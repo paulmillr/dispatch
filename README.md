@@ -26,8 +26,9 @@ Requires Xcode 26+. Tested on macOS 26 & 27, but may run on macOS 14+.
 ./run.sh --test        # fast tests (see test/README.md)
 ```
 
-All deps are downloaded into `build`.
+Easiest way to install xcode (needs apple id): `brew install xcodes; xcodes install 27.0`.
 
+All deps are downloaded into `build`.
 For signed, notarized macOS downloads, see [distribution](docs/distribution.md).
 
 ## Using Dispatch
