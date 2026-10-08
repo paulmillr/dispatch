@@ -19,6 +19,7 @@ have no independent help parser. `profile.py` does not support
 ## Start here
 
 ```sh
+python3 test/distribution.py          # Offline signing/notarization workflow checks
 python3 test/benchmark.py             # Fast benchmark-runner regression tests
 python3 test/vm-runner.py             # Fast test-runner/cache regression tests
 python3 test/model-fixtures.py        # Local endpoint/shell barrier regressions

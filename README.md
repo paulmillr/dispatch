@@ -28,6 +28,8 @@ Requires Xcode 26+. Tested on macOS 26 & 27, but may run on macOS 14+.
 
 All deps are downloaded into `build`.
 
+For signed, notarized macOS downloads, see [distribution](docs/distribution.md).
+
 ## Using Dispatch
 
 1. Open new tab.
