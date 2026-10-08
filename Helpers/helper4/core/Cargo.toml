@@ -1,0 +1,14 @@
+[package]
+name = "dispatch-helper4-core"
+version = "0.1.0"
+edition = "2024"
+publish = false
+autotests = false
+
+[features]
+# Test instrument: DISPATCH_CAPTURE traces all helper IO unredacted, DISPATCH_REPLAY runs a trace.
+# Without it (Release helpers) both are ignored.
+capture = []
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"

@@ -1,0 +1,100 @@
+[
+  {
+    "session_id": "11111111-1111-4111-8111-111111111111",
+    "transcript_path": "/tmp/rollout.jsonl",
+    "cwd": "/tmp/project",
+    "hook_event_name": "SessionStart",
+    "model": "dispatch-fixture",
+    "permission_mode": "default",
+    "source": "startup"
+  },
+  {
+    "session_id": "11111111-1111-4111-8111-111111111111",
+    "turn_id": "turn-1",
+    "transcript_path": "/tmp/rollout.jsonl",
+    "cwd": "/tmp/project",
+    "hook_event_name": "UserPromptSubmit",
+    "model": "dispatch-fixture",
+    "permission_mode": "default",
+    "prompt": "approval test"
+  },
+  {
+    "session_id": "11111111-1111-4111-8111-111111111111",
+    "turn_id": "turn-1",
+    "transcript_path": "/tmp/rollout.jsonl",
+    "cwd": "/tmp/project",
+    "hook_event_name": "PreToolUse",
+    "model": "dispatch-fixture",
+    "permission_mode": "default",
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "printf 'DISPATCH_LOCAL_TOOL_OK\\n'"
+    },
+    "tool_use_id": "00000000-0000-4000-8000-000000000006"
+  },
+  {
+    "session_id": "11111111-1111-4111-8111-111111111111",
+    "turn_id": "turn-1",
+    "transcript_path": "/tmp/rollout.jsonl",
+    "cwd": "/tmp/project",
+    "hook_event_name": "PermissionRequest",
+    "model": "dispatch-fixture",
+    "permission_mode": "default",
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "printf 'DISPATCH_LOCAL_TOOL_OK\\n'",
+      "description": "Allow the local fixture to print its test marker?"
+    }
+  },
+  {
+    "session_id": "11111111-1111-4111-8111-111111111111",
+    "turn_id": "turn-1",
+    "transcript_path": "/tmp/rollout.jsonl",
+    "cwd": "/tmp/project",
+    "hook_event_name": "PostToolUse",
+    "model": "dispatch-fixture",
+    "permission_mode": "default",
+    "tool_name": "Bash",
+    "tool_input": {
+      "command": "printf 'DISPATCH_LOCAL_TOOL_OK\\n'"
+    },
+    "tool_response": "DISPATCH_LOCAL_TOOL_OK\n",
+    "tool_use_id": "00000000-0000-4000-8000-000000000006"
+  },
+  {
+    "session_id": "11111111-1111-4111-8111-111111111111",
+    "turn_id": "turn-1",
+    "transcript_path": "/tmp/rollout.jsonl",
+    "cwd": "/tmp/project",
+    "hook_event_name": "Stop",
+    "model": "dispatch-fixture",
+    "permission_mode": "default",
+    "stop_hook_active": false,
+    "last_assistant_message": "Local fixture reply: approval test\n\nTool result received."
+  },
+  {
+    "session_id": "11111111-1111-4111-8111-111111111111",
+    "turn_id": "turn-2",
+    "transcript_path": "/tmp/rollout.jsonl",
+    "cwd": "/tmp/project",
+    "hook_event_name": "PreCompact",
+    "model": "dispatch-fixture",
+    "trigger": "manual"
+  },
+  {
+    "session_id": "11111111-1111-4111-8111-111111111111",
+    "turn_id": "turn-2",
+    "transcript_path": "/tmp/rollout.jsonl",
+    "cwd": "/tmp/project",
+    "hook_event_name": "PostCompact",
+    "model": "dispatch-fixture",
+    "trigger": "manual"
+  },
+  {
+    "session_id": "11111111-1111-4111-8111-111111111111",
+    "transcript_path": "/tmp/rollout.jsonl",
+    "cwd": "/tmp/project",
+    "hook_event_name": "SessionEnd",
+    "reason": "other"
+  }
+]

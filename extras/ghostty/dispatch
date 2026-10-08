@@ -1,0 +1,29 @@
+# dispatch — one palette for the app, the terminal and the code
+# Source: design/Syntax highlight.dc.html, mockup 1d.
+
+background = #0d0d0f
+foreground = #c9c9ce
+cursor-color = #c9c9ce
+cursor-text = #0d0d0f
+selection-background = #2e2e34
+selection-foreground = #ececf0
+
+# ANSI 0–7: black, red, green, yellow, blue, magenta, cyan, white.
+palette = 0=#1c1c20
+palette = 1=#e07b7b
+palette = 2=#7fd3a1
+palette = 3=#d9b36a
+palette = 4=#7ea6c9
+palette = 5=#e07be0
+palette = 6=#6fb3aa
+palette = 7=#c9c9ce
+
+# ANSI 8–15: bright variants; bright magenta carries lavender types.
+palette = 8=#5c5c64
+palette = 9=#ec9b9b
+palette = 10=#a3e3bd
+palette = 11=#e8cb8f
+palette = 12=#a3c4df
+palette = 13=#b3a1e6
+palette = 14=#9ad0c9
+palette = 15=#ececf0

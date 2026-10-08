@@ -1,0 +1,4414 @@
+{
+  "version": 1,
+  "suite": "baseline correctness",
+  "run": "20260917-210448-25728",
+  "wall_seconds": 2701,
+  "xctest_seconds": 2662,
+  "cases": [
+    {
+      "identifier": "DispatchTests/AttentionTests/testAttentionAndSettingsPresentation",
+      "seconds": 4.408153057098389,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/AttentionTests/testAttentionNavigationAndDeduplicationPreserveApprovals",
+      "seconds": 0.1046440601348877,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/AttentionTests/testCompletionAlertsRequireAnEndedResponseAndDoNotRepeatAfterActivityChanges",
+      "seconds": 0.001529097557067871,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/AttentionTests/testCompletionAlertsWaitForReliableActivityAndDoNotTreatInterruptedToolsAsResponses",
+      "seconds": 0.0014410018920898438,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/AttentionTests/testDisabledHostDetectionUsesOrdinarySSHWithoutChangingSavedGrant",
+      "seconds": 0.1359400749206543,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/AttentionTests/testNotificationClickRevealsTheResponseAndDoesNotJumpIntoAnotherConversation",
+      "seconds": 0.0036050081253051758,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/AttentionTests/testNotificationPreviewsStripMarkdownAndBoundLongUnicodeText",
+      "seconds": 0.00391995906829834,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/AttentionTests/testNotificationsPreviewResponsesAndQuestionsAndReplaceTheSamePane",
+      "seconds": 0.0023859739303588867,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/AttentionTests/testPreferencesMigrateAndRoundTrip",
+      "seconds": 0.0009980201721191406,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatCommandTests/testClearPreservesTargetAndPreviousConversationDraftButPausesOldQueue",
+      "seconds": 0.001374959945678711,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatCommandTests/testExactCommandFormsAndArguments",
+      "seconds": 0.0008009672164916992,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatCommandTests/testMultilinePrefixesAreMessagesAndNativeDeliveryQuotesThem",
+      "seconds": 0.0009680986404418945,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatCommandTests/testReviewChildActivityCompletesWithTheParent",
+      "seconds": 0.001708984375,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatCommandTests/testSettingsAndGoalEventsAreBoundToTheirConversation",
+      "seconds": 0.0017130374908447266,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatCommandTests/testUnrecognizedConfirmationKeepsChatAndEditableDraft",
+      "seconds": 0.001667022705078125,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatComposerTests/testComposer4aNarrowWrappingScrollingThemesAndEditorIdentity",
+      "seconds": 8.66970694065094,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatComposerTests/testComposerFocusSurvivesMountingAfterItsFirstUpdate",
+      "seconds": 0.17734801769256592,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatComposerTests/testLocalCaretTracksNativeGeometryEditingAndFocus",
+      "seconds": 1.4524520635604858,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatComposerTests/testNativePlaceholderMatchesTypedTextAndCompactComposer",
+      "seconds": 1.7569119930267334,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatComposerTests/testRecordedModelEffortLoadsOutsideRecentPageAndHistoryCannotRevertIt",
+      "seconds": 1.0980950593948364,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatComposerTests/testUnreadActivityFollowsMountedTabsAndSpaces",
+      "seconds": 0.7409399747848511,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatDiscoveryTests/testAttentionNeverChangesManualViewPreference",
+      "seconds": 0.0013850927352905273,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatDiscoveryTests/testAttentionSurvivesPollingAndBlocksEveryInputPath",
+      "seconds": 0.0178530216217041,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatDiscoveryTests/testConversationResetPreservesExplicitViewChoice",
+      "seconds": 0.002213001251220703,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatDiscoveryTests/testDiscoveryFailureRetainsChatAndDurableDraftWithoutAllowingInput",
+      "seconds": 0.0025409460067749023,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatDiscoveryTests/testOpenFileReplacementCannotChangeDiscoveredMetadata",
+      "seconds": 0.017563939094543457,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatDiscoveryTests/testPreviouslyOpenedEmptyChatRemainsReachableAfterAttachmentEnds",
+      "seconds": 0.002745985984802246,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatDiscoveryTests/testProvisionalRemoteDraftFollowsVerifiedProcessToNewSurface",
+      "seconds": 0.012511014938354492,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatDiscoveryTests/testRealCodexAttachesBeforeFirstPromptWithoutHooksAndResumesHistory",
+      "seconds": 4.8813910484313965,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatDiscoveryTests/testRemotePresentationSurvivesNewProcessAndSurfaceWithoutTransferringAuthority",
+      "seconds": 0.0015479326248168945,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatDiscoveryTests/testTranscriptReaderUsesAgentSpecificParser",
+      "seconds": 0.0040580034255981445,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatDiscoveryTests/testVerifiedReconnectKeepsReplacementSavedDraftSelected",
+      "seconds": 0.001659989356994629,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatDraftTests/testAtomicJSONRoundTripAndRestartNeverQueuesSnapshots",
+      "seconds": 0.007133960723876953,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatDraftTests/testContinuousTypingHasBoundedAutosaveDelay",
+      "seconds": 2.744346022605896,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatDraftTests/testConversationDiscoveryKeepsNewWorkingTextVisibleAlongsideRetainedDrafts",
+      "seconds": 0.004526019096374512,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatDraftTests/testDebounceAndCoordinatorClosureFlush",
+      "seconds": 0.4196360111236572,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatDraftTests/testDeliveryCompletionAfterConversationSwitchPreservesEditedSelectionAndFailedSnapshot",
+      "seconds": 0.004521012306213379,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatDraftTests/testDeliveryFailureTargetsOriginalRevisionAndConversation",
+      "seconds": 0.0026830434799194336,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatDraftTests/testFailedDeliveryDoesNotDuplicateUnchangedSavedDraftAfterSelectionChanges",
+      "seconds": 0.0022939443588256836,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatDraftTests/testFailedDeliveryRestoredToWorkingBufferHasDistinctIdentityFromEditedSavedDraft",
+      "seconds": 0.0017930269241333008,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatDraftTests/testIsolationMigrationReconnectAndRecoveryMenu",
+      "seconds": 0.0017490386962890625,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatDraftTests/testKeepSwitchEditRenameDeleteAndStickyMultiline",
+      "seconds": 0.002339005470275879,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatDraftTests/testManualRecoveryDeduplicatesPendingVersionsWithoutReplacingDestinationDraft",
+      "seconds": 0.0021419525146484375,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatDraftTests/testPendingDeliveryFollowsProvisionalReconnectAndDiscoveryWithoutReplacingNewTyping",
+      "seconds": 0.003123044967651367,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatDraftTests/testProvisionalDeliveryMigratesAndCompletesInIdentifiedConversation",
+      "seconds": 0.0025870800018310547,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatDraftTests/testProvisionalReconnectPreservesSelectedReplacementDraftWithEmptyWorkingBuffer",
+      "seconds": 0.001752018928527832,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatDraftTests/testRepeatedFailedDeliveriesRestoreOneRevisionInActiveAndInactiveConversation",
+      "seconds": 0.0019080638885498047,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatDraftTests/testRestartRecoversRepeatedPendingRevisionOnlyOnceAlongsideNewerEdit",
+      "seconds": 0.0017069578170776367,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatDraftTests/testRetryAfterReadFailurePreservesDiskDraftsAlongsideNewTyping",
+      "seconds": 0.003565073013305664,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatDraftTests/testSuccessfulCommandConsumesItsSavedRevisionAfterSwitchingDrafts",
+      "seconds": 0.0011769533157348633,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatDraftTests/testUndoDeletionAfterEditingFailedDeliverySnapshotKeepsBothVersionsSelectable",
+      "seconds": 0.0013620853424072266,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatDraftTests/testUndoDeletionAfterFailedDeliveryDoesNotDuplicateRestoredDraft",
+      "seconds": 0.0013689994812011719,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatDraftTests/testUnreadableStoreIsNotOverwrittenByAnEmptyCollection",
+      "seconds": 0.0024399757385253906,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatDraftTests/testWriteFailurePreservesVisibleDraftAndCanRetry",
+      "seconds": 0.0018439292907714844,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatEndToEndTests/testOfflineDemoResumePublishesHistoryThroughInstalledCodexLauncher",
+      "seconds": 2.147006034851074,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatEndToEndTests/testRealCodexLocalEndpointThroughShippingBridgeAndTerminalComposer",
+      "seconds": 11.434362053871155,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatFormattingTests/testArgumentArraysPreserveQuotingAndShellPositionalArguments",
+      "seconds": 0.001168966293334961,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatFormattingTests/testBatchedWebStepsAndUnknownArgumentsPreserveDetails",
+      "seconds": 0.0012979507446289062,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatFormattingTests/testCodexContentItemsDecodeIndividuallyAndPreserveRawDetails",
+      "seconds": 0.003908038139343262,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatFormattingTests/testCodexDirectAndWrappedWebCallsBecomeFormattedSteps",
+      "seconds": 0.0020979642868041992,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatFormattingTests/testCompletionSurvivesOverlappingTranscriptAndHooks",
+      "seconds": 0.0015469789505004883,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatFormattingTests/testContentValidationPreservesMalformedMediaBesideValidText",
+      "seconds": 0.0016270875930786133,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatFormattingTests/testDiffRetainsSyntaxColorsAndSeparatesOldAndNewLexicalState",
+      "seconds": 0.0025368928909301758,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatFormattingTests/testMarkdownAllowsWebAndSourceLinks",
+      "seconds": 0.0024510622024536133,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatFormattingTests/testMarkdownFencesListsAndTablesPreserveContent",
+      "seconds": 0.0010089874267578125,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatFormattingTests/testMarkdownSourceCitationsPreserveLabelsAndLineNumbers",
+      "seconds": 0.03115391731262207,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatFormattingTests/testMixedContentAndFailureEnvelopesRetainMeaning",
+      "seconds": 0.002794027328491211,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatFormattingTests/testNativeContentItemsShowReadableOutput",
+      "seconds": 1.1549919843673706,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatFormattingTests/testNativeExpandedOrchestrationHidesCode",
+      "seconds": 0.8610649108886719,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatFormattingTests/testNativeFormattedCardsAndMarkdown",
+      "seconds": 2.403671979904175,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatFormattingTests/testObservedCodex1534FormattingAndFailure",
+      "seconds": 0.005145072937011719,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatFormattingTests/testObservedCodex1540FormattingAndFailure",
+      "seconds": 0.0036219358444213867,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatFormattingTests/testObservedCodexCommandBecomesReadableShellCard",
+      "seconds": 0.0019409656524658203,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatFormattingTests/testOrchestrationDoesNotGuessComputedArgumentsOrCallsInsideText",
+      "seconds": 0.0010219812393188477,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatFormattingTests/testOrchestrationIsRawOnlyAndLiteralRequestsAreReadable",
+      "seconds": 0.0013010501861572266,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatFormattingTests/testOutputEnvelopesAndFailuresDoNotObscureProgramOutput",
+      "seconds": 0.001558065414428711,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatFormattingTests/testPatchSummaryShowsFilesAndCounts",
+      "seconds": 0.0007510185241699219,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatFormattingTests/testSourceCitationPreviewShowsCitedLineBeyondNormalPreviewLimit",
+      "seconds": 2.53425395488739,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatFormattingTests/testSyntaxTokensRespectStringsCommentsUnicodeAndUnknownLanguages",
+      "seconds": 0.02130305767059326,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatFormattingTests/testWebStepsHaveActionLabelsAndReadableTargets",
+      "seconds": 0.005876898765563965,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatHistoricalMergeTests/testBulkMergeMatchesIncrementalInsertionForShuffledUpdatesAndRepeatedPages",
+      "seconds": 0.02849400043487549,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatHistoricalMergeTests/testDirectSnapshotsWithMissingMetadataAndDuplicateIDsKeepIncrementalBehavior",
+      "seconds": 0.003473997116088867,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatHistoricalMergeTests/testEarlierBatchDoesNotChangeLiveSettingsOrConsumeAnOptimisticPrompt",
+      "seconds": 0.001096963882446289,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatHistoricalMergeTests/testInitialHistoricalBatchKeepsPromptActivityAndSettingsEventOrder",
+      "seconds": 0.0013599395751953125,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatHistoricalMergeTests/testTextMatchingUsesTheFirstDisplayedMatchAndPreservesPiIdentitiesAndFinalContent",
+      "seconds": 0.001434922218322754,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatHistoricalMergeTests/testTimestampCorrectionsRetainThePreviousStableTieOrder",
+      "seconds": 0.0013849735260009766,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatHistoryTests/testActivityRecoveryRetriesTransientFailureAndIgnoresStaleCompletion",
+      "seconds": 0.16253793239593506,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatHistoryTests/testFreshRepliesHealIdleActivityAndLateOutputDoesNotReviveCompletedTurn",
+      "seconds": 0.08453893661499023,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatHistoryTests/testHistoricalInsertionAndMergeKeepStableOrder",
+      "seconds": 0.0010249614715576172,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatHistoryTests/testInitialHistoryHasLargerByteBudgetWithoutChangingEarlierByteBudget",
+      "seconds": 1.3939709663391113,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatHistoryTests/testNativePagingPreservesPixelOffsetAndSeparatesNewMessages",
+      "seconds": 3.1596779823303223,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatHistoryTests/testOpeningTallChatAutomaticallyPreloadsCollapsedHistoryAndKeepsLatestReplyVisible",
+      "seconds": 0.5835239887237549,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatHistoryTests/testPagesThroughOneLargeLegacyTurnKeepToolContextAndOutputs",
+      "seconds": 0.0998990535736084,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatHistoryTests/testPartialTailAndReplacementInvalidateOldPageRequests",
+      "seconds": 0.0998760461807251,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatHistoryTests/testPrependingToolsKeepsAnExpandedStandaloneToolVisible",
+      "seconds": 0.05148899555206299,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatHistoryTests/testPrependingToolsKeepsTheExistingGroupIdentity",
+      "seconds": 0.0013630390167236328,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatHistoryTests/testReadableHistoryBatchesRemainBoundedAndPreserveEveryRecord",
+      "seconds": 0.32900798320770264,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatHistoryTests/testRecentPageArrivesFirstAndOlderPagesDoNotMoveLiveCursor",
+      "seconds": 0.6684719324111938,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatHistoryTests/testRecentPagingOfRealCodexResumeHistoryFromLocalEndpoint",
+      "seconds": 7.016366958618164,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatHistoryTests/testReconnectRecoversActivityWithoutReplayingTurnStart",
+      "seconds": 0.034675002098083496,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatHistoryTests/testReversePagesCrossBlockBoundariesAndSkipMalformedOversizedRecords",
+      "seconds": 1.7889399528503418,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatHistoryTests/testToolDenseInitialHistoryIncludesMoreRepliesWhileEarlierPagesStayBounded",
+      "seconds": 0.08454203605651855,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatHistoryTests/testTranscriptKeysAndTimestampCompatibility",
+      "seconds": 0.0027159452438354492,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatModelChoicesCacheTests/testCacheBelongsToChatAndResetsWithAgentIdentity",
+      "seconds": 0.0014290809631347656,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatModelChoicesCacheTests/testCachedChoicesDoNotBypassIdentityFailureOrRetry",
+      "seconds": 0.03331100940704346,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatModelChoicesCacheTests/testCachedEffortSelectionRevalidatesLiveRowsAndConfirmsOnce",
+      "seconds": 0.1817929744720459,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatModelChoicesCacheTests/testCachedModelAndEffortBrowsingSendsNoInputAndUpdatesCheckmarks",
+      "seconds": 0.001986980438232422,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatModelChoicesCacheTests/testClaudeCanonicalModelAliasesReuseChoicesAndExpireWithCatalog",
+      "seconds": 0.0019290447235107422,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatModelChoicesCacheTests/testEffortTTLIsIndependentOfModelListRefresh",
+      "seconds": 0.0018669366836547852,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatModelChoicesCacheTests/testFreshChoicesAreReusedAndExpiredChoicesReload",
+      "seconds": 0.4111210107803345,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatModelChoicesCacheTests/testImmediateCancellationDoesNotStartLoadingAfterClose",
+      "seconds": 0.10824310779571533,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatModelChoicesCacheTests/testRemovedEffortInvalidatesCacheWithoutApplyingAnotherChoice",
+      "seconds": 0.0996849536895752,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatModelChoicesCacheTests/testTTLIsOneDayWithoutSlidingAndClockReversalExpires",
+      "seconds": 0.004163980484008789,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatModelPickerTests/testCancellationDoesNotReplayOpeningCommandOrConfirm",
+      "seconds": 0.12300801277160645,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatModelPickerTests/testLiveMenuParsingAndMalformedScreens",
+      "seconds": 0.014622092247009277,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatModelPickerTests/testPickerAvailabilityRequiresIdleAttachedSession",
+      "seconds": 0.0034269094467163086,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatModelPickerTests/testQuickModelsRemainAvailableAfterBrowsingFullList",
+      "seconds": 0.3850339651107788,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatModelPickerTests/testRealHerdrChatCommands",
+      "seconds": 28.673082947731018,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatModelPickerTests/testRealLocalChatCommands",
+      "seconds": 25.50204598903656,
+      "outcome": "Failed"
+    },
+    {
+      "identifier": "DispatchTests/ChatModelPickerTests/testRealLocalHerdrModelAndEffortPicker",
+      "seconds": 7.6987550258636475,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatModelPickerTests/testRealLocalModelAndEffortPicker",
+      "seconds": 11.141224026679993,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatModelPickerTests/testRealLocalTmuxChatCommands",
+      "seconds": 17.90660798549652,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatModelPickerTests/testRealLocalTmuxModelAndEffortPicker",
+      "seconds": 5.970939040184021,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatModelPickerTests/testRealQueuedMessagesCancelledByPermissionRevocation",
+      "seconds": 15.902192950248718,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatModelPickerTests/testRealQueuedMessagesStayPausedAfterAcceptedTurnIsRevoked",
+      "seconds": 36.954874992370605,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatModelPickerTests/testRealSSHChatCommands",
+      "seconds": 28.493374943733215,
+      "outcome": "Failed"
+    },
+    {
+      "identifier": "DispatchTests/ChatModelPickerTests/testRealSSHHerdrChatCommands",
+      "seconds": 73.18760597705841,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatModelPickerTests/testRealSSHHerdrModelAndEffortPicker",
+      "seconds": 44.41821599006653,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatModelPickerTests/testRealSSHModelAndEffortPicker",
+      "seconds": 8.435173034667969,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatModelPickerTests/testRealSSHTmuxChatCommands",
+      "seconds": 29.809697031974792,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatModelPickerTests/testRealSSHTmuxModelAndEffortPicker",
+      "seconds": 17.314839005470276,
+      "outcome": "Failed"
+    },
+    {
+      "identifier": "DispatchTests/ChatModelPickerTests/testUnverifiedAgentFailurePreservesSelectionAndDoesNotRetry",
+      "seconds": 0.032498955726623535,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatPatchTests/testAddedDeletedAndInterruptedPatches",
+      "seconds": 0.0014770030975341797,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatPatchTests/testCommandWrappersAndTheirOutputsAppearOnlyOnce",
+      "seconds": 0.003242969512939453,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatPatchTests/testDelayedExecutionsUseProcessIdentityAndReplaceEmptyPolling",
+      "seconds": 0.0019739866256713867,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatPatchTests/testDiffLineReconciliationBoundsLargeBatchesAndRepeatedLines",
+      "seconds": 0.009410977363586426,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatPatchTests/testDiffLinesRetainIdentityAcrossGrowingHunksAndPartialLines",
+      "seconds": 0.0008490085601806641,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatPatchTests/testDiffLinesStayStillForHistorySourceSwitchingAndReopening",
+      "seconds": 0.0014219284057617188,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatPatchTests/testLegacyAndPaginatedHistoryRestoreStructuredChanges",
+      "seconds": 0.0019459724426269531,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatPatchTests/testLineNumbersAndEndpointResolution",
+      "seconds": 0.0017271041870117188,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatPatchTests/testLiveAndResumedItemsShareStateAndSourcePolicy",
+      "seconds": 0.0014749765396118164,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatPatchTests/testNotificationsAreScopedAndRequestsAreNotConsumed",
+      "seconds": 0.001284956932067871,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatPatchTests/testParallelWrappersUseExecutionResultsEvenWhenWrapperOutputIsTruncated",
+      "seconds": 0.0026780366897583008,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatPatchTests/testPatchOnlyWrappersFoldIntoMatchingExecutionRows",
+      "seconds": 0.0026470422744750977,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatPatchTests/testRealAppServerStreamsPatchBeforeCompletion",
+      "seconds": 2.8765209913253784,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatPatchTests/testSnapshotsRetainIdentityAndFinalStatusAcrossHistoryReplay",
+      "seconds": 0.0011749267578125,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatPerformanceTests/testFormattingCacheReusesRevisionsAndInvalidatesChanges",
+      "seconds": 0.12869298458099365,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatPerformanceTests/testRowsRemainStableAndRefreshWhenConversationChanges",
+      "seconds": 0.0016440153121948242,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatPerformanceTests/testTenThousandToolRowsOnlyFormatVisibleRowsWhileScrolling",
+      "seconds": 3.6516469717025757,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatPerformanceTests/testToolGeometrySurvivesPayloadEvictionAndExpiresWithItsTranscript",
+      "seconds": 0.006026029586791992,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatPerformanceTests/testWholeToolHeaderRespondsToClicksAwayFromChevron",
+      "seconds": 0.6746679544448853,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatPresentationTests/testAttentionPreservesMountedComposerFocusSelectionAndDraft",
+      "seconds": 1.434340000152588,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatPresentationTests/testChatUsesResolvedThemeAndUpdatesWithoutRemounting",
+      "seconds": 1.5030629634857178,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatPresentationTests/testLargeFontComposerKeepsOneFullLineInShortPane",
+      "seconds": 2.6150509119033813,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatPresentationTests/testLiveDiffLineArrivalsKeepScrollPositionAndSourceStable",
+      "seconds": 1.8221590518951416,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatPresentationTests/testLivePatchAndGoalInfoWithoutComposerStats",
+      "seconds": 9.576743006706238,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatPresentationTests/testModeSwitchDoesNotInheritChatFont",
+      "seconds": 0.4517320394515991,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatPresentationTests/testNarrowComposerKeepsModelAndDraftActions",
+      "seconds": 6.797484993934631,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatPresentationTests/testReplyButtonKeepsSizeAcrossSendSteerAndQueueStates",
+      "seconds": 0.010542988777160645,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatPresentationTests/testSixNativeChatStatesAndKeyboardComposer",
+      "seconds": 4.138826012611389,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatPresentationTests/testUpdatedMockupFullWidthTranscriptAndUserBubble",
+      "seconds": 1.1682789325714111,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatPresentationTests/testUserMessagesRenderMarkdownAndHighlightedCode",
+      "seconds": 2.140468955039978,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatQueueTests/testAttentionAndRetryDoNotPauseUntouchedMessages",
+      "seconds": 0.0016369819641113281,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatQueueTests/testCommandCompletionAndQueueNavigationDoNotSubmit",
+      "seconds": 0.005857944488525391,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatQueueTests/testCommandWaitsForTerminalQuestionToFinishClosing",
+      "seconds": 0.0013200044631958008,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatQueueTests/testConversationBindingDetectsChangeWithoutResetAndAllowsInitialAdoption",
+      "seconds": 0.001217961311340332,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatQueueTests/testDeliveryUncertaintyRequiresStartedInputAndNoProofOfRejection",
+      "seconds": 0.0009620189666748047,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatQueueTests/testDisconnectKeepsBindingButPermissionRevocationRequiresReview",
+      "seconds": 0.008572936058044434,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatQueueTests/testEditingKeepsOrderAndCancelRestoresOriginal",
+      "seconds": 0.0012359619140625,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatQueueTests/testExistingDirectCodexAttachShowsSwitchAndControlReturnQueuesInOrder",
+      "seconds": 12.580128908157349,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatQueueTests/testExplicitChatOptOutIsPreservedWithoutHooks",
+      "seconds": 0.0022879838943481445,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatQueueTests/testIdleComposerSubmissionSkipsQueueUI",
+      "seconds": 0.0013880729675292969,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatQueueTests/testMultilineControlReturnUsesSubmissionRoutingThroughAppKit",
+      "seconds": 0.47221410274505615,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatQueueTests/testMultilineSlashAndBangStayLiteralAcrossQueueEditingAndDelivery",
+      "seconds": 0.0017429590225219727,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatQueueTests/testQueueEditingValidationAndConversationReplacement",
+      "seconds": 0.0016700029373168945,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatQueueTests/testQueueUsesStableSSHIdentityButRejectsProcessReplacement",
+      "seconds": 0.002080082893371582,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatQueueTests/testRequeueRetargetsOnlyEditedMessageAfterConversationChange",
+      "seconds": 0.0017169713973999023,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatQueueTests/testResumeAfterStopPreservesUncertainMessages",
+      "seconds": 0.001398921012878418,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatQueueTests/testReturnAndKeypadEnterQueueWhileBusyAndCheckingActivity",
+      "seconds": 5.171301960945129,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatQueueTests/testUncertainHeadSurvivesUnrelatedEditAndRetryButDiscardReleasesQueue",
+      "seconds": 0.001150965690612793,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatRoutingIntegrationTests/testTwoRealCodexProcessesInSameDirectoryAndResumeRouting",
+      "seconds": 1.2549340724945068,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatRowCacheTests/testApprovalsAndOptimisticPromptKeepExistingGroupPresentations",
+      "seconds": 0.001374959945678711,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatRowCacheTests/testGeometryPruningRetainsRevisionsSharedBySurvivingTurns",
+      "seconds": 0.0009539127349853516,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatRowCacheTests/testPrependingBeyond256TurnsKeepsUnchangedGroupPresentations",
+      "seconds": 0.01060497760772705,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatRowCacheTests/testTimestampCorrectionRefreshesReplyWithoutRebuildingOtherTurns",
+      "seconds": 0.001055002212524414,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatRowCacheTests/testTimingOnlyUpdatesPreserveProjectedToolFormattingIdentity",
+      "seconds": 0.0012799501419067383,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatRowCacheTests/testToolNameClassificationPreservesNamespaceAndCaseSemantics",
+      "seconds": 0.0007880926132202148,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatScrollStabilityTests/testBlankViewportRecoversDespiteContinuousLayoutUpdates",
+      "seconds": 0.08535504341125488,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatScrollStabilityTests/testBottomFollowingSurvivesLargeRepliesAndStopsWhenReadingHistory",
+      "seconds": 6.148732900619507,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatScrollStabilityTests/testDefaultSystemFontKeepsBottomFollowingAndExpandedToolScrollingStable",
+      "seconds": 14.602084040641785,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatScrollStabilityTests/testDisconnectCancelsQueuedOpeningPreloadAndRequiresNewAppearance",
+      "seconds": 0.16423296928405762,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatScrollStabilityTests/testDisconnectReleasesDeferredHistoryWork",
+      "seconds": 0.011463046073913574,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatScrollStabilityTests/testExpandedToolsKeepMessagesStableWhileScrollingBothDirections",
+      "seconds": 8.417199969291687,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatScrollStabilityTests/testHistoryPrefetchAnticipatesFastScrollingButStaysBounded",
+      "seconds": 0.3705589771270752,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatScrollStabilityTests/testIdleViewportDetectsMissingRowsAndEscalatesRecoveryWithoutWheelInput",
+      "seconds": 8.110448002815247,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatScrollStabilityTests/testKeyboardNavigationRearmsExhaustedHistoryPreloadAndIgnoresComposer",
+      "seconds": 0.19037103652954102,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatScrollStabilityTests/testLateItemScrollCannotUndoAPrependedPixelAnchor",
+      "seconds": 0.013628005981445312,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatScrollStabilityTests/testLivePrependRetainsPixelsWhenFirstVisibleMarkerIsRecycled",
+      "seconds": 0.010711073875427246,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatScrollStabilityTests/testLiveScrollingCancelsStalePreservationAndFollowIntent",
+      "seconds": 0.0733720064163208,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatScrollStabilityTests/testOpeningHistoryPreloadContinuesAfterRestorationAndStopsWithoutProgress",
+      "seconds": 0.09816408157348633,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatScrollStabilityTests/testOpeningHistoryPreloadCountsAcceptedLoadsAndCapsInvisibleProgress",
+      "seconds": 0.11761999130249023,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatScrollStabilityTests/testOpeningHistoryPreloadFillsShortContentAndStopsAtItsViewportTarget",
+      "seconds": 0.0951920747756958,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatScrollStabilityTests/testOpeningHistoryPreloadStopsAtEOFOrErrorAndRejectsConcurrentReads",
+      "seconds": 0.27624595165252686,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatScrollStabilityTests/testPassiveHistoryKeepsBottomUnlessUserMovesWhileReadIsPending",
+      "seconds": 0.12727999687194824,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatScrollStabilityTests/testPrependingHistoryDuringWheelScrollingKeepsVisibleMessagesContinuous",
+      "seconds": 3.4878950119018555,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatScrollStabilityTests/testPrependRetainsTheNextVisibleMessageWhenTheFirstRowBecomesAGroup",
+      "seconds": 0.07470405101776123,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatScrollStabilityTests/testReusedMarkerTracksItsCurrentMessageAndChat",
+      "seconds": 0.008826017379760742,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatScrollStabilityTests/testScrollbarTrackingDefersPrependAndPreservesItsFinalReadingPosition",
+      "seconds": 0.07394897937774658,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatScrollStabilityTests/testScrollbarVisibilityFollowsInteractionNotDocumentUpdates",
+      "seconds": 6.4671419858932495,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatScrollStabilityTests/testTranscriptRebuildAndWakePreserveReadingPositionDraftAndIdleThinking",
+      "seconds": 2.5375880002975464,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatScrollStabilityTests/testViewportRecoveryIgnoresEmptyHiddenAndActivelyScrolledContentAndDisconnects",
+      "seconds": 0.952678918838501,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatSideComposerTests/testSideComposerUsesLocalCaretThroughEditingIMEAndFocusChanges",
+      "seconds": 2.6055610179901123,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatSideComposerTests/testMultilineSideKeyboardProtectionThroughAppKit",
+      "seconds": 0.17246496677398682,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatSideComposerTests/testSideDraftSelectionAndHeightSurviveUpdatesAndQuestionRemount",
+      "seconds": 0.2630190849304199,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatSideConversationTests/testEscapeClosesOnlyTheActiveSideSheetWithAndWithoutComposerFocus",
+      "seconds": 1.0215460062026978,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatSideConversationTests/testLateRepliesCannotReopenClosedSheetOrEnterParent",
+      "seconds": 0.0019599199295043945,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatSideConversationTests/testModesHaveSeparatePermissionBoundaries",
+      "seconds": 0.001665949821472168,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatSideConversationTests/testPermissionDisplaysCompleteOperationAndRejectsMissingDetails",
+      "seconds": 0.002274036407470703,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatSideConversationTests/testRealCodexForkKeepsSideReplyOutOfMainThread",
+      "seconds": 10.908223032951355,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatSideConversationTests/testReviewAndCoordinatorStopCloseSideOwnership",
+      "seconds": 0.001332998275756836,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatSideQuestionTests/testAnswersUseIDsAndRequireExplicitCompleteInput",
+      "seconds": 0.0009679794311523438,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatSideQuestionTests/testMainQuestionsKeepDraftAndRespectBlockingAndResolution",
+      "seconds": 0.0017420053482055664,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatSideQuestionTests/testMalformedDuplicateAndOversizedQuestionsAreRejected",
+      "seconds": 0.001042008399963379,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatSideQuestionTests/testQuestionHistoryShowsAnswersWithoutRawProtocolAndRedactsSecrets",
+      "seconds": 0.0010379552841186523,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatSideQuestionTests/testSkipAndCustomChoiceSwitching",
+      "seconds": 0.0007829666137695312,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatTests/testAcceptedOptimisticPromptDoesNotRestoreButNextUnsentPromptDoes",
+      "seconds": 0.0007981061935424805,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatTests/testApprovalDecisionsAreOneShotAndFailOpenToNativeUI",
+      "seconds": 0.0008950233459472656,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatTests/testBranchSwitchClearsAcceptedBubbleWithoutRestoringItAsDraft",
+      "seconds": 0.0007780790328979492,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatTests/testChatFontMigrationAndPersistence",
+      "seconds": 0.0010770559310913086,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatTests/testChatFontSelectionKeepsCodeFontIndependent",
+      "seconds": 0.00256192684173584,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatTests/testDuplicateMessagesKeepIdentityAndEarliestTranscriptPosition",
+      "seconds": 0.0008929967880249023,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatTests/testFailedSendRemainsVisibleAcrossBackgroundStatusRefreshUntilExplicitAction",
+      "seconds": 0.0011529922485351562,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatTests/testHistoricalAndDuplicateOutputDoesNotCreateUnreadActivity",
+      "seconds": 0.000970005989074707,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatTests/testHistoricalTurnsArrivingAfterHooksRemainChronological",
+      "seconds": 0.02296304702758789,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatTests/testHookAndTranscriptOverlapPreservesToolInput",
+      "seconds": 0.0020470619201660156,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatTests/testHookMergePreservesExistingHandlersAndIsIdempotent",
+      "seconds": 0.0011750459671020508,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatTests/testInstallAndDisableInTemporaryHome",
+      "seconds": 0.0026890039443969727,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatTests/testInvalidConfigurationRemainsUntouched",
+      "seconds": 0.001683950424194336,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatTests/testMissingOrMalformedMetadataDoesNotAuthorizeTranscriptRecords",
+      "seconds": 0.028421998023986816,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatTests/testMovedPresentationDoesNotLetOutgoingViewHideTheNewOwner",
+      "seconds": 0.0007799863815307617,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatTests/testNewConversationPreservesSelectedViewWhileReadinessChanges",
+      "seconds": 0.000926971435546875,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatTests/testOptimisticFailureResetAndCommands",
+      "seconds": 0.000946044921875,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatTests/testOptimisticPromptReconcilesWithoutDuplicateOrRowIdentityChange",
+      "seconds": 0.0014140605926513672,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatTests/testOversizedAndMalformedRecordsRecoverAtNewline",
+      "seconds": 0.45146799087524414,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatTests/testPartialTranscriptAndUnknownRecords",
+      "seconds": 0.0040580034255981445,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatTests/testReaderHandlesReplacementTruncationAndWrongSession",
+      "seconds": 0.007731080055236816,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatTests/testRetainedHistoryRemainsReadableAfterProcessLookupFails",
+      "seconds": 0.001109004020690918,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatTests/testSessionUsageParsesReportedCountersWithoutInventingCost",
+      "seconds": 0.0014100074768066406,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatTests/testSubmissionFailureDoesNotFollowAClosedOrReplacementConversation",
+      "seconds": 0.001000046730041504,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatTests/testSubmittedThinkingClockSurvivesRemoteAcknowledgement",
+      "seconds": 0.0011110305786132812,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatTests/testTabStateAndManualChoiceSurviveRepeatedAccess",
+      "seconds": 0.0010520219802856445,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatTests/testToolUpdatesMergeInEitherOrderAndKeepSeparateCalls",
+      "seconds": 0.0008729696273803711,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatTests/testTranscriptCompatibilityDependsOnMetadataNotVersion",
+      "seconds": 0.009553074836730957,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatTests/testUnavailableCodeFontKeepsChatTypographyUsableAtSizeLimits",
+      "seconds": 0.007249951362609863,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatTests/testUnreadOutputTracksPresentationAcrossTerminalAndChatModes",
+      "seconds": 0.0008660554885864258,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatToolGroupingTests/testCollapsedHugeGroupDoesNotFormatHiddenTools",
+      "seconds": 0.6406079530715942,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatToolGroupingTests/testConsecutiveToolsGroupWithinTurnsAndKeepApprovalsVisible",
+      "seconds": 0.0012170076370239258,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatToolGroupingTests/testGroupIdentityAndExpansionSurviveNewToolsAndOutput",
+      "seconds": 0.0015060901641845703,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatToolGroupingTests/testHistoricalMessageSplitsToolGroupsWithoutSharingDisclosureState",
+      "seconds": 0.0013279914855957031,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatToolGroupingTests/testLiveMessageStepsCollapseAtCompletionAndRespectManualChoice",
+      "seconds": 0.0012869834899902344,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatToolGroupingTests/testMergedGroupDisclosureSurvivesPresentationRestore",
+      "seconds": 0.0021080970764160156,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatToolGroupingTests/testMergingLiveToolGroupsPreservesManualCollapse",
+      "seconds": 0.0009109973907470703,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatToolGroupingTests/testMergingToolGroupsKeepsPreviouslyVisibleToolsExpanded",
+      "seconds": 0.0009551048278808594,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatToolGroupingTests/testMockupGroupSummaryCountsOperationsWithoutDecodingOutput",
+      "seconds": 0.002823948860168457,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatToolGroupingTests/testNativeGroupAndChildUnwrapIndependentlyAndRetainState",
+      "seconds": 6.647372007369995,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatToolGroupingTests/testReplyTimesDoNotCollideAcrossDelimitedTurnAndItemIDs",
+      "seconds": 0.0014190673828125,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatToolGroupingTests/testReplyTimesFollowRecordedMessagesWithAndWithoutSteps",
+      "seconds": 0.001073002815246582,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatToolGroupingTests/testReplyTimeStaysBesideStepsAcrossExpansionAndNarrowLayout",
+      "seconds": 4.328770995140076,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ClaudeChatIntegrationTests/testLocalDiscoveryComposerThinkingToolsAndExit",
+      "seconds": 19.52399504184723,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ClaudeChatIntegrationTests/testQuitReturnsKeyboardFocusToShell",
+      "seconds": 2.6614969968795776,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ClaudeHistoryTests/testForeignHistoryAndReplacedFileInvalidatePendingOlderPages",
+      "seconds": 0.09215903282165527,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ClaudeHistoryTests/testLongTurnPartialTailAndContextLookup",
+      "seconds": 0.4077190160751343,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ClaudeHistoryTests/testRecentClaudeHistoryKeepsEveryOlderTurnAndIndependentLiveCursor",
+      "seconds": 0.7275890111923218,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ClaudeHistoryTests/testWrongSessionPageIsRejectedAndEmptyFileCanStartLater",
+      "seconds": 0.0046770572662353516,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ClaudeHookTests/testPreviousApprovalOptInSurvivesQuestionHookUpgrade",
+      "seconds": 0.0035599470138549805,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ClaudeHookTests/testRealLocalClaudeAllowsDeniesAndRevokesApproval",
+      "seconds": 7.866214990615845,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ClaudeHookTests/testSettingsPreserveHandlersPermissionsAndTrust",
+      "seconds": 0.00475001335144043,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ClaudeModelMenuTests/testCatalogWalkStopsAfterWrapAndStillHandlesClampedLists",
+      "seconds": 2.561851978302002,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ClaudeModelMenuTests/testParsesLiveChoicesWithoutFixedModelCatalog",
+      "seconds": 0.002631068229675293,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ClaudeModelMenuTests/testRecognizesOnlyCurrentConfirmationAndEmptyComposer",
+      "seconds": 0.0023109912872314453,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ClaudeModelMenuTests/testRejectsAmbiguousOrIncompleteMenusAndOldOutput",
+      "seconds": 0.003769993782043457,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ClaudeQuestionTests/testAnswersPreserveQuestionsAndRejectInvalidOrStaleReplies",
+      "seconds": 0.003608107566833496,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ClaudeQuestionTests/testMalformedQuestionnairesDoNotBecomeAnswerableTools",
+      "seconds": 0.0028710365295410156,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ClaudeQuestionTests/testQuestionFormNativeEventDelivery",
+      "seconds": 4.095322012901306,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ClaudeQuestionTests/testRealLocalQuestionsChoicesCustomTextSkipAndRevocation",
+      "seconds": 41.8707629442215,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ClaudeTranscriptTests/testIgnoresSidechainsInjectedContextAndRedactedThinking",
+      "seconds": 0.003327012062072754,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ClaudeTranscriptTests/testMalformedAndInterruptedInput",
+      "seconds": 0.4753509759902954,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ClaudeTranscriptTests/testNativeCommandsDoNotCreatePhantomUserTurns",
+      "seconds": 0.001223921775817871,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ClaudeTranscriptTests/testRealRecordShapesPreserveTurnsThinkingAndToolResults",
+      "seconds": 0.0033659934997558594,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ClaudeTransportTests/testHerdrChatStopAndPicker",
+      "seconds": 10.784641027450562,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ClaudeTransportTests/testLocalStopAndRecovery",
+      "seconds": 9.3783860206604,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ClaudeTransportTests/testTmuxChatStopAndPicker",
+      "seconds": 7.644791007041931,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/CodexMainThreadTests/testAsyncMainQuestionRemainsAfterTurnAndRepliesWithoutConsumingDraft",
+      "seconds": 13.627104997634888,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/CodexMainThreadTests/testAsyncQuestionsUseUserMessagesAndSurviveTurnCompletion",
+      "seconds": 0.0017650127410888672,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/CodexMainThreadTests/testFirstMainQuestionAttachesWithoutStatusAndTracksNewConversation",
+      "seconds": 2.459878921508789,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/CodexMainThreadTests/testLaunchPreservesCommandsAndConfiguration",
+      "seconds": 0.0011190176010131836,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/CodexMainThreadTests/testMainConversationAttachesThroughPackageLauncher",
+      "seconds": 2.8663519620895386,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/CodexMainThreadTests/testMainQuestionsInNativeTmux",
+      "seconds": 2.895400047302246,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/CodexMainThreadTests/testRemoteLaunchPreservesDirectoryFilteringAndExplicitOverrides",
+      "seconds": 0.001056075096130371,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/CodexMainThreadTests/testStopThinkingInterruptsOnlyTheCurrentCodexTurnAndKeepsTheCLIUsable",
+      "seconds": 1.6922019720077515,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/CodexMainThreadTests/testTranscriptRecoversMissedAsyncQuestionAndRecognizesTerminalAnswer",
+      "seconds": 0.002877950668334961,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ComposerEditingTests/testBackspaceNeverDiscardsHoveredOrSelectedQueueRows",
+      "seconds": 0.009195089340209961,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ComposerEditingTests/testBracketsSurroundUnicodeSkipCloserDeleteAndUndo",
+      "seconds": 0.008085012435913086,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ComposerEditingTests/testChatFontScalingKeepsComposerCodeAtSelectedSize",
+      "seconds": 0.007858991622924805,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ComposerEditingTests/testCommandArrowsMoveAndSelectTextThroughApplicationMenus",
+      "seconds": 0.03451097011566162,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ComposerEditingTests/testDoubleControlDExitsOnlyWithTwoRecentPressesInAnEmptyComposer",
+      "seconds": 0.005700945854187012,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ComposerEditingTests/testDoubleControlDResetsWhenTypingOrChangingFocusAndPreservesForwardDelete",
+      "seconds": 0.010144948959350586,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ComposerEditingTests/testFenceRangesAliasesThemesAndBoundedFallback",
+      "seconds": 0.006080985069274902,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ComposerEditingTests/testMultilineEditorShortcutsTakePrecedenceOverApplicationMenus",
+      "seconds": 0.016512036323547363,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ComposerEditingTests/testMultilineSlashBangAndOptionCharactersUseTextEditing",
+      "seconds": 0.007375001907348633,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ComposerEditingTests/testOptionArrowsMoveInTextWithoutSwitchingDrafts",
+      "seconds": 0.0071419477462768555,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ComposerEditingTests/testPasteAndMarkedTextDoNotCompleteBracketsOrSubmit",
+      "seconds": 0.006062984466552734,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ComposerEditingTests/testQueueHoverEnablesEditSendAndDeleteShortcuts",
+      "seconds": 0.0054819583892822266,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ComposerEditingTests/testQueueSelectionDoesNotCaptureDraftNavigationOrSending",
+      "seconds": 0.005449056625366211,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ComposerEditingTests/testQueueShortcutsFollowHoverAndRespectDisabledActions",
+      "seconds": 0.006082057952880859,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ComposerEditingTests/testReturnKeypadAndStickyMultiline",
+      "seconds": 0.006391048431396484,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ComposerEditingTests/testSaveShortcutKeepsDraftAndOpensFreshBuffer",
+      "seconds": 0.00521695613861084,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ComposerEditingTests/testTabIndentsSelectionAndNeverQueues",
+      "seconds": 0.005594015121459961,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HerdrChatIntegrationTests/testChatFollowsRealHerdrTerminalsAcrossTabsSplitsMovesAndReattach",
+      "seconds": 13.218024015426636,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HerdrIntegrationTests/testLaunchFailuresAliasesServerRestartAndEmptySession",
+      "seconds": 5.099581003189087,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HerdrIntegrationTests/testRealHerdrHandoffNativeControlsAndPersistentTerminals",
+      "seconds": 4.868016958236694,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HerdrLaunchLifecycleTests/testFailedStartupCleansPartialGenerationAndCanRetry",
+      "seconds": 0.01321101188659668,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HerdrLaunchLifecycleTests/testRestartIsolatesLateWritersAndWaitsForRetiredControlCleanup",
+      "seconds": 0.18170905113220215,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HerdrLaunchLifecycleTests/testRuntimeRetryClearsErrorAndRealSSHUsesEachRestartedMailbox",
+      "seconds": 3.158729076385498,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HerdrLayoutTests/testDividerEscapeCancelsAndDoubleClickBalances",
+      "seconds": 0.000980973243713379,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HerdrLayoutTests/testSplitPathsAndPreviewCoordinates",
+      "seconds": 0.0008820295333862305,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HerdrLocalLayoutTests/testPreciseWheelDeltasAccumulateAndReverseWithoutLeakingIntoKeys",
+      "seconds": 0.0006630420684814453,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HerdrLocalLayoutTests/testRealLocalLayoutsPreserveHerdrTabsAndWheelScrollsServerHistory",
+      "seconds": 3.2983999252319336,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HerdrLocalLayoutTests/testSavedLayoutsUseServerIDsAndPruneClosedTabs",
+      "seconds": 0.004212021827697754,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HerdrTests/testCancelledHandoffDoesNotStealSelection",
+      "seconds": 0.001989006996154785,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HerdrTests/testDeferredReattachCannotRestartStoppedCoordinator",
+      "seconds": 0.0611950159072876,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HerdrTests/testDetachingLastHerdrTabReleasesEndpointTransport",
+      "seconds": 0.001981973648071289,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HerdrTests/testDisconnectDuringCreationRetainsOnlyConfirmedTerminals",
+      "seconds": 0.0313340425491333,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HerdrTests/testEndpointAliasesShareNativeIdentity",
+      "seconds": 0.003242015838623047,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HerdrTests/testFailedHerdrFocusDoesNotSuppressLaterExternalSelection",
+      "seconds": 0.05560195446014404,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HerdrTests/testHandoffClosesOnlyLaunchingTabAndRemovesEmptySpace",
+      "seconds": 0.00580596923828125,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HerdrTests/testLargeSessionSkipsIdleInvalidationAndPreservesChangedIdentities",
+      "seconds": 0.33371400833129883,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HerdrTests/testLaunchClassification",
+      "seconds": 0.0008189678192138672,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HerdrTests/testMixedSpaceOrderSurvivesSnapshotsAndRemoteFocus",
+      "seconds": 0.002507925033569336,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HerdrTests/testNewerSelectionSupersedesPendingTabFocus",
+      "seconds": 0.09665894508361816,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HerdrTests/testNormalTerminalExitDoesNotDisableTakeoverAndRestartRecovery",
+      "seconds": 0.0011909008026123047,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HerdrTests/testOptimisticCloseRetainsTerminalAndRestoresIdentityOnFailure",
+      "seconds": 0.10143792629241943,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HerdrTests/testOptimisticCreationReusesPlaceholderAndMoveRetainsTerminal",
+      "seconds": 0.1751539707183838,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HerdrTests/testOptimisticRenameSurvivesOldRepliesAndRollsBackAfterRead",
+      "seconds": 0.15295100212097168,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HerdrTests/testQueuedHerdrFocusPreservesLatestSpaceAndInnerPaneSelection",
+      "seconds": 0.4354259967803955,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HerdrTests/testQueuedLayoutPreservesOptimisticCreationIdentityAcrossConfirmation",
+      "seconds": 0.13245606422424316,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HerdrTests/testReattachUsesServerSelectionEvenAfterBackgroundUpdates",
+      "seconds": 0.009327054023742676,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HerdrTests/testRetainedHerdrLauncherReturnsToShellAndButtonsCreatePlainSpace",
+      "seconds": 0.006247997283935547,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HerdrTests/testSelectingPendingTabIsSentAfterItsServerIdentityArrives",
+      "seconds": 0.08976197242736816,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HerdrTests/testSnapshotIdentitySelectionNamespaceAndDetach",
+      "seconds": 0.010905981063842773,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HerdrTests/testTwoAboveLayoutRecognition",
+      "seconds": 0.0014309883117675781,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HerdrTests/testUncertainMutationIgnoresObserverReadStartedBeforeFailure",
+      "seconds": 0.10077095031738281,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostDisconnectTests/testDisconnectInsideLocalTmuxRestoresTheSameShellAndBackend",
+      "seconds": 6.544554948806763,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostDisconnectTests/testDisconnectReleasesRetainedHerdrAndReusedOriginWithoutKillingJobs",
+      "seconds": 5.6424949169158936,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostDisconnectTests/testHostHeadingShowsInformationAndDisconnectsAllVerifiedConnectionsOnly",
+      "seconds": 13.831605911254883,
+      "outcome": "Failed"
+    },
+    {
+      "identifier": "DispatchTests/HostDisconnectTests/testHostPopoverDisconnectsEveryDirectSSHTmuxSpaceAndPreservesServer",
+      "seconds": 9.167532086372375,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostDisconnectTests/testHostPopupResetsPermissionsAndNextLoginShowsChooser",
+      "seconds": 11.549947023391724,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostDisconnectTests/testNewOrdinarySSHTabsReuseTheSidebarHost",
+      "seconds": 17.324560046195984,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostDisconnectTests/testNewStatisticsSSHTabsReuseTheSidebarHost",
+      "seconds": 2.9651390314102173,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostLinuxIntegrationTests/testLinuxIdentityAndCreationInPlainSSH",
+      "seconds": 3.3781750202178955,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostLinuxIntegrationTests/testLinuxIdentityAndCreationInRemoteHerdr",
+      "seconds": 2.8492389917373657,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostLinuxIntegrationTests/testLinuxIdentityAndCreationInRemoteTmux",
+      "seconds": 2.498510003089905,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostNativeIntegrationTests/testChangedAndMissingTmuxOriginsKeepTheLivePaneSeparate",
+      "seconds": 12.97847294807434,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostNativeIntegrationTests/testCloseAndDetachDuringTmuxHostMoveFollowTheOriginalTerminals",
+      "seconds": 1.626486897468567,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostNativeIntegrationTests/testDisconnectDuringTmuxHostMoveReleasesSidebarLock",
+      "seconds": 0.951138973236084,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostNativeIntegrationTests/testFirstShellOfNewTmuxServerHasPrivateSSHWrapper",
+      "seconds": 1.8130120038986206,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostNativeIntegrationTests/testManualTmuxWindowMoveSupersedesAutomaticReturn",
+      "seconds": 3.4529500007629395,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostNativeIntegrationTests/testNewTmuxShellWrapsSSHAndCommandNOffersTheOwningBackend",
+      "seconds": 2.893049955368042,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostNativeIntegrationTests/testSSHInsideHerdrSplitPreservesStableTerminalAndRestoresGeometry",
+      "seconds": 13.871739029884338,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostNativeIntegrationTests/testSSHInsideInactiveTmuxPaneUsesItsActualPTYAndPreservesServerSplit",
+      "seconds": 2.0802940130233765,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostPerformanceTests/testBackgroundWatcherBatchCost",
+      "seconds": 0.08345901966094971,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostPerformanceTests/testHostSidebarPresentationAndScaling",
+      "seconds": 4.039610028266907,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostPlacementTests/testChangedOriginDoesNotOverwriteLayoutOrNewTabs",
+      "seconds": 0.0013829469680786133,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostPlacementTests/testConcurrentSSHInOriginPreventsAMixedHostReturn",
+      "seconds": 0.0010350942611694336,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostPlacementTests/testExtractMiddleTabAndRestoreItsIndexWithoutClosingOrStealingFocus",
+      "seconds": 0.0010529756546020508,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostPlacementTests/testFilterFindsHostAliasesAndMixedRowsAndUnknownHostsRemainReachable",
+      "seconds": 0.0023320913314819336,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostPlacementTests/testHostOrderingShortcutsCyclingAndMixedHostDrops",
+      "seconds": 0.0013298988342285156,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostPlacementTests/testMissingOriginAndManualMovesKeepSeparateSpace",
+      "seconds": 0.0012689828872680664,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostPlacementTests/testPlacementRestoreAndRegroupEachCommitOnce",
+      "seconds": 0.001740097999572754,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostPlacementTests/testSingleTerminalRegroupsInPlaceAndRejectsStaleExit",
+      "seconds": 0.0009979009628295898,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostPlacementTests/testSplitRestoresGeometryAndKeepsSelectedTerminal",
+      "seconds": 0.0013699531555175781,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostPlacementTests/testSSHIdentityGraceSkipsProvisionalHostButKeepsRoutingAndSlowFallback",
+      "seconds": 0.6125149726867676,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostRegistryTests/testIdentityMergesAliasesAndUsersWithoutMergingNames",
+      "seconds": 0.0024759769439697266,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostRegistryTests/testLoginGroupingSeparatesRoutesAccountsAndExecutables",
+      "seconds": 0.003574967384338379,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostRegistryTests/testOldGreetingsMetadataPersistenceSeedsAndEmptyCards",
+      "seconds": 0.008535981178283691,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostRegistryTests/testPersistedExtremeOrderCannotOverflowWhenAnotherHostArrives",
+      "seconds": 0.005673050880432129,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostRegistryTests/testSameLoginSharesPresentationWithoutSharingAuthenticationOrGeneration",
+      "seconds": 0.0038139820098876953,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostRegistryTests/testStaleCallbacksCannotReplaceAConnectionAndFailuresAggregate",
+      "seconds": 0.0012090206146240234,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostSessionStoreTests/testFailedRestoredShellKeepsTabAndReconnectControl",
+      "seconds": 0.002467036247253418,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostSessionStoreTests/testForgetHostRemovesOnlyThatHostAndUpdatesSnapshotImmediately",
+      "seconds": 0.005415081977844238,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostSessionStoreTests/testMissingInvalidAndFutureSnapshotsAreIgnored",
+      "seconds": 0.0022269487380981445,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostSessionStoreTests/testNativeReferencesAndLayoutsSurviveDiskRoundTrip",
+      "seconds": 0.0017839670181274414,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostSessionStoreTests/testQuitSavesBeforeRuntimeCleanupAndDoesNotOverwriteOnTerminationNotification",
+      "seconds": 0.029934048652648926,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostSessionStoreTests/testRememberHostsDefaultsAndDisablingClearsSnapshotWithoutClosingTabs",
+      "seconds": 0.032832980155944824,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostSessionStoreTests/testRoundTripRestoresOfflineTabsWithoutStartingConnectionsAndOverwritesOneFile",
+      "seconds": 0.0391010046005249,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostStatisticsStoreTests/testAllHistoryAppendPathsAreBounded",
+      "seconds": 0.6617629528045654,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostStatisticsStoreTests/testChartsBreakAtMissingSamplesAndAdvancePastDisconnectedHistory",
+      "seconds": 0.0009309053421020508,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostStatisticsStoreTests/testHostGroupingDoesNotMergeAccountsOrAuthorizationAndPrefersCurrentTerminal",
+      "seconds": 0.0014700889587402344,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostStatisticsStoreTests/testInactiveHistoryExpiresWithoutSamplingAndPreservesLastStaleSample",
+      "seconds": 0.13817107677459717,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostStatisticsStoreTests/testLocalBackgroundHistoryContinuesAfterLastViewerCloses",
+      "seconds": 5.146327972412109,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostStatisticsStoreTests/testLocalFirstRatesAreUnknownAndMemoryIsExplicitlyCollected",
+      "seconds": 0.13108301162719727,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostStatisticsStoreTests/testRemoteProcessSortingUnknownCPUAndPartialSnapshot",
+      "seconds": 0.0023980140686035156,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostStatisticsStoreTests/testUnknownRemoteNeverInheritsLocalMachineValues",
+      "seconds": 0.0356060266494751,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/HostStatisticsStoreTests/testUnsubscribeKeepsSamplingAndOnlyDisconnectCreatesGap",
+      "seconds": 0.09645307064056396,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/IntegrationPreferencesTests/testHerdrToggleRetainedLauncherEOFDetachAndClose",
+      "seconds": 1.1911929845809937,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/InterfaceMotionTests/testChatArrivalFadesAndMovesWithoutChangingLayoutAndReducedMotionOnlyFades",
+      "seconds": 2.964406967163086,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/InterfaceMotionTests/testChatArrivalsExcludeHistoryStreamingAndAcknowledgedPrompts",
+      "seconds": 0.0017659664154052734,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/InterfaceMotionTests/testClosingSecondSpaceLeavesNoSidebarDivider",
+      "seconds": 4.1288450956344604,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/InterfaceMotionTests/testConnectingArcRemainsVisibleAndStillWithReducedMotion",
+      "seconds": 0.44755399227142334,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/InterfaceMotionTests/testHostMoveOverlaysFinishCancelAndRespectReduceMotion",
+      "seconds": 2.0140100717544556,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/InterfaceMotionTests/testHostMovesUseRealSidebarAndTabMarkers",
+      "seconds": 6.327156901359558,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/InterfaceMotionTests/testSidebarAnimationCanReverseAndReduceMotionFinishesImmediately",
+      "seconds": 0.31494200229644775,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/InterfaceMotionTests/testSpaceNavigationDoesNotRetainAnOutgoingBitmap",
+      "seconds": 0.016877055168151855,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/InterfaceMotionTests/testSwitcherClicksCompactSizingAndApprovalReceipt",
+      "seconds": 3.308326005935669,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/InterfaceMotionTests/testTabNavigationSkipsSnapshotsWithSharedPanesAndCancelsLayoutAnimation",
+      "seconds": 0.3874020576477051,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/MainMockupPresentationTests/testLayoutControlRemainsInGeometricTopRightForCustomSplits",
+      "seconds": 0.001461029052734375,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/MainMockupPresentationTests/testMainEmptyReducedFlatTreeAndCustomSplitStates",
+      "seconds": 5.472250938415527,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/MainMockupPresentationTests/testOverflowAttentionJumpSwitcherAndLastSpaceShortcut",
+      "seconds": 5.197009921073914,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/MainMockupPresentationTests/testSidebarPalettesPreserveTerminalSurface",
+      "seconds": 2.414185047149658,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/NativeChatCommandTests/testRemoteTmuxExitLatency",
+      "seconds": 11.877515077590942,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/NativeChatCommandTests/testShellCommandInTmuxDoesNotWaitForModelAcknowledgement",
+      "seconds": 2.7765350341796875,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/NativeChatCommandTests/testShellCommandsAreNativeAndCannotBeQueued",
+      "seconds": 0.0020619630813598633,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/NativeChatCommandTests/testShellCompletionRequiresMatchingResultAndRestoredComposer",
+      "seconds": 0.0011339187622070312,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/NativeChatCommandTests/testStructuredShellCompletionPreservesOutputAndMatchesPendingCommand",
+      "seconds": 0.0013899803161621094,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/NativeChatCommandTests/testTranscriptUserShellCommandUsesStructuredIdentity",
+      "seconds": 0.0008569955825805664,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/NativeSSHEnvironmentTests/testCommandWrappersPreserveArgumentsInShimsAndInteractiveFunctions",
+      "seconds": 0.8804099559783936,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/NativeSSHEnvironmentTests/testExecutableLookupHonorsPATHAndSkipsCurrentAndRetiredShims",
+      "seconds": 0.009464025497436523,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/NativeSSHEnvironmentTests/testNativeBashImportsPrivateSSHFunction",
+      "seconds": 0.08261406421661377,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/NativeSSHEnvironmentTests/testNativeBashRetainsExportedUserFunctionsThroughTmux",
+      "seconds": 0.10031890869140625,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/NativeSSHEnvironmentTests/testNativeTerminalLeavesSudoUnwrapped",
+      "seconds": 0.20388007164001465,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/NativeSSHEnvironmentTests/testNativeZshRetainsUserStartupAndWrapsSSH",
+      "seconds": 0.09620893001556396,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/NativeSSHEnvironmentTests/testSSHLauncherUsesPATHAndRetainsExplicitExecutable",
+      "seconds": 0.194646954536438,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/NativeSSHEnvironmentTests/testWrappersPreserveUserFunctionsAndAliases",
+      "seconds": 1.1333889961242676,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/NativeTabCloseTests/testClosingIdlePanePreservesHiddenSiblingWork",
+      "seconds": 0.9194949865341187,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/NativeTabCloseTests/testCommandWPreservesForegroundBackgroundAndStoppedTmuxJobs",
+      "seconds": 1.7670949697494507,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/NativeTabCloseTests/testCommandWTerminatesIdleTmuxWindowAndAllItsPanes",
+      "seconds": 0.6957260370254517,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/NativeTabCloseTests/testLocalHerdrCloseTerminatesIdleButDetachesBackgroundJob",
+      "seconds": 1.2974779605865479,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/NativeTabCloseTests/testRemoteHerdrCloseTerminatesIdleButDetachesBackgroundJob",
+      "seconds": 6.024370908737183,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/NativeTabCloseTests/testRemoteTmuxCloseTerminatesIdleAndPreservesBackgroundJob",
+      "seconds": 2.6996970176696777,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/NewSpacePresentationTests/testBackendCacheAlsoCachesNoInstalledBackends",
+      "seconds": 0.006152033805847168,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/NewSpacePresentationTests/testBackendCacheHasOneMinuteTTLAndUsesHostIdentityAcrossRoutes",
+      "seconds": 0.0012049674987792969,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/NewSpacePresentationTests/testBackendCacheSharesPendingProbeAndSurvivesClosingAView",
+      "seconds": 0.030972957611083984,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/NewSpacePresentationTests/testEachHostOffersNewSpaceInItsHeaderWithLocalShortcutHint",
+      "seconds": 3.7718729972839355,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/NewSpacePresentationTests/testFailedBackendProbeStaysUnknownAndRetriesSoon",
+      "seconds": 0.002377033233642578,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/NewSpacePresentationTests/testGlobalChoicesGroupInstalledBackendsByHostAndTargetEachMachine",
+      "seconds": 0.004224061965942383,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/NewSpacePresentationTests/testHostScopedMenuShowsOnlyDirectBackendChoices",
+      "seconds": 0.003655076026916504,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/NewSpacePresentationTests/testHostSubmenusPreserveContextAndDisableHerdrWithoutItsHelper",
+      "seconds": 0.06295907497406006,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/NewSpacePresentationTests/testInstalledBackendProbeHidesMissingCommandsAndHandlesFailure",
+      "seconds": 0.6281520128250122,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/NewSpacePresentationTests/testRemoteBackendProbeLoadsZshInteractiveLoginPath",
+      "seconds": 0.16037499904632568,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/NewSpacePresentationTests/testRightClickAndHoldRequestMenuWithoutCreatingSpace",
+      "seconds": 0.5265629291534424,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/NewSpacePresentationTests/testRightClickPresentsCachedMenuWhileDiscoveryIsPending",
+      "seconds": 0.035820960998535156,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/PaneNavigationTests/testListsHiddenTmuxPanesAndEveryHerdrSurfaceOnce",
+      "seconds": 0.0023040771484375,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/PaneNavigationTests/testRankingByUrgency",
+      "seconds": 0.0027390718460083008,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/PaneNavigationTests/testRunningShellSurvivesMoveToNewSpace",
+      "seconds": 0.18101000785827637,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/PaneNavigationTests/testSidebarFilteringWithoutPopup",
+      "seconds": 6.921965956687927,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/PiBridgeTests/testNativeDialogBlocksInputEvenWithoutATitleOrActiveModelTurn",
+      "seconds": 0.0020750761032104492,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/PiChatIntegrationTests/testHerdrPiChatTransport",
+      "seconds": 4.492233991622925,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/PiChatIntegrationTests/testManagedExtensionReloadNativeDialogAndRevocation",
+      "seconds": 2.490823984146118,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/PiChatIntegrationTests/testNativeDiscoveryStreamingQueueStopModelAndSessionLifecycle",
+      "seconds": 7.525361061096191,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/PiChatIntegrationTests/testTmuxPiChatTransport",
+      "seconds": 3.0699470043182373,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/PiDiscoveryTests/testPiSetupHomeTreatsEmptyEnvironmentAsDefault",
+      "seconds": 0.0007500648498535156,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/PiHistoryTests/testExplicitLeafAppendIsIncrementalAndBranchSwitchInvalidatesOlderPages",
+      "seconds": 0.1046600341796875,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/PiHistoryTests/testLongTurnPartialTailKeepsToolPairsAndActualActivityContext",
+      "seconds": 0.33166801929473877,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/PiHistoryTests/testRecentPagesPreserveEveryActiveTurnAndIndependentLiveCursor",
+      "seconds": 0.5724790096282959,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/PiHistoryTests/testTreeSelectionExcludesAbandonedBranchesAndObservesUnpersistedNavigation",
+      "seconds": 0.004915952682495117,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/PiHistoryTests/testWrongSessionMissingParentsAndReplacementAreRejectedOrReloaded",
+      "seconds": 0.005853056907653809,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/PiTranscriptTests/testCompletedTextAndThinkingSurviveAnOlderLiveSnapshot",
+      "seconds": 0.0013549327850341797,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/PiTranscriptTests/testCompletedToolsRejectStaleLiveArgumentsAndAcceptLatePersistedCalls",
+      "seconds": 0.002054929733276367,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/PiTranscriptTests/testErrorsCancellationCompactionAndExtensionMessagesStayDistinct",
+      "seconds": 0.0013439655303955078,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/PiTranscriptTests/testFailedToolResultsAndManualBashPreserveOutcome",
+      "seconds": 0.0009219646453857422,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/PiTranscriptTests/testFirstTurnLiveUserPrecedesReplyAndMergesWithPersistedHistory",
+      "seconds": 0.00138092041015625,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/PiTranscriptTests/testIdenticalNativeMessagesAroundToolsKeepTheirDistinctIDs",
+      "seconds": 0.0021320581436157227,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/PiTranscriptTests/testIdentityAndFormatValidationRejectForeignOrRepeatedHeaders",
+      "seconds": 0.0010830163955688477,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/PiTranscriptTests/testLFFramingWaitsForCompleteRecordsAndPreservesUnicodeSeparators",
+      "seconds": 0.0009180307388305664,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/PiTranscriptTests/testLiveSnapshotsSharePersistedBlockIDsWithoutChangingActivityOrConfiguration",
+      "seconds": 0.0009719133377075195,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/PiTranscriptTests/testMalformedLinesRecoverWithoutLeakingContent",
+      "seconds": 0.449923038482666,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/PiTranscriptTests/testNativeRecordShapesPreserveThinkingToolsResultsAndTurnCompletion",
+      "seconds": 0.0033550262451171875,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/PlanOnePresentationTests/testChatKeepsEarlierTurnsInNativeRender",
+      "seconds": 1.9899879693984985,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/PlanOnePresentationTests/testNativeLayoutsDropZonesAndStatsPopover",
+      "seconds": 2.4792760610580444,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/PlanOnePresentationTests/testNativePickerAndFileViews",
+      "seconds": 1.448788046836853,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/PlanOnePresentationTests/testSourcePreviewRefreshesWhenDocumentChangesAndClearsFailedContent",
+      "seconds": 2.0387179851531982,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/PlanOneTests/testBundledFontsAndPersistedSidebarMode",
+      "seconds": 0.061041951179504395,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/PlanOneTests/testChatAvailabilityFollowsAttachmentAndSetting",
+      "seconds": 0.0012969970703125,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/PlanOneTests/testDiffContentCannotBecomeFileHeaders",
+      "seconds": 0.0009440183639526367,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/PlanOneTests/testHostSampling",
+      "seconds": 0.027881979942321777,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/PlanOneTests/testInsufficientTabsCannotCreateShellsAndEdgeDropKeepsIdentity",
+      "seconds": 0.0011670589447021484,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/PlanOneTests/testLayoutsRedistributeExistingTabsAndSingleMergesInSlotOrder",
+      "seconds": 0.001479029655456543,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/PlanOneTests/testMovingAcrossSpacesAndToNewSpaceKeepsEveryTab",
+      "seconds": 0.0024050474166870117,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/PlanOneTests/testSplittingSelectedTabChoosesNearestSourceNeighbor",
+      "seconds": 0.0011109113693237305,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/PlanOneTests/testToolPatchAndSourceUseRealLocalFile",
+      "seconds": 0.0016469955444335938,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/PlanOneTests/testTwoAboveLayoutEncodingAndRetiredPresetCompatibility",
+      "seconds": 0.0007680654525756836,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHBootstrapFallbackIntegrationTests/testFailedUploadPreservesShellTmuxAndCommandStatus",
+      "seconds": 2.5129709243774414,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHBootstrapFallbackIntegrationTests/testInvalidGreetingPreservesShellTmuxAndCommandStatus",
+      "seconds": 2.899034023284912,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHBootstrapFallbackIntegrationTests/testUnsupportedPlatformPreservesShellTmuxAndCommandStatus",
+      "seconds": 2.418256998062134,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHBootstrapPolicyTests/testDeadlineReapsAnAuxiliaryCommandIgnoringTermination",
+      "seconds": 0.400750994682312,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHBootstrapPolicyTests/testFailureRunsOriginalCommandOnceWithExactQuotingAndStatus",
+      "seconds": 0.3046020269393921,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHBootstrapPolicyTests/testOrdinaryAndUnmarkedBundlesNeverStartAnAuxiliaryCommand",
+      "seconds": 0.0030928850173950195,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHBootstrapPolicyTests/testPrivateCacheRejectsSymlinksAndUnsafeModesWithoutChangingThem",
+      "seconds": 0.20891809463500977,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHBootstrapPolicyTests/testStartedHelperFailureNeverReplaysCommandAndPublicSessionHasNoCredential",
+      "seconds": 0.46627604961395264,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHBootstrapPolicyTests/testUnverifiedBinaryAndPlantedReadyLinkAreNeverExecuted",
+      "seconds": 0.7526379823684692,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHChatIntegrationTests/testRemoteHerdrAgentDiscoveryHistoryAndSourcePreview",
+      "seconds": 8.152018070220947,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHChatIntegrationTests/testRemoteHerdrApprovalHooks",
+      "seconds": 13.132259964942932,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHChatIntegrationTests/testRemoteHerdrSideConversationsKeepParentRunning",
+      "seconds": 8.95766806602478,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHChatIntegrationTests/testRemotePlainAgentDiscoveryHistoryAndSourcePreview",
+      "seconds": 5.238990068435669,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHChatIntegrationTests/testRemotePlainApprovalHooks",
+      "seconds": 7.171007037162781,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHChatIntegrationTests/testRemotePlainSideConversationsKeepParentRunning",
+      "seconds": 5.528571009635925,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHChatIntegrationTests/testRemoteTmuxAgentDiscoveryHistoryAndSourcePreview",
+      "seconds": 5.999832987785339,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHChatIntegrationTests/testRemoteTmuxAsyncQuestionsCanAnswerAndSkipWithoutConsumingDraft",
+      "seconds": 8.097414016723633,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHChatIntegrationTests/testRemoteTmuxCommandSideConversationsKeepParentRunning",
+      "seconds": 5.978796005249023,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHChatIntegrationTests/testRemoteTmuxControlModeInSSHCommand",
+      "seconds": 5.584329962730408,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHChatIntegrationTests/testRemoteTmuxRespawnRediscoversAgent",
+      "seconds": 6.26849901676178,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHChatIntegrationTests/testRemoteTmuxSideConversationsKeepParentRunning",
+      "seconds": 6.676102995872498,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHClaudeIntegrationTests/testRemoteHerdrApprovalAllowDenyAndRevocation",
+      "seconds": 13.091516017913818,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHClaudeIntegrationTests/testRemoteHerdrClaudeReattachmentRejectsOldApprovalAndRecoversQuestions",
+      "seconds": 33.85777997970581,
+      "outcome": "Failed"
+    },
+    {
+      "identifier": "DispatchTests/SSHClaudeIntegrationTests/testRemoteHerdrDiscoveryMessagesHistoryAndExit",
+      "seconds": 53.60432589054108,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHClaudeIntegrationTests/testRemoteHerdrQuestionsAnswersSkipAndRevocation",
+      "seconds": 23.279948115348816,
+      "outcome": "Failed"
+    },
+    {
+      "identifier": "DispatchTests/SSHClaudeIntegrationTests/testRemoteIntegrationRevocationRejectsPendingApprovals",
+      "seconds": 41.554595947265625,
+      "outcome": "Failed"
+    },
+    {
+      "identifier": "DispatchTests/SSHClaudeIntegrationTests/testRemotePlainApprovalAllowDenyAndRevocation",
+      "seconds": 7.962618947029114,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHClaudeIntegrationTests/testRemotePlainDiscoveryMessagesHistoryAndExit",
+      "seconds": 13.266416072845459,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHClaudeIntegrationTests/testRemotePlainQuestionsAnswersSkipAndRevocation",
+      "seconds": 10.679600954055786,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHClaudeIntegrationTests/testRemoteTmuxApprovalAllowDenyAndRevocation",
+      "seconds": 9.990296006202698,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHClaudeIntegrationTests/testRemoteTmuxClaudeReattachmentRejectsOldApprovalAndRecoversQuestions",
+      "seconds": 16.261638045310974,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHClaudeIntegrationTests/testRemoteTmuxDiscoveryMessagesHistoryAndExit",
+      "seconds": 16.539250016212463,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHClaudeIntegrationTests/testRemoteTmuxQuestionsAnswersSkipAndRevocation",
+      "seconds": 12.367684006690979,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHCompatibilityTests/testConfiguredJumpHostKeepsIntegrationAndExplicitCommandStatus",
+      "seconds": 4.237794995307922,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHCompatibilityTests/testIntegrationTogglesApplyInsideAnAlreadyOpenSSHShell",
+      "seconds": 3.086916923522949,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHCompatibilityTests/testNestedSSHDoesNotAdoptTheInnerAgentAsAnOuterHostAgent",
+      "seconds": 3.9084229469299316,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHCompatibilityTests/testRemoteTmuxDiscoversAgentsStartedBeforeSSHInInactiveWindows",
+      "seconds": 4.58120596408844,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHConnectionLifetimeTests/testOriginShellExitWithoutNativeConsumersReleasesMaster",
+      "seconds": 2.621591091156006,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHConnectionLifetimeTests/testRemoteHerdrSurvivesOriginShellExitUntilLastDetach",
+      "seconds": 3.688436985015869,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHConnectionLifetimeTests/testRemoteHerdrSurvivesOriginTabCloseUntilLastDetach",
+      "seconds": 3.5313069820404053,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHConnectionLifetimeTests/testRetainedHerdrDoesNotOwnReusedOriginSSHOrTmux",
+      "seconds": 6.099782943725586,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHConnectionStateTests/testRetirementCancelsOnlyItsOwnWorkAndKeepsCleanupAwaitable",
+      "seconds": 0.0024269819259643555,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHConsentIntegrationTests/testCancelledPresenterClosesItsSheetWithoutAGrant",
+      "seconds": 0.681656002998352,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHConsentIntegrationTests/testCapabilityUpgradeRequiresAnotherExplicitNativeChoice",
+      "seconds": 0.7619590759277344,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHConsentIntegrationTests/testConcurrentCancelAbortsBothSSHCommandsWithoutInstallingHelpers",
+      "seconds": 1.5537229776382446,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHConsentIntegrationTests/testConcurrentDontInstallRunsOrdinarySSHAndRemembersTheChoice",
+      "seconds": 1.7122329473495483,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHConsentIntegrationTests/testLongDestinationAndSettingsCancellation",
+      "seconds": 0.7562930583953857,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHConsentIntegrationTests/testPresenterCancellationWinsOverQueuedReconnectActivation",
+      "seconds": 1.3503930568695068,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHConsentIntegrationTests/testRememberedChoiceAndChangedConfigurationUseTheNativeSheet",
+      "seconds": 1.417829990386963,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHConsentPresentationTests/testCancellingQueuedPresenterPreservesVisibleDraft",
+      "seconds": 1.4288740158081055,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHConsentPresentationTests/testClosingParentWindowFinishesPresenterAndStopsPolling",
+      "seconds": 1.295206069946289,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHConsentPresentationTests/testClosingParentWindowFinishesQueuedPresenters",
+      "seconds": 1.9720948934555054,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHConsentPresentationTests/testConnectionChangeMovesFocusOutOfHiddenReconnectButton",
+      "seconds": 0.6654459238052368,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHConsentPresentationTests/testConnectionTransitionsPreserveDraftAndStopRefreshingAfterClose",
+      "seconds": 4.351446986198425,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHConsentPresentationTests/testDefaultsAreDraftUntilSaveAndReconnectIsExplicit",
+      "seconds": 1.0571919679641724,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHConsentPresentationTests/testDefaultsRemainAccurateAcrossLiveConnectionChanges",
+      "seconds": 1.3970829248428345,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHConsentPresentationTests/testDisablingHelperMovesFocusOutOfDisabledFeature",
+      "seconds": 0.6505070924758911,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHConsentPresentationTests/testFeatureSelectionsWaitForConnectAndParentPreservesChildren",
+      "seconds": 0.6254420280456543,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHConsentPresentationTests/testMixedConnectionsRequireEveryNativeFeatureBeforeReconnect",
+      "seconds": 2.395448923110962,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHConsentPresentationTests/testModifiedKeysDoNotChangeOrDismissIntegrationDraft",
+      "seconds": 0.6287920475006104,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHConsentPresentationTests/testModifiedReturnDoesNotSaveIntegrationDraft",
+      "seconds": 0.63224196434021,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHConsentPresentationTests/testPlainSSHAndCancellation",
+      "seconds": 1.2499539852142334,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHConsentPresentationTests/testReconnectIsHiddenForUnchangedSettingsReductionsAndRevertedEdits",
+      "seconds": 0.6185740232467651,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHConsentPresentationTests/testReconnectRequiresFeaturesForExistingNativeSessions",
+      "seconds": 0.6200540065765381,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHConsentPresentationTests/testReconnectRevalidatesNativeRequirementsAtActivation",
+      "seconds": 0.8319779634475708,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHConsentPresentationTests/testReturnSavesAllFeaturesAndEscapeDiscardsEdits",
+      "seconds": 1.2514829635620117,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHConsumerCleanupTests/testApplicationQuitRepliesAfterMasterHelperAndMailboxCleanup",
+      "seconds": 2.8071290254592896,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHConsumerCleanupTests/testFailedHerdrLaunchDoesNotRetainMasterAfterOriginExit",
+      "seconds": 2.917443037033081,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHConsumerCleanupTests/testRuntimeStopReleasesActiveMasterAndHelperBeforeRemovingMailbox",
+      "seconds": 2.7527260780334473,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHConsumerCleanupTests/testUpstreamFinalWorkspaceCloseReleasesRetainedMasterAndHelper",
+      "seconds": 3.9464930295944214,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHFileConsistencyTests/testConcurrentFileRangesAndPreviewsShareTheBoundedWorker",
+      "seconds": 0.30387604236602783,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHFileConsistencyTests/testSameInodeMiddleRewriteInvalidatesRemoteHistoryAndLiveGeneration",
+      "seconds": 0.33132994174957275,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHHerdrIntegrationTests/testDisablingHelperRetainsHerdrRecovery",
+      "seconds": 6.508123993873596,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHHerdrIntegrationTests/testDisconnectDuringCreationRecoversConfirmedHerdrTerminals",
+      "seconds": 12.571158051490784,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHHerdrIntegrationTests/testHerdrThenTmuxRevocationRetainsBothSessions",
+      "seconds": 5.509851932525635,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHHerdrIntegrationTests/testQuitAndRelaunchRetainsHerdrUntilExplicitReconnect",
+      "seconds": 5.00341796875,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHHerdrIntegrationTests/testRemoteHerdrHandoffLayoutsScrollAndDetachKeepRemoteShell",
+      "seconds": 8.513538002967834,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHHerdrIntegrationTests/testRemovingHerdrPermissionRetainsRecovery",
+      "seconds": 6.5128830671310425,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHHerdrIntegrationTests/testRemovingOnlyHerdrPermissionRetainsRecovery",
+      "seconds": 6.43572199344635,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHHerdrIntegrationTests/testTmuxThenHerdrRevocationRetainsBothSessions",
+      "seconds": 5.4509899616241455,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHHostIsolationIntegrationTests/testDistinctAuthenticatedHostsIsolateCollidingHerdrAndCodexIdentities",
+      "seconds": 26.549027919769287,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHIntegrationPolicyTests/testCapabilitiesAndLiveReductions",
+      "seconds": 0.0009499788284301758,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHIntegrationPolicyTests/testCloneConsentStillDistinguishesResolvedAccountRouteAndIdentity",
+      "seconds": 0.12872600555419922,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHIntegrationPolicyTests/testConcurrentConsentWaitersShareOnePersistedGrant",
+      "seconds": 0.04090297222137451,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHIntegrationPolicyTests/testGrantsDoNotTransferBetweenAccountsAliasesExecutablesOrConfigurations",
+      "seconds": 0.0017130374908447266,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHIntegrationPolicyTests/testIndividualFeaturesRoundTripAndNeverEnableUnselectedOperations",
+      "seconds": 0.009655952453613281,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHIntegrationPolicyTests/testNativeSSHClonesReusePersistedConsentWithoutDuplicatingForwarding",
+      "seconds": 3.396551012992859,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHIntegrationPolicyTests/testNewCapabilitiesRequireConsentAndNeverEnterLiveReductions",
+      "seconds": 0.0026090145111083984,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHIntegrationPolicyTests/testPersistenceIsSeparateFromHostRegistry",
+      "seconds": 0.008857011795043945,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHIntegrationPolicyTests/testProcessCapabilityRenewsBothEnhancedGrantsWithoutUpgradingLiveConnections",
+      "seconds": 0.0026350021362304688,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHIntegrationPolicyTests/testRememberedStatisticsChoiceIncludesLatencyWithoutChangingItsProfile",
+      "seconds": 0.0018830299377441406,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHIntegrationPolicyTests/testRememberingCancellationAndConcurrentPromptDeduplication",
+      "seconds": 0.02680802345275879,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHIntegrationPolicyTests/testRemoteSideCapabilityDoesNotSilentlyUpgradeSavedChatGrants",
+      "seconds": 0.001974940299987793,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHIntegrationPolicyTests/testResetAllCancelsPendingChoicesWithoutRestoringOldPermissions",
+      "seconds": 0.0047800540924072266,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHIntegrationPolicyTests/testResetAllClearsEveryHostAndAccountPersistsAndRevokesLiveGrants",
+      "seconds": 0.007189035415649414,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHIntegrationPolicyTests/testResetForgetsOnlyTheSelectedScopeAndPublishesRevocation",
+      "seconds": 0.004310965538024902,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHIntegrationPolicyTests/testResetInvalidatesAnOpenPromptAndNextLoginPromptsAgain",
+      "seconds": 0.0029449462890625,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHIntegrationPolicyTests/testSettingsChoiceSupersedesAnOpenConsentPromptForEveryWaiter",
+      "seconds": 0.0026439428329467773,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHIntegrationPolicyTests/testStatsPermissionDisclosesProcessEnumeration",
+      "seconds": 0.0008310079574584961,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHLinuxClaudeIntegrationTests/testLinuxHerdrClaudeApprovalsAndQuestions",
+      "seconds": 19.74384307861328,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHLinuxClaudeIntegrationTests/testLinuxHerdrClaudeChat",
+      "seconds": 45.54629302024841,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHLinuxClaudeIntegrationTests/testLinuxPlainClaudeApprovalsAndQuestions",
+      "seconds": 13.99661910533905,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHLinuxClaudeIntegrationTests/testLinuxPlainClaudeChat",
+      "seconds": 16.809767961502075,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHLinuxClaudeIntegrationTests/testLinuxTmuxClaudeApprovalsAndQuestions",
+      "seconds": 15.930315017700195,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHLinuxClaudeIntegrationTests/testLinuxTmuxClaudeChat",
+      "seconds": 20.627758979797363,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHLinuxIntegrationTests/testLinuxDetachedTmuxRestorePreservesProcesses",
+      "seconds": 6.6121439933776855,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHLinuxIntegrationTests/testLinuxExit255ReturnsToEditableLocalShell",
+      "seconds": 6.645661950111389,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHLinuxIntegrationTests/testLinuxGranularTmuxGrantSurvivesDetachAndReconnect",
+      "seconds": 6.568498969078064,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHLinuxIntegrationTests/testLinuxHerdrApprovalHooksAndCustomHomeTrust",
+      "seconds": 17.653748989105225,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHLinuxIntegrationTests/testLinuxHerdrChatAndRemoteFiles",
+      "seconds": 8.067540049552917,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHLinuxIntegrationTests/testLinuxPlainApprovalHooksAndCustomHomeTrust",
+      "seconds": 11.091467022895813,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHLinuxIntegrationTests/testLinuxPlainChatAndRemoteFiles",
+      "seconds": 5.54339599609375,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHLinuxIntegrationTests/testLinuxSupportedTmuxCheckedChatAndRemoteFiles",
+      "seconds": 5.917650103569031,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHLinuxIntegrationTests/testLinuxTmuxApprovalHooksAndCustomHomeTrust",
+      "seconds": 14.578971982002258,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHLinuxIntegrationTests/testLinuxTmuxChatCompatibilityAndRemoteFiles",
+      "seconds": 6.684108018875122,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHLinuxIntegrationTests/testLinuxTwoTmuxCodexChatsShareDirectoryDuringToolCalls",
+      "seconds": 15.848317980766296,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHLinuxPiIntegrationTests/testLinuxHerdrPiChat",
+      "seconds": 19.345391988754272,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHLinuxPiIntegrationTests/testLinuxPlainPiChat",
+      "seconds": 15.973307967185974,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHLinuxPiIntegrationTests/testLinuxTmuxPiChat",
+      "seconds": 17.784197092056274,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHPiIntegrationTests/testRemoteHerdrPiChatAndBranchReconnect",
+      "seconds": 26.74828803539276,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHPiIntegrationTests/testRemoteManagedPiExtensionInstallReloadAndRevocation",
+      "seconds": 4.350134015083313,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHPiIntegrationTests/testRemotePlainPiChat",
+      "seconds": 13.923025012016296,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHPiIntegrationTests/testRemoteTmuxPiChatAndBranchReconnect",
+      "seconds": 18.2931889295578,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHProcessStatisticsIntegrationTests/testLinuxProcessRowsAndTerminalTraffic",
+      "seconds": 11.777668952941895,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHProcessStatisticsIntegrationTests/testMacOSFullProfileProcessRowsAndTerminalTraffic",
+      "seconds": 6.325368046760559,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHProcessStatisticsIntegrationTests/testMacOSStatisticsProfileProcessRowsAndTerminalTraffic",
+      "seconds": 6.15339994430542,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHProfileIntegrationTests/testExplicitTmuxControlModeWithFullIntegration",
+      "seconds": 2.1343719959259033,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHProfileIntegrationTests/testExplicitTmuxControlModeWithOrdinarySSH",
+      "seconds": 1.2811359167099,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHProfileIntegrationTests/testExplicitTmuxControlModeWithStatisticsOnly",
+      "seconds": 1.9183449745178223,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHProtocolV2Tests/testBackendHandlesCannotCrossConnections",
+      "seconds": 0.12439501285552979,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHProtocolV2Tests/testFileReadRejectsMetadataIdentityMismatch",
+      "seconds": 0.045533061027526855,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHProtocolV2Tests/testHerdrOperationCodecRejectsGenericControlsAndUnknownFields",
+      "seconds": 0.0010271072387695312,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectIntegrationTests/testAuthenticatedExit255ReturnsToLocalShellWithoutReconnect",
+      "seconds": 2.383686065673828,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectIntegrationTests/testBrokerOnlyFailureRetiresOldMasterBeforeResumingLauncher",
+      "seconds": 3.4398380517959595,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectIntegrationTests/testClosingRemoteDetachedRestoreAfterSSHStartsAllowsCleanRetry",
+      "seconds": 7.63470196723938,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectIntegrationTests/testDetachedRemoteSpaceCanBeFilteredBySSHDestination",
+      "seconds": 5.043689012527466,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectIntegrationTests/testDetachedSSHRestoreRejectsMissingAndReplacementServers",
+      "seconds": 6.7212289571762085,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectIntegrationTests/testDisablingHelperKeepsChatDraftAndConnectedShell",
+      "seconds": 2.761546015739441,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectIntegrationTests/testDisablingHelperRetainsNativeTmuxRecovery",
+      "seconds": 4.029294967651367,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectIntegrationTests/testDisablingRemoteChatKeepsDraftAndConnectedShell",
+      "seconds": 2.6671600341796875,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectIntegrationTests/testDisconnectDuringReplacementShellStartupCanRetry",
+      "seconds": 5.720064043998718,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectIntegrationTests/testDisconnectedShellClosesWithoutConfirmationButOtherCommandsRemainProtected",
+      "seconds": 2.2474249601364136,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectIntegrationTests/testExitAndControlDReturnToAnEditableLocalShell",
+      "seconds": 3.3479249477386475,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectIntegrationTests/testFilteredRestoreAllLeavesUnmatchedDetachedSpaceAndProcessesUntouched",
+      "seconds": 5.088322043418884,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectIntegrationTests/testForgettingDisconnectedTmuxHostPreservesRemoteJobs",
+      "seconds": 2.7156360149383545,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectIntegrationTests/testGranularTmuxGrantPublishesShellLifecycle",
+      "seconds": 2.8038198947906494,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectIntegrationTests/testHelperDisableThenControlDReturnsToLocalShell",
+      "seconds": 2.662822961807251,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectIntegrationTests/testInputImmediatelyAfterShellRecoveryReachesRemoteShell",
+      "seconds": 13.760580897331238,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectIntegrationTests/testIntegrationReconnectIncludesConnectionsStartedWhileSheetWasOpen",
+      "seconds": 5.039549946784973,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectIntegrationTests/testNewLocalTmuxTabFollowsFocusedPaneDirectory",
+      "seconds": 1.5118799209594727,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectIntegrationTests/testNewRemoteTmuxTabFollowsFocusedPaneDirectoryAcrossReconnect",
+      "seconds": 5.8398590087890625,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectIntegrationTests/testOfflineSpaceGroupingAndNameArePersistedAfterReconnect",
+      "seconds": 4.175879955291748,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectIntegrationTests/testOfflineTmuxPaneClosureAndMissingServerNeverRecreateCommands",
+      "seconds": 6.532986044883728,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectIntegrationTests/testPermissionRevocationDuringReplacementShellStartupCanRetry",
+      "seconds": 5.671750068664551,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectIntegrationTests/testQuitAndRelaunchKeepsShellOfflineUntilReconnect",
+      "seconds": 4.647688984870911,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectIntegrationTests/testQuitAndRelaunchRetainsTmuxUntilExplicitReconnect",
+      "seconds": 4.4321640729904175,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectIntegrationTests/testRemovingTmuxPermissionRetainsRecovery",
+      "seconds": 4.221221089363098,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectIntegrationTests/testRepeatedDetachFreshSSHAttachAndReconnectKeepDetachedAndVisibleDisjoint",
+      "seconds": 14.91349995136261,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectIntegrationTests/testRepeatedHelperDisableAndExitReturnsToLocalShell",
+      "seconds": 54.351938009262085,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectIntegrationTests/testShellRecoveryPreservesSurfacesAndHealthyConnectionsAcrossSpaces",
+      "seconds": 12.159906029701233,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectIntegrationTests/testStoppingDisconnectedTmuxClearsRetainedSessionsWithoutKillingServer",
+      "seconds": 2.8018170595169067,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectTests/testCancellationAndClosedTabsRejectLateCompletion",
+      "seconds": 0.12237703800201416,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectTests/testHostDisconnectCancelsReconnectWithoutCancellingAnotherHost",
+      "seconds": 0.0911179780960083,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectTests/testHostRetryCoalescesClicksAndKeepsHealthyConnectionsUntouched",
+      "seconds": 0.11562395095825195,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectTests/testLoginSheetReceivesPasswordKeysAndRestoresWorkspaceFocus",
+      "seconds": 0.8150119781494141,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectTests/testNormalSSHExitIsDistinctFromTransportLossAndLegacyNotices",
+      "seconds": 0.0014450550079345703,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectTests/testOfflineBarFullWidthPresentation",
+      "seconds": 0.02717304229736328,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectTests/testOfflineTerminalDiscardsCompositionAndReturnReconnects",
+      "seconds": 0.030241012573242188,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectTests/testOfflineTimestampAndAttemptCountSurviveFailure",
+      "seconds": 0.032221078872680664,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectTests/testPartialRecoveryRetainsOnlyFailuresForRetry",
+      "seconds": 0.05537104606628418,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectTests/testReconnectBarActionsAndReducedMotion",
+      "seconds": 0.0036519765853881836,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectTests/testReconnectControlKeepsViewportAndForwardsWheel",
+      "seconds": 2.5637699365615845,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHReconnectTests/testSuccessfulGenerationReplacementShowsConnectedThenClears",
+      "seconds": 0.666985034942627,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHRecoveryIntegrationTests/testRemoteHerdrMasterLossPreservesDraftLayoutAndPendingApprovalWithoutReplay",
+      "seconds": 17.197216987609863,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHRecoveryIntegrationTests/testRemoteShellExitDrainsOutputAndRejectsForgedLifecycleEvents",
+      "seconds": 4.14390504360199,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHRecoveryIntegrationTests/testRemoteTmuxMasterLossPreservesDraftLayoutAndPendingApprovalWithoutReplay",
+      "seconds": 9.578405022621155,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHRecoveryIntegrationTests/testRemoteTmuxReconnectPreservesDraftBeforeFirstTurn",
+      "seconds": 5.994178056716919,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHShellIntegrationTests/testHostBorderWithoutSSH",
+      "seconds": 6.860622048377991,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHShellIntegrationTests/testHostTintFollowsSSHAcrossMixedPanesAndReconnect",
+      "seconds": 11.779734015464783,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHShellIntegrationTests/testTypedSSHAndNewSpaceInstallRemoteIntegrationAndRetainTmuxGateway",
+      "seconds": 5.117156982421875,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHSpaceTests/testConnectingSpinnerPrecedesAuthenticationAndClearsOnFailure",
+      "seconds": 7.109215974807739,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHSpaceTests/testRemoteTmuxPopupCreatesBackendAndLocalSpaces",
+      "seconds": 11.659608006477356,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHStatisticsStoreTests/testBackgroundHistoryKeepsCPUBaselineAcrossPopupCadenceChanges",
+      "seconds": 0.19453203678131104,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHStatisticsStoreTests/testBackgroundLatencyPausesForSleepAndDisconnectAndRefreshesOnWake",
+      "seconds": 0.35364997386932373,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHStatisticsStoreTests/testBackgroundSamplingSlowsWithoutSubscribersAndOneSamplerServesMultipleViews",
+      "seconds": 0.2655419111251831,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHStatisticsStoreTests/testFailoverUsesOnlyAlreadyLiveSameAccountConnections",
+      "seconds": 0.1274319887161255,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHStatisticsStoreTests/testLatencyFailureRecoversWithoutStoppingMetricsOrUsingAnotherAccount",
+      "seconds": 0.1657240390777588,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHStatisticsStoreTests/testLatencyRefreshesImmediatelyOnOpenSharesPollingAndSlowsAfterClose",
+      "seconds": 0.32780396938323975,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHStatisticsStoreTests/testOlderHelperAndBlockedProcessesKeepAggregateSampling",
+      "seconds": 0.15074598789215088,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHStatisticsStoreTests/testOrdinaryAndIncompatibleConnectionsCannotRegister",
+      "seconds": 0.003381967544555664,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHStatisticsStoreTests/testProcessesShareSubscriptionsFailIndependentlyRecoverAndStayStale",
+      "seconds": 0.2986489534378052,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHStatisticsStoreTests/testReconnectDiscardsLateProbeAndPrefersThePopupConnection",
+      "seconds": 0.16217398643493652,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHStatisticsTests/testFirstSampleUnknownAndRatesUseRemoteTime",
+      "seconds": 0.0037620067596435547,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHStatisticsTests/testInterfaceChangesAndUnavailableFieldsStayUnknown",
+      "seconds": 0.002270936965942383,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHStatisticsTests/testProcessBaselinesResetForIdentityClockCounterAndMissingObservations",
+      "seconds": 0.0023540258407592773,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHStatisticsTests/testProcessRatesMemoryImmediatelyAndMulticore",
+      "seconds": 0.0014600753784179688,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHStatisticsTests/testProcessWireValidationAndInvalidSamplesResetRates",
+      "seconds": 0.0023839473724365234,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHStatisticsTests/testReconnectionRebootClockAndCounterResets",
+      "seconds": 0.002507925033569336,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHSubmissionIntegrationTests/testHerdrExitAfterPastePreservesDraftAndDoesNotSendReturnToShell",
+      "seconds": 6.602199077606201,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHSubmissionIntegrationTests/testLocalHerdrExitAfterPastePreservesDraftAndDoesNotSendReturnToShell",
+      "seconds": 3.7787410020828247,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHSubmissionIntegrationTests/testPlainExitAfterPastePreservesDraftAndDoesNotSendReturnToShell",
+      "seconds": 5.112882018089294,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHSubmissionIntegrationTests/testTmuxExitAfterPastePreservesDraftAndDoesNotSendReturnToShell",
+      "seconds": 5.123803019523621,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHSubmissionIntegrationTests/testTmuxExitCommandRechecksOwnershipBeforeReturn",
+      "seconds": 5.4192728996276855,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHSubmissionIntegrationTests/testTmuxQuitCommandRechecksOwnershipBeforeReturn",
+      "seconds": 5.4798500537872314,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHTransportTests/testBootstrapCancellationAndUnsupportedPlatformLeaveNoLiveChannel",
+      "seconds": 0.9078810214996338,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHTransportTests/testBootstrapConcurrentUploadsRepairCorruptCacheAndRecoverFromPartialUpload",
+      "seconds": 4.187582015991211,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHTransportTests/testBootstrapRequiresChecksumsAndRejectsLinkedCachePaths",
+      "seconds": 2.2854679822921753,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHTransportTests/testBootstrapUsesAuthenticatedMasterAndNeverRedialsAfterLoss",
+      "seconds": 1.4075770378112793,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHTransportTests/testFramesSurviveEverySplitAndRejectInvalidLengths",
+      "seconds": 0.0025559663772583008,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHTransportTests/testGreetingCancellationAndLateCallbacksStayWithTheirConnection",
+      "seconds": 0.6688059568405151,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHTransportTests/testInvocationPreservesOptionsAndOpenSSHCommandJoining",
+      "seconds": 0.0015200376510620117,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHTransportTests/testMasterCommandPreservesSSHChildIdentityWithShellExitTrap",
+      "seconds": 0.04567301273345947,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHTransportTests/testQueuedFramesPreserveOrderAcrossPartialDrainsAndReuse",
+      "seconds": 0.023806095123291016,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHTransportTests/testRemoteTranscriptPagingMatchesLocalAndDetectsReplacement",
+      "seconds": 0.38900303840637207,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHTransportTests/testResolvedConfigurationHonorsUserOverrides",
+      "seconds": 0.012387990951538086,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SSHTransportTests/testUnsupportedInvocationsPassThrough",
+      "seconds": 0.00533902645111084,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SettingsStatsPresentationTests/testCompactConnectionRowsKeepBackendBadgesAndHelperActionsVisible",
+      "seconds": 6.293907046318054,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SettingsStatsPresentationTests/testMonospacedFontDiscoveryPreservesAvailableFamilies",
+      "seconds": 0.3256649971008301,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SettingsStatsPresentationTests/testProcessSamplingDoesNotChangePopupContentHeight",
+      "seconds": 1.5450810194015503,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SettingsStatsPresentationTests/testRemoteHostCardShowsConnectionWithoutLocalMetrics",
+      "seconds": 1.4312350749969482,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SettingsStatsPresentationTests/testRemoteHostLatencyKeepsPopupSizeWhileLoadingReadyAndStale",
+      "seconds": 5.0453200340271,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SettingsStatsPresentationTests/testRemoteHostPopoverGrowsWithProcessesNearBottomOfScreen",
+      "seconds": 2.4454060792922974,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SettingsStatsPresentationTests/testRemotePartialProcessesShowMemoryBeforeCPUAndRetainStaleRows",
+      "seconds": 4.2724369764328,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SettingsStatsPresentationTests/testRemoteStatsPreferCurrentAccountShowUnknownRatesAndStayStaleAfterDisconnect",
+      "seconds": 1.7738419771194458,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SettingsStatsPresentationTests/testSettingsFitsAppearancePageAndPreservesVerticalResizing",
+      "seconds": 2.032892942428589,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SettingsStatsPresentationTests/testSettingsListsDisconnectedHostIntegrationsAndResetsAll",
+      "seconds": 4.068202972412109,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SettingsStatsPresentationTests/testSettingsNativeControlsRemainVisibleWithImplementedOptions",
+      "seconds": 9.368358969688416,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SettingsStatsPresentationTests/testStatsPopoverGrowsOnCPUSelectionAndStaysOnScreenAtEverySidebarHeight",
+      "seconds": 9.44523298740387,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SettingsStatsPresentationTests/testStatsPopoverKeepsTheRightInformationVisible",
+      "seconds": 5.785527944564819,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SettingsSynchronizationTests/testAppThemePickerUpdatesDefaultTerminalAndChatColors",
+      "seconds": 0.31360793113708496,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SettingsSynchronizationTests/testExplicitColorSchemesRemainIndependentOfAppTheme",
+      "seconds": 0.022832036018371582,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SettingsSynchronizationTests/testFontShortcutsSaveAndApplyConfiguredSize",
+      "seconds": 0.4748040437698364,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SettingsSynchronizationTests/testFullscreenSidebarButtonRefreshesWithoutRecreation",
+      "seconds": 0.3195120096206665,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SettingsSynchronizationTests/testRetainedSettingsReflectExternalChangesAndPreserveThemWhenEditing",
+      "seconds": 1.6943399906158447,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SettingsSynchronizationTests/testSidebarThemeDefaultsAndPersistenceAreIndependentOfTerminalThemes",
+      "seconds": 0.0010579824447631836,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SettingsSynchronizationTests/testThemeSelectorsFollowAppearance",
+      "seconds": 0.19241094589233398,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SpaceBranchTests/testConcurrentSpacesAllReceiveBranches",
+      "seconds": 0.011788010597229004,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SpaceBranchTests/testFirstTabIgnoresSelectionAndFollowsReorderingAndDirectoryChanges",
+      "seconds": 0.1370089054107666,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SpaceBranchTests/testFirstTmuxWindowDoesNotFollowSelectedWindow",
+      "seconds": 0.13707506656646729,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SpaceBranchTests/testMissingOversizedAndNonRegularMetadataStayEmpty",
+      "seconds": 0.015738964080810547,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SpaceBranchTests/testNestedDirectoryAndUnbornBranch",
+      "seconds": 0.0028319358825683594,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SpaceBranchTests/testRelativeWorktreeAndDetachedOrInvalidHeadStayEmpty",
+      "seconds": 0.0044100284576416016,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SpaceBranchTests/testSidebarModesRefreshAndClearUnavailableBranches",
+      "seconds": 5.409008026123047,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SpaceHoverCardTests/testBottomEdgeTabHoverOpensAboveAndStaysAboveOnRefresh",
+      "seconds": 0.012034893035888672,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SpaceHoverCardTests/testHoverPanelPreservesFocusAndDismissesBeforeSelecting",
+      "seconds": 0.8012819290161133,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SpaceHoverCardTests/testRouteUsesTheSpacesAccountAndNeverItsLocalSSHLaunchDirectory",
+      "seconds": 0.1439419984817505,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SpaceHoverCardTests/testTabHoverShowsReportedActivityBelowTabWithoutTakingFocus",
+      "seconds": 0.8280209302902222,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SplitSizingTests/testMinimumSizeAccountsForTheWholeLayout",
+      "seconds": 0.000677943229675293,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SplitSizingTests/testNestedNativeSplitsPreservePaneMinimaOnResizeAndDividerDrags",
+      "seconds": 0.007217884063720703,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SplitSizingTests/testSidebarLeavesEnoughRoomForFourColumnsAndRestoresAfterHiding",
+      "seconds": 0.0039010047912597656,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/SplitSizingTests/testTypographyUpdatesAcrossNativeSplitsAndMotionHosts",
+      "seconds": 0.1028740406036377,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TabCloseSelectionTests/testCloseConfirmationTracksLiveCommandsAndIdleShells",
+      "seconds": 0.2768280506134033,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TabCloseSelectionTests/testDetachPendingTmuxTabKeepsItDetachedAfterCreationAndRestoresSameProcess",
+      "seconds": 0.7631710767745972,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TabCloseSelectionTests/testHerdrCloseSelection",
+      "seconds": 1.9640319347381592,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TabCloseSelectionTests/testNativeCloseSelection",
+      "seconds": 0.6948020458221436,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TabCloseSelectionTests/testRemoteHerdrCloseSelection",
+      "seconds": 23.00292694568634,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TabCloseSelectionTests/testRemoteTmuxCloseSelection",
+      "seconds": 3.855702042579651,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TabCloseSelectionTests/testSSHCloseSelection",
+      "seconds": 2.833396077156067,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TabCloseSelectionTests/testTmuxCloseSelection",
+      "seconds": 1.354315996170044,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TabCloseSelectionTests/testTmuxDetachDoesNotRequireConfirmation",
+      "seconds": 0.6256150007247925,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TerminalIntegrationTests/testControlCReachesForegroundCommandThroughApplicationEvents",
+      "seconds": 0.37051093578338623,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TerminalIntegrationTests/testTerminalVisibilityTracksChatWindowAndTabWithoutStoppingSession",
+      "seconds": 3.0277180671691895,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TerminalIntegrationTests/testRealShellSurvivesTabsSpacesSplitsAndSettings",
+      "seconds": 8.55803894996643,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TerminalMachineTests/testIndependentAutoClosePreferencesMigrateAndReachWorkspace",
+      "seconds": 0.2585010528564453,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TerminalMachineTests/testIntegrationPreferencesMigrateAndRoundTrip",
+      "seconds": 0.0009520053863525391,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TerminalMachineTests/testNonInteractiveAndInvalidSSHProcessesAreNotCloned",
+      "seconds": 0.0008549690246582031,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TerminalMachineTests/testSSHConnectionCloningPreservesHostAuthenticationAndQuoting",
+      "seconds": 0.027522921562194824,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TerminalScrollbarTests/testHistoryRangeClampsEmptyShrinkingAndExtremeValues",
+      "seconds": 0.002691030502319336,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ThinkingAnimationTests/testActivityFormatsShellArgumentsLikeToolCards",
+      "seconds": 0.0058400630950927734,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ThinkingAnimationTests/testAdaptiveActivityUsesCurrentEventsAndKeepsRecentDetails",
+      "seconds": 0.0011440515518188477,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ThinkingAnimationTests/testCompletedActivityKeepsDetailsWithoutLastFragment",
+      "seconds": 0.0012919902801513672,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ThinkingAnimationTests/testFinishedDurationSwitchesToCompletionTimeAfterFiveMinutes",
+      "seconds": 0.001641988754272461,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ThinkingAnimationTests/testHistoryLoadingUsesActivityWithoutHistoricalReasoning",
+      "seconds": 0.0008699893951416016,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ThinkingAnimationTests/testLastActivityStaysHiddenRegardlessOfRowExpansion",
+      "seconds": 0.0011560916900634766,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ThinkingAnimationTests/testLiveActivityStaysReadableAndExpandsWithoutDuplicateIndicator",
+      "seconds": 3.3334290981292725,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ThinkingAnimationTests/testRealCodexShowsThinkingBeforeAndDuringReportedSummary",
+      "seconds": 12.856626987457275,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ThinkingAnimationTests/testReportedSummaryEventsDeduplicateAndIgnoreRawReasoning",
+      "seconds": 0.001855015754699707,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ThinkingAnimationTests/testThinkingSweepsForTenSecondsBeforeTracesAndDuringToolWork",
+      "seconds": 10.487545013427734,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ThinkingAnimationTests/testToolActivityFooterExpandsStopAndStatistics",
+      "seconds": 2.4004709720611572,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxChatIntegrationTests/testChatDiscoversInactiveWindowsRoutesPromptsAndSurvivesMovesAndReconnect",
+      "seconds": 4.857553958892822,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxChatIntegrationTests/testExistingServerSplitRemainsInsideItsWindow",
+      "seconds": 0.8351020812988281,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxChatIntegrationTests/testLayoutsRearrangeFourExistingWindowsWithoutCreatingShells",
+      "seconds": 5.043455958366394,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxEdgeCaseTests/testAddingDetachedTabAfterCancelledRestoreOverridesHiddenState",
+      "seconds": 0.8195459842681885,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxEdgeCaseTests/testAddingDetachedTabToPendingRestoreCoalescesLauncher",
+      "seconds": 0.7812809944152832,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxEdgeCaseTests/testAutomaticHandoffLayoutsPlainSpacesAndGroupDetach",
+      "seconds": 1.3282480239868164,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxEdgeCaseTests/testClosingPendingDetachedRestoreAllowsRetryWithoutDuplicateSpaces",
+      "seconds": 0.7826740741729736,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxEdgeCaseTests/testDeletedDetachedRestoreAfterDisconnectKeepsOtherWorkHidden",
+      "seconds": 0.9132980108261108,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxEdgeCaseTests/testDetachedRestoreRacingServerDeletionRemovesStalePane",
+      "seconds": 0.8019909858703613,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxEdgeCaseTests/testExplicitDetachPreservesServerPanesAndWindows",
+      "seconds": 0.6374410390853882,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxEdgeCaseTests/testExternalWindowsJoinTheActiveGroupAndClosingAGroupClosesAllItsTabs",
+      "seconds": 0.5431649684906006,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxEdgeCaseTests/testForgettingUnrequestedDetachedTabDuringRestoreKeepsItHidden",
+      "seconds": 0.781343936920166,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxEdgeCaseTests/testForgettingUnrequestedDetachedTabSurvivesCancelledRestore",
+      "seconds": 0.7700510025024414,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxEdgeCaseTests/testForgettingUnrequestedDetachedTabSurvivesFailedRestore",
+      "seconds": 0.950240969657898,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxEdgeCaseTests/testInitialFocusNativeWindowSelectionAndSessionSwitch",
+      "seconds": 3.0708709955215454,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxEdgeCaseTests/testIntegrationToggleUsesExistingTerminalAndHandoffKeepsSibling",
+      "seconds": 0.7898060083389282,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxEdgeCaseTests/testInterruptedTitleSequenceDoesNotHideLaterOutput",
+      "seconds": 0.6223139762878418,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxEdgeCaseTests/testLinkedWindowAliasesShareOneNativeSpace",
+      "seconds": 0.6128429174423218,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxEdgeCaseTests/testMovingWindowsRetainsExistingSplitsAndClosingOriginDetaches",
+      "seconds": 0.796645998954773,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxEdgeCaseTests/testPaneBorderRowsAndRestoredTitles",
+      "seconds": 2.3025749921798706,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxEdgeCaseTests/testPartialDetachedRestoreAfterDisconnectKeepsOtherWorkHidden",
+      "seconds": 1.1539769172668457,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxEdgeCaseTests/testPartialDetachedRestoreKeepsOnlyMissingPanesListed",
+      "seconds": 0.8190759420394897,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxEdgeCaseTests/testPendingLocalTabRenameUsesLatestTitleWhenCreationCompletes",
+      "seconds": 0.7564040422439575,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxEdgeCaseTests/testReplacementServerDoesNotShareStaleDetachedRestoreLauncher",
+      "seconds": 1.1658400297164917,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxEdgeCaseTests/testRestoreAllKeepsOtherServersPendingEntryWithSamePaneNumber",
+      "seconds": 1.159409999847412,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxEdgeCaseTests/testRestoreDetachedTabAndSpaceKeepsExistingProcesses",
+      "seconds": 4.398920893669128,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxEdgeCaseTests/testRestoringDeletedDetachedPaneReportsFailureOnLiveGateway",
+      "seconds": 0.7643060684204102,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxEdgeCaseTests/testWindowTabGroupingReordersMovesAndRestoresOnReconnect",
+      "seconds": 0.8255460262298584,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxEdgeCaseTests/testWindowTabsOwnLayoutsAndCommandShortcuts",
+      "seconds": 1.909451961517334,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxIntegrationTests/testControlModeCreatesNativePanesAndReconnectsToSurvivingShells",
+      "seconds": 6.7887139320373535,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxIntegrationTests/testDisconnectDropsUnconfirmedTmuxNames",
+      "seconds": 0.583156943321228,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxIntegrationTests/testDisconnectDuringDetachedPendingCreationRemovesUnconfirmedPane",
+      "seconds": 0.5816819667816162,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxIntegrationTests/testDisconnectDuringPendingCreationRemovesUnconfirmedPane",
+      "seconds": 0.5682439804077148,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxIntegrationTests/testDisconnectDuringPendingSpaceCreationRemovesUnconfirmedPane",
+      "seconds": 0.5835540294647217,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxIntegrationTests/testFailedPendingCreationRemovesDetachedPlaceholder",
+      "seconds": 0.6059689521789551,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxIntegrationTests/testFailedPendingCreationRemovesVisiblePlaceholder",
+      "seconds": 0.6505850553512573,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxIntegrationTests/testHerdrAndTmuxCoexistWithoutSharingLayoutsOrInput",
+      "seconds": 1.816277027130127,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxIntegrationTests/testNewTabAndSpaceWhileDisconnectedDoNotCreateUnrecoverablePlaceholders",
+      "seconds": 0.5950180292129517,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxIntegrationTests/testOfflineRenameDoesNotReplaceConfirmedTmuxNames",
+      "seconds": 0.569551944732666,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxIntegrationTests/testOptimisticCreationRenameCloseAndDividerReconciliation",
+      "seconds": 1.131080985069275,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxIntegrationTests/testRenamingWindowAndPanePreservesLiteralCharacters",
+      "seconds": 0.595952033996582,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxOutputPerformanceTests/testContinuousOutputCanBeInterrupted",
+      "seconds": 0.939041018486023,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxOutputPerformanceTests/testFindAndLargeOutputKeepNativePaneResponsive",
+      "seconds": 13.178477048873901,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxPresentationTests/testChatSwitchMovesBetweenTmuxTabBarPaneHeadersAndHiddenBar",
+      "seconds": 8.824475049972534,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxPresentationTests/testColumnsGiveEachWindowItsOwnTabBar",
+      "seconds": 1.3220959901809692,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxPresentationTests/testInitialAttachRespectsAConstrainedServerGrid",
+      "seconds": 0.4231729507446289,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxPresentationTests/testLocalAttachAndNewWindowsStartAtAvailableSize",
+      "seconds": 1.4557600021362305,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxPresentationTests/testSplitCreationPreservesTheOriginalWindow",
+      "seconds": 1.8821669816970825,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxPresentationTests/testSSHReattachRemapsPresentationWindowsWithoutCrossingAccountOrServer",
+      "seconds": 0.0011680126190185547,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxPresentationTests/testSSHTabNavigationDoesNotCaptureOutgoingPanes",
+      "seconds": 10.892642974853516,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TmuxPresentationTests/testTypedSSHAttachAndNewWindowsStartAtAvailableSize",
+      "seconds": 3.892886996269226,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ToolCommandPresentationTests/testActionLabelsPreserveExactCommands",
+      "seconds": 0.0067119598388671875,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ToolCommandPresentationTests/testCompoundCommandsAndUnrecognizedFlagsStayVisible",
+      "seconds": 0.0032590627670288086,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ToolCommandPresentationTests/testHumanizedCardsKeepCommandsInDetails",
+      "seconds": 1.268617033958435,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ToolCommandPresentationTests/testMultilineReadAndStatusStepsUseReadableSummaries",
+      "seconds": 0.0018930435180664062,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ToolCommandPresentationTests/testOnlyConfirmedOverallTestTotalsBecomeResults",
+      "seconds": 0.002519965171813965,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ToolCommandPresentationTests/testReadingDiffsDoesNotClaimToApplyPatches",
+      "seconds": 0.0010609626770019531,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ToolCommandPresentationTests/testRunningOutputAndTerminalPollingDoNotLookFinished",
+      "seconds": 0.0010509490966796875,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ToolReadCommandTests/testCapturedReadOutputPreservesCommandAndDoesNotBecomeAPatch",
+      "seconds": 0.0016150474548339844,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ToolReadCommandTests/testComplexCommandsKeepTheirOriginalPresentation",
+      "seconds": 0.0028400421142578125,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ToolReadCommandTests/testLiteralReadSummariesAndLineOrigins",
+      "seconds": 0.0010110139846801758,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ToolReadCommandTests/testReadCardShowsCapturedCodeWithoutShellSyntax",
+      "seconds": 0.9151300191879272,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TranscriptSnapshotTests/testMissingTranscriptStillReportsReadFailure",
+      "seconds": 0.0013470649719238281,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/UIWalkthroughTests/testCompactSplitKeepsSelectedTabClosableWithChatControls",
+      "seconds": 5.847572088241577,
+      "outcome": "Failed"
+    },
+    {
+      "identifier": "DispatchTests/UIWalkthroughTests/testCreationAndClosingShortcutsKeepTabsAndSpacesDistinct",
+      "seconds": 0.8149350881576538,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/UIWalkthroughTests/testLargeFontKeepsTabCloseButtonInsideVisibleStrip",
+      "seconds": 0.8272600173950195,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/UIWalkthroughTests/testLongTabTitlesKeepCloseButtonInsideVisibleStrip",
+      "seconds": 0.8327710628509521,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/UIWalkthroughTests/testMinimumWindowWithNestedSplits",
+      "seconds": 0.4767470359802246,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceFooterTests/testFooterAlignmentAcrossHostsWrappingAndSpaceChanges",
+      "seconds": 0.27209603786468506,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceTests/testAutomaticSpaceNameHandlesRootAndUnknownDirectory",
+      "seconds": 0.0015919208526611328,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceTests/testCloseBackgroundTabPreservesSelection",
+      "seconds": 0.0015929937362670898,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceTests/testClosingBackgroundSelectedTabsChoosesNeighborsAndRemovesEmptySpace",
+      "seconds": 0.001314997673034668,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceTests/testClosingBackgroundSpaceDoesNotChangeActiveSpace",
+      "seconds": 0.0010629892349243164,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceTests/testClosingNestedSplitCollapsesOnlyThatBranch",
+      "seconds": 0.0012309551239013672,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceTests/testExplicitNewSpaceChoiceStartsRequestedBackendOnTargetHost",
+      "seconds": 0.0017139911651611328,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceTests/testFontMenuContainsOnlyMonospacedFamilies",
+      "seconds": 0.03970599174499512,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceTests/testHostNewSpacePrefersCurrentThenExistingBackendOtherwiseNative",
+      "seconds": 0.0015799999237060547,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceTests/testInitialTabTitleUsesInheritedDirectoryBeforeShellStarts",
+      "seconds": 0.0011430978775024414,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceTests/testLayoutPresetsKeepVisibleTabsInTheirPositions",
+      "seconds": 0.010697007179260254,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceTests/testLocalReorderCommitsOnMouseUpAndEscapeCancels",
+      "seconds": 0.006727933883666992,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceTests/testMovingOnlyTabReindexesDestinationSpaceWithoutClosingShell",
+      "seconds": 0.001006007194519043,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceTests/testMovingSoleTabCollapsesSourceWithoutClosingShell",
+      "seconds": 0.0011029243469238281,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceTests/testNativeSpaceNameFollowsFirstTabUntilManuallyRenamed",
+      "seconds": 0.0010859966278076172,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceTests/testNumberedNavigationFocusesPanesWhileTabCyclingStaysInFocusedPane",
+      "seconds": 0.0012210607528686523,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceTests/testNumberedShortcutsFollowLayoutAndEachPanesCurrentTab",
+      "seconds": 0.005506038665771484,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceTests/testNumberedShortcutsReadCustomGridByRowsInsteadOfTreeOrder",
+      "seconds": 0.0011540651321411133,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceTests/testSettingsRoundTripAndInvalidInputDoesNotReplaceSavedValues",
+      "seconds": 0.002012968063354492,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceTests/testSidebarToggleRemembersOnlyExceptionsToAutomaticVisibility",
+      "seconds": 0.0010529756546020508,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceTests/testSinglePaneTabShortcutsFollowReorderingAndLayoutChanges",
+      "seconds": 0.0031549930572509766,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceTests/testSpaceNavigationWrapsAndKeepsEachSelection",
+      "seconds": 0.0009500980377197266,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceTests/testSpaceReorderingPreservesSelectionAndChangesNavigationOrder",
+      "seconds": 0.0008910894393920898,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceTests/testSpaceReorderUsesOneBoundaryAcrossBothRowsAndTheirGap",
+      "seconds": 0.006734013557434082,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceTests/testSpaceSelectionAndDirectoryInheritance",
+      "seconds": 0.0011730194091796875,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceTests/testSplitCreationKeepsTheOriginalVisible",
+      "seconds": 0.0018309354782104492,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceTests/testSplitLimitAndInvalidMoves",
+      "seconds": 0.0016438961029052734,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceTests/testSplittingSoleTabAtPaneLimitPreservesEveryShell",
+      "seconds": 0.0023440122604370117,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceTests/testSplitTogglesPreserveTabsFocusAndUnrelatedBranches",
+      "seconds": 0.0039670467376708984,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceTests/testTabAndSpaceShortcutsDispatchThroughTheApplicationMenu",
+      "seconds": 0.8199620246887207,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceTests/testTabReorderingAndInsertionIntoAnotherPanePreserveShells",
+      "seconds": 0.004194974899291992,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceTests/testThemeDefaultsAppearanceAndOlderSettings",
+      "seconds": 0.0020639896392822266,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceTests/testTmuxSpaceNameUsesFirstWindowAndPreservesCustomName",
+      "seconds": 0.0016380548477172852,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceTests/testTmuxSplitTogglesPreserveServerArrangements",
+      "seconds": 0.0021630525588989258,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceTests/testTmuxTabCyclingStaysInTheFocusedPaneAndPaneOneKeepsItsSelection",
+      "seconds": 0.0018519163131713867,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceTransactionTests/testAddingSpaceCommitsLayoutAndSelectionTogether",
+      "seconds": 0.0012149810791015625,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceTransactionTests/testCompleteLayoutCommitsOnceAndNoOpDoesNotPublish",
+      "seconds": 0.0011769533157348633,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceTransactionTests/testCompoundCommandsCommitOnceAndKeepTerminalIdentity",
+      "seconds": 0.0017050504684448242,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceTransactionTests/testCreatingHerdrSplitPublishesOneCompleteOptimisticLayout",
+      "seconds": 0.002170085906982422,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceTransactionTests/testCreatingLocalSplitPublishesOnlyTheCompleteLayout",
+      "seconds": 0.0011290311813354492,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceTransactionTests/testCreatingTmuxSplitCommitsOnceAndRetainsPlacementAfterConfirmation",
+      "seconds": 0.8249830007553101,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceTransactionTests/testRejectedSplitLeavesSourceAndSelectionUntouched",
+      "seconds": 0.0010139942169189453,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/WorkspaceTransactionTests/testThrowingMutationLeavesLayoutAndSelectionUntouched",
+      "seconds": 0.001071929931640625,
+      "outcome": "Passed"
+    }
+  ]
+}

@@ -1,0 +1,914 @@
+{
+  "source": "test/ssh-helper-rust.py",
+  "commit": "c1654ccb458b13dbdc92413413618c2acd7156ab",
+  "sha256": "f31b9898fd905bc8df7309f6a0fc467b694e221014eaf25e0654ca6cb3e07247",
+  "cases": [
+    {
+      "test": "ProtocolTests.test_registered_tmux_agent_submission",
+      "line": 33,
+      "end": 38,
+      "owner": "transport",
+      "scenario": null,
+      "held": [
+        "Direct agent registration/inspection/version or legacy-generation submission is absent; current chat requires a verified discovered binding."
+      ],
+      "assertion_lines": [
+        38
+      ]
+    },
+    {
+      "test": "ProtocolTests.test_named_tmux_registration_ownership_and_connection_scope",
+      "line": 41,
+      "end": 198,
+      "owner": "transport",
+      "scenario": "tmux",
+      "held": [
+        "Registration/inspection/startup and private-handle assertions moved behind the mux; no public current operation covers all old assertions."
+      ],
+      "assertion_lines": [
+        53,
+        54,
+        55,
+        57,
+        62,
+        63,
+        66,
+        67,
+        70,
+        71,
+        71,
+        81,
+        82,
+        83,
+        84,
+        89,
+        90,
+        91,
+        92,
+        93,
+        94,
+        95,
+        100,
+        103,
+        106,
+        144,
+        145,
+        146,
+        149,
+        153,
+        154,
+        165,
+        166,
+        191,
+        192,
+        61,
+        75,
+        76,
+        98,
+        135,
+        136,
+        142,
+        179,
+        180,
+        181,
+        183,
+        184,
+        120,
+        132,
+        175,
+        187
+      ]
+    },
+    {
+      "test": "ProtocolTests.test_pane_shell_registration_resolves_custom_socket_and_tmpdir",
+      "line": 201,
+      "end": 259,
+      "owner": "transport",
+      "scenario": null,
+      "held": [
+        "Registration/inspection/startup and private-handle assertions moved behind the mux; no public current operation covers all old assertions."
+      ],
+      "assertion_lines": [
+        221,
+        225,
+        227,
+        228,
+        229,
+        231,
+        232,
+        233,
+        249,
+        251,
+        253,
+        254,
+        255,
+        256,
+        224,
+        247
+      ]
+    },
+    {
+      "test": "ProtocolTests.test_typed_herdr_start_reuses_server_and_preserves_jobs",
+      "line": 262,
+      "end": 383,
+      "owner": "transport",
+      "scenario": null,
+      "held": [
+        "Registration/inspection/startup and private-handle assertions moved behind the mux; no public current operation covers all old assertions."
+      ],
+      "assertion_lines": [
+        278,
+        279,
+        281,
+        291,
+        292,
+        293,
+        293,
+        298,
+        299,
+        310,
+        321,
+        322,
+        324,
+        328,
+        329,
+        331,
+        345,
+        370,
+        371,
+        372,
+        284,
+        314,
+        351,
+        352,
+        353,
+        354,
+        360,
+        361,
+        362,
+        363,
+        364,
+        306,
+        307,
+        317,
+        358,
+        367
+      ]
+    },
+    {
+      "test": "ProtocolTests.test_typed_herdr_start_reports_spawn_uncertainty_without_retry",
+      "line": 385,
+      "end": 411,
+      "owner": "transport",
+      "scenario": null,
+      "held": [
+        "Registration/inspection/startup and private-handle assertions moved behind the mux; no public current operation covers all old assertions."
+      ],
+      "assertion_lines": [
+        397,
+        398,
+        404,
+        405,
+        406
+      ]
+    },
+    {
+      "test": "ProtocolTests.test_registered_herdr_agent_submission",
+      "line": 414,
+      "end": 518,
+      "owner": "transport",
+      "scenario": null,
+      "held": [
+        "Direct agent registration/inspection/version or legacy-generation submission is absent; current chat requires a verified discovered binding."
+      ],
+      "assertion_lines": [
+        435,
+        447,
+        452,
+        453,
+        482,
+        482,
+        477,
+        479,
+        479,
+        480,
+        499,
+        502,
+        503,
+        504,
+        505,
+        510,
+        492,
+        493,
+        494,
+        495,
+        496,
+        497,
+        508,
+        509
+      ]
+    },
+    {
+      "test": "ProtocolTests.test_registered_herdr_snapshot_identity_and_revocation",
+      "line": 521,
+      "end": 677,
+      "owner": "transport",
+      "scenario": "herdr",
+      "held": [
+        "Registration/inspection/startup and private-handle assertions moved behind the mux; no public current operation covers all old assertions."
+      ],
+      "assertion_lines": [
+        542,
+        543,
+        549,
+        554,
+        555,
+        565,
+        595,
+        597,
+        599,
+        601,
+        602,
+        603,
+        604,
+        605,
+        607,
+        608,
+        609,
+        625,
+        626,
+        627,
+        632,
+        633,
+        634,
+        635,
+        644,
+        645,
+        651,
+        654,
+        656,
+        657,
+        659,
+        661,
+        664,
+        665,
+        667,
+        668,
+        669,
+        670,
+        552,
+        564,
+        576,
+        585,
+        621,
+        622,
+        639,
+        642,
+        648,
+        572,
+        573,
+        575,
+        583,
+        584,
+        590,
+        591,
+        582
+      ]
+    },
+    {
+      "test": "ProtocolTests.test_individual_capabilities_start_without_stats_and_reduce",
+      "line": 679,
+      "end": 696,
+      "owner": "transport",
+      "scenario": null,
+      "held": [
+        "The old profile/capability/reduction API has no helper4 equivalent; no caller-side permission simulation."
+      ],
+      "assertion_lines": [
+        683,
+        684,
+        685,
+        693,
+        694,
+        696,
+        689,
+        690,
+        691
+      ]
+    },
+    {
+      "test": "ProtocolTests.test_greeting_and_no_implicit_profile",
+      "line": 698,
+      "end": 708,
+      "owner": "transport",
+      "scenario": "greeting",
+      "held": [
+        "The old profile/capability/reduction API has no helper4 equivalent; no caller-side permission simulation."
+      ],
+      "assertion_lines": [
+        700,
+        701,
+        702,
+        703,
+        704,
+        707,
+        708
+      ]
+    },
+    {
+      "test": "ProtocolTests.test_statistics_refuses_all_full_and_generic_operations",
+      "line": 710,
+      "end": 712,
+      "owner": "transport",
+      "scenario": "restricted",
+      "held": [
+        "The old profile/capability/reduction API has no helper4 equivalent; no caller-side permission simulation."
+      ],
+      "assertion_lines": [
+        712
+      ]
+    },
+    {
+      "test": "ProtocolTests.test_statistics_and_disks_are_separate_requests",
+      "line": 714,
+      "end": 723,
+      "owner": "transport",
+      "scenario": "stats",
+      "held": [],
+      "assertion_lines": [
+        716,
+        717,
+        718,
+        719,
+        721,
+        722,
+        723
+      ]
+    },
+    {
+      "test": "ProtocolTests.test_latency_echo_profiles_strict_decoding_and_revocation",
+      "line": 725,
+      "end": 735,
+      "owner": "transport",
+      "scenario": null,
+      "held": [
+        "The old profile/capability/reduction API has no helper4 equivalent; no caller-side permission simulation."
+      ],
+      "assertion_lines": [
+        728,
+        729,
+        730,
+        732,
+        733,
+        735
+      ]
+    },
+    {
+      "test": "ProtocolTests.test_process_statistics_profiles_strict_decoding_and_revocation",
+      "line": 737,
+      "end": 757,
+      "owner": "transport",
+      "scenario": "processes",
+      "held": [
+        "The old profile/capability/reduction API has no helper4 equivalent; no caller-side permission simulation."
+      ],
+      "assertion_lines": [
+        740,
+        742,
+        743,
+        744,
+        745,
+        746,
+        754,
+        755,
+        757,
+        748,
+        749,
+        750,
+        752
+      ]
+    },
+    {
+      "test": "ProtocolTests.test_unknown_fields_duplicate_keys_and_types_fail",
+      "line": 759,
+      "end": 764,
+      "owner": "transport",
+      "scenario": "invalid",
+      "held": [],
+      "assertion_lines": [
+        763,
+        764,
+        761
+      ]
+    },
+    {
+      "test": "ProtocolTests.test_revocation_and_increase_requires_new_connection",
+      "line": 766,
+      "end": 773,
+      "owner": "transport",
+      "scenario": null,
+      "held": [
+        "The old profile/capability/reduction API has no helper4 equivalent; no caller-side permission simulation."
+      ],
+      "assertion_lines": [
+        768,
+        770,
+        771,
+        772,
+        773
+      ]
+    },
+    {
+      "test": "ProtocolTests.test_full_reads_bounded_regular_files_and_revokes",
+      "line": 775,
+      "end": 793,
+      "owner": "files",
+      "scenario": null,
+      "held": [],
+      "assertion_lines": [
+        783,
+        784,
+        785,
+        787,
+        788,
+        791,
+        792,
+        793
+      ]
+    },
+    {
+      "test": "ProtocolTests.test_unread_reply_flood_fails_closed",
+      "line": 795,
+      "end": 820,
+      "owner": "transport",
+      "scenario": "flood",
+      "held": [],
+      "assertion_lines": [
+        819,
+        820
+      ]
+    },
+    {
+      "test": "ProtocolTests.test_source_previews_enforce_text_limits_and_permissions",
+      "line": 822,
+      "end": 850,
+      "owner": "files",
+      "scenario": null,
+      "held": [],
+      "assertion_lines": [
+        848,
+        850,
+        830,
+        840,
+        843,
+        847,
+        834,
+        837,
+        838
+      ]
+    },
+    {
+      "test": "ProtocolTests.test_full_still_forbids_generic_authority",
+      "line": 852,
+      "end": 856,
+      "owner": "transport",
+      "scenario": "forbidden",
+      "held": [],
+      "assertion_lines": [
+        856
+      ]
+    },
+    {
+      "test": "ProtocolTests.test_registered_handles_revalidate_process_and_connection",
+      "line": 858,
+      "end": 915,
+      "owner": "transport",
+      "scenario": null,
+      "held": [
+        "Direct agent registration/inspection/version or legacy-generation submission is absent; current chat requires a verified discovered binding."
+      ],
+      "assertion_lines": [
+        887,
+        890,
+        891,
+        892,
+        893,
+        906,
+        907,
+        909,
+        910,
+        882,
+        897,
+        898,
+        900,
+        901
+      ]
+    },
+    {
+      "test": "ProtocolTests.test_version_worker_success_limits_cancellation_and_revocation",
+      "line": 918,
+      "end": 982,
+      "owner": "transport",
+      "scenario": null,
+      "held": [
+        "Direct agent registration/inspection/version or legacy-generation submission is absent; current chat requires a verified discovered binding."
+      ],
+      "assertion_lines": [
+        946,
+        947,
+        978,
+        942,
+        943,
+        950,
+        952,
+        954,
+        976,
+        972,
+        973,
+        965,
+        966,
+        967,
+        968,
+        969
+      ]
+    },
+    {
+      "test": "ProtocolTests.test_agent_inspection_checks_account_pid_and_start_time",
+      "line": 984,
+      "end": 993,
+      "owner": "transport",
+      "scenario": null,
+      "held": [
+        "Direct agent registration/inspection/version or legacy-generation submission is absent; current chat requires a verified discovered binding."
+      ],
+      "assertion_lines": [
+        988,
+        989,
+        990,
+        991,
+        992,
+        993
+      ]
+    },
+    {
+      "test": "ProtocolTests.test_pi_extension_transport_binds_process_session_peer_and_grants",
+      "line": 996,
+      "end": 1103,
+      "owner": "transport",
+      "scenario": null,
+      "held": [
+        "Direct agent registration/inspection/version or legacy-generation submission is absent; current chat requires a verified discovered binding."
+      ],
+      "assertion_lines": [
+        1006,
+        1007,
+        1012,
+        1014,
+        1016,
+        1020,
+        1021,
+        1022,
+        1022,
+        1023,
+        1024,
+        1027,
+        1028,
+        1029,
+        1031,
+        1032,
+        1034,
+        1037,
+        1037,
+        1039,
+        1050,
+        1050,
+        1052,
+        1053,
+        1071,
+        1074,
+        1076,
+        1077,
+        1078,
+        1079,
+        1080,
+        1082,
+        1083,
+        1084,
+        1085,
+        1086,
+        1088,
+        1089,
+        1091,
+        1092,
+        1094,
+        1095,
+        1096,
+        1041,
+        1045,
+        1047,
+        1048,
+        1063,
+        1066
+      ]
+    },
+    {
+      "test": "ProtocolTests.test_worker_concurrency_is_bounded_and_broker_stays_responsive",
+      "line": 1105,
+      "end": 1116,
+      "owner": "transport",
+      "scenario": "workers",
+      "held": [],
+      "assertion_lines": [
+        1115,
+        1116,
+        1112,
+        1114
+      ]
+    },
+    {
+      "test": "ProtocolTests.test_fragmented_request_and_malformed_frames",
+      "line": 1118,
+      "end": 1130,
+      "owner": "transport",
+      "scenario": "framing",
+      "held": [],
+      "assertion_lines": [
+        1120,
+        1121,
+        1127,
+        1128
+      ]
+    },
+    {
+      "test": "HerdrFallbackTests.test_native_arguments_environment_directory_and_status",
+      "line": 1134,
+      "end": 1143,
+      "owner": "transport",
+      "scenario": null,
+      "held": [
+        "Native passthrough/non-PTY execution has no helper4 wire operation; the old CLI was removed."
+      ],
+      "assertion_lines": [
+        1142,
+        1143
+      ]
+    },
+    {
+      "test": "HerdrFallbackTests.test_missing_and_recursive_executables_fail_without_looping",
+      "line": 1145,
+      "end": 1153,
+      "owner": "transport",
+      "scenario": null,
+      "held": [
+        "Native passthrough/non-PTY execution has no helper4 wire operation; the old CLI was removed."
+      ],
+      "assertion_lines": [
+        1152,
+        1153
+      ]
+    },
+    {
+      "test": "HerdrFallbackTests.test_path_skips_nonexecutable_files",
+      "line": 1155,
+      "end": 1163,
+      "owner": "transport",
+      "scenario": null,
+      "held": [
+        "Native passthrough/non-PTY execution has no helper4 wire operation; the old CLI was removed."
+      ],
+      "assertion_lines": [
+        1163
+      ]
+    },
+    {
+      "test": "LoginFallbackTests.test_non_pty_command_preserves_bytes_quoting_and_exit_status",
+      "line": 1167,
+      "end": 1179,
+      "owner": "transport",
+      "scenario": null,
+      "held": [
+        "Native passthrough/non-PTY execution has no helper4 wire operation; the old CLI was removed."
+      ],
+      "assertion_lines": [
+        1177,
+        1178,
+        1179
+      ]
+    },
+    {
+      "test": "LoginFallbackTests.test_non_pty_command_retains_working_directory_and_environment",
+      "line": 1181,
+      "end": 1191,
+      "owner": "transport",
+      "scenario": null,
+      "held": [
+        "Native passthrough/non-PTY execution has no helper4 wire operation; the old CLI was removed."
+      ],
+      "assertion_lines": [
+        1188,
+        1190,
+        1191
+      ]
+    },
+    {
+      "test": "RelayTests.test_statistics_lifecycle_authorization_respects_kernel_identity",
+      "line": 1205,
+      "end": 1283,
+      "owner": "transport",
+      "scenario": null,
+      "held": [
+        "The old login-generation/lifecycle or parent-terminal ownership is absent from helper4 stdio; these assertions cannot be replaced with a fake renderer."
+      ],
+      "assertion_lines": [
+        1232,
+        1233,
+        1274,
+        1277,
+        1278,
+        1283,
+        1236,
+        1243,
+        1271,
+        1240,
+        1241,
+        1246,
+        1248,
+        1249,
+        1250,
+        1251,
+        1252,
+        1253,
+        1262,
+        1263,
+        1266,
+        1268,
+        1269
+      ]
+    },
+    {
+      "test": "RelayTests.test_registered_submission_and_exit_before_return",
+      "line": 1286,
+      "end": 1336,
+      "owner": "transport",
+      "scenario": null,
+      "held": [
+        "The old login-generation/lifecycle or parent-terminal ownership is absent from helper4 stdio; these assertions cannot be replaced with a fake renderer."
+      ],
+      "assertion_lines": [
+        1311,
+        1306,
+        1307,
+        1314,
+        1319,
+        1320,
+        1322,
+        1324,
+        1327
+      ]
+    },
+    {
+      "test": "RelayTests.test_claude_conversation_is_checked_before_paste_and_return",
+      "line": 1339,
+      "end": 1381,
+      "owner": "transport",
+      "scenario": null,
+      "held": [
+        "The old login-generation/lifecycle or parent-terminal ownership is absent from helper4 stdio; these assertions cannot be replaced with a fake renderer."
+      ],
+      "assertion_lines": [
+        1361,
+        1365,
+        1365,
+        1367,
+        1367,
+        1368,
+        1369,
+        1371,
+        1372,
+        1374,
+        1355,
+        1355,
+        1363,
+        1375,
+        1376
+      ]
+    },
+    {
+      "test": "RelayTests.test_submission_cancellation_revocation_and_statistics_owner",
+      "line": 1384,
+      "end": 1453,
+      "owner": "transport",
+      "scenario": null,
+      "held": [
+        "The old login-generation/lifecycle or parent-terminal ownership is absent from helper4 stdio; these assertions cannot be replaced with a fake renderer."
+      ],
+      "assertion_lines": [
+        1439,
+        1444,
+        1405,
+        1406,
+        1413,
+        1414,
+        1438,
+        1425,
+        1426,
+        1427,
+        1429,
+        1430,
+        1431
+      ]
+    },
+    {
+      "test": "RelayTests.test_duplicate_login_id_preserves_live_session_and_falls_back",
+      "line": 1455,
+      "end": 1472,
+      "owner": "transport",
+      "scenario": null,
+      "held": [
+        "The old login-generation/lifecycle or parent-terminal ownership is absent from helper4 stdio; these assertions cannot be replaced with a fake renderer."
+      ],
+      "assertion_lines": [
+        1467,
+        1468
+      ]
+    },
+    {
+      "test": "RelayTests.test_full_login_installs_wrapper_and_cleans_private_startup",
+      "line": 1474,
+      "end": 1484,
+      "owner": "transport",
+      "scenario": null,
+      "held": [
+        "The old login-generation/lifecycle or parent-terminal ownership is absent from helper4 stdio; these assertions cannot be replaced with a fake renderer."
+      ],
+      "assertion_lines": [
+        1479,
+        1481,
+        1482,
+        1483,
+        1484
+      ]
+    },
+    {
+      "test": "RelayTests.test_interactive_input_resize_exit_and_terminal_restoration",
+      "line": 1523,
+      "end": 1536,
+      "owner": "transport",
+      "scenario": "terminal",
+      "held": [
+        "The old login-generation/lifecycle or parent-terminal ownership is absent from helper4 stdio; these assertions cannot be replaced with a fake renderer."
+      ],
+      "assertion_lines": [
+        1527,
+        1535,
+        1536
+      ]
+    },
+    {
+      "test": "RelayTests.test_output_larger_than_queue_drains_without_loss",
+      "line": 1538,
+      "end": 1543,
+      "owner": "transport",
+      "scenario": "large",
+      "held": [
+        "The old login-generation/lifecycle or parent-terminal ownership is absent from helper4 stdio; these assertions cannot be replaced with a fake renderer."
+      ],
+      "assertion_lines": [
+        1543
+      ]
+    },
+    {
+      "test": "RelayTests.test_termination_allows_shell_hangup_cleanup",
+      "line": 1545,
+      "end": 1554,
+      "owner": "transport",
+      "scenario": "hangup",
+      "held": [
+        "The old login-generation/lifecycle or parent-terminal ownership is absent from helper4 stdio; these assertions cannot be replaced with a fake renderer."
+      ],
+      "assertion_lines": [
+        1554
+      ]
+    },
+    {
+      "test": "RelayTests.test_termination_restores_parent_terminal",
+      "line": 1556,
+      "end": 1561,
+      "owner": "transport",
+      "scenario": "terminate",
+      "held": [
+        "The old login-generation/lifecycle or parent-terminal ownership is absent from helper4 stdio; these assertions cannot be replaced with a fake renderer."
+      ],
+      "assertion_lines": []
+    }
+  ],
+  "assertions": "Unchanged in the pinned source; line references are provenance, not behavioral checks.",
+  "wire_changes": {
+    "greeting": "hello request / version 4",
+    "frame": "LE u32 length / u8 kind / LE u64 id",
+    "busy": "stats_busy replaces the old busy code",
+    "denial": "unsupported rejects removed arbitrary-execution operations",
+    "sample": "normalized host fields; original monotonic/memory/boot assertions also inspect real captured native completion",
+    "processes": "result is [rows,truncated]; raw native counters remain in captured effects"
+  }
+}

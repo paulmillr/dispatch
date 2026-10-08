@@ -1,0 +1,11 @@
+[package]
+name = "dispatch-helper4-herdr"
+version = "0.1.0"
+edition = "2024"
+publish = false
+autotests = false
+
+[dependencies]
+dispatch-helper4-core = { path = "../../core" }
+
+[lib]

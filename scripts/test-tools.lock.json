@@ -1,0 +1,150 @@
+{
+  "codex": {
+    "version": "0.159.1",
+    "check": [
+      "--version"
+    ],
+    "banner": "codex-cli {version}",
+    "archives": {
+      "arm64": {
+        "url": "https://github.com/openai/codex/releases/download/rust-v0.159.1/codex-package-aarch64-apple-darwin.tar.gz",
+        "sha256": "a8fc76ccb5230dd97fb6db01873fa9c12b5e1efdf32d13c2ba7f6e8489ccd893",
+        "binary": "bin/codex"
+      },
+      "x86_64": {
+        "url": "https://github.com/openai/codex/releases/download/rust-v0.159.1/codex-package-x86_64-apple-darwin.tar.gz",
+        "sha256": "b8e8e6e403ed4357dfac2f2e5bba0f22df3e6a6962c68da792d6720a32e0842a",
+        "binary": "bin/codex"
+      }
+    }
+  },
+  "claude": {
+    "version": "2.1.285",
+    "check": [
+      "--version"
+    ],
+    "banner": "{version} (Claude Code)",
+    "archives": {
+      "arm64": {
+        "url": "https://downloads.claude.ai/claude-code-releases/2.1.285/darwin-arm64/claude",
+        "sha256": "51f09bd1e021d9fa8a1864c179799bd37cb39962a937935c5cf6823398e86db4",
+        "binary": "bin/claude",
+        "format": "binary"
+      },
+      "x86_64": {
+        "url": "https://downloads.claude.ai/claude-code-releases/2.1.285/darwin-x64/claude",
+        "sha256": "24835f7ca4b4338c33ad21c98a3402d9c22f89b8055075d18828e97973844ec3",
+        "binary": "bin/claude",
+        "format": "binary"
+      }
+    }
+  },
+  "pi": {
+    "version": "1.0.4",
+    "check": [
+      "--version"
+    ],
+    "banner": "{version}",
+    "archives": {
+      "arm64": {
+        "url": "https://github.com/earendil-works/pi/releases/download/v1.0.4/pi-darwin-arm64.tar.gz",
+        "sha256": "717dcd38a03849e919f9dec9daa96f5ca102e15ea33d804e5db57b1d47e513bc",
+        "binary": "pi/pi"
+      },
+      "x86_64": {
+        "url": "https://github.com/earendil-works/pi/releases/download/v1.0.4/pi-darwin-x64.tar.gz",
+        "sha256": "665022918678542dd7c87fe7b0da70d2a3dcd926bc6ff4cc712308f2ca313358",
+        "binary": "pi/pi"
+      }
+    }
+  },
+  "herdr": {
+    "version": "0.9.0",
+    "check": [
+      "--version"
+    ],
+    "banner": "herdr {version}",
+    "archives": {
+      "arm64": {
+        "url": "https://github.com/herdrdev/herdr/releases/download/v0.9.0/herdr-macos-aarch64",
+        "sha256": "32b53df09872628059c789a69f02a6b8e29e14ddf26711421f3463f70c1aef17",
+        "binary": "bin/herdr",
+        "format": "binary"
+      },
+      "x86_64": {
+        "url": "https://github.com/herdrdev/herdr/releases/download/v0.9.0/herdr-macos-x86_64",
+        "sha256": "d0c920b2a126a74809fa1491411c9a097a44786cac9c2ca51b818a995581cf16",
+        "binary": "bin/herdr",
+        "format": "binary"
+      }
+    }
+  },
+  "tmux": {
+    "version": "3.7",
+    "check": [
+      "-V"
+    ],
+    "banner": "tmux {version}",
+    "archives": {
+      "arm64": {
+        "url": "https://github.com/tmux/tmux/releases/download/3.7/tmux-3.7.tar.gz",
+        "sha256": "2344f191501b8a73eb71dd6c5fd5dcf8c765f5066f34ab46f04b3013dc7bc1a5",
+        "binary": "tmux-3.7/tmux"
+      },
+      "x86_64": {
+        "url": "https://github.com/tmux/tmux/releases/download/3.7/tmux-3.7.tar.gz",
+        "sha256": "2344f191501b8a73eb71dd6c5fd5dcf8c765f5066f34ab46f04b3013dc7bc1a5",
+        "binary": "tmux-3.7/tmux"
+      }
+    },
+    "sources": [
+      {
+        "version": "2.1.13",
+        "url": "https://github.com/libevent/libevent/releases/download/release-2.1.13-stable/libevent-2.1.13-stable.tar.gz",
+        "sha256": "f7e9383b8c0baa81b687e5b5eecc01beefaf1b19b64151d95ed61647fe7a315c",
+        "name": "libevent"
+      }
+    ],
+    "build": [
+      {
+        "directory": "libevent-2.1.13-stable",
+        "commands": [
+          [
+            "./configure",
+            "--prefix={stage}/deps",
+            "--disable-shared",
+            "--enable-static",
+            "--disable-openssl",
+            "--disable-libevent-regress",
+            "--disable-samples",
+            "ac_cv_func_pipe2=no"
+          ],
+          [
+            "make",
+            "-j{jobs}"
+          ],
+          [
+            "make",
+            "install"
+          ]
+        ]
+      },
+      {
+        "directory": "tmux-3.7",
+        "commands": [
+          [
+            "./configure",
+            "--prefix={stage}/install",
+            "--disable-utf8proc",
+            "LIBEVENT_CFLAGS=-I{stage}/deps/include",
+            "LIBEVENT_LIBS={stage}/deps/lib/libevent.a"
+          ],
+          [
+            "make",
+            "-j{jobs}"
+          ]
+        ]
+      }
+    ]
+  }
+}

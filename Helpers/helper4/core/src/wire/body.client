@@ -1,0 +1,166 @@
+
+# Shared test adapter over the generated binary codec and collector.
+import asyncio
+import base64
+import itertools
+import json
+
+BinaryCollector = Collector
+
+decode_body = decode
+
+class Collector(BinaryCollector):
+    def __init__(self, budget=64 * 1024 * 1024):
+        # Bootstrap body bound is the existing wire limit; Hello overrides it.
+        self.frame = 12_000_013
+        super().__init__(budget, 5, self.frame - 8)
+
+    def configure(self, hello):
+        frame, kind, limit = (
+            hello.get(key) for key in ("frame_limit", "chunk_kind", "chunk_limit")
+        )
+        if (
+            type(frame) is not int or not 9 <= frame <= (1 << 32) - 10
+            or type(kind) is not int or kind != 5
+            or type(limit) is not int or not 0 < limit <= frame - 8
+        ):
+            raise ValueError("hello limits")
+        self.frame, self.chunk_kind, self.chunk_limit = frame, kind, limit
+
+    def push(self, kind, ident, body):
+        result = super().push(kind, ident, body)
+        if result is None:
+            return None
+        _, _, value, data = result
+        if data is not None:
+            return {"result": (value, data)}
+        if not isinstance(value, dict):
+            raise ValueError("reply envelope")
+        return value
+
+
+class Client:
+    def __init__(self, child, root, *, reader=None, writer=None):
+        if (reader is None) != (writer is None):
+            raise ValueError("reader and writer must be supplied together")
+        self.child, self.root = child, root
+        self.reader = reader if reader is not None else getattr(child, "stdout", None)
+        self.writer = writer if writer is not None else getattr(child, "stdin", None)
+        self.serial = 0
+        self.frames = []
+        self.responses = {}
+        self.actions = []
+        self.sent, self.received = bytearray(), bytearray()
+        self.collector = Collector()
+        self.hello = set()
+
+    def packet(self, method, params=None, ident=None):
+        self.serial += 1
+        ident = self.serial if ident is None else ident
+        if method == "hello":
+            self.hello.add(ident)
+        value = {"method": method, "params": {} if params is None else params}
+        body = encode(value)
+        return ident, struct.pack("<IBQ", len(body) + 9, 1, ident) + body
+
+    async def write(self, data):
+        self.sent.extend(data)
+        self.actions.append({"write": data.hex()})
+        self.writer.write(data)
+        await self.writer.drain()
+
+    async def read(self):
+        for _ in itertools.count():
+            try:
+                header = await asyncio.wait_for(self.reader.readexactly(13), 10)
+                length, kind, ident = struct.unpack("<IBQ", header)
+                if not 9 <= length <= self.collector.frame + 9:
+                    raise ValueError("frame length")
+                body = await asyncio.wait_for(
+                    self.reader.readexactly(length - 9), 10
+                )
+            except asyncio.IncompleteReadError:
+                self.collector.finish()
+                raise
+            self.received.extend(header)
+            self.received.extend(body)
+            result = self.collector.push(kind, ident, body)
+            if result is not None:
+                if kind == 2 and ident in self.hello:
+                    self.hello.remove(ident)
+                    if "result" in result:
+                        self.collector.configure(result["result"])
+                value = (kind, ident, result)
+                if kind == 2:
+                    if ident in self.responses:
+                        raise ValueError("duplicate unconsumed response")
+                    self.responses[ident] = result
+                self.frames.append(value)
+                self.actions.append({"read": value})
+                return value
+
+    async def result(self, ident, event=None):
+        for _ in range(10000):
+            if ident in self.responses:
+                return self.responses.pop(ident)
+            kind, key, value = await self.read()
+            if key == ident:
+                if kind == 2:
+                    return self.responses.pop(ident)
+                if value.get("method") == event:
+                    return value
+        raise AssertionError("Result not found")
+
+    async def request(self, method, params=None, event=None):
+        ident, data = self.packet(method, params)
+        await self.write(data)
+        value = await self.result(ident, event)
+        assert "error" not in value, (method, value)
+        return ident, value.get("result", value.get("params"))
+
+    def output(self, terminal):
+        return b"".join(
+            base64.b64decode(value["params"]["bytes"])
+            for _, _, value in self.frames
+            if value.get("method") == "terminal.output"
+            and value["params"]["terminal"] == terminal
+        )
+
+    async def until(self, predicate):
+        for _ in range(10000):
+            if predicate():
+                return
+            await self.read()
+        raise AssertionError("Expected event not found")
+
+    async def stop(self):
+        if not self.writer.is_closing():
+            self.actions.append({"eof": True})
+            self.writer.close()
+        try:
+            if self.child is None:
+                await asyncio.wait_for(self.writer.wait_closed(), 5)
+                status = 0
+            else:
+                status = await asyncio.wait_for(self.child.wait(), 5)
+        except TimeoutError:
+            if self.child is None:
+                raise AssertionError("Socket did not settle after UI EOF")
+            self.child.terminate()
+            try:
+                await asyncio.wait_for(self.child.wait(), 3)
+            except TimeoutError:
+                self.child.kill()
+                await self.child.wait()
+            raise AssertionError("Helper did not settle after UI EOF")
+        finally:
+            (self.root / "actions.json").write_text(
+                json.dumps(self.actions, default=bytes.hex) + "\n"
+            )
+            (self.root / "frames.json").write_text(
+                json.dumps(self.frames, default=bytes.hex) + "\n"
+            )
+            if self.child is not None:
+                self.child._stderr.close()
+        self.collector.finish()
+        return status

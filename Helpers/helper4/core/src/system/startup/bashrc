@@ -1,0 +1,22 @@
+if [[ ${DISPATCH_SSH_BASH_ENV_SET-} == 1 ]]; then export ENV=$DISPATCH_SSH_BASH_ENV; else unset ENV; fi
+unset DISPATCH_SSH_BASH_ENV DISPATCH_SSH_BASH_ENV_SET
+set +o posix
+shopt -u inherit_errexit 2>/dev/null
+if [[ ${DISPATCH_SSH_BASH_HISTORY-} == 1 ]]; then export -n HISTFILE; unset DISPATCH_SSH_BASH_HISTORY; fi
+[[ -r /etc/profile ]] && source /etc/profile
+for file in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do
+ if [[ -r $file ]]; then source "$file"; break; fi
+done
+unset file
+# DISPATCH_INTEGRATION
+if (( BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 2) )) && ! shopt -qo posix; then
+ DISPATCH_SSH_BASH_PROMPT_COMMAND=${PROMPT_COMMAND-}
+ DISPATCH_SSH_BASH_PROMPT_SET=${PROMPT_COMMAND+x}
+ function __dispatch_ssh_bash_startup {
+  set +o posix
+  if [[ $DISPATCH_SSH_BASH_PROMPT_SET == x ]]; then PROMPT_COMMAND=$DISPATCH_SSH_BASH_PROMPT_COMMAND; else unset PROMPT_COMMAND; fi
+  unset DISPATCH_SSH_BASH_PROMPT_COMMAND DISPATCH_SSH_BASH_PROMPT_SET
+  unset -f __dispatch_ssh_bash_startup
+ }
+ PROMPT_COMMAND='__dispatch_ssh_bash_startup; '"${PROMPT_COMMAND-}"
+fi

@@ -1,0 +1,22 @@
+/tmp/
+/build/
+/com.apple.DeveloperTools/
+**/xcuserdata/
+.DS_Store
+
+__pycache__/
+/Helpers/ssh-helper/target/
+# Cargo verifies these vendored files against .cargo-checksum.json.
+# Keep original manifests even when global ignore rules exclude them.
+!/Helpers/ssh-helper/vendor/*/Cargo.toml.orig
+*.py[cod]
+DispatchTests/LocalToolAudit/
+
+# Private prompt history and raw conversation captures stay local.
+/docs/STEPS.md
+rollout-*.jsonl
+
+# Agent instructions and local agent state stay local.
+/CLAUDE.md
+/AGENTS.md
+/.claude/

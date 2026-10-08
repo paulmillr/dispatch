@@ -1,0 +1,30 @@
+{
+ "source_sha256": "08b3c781da38d50df1744b4a116db50ffb813ff099d73cfd3f70edb08f84d058",
+ "schema": "4270909662526680981",
+ "frames": {
+  "read": [
+   {
+    "kind": 1,
+    "id": 1,
+    "value": {
+     "method": "backends.open",
+     "params": {
+      "key": "missing"
+     }
+    }
+   }
+  ],
+  "write": [
+   {
+    "kind": 2,
+    "id": 1,
+    "value": {
+     "error": {
+      "code": "backend_unavailable",
+      "message": ""
+     }
+    }
+   }
+  ]
+ }
+}

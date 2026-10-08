@@ -1,0 +1,1167 @@
+{
+ "source_sha256": "d4f997c4fc21a47cd587bd9dd9c32f67f2d0add3f813420c7b578235e6988975",
+ "schema": "4270909662526680981",
+ "frames": {
+  "read": [
+   {
+    "kind": 1,
+    "id": 1,
+    "value": {
+     "method": "backends.open",
+     "params": {
+      "key": "tmux.sock",
+      "mux": 0
+     }
+    }
+   },
+   {
+    "kind": 4,
+    "id": 1
+   },
+   {
+    "kind": 1,
+    "id": 2,
+    "value": {
+     "method": "echo",
+     "params": {
+      "nonce": 373190410725750
+     }
+    }
+   }
+  ],
+  "write": [
+   {
+    "kind": 3,
+    "id": 1,
+    "value": {
+     "method": "topology",
+     "params": {
+      "backend": 2,
+      "nodes": [
+       {
+        "id": 3,
+        "parent": null,
+        "key": "tmux:tmux.sock:$0",
+        "kind": "workspace",
+        "name": "usr",
+        "cwd": null,
+        "size": null,
+        "agent": null,
+        "tty": null,
+        "detached": false
+       },
+       {
+        "id": 4,
+        "parent": 3,
+        "key": "tmux:tmux.sock:$0:@0",
+        "kind": "tab",
+        "name": "zsh",
+        "cwd": null,
+        "size": null,
+        "agent": null,
+        "tty": null,
+        "detached": false
+       },
+       {
+        "id": 5,
+        "parent": 4,
+        "key": "tmux:tmux.sock:$0:%0",
+        "kind": "terminal",
+        "name": "captured terminal",
+        "cwd": "/usr",
+        "size": {
+         "columns": 40,
+         "rows": 24
+        },
+        "agent": null,
+        "tty": null,
+        "detached": false
+       },
+       {
+        "id": 6,
+        "parent": 4,
+        "key": "tmux:tmux.sock:$0:%2",
+        "kind": "terminal",
+        "name": "captured terminal",
+        "cwd": "/usr",
+        "size": {
+         "columns": 39,
+         "rows": 24
+        },
+        "agent": null,
+        "tty": null,
+        "detached": false
+       },
+       {
+        "id": 8,
+        "parent": null,
+        "key": "tmux:tmux.sock:$1",
+        "kind": "workspace",
+        "name": "usr",
+        "cwd": null,
+        "size": null,
+        "agent": null,
+        "tty": null,
+        "detached": false
+       },
+       {
+        "id": 9,
+        "parent": 8,
+        "key": "tmux:tmux.sock:$1:@1",
+        "kind": "tab",
+        "name": "kernel_task",
+        "cwd": null,
+        "size": null,
+        "agent": null,
+        "tty": null,
+        "detached": false
+       },
+       {
+        "id": 10,
+        "parent": 9,
+        "key": "tmux:tmux.sock:$1:%1",
+        "kind": "terminal",
+        "name": "captured terminal",
+        "cwd": "/usr",
+        "size": {
+         "columns": 80,
+         "rows": 12
+        },
+        "agent": null,
+        "tty": null,
+        "detached": false
+       },
+       {
+        "id": 11,
+        "parent": 9,
+        "key": "tmux:tmux.sock:$1:%3",
+        "kind": "terminal",
+        "name": "captured terminal",
+        "cwd": "/usr",
+        "size": {
+         "columns": 80,
+         "rows": 11
+        },
+        "agent": null,
+        "tty": null,
+        "detached": false
+       }
+      ],
+      "layouts": [
+       {
+        "container": 4,
+        "full": {
+         "id": 7,
+         "axis": "columns",
+         "children": [
+          {
+           "weight": 40,
+           "split": {
+            "terminal": 5
+           }
+          },
+          {
+           "weight": 39,
+           "split": {
+            "terminal": 6
+           }
+          }
+         ]
+        },
+        "visible": {
+         "id": 7,
+         "axis": "columns",
+         "children": [
+          {
+           "weight": 40,
+           "split": {
+            "terminal": 5
+           }
+          },
+          {
+           "weight": 39,
+           "split": {
+            "terminal": 6
+           }
+          }
+         ]
+        },
+        "focus": 6
+       },
+       {
+        "container": 3,
+        "full": {
+         "terminal": 4
+        },
+        "visible": {
+         "terminal": 4
+        },
+        "focus": 4
+       },
+       {
+        "container": 9,
+        "full": {
+         "id": 12,
+         "axis": "rows",
+         "children": [
+          {
+           "weight": 12,
+           "split": {
+            "terminal": 10
+           }
+          },
+          {
+           "weight": 11,
+           "split": {
+            "terminal": 11
+           }
+          }
+         ]
+        },
+        "visible": {
+         "id": 12,
+         "axis": "rows",
+         "children": [
+          {
+           "weight": 12,
+           "split": {
+            "terminal": 10
+           }
+          },
+          {
+           "weight": 11,
+           "split": {
+            "terminal": 11
+           }
+          }
+         ]
+        },
+        "focus": 11
+       },
+       {
+        "container": 8,
+        "full": {
+         "terminal": 9
+        },
+        "visible": {
+         "terminal": 9
+        },
+        "focus": 9
+       }
+      ],
+      "focus": null
+     }
+    }
+   },
+   {
+    "kind": 3,
+    "id": 1,
+    "value": {
+     "method": "backend.opened",
+     "params": 2
+    }
+   },
+   {
+    "kind": 3,
+    "id": 1,
+    "value": {
+     "method": "topology",
+     "params": {
+      "backend": 2,
+      "nodes": [
+       {
+        "id": 3,
+        "parent": null,
+        "key": "tmux:tmux.sock:$0",
+        "kind": "workspace",
+        "name": "usr",
+        "cwd": null,
+        "size": null,
+        "agent": null,
+        "tty": null,
+        "detached": false
+       },
+       {
+        "id": 4,
+        "parent": 3,
+        "key": "tmux:tmux.sock:$0:@0",
+        "kind": "tab",
+        "name": "zsh",
+        "cwd": null,
+        "size": null,
+        "agent": null,
+        "tty": null,
+        "detached": false
+       },
+       {
+        "id": 5,
+        "parent": 4,
+        "key": "tmux:tmux.sock:$0:%0",
+        "kind": "terminal",
+        "name": "captured terminal",
+        "cwd": "/usr",
+        "size": {
+         "columns": 40,
+         "rows": 24
+        },
+        "agent": null,
+        "tty": 268435489,
+        "detached": false
+       },
+       {
+        "id": 6,
+        "parent": 4,
+        "key": "tmux:tmux.sock:$0:%2",
+        "kind": "terminal",
+        "name": "captured terminal",
+        "cwd": "/usr",
+        "size": {
+         "columns": 39,
+         "rows": 24
+        },
+        "agent": null,
+        "tty": null,
+        "detached": false
+       },
+       {
+        "id": 8,
+        "parent": null,
+        "key": "tmux:tmux.sock:$1",
+        "kind": "workspace",
+        "name": "usr",
+        "cwd": null,
+        "size": null,
+        "agent": null,
+        "tty": null,
+        "detached": false
+       },
+       {
+        "id": 9,
+        "parent": 8,
+        "key": "tmux:tmux.sock:$1:@1",
+        "kind": "tab",
+        "name": "kernel_task",
+        "cwd": null,
+        "size": null,
+        "agent": null,
+        "tty": null,
+        "detached": false
+       },
+       {
+        "id": 10,
+        "parent": 9,
+        "key": "tmux:tmux.sock:$1:%1",
+        "kind": "terminal",
+        "name": "captured terminal",
+        "cwd": "/usr",
+        "size": {
+         "columns": 80,
+         "rows": 12
+        },
+        "agent": null,
+        "tty": null,
+        "detached": false
+       },
+       {
+        "id": 11,
+        "parent": 9,
+        "key": "tmux:tmux.sock:$1:%3",
+        "kind": "terminal",
+        "name": "captured terminal",
+        "cwd": "/usr",
+        "size": {
+         "columns": 80,
+         "rows": 11
+        },
+        "agent": null,
+        "tty": null,
+        "detached": false
+       }
+      ],
+      "layouts": [
+       {
+        "container": 4,
+        "full": {
+         "id": 7,
+         "axis": "columns",
+         "children": [
+          {
+           "weight": 40,
+           "split": {
+            "terminal": 5
+           }
+          },
+          {
+           "weight": 39,
+           "split": {
+            "terminal": 6
+           }
+          }
+         ]
+        },
+        "visible": {
+         "id": 7,
+         "axis": "columns",
+         "children": [
+          {
+           "weight": 40,
+           "split": {
+            "terminal": 5
+           }
+          },
+          {
+           "weight": 39,
+           "split": {
+            "terminal": 6
+           }
+          }
+         ]
+        },
+        "focus": 6
+       },
+       {
+        "container": 3,
+        "full": {
+         "terminal": 4
+        },
+        "visible": {
+         "terminal": 4
+        },
+        "focus": 4
+       },
+       {
+        "container": 9,
+        "full": {
+         "id": 12,
+         "axis": "rows",
+         "children": [
+          {
+           "weight": 12,
+           "split": {
+            "terminal": 10
+           }
+          },
+          {
+           "weight": 11,
+           "split": {
+            "terminal": 11
+           }
+          }
+         ]
+        },
+        "visible": {
+         "id": 12,
+         "axis": "rows",
+         "children": [
+          {
+           "weight": 12,
+           "split": {
+            "terminal": 10
+           }
+          },
+          {
+           "weight": 11,
+           "split": {
+            "terminal": 11
+           }
+          }
+         ]
+        },
+        "focus": 11
+       },
+       {
+        "container": 8,
+        "full": {
+         "terminal": 9
+        },
+        "visible": {
+         "terminal": 9
+        },
+        "focus": 9
+       }
+      ],
+      "focus": null
+     }
+    }
+   },
+   {
+    "kind": 3,
+    "id": 1,
+    "value": {
+     "method": "topology",
+     "params": {
+      "backend": 2,
+      "nodes": [
+       {
+        "id": 3,
+        "parent": null,
+        "key": "tmux:tmux.sock:$0",
+        "kind": "workspace",
+        "name": "usr",
+        "cwd": null,
+        "size": null,
+        "agent": null,
+        "tty": null,
+        "detached": false
+       },
+       {
+        "id": 4,
+        "parent": 3,
+        "key": "tmux:tmux.sock:$0:@0",
+        "kind": "tab",
+        "name": "zsh",
+        "cwd": null,
+        "size": null,
+        "agent": null,
+        "tty": null,
+        "detached": false
+       },
+       {
+        "id": 5,
+        "parent": 4,
+        "key": "tmux:tmux.sock:$0:%0",
+        "kind": "terminal",
+        "name": "captured terminal",
+        "cwd": "/usr",
+        "size": {
+         "columns": 40,
+         "rows": 24
+        },
+        "agent": null,
+        "tty": 268435489,
+        "detached": false
+       },
+       {
+        "id": 6,
+        "parent": 4,
+        "key": "tmux:tmux.sock:$0:%2",
+        "kind": "terminal",
+        "name": "captured terminal",
+        "cwd": "/usr",
+        "size": {
+         "columns": 39,
+         "rows": 24
+        },
+        "agent": null,
+        "tty": 268435511,
+        "detached": false
+       },
+       {
+        "id": 8,
+        "parent": null,
+        "key": "tmux:tmux.sock:$1",
+        "kind": "workspace",
+        "name": "usr",
+        "cwd": null,
+        "size": null,
+        "agent": null,
+        "tty": null,
+        "detached": false
+       },
+       {
+        "id": 9,
+        "parent": 8,
+        "key": "tmux:tmux.sock:$1:@1",
+        "kind": "tab",
+        "name": "kernel_task",
+        "cwd": null,
+        "size": null,
+        "agent": null,
+        "tty": null,
+        "detached": false
+       },
+       {
+        "id": 10,
+        "parent": 9,
+        "key": "tmux:tmux.sock:$1:%1",
+        "kind": "terminal",
+        "name": "captured terminal",
+        "cwd": "/usr",
+        "size": {
+         "columns": 80,
+         "rows": 12
+        },
+        "agent": null,
+        "tty": null,
+        "detached": false
+       },
+       {
+        "id": 11,
+        "parent": 9,
+        "key": "tmux:tmux.sock:$1:%3",
+        "kind": "terminal",
+        "name": "captured terminal",
+        "cwd": "/usr",
+        "size": {
+         "columns": 80,
+         "rows": 11
+        },
+        "agent": null,
+        "tty": null,
+        "detached": false
+       }
+      ],
+      "layouts": [
+       {
+        "container": 4,
+        "full": {
+         "id": 7,
+         "axis": "columns",
+         "children": [
+          {
+           "weight": 40,
+           "split": {
+            "terminal": 5
+           }
+          },
+          {
+           "weight": 39,
+           "split": {
+            "terminal": 6
+           }
+          }
+         ]
+        },
+        "visible": {
+         "id": 7,
+         "axis": "columns",
+         "children": [
+          {
+           "weight": 40,
+           "split": {
+            "terminal": 5
+           }
+          },
+          {
+           "weight": 39,
+           "split": {
+            "terminal": 6
+           }
+          }
+         ]
+        },
+        "focus": 6
+       },
+       {
+        "container": 3,
+        "full": {
+         "terminal": 4
+        },
+        "visible": {
+         "terminal": 4
+        },
+        "focus": 4
+       },
+       {
+        "container": 9,
+        "full": {
+         "id": 12,
+         "axis": "rows",
+         "children": [
+          {
+           "weight": 12,
+           "split": {
+            "terminal": 10
+           }
+          },
+          {
+           "weight": 11,
+           "split": {
+            "terminal": 11
+           }
+          }
+         ]
+        },
+        "visible": {
+         "id": 12,
+         "axis": "rows",
+         "children": [
+          {
+           "weight": 12,
+           "split": {
+            "terminal": 10
+           }
+          },
+          {
+           "weight": 11,
+           "split": {
+            "terminal": 11
+           }
+          }
+         ]
+        },
+        "focus": 11
+       },
+       {
+        "container": 8,
+        "full": {
+         "terminal": 9
+        },
+        "visible": {
+         "terminal": 9
+        },
+        "focus": 9
+       }
+      ],
+      "focus": null
+     }
+    }
+   },
+   {
+    "kind": 3,
+    "id": 1,
+    "value": {
+     "method": "topology",
+     "params": {
+      "backend": 2,
+      "nodes": [
+       {
+        "id": 3,
+        "parent": null,
+        "key": "tmux:tmux.sock:$0",
+        "kind": "workspace",
+        "name": "usr",
+        "cwd": null,
+        "size": null,
+        "agent": null,
+        "tty": null,
+        "detached": false
+       },
+       {
+        "id": 4,
+        "parent": 3,
+        "key": "tmux:tmux.sock:$0:@0",
+        "kind": "tab",
+        "name": "zsh",
+        "cwd": null,
+        "size": null,
+        "agent": null,
+        "tty": null,
+        "detached": false
+       },
+       {
+        "id": 5,
+        "parent": 4,
+        "key": "tmux:tmux.sock:$0:%0",
+        "kind": "terminal",
+        "name": "captured terminal",
+        "cwd": "/usr",
+        "size": {
+         "columns": 40,
+         "rows": 24
+        },
+        "agent": null,
+        "tty": 268435489,
+        "detached": false
+       },
+       {
+        "id": 6,
+        "parent": 4,
+        "key": "tmux:tmux.sock:$0:%2",
+        "kind": "terminal",
+        "name": "captured terminal",
+        "cwd": "/usr",
+        "size": {
+         "columns": 39,
+         "rows": 24
+        },
+        "agent": null,
+        "tty": 268435511,
+        "detached": false
+       },
+       {
+        "id": 8,
+        "parent": null,
+        "key": "tmux:tmux.sock:$1",
+        "kind": "workspace",
+        "name": "usr",
+        "cwd": null,
+        "size": null,
+        "agent": null,
+        "tty": null,
+        "detached": false
+       },
+       {
+        "id": 9,
+        "parent": 8,
+        "key": "tmux:tmux.sock:$1:@1",
+        "kind": "tab",
+        "name": "kernel_task",
+        "cwd": null,
+        "size": null,
+        "agent": null,
+        "tty": null,
+        "detached": false
+       },
+       {
+        "id": 10,
+        "parent": 9,
+        "key": "tmux:tmux.sock:$1:%1",
+        "kind": "terminal",
+        "name": "captured terminal",
+        "cwd": "/usr",
+        "size": {
+         "columns": 80,
+         "rows": 12
+        },
+        "agent": null,
+        "tty": 268435508,
+        "detached": false
+       },
+       {
+        "id": 11,
+        "parent": 9,
+        "key": "tmux:tmux.sock:$1:%3",
+        "kind": "terminal",
+        "name": "captured terminal",
+        "cwd": "/usr",
+        "size": {
+         "columns": 80,
+         "rows": 11
+        },
+        "agent": null,
+        "tty": null,
+        "detached": false
+       }
+      ],
+      "layouts": [
+       {
+        "container": 4,
+        "full": {
+         "id": 7,
+         "axis": "columns",
+         "children": [
+          {
+           "weight": 40,
+           "split": {
+            "terminal": 5
+           }
+          },
+          {
+           "weight": 39,
+           "split": {
+            "terminal": 6
+           }
+          }
+         ]
+        },
+        "visible": {
+         "id": 7,
+         "axis": "columns",
+         "children": [
+          {
+           "weight": 40,
+           "split": {
+            "terminal": 5
+           }
+          },
+          {
+           "weight": 39,
+           "split": {
+            "terminal": 6
+           }
+          }
+         ]
+        },
+        "focus": 6
+       },
+       {
+        "container": 3,
+        "full": {
+         "terminal": 4
+        },
+        "visible": {
+         "terminal": 4
+        },
+        "focus": 4
+       },
+       {
+        "container": 9,
+        "full": {
+         "id": 12,
+         "axis": "rows",
+         "children": [
+          {
+           "weight": 12,
+           "split": {
+            "terminal": 10
+           }
+          },
+          {
+           "weight": 11,
+           "split": {
+            "terminal": 11
+           }
+          }
+         ]
+        },
+        "visible": {
+         "id": 12,
+         "axis": "rows",
+         "children": [
+          {
+           "weight": 12,
+           "split": {
+            "terminal": 10
+           }
+          },
+          {
+           "weight": 11,
+           "split": {
+            "terminal": 11
+           }
+          }
+         ]
+        },
+        "focus": 11
+       },
+       {
+        "container": 8,
+        "full": {
+         "terminal": 9
+        },
+        "visible": {
+         "terminal": 9
+        },
+        "focus": 9
+       }
+      ],
+      "focus": null
+     }
+    }
+   },
+   {
+    "kind": 3,
+    "id": 1,
+    "value": {
+     "method": "topology",
+     "params": {
+      "backend": 2,
+      "nodes": [
+       {
+        "id": 3,
+        "parent": null,
+        "key": "tmux:tmux.sock:$0",
+        "kind": "workspace",
+        "name": "usr",
+        "cwd": null,
+        "size": null,
+        "agent": null,
+        "tty": null,
+        "detached": false
+       },
+       {
+        "id": 4,
+        "parent": 3,
+        "key": "tmux:tmux.sock:$0:@0",
+        "kind": "tab",
+        "name": "zsh",
+        "cwd": null,
+        "size": null,
+        "agent": null,
+        "tty": null,
+        "detached": false
+       },
+       {
+        "id": 5,
+        "parent": 4,
+        "key": "tmux:tmux.sock:$0:%0",
+        "kind": "terminal",
+        "name": "captured terminal",
+        "cwd": "/usr",
+        "size": {
+         "columns": 40,
+         "rows": 24
+        },
+        "agent": null,
+        "tty": 268435489,
+        "detached": false
+       },
+       {
+        "id": 6,
+        "parent": 4,
+        "key": "tmux:tmux.sock:$0:%2",
+        "kind": "terminal",
+        "name": "captured terminal",
+        "cwd": "/usr",
+        "size": {
+         "columns": 39,
+         "rows": 24
+        },
+        "agent": null,
+        "tty": 268435511,
+        "detached": false
+       },
+       {
+        "id": 8,
+        "parent": null,
+        "key": "tmux:tmux.sock:$1",
+        "kind": "workspace",
+        "name": "usr",
+        "cwd": null,
+        "size": null,
+        "agent": null,
+        "tty": null,
+        "detached": false
+       },
+       {
+        "id": 9,
+        "parent": 8,
+        "key": "tmux:tmux.sock:$1:@1",
+        "kind": "tab",
+        "name": "kernel_task",
+        "cwd": null,
+        "size": null,
+        "agent": null,
+        "tty": null,
+        "detached": false
+       },
+       {
+        "id": 10,
+        "parent": 9,
+        "key": "tmux:tmux.sock:$1:%1",
+        "kind": "terminal",
+        "name": "captured terminal",
+        "cwd": "/usr",
+        "size": {
+         "columns": 80,
+         "rows": 12
+        },
+        "agent": null,
+        "tty": 268435508,
+        "detached": false
+       },
+       {
+        "id": 11,
+        "parent": 9,
+        "key": "tmux:tmux.sock:$1:%3",
+        "kind": "terminal",
+        "name": "captured terminal",
+        "cwd": "/usr",
+        "size": {
+         "columns": 80,
+         "rows": 11
+        },
+        "agent": null,
+        "tty": 268435513,
+        "detached": false
+       }
+      ],
+      "layouts": [
+       {
+        "container": 4,
+        "full": {
+         "id": 7,
+         "axis": "columns",
+         "children": [
+          {
+           "weight": 40,
+           "split": {
+            "terminal": 5
+           }
+          },
+          {
+           "weight": 39,
+           "split": {
+            "terminal": 6
+           }
+          }
+         ]
+        },
+        "visible": {
+         "id": 7,
+         "axis": "columns",
+         "children": [
+          {
+           "weight": 40,
+           "split": {
+            "terminal": 5
+           }
+          },
+          {
+           "weight": 39,
+           "split": {
+            "terminal": 6
+           }
+          }
+         ]
+        },
+        "focus": 6
+       },
+       {
+        "container": 3,
+        "full": {
+         "terminal": 4
+        },
+        "visible": {
+         "terminal": 4
+        },
+        "focus": 4
+       },
+       {
+        "container": 9,
+        "full": {
+         "id": 12,
+         "axis": "rows",
+         "children": [
+          {
+           "weight": 12,
+           "split": {
+            "terminal": 10
+           }
+          },
+          {
+           "weight": 11,
+           "split": {
+            "terminal": 11
+           }
+          }
+         ]
+        },
+        "visible": {
+         "id": 12,
+         "axis": "rows",
+         "children": [
+          {
+           "weight": 12,
+           "split": {
+            "terminal": 10
+           }
+          },
+          {
+           "weight": 11,
+           "split": {
+            "terminal": 11
+           }
+          }
+         ]
+        },
+        "focus": 11
+       },
+       {
+        "container": 8,
+        "full": {
+         "terminal": 9
+        },
+        "visible": {
+         "terminal": 9
+        },
+        "focus": 9
+       }
+      ],
+      "focus": null
+     }
+    }
+   },
+   {
+    "kind": 2,
+    "id": 2,
+    "value": {
+     "result": {
+      "nonce": 373190410725750
+     }
+    }
+   }
+  ]
+ }
+}

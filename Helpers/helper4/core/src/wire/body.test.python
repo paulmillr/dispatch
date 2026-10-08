@@ -1,0 +1,145 @@
+import json
+from pathlib import Path
+import sys
+
+from HelperTestClient import Client, Collector, Frames, decode_body
+
+root = Path(sys.argv[1])
+native = [line for line in (root / "native.jsonl").read_bytes().splitlines() if line]
+binary = [bytes.fromhex(line) for line in (root / "binary.hex").read_text().splitlines()]
+expected = [json.loads(line) for line in native]
+assert [decode_body(line) for line in binary] == expected
+for body in native:
+    try:
+        decode_body(body)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("JSON was admitted on the binary wire")
+collector = Collector()
+actual = [collector.push(2, index, body) for index, body in enumerate(binary)]
+collector.finish()
+assert actual == expected
+client = Client(None, root)
+frames = Frames()
+actual = []
+for item in expected:
+    ident, packet = client.packet("echo", item)
+    kind, key, body = frames.feed(packet)[0]
+    assert (kind, key) == (1, ident)
+    actual.append(decode_body(body))
+frames.finish()
+assert actual == [{"method": "echo", "params": item} for item in expected]
+
+# Same captured documents through an explicit Unix reader/writer pair. The shared
+# decoder handles all fragmentation; notifications remain visible during requests.
+import asyncio
+import os
+import struct
+from HelperTestClient import encode, frame
+
+async def socket_client():
+    complete = asyncio.get_running_loop().create_future()
+    async def peer(reader, writer):
+        try:
+            frames = Frames()
+            requests = []
+            for _ in range(len(expected)):
+                for _ in range(10000):
+                    data = await reader.read(17)
+                    if not data:
+                        raise AssertionError("early client EOF")
+                    messages = frames.feed(data)
+                    if messages:
+                        break
+                assert len(messages) == 1
+                kind, ident, body = messages[0]
+                request = decode_body(body)
+                requests.append(request)
+                value = request["params"]
+                raw = encode({"result": value})
+                packets = [frame(3, 0, {"method": "captured", "params": value})]
+                for sequence, at in enumerate(range(0, len(raw), 64)):
+                    part = struct.pack("<Q", sequence) + raw[at:at + 64]
+                    packets.append(struct.pack("<IBQ", len(part) + 9, 5, ident) + part)
+                packets.append(frame(2, ident, {"stream": {"chunks": (len(raw) + 63) // 64, "bytes": len(raw), "encoding": "value"}}))
+                writer.write(b"".join(packets))
+                await writer.drain()
+            assert await reader.read(1) == b""
+            frames.finish()
+            complete.set_result(requests)
+        except BaseException as error:
+            complete.set_exception(error)
+        finally:
+            writer.close()
+            await writer.wait_closed()
+    os.chdir(root)  # Unix socket paths are bounded independently of the private test-root length.
+    server = await asyncio.start_unix_server(peer, path="client.sock")
+    reader, writer = await asyncio.open_unix_connection("client.sock")
+    client = Client(None, root, reader=reader, writer=writer)
+    try:
+        for item in expected:
+            _, result = await client.request("echo", item)
+            assert result == item
+        await client.until(lambda: len(client.frames) == 2 * len(expected))
+        assert [(kind, value) for kind, _, value in client.frames] == [
+            entry for item in expected for entry in [(3, {"method": "captured", "params": item}), (2, {"result": item})]
+        ]
+        assert await client.stop() == 0
+        assert await complete == [{"method": "echo", "params": item} for item in expected]
+    finally:
+        writer.close()
+        await writer.wait_closed()
+        server.close()
+        await server.wait_closed()
+asyncio.run(socket_client())
+
+async def out_of_order(duplicate=False):
+    complete = asyncio.get_running_loop().create_future()
+    async def peer(reader, writer):
+        try:
+            decoder = Frames()
+            messages = []
+            for _ in range(10000):
+                messages.extend(decoder.feed(await reader.read(17)))
+                if len(messages) == 2:
+                    break
+            assert len(messages) == 2
+            packets = [frame(2, ident, {"result": decode_body(body)["params"]}) for _, ident, body in reversed(messages)]
+            if duplicate:
+                packets.insert(0, packets[0])
+            writer.write(b"".join(packets))
+            await writer.drain()
+            complete.set_result(True)
+        except BaseException as error:
+            complete.set_exception(error)
+        finally:
+            writer.close()
+            await writer.wait_closed()
+    server = await asyncio.start_unix_server(peer, path="order.sock")
+    reader, writer = await asyncio.open_unix_connection("order.sock")
+    client = Client(None, root, reader=reader, writer=writer)
+    try:
+        a, first = client.packet("echo", expected[0])
+        b, second = client.packet("echo", expected[1])
+        await client.write(first + second)
+        if duplicate:
+            try:
+                await client.result(a)
+            except ValueError as error:
+                assert str(error) == "duplicate unconsumed response"
+            else:
+                raise AssertionError("duplicate response was silently overwritten")
+        else:
+            assert await client.result(a) == {"result": expected[0]}
+            assert await client.result(b) == {"result": expected[1]}
+            assert [(ident, value) for _, ident, value in client.frames] == [(b, {"result": expected[1]}), (a, {"result": expected[0]})]
+        assert await complete
+        await client.stop()
+    finally:
+        writer.close()
+        await writer.wait_closed()
+        server.close()
+        await server.wait_closed()
+asyncio.run(out_of_order())
+asyncio.run(out_of_order(duplicate=True))

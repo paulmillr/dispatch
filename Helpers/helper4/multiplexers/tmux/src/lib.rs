@@ -1,0 +1,21 @@
+//! Native tmux control and topology; terminal ownership stays in this multiplexer.
+mod actions;
+mod affinity;
+mod backend;
+mod client;
+mod close;
+pub mod commands;
+pub mod control;
+mod create;
+mod discovery;
+mod endpoint;
+mod mux;
+mod open;
+mod ops;
+mod place;
+mod prefix;
+mod retained;
+pub mod snapshot;
+pub mod terminal;
+pub mod topology;
+pub use mux::Tmux;

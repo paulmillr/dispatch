@@ -1,0 +1,5 @@
+capture-pane -p -e -C -N -J -t PANE -S HISTORY
+capture-pane -p -e -C -N -J -q -a -t PANE -S HISTORY
+capture-pane -p -e -C -N -t PANE -S "#{cursor_y}" -E "#{cursor_y}"
+display-message -p -t PANE "pane_id=#{pane_id}|pane_width=#{pane_width}|pane_height=#{pane_height}|pane_active=#{pane_active}|alternate_on=#{alternate_on}|alternate_saved_x=#{alternate_saved_x}|alternate_saved_y=#{alternate_saved_y}|cursor_x=#{cursor_x}|cursor_y=#{cursor_y}|cursor_shape=#{cursor_shape}|cursor_blinking=#{cursor_blinking}|origin_flag=#{origin_flag}|pane_private_modes=#{pane_private_modes}|scroll_region_upper=#{scroll_region_upper}|scroll_region_lower=#{scroll_region_lower}|pane_tabs=#{pane_tabs}|cursor_flag=#{cursor_flag}|insert_flag=#{insert_flag}|keypad_cursor_flag=#{keypad_cursor_flag}|keypad_flag=#{keypad_flag}|wrap_flag=#{wrap_flag}|mouse_standard_flag=#{mouse_standard_flag}|mouse_button_flag=#{mouse_button_flag}|mouse_any_flag=#{mouse_any_flag}|mouse_utf8_flag=#{mouse_utf8_flag}|mouse_sgr_flag=#{mouse_sgr_flag}|bracket_paste_flag=#{bracket_paste_flag}|pane_key_mode=#{pane_key_mode}|pane_current_path=#{pane_current_path}"
+capture-pane -p -P -C -t PANE

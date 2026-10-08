@@ -1,0 +1,151 @@
+name: Dispatch
+options:
+  deploymentTarget:
+    macOS: "14.0"
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    ARCHS: "$(NATIVE_ARCH_ACTUAL)"
+    ONLY_ACTIVE_ARCH: YES
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGN_STYLE: Manual
+    ENABLE_HARDENED_RUNTIME: YES
+    OTHER_LDFLAGS: ["-lc++"]
+    OTHER_SWIFT_FLAGS: ["-Xcc", "-Wno-incomplete-umbrella"]
+settingGroups:
+  # The Swift terminal (Vendor/Term) is optimized with whole-module optimization in every
+  # configuration: built like the app's Debug code (unoptimized, or file by file) it consumes
+  # output 3-80x slower and blocks the programs writing to it.
+  term:
+    GENERATE_INFOPLIST_FILE: YES
+    SWIFT_OPTIMIZATION_LEVEL: -O
+    SWIFT_COMPILATION_MODE: wholemodule
+    ENABLE_TESTABILITY: NO
+targets:
+  # Static: the hardened runtime's library validation refuses ad-hoc signed
+  # frameworks embedded in an ad-hoc signed app (local Release builds would not launch).
+  Term:
+    type: framework.static
+    platform: macOS
+    sources: [Vendor/Term/Sources/Term]
+    settings:
+      groups: [term]
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.dispatch.term
+  TermApple:
+    type: framework.static
+    platform: macOS
+    sources:
+      - path: Vendor/Term/Sources/TermApple
+        excludes: [Resources]
+    dependencies:
+      - target: Term
+    settings:
+      groups: [term]
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.dispatch.termapple
+        SWIFT_VERSION: "5.0"
+        SWIFT_STRICT_CONCURRENCY: minimal
+  Dispatch:
+    type: application
+    platform: macOS
+    preBuildScripts:
+      - name: Install SSH helpers
+        # Built by the SSHHelpers target, in parallel with the terminal frameworks.
+        script: python3 "$SRCROOT/scripts/build-ssh-helper.py" --install-only
+        inputFiles: ["$(SRCROOT)/build/helper4-rust/bin/darwin-universal", "$(SRCROOT)/build/helper4-rust/bin/linux-aarch64", "$(SRCROOT)/build/helper4-rust/bin/linux-x86_64", "$(SRCROOT)/build/helper4-rust/bin/version", "$(SRCROOT)/build/helper4-rust/bin/protocol-version"]
+        outputFiles: ["$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper4/darwin-universal", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper4/linux-aarch64", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper4/linux-x86_64", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper4/version", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper4/protocol-version"]
+    postBuildScripts:
+      - name: Bundle unified helper
+        script: bash "$SRCROOT/scripts/build-helper4.sh"
+        basedOnDependencyAnalysis: false
+      - name: Bundle Dispatch themes
+        # Always: the ghostty folder copy replaces the folder wholesale, even when this
+        # script's inputs and outputs look unchanged.
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          destination="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/ghostty/themes"
+          mkdir -p "$destination"
+          cp "$SRCROOT/extras/ghostty/dispatch" "$SRCROOT/extras/ghostty/dispatch-black" "$destination/"
+        inputFiles: ["$(SRCROOT)/extras/ghostty/dispatch", "$(SRCROOT)/extras/ghostty/dispatch-black"]
+        outputFiles: ["$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/ghostty/themes/dispatch", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/ghostty/themes/dispatch-black"]
+    sources:
+      - path: Dispatch
+        excludes: [Info.plist]
+      # Ghostty's shell integration and themes, vendored (Vendor/Term/Resources/PROVENANCE.md).
+      - path: Vendor/Term/Resources/ghostty
+        type: folder
+        buildPhase: resources
+      # The terminal's fonts: TermApple is linked into the app, so it finds them in the app bundle.
+      - path: Vendor/Term/Sources/TermApple/Resources
+        type: folder
+        buildPhase: resources
+      - path: ThirdPartyLicenses
+        type: folder
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.dispatch.local
+        PRODUCT_MODULE_NAME: DispatchApp
+        INFOPLIST_FILE: Dispatch/Info.plist
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    dependencies:
+      - target: SSHHelpers
+      # Linked into the app (static), nothing to embed.
+      - target: Term
+        embed: false
+      - target: TermApple
+        embed: false
+      - sdk: AppKit.framework
+      - sdk: Carbon.framework
+      - sdk: CoreText.framework
+      - sdk: IOKit.framework
+      - sdk: Metal.framework
+      - sdk: QuartzCore.framework
+  DispatchTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: DispatchTests
+        excludes: [LocalToolAudit, "**/rollout-*.jsonl"]
+    dependencies:
+      - target: Dispatch
+      # The tests use the terminal's modules directly; their code is the app's (BUNDLE_LOADER),
+      # not a second copy.
+      - target: Term
+        link: false
+        embed: false
+      - target: TermApple
+        link: false
+        embed: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.dispatch.local.tests
+        INFOPLIST_KEY_NSPrincipalClass: DispatchTestObserver
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Dispatch.app/Contents/MacOS/Dispatch"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        ENABLE_HARDENED_RUNTIME: NO
+aggregateTargets:
+  # The Rust helper depends on nothing in Xcode, so this target builds alongside Term/TermApple
+  # instead of serially inside the app target.
+  SSHHelpers:
+    buildScripts:
+      - name: Build portable SSH helpers
+        script: bash "$SRCROOT/scripts/build-ssh-helper.sh" --build-only
+        basedOnDependencyAnalysis: false
+        inputFiles: ["$(SRCROOT)/Helpers/helper4", "$(SRCROOT)/scripts/build-ssh-helper.sh", "$(SRCROOT)/scripts/build-ssh-helper.py", "$(SRCROOT)/scripts/setup-ssh-rust.py"]
+        outputFiles: ["$(SRCROOT)/build/helper4-rust/bin/darwin-universal", "$(SRCROOT)/build/helper4-rust/bin/linux-aarch64", "$(SRCROOT)/build/helper4-rust/bin/linux-x86_64", "$(SRCROOT)/build/helper4-rust/bin/version", "$(SRCROOT)/build/helper4-rust/bin/protocol-version"]
+schemes:
+  Dispatch:
+    build:
+      targets:
+        Dispatch: all
+    test:
+      targets: [DispatchTests]
+      environmentVariables:
+        DISPATCH_TESTING: "1"

@@ -1,0 +1,12 @@
+[env]
+# Tests create fresh child directories under target; Cargo also uses it for development runs.
+HOME = { value = "target/test-home", relative = true, force = true }
+XDG_CONFIG_HOME = { value = "target/test-home/config", relative = true, force = true }
+XDG_DATA_HOME = { value = "target/test-home/data", relative = true, force = true }
+CODEX_HOME = { value = "target/test-home/codex", relative = true, force = true }
+CLAUDE_CONFIG_DIR = { value = "target/test-home/claude", relative = true, force = true }
+TMPDIR = { value = "target", relative = true, force = true }
+DISPATCH_TEST_ROOT = { value = "target/test-root", relative = true }
+DISPATCH_FILE_TEST_ROOT = { value = "target/test-root", relative = true }
+CARGO_TARGET_DIR = { value = "target", relative = true }
+RUST_TEST_THREADS = "1"
