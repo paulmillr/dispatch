@@ -30,12 +30,15 @@ All deps are downloaded into `build`.
 
 ## Using Dispatch
 
-1. Open new tab. Use standard ssh command for remote host auth.
+1. Open new tab.
+    - For local usage: do nothing
+    - For remote usage: use standard ssh command
     - After ssh auth, you'd be asked to upload Rust helper there to handle all the heavy lifting. **The helper is optional.**
-2. Run `tmux -CC` or `herdr` to get native spaces and tabs.
+2. Run `tmux -CC` or `herdr` locally / remotely to get native spaces and tabs.
 3. Try chat mode: Start an agent in a terminal, it would auto-switch the tab to **Chat Mode**.
     - Chat mode always queues across all agents; with extra option to steer
     - shift+enter enables multi-line editor with syntax highlight for markdown code
+    - Requires codex-cli 0.161.0, claude 2.1.293, pi 1.1.0 or nanocodex
 4. Try splits: open 4 tabs, use ctrl+1, ctrl+2, ctrl+3, ctrl+4
 
 Extra features:
