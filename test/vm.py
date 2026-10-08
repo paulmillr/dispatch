@@ -136,7 +136,20 @@ ln -sf "$1" /opt/homebrew/bin/codex
 /opt/homebrew/bin/tmux -V
 ''', str(CODEX))
     provision_rust(vm)
+    provision_xcodegen(vm)
     print("VM ready. Run python3 test/vm.py test", flush=True)
+
+
+def provision_xcodegen(vm):
+    """Copy the host's pinned XcodeGen; the guest's offline setup cannot download it."""
+    binary = Path(run(sys.executable, str(ROOT / "scripts/setup-build-tools.py"), "xcodegen", "--offline",
+                      capture_output=True, text=True).stdout.strip())
+    tools = ROOT / "build/tools/xcodegen"
+    source = tools / binary.relative_to(tools).parts[0]
+    destination = GUEST + "/workspace/build/tools/xcodegen/" + source.name
+    guest(vm, "/bin/mkdir", "-p", destination)
+    synchronize(vm, [str(source) + "/"], destination + "/")
+    guest(vm, destination + "/" + str(binary.relative_to(source)), "--version")
 
 
 def provision_rust(vm):

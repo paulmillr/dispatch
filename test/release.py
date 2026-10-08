@@ -88,7 +88,8 @@ def main():
     controller = build / 'controller'
     subprocess.run(['xcrun', 'swiftc', '-module-cache-path', str(build / 'modules'),
                     str(source), '-o', str(controller)], check=True, timeout=120)
-    with tempfile.TemporaryDirectory(prefix='home-', dir=os.environ.get('DISPATCH_TEST_ROOT', build)) as directory:
+    # The helper's sockets live under this HOME; a checkout's build directory overruns sun_path.
+    with tempfile.TemporaryDirectory(prefix='home-', dir=os.environ.get('DISPATCH_TEST_ROOT', '/tmp')) as directory:
         home = Path(directory)
         settings = home / 'Library/Application Support/Dispatch/Local/settings.json'
         settings.parent.mkdir(parents=True)
@@ -107,7 +108,7 @@ def main():
             result = subprocess.run([str(controller), str(app / 'Contents/MacOS/Dispatch'), directory, str(receipt)],
                                     cwd=home, env=env, stdout=output, stderr=subprocess.STDOUT, timeout=60)
         print((build / 'launch.log').read_text(), end='')
-        (build / 'result.json').write_text(json.dumps({'app': str(app), 'engine': engine, 'exit_code': result.returncode}) + '\n')
+        (build / 'result.json').write_text(json.dumps({'app': str(app), 'exit_code': result.returncode}) + '\n')
         return result.returncode
 
 

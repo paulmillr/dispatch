@@ -1,6 +1,6 @@
 {
   "capture_sha256": "8ac6c029fd2787030c9a41ff66e337e890042152aaf4daf674444c9f9b882b11",
-  "origin": "Real PTY login recorded by Helpers/helper4/bin/tests/login.py; unchanged capture bytes.",
+  "origin": "Real PTY login recorded by helper/bin/tests/login.py; unchanged capture bytes.",
   "helper_sha256": "192cb32b8ff92ceaa58575abe6c1324b4a3dc75ac333926f6ccd8e96af805521",
   "helper_source_commit": "db6ff9587e0ff6468147a8b8e9360585d2f370a2",
   "wire_version": "9172082130310314751",

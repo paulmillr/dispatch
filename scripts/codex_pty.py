@@ -15,8 +15,8 @@ import time
 def command(executable, arguments, environment):
     """Exercise Dispatch's wrapper, or the same native isolation outside the app."""
     # A Dispatch terminal: the helper's typed launch (what typing `codex` there runs). Local terminals name
-    # the helper in DISPATCH_HELPER4_EXECUTABLE, remote login shells in DISPATCH_SSH_HELPER.
-    helper = environment.get('DISPATCH_HELPER4_EXECUTABLE') or environment.get('DISPATCH_SSH_HELPER')
+    # the helper in DISPATCH_HELPER_EXECUTABLE, remote login shells in DISPATCH_SSH_HELPER.
+    helper = environment.get('DISPATCH_HELPER_EXECUTABLE') or environment.get('DISPATCH_SSH_HELPER')
     if helper:
         return [helper, 'launch', 'codex', *arguments]
     isolated = []

@@ -57,7 +57,7 @@ static int fail_pty(const char *marker, const char *home) {
         int output = open(marker, O_WRONLY | O_CREAT | O_EXCL, 0600);
         if (output < 0) _exit(11);
         char pattern[4096];
-        int count = snprintf(pattern, sizeof(pattern), "%s/.dispatch/h4/run-*/startup-*", home);
+        int count = snprintf(pattern, sizeof(pattern), "%s/.dispatch/run/*/startup-*", home);
         glob_t matches = {0};
         if (count <= 0 || (size_t)count >= sizeof(pattern) || glob(pattern, 0, NULL, &matches)) _exit(12);
         for (size_t index = 0; index < matches.gl_pathc; ++index) dprintf(output, "%s\n", matches.gl_pathv[index]);

@@ -22,9 +22,9 @@ if args.dry_run:
     raise SystemExit(0)
 args.root = args.root.resolve()
 # The tmux multiplexer's index is its registration order in the helper's main.rs.
-main = (Path(__file__).resolve().parents[1] / "Helpers/helper4/bin/src/main.rs").read_text()
+main = (Path(__file__).resolve().parents[1] / "helper/bin/src/main.rs").read_text()
 main = main[main.rindex("let mut helper = DispatchHelper::new();"):]
-tmux_mux = re.findall(r"add_multiplexer\(\s*dispatch_helper4_(\w+)::", main).index("tmux")
+tmux_mux = re.findall(r"add_multiplexer\(\s*dispatch_helper_(\w+)::", main).index("tmux")
 args.helper = args.helper.resolve()
 args.probe = args.probe.resolve()
 args.root.mkdir(mode=0o700, parents=True, exist_ok=False)

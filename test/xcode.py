@@ -9,6 +9,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import tempfile
 import uuid
 from profile import Profile
 from timings import cases_from_result, report, compare
@@ -173,17 +174,23 @@ def execute(root, tests, skips=(), recheck=False, benchmarks=False, selection=No
     runner_error = None
     status = 1
     recording = None
+    # Unix sockets under the per-user temporary directory (/var/folders/…/T/) overrun macOS's
+    # 104-byte sun_path: the helper's hook sockets (in DISPATCH_TEST_ROOT, else the test HOME
+    # there) and fixture sockets in TMPDIR. One short private root per run holds both; it also
+    # keeps test hook senders out of the account's real helper registry.
+    test_root = tempfile.mkdtemp(prefix='dt-', dir='/tmp')
+    os.mkdir(os.path.join(test_root, 'tmp'), 0o700)
     try:
-        # The old SSH helper's portable preflight went with it; helper4 builds in the Xcode phase.
+        # The old SSH helper's portable preflight went with it; the helper builds in the Xcode phase.
         plan = ensure_build(root, profile, force=recheck)
         if not replay_run and any((root / "captures").rglob("manifest.json")):
             with profile.stage('helper_replay'):
                 subprocess.run([sys.executable, str(root / 'scripts/build-ssh-helper.py'),
                                 '--replay-tools', '--build-only'], cwd=root, check=True)
                 resources = root / 'build/Build/Products/Debug/Dispatch.app/Contents/Resources'
-                tools = root / 'build/helper4-rust/bin/replay'
+                tools = root / 'build/helper-rust/bin/replay'
                 settings = {'helper': {'macos': resources / 'dispatch-helper',
-                                       'linux': resources / 'helper4/linux-x86_64'},
+                                       'linux': resources / 'helper/linux-x86_64'},
                             'tool': {'macos': tools / 'darwin-universal', 'linux': tools / 'linux-x86_64'},
                             'ssh': {}}
                 if (root / 'build/linux-ssh.json').is_file():
@@ -197,10 +204,12 @@ def execute(root, tests, skips=(), recheck=False, benchmarks=False, selection=No
                 if replay.main(arguments):
                     raise RuntimeError('Helper replay preflight failed; live tests were not started.')
         environment = dict(os.environ)
+        environment.setdefault('TEST_RUNNER_DISPATCH_TEST_ROOT', test_root)
+        environment.setdefault('TEST_RUNNER_TMPDIR', os.path.join(test_root, 'tmp') + '/')
         if capture_run:
             resources = root / 'build/Build/Products/Debug/Dispatch.app/Contents/Resources'
             paths = [(resources / 'dispatch-helper', 'macos')]
-            paths += [(resources / 'helper4' / name, system) for name, system in
+            paths += [(resources / 'helper' / name, system) for name, system in
                       [('darwin-universal','macos'),('linux-aarch64','linux'),('linux-x86_64','linux')]]
             helpers = [{'path':str(path),'platform':system} for path,system in paths if path.is_file()]
             if not helpers: raise RuntimeError('Capture requires the built original helper binaries')
@@ -250,6 +259,7 @@ def execute(root, tests, skips=(), recheck=False, benchmarks=False, selection=No
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         status = status or 1
         runner_error = (runner_error + '; ' if runner_error else '') + 'Fixture audit failed: ' + str(error)
+    shutil.rmtree(test_root, ignore_errors=True)
     cases = []
     export_error = None
     try:

@@ -163,6 +163,8 @@ class ProcessCleanupTests(unittest.TestCase):
                     binary = home / 'packages/release/bin/codex'
                     binary.parent.mkdir(parents=True)
                     shutil.copyfile('/bin/sleep', binary); binary.chmod(0o700)
+                    # Newer macOS kills a relocated platform binary at exec; an ad-hoc signature runs.
+                    subprocess.run(['codesign', '-f', '-s', '-', str(binary)], check=True, capture_output=True)
                     children.append(subprocess.Popen([str(binary), '60']))
                     (home / 'evidence.jsonl').write_text('retained transcript\n')
                 codex_fixture.stop(homes[0], None)
@@ -192,7 +194,7 @@ class ProcessCleanupTests(unittest.TestCase):
     def testCodexFixtureLaunchUsesTheProductWrapperAndCompatibleIsolation(self):
         arguments = ['--no-alt-screen', 'resume', 'session with spaces']
         # A Dispatch terminal (local or a remote helper's) runs the helper's typed launch and never probes Codex.
-        for environment in [{'DISPATCH_HELPER4_EXECUTABLE': '/helper path'}, {'DISPATCH_SSH_HELPER': '/helper path'}]:
+        for environment in [{'DISPATCH_HELPER_EXECUTABLE': '/helper path'}, {'DISPATCH_SSH_HELPER': '/helper path'}]:
             with self.subTest(environment=environment), \
                     patch.object(subprocess, 'run', side_effect=subprocess.CalledProcessError(1, [])) as probe:
                 self.assertEqual(codex_pty.command('/codex', arguments, environment),

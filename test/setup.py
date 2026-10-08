@@ -469,13 +469,13 @@ class BuildEntryPointTests(unittest.TestCase):
         self.assertEqual(code, 0, self.result.stderr)
         self.assertEqual(calls.count('helper'), 1)
         self.assertEqual(sum(line.startswith('build ') for line in calls), 1)
-        helper = self.result.stdout.index('✓ Building dsptch helper for SSH')
+        helper = self.result.stdout.index('✓ Building SSH helper')
         app = self.result.stdout.index('✓ Building Dispatch macOS app')
         self.assertLess(helper, app)
         self.assertFalse(list((self.root / 'build/logs').glob('.progress-*')))
 
     def testBuildFailuresReportTheCurrentStage(self):
-        for failure, stage in [('HELPER_EXIT', 'Building dsptch helper for SSH'),
+        for failure, stage in [('HELPER_EXIT', 'Building SSH helper'),
                                ('BUILD_EXIT', 'Building Dispatch macOS app')]:
             with self.subTest(failure=failure):
                 code, calls = self.invoke('root', **{failure: '7'})

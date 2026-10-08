@@ -103,7 +103,7 @@ Chat attaches to Codex, Claude Code, Pi, and Nanocodex sessions that are already
 - Codex: `$CODEX_HOME/hooks.json` (default `~/.codex/hooks.json`) gets session, prompt, tool, compaction, stop, and permission events. Codex then asks you to trust the hook in `/hooks`.
 - Claude: `$CLAUDE_CONFIG_DIR/settings.json` (default `~/.claude/settings.json`) gets `PermissionRequest` and `PreToolUse` for `AskUserQuestion`.
 - How the edit is made: Dispatch only adds or removes entries whose command is its own. It refuses invalid JSON and aborts if the file changed while it was working. It rewrites the whole file pretty-printed with sorted keys, so your formatting changes. It doesn't make a backup and doesn't set the file mode.
-- The hook command runs the helper's stable copy, `~/.dispatch/h4/bin/dispatch-helper4 hook {codex,claude}`. It sends the hook's JSON — your prompts, tool inputs and outputs, and the agent's replies — to the running helper over a Unix socket in `~/.dispatch/h4/run-*/` (folder 0700). It does nothing when no Dispatch helper is running.
+- The hook command runs the helper's stable copy, `~/.dispatch/bin/dispatch-helper hook {codex,claude}`. It sends the hook's JSON — your prompts, tool inputs and outputs, and the agent's replies — to the running helper over a Unix socket in `~/.dispatch/run/*/` (folder 0700). It does nothing when no Dispatch helper is running.
 - Turning Chat or an agent's hooks off removes Dispatch's entries. The hook script itself stays on disk.
 - Pi needs an explicit **Install** in Settings. That writes `~/.pi/agent/extensions/dispatch-chat.js` (0600) plus a checksum receipt, and refuses symlinked or foreign-owned folders. While Pi runs, the extension listens on `/tmp/dispatch-pi-<uid>/<pid>-<uuid>.sock` (0600, token required). Through that socket it serves Pi's state (including the current editor text), model list, prompt, steer, and abort. **Remove** deletes both files.
 
@@ -166,11 +166,12 @@ The token routes the request to a pane. If the token doesn't match any pane, Dis
 
 **The helper on the remote host.**
 
-- It is uploaded to `~/.dispatch/bin/<sha256>/dsptch`. Before running it, Dispatch requires private permissions (umask 077, folders 0700, owned by you, no symlinks, `$HOME` not writable by group or others) and a matching size and SHA-256.
+- It is uploaded to `~/.dispatch/bin/versions/<sha256>/dispatch-helper`. Before running it, Dispatch requires private permissions (umask 077, folders 0700, owned by you, no symlinks, `$HOME` not writable by group or others) and a matching size and SHA-256.
 - Its only verification is that hash; there is no code signature.
 - It runs as a child of `sshd`, not as a daemon, and exits when the connection closes. If its login shell exits while other Dispatch connections to that host still use it, it keeps serving them until they disconnect or 24 hours pass without traffic from any of them.
 - Its capabilities and session ID are visible in the remote process list. It has no credentials of its own: any process running as your remote user can connect to its socket and use everything the grant allows, including running commands. Only other users are kept out.
-- Per-connection state lives in `~/.dispatch/live/<session>/` (the login's bus socket) and `~/.dispatch/h4/run-<random>/` (hook sockets, shell startup files). Folders are 0700, so only your user can connect.
+- Per-connection state lives in `~/.dispatch/sessions/<session>/` (the login hand-off, the login's bus socket, and its exit status) and `~/.dispatch/run/<random>/` (hook sockets, shell startup files). Folders are 0700, so only your user can connect.
+- Each helper start removes what no running helper holds: run folders of exited helpers, and session folders and uploaded helper versions that are unlocked and unchanged for a day.
 
 **What the helper reads**, depending on the grant:
 
@@ -187,14 +188,13 @@ The token routes the request to a pane. If the token doesn't match any pane, Dis
   - The edit only appends, refuses invalid JSON, takes an exclusive lock, requires files owned by you that others can't write and that are at most 1 MiB, keeps the existing file mode, and replaces the file atomically. It makes no backup.
   - Turning hooks off stops routing but **leaves the entries in place**. A leftover hook does nothing once no Dispatch connection is live.
   - Hook events forward their full JSON to your Mac, up to 250 KB each, including prompts and tool input.
-- **Helper copy:** `~/.dispatch/h4/bin/dispatch-helper4`, the stable path that hook entries and shell startup files run. Each helper refreshes it from its own executable.
+- **Helper copy:** `~/.dispatch/bin/dispatch-helper`, the stable path that hook entries and shell startup files run. Each helper refreshes it from its own executable.
 - **Pi:** the extension `<pi agent dir>/extensions/dispatch-chat.js` is removed again when Pi hooks are turned off.
 - **Shell startup:** when agent hooks are granted, the remote shell starts through private startup files that define `codex`, `pi`, and `herdr` functions, unless you already have a function (or, in bash and zsh, an alias) with that name. Your rc files are sourced, never edited.
 - **Agent control:** with Chat, the helper can type prompts into a verified agent's terminal, tmux pane, or herdr pane. It can start `codex app-server --stdio` for side conversations, and create tmux windows and herdr tabs.
 - **Commands:** the helper is a terminal server. The Chat, hooks, tmux, and herdr grants each let the Mac open remote terminals that run any command and type into them; tmux also lets it send tmux commands. The helper also connects to agents' and herdr's own sockets.
 - **Left behind after disconnect** (there is no uninstall):
-  - the cached helper in `~/.dispatch/bin/`;
-  - `~/.dispatch/h4/`: the helper copy, and herdr recovery records in `state/`;
+  - in `~/.dispatch/`: the helper copy and the most recently used helper versions in `bin/`, herdr recovery records in `state/`, and session folders for up to a day;
   - lock files in agent config folders;
   - the hook entries above;
 
@@ -225,7 +225,7 @@ Quitting doesn't ask for confirmation when only tmux and herdr tabs are open.
 | Spaces | `…/Dispatch/host-session.json` | Spaces, tabs, titles, and folders; host records; SSH executables, options, and destinations; remote uid and boot ID; herdr recovery tokens; tmux sessions. No credentials or launch commands. | On window close and quit, while **Reopen spaces on launch** is on (on). Deleted when that setting is turned off. | 0600, atomic |
 | Terminal output | `…/Dispatch/terminal-history.json` | The raw text of plain local and SSH tabs: commands, output, and anything else visible, possibly secrets. Not tmux or herdr tabs. | Only on a normal quit, with **Restore tab history** (off) and **Reopen spaces** both on. Deleted from disk early in the next launch, ignored after 7 days, and deleted when the setting is turned off. | 0600, atomic, excluded from backups. Capped at one scrollback per tab and 1/32 of RAM in total. Replayed without control sequences. |
 | Chat drafts | `…/Dispatch/drafts.json` | Working and saved drafts, plus a copy of each prompt from before it is sent until delivery is confirmed, per host, agent, and conversation | 300 ms after typing stops, and at most every 2 s | Atomic write; default file mode; no expiry |
-| Helper files | `~/.dispatch/h4/` | `bin/dispatch-helper4`, the helper copy that hook entries run; `run-*/` hook sockets and startup files of running helpers; `live/` their routes; `state/` herdr recovery records | `bin/` is refreshed when a helper writes a hook or startup command; each `run-*/` exists while its helper runs | Folders 0700, sockets 0600 |
+| Helper files | `~/.dispatch/` | `bin/dispatch-helper`, the helper copy that hook entries run; `run/*/` hook sockets and startup files of running helpers; `routes/` which helper serves each hook; `state/` herdr recovery records | `bin/dispatch-helper` is refreshed when a helper writes a hook or startup command; each `run/*/` exists while its helper runs | Folders 0700, sockets 0600 |
 | Diagnostics | `~/Library/Logs/Dispatch/Diagnostics/` | Chat scroll and viewport events and geometry. Row IDs are replaced with keyed hashes; no conversation text, hosts, or paths. | Only while **Diagnostics** is on (off). Turning it off doesn't delete existing files. | 0600, rotated at 4 MiB |
 | UserDefaults (`dev.dispatch.local`) | `~/Library/Preferences` | Chat and hook switches, SSH grants (`SSHIntegrationPermissions.v2`), host records (`HostRegistry.v1`), herdr presentation, window frame | On change | Default |
 

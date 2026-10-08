@@ -18,6 +18,9 @@ class Admission(unittest.TestCase):
         for blocked in (True, False):
             with self.subTest(blocked=blocked), tempfile.TemporaryDirectory(dir=parent) as directory:
                 root = Path(directory)
+                # The replay gate engages only when a capture corpus exists.
+                (root / 'captures/run').mkdir(parents=True)
+                (root / 'captures/run/manifest.json').write_text('{}')
                 events = []
                 selection = {'selected': ['DispatchTests/Example/test'], 'suite': 'full'}
                 timing = dict(complete=False, missing_identifiers=selection['selected'],
@@ -42,6 +45,7 @@ class Admission(unittest.TestCase):
                      patch.object(replay, 'main', side_effect=gate), \
                      patch.object(xcode.subprocess, 'run', side_effect=run), \
                      patch.object(xcode.subprocess, 'check_output', return_value='Xcode'), \
+                     patch.object(xcode.platform, 'platform', return_value='macOS'), \
                      patch.object(xcode.codex_fixture, 'resources', return_value={}), \
                      patch.object(xcode, 'fingerprint', return_value='inputs'), \
                      patch.object(xcode, 'report', return_value=timing), \

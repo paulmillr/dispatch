@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Replays a recorded app<->helper exchange (a capture-helper-wire.py fixture) as the helper.
 
-The app starts it like the helper binary (DISPATCH_HELPER4_EXECUTABLE; `--stdio` is ignored) and talks the
+The app starts it like the helper binary (DISPATCH_HELPER_EXECUTABLE; `--stdio` is ignored) and talks the
 same framed wire on stdin/stdout. Environment: DISPATCH_REPLAY_FIXTURE (the fixture), DISPATCH_REPLAY_REPORT
 (written when stdin ends), DISPATCH_REPLAY_CODEC (default: HelperBinary.py beside this script, generated
 with Dispatch/Helper/HelperBinary.swift).

@@ -48,7 +48,7 @@ static int fixture_openpty(int *master, int *slave, char *name,
     if (marker) {
         const char *home = getenv("DISPATCH_TEST_HOME");
         char pattern[4096];
-        int count = snprintf(pattern, sizeof(pattern), "%s/.dispatch/h4/run-*/startup-*", home ? home : "");
+        int count = snprintf(pattern, sizeof(pattern), "%s/.dispatch/run/*/startup-*", home ? home : "");
         glob_t matches = {0};
         int fd = open(marker, O_WRONLY | O_CREAT | O_TRUNC, 0600);
         if (fd >= 0) {

@@ -28,8 +28,8 @@ class Comparison(unittest.TestCase):
             [sys.executable,str(root/'scripts/build-ssh-helper.py'),'--build-only','--replay-tools']])
         corpus,helpers,tools,remotes,strict=planned.call_args.args
         self.assertEqual((corpus,helpers,tools,strict),(root/'captures',
-            {'macos':root/'build/helper4-rust/bin/darwin-universal','linux':root/'build/helper4-rust/bin/linux-x86_64'},
-            {'macos':root/'build/helper4-rust/bin/replay/darwin-universal','linux':root/'build/helper4-rust/bin/replay/linux-x86_64'},True))
+            {'macos':root/'build/helper-rust/bin/darwin-universal','linux':root/'build/helper-rust/bin/linux-x86_64'},
+            {'macos':root/'build/helper-rust/bin/replay/darwin-universal','linux':root/'build/helper-rust/bin/replay/linux-x86_64'},True))
 
     def test_all_observed_versions_and_nonzero_exits_are_retained(self):
         original = {
@@ -266,12 +266,12 @@ class Builder(unittest.TestCase):
             def execute(*args, **kwargs):
                 commands.append(args)
                 if len(args)>1 and args[1]=='build':
-                    self.assertEqual(args[args.index('--package')+1], 'dispatch-helper4-core')
+                    self.assertEqual(args[args.index('--package')+1], 'dispatch-helper-core')
                     self.assertEqual(args[args.index('--example')+1], 'capture-redact')
                     self.assertEqual(args.count('--target'), 4)
                     for i, arg in enumerate(args):
                         if arg=='--target':
-                            path=cache/args[i+1]/'release/examples/capture-redact'
+                            path=cache/args[i+1]/args[args.index('--profile')+1]/'examples/capture-redact'
                             path.parent.mkdir(parents=True, exist_ok=True)
                             path.write_bytes(args[i+1].encode())
                     from types import SimpleNamespace
@@ -305,7 +305,7 @@ class Builder(unittest.TestCase):
         spec.loader.exec_module(builder)
         temporary = root/'build/replay-tests'
         temporary.mkdir(parents=True, exist_ok=True)
-        for configuration, features, cache in (('Debug', ['--features', 'dispatch-helper4/capture'], ''),
+        for configuration, features, cache in (('Debug', ['--features', 'dispatch-helper/capture'], ''),
                                                ('Release', [], 'without-capture')):
             with self.subTest(configuration), tempfile.TemporaryDirectory(dir=temporary) as directory:
                 project = Path(directory)
@@ -316,7 +316,7 @@ class Builder(unittest.TestCase):
                         builds.append((args, kwargs['env']['CARGO_TARGET_DIR']))
                         for i, arg in enumerate(args):
                             if arg=='--target':
-                                path=Path(kwargs['env']['CARGO_TARGET_DIR'])/args[i+1]/'release/dispatch-helper4'
+                                path=Path(kwargs['env']['CARGO_TARGET_DIR'])/args[i+1]/args[args.index('--profile')+1]/'dispatch-helper'
                                 path.parent.mkdir(parents=True, exist_ok=True)
                                 path.write_bytes(args[i+1].encode())
                         from types import SimpleNamespace

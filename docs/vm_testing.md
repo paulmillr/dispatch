@@ -19,7 +19,7 @@ The host needs Apple Silicon, Xcode 26 with first launch completed, Homebrew in 
 The full suite also needs Claude Code on `PATH` and the pinned Pi from `./run.sh --test`. Host binaries built for a newer macOS, or linked to host libraries, are rejected before copying.
 
 ```sh
-python3 test/vm.py setup            # creates/reuses the VM from the digest-pinned image
+python3 test/vm.py setup            # creates/reuses the VM from the digest-pinned image; copies host Rust + XcodeGen
 python3 test/vm.py rust             # copy + verify host build/rust into the guest (no download)
 python3 test/vm.py test ChatTests   # first validation: no Claude, Pi, or Linux needed
 ```
@@ -103,7 +103,7 @@ Batch the relevant classes in one `vm.py test` run: Chat\* (discovery, drafts, q
 
 ### Process statistics checks
 
-helper4's `plugins/stats` tests (`cargo test` in `Helpers/helper4`) cover the native collectors. The live checks are `SSHProcessStatisticsIntegrationTests` (macOS cases in the VM). The Linux case reads `/tmp/dispatch-stats-linux.json` (`destination`, `options`) on the XCTest host and must not use a preconfigured ControlMaster.
+The helper's `plugins/stats` tests (`cargo test` in `helper`) cover the native collectors. The live checks are `SSHProcessStatisticsIntegrationTests` (macOS cases in the VM). The Linux case reads `/tmp/dispatch-stats-linux.json` (`destination`, `options`) on the XCTest host and must not use a preconfigured ControlMaster.
 
 ### UI checks
 

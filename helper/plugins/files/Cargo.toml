@@ -1,0 +1,14 @@
+[package]
+name = "dispatch-helper-files"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98.1"
+publish = false
+autotests = false
+
+[dependencies]
+dispatch-helper-core = { path = "../../core" }
+
+[lib]
+test = false
+path = "src/lib.rs"

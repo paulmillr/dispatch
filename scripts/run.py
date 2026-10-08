@@ -284,7 +284,7 @@ def main():
                 if env.get('DISPATCH_BUILD_JOBS'):
                     command += ['-jobs', env['DISPATCH_BUILD_JOBS']]
                     env['CARGO_BUILD_JOBS'] = env['DISPATCH_BUILD_JOBS']
-                ui.step('Building dsptch helper for SSH', command, env,
+                ui.step('Building SSH helper', command, env,
                         next_stage=(helper_complete, 'Building Dispatch macOS app'))
             app = ROOT / 'build/Build/Products' / configuration / 'Dispatch.app'
             if not args.just_build:

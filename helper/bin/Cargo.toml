@@ -1,0 +1,34 @@
+[package]
+name = "dispatch-helper"
+version = "0.1.0"
+edition = "2024"
+publish = false
+autotests = false
+
+[dependencies]
+dispatch-helper-core = { path = "../core" }
+dispatch-helper-tmux = { path = "../multiplexers/tmux", optional = true }
+dispatch-helper-native = { path = "../multiplexers/native" }
+dispatch-helper-herdr = { path = "../multiplexers/herdr" }
+dispatch-helper-claude = { path = "../harnesses/claude" }
+dispatch-helper-pi = { path = "../harnesses/pi" }
+dispatch-helper-nanocodex = { path = "../harnesses/nanocodex" }
+dispatch-helper-codex = { path = "../harnesses/codex" }
+dispatch-helper-files = { path = "../plugins/files" }
+dispatch-helper-stats = { path = "../plugins/stats" }
+
+[features]
+default = ["tmux"]
+tmux = ["dep:dispatch-helper-tmux"]
+capture = ["dispatch-helper-core/capture"]
+
+
+[[bin]]
+name = "dispatch-helper"
+path = "src/main.rs"
+test = false
+
+[[bench]]
+name = "terminals"
+path = "benches/terminals.bench.rs"
+harness = false

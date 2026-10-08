@@ -13,7 +13,7 @@ from pathlib import Path
 import os
 ROOT = Path(os.environ.get('QUALITY_METRICS_ROOT') or Path(__file__).resolve().parent.parent)
 SWIFT_SCOPE = ROOT / 'Dispatch'
-RUST_SCOPE = ROOT / 'Helpers/helper4'
+RUST_SCOPE = ROOT / 'helper'
 COMPLEXITY_THRESHOLD = 15
 LENGTH_THRESHOLD = 80
 TOP = 12
@@ -266,7 +266,7 @@ def co_change():
     Cheap and post hoc, so it measures the change amplification that actually
     happened rather than an estimate. Splitting one logical change across commits
     is the only way to game it."""
-    log = subprocess.run(['git', 'log', '--format=%x00%h', '--name-only', '--', 'Dispatch', 'Helpers/helper4'],
+    log = subprocess.run(['git', 'log', '--format=%x00%h', '--name-only', '--', 'Dispatch', 'helper'],
                          capture_output=True, text=True, cwd=ROOT).stdout
     commits = []
     for block in log.split('\x00')[1:]:

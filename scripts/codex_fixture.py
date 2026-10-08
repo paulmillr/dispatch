@@ -461,7 +461,7 @@ def main():
         if args.remote and args.no_daemon:
             parser.error('--remote and --no-daemon select different native launch modes')
         arguments = (['--no-daemon'] if args.no_daemon else []) + (['--remote', args.remote] if args.remote else []) + (['resume', args.resume] if args.resume else [])
-        if args.dispatch and not env.get('DISPATCH_HELPER4_EXECUTABLE') and not env.get('DISPATCH_SSH_HELPER'):
+        if args.dispatch and not env.get('DISPATCH_HELPER_EXECUTABLE') and not env.get('DISPATCH_SSH_HELPER'):
             parser.error('--dispatch requires a Dispatch terminal')
         env['PATH'] = str(Path(args.codex).parent) + os.pathsep + env.get('PATH', '')
         argv = codex_command(args.codex, ['--no-alt-screen', *arguments], env)
@@ -483,7 +483,7 @@ def main():
                     request = mailbox / 'request.json'
                     while os.getppid() == owner:
                         if request.exists():
-                            helper = env.get('DISPATCH_HELPER4_EXECUTABLE') or env.get('DISPATCH_SSH_HELPER')
+                            helper = env.get('DISPATCH_HELPER_EXECUTABLE') or env.get('DISPATCH_SSH_HELPER')
                             if not helper:
                                 raise RuntimeError('Fixture hook requires a Dispatch helper')
                             child = subprocess.Popen([helper, 'hook', 'codex'], env=env,

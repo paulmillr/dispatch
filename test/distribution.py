@@ -29,7 +29,7 @@ class DistributionTests(unittest.TestCase):
     def test_all_macos_helpers_signed_before_bundle(self):
         with tempfile.TemporaryDirectory() as directory:
             app = Path(directory) / 'Dispatch.app'
-            resources = app / 'Contents/Resources/helper4'
+            resources = app / 'Contents/Resources/helper'
             resources.mkdir(parents=True)
             binary = resources / 'darwin-universal'
             binary.write_bytes(bytes.fromhex('cafebabe') + b'code')

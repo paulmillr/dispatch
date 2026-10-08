@@ -1,0 +1,9 @@
+[package]
+name = "dispatch-helper-codex"
+version = "0.1.0"
+edition = "2024"
+publish = false
+autotests = false
+
+[dependencies]
+dispatch-helper-core = { path = "../../core" }

@@ -54,11 +54,11 @@ targets:
       - name: Install SSH helpers
         # Built by the SSHHelpers target, in parallel with the terminal frameworks.
         script: python3 "$SRCROOT/scripts/build-ssh-helper.py" --install-only
-        inputFiles: ["$(SRCROOT)/build/helper4-rust/bin/darwin-universal", "$(SRCROOT)/build/helper4-rust/bin/linux-aarch64", "$(SRCROOT)/build/helper4-rust/bin/linux-x86_64", "$(SRCROOT)/build/helper4-rust/bin/version", "$(SRCROOT)/build/helper4-rust/bin/protocol-version"]
-        outputFiles: ["$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper4/darwin-universal", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper4/linux-aarch64", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper4/linux-x86_64", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper4/version", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper4/protocol-version"]
+        inputFiles: ["$(SRCROOT)/build/helper-rust/bin/darwin-universal", "$(SRCROOT)/build/helper-rust/bin/linux-aarch64", "$(SRCROOT)/build/helper-rust/bin/linux-x86_64", "$(SRCROOT)/build/helper-rust/bin/version", "$(SRCROOT)/build/helper-rust/bin/protocol-version"]
+        outputFiles: ["$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/darwin-universal", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/linux-aarch64", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/linux-x86_64", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/version", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/protocol-version"]
     postBuildScripts:
       - name: Bundle unified helper
-        script: bash "$SRCROOT/scripts/build-helper4.sh"
+        script: bash "$SRCROOT/scripts/bundle-helper.sh"
         basedOnDependencyAnalysis: false
       - name: Bundle Dispatch themes
         # Always: the ghostty folder copy replaces the folder wholesale, even when this
@@ -138,8 +138,8 @@ aggregateTargets:
       - name: Build portable SSH helpers
         script: bash "$SRCROOT/scripts/build-ssh-helper.sh" --build-only
         basedOnDependencyAnalysis: false
-        inputFiles: ["$(SRCROOT)/Helpers/helper4", "$(SRCROOT)/scripts/build-ssh-helper.sh", "$(SRCROOT)/scripts/build-ssh-helper.py", "$(SRCROOT)/scripts/setup-ssh-rust.py"]
-        outputFiles: ["$(SRCROOT)/build/helper4-rust/bin/darwin-universal", "$(SRCROOT)/build/helper4-rust/bin/linux-aarch64", "$(SRCROOT)/build/helper4-rust/bin/linux-x86_64", "$(SRCROOT)/build/helper4-rust/bin/version", "$(SRCROOT)/build/helper4-rust/bin/protocol-version"]
+        inputFiles: ["$(SRCROOT)/helper", "$(SRCROOT)/scripts/build-ssh-helper.sh", "$(SRCROOT)/scripts/build-ssh-helper.py", "$(SRCROOT)/scripts/setup-ssh-rust.py"]
+        outputFiles: ["$(SRCROOT)/build/helper-rust/bin/darwin-universal", "$(SRCROOT)/build/helper-rust/bin/linux-aarch64", "$(SRCROOT)/build/helper-rust/bin/linux-x86_64", "$(SRCROOT)/build/helper-rust/bin/version", "$(SRCROOT)/build/helper-rust/bin/protocol-version"]
 schemes:
   Dispatch:
     build:

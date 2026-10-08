@@ -19,10 +19,10 @@ import tempfile
 
 ROOT = Path(os.environ.get("SRCROOT", Path(__file__).resolve().parent.parent))
 NAMES = ("darwin-universal", "linux-aarch64", "linux-x86_64")
-# Remote helpers bundled for SSH hosts: protocol marker the app checks (helper4: its generated wire schema
-# version) and a fixed Cargo profile when the workspace defines only one.
+# Remote helpers bundled for SSH hosts: protocol marker the app checks (helper: its generated wire schema
+# version).
 HELPERS = {
-    "helper4": {"protocol": None, "profile": "release", "codec": ROOT / "Dispatch/Helper/HelperBinary.swift"},
+    "helper": {"protocol": None, "codec": ROOT / "Dispatch/Helper/HelperBinary.swift"},
 }
 
 
@@ -76,9 +76,8 @@ def codec(messages, committed):
     return re.search(r"static let version: UInt64 = (\d+)", text).group(1) + "\n"
 
 
-def build(profile, target_dir, helper="helper4", replay_tools=False, dry_run=False, capture=None):
+def build(profile, target_dir, helper="helper", replay_tools=False, dry_run=False, capture=None):
     settings = HELPERS[helper]
-    profile = settings.get("profile", profile)
     capture = default_capture() if capture is None else capture
     toolchain = ROOT / "build/rust"
     # Validate every required target without installing or fetching anything.
@@ -95,7 +94,7 @@ def build(profile, target_dir, helper="helper4", replay_tools=False, dry_run=Fal
                MACOSX_DEPLOYMENT_TARGET="14.0",
                DYLD_FALLBACK_LIBRARY_PATH=str(toolchain / "lib") +
                (os.pathsep + os.environ["DYLD_FALLBACK_LIBRARY_PATH"] if os.environ.get("DYLD_FALLBACK_LIBRARY_PATH") else ""))
-    crate = ROOT / "Helpers" / helper
+    crate = ROOT / helper
     binary = "examples/capture-redact" if replay_tools else "dispatch-" + helper
     protocol = settings["protocol"]
     cargo = str(toolchain / "bin/cargo")
@@ -118,7 +117,7 @@ def build(profile, target_dir, helper="helper4", replay_tools=False, dry_run=Fal
         # across all four targets. Separate Cargo processes would lock this cache.
         command = [cargo, "build", "--offline", "--frozen", "--profile", profile, "--message-format=json-render-diagnostics"]
         if replay_tools:
-            command += ["--package", "dispatch-helper4-core", "--example", "capture-redact"]
+            command += ["--package", "dispatch-helper-core", "--example", "capture-redact"]
         elif capture:
             command += ["--features", "dispatch-" + helper + "/capture"]
         # Global rustflags override target-specific flags. Preserve caller flags
@@ -164,7 +163,7 @@ def build(profile, target_dir, helper="helper4", replay_tools=False, dry_run=Fal
             write_if_changed(output / "protocol-version", protocol)
 
 
-def install(target_dir, helper="helper4"):
+def install(target_dir, helper="helper"):
     """Copy built binaries into the portable-test cache and the app's resources."""
     output = target_dir.resolve() / "bin"
     if not all((output / name).is_file() for name in (*NAMES, "version", "protocol-version")):
@@ -196,8 +195,8 @@ def default_capture():
 
 
 def default_profile():
-    # The fully optimized helper (fat LTO, one codegen unit) costs ~4x the compile time, so it is
-    # reserved for archives and explicit requests; local Debug and Release builds use `local`.
+    # The fully optimized helper (thin LTO, no incremental builds) takes ~30s to rebuild after any edit,
+    # so it is reserved for archives and explicit requests; local Debug and Release builds use `local`.
     requested = os.environ.get("DISPATCH_HELPER_PROFILE")
     if requested:
         return requested
@@ -210,9 +209,8 @@ if __name__ == "__main__":
     mode.add_argument("--build-only", action="store_true", help="Build artifacts without copying them into app resources")
     mode.add_argument("--install-only", action="store_true", help="Install already built artifacts without running Cargo")
     parser.add_argument("--profile", choices=("local", "release"), default=default_profile(),
-                        help="Default: release for Xcode archives or DISPATCH_HELPER_PROFILE=release, local otherwise; "
-                             "a helper whose workspace defines one profile always builds that one")
-    parser.add_argument("--target-dir", type=Path, default=ROOT / "build/helper4-rust",
+                        help="Default: release for Xcode archives or DISPATCH_HELPER_PROFILE=release, local otherwise")
+    parser.add_argument("--target-dir", type=Path, default=ROOT / "build/helper-rust",
                         help="Cargo output directory; override for isolated cold-build measurements")
     parser.add_argument("--replay-tools", action="store_true",
                         help="Build capture-redact examples into bin/replay without changing app helper resources")

@@ -106,7 +106,7 @@ def main(argv=None):
             subprocess.run(command, cwd=ROOT, env=environment, check=True, timeout=args.budget)
         if args.dry_run:
             return 0
-        binaries = ROOT / 'build/helper4-rust/bin'
+        binaries = ROOT / 'build/helper-rust/bin'
         names = {'macos': 'darwin-universal', 'linux': 'linux-x86_64'}
         helpers = {**{system: binaries / name for system, name in names.items()}, **helpers}
         tools = {**{system: binaries / 'replay' / name for system, name in names.items()}, **tools}

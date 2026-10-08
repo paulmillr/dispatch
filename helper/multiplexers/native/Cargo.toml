@@ -1,0 +1,15 @@
+[package]
+name = "dispatch-helper-native"
+version = "0.1.0"
+edition = "2024"
+publish = false
+autotests = false
+
+[dependencies]
+dispatch-helper-core = { path = "../../core", version = "=0.1.0" }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lib]
+test = false
