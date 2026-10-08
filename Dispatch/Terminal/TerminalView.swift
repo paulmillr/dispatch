@@ -1,4 +1,5 @@
 import AppKit
+import os
 import QuartzCore
 
 /// An NSView and its terminal surface have the same owner and lifetime, even
@@ -40,6 +41,8 @@ final class TerminalView: NSView {
     var herdrScrollAccumulator = HerdrScrollAccumulator()
     let scrollbar = TerminalScrollbar()
     var history: TerminalHistory?
+    /// Coalesces screen publication across output batches (`screenChanged`).
+    let screenPublication = OSAllocatedUnfairLock(initialState: ScreenPublication())
     private var tracking: NSTrackingArea?
     private var rendererView: NSView?
     var markedTextRange = NSRange(location: NSNotFound, length: 0)

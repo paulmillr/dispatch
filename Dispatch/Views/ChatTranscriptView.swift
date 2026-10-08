@@ -29,178 +29,196 @@ struct ChatTranscriptView: View {
     var body: some View {
         let directory = directory
         let query = session.search.visible ? session.search.query : ""
-        let request = SearchRequest(query: query, revision: session.revision, history: session.historyRevision,
-                                    approvals: session.approvals.count, generation: session.historyGeneration)
+        // Without a query the transcript's changes can't change the (empty) results: don't restart per record.
+        let searching = !query.isEmpty
+        let request = SearchRequest(query: query, revision: searching ? session.revision : 0,
+                                    history: searching ? session.historyRevision : 0,
+                                    approvals: searching ? session.approvals.count : 0, generation: session.historyGeneration)
         return GeometryReader { geometry in
             ScrollViewReader { scroll in
-                ScrollView(.vertical, showsIndicators: false) {
-                    // A fixed scroll target inside the lazy rows can make
-                    // accessibility prefetch alternate their visibility forever.
-                    VStack(alignment: .leading, spacing: 0) {
-                        LazyVStack(alignment: .leading, spacing: 0) {
-                            if session.hasEarlier || session.loadingEarlier {
-                                earlierMessages
+                // Helpers split this chain: as one expression it took seconds to type-check.
+                followingLatest(searchAndLifecycle(transcript(geometry, directory: directory), query: query,
+                                                   request: request, scroll: scroll), scroll: scroll)
+            }
+        }.environment(\.chatSearchQuery, query)
+    }
+
+    private func transcript(_ geometry: GeometryProxy, directory: String) -> some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            // A fixed scroll target inside the lazy rows can make
+            // accessibility prefetch alternate their visibility forever.
+            VStack(alignment: .leading, spacing: 0) {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    if session.hasEarlier || session.loadingEarlier {
+                        earlierMessages
+                    }
+                    ForEach(session.visibleTranscriptRows) { row in
+                        // One layout child per ID, regardless of row kind or
+                        // disclosure state, keeps the outer stack lazy.
+                        VStack(alignment: .leading, spacing: 0) {
+                            if let match = session.searchMatch, match.document.row == row.id {
+                                let excerpt = match.excerpt
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(match.document.label).font(theme.typography.detail).foregroundStyle(theme.muted)
+                                    Text(searchExcerpt(excerpt)).textSelection(.enabled).font(theme.typography.body)
+                                }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(theme.yellow.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+                                    .overlay { RoundedRectangle(cornerRadius: 6).stroke(theme.yellow, lineWidth: 1) }
+                                    .padding(.bottom, 8).accessibilityIdentifier("chat-find-match")
                             }
-                            ForEach(session.visibleTranscriptRows) { row in
-                                // One layout child per ID, regardless of row kind or
-                                // disclosure state, keeps the outer stack lazy.
-                                VStack(alignment: .leading, spacing: 0) {
-                                    if let match = session.searchMatch, match.document.row == row.id {
-                                        let excerpt = match.excerpt
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            Text(match.document.label).font(theme.typography.detail).foregroundStyle(theme.muted)
-                                            Text(searchExcerpt(excerpt)).textSelection(.enabled).font(theme.typography.body)
-                                        }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
-                                            .background(theme.yellow.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
-                                            .overlay { RoundedRectangle(cornerRadius: 6).stroke(theme.yellow, lineWidth: 1) }
-                                            .padding(.bottom, 8).accessibilityIdentifier("chat-find-match")
-                                    }
-                                    ChatTranscriptRowView(row: row, session: session, coordinator: coordinator, directory: directory,
-                                        contentWidth: max(0, geometry.size.width - 44))
-                                        .modifier(ChatArrivalMotion(receipt: session.transcriptArrivals.receipt(for: row.id),
-                                                                    since: openedAt, reduceMotion: reduceMotion))
-                                }.background(ChatScrollMarker(id: row.id, position: session.scrollPosition)).id(row.id)
-                            }
-                        }
-                        // Scrolling to the bottom aligns this marker's bottom edge, so it spans a floating input.
-                        Color.clear.frame(height: 1 + bottomContentInset).id("bottom")
-                    }
-                    .padding(22).frame(maxWidth: .infinity)
-                    .padding(.top, topContentInset)
-                    .id(viewportGeneration)
-                    .background(ChatScrollViewport(position: session.scrollPosition))
-                }
-                .modifier(ChatInitialScrollAnchor(atBottom: session.atBottom))
-                .modifier(ChatScrollGeometryTrace(position: session.scrollPosition,
-                    enabled: ChatViewportTrace.enabled || session.scrollPosition.diagnosticSink != nil))
-                .coordinateSpace(name: "chatScroll")
-                .mask {
-                    VStack(spacing: 0) {
-                        if fadeTopInset > 0 {
-                            LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .clear, location: 0.5),
-                                                   .init(color: .black, location: 1)], startPoint: .top, endPoint: .bottom)
-                                .frame(height: fadeTopInset + 8)
-                        }
-                        Color.black
+                            ChatTranscriptRowView(row: row, session: session, coordinator: coordinator, directory: directory,
+                                contentWidth: max(0, geometry.size.width - 44))
+                                .modifier(ChatArrivalMotion(receipt: session.transcriptArrivals.receipt(for: row.id),
+                                                            since: openedAt, reduceMotion: reduceMotion))
+                        }.background(ChatScrollMarker(id: row.id, position: session.scrollPosition)).id(row.id)
                     }
                 }
-                .onPreferenceChange(ChatTopPreference.self) { top in
-                    if top > -session.scrollPosition.earlierPrefetchDistance && top < geometry.size.height {
-                        session.scrollPosition.prefetchEarlier()
-                    }
+                // Scrolling to the bottom aligns this marker's bottom edge, so it spans a floating input.
+                Color.clear.frame(height: 1 + bottomContentInset).id("bottom")
+            }
+            .padding(22).frame(maxWidth: .infinity)
+            .padding(.top, topContentInset)
+            .id(viewportGeneration)
+            .background(ChatScrollViewport(position: session.scrollPosition))
+        }
+        .modifier(ChatInitialScrollAnchor(atBottom: session.atBottom))
+        .modifier(ChatScrollGeometryTrace(position: session.scrollPosition,
+            enabled: ChatViewportTrace.enabled || session.scrollPosition.diagnosticSink != nil))
+        .coordinateSpace(name: "chatScroll")
+        .mask {
+            VStack(spacing: 0) {
+                if fadeTopInset > 0 {
+                    LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .clear, location: 0.5),
+                                           .init(color: .black, location: 1)], startPoint: .top, endPoint: .bottom)
+                        .frame(height: fadeTopInset + 8)
                 }
-                .overlay(alignment: .bottomTrailing) {
-                    if session.hasNewMessages && !session.atBottom {
-                        Button { session.revealLatestMessages() } label: {
-                            HStack(spacing: 6) {
-                                Text("new messages")
-                                Image(systemName: "arrow.down").font(.system(size: theme.typography.detailSize - 0.5))
-                            }
-                            .font(theme.typography.detail)
-                            .foregroundStyle(Color(red: 26/255, green: 18/255, blue: 24/255))
-                            .padding(.horizontal, 10)
-                            .frame(minHeight: max(22, theme.typography.detailLineHeight + 8))
-                            // Accent-tinted interactive glass; glass carries its own depth, so no drop shadow.
-                            .liquidGlass(in: Capsule(), interactive: true, tint: theme.accent)
-                            .background(LiquidGlassStore.shared.active ? Color.clear : theme.accent, in: Capsule())
-                            .shadow(color: .black.opacity(LiquidGlassStore.shared.active ? 0 : 0.5), radius: 8, y: 6)
-                            .contentShape(Capsule())
-                        }
-                        .buttonStyle(.plain)
-                        .help("Jump to latest · ⏎ with an empty draft")
-                        .accessibilityLabel("New messages. Jump to latest")
-                        .accessibilityIdentifier("chat-new-messages")
-                        .padding(.trailing, Chrome.paneContentInset).padding(.bottom, 2 + bottomContentInset)
+                Color.black
+            }
+        }
+        .onPreferenceChange(ChatTopPreference.self) { top in
+            if top > -session.scrollPosition.earlierPrefetchDistance && top < geometry.size.height {
+                session.scrollPosition.prefetchEarlier()
+            }
+        }
+        .overlay(alignment: .bottomTrailing) {
+            if session.hasNewMessages && !session.atBottom {
+                Button { session.revealLatestMessages() } label: {
+                    HStack(spacing: 6) {
+                        Text("new messages")
+                        Image(systemName: "arrow.down").font(.system(size: theme.typography.detailSize - 0.5))
                     }
+                    .font(theme.typography.detail)
+                    .foregroundStyle(Color(red: 26/255, green: 18/255, blue: 24/255))
+                    .padding(.horizontal, 10)
+                    .frame(minHeight: max(22, theme.typography.detailLineHeight + 8))
+                    // Accent-tinted interactive glass; glass carries its own depth, so no drop shadow.
+                    .liquidGlass(in: Capsule(), interactive: true, tint: theme.accent)
+                    .background(LiquidGlassStore.shared.active ? Color.clear : theme.accent, in: Capsule())
+                    .shadow(color: .black.opacity(LiquidGlassStore.shared.active ? 0 : 0.5), radius: 8, y: 6)
+                    .contentShape(Capsule())
                 }
-                .onAppear { openedAt = ProcessInfo.processInfo.systemUptime; connectScrollPosition(scroll); updateScrollbarTheme() }
-                .task(id: request) {
-                    do {
-                        let matches = try await session.searchIndex.matches(query.isEmpty ? [] : session.searchDocuments, query: query)
+                .buttonStyle(.plain)
+                .help("Jump to latest · ⏎ with an empty draft")
+                .accessibilityLabel("New messages. Jump to latest")
+                .accessibilityIdentifier("chat-new-messages")
+                .padding(.trailing, Chrome.paneContentInset).padding(.bottom, 2 + bottomContentInset)
+            }
+        }
+    }
+
+    private func searchAndLifecycle(_ content: some View, query: String, request: SearchRequest,
+                                    scroll: ScrollViewProxy) -> some View {
+        content
+            .onAppear { openedAt = ProcessInfo.processInfo.systemUptime; connectScrollPosition(scroll); updateScrollbarTheme() }
+            .task(id: request) {
+                do {
+                    let matches = try await session.searchIndex.matches(query.isEmpty ? [] : session.searchDocuments, query: query)
+                    try Task.checkCancellation()
+                    guard query == (session.search.visible ? session.search.query : "") else { return }
+                    let selected = session.searchMatch?.id
+                    session.searchMatches = matches
+                    session.search.total = matches.count
+                    session.search.selected = selected.flatMap { id in matches.firstIndex { $0.id == id } }
+                } catch is CancellationError { } catch { session.search.status = error.localizedDescription }
+            }
+            .task(id: SearchHistory(query: query, conversation: session.sessionID, generation: session.historyGeneration)) {
+                guard !query.isEmpty else { session.search.status = nil; return }
+                do {
+                    while true {
                         try Task.checkCancellation()
-                        guard query == (session.search.visible ? session.search.query : "") else { return }
-                        let selected = session.searchMatch?.id
-                        session.searchMatches = matches
-                        session.search.total = matches.count
-                        session.search.selected = selected.flatMap { id in matches.firstIndex { $0.id == id } }
-                    } catch is CancellationError { } catch { session.search.status = error.localizedDescription }
-                }
-                .task(id: SearchHistory(query: query, conversation: session.sessionID, generation: session.historyGeneration)) {
-                    guard !query.isEmpty else { session.search.status = nil; return }
-                    do {
-                        while true {
-                            try Task.checkCancellation()
-                            if let error = session.earlierError { session.search.status = "Search incomplete: " + error; return }
-                            guard session.hasEarlier || session.loadingHistory || session.loadingEarlier else { break }
-                            session.search.status = "Searching earlier messages…"
-                            if !session.loadingHistory, !session.loadingEarlier, !session.scrollPosition.isRestoring,
-                               !coordinator.loadEarlier(session, preservingBottom: true) {
-                                session.search.status = "Search incomplete: earlier messages are unavailable."; return
-                            }
-                            try await Task.sleep(for: .milliseconds(25))
+                        if let error = session.earlierError { session.search.status = "Search incomplete: " + error; return }
+                        guard session.hasEarlier || session.loadingHistory || session.loadingEarlier else { break }
+                        session.search.status = "Searching earlier messages…"
+                        if !session.loadingHistory, !session.loadingEarlier, !session.scrollPosition.isRestoring,
+                           !coordinator.loadEarlier(session, preservingBottom: true) {
+                            session.search.status = "Search incomplete: earlier messages are unavailable."; return
                         }
-                        session.search.status = nil
-                    } catch { }
-                }
-                .onChange(of: session.search.navigation) { _, _ in
-                    let count = session.searchMatches.count
-                    guard !query.isEmpty, session.search.total != nil, count > 0 else { return }
-                    let selected = session.search.selected ?? (session.search.direction > 0 ? -1 : 0)
-                    session.search.selected = (selected + session.search.direction + count) % count
-                }
-                .onChange(of: session.searchMatch?.id) { _, id in
-                    guard let id, let match = session.searchMatch else { return }
-                    for row in session.transcriptRows {
-                        if let group = row.group, group.children.contains(where: { $0.id == match.document.row }) {
-                            session.setGroupExpanded(group, true)
-                        }
+                        try await Task.sleep(for: .milliseconds(25))
                     }
-                    session.atBottom = false; session.followRevision = nil
-                    session.scrollPosition.restore(.init(id: match.document.row, offset: 0))
+                    session.search.status = nil
+                } catch { }
+            }
+            .onChange(of: session.search.navigation) { _, _ in
+                let count = session.searchMatches.count
+                guard !query.isEmpty, session.search.total != nil, count > 0 else { return }
+                let selected = session.search.selected ?? (session.search.direction > 0 ? -1 : 0)
+                session.search.selected = (selected + session.search.direction + count) % count
+            }
+            .onChange(of: session.searchMatch?.id) { _, id in
+                guard let id, let match = session.searchMatch else { return }
+                for row in session.transcriptRows {
+                    if let group = row.group, group.children.contains(where: { $0.id == match.document.row }) {
+                        session.setGroupExpanded(group, true)
+                    }
+                }
+                session.atBottom = false; session.followRevision = nil
+                session.scrollPosition.restore(.init(id: match.document.row, offset: 0))
+                DispatchQueue.main.async {
+                    guard session.searchMatch?.id == id else { return }
+                    scroll.scrollTo(match.document.row, anchor: .top)
+                }
+            }
+            .onChange(of: theme) { _, _ in updateScrollbarTheme() }
+            .onChange(of: session.scrollToLatestRequest) { _, _ in
+                scroll.scrollTo("bottom", anchor: .bottom)
+            }
+            .onDisappear { openedAt = .infinity; session.scrollPosition.disconnect() }
+    }
+
+    private func followingLatest(_ content: some View, scroll: ScrollViewProxy) -> some View {
+        content
+            .onChange(of: session.historyGeneration) { _, _ in
+                session.scrollPosition.beginOpeningHistoryPreload()
+            }
+            .onChange(of: session.hasEarlier) { _, _ in
+                session.scrollPosition.geometryChanged()
+            }
+            .onChange(of: session.historyRevision) { _, _ in
+                session.scrollPosition.recordDiagnostic(.history)
+                session.scrollPosition.restoreAfterPrepend()
+            }
+            .onChange(of: session.approvals.count) { _, _ in
+                if session.atBottom { scroll.scrollTo("bottom", anchor: .bottom) }
+            }
+            .onChange(of: bottomContentInset) { _, _ in
+                // A floating input that grows on focus would otherwise cover the latest message.
+                if session.atBottom { scroll.scrollTo("bottom", anchor: .bottom) }
+            }
+            .onChange(of: session.revision) { _, revision in
+                session.scrollPosition.recordDiagnostic(.transcript)
+                // Capture intent when the item arrives. New row geometry can
+                // move the bottom outside the viewport before this callback.
+                if session.atBottom || session.followRevision == revision {
+                    let interaction = session.scrollPosition.interactionRevision
                     DispatchQueue.main.async {
-                        guard session.searchMatch?.id == id else { return }
-                        scroll.scrollTo(match.document.row, anchor: .top)
-                    }
-                }
-                .onChange(of: theme) { _, _ in updateScrollbarTheme() }
-                .onChange(of: session.scrollToLatestRequest) { _, _ in
-                    scroll.scrollTo("bottom", anchor: .bottom)
-                }
-                .onDisappear { openedAt = .infinity; session.scrollPosition.disconnect() }
-                .onChange(of: session.historyGeneration) { _, _ in
-                    session.scrollPosition.beginOpeningHistoryPreload()
-                }
-                .onChange(of: session.hasEarlier) { _, _ in
-                    session.scrollPosition.geometryChanged()
-                }
-                .onChange(of: session.historyRevision) { _, _ in
-                    session.scrollPosition.recordDiagnostic(.history)
-                    session.scrollPosition.restoreAfterPrepend()
-                }
-                .onChange(of: session.approvals.count) { _, _ in
-                    if session.atBottom { scroll.scrollTo("bottom", anchor: .bottom) }
-                }
-                .onChange(of: bottomContentInset) { _, _ in
-                    // A floating input that grows on focus would otherwise cover the latest message.
-                    if session.atBottom { scroll.scrollTo("bottom", anchor: .bottom) }
-                }
-                .onChange(of: session.revision) { _, revision in
-                    session.scrollPosition.recordDiagnostic(.transcript)
-                    // Capture intent when the item arrives. New row geometry can
-                    // move the bottom outside the viewport before this callback.
-                    if session.atBottom || session.followRevision == revision {
-                        let interaction = session.scrollPosition.interactionRevision
-                        DispatchQueue.main.async {
-                            guard session.scrollPosition.interactionRevision == interaction,
-                                  session.atBottom || session.followRevision == revision,
-                                  !session.scrollPosition.glidesToBottom else { return }
-                            session.scrollPosition.recordDiagnostic(.followRequested)
-                            scroll.scrollTo("bottom", anchor: .bottom)
-                        }
+                        guard session.scrollPosition.interactionRevision == interaction,
+                              session.atBottom || session.followRevision == revision,
+                              !session.scrollPosition.glidesToBottom else { return }
+                        session.scrollPosition.recordDiagnostic(.followRequested)
+                        scroll.scrollTo("bottom", anchor: .bottom)
                     }
                 }
             }
-        }.environment(\.chatSearchQuery, query)
     }
     private func updateScrollbarTheme() { session.scrollPosition.scrollbarColor = NSColor(theme.muted) }
 

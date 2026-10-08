@@ -20,7 +20,7 @@ struct ChatComposerShortcuts: View {
     }
 
     private var composer: [ShortcutRow] {
-        let multiline = session.drafts.current.multiline
+        let multiline = session.drafts.shape.multiline
         return (multiline ? [.init("⏎", "newline · insert a new line")] : []) + [
             .init(multiline ? "⌘⏎" : "⏎", session.busy ? "queue · runs after the current turn" : "send · start a new turn"),
             .init("⌥⏎", "steer · interrupts and redirects the current turn"),
@@ -63,41 +63,24 @@ struct ChatComposerActivity: View {
     var body: some View {
         let state = AgentWorkingState(session)
         if state.visible && !state.loading {
-            // Compositor version (Core Animation; see ChatComposerMotion.swift), disabled until visually reviewed:
-            // let moving = active && visible && !reduceMotion && !state.waiting && session.showChat
-            // Button { details.toggle() } label: {
-            //     HStack(spacing: 8) {
-            //         ChatComposerOrbit(moving: moving)
-            //         ChatComposerStatus(label: state.label, moving: moving)
-            //         if !state.waiting {
-            //             // Motion runs in the compositor; SwiftUI updates only the whole seconds.
-            //             TimelineView(.animation(minimumInterval: 1, paused: !active || !visible || !session.showChat)) { timeline in
-            //                 Text("· " + AgentWorkingAnimation.timeText(state, now: timeline.date, appeared: appeared))
-            //                     .monospacedDigit().fixedSize()
-            //             }
-            //         }
-            //     }.foregroundStyle(theme.muted).contentShape(Rectangle())
-            // }.buttonStyle(.plain).accessibilityIdentifier("chat-activity-details")
-            //     .help("Show activity details")
-            //     .accessibilityElement(children: .contain)
-            //     .font(theme.typography.detail).accessibilityIdentifier("chat-working")
-            TimelineView(.animation(minimumInterval: reduceMotion ? 1 : nil,
-                                    paused: !active || !visible || !session.showChat || state.waiting)) { timeline in
-                let seconds = timeline.date.timeIntervalSinceReferenceDate
-                let moving = active && !reduceMotion && !state.waiting && session.showChat
-                Button { details.toggle() } label: {
-                    HStack(spacing: 8) {
-                        ChatComposerOrbit(seconds: seconds, moving: moving)
-                        ChatComposerStatus(label: state.label, seconds: seconds, moving: moving)
-                        if !state.waiting {
+            // Motion runs in the compositor (ChatComposerMotion.swift); SwiftUI updates only the whole seconds.
+            let moving = active && visible && !reduceMotion && !state.waiting && session.showChat
+            Button { details.toggle() } label: {
+                HStack(spacing: 8) {
+                    ChatComposerOrbit(moving: moving)
+                    ChatComposerStatus(label: state.label, moving: moving)
+                    if !state.waiting {
+                        TimelineView(.animation(minimumInterval: 1, paused: !active || !visible || !session.showChat)) { timeline in
                             Text("· " + AgentWorkingAnimation.timeText(state, now: timeline.date, appeared: appeared,
                                                                        reduceMotion: reduceMotion))
                                 .monospacedDigit().fixedSize()
                         }
-                    }.foregroundStyle(theme.muted).contentShape(Rectangle())
-                }.buttonStyle(.plain).accessibilityIdentifier("chat-activity-details")
-                    .help("Show activity details")
-            }.font(theme.typography.detail).accessibilityIdentifier("chat-working")
+                    }
+                }.foregroundStyle(theme.muted).contentShape(Rectangle())
+            }.buttonStyle(.plain).accessibilityIdentifier("chat-activity-details")
+                .help("Show activity details")
+                .accessibilityElement(children: .contain)
+                .font(theme.typography.detail).accessibilityIdentifier("chat-working")
                 .onAppear { appeared = .now; visible = true }
                 .onDisappear { visible = false }
                 .onChange(of: session.activeTurnID) { _, _ in appeared = .now }

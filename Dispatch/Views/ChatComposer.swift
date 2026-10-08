@@ -54,18 +54,21 @@ struct ChatComposer: NSViewRepresentable {
         context.coordinator.optionChanged = optionChanged
         guard let text = scroll.documentView as? ComposerTextView else { return }
         let drafts = session.drafts
+        // The editor's own keystrokes are already in it; observe only changes made elsewhere.
+        _ = drafts.externalRevision
+        let draft = drafts.editorDraft
         var revealRestoredSelection = false
         let switched = text.editorGeneration != drafts.editorGeneration
         if switched || !text.hasMarkedText() {
-            if switched || text.string != session.draft {
+            if switched || text.string != draft.text {
                 text.resetExitShortcut()
                 text.applyingState = true
                 if switched && text.hasMarkedText() {
                     text.inputContext?.discardMarkedText()
                     text.unmarkText()
                 }
-                text.string = session.draft
-                let selection = drafts.current.selection
+                text.string = draft.text
+                let selection = draft.selection
                 let location = min(selection.location, text.string.utf16.count)
                 text.setSelectedRange(NSRange(location: location, length: min(selection.length, text.string.utf16.count - location)))
                 if switched { text.undoManager?.removeAllActions(); text.automaticPairs = [] }
@@ -83,11 +86,18 @@ struct ChatComposer: NSViewRepresentable {
             text.selectedTextAttributes = [.backgroundColor: NSColor(theme.selection), .foregroundColor: NSColor(theme.selectedText)]
             text.appliedTheme = theme
         }
-        text.placeholder = TerminalRuntime.shared.chat.placeholder(session)
+        let placeholder = TerminalRuntime.shared.chat.placeholder(session)
+        text.placeholder = placeholder
         text.highlight()
         text.measure()
         if revealRestoredSelection { text.scrollRangeToVisible(text.selectedRange()) }
-        text.needsDisplay = true
+        // Edits redraw what they change. This runs on every keystroke, so redraw the whole editor only for
+        // what draw() shows besides the text: the placeholder and its colors.
+        let drawn = Coordinator.Drawn(placeholder: placeholder, empty: text.string.isEmpty, theme: theme)
+        if context.coordinator.drawn != drawn {
+            context.coordinator.drawn = drawn
+            text.needsDisplay = true
+        }
         text.submit = submit; text.pickModel = pickModel
         text.interrupt = interrupt; text.exitChat = exitChat; text.exitPrompt = exitPrompt
         text.sendNow = sendNow; text.queueAction = queueAction; text.showShortcuts = showShortcuts
@@ -128,16 +138,18 @@ struct ChatComposer: NSViewRepresentable {
         var modifierMonitor: Any?
         var focusRequest: UUID?
         var wasFocused = false
+        struct Drawn: Equatable { let placeholder: String, empty: Bool, theme: ChatTheme }
+        var drawn: Drawn?
         init(_ session: ChatSession) { self.session = session }
         func textDidChange(_ notification: Notification) {
             guard let text = notification.object as? ComposerTextView, !text.applyingState else { return }
-            session.drafts.edit(text: text.string, selection: text.selectedRange()); session.lastInputAt = Date()
+            session.drafts.edit(text: text.string, selection: text.selectedRange(), fromEditor: true); session.lastInputAt = Date()
             if !text.hasMarkedText() { text.highlight() }
             text.measure()
         }
         func textViewDidChangeSelection(_ notification: Notification) {
             guard let text = notification.object as? ComposerTextView, !text.applyingState, !text.hasMarkedText() else { return }
-            session.drafts.edit(selection: text.selectedRange())
+            session.drafts.edit(selection: text.selectedRange(), fromEditor: true)
         }
     }
     class ComposerTextView: ChatEditorTextView {

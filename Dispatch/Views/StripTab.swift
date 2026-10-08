@@ -402,7 +402,7 @@ struct StripSpacePicker: View {
                     VStack(alignment: .leading, spacing: 2) {
                         if let host = section.host { heading(host) }
                         ForEach(section.spaces) { space in
-                            StripSpaceRow(space: space, host: workspace.hosts.record(space.hostID),
+                            StripSpaceRow(space: workspace.liveSpace(space), host: workspace.hosts.record(space.hostID),
                                           selected: space.id == workspace.selectedSpace,
                                           shortcut: shortcuts[space.id] ?? "") {
                                 workspace.selectSpace(space.id)

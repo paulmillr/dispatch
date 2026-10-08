@@ -19,6 +19,18 @@ struct AgentWorkingState: Equatable {
     }
     let details: [Detail]
 
+    /// `visible && !loading` without reading the transcript, for views that only place or frame the activity:
+    /// a new record must not re-render them.
+    static func isWorking(_ session: ChatSession) -> Bool {
+        session.active && session.busy && !(session.loadingHistory && !session.awaitingPromptAck)
+    }
+
+    /// `waiting`, likewise without the transcript.
+    static func isWaiting(_ session: ChatSession) -> Bool {
+        !(session.loadingHistory && !session.awaitingPromptAck) && (session.approvals.contains(where: \.pending)
+            || session.waitingForAnswer || (session.questions.isEmpty && session.nativePrompt != nil))
+    }
+
     init(_ session: ChatSession) {
         // Discovering the first rollout can start a history read after Submit.
         // Keep that submitted turn visible while its acknowledgement is loading.
@@ -67,7 +79,18 @@ struct AgentWorkingState: Equatable {
         String(text.prefix(180)).components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }.joined(separator: " ")
     }
 
+    /// By `presentationID`, which changes with the item: each record rebuilds the state in every footer variant.
+    private static var toolDescriptions: [UUID: (label: String, text: String)] = [:]
+
     private static func toolDescription(_ item: ChatItem) -> (label: String, text: String) {
+        if let cached = toolDescriptions[item.presentationID] { return cached }
+        if toolDescriptions.count >= 256 { toolDescriptions.removeAll(keepingCapacity: true) }
+        let description = describeTool(item)
+        toolDescriptions[item.presentationID] = description
+        return description
+    }
+
+    private static func describeTool(_ item: ChatItem) -> (label: String, text: String) {
         // Status updates must not format full tool outputs or parse huge payloads.
         let value = item.text.utf8.count <= 32_768 ? ToolPresentation.json(item.text) : nil
         let object = value as? [String: Any]

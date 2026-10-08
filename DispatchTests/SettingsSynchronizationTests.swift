@@ -277,6 +277,29 @@ final class SettingsSynchronizationTests: XCTestCase {
     /// With Liquid Glass the sidebar is one panel from top to bottom: halfway down, well below the spaces and above
     /// the footer, the panel still covers the column, while the window shows in the inset beside it.
     func testGlassSidebarIsOnePanelFromTopToBottom() async throws {
+        let (panel, inset) = try await glassSidebarBrightness(systemSidebar: false, named: "glass-sidebar")
+        XCTAssertGreaterThan(abs(panel - inset), 0.02, "The panel covers the column halfway down (\(panel) vs the inset's \(inset))")
+    }
+
+    /// The system sidebar, as in Finder and Mail, is AppKit's own sidebar glass in a column flush with the window's
+    /// edge: no inset beside it, and the setting is off unless chosen.
+    func testSystemSidebarIsFlushWithTheWindowEdge() async throws {
+        let defaults = try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8))
+        XCTAssertFalse(defaults.systemSidebar, "The floating panel stays the default")
+        var chosen = defaults
+        chosen.systemSidebar = true
+        XCTAssertEqual(try JSONDecoder().decode(Preferences.self, from: JSONEncoder().encode(chosen)), chosen)
+        let (panel, inset) = try await glassSidebarBrightness(systemSidebar: true, named: "system-sidebar") { root in
+            guard #available(macOS 26, *) else { return }
+            XCTAssertFalse(PresentationTestSupport.views(of: NSGlassEffectView.self, in: root, includingNestedMatches: true).isEmpty,
+                           "The column draws AppKit's sidebar glass")
+        }
+        XCTAssertEqual(panel, inset, accuracy: 0.02, "The glass reaches the window's edge (\(panel) vs \(inset) at the edge)")
+    }
+
+    /// A two-space glass sidebar's brightness halfway down: mid-column, and halfway into the floating panel's inset.
+    private func glassSidebarBrightness(systemSidebar: Bool, named name: String,
+                                        inspect: (NSView) throws -> Void = { _ in }) async throws -> (panel: CGFloat, inset: CGFloat) {
         try XCTSkipUnless(LiquidGlassStore.supported, "Liquid Glass needs macOS 26")
         try DesktopTestSupport.requireUnlocked()
         AppFont.register()
@@ -290,13 +313,14 @@ final class SettingsSynchronizationTests: XCTestCase {
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.appearance = NSAppearance(named: .darkAqua)
+        let originalGlass = LiquidGlassStore.shared.enabled, originalSystem = LiquidGlassStore.shared.systemSidebar
+        defer { LiquidGlassStore.shared.enabled = originalGlass; LiquidGlassStore.shared.systemSidebar = originalSystem }
+        LiquidGlassStore.shared.enabled = true
+        LiquidGlassStore.shared.systemSidebar = systemSidebar
         let root = NSHostingView(rootView: SpaceSidebar(workspace: workspace, settings: controller.settings, controller: controller))
         window.contentView = root
         window.makeKeyAndOrderFront(nil)
         defer { window.orderOut(nil); window.contentView = nil; window.close() }
-        let originalGlass = LiquidGlassStore.shared.enabled
-        defer { LiquidGlassStore.shared.enabled = originalGlass }
-        LiquidGlassStore.shared.enabled = true
         controller.settings.values.spaceOrder = .flat
         try await TestSupport.eventually {
             root.layoutSubtreeIfNeeded()
@@ -304,15 +328,14 @@ final class SettingsSynchronizationTests: XCTestCase {
                 .filter { if case .space = $0.configuration.item { return true }; return false }.count == 2
         }
         try await Task.sleep(for: .milliseconds(InterfaceMotion.viewDuration * 1000 + 100))
-        let bitmap = try await PresentationTestSupport.capture(window, named: "glass-sidebar", in: "sidebar-validation").bitmap
+        try inspect(root)
+        let bitmap = try await PresentationTestSupport.capture(window, named: name, in: "sidebar-validation").bitmap
         func brightness(x: Int) throws -> CGFloat {
             let color = try XCTUnwrap(bitmap.colorAt(x: x, y: bitmap.pixelsHigh / 2)?.usingColorSpace(.deviceRGB))
             return (color.redComponent + color.greenComponent + color.blueComponent) / 3
         }
         let scale = CGFloat(bitmap.pixelsWide) / root.bounds.width
-        let panel = try brightness(x: bitmap.pixelsWide / 2)
-        let inset = try brightness(x: Int(SpaceSidebar.glassInset / 2 * scale))
-        XCTAssertGreaterThan(abs(panel - inset), 0.02, "The panel covers the column halfway down (\(panel) vs the inset's \(inset))")
+        return (try brightness(x: bitmap.pixelsWide / 2), try brightness(x: Int(SpaceSidebar.glassInset / 2 * scale)))
     }
 
     /// The icons style draws spaces as the host picker does, in both orders, flat and glass alike: 30-point rows 2 points

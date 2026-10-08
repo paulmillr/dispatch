@@ -52,7 +52,7 @@ extension Workspace {
             return match
         }
         return presentationSpaces.filter { space in
-            if space.name.localizedStandardContains(filter) { return true }
+            if liveName(space).localizedStandardContains(filter) { return true }
             if hostMatches(space.hostID) { return true }
             return space.tabs.contains { tab in
                 tab.surfaceIDs.contains { terminal in

@@ -84,6 +84,7 @@ final class TerminalRuntime {
         SidebarThemeStore.shared.current = preferences.resolvedSidebarTheme
         KeyGroupsStore.shared.current = preferences.keyGroups
         LiquidGlassStore.shared.enabled = preferences.liquidGlass
+        LiquidGlassStore.shared.systemSidebar = preferences.systemSidebar
         HostColorStore.shared.choices = preferences.hostColors
         HostColorStore.shared.enabled = preferences.showHostColors
         chat.start()
@@ -139,6 +140,7 @@ final class TerminalRuntime {
         SidebarThemeStore.shared.current = preferences.resolvedSidebarTheme
         KeyGroupsStore.shared.current = preferences.keyGroups
         LiquidGlassStore.shared.enabled = preferences.liquidGlass
+        LiquidGlassStore.shared.systemSidebar = preferences.systemSidebar
         HostColorStore.shared.choices = preferences.hostColors
         HostColorStore.shared.enabled = preferences.showHostColors
         for view in views.values { configureBackground(view) }

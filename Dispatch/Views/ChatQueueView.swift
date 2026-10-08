@@ -277,12 +277,12 @@ struct ChatQueueView: View {
     }
 
     private func editDisabled(_ message: ChatQueuedMessage) -> Bool {
-        !session.draft.isEmpty || session.editingQueuedID != nil || !message.editable
+        !session.drafts.shape.isEmpty || session.editingQueuedID != nil || !message.editable
     }
 
     @ViewBuilder private func actionButtons(_ message: ChatQueuedMessage, index: Int) -> some View {
-        let shortcuts = (session.hoveredQueuedID ?? session.selectedQueuedID) == message.id && session.draft.isEmpty
-            && !session.drafts.current.multiline && session.editingQueuedID == nil
+        let shortcuts = (session.hoveredQueuedID ?? session.selectedQueuedID) == message.id && session.drafts.shape.isEmpty
+            && !session.drafts.shape.multiline && session.editingQueuedID == nil
         Button { coordinator.sendNow(session, queuedID: message.id) } label: {
             actionLabel("send now", shortcut: "⌥⏎", showShortcut: shortcuts)
         }

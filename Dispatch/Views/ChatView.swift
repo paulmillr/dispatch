@@ -33,8 +33,7 @@ struct ChatView: View {
                                 // Unfocused while the agent works, the composer hides its glass pill and the bare
                                 // activity row would float over the transcript: back the input with the pane's own
                                 // color, nearly opaque, as without glass.
-                                let state = AgentWorkingState(session)
-                                theme.terminal.opacity(!focused && state.visible && !state.loading ? 0.92 : 0)
+                                theme.terminal.opacity(!focused && AgentWorkingState.isWorking(session) ? 0.92 : 0)
                                     .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: 0.18), value: focused)
                             }
                             .background(GeometryReader { proxy in
@@ -104,12 +103,12 @@ struct ChatView: View {
         if !session.draftIsCommand || session.busy || session.editingQueuedID != nil {
             return coordinator.enabled && session.active && session.supportsQueue && !session.inputBlocked
                 && session.helper != nil
-                && !session.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && session.drafts.shape.hasText
                 && (session.queuedMessages.count < 50 || session.editingQueuedID != nil)
         }
         return session.active && session.submissionID == nil && session.modelPicker == nil && session.command == nil
             && !session.nativeInputInFlight && session.nativePrompt == nil && session.commandEditor == nil && !session.inputBlocked && !session.loadingHistory
-            && session.activityCheck == nil && (!session.busy || ChatCommand(session.draft)?.allowsBusy == true) && !session.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && session.activityCheck == nil && (!session.busy || session.drafts.shape.commandAllowsBusy) && session.drafts.shape.hasText
             && !session.approvals.contains(where: \.pending)
     }
 
@@ -202,7 +201,7 @@ struct ChatView: View {
                             }, optionChanged: { optionHeld = $0 }, showShortcuts: { session.shortcutsPresented.toggle() })
                             .frame(height: min(max(theme.typography.replyLineHeight + 10, session.composerHeight), max(theme.typography.replyLineHeight + 10, min(320, availableChatHeight * 0.4) - theme.typography.detailLineHeight - 26)))
                             .overlay(alignment: .topTrailing) {
-                                if session.drafts.current.multiline {
+                                if session.drafts.shape.multiline {
                                     Text("editor")
                                         .font(theme.typography.detail)
                                         .foregroundStyle(theme.terminal)
@@ -248,10 +247,7 @@ struct ChatView: View {
     // Reserve the mounted editor's footprint so focusing another pane neither
     // shifts the Reply baseline nor moves the transcript being read.
     /// Whether the agent's activity shows in the composer footer, which an unfocused pane keeps in place.
-    private var agentWorking: Bool {
-        let state = AgentWorkingState(session)
-        return state.visible && !state.loading
-    }
+    private var agentWorking: Bool { AgentWorkingState.isWorking(session) }
 
     @ViewBuilder private var inactiveComposer: some View {
         if agentWorking {
@@ -305,8 +301,7 @@ struct ChatView: View {
     }
 
     private var composerFooter: some View {
-        let state = AgentWorkingState(session)
-        let hasActivity = state.visible && !state.loading
+        let hasActivity = agentWorking
         return ViewThatFits(in: .horizontal) {
             composerFooterRow(compactEffort: false)
             if hasActivity {
@@ -342,14 +337,14 @@ struct ChatView: View {
     }
 
     @ViewBuilder private var savedDraftControls: some View {
-        if !session.drafts.saved.isEmpty || !session.drafts.recoverable.isEmpty {
+        if session.drafts.shape.hasSaved || !session.drafts.recoverable.isEmpty {
             ChatDraftControls(session: session).frame(maxWidth: 220, alignment: .leading)
         }
     }
 
     private func modelControls(compactEffort: Bool) -> some View {
         HStack(spacing: 7) {
-            ChatModelControls(session: session, coordinator: coordinator, focused: focused && session.showChat && !session.drafts.current.multiline,
+            ChatModelControls(session: session, coordinator: coordinator, focused: focused && session.showChat && !session.drafts.shape.multiline,
                               compactEffort: compactEffort)
             if session.goal != nil {
                 Text("·").accessibilityHidden(true)
@@ -367,8 +362,7 @@ struct ChatView: View {
     }
 
     @ViewBuilder private var composerStop: some View {
-        let state = AgentWorkingState(session)
-        if state.visible && !state.loading {
+        if agentWorking {
             Button { coordinator.interrupt(session) } label: {
                 Image(systemName: "stop.fill").font(.system(size: 7))
                     .frame(width: 18, height: 18)
@@ -385,7 +379,7 @@ struct ChatView: View {
         HStack(spacing: 8) {
             ChatComposerShortcuts(session: session, presented: $session.shortcutsPresented)
             ChatReplyButton(canSubmit: canSubmit, optionHeld: optionHeld, busy: session.busy,
-                            editingQueued: session.editingQueuedID != nil, multiline: session.drafts.current.multiline,
+                            editingQueued: session.editingQueuedID != nil, multiline: session.drafts.shape.multiline,
                             command: session.draftIsCommand) {
                 if optionHeld { coordinator.sendNow(session) }
                 else { coordinator.sendFromComposer(session) }

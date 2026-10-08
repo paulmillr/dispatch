@@ -47,7 +47,10 @@ struct ChatDraftBucket: Codable {
 /// One repository serializes all conversations, including completions for a departed conversation.
 @MainActor @Observable final class ChatDraftRepository {
     static let shared = ChatDraftRepository(store: ChatDraftFileStore())
-    private(set) var buckets: [String: ChatDraftBucket] = [:]
+    /// Not observed: typing rewrites the active bucket on every keystroke. Recoverable drafts follow
+    /// `inactiveRevision` and `activeScopes`, since only buckets no chat shows can be recovered.
+    @ObservationIgnored private(set) var buckets: [String: ChatDraftBucket] = [:]
+    private(set) var inactiveRevision: UInt64 = 0
     private(set) var error: String?
     var activeScopes: Set<String> = []
     @ObservationIgnored private let store: any ChatDraftPersistence
@@ -77,6 +80,7 @@ struct ChatDraftBucket: Codable {
                 }
                 bucket.recovery = [:]; restored[key] = bucket
             }
+            inactiveRevision &+= 1
             for (key, bucket) in restored {
                 if buckets[key] == nil { buckets[key] = bucket }
                 else if !bucket.saved.isEmpty || !bucket.working.isEmpty {
@@ -91,6 +95,7 @@ struct ChatDraftBucket: Codable {
     }
     func put(_ bucket: ChatDraftBucket, at key: String, flush: Bool = false) {
         buckets[key] = bucket
+        if !activeScopes.contains(key) { inactiveRevision &+= 1 }
         pending?.cancel()
         if flush { _ = self.flush() }
         else {
@@ -115,7 +120,10 @@ struct ChatDraftBucket: Codable {
         do { try store.save(buckets); error = nil; return true }
         catch { self.error = "Drafts could not be saved: \(error.localizedDescription)"; return false }
     }
-    func remove(_ key: String) { buckets[key] = nil }
+    func remove(_ key: String) {
+        guard buckets.removeValue(forKey: key) != nil else { return }
+        if !activeScopes.contains(key) { inactiveRevision &+= 1 }
+    }
 }
 
 struct ChatDraftDelivery {
@@ -127,7 +135,21 @@ struct ChatDraftDelivery {
 @MainActor @Observable final class ChatDraftCollection {
     let repository: ChatDraftRepository
     private(set) var scope: String
-    private(set) var bucket: ChatDraftBucket
+    private(set) var bucket: ChatDraftBucket {
+        didSet {
+            let next = ChatDraftShape(current, hasSaved: !bucket.saved.isEmpty)
+            if next != shape { shape = next }
+            editorDraft = current
+            if !editorEditing { externalRevision &+= 1 }
+        }
+    }
+    /// The current draft for its editor, unobserved: the editor's own keystrokes must not update it back.
+    @ObservationIgnored private(set) var editorDraft = ChatDraft()
+    /// Changes with every change to the draft except the editor's own (`edit(..., fromEditor: true)`).
+    private(set) var externalRevision: UInt64 = 0
+    @ObservationIgnored private var editorEditing = false
+    /// What views decide from the current draft. Typing that leaves it unchanged re-renders only the editor.
+    private(set) var shape = ChatDraftShape()
     private(set) var editorGeneration = UUID()
     private var deleted: [(Int, ChatDraft)] = []
     var canUndoDelete: Bool { !deleted.isEmpty }
@@ -137,17 +159,23 @@ struct ChatDraftDelivery {
         scope = initialScope
         bucket = repository.buckets[initialScope] ?? ChatDraftBucket()
         repository.activeScopes.insert(scope)
+        shape = ChatDraftShape(current, hasSaved: !bucket.saved.isEmpty)
+        editorDraft = current
     }
     var current: ChatDraft { bucket.saved.first { $0.id == bucket.selected } ?? bucket.working }
     var saved: [ChatDraft] { bucket.saved }
     var selected: UUID? { bucket.selected }
     /// Drafts left by conversations no chat shows, most recently edited first.
     var recoverable: [String] {
-        repository.buckets.keys.filter { $0 != scope && !repository.activeScopes.contains($0) && !Self.records(repository.buckets[$0]).isEmpty }
+        _ = repository.inactiveRevision
+        return repository.buckets.keys.filter { $0 != scope && !repository.activeScopes.contains($0) && !Self.records(repository.buckets[$0]).isEmpty }
             .sorted { (Self.records(repository.buckets[$0]).map(\.modified).max() ?? .distantPast, $0) > (Self.records(repository.buckets[$1]).map(\.modified).max() ?? .distantPast, $1) }
     }
     /// The drafts `recover` would bring in, newest first.
-    func recoverableDrafts(_ key: String) -> [ChatDraft] { Self.records(repository.buckets[key]).sorted { $0.modified > $1.modified } }
+    func recoverableDrafts(_ key: String) -> [ChatDraft] {
+        _ = repository.inactiveRevision
+        return Self.records(repository.buckets[key]).sorted { $0.modified > $1.modified }
+    }
     private static func records(_ bucket: ChatDraftBucket?) -> [ChatDraft] {
         guard let bucket else { return [] }
         var seen = Set<UUID>()
@@ -203,7 +231,9 @@ struct ChatDraftDelivery {
         repository.activeScopes.remove(scope); repository.activeScopes.insert(key)
         scope = key; bucket = next; deleted = []; editorGeneration = UUID(); persist(flush: true)
     }
-    func edit(text: String? = nil, multiline: Bool? = nil, selection: NSRange? = nil) {
+    func edit(text: String? = nil, multiline: Bool? = nil, selection: NSRange? = nil, fromEditor: Bool = false) {
+        editorEditing = fromEditor
+        defer { editorEditing = false }
         var record = current
         if let text, record.text != text {
             record.text = text; record.multiline = record.multiline || text.contains("\n") || text.contains("\r")
@@ -339,4 +369,29 @@ struct ChatDraftDelivery {
         }
     }
     func persist(flush: Bool = false) { repository.put(bucket, at: scope, flush: flush) }
+}
+
+struct ChatDraftShape: Equatable {
+    var isEmpty = true
+    /// Anything besides whitespace.
+    var hasText = false
+    var multiline = false
+    /// `AgentInput.isCommand`.
+    var command = false
+    var commandAllowsBusy = false
+    /// A single word after "/", which `ChatSession.matchingCommands` completes.
+    var commandPrefix: String?
+    var hasSaved = false
+
+    init() {}
+    init(_ draft: ChatDraft, hasSaved: Bool) {
+        let text = draft.text
+        isEmpty = text.isEmpty
+        hasText = text.contains { !$0.isWhitespace }
+        multiline = draft.multiline
+        command = AgentInput.isCommand(text, multiline: multiline)
+        commandAllowsBusy = command && ChatCommand(text)?.allowsBusy == true
+        commandPrefix = command && text.hasPrefix("/") && !text.contains(where: \.isWhitespace) ? text : nil
+        self.hasSaved = hasSaved
+    }
 }

@@ -1,10 +1,14 @@
 import SwiftUI
 import AppKit
 
-struct SSHSourceContext: Sendable {
+struct SSHSourceContext: Sendable, Equatable {
     let id: SSHConnectionID
     /// Reads a document's current text on that host (document, working directory).
     let source: @Sendable (ToolDocument, String) async throws -> String
+
+    /// One connection reads the same way: ChatView recreates the closure on every render, and an unequal
+    /// environment value would re-render every code document in the transcript.
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.id == rhs.id }
 }
 private struct SSHSourceKey: EnvironmentKey { static let defaultValue: SSHSourceContext? = nil }
 extension EnvironmentValues {

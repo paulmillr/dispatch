@@ -100,6 +100,9 @@ struct Preferences: Codable, Equatable {
     /// macOS 26 Liquid Glass for the chat input, tab strips and sidebar, the same in a window and full screen.
     /// On by default; earlier systems ignore it and keep the flat chrome.
     var liquidGlass = true
+    /// With Liquid Glass, the sidebar is the system's own, as in Finder and Mail: a column at the window's edge in
+    /// AppKit's sidebar glass, instead of Dispatch's panel floating over the content.
+    var systemSidebar = false
     /// Colors chosen for SSH hosts, by HostTint.machine; others keep their automatic color.
     var hostColors: [String: HostColor] = [:]
     /// Off draws remote hosts in neutral gray: they stay marked, but not by hue.
@@ -180,7 +183,7 @@ struct Preferences: Codable, Equatable {
         case prefixKeys, backendPrefixKeys, keyGroups
         case hideSingleSpace, startingDirectory, rememberHosts, restoreTerminalOutput
         case enableDiagnostics
-        case sidebarStyle, showGitBranches, liquidGlass, hostColors, showHostColors
+        case sidebarStyle, showGitBranches, liquidGlass, systemSidebar, hostColors, showHostColors
         case improveTextContrast
         case spaces, closeLaunching, enableKittyGraphics
     }
@@ -216,6 +219,7 @@ struct Preferences: Codable, Equatable {
         // explicitly, not for everyone now that large is the default.
         showGitBranches = try fields.decodeIfPresent(Bool.self, forKey: .showGitBranches) ?? large ?? showGitBranches
         liquidGlass = try fields.decodeIfPresent(Bool.self, forKey: .liquidGlass) ?? liquidGlass
+        systemSidebar = try fields.decodeIfPresent(Bool.self, forKey: .systemSidebar) ?? systemSidebar
         // An unknown color drops only that host's choice.
         hostColors = try fields.decodeIfPresent([String: String].self, forKey: .hostColors)?
             .compactMapValues(HostColor.init(rawValue:)) ?? hostColors

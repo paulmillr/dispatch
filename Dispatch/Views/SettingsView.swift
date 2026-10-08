@@ -196,6 +196,12 @@ struct SettingsView: View {
                         .disabled(!LiquidGlassStore.supported)
                         .accessibilityIdentifier("settings-liquid-glass")
                 }
+                row("System sidebar", detail: "Like Finder and Mail") {
+                    settingToggle("System sidebar", isOn: $draft.systemSidebar)
+                        .disabled(!LiquidGlassStore.supported || !draft.liquidGlass)
+                        .accessibilityIdentifier("settings-system-sidebar")
+                        .help("The sidebar in the system's sidebar glass at the window's edge, instead of a floating glass panel")
+                }
                 row("Theme", detail: "Automatic follows macOS") {
                     dropdown("Theme", selection: Binding(get: { draft.appTheme.label }, set: { label in
                         if let theme = AppTheme.allCases.first(where: { $0.label == label }) { draft.appTheme = theme }

@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct SpaceBranchName: View {
     let space: Space
@@ -40,27 +41,35 @@ struct SpaceBranchName: View {
 }
 
 /// Keep discovery mounted while the row switches between compact and tile layouts.
+/// Polls only while branches are shown and the app is active; activation refreshes at once.
 struct SpaceBranchObserver: View {
     let space: Space
+    var enabled = true
     @State private var value: String?
     @State private var resolved: SpaceBranchSource.Key?
+    @State private var appActive = NSApp?.isActive ?? true
+    private struct Polling: Equatable { let key: SpaceBranchSource.Key?; let active: Bool }
 
     var body: some View {
-        let source = SpaceBranchSource.firstTab(in: space, runtime: .shared)
+        let source = enabled ? SpaceBranchSource.firstTab(in: space, runtime: .shared) : nil
         let branch = resolved == source?.key ? value : nil
         Color.clear
             .preference(key: SpaceBranchNames.self, value: branch.map { [space.id: $0] } ?? [:])
-            .task(id: source?.key) {
-                value = nil; resolved = nil
+            .task(id: Polling(key: source?.key, active: appActive)) {
+                // A new source starts blank; resuming the same one keeps its branch.
+                if resolved != source?.key { value = nil; resolved = nil }
                 guard let source else { return }
                 while !Task.isCancelled {
                     let next = await SpaceBranchReader.shared.branch(source)
                     guard !Task.isCancelled else { return }
                     resolved = source.key
                     if value != next { value = next }
+                    guard appActive else { return }
                     do { try await Task.sleep(for: .seconds(2)) } catch { return }
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in appActive = true }
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in appActive = false }
     }
 }
 

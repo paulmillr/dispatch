@@ -254,6 +254,18 @@ struct ChatInputNotSent: LocalizedError {
         }
     }
     private var receipts: [String: Receipt] = [:]
+    /// Each entrance glides and fades the transcript for a few frames, and every frame re-lays it out. In a burst
+    /// of live rows only the first in this interval moves; the rest appear in place, joining a glide still running.
+    var burstInterval: TimeInterval = 1
+    private var lastMotion = -Double.infinity
+    /// Whether a live row arriving now gets an entrance; one that does starts a new interval.
+    func admitsMotion(now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool {
+        guard now - lastMotion >= burstInterval else { return false }
+        lastMotion = now
+        return true
+    }
+    /// The user's own prompt always enters, and starts an interval like any entrance.
+    func noteMotion(now: TimeInterval = ProcessInfo.processInfo.systemUptime) { lastMotion = now }
     func record(_ id: String, now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
         receipts = receipts.filter { now - $0.value.time < 0.5 }
         if receipts[id] == nil { receipts[id] = Receipt(time: now) }
@@ -264,7 +276,7 @@ struct ChatInputNotSent: LocalizedError {
         guard children.contains(where: { receipts[$0].map { !$0.consumed && now - $0.time < 0.5 } == true }) else { return }
         record(id, now: now)
     }
-    func reset() { receipts.removeAll() }
+    func reset() { receipts.removeAll(); lastMotion = -Double.infinity }
 }
 
 actor ChatSearch {
@@ -398,6 +410,7 @@ final class ChatSession: Identifiable {
         didSet {
             cachedRows = nil; cachedVisibleRows = nil
             if let optimisticPrompt, oldValue?.id != optimisticPrompt.id, showChat, atBottom {
+                transcriptArrivals.noteMotion()
                 transcriptArrivals.record(optimisticPrompt.id)
                 scrollPosition.expectArrival()
             }
@@ -710,7 +723,7 @@ final class ChatSession: Identifiable {
         get { drafts.current.text }
         set { drafts.edit(text: newValue) }
     }
-    var draftIsCommand: Bool { AgentInput.isCommand(draft, multiline: drafts.current.multiline) }
+    var draftIsCommand: Bool { drafts.shape.command }
     var composerHeight: CGFloat = 28
     var directDraftDelivery: ChatDraftDelivery?
     func clearDraft() { drafts.discard() }
@@ -756,9 +769,9 @@ final class ChatSession: Identifiable {
     var sideConversation: ChatSideConversation?
     var reviewing = false
     var matchingCommands: [String] {
-        guard draftIsCommand, draft.hasPrefix("/"), !draft.contains(where: \.isWhitespace) else { return [] }
+        guard let prefix = drafts.shape.commandPrefix else { return [] }
         let commands = ["/terminal"] + (active ? helperCommands.filter { $0 != "/terminal" } : [])
-        return commands.filter { $0.hasPrefix(draft) }
+        return commands.filter { $0.hasPrefix(prefix) }
     }
     func completeCommand() {
         guard !matchingCommands.isEmpty else { return }
@@ -988,8 +1001,12 @@ final class ChatSession: Identifiable {
             turn.items.append(item); changed = true
             // An acknowledged optimistic prompt already animated under its rowID.
             if !historical, showChat, atBottom, !loadingHistory, item.rowID == nil {
-                transcriptArrivals.record("\(turnID.utf8.count):\(turnID):\(item.id)")
-                scrollPosition.expectArrival()
+                if transcriptArrivals.admitsMotion() {
+                    transcriptArrivals.record("\(turnID.utf8.count):\(turnID):\(item.id)")
+                    scrollPosition.expectArrival()
+                } else {
+                    scrollPosition.expectRow()
+                }
             }
         }
         let key = ItemIdentity(turn: turnID, item: identity)

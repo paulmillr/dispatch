@@ -14,8 +14,9 @@ struct MainView: View {
     @State private var revealShown = false
     @State private var revealPicker = false
     private var sidebarVisible: Bool { controller.sidebarVisible }
-    /// With Liquid Glass the sidebar floats over the content instead of taking a split column.
-    private var glassSidebar: Bool { LiquidGlassStore.shared.active }
+    /// With Liquid Glass the sidebar floats over the content instead of taking a split column, unless it is the
+    /// system sidebar.
+    private var glassSidebar: Bool { LiquidGlassStore.shared.floatingSidebar }
     private var showTmuxTabs: Bool {
         guard let space = workspace.current, space.structured else { return false }
         return (space.windowPresentation?.groups.count ?? 1) <= 1 && (titlebarTabs || WindowTabBar.showsTabs(space: space))
@@ -149,7 +150,7 @@ struct MainView: View {
         .onChange(of: workspace.focusRequest) { _, _ in
             DispatchQueue.main.async { TerminalRuntime.shared.focusActive() }
         }
-        .onChange(of: title) { _, title in controller.window.title = title }
+        .background(WindowTitleSync(workspace: workspace, settings: settings, controller: controller))
         .onChange(of: StripTab.titleRowHeight(typography), initial: true) { _, height in
             (controller.window as? MainWindow)?.titleBarHeight = height
         }
@@ -192,7 +193,7 @@ struct MainView: View {
     /// The glass sidebar panel is inset from the window edge; the traffic lights move in with it so they sit inside
     /// the panel's corner rather than against its edge.
     private var controlsShift: CGFloat {
-        LiquidGlassStore.shared.active && sidebarVisible && !controller.windowState.isFullScreen ? SpaceSidebar.glassInset : 0
+        glassSidebar && sidebarVisible && !controller.windowState.isFullScreen ? SpaceSidebar.glassInset : 0
     }
 
     /// With Liquid Glass, tmux strips lie over the panes instead of taking their own row, in full screen too.
@@ -217,7 +218,7 @@ struct MainView: View {
             Color.clear.frame(width: sidebarToggleLeadingSpace)
             SidebarToggle(controller: controller)
             Spacer(minLength: 0)
-            (Text(title) + Text(activeHostOffline ? " · offline" : "").foregroundColor(Color(red: 217/255, green: 179/255, blue: 106/255))).font(typography.font(offset: 0.5)).lineLimit(1).truncationMode(.middle)
+            MainTitleText(workspace: workspace, settings: settings, offline: activeHostOffline).font(typography.font(offset: 0.5)).lineLimit(1).truncationMode(.middle)
                 .id(workspace.selectedSpace)
                 .transition(reduceMotion ? .identity : .asymmetric(insertion: .offset(y: 8).combined(with: .opacity), removal: .offset(y: -8).combined(with: .opacity)))
                 .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: InterfaceMotion.spaceSwitchDuration), value: workspace.selectedSpace)
@@ -232,14 +233,6 @@ struct MainView: View {
 
     private var activeHostOffline: Bool {
         workspace.activeSurfaceID.map { TerminalRuntime.shared.hosts.reconnect.state(for: $0) != nil } ?? false
-    }
-
-    private var title: String {
-        guard let space = workspace.current else { return "Dispatch" }
-        let runtime = TerminalRuntime.shared, automatic = settings.values.automaticTabNames
-        let tab = space.containers.first { $0.id == space.selectedContainer }.map { runtime.label(for: $0, automatic: automatic) }
-            ?? space.activeTab.map { runtime.label(for: $0, automatic: automatic) }
-        return "\(tab ?? "Terminal") — \(space.name)"
     }
 
     private var content: some View {
@@ -665,5 +658,36 @@ private struct SidebarResizeHandle: View {
                 }
                 .onEnded { _ in start = nil })
             .accessibilityHidden(true)
+    }
+}
+
+/// The window's title follows the active tab's label. Leaf views read it, so a title change re-renders them
+/// instead of MainView and everything below it.
+@MainActor private func windowTitle(_ workspace: Workspace, settings: SettingsStore) -> String {
+    guard let space = workspace.current else { return "Dispatch" }
+    let runtime = TerminalRuntime.shared, automatic = settings.values.automaticTabNames
+    let tab = space.containers.first { $0.id == space.selectedContainer }.map { runtime.label(for: $0, automatic: automatic) }
+        ?? space.activeTab.map { runtime.label(for: workspace.liveTab($0.id) ?? $0, automatic: automatic) }
+    return "\(tab ?? "Terminal") — \(workspace.liveName(space))"
+}
+
+private struct MainTitleText: View {
+    let workspace: Workspace
+    let settings: SettingsStore
+    let offline: Bool
+
+    var body: some View {
+        Text(windowTitle(workspace, settings: settings))
+            + Text(offline ? " · offline" : "").foregroundColor(Color(red: 217/255, green: 179/255, blue: 106/255))
+    }
+}
+
+private struct WindowTitleSync: View {
+    let workspace: Workspace
+    let settings: SettingsStore
+    let controller: AppDelegate
+
+    var body: some View {
+        Color.clear.onChange(of: windowTitle(workspace, settings: settings)) { _, title in controller.window.title = title }
     }
 }

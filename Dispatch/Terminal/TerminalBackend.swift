@@ -111,22 +111,7 @@ extension TerminalView {
                 }
                 owner?.control(self.id, event: event, bytes: bytes, session: session)
             case .screen:
-                guard runtime.views[self.id] === self, let surface = self.surface else { return }
-                let cursor = surface.cursorFaintTail()
-                func screen(_ terminal: UInt64, _ text: String) -> HelperClient.Screen {
-                    .init(terminal: terminal, text: text, cursor: .init(column: cursor.column, row: cursor.row), faint_tail: cursor.faint)
-                }
-                // The helper running this tab, and the remote helper observing an SSH login in it: each acts
-                // on the screen under its own terminal id (a remote send waits for that screen). The observer
-                // gets only what its session wrote, never the tab's earlier local text (observedText).
-                if let terminal = runtime.workspace?.spaces.flatMap(\.tabs).first(where: { $0.id == self.id })?.terminal {
-                    runtime.workspace?.helper(containing: self.id)?.publish(screen(terminal, surface.readText(.active)))
-                }
-                for helper in runtime.helpers.values {
-                    if let terminal = helper.observedTerminal(self.id), let text = helper.observedText(terminal, surface: surface) {
-                        helper.publish(screen(terminal, text))
-                    }
-                }
+                self.publishScreen()
             case .startSearch(let query):
                 guard runtime.views[self.id] === self, let search = runtime.chat.sessions[self.id]?.terminalSearch else { return }
                 if !query.isEmpty { search.query = query }
@@ -142,6 +127,43 @@ extension TerminalView {
             case .childExited: self.didExit()
             case .scrollbar(let state): self.updateScrollback(state)
             case .background(let r, let g, let b): self.setBackground(r: r, g: g, b: b)
+            }
+        }
+    }
+
+    /// Output batches arrive hundreds of times a second under load, and a helper needs only the latest screen.
+    /// At most one read waits on the main queue per terminal, about 30 a second, and the last batch is always read.
+    nonisolated func screenChanged() {
+        let delay: TimeInterval? = screenPublication.withLock { state in
+            guard !state.pending else { return nil }
+            state.pending = true
+            return max(0, state.last + ScreenPublication.interval - ProcessInfo.processInfo.systemUptime)
+        }
+        guard let delay else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            MainActor.assumeIsolated { self?.publishScreen() }
+        }
+    }
+
+    /// Sends the active screen to the helpers that act on this terminal.
+    func publishScreen() {
+        // Cleared before reading: output during the read schedules the next publication.
+        screenPublication.withLock { $0.pending = false; $0.last = ProcessInfo.processInfo.systemUptime }
+        let runtime = TerminalRuntime.shared
+        guard runtime.views[self.id] === self, let surface = self.surface else { return }
+        let cursor = surface.cursorFaintTail()
+        func screen(_ terminal: UInt64, _ text: String) -> HelperClient.Screen {
+            .init(terminal: terminal, text: text, cursor: .init(column: cursor.column, row: cursor.row), faint_tail: cursor.faint)
+        }
+        // The helper running this tab, and the remote helper observing an SSH login in it: each acts
+        // on the screen under its own terminal id (a remote send waits for that screen). The observer
+        // gets only what its session wrote, never the tab's earlier local text (observedText).
+        if let terminal = runtime.workspace?.spaces.flatMap(\.tabs).first(where: { $0.id == self.id })?.terminal {
+            runtime.workspace?.helper(containing: self.id)?.publish(screen(terminal, surface.readText(.active)))
+        }
+        for helper in runtime.helpers.values {
+            if let terminal = helper.observedTerminal(self.id), let text = helper.observedText(terminal, surface: surface) {
+                helper.publish(screen(terminal, text))
             }
         }
     }
@@ -171,4 +193,10 @@ enum TerminalClipboard {
             NSPasteboard.general.setString(text, forType: .string)
         }
     }
+}
+
+struct ScreenPublication {
+    static let interval: TimeInterval = 1.0 / 30
+    var pending = false
+    var last: TimeInterval = 0
 }

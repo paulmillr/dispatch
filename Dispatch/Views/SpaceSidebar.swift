@@ -31,7 +31,10 @@ struct SpaceSidebar: View {
     /// ⌘P opens the search field above the footer; a query keeps it open.
     private var searchOpen: Bool { controller.windowState.spaceSearchFocusRequest != nil }
     @FocusState private var searchFocused: Bool
-    @State private var rowFrames: [UUID: CGRect] = [:]
+    /// The rows' latest frames, unobserved: scrolling moves them every frame. `rowPlacements` changes only as a
+    /// row crosses the viewport's edge, which is all the sidebar reads, so scrolling doesn't re-render it per frame.
+    @State private var rowFrames = SpaceRowFrameStore()
+    @State private var rowPlacements: [UUID: SpaceRowPlacement] = [:]
     @State private var viewportHeight: CGFloat = 0
     /// The overflow bar's height while it rides over the list's bottom (GlassScrollEdge); rows under it are hidden.
     @State private var overflowBarHeight: CGFloat = 0
@@ -50,23 +53,32 @@ struct SpaceSidebar: View {
         withTransaction(transaction) { searchQuery = value }
     }
 
+    /// Classifies against the current viewport, so a viewport change applies in the same update.
+    private func placement(of id: UUID) -> SpaceRowPlacement? {
+        rowFrames.frames[id].map { SpaceRowPlacement($0, visibleHeight: visibleHeight) }
+    }
+
+    private func updateRowPlacements() {
+        let next = rowFrames.frames.mapValues { SpaceRowPlacement($0, visibleHeight: visibleHeight) }
+        if next != rowPlacements { rowPlacements = next }
+    }
+
     private func hiddenSpaces(in order: [Space]) -> [Space] {
+        _ = rowPlacements
         // The overflow bar changes the scroll safe area. It must not keep itself alive
         // through shifted row frames after the complete rows stack fits again.
         guard viewportHeight > 0, rowsHeight > viewportHeight else { return [] }
         return order.filter {
-            guard let frame = rowFrames[$0.id] else { return true }
-            return frame.minY < -1 || frame.maxY > visibleHeight + 1
+            guard let placement = placement(of: $0.id) else { return true }
+            return placement.above || placement.below
         }
     }
 
     private func spacesBelowViewport(in order: [Space]) -> [Space] {
         guard viewportHeight > 0, rowsHeight > viewportHeight else { return [] }
-        let lastVisible = order.lastIndex { space in
-            rowFrames[space.id].map { $0.maxY > 0 && $0.minY < visibleHeight } ?? false
-        } ?? -1
+        let lastVisible = order.lastIndex { space in placement(of: space.id)?.showing ?? false } ?? -1
         return order.enumerated().compactMap { index, space in
-            if let frame = rowFrames[space.id] { return frame.maxY > visibleHeight + 1 ? space : nil }
+            if let placement = placement(of: space.id) { return placement.below ? space : nil }
             return index > lastVisible ? space : nil
         }
     }
@@ -113,9 +125,10 @@ struct SpaceSidebar: View {
             .frame(maxWidth: glass ? .infinity : nil)
         }
         // With Liquid Glass the sidebar is one panel from top to bottom, floating over the content (MainView) at the
-        // glass inset, the title row keeping its place beside the traffic lights inside it.
-        .background { if glass { glassPanel.padding(.horizontal, Self.glassInset).padding(.top, Self.glassInset) } }
-        .padding(.bottom, glass ? Self.glassInset : 0)
+        // glass inset, the title row keeping its place beside the traffic lights inside it. The system sidebar is
+        // a column in AppKit's sidebar glass instead, flush with the window's edges as in Finder and Mail.
+        .background { if glass { glassPanel } }
+        .padding(.bottom, floating ? Self.glassInset : 0)
         .buttonStyle(.plain)
         // Without glass, one flat sidebar column.
         .background { if !glass { Chrome.sidebar } }
@@ -137,6 +150,8 @@ struct SpaceSidebar: View {
     }
 
     private var glass: Bool { LiquidGlassStore.shared.active }
+    /// Dispatch's own glass panel, inset from the window, rather than the system sidebar's column.
+    private var floating: Bool { LiquidGlassStore.shared.floatingSidebar }
     /// Whether the overflow control rides over the list as a bar (GlassScrollEdge) rather than below it.
     private var overflowBar: Bool {
         if #available(macOS 26, *) { return glass } else { return false }
@@ -154,8 +169,13 @@ struct SpaceSidebar: View {
         // A little more room than between spaces, so the actions read apart from the list.
         .padding(.top, max(Self.glassRowInset, metrics.rowSpacing))
     }
-    private var glassPanel: some View {
-        Color.clear.liquidGlass(in: RoundedRectangle(cornerRadius: Self.glassRadius, style: .continuous))
+    @ViewBuilder private var glassPanel: some View {
+        if !floating, #available(macOS 26, *) {
+            SystemSidebarGlass().ignoresSafeArea().accessibilityHidden(true)
+        } else {
+            Color.clear.liquidGlass(in: RoundedRectangle(cornerRadius: Self.glassRadius, style: .continuous))
+                .padding(.horizontal, Self.glassInset).padding(.top, Self.glassInset)
+        }
     }
     /// The glass panel's inset from the window edges and from the content beside it.
     static let glassInset: CGFloat = 6
@@ -349,7 +369,8 @@ struct SpaceSidebar: View {
                 .frame(minHeight: minHeight, alignment: .top)
         }
         .coordinateSpace(name: "space-list")
-        .onPreferenceChange(SpaceRowFrames.self) { rowFrames = $0 }
+        .onPreferenceChange(SpaceRowFrames.self) { rowFrames.frames = $0; updateRowPlacements() }
+        .onChange(of: visibleHeight) { _, _ in updateRowPlacements() }
         .overlay(alignment: .bottom) {
             if !below.isEmpty && !glass {
                 LinearGradient(colors: [.clear, Chrome.sidebar], startPoint: .top, endPoint: .bottom)
@@ -653,7 +674,7 @@ struct SpaceSidebar: View {
                              branch: branch,
                              showBranch: settings.values.showGitBranches, metrics: metrics, selection: selection)
         }
-        .background(SpaceBranchObserver(space: space))
+        .background(SpaceBranchObserver(space: space, enabled: settings.values.showGitBranches))
         .accessibilityHint(hover.summary)
         .accessibilityIdentifier("space-\(space.id)")
         .overlay {
@@ -812,12 +833,30 @@ private struct SpaceSidebarRow: View, Equatable {
     let selection: Namespace.ID
 
     var body: some View {
-        sidebar.rowContent(space, selected: selected, pending: pending, shortcut: shortcut, branch: branch, selection: selection)
+        // Live: its tabs' titles and directories re-render this row, not the sidebar.
+        sidebar.rowContent(sidebar.workspace.liveSpace(space), selected: selected, pending: pending, shortcut: shortcut,
+                           branch: branch, selection: selection)
     }
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.space == rhs.space && lhs.selected == rhs.selected && lhs.pending == rhs.pending
             && lhs.shortcut == rhs.shortcut && lhs.branch == rhs.branch && lhs.selection == rhs.selection
+    }
+}
+
+private final class SpaceRowFrameStore {
+    var frames: [UUID: CGRect] = [:]
+}
+
+private struct SpaceRowPlacement: Equatable {
+    let above: Bool
+    let showing: Bool
+    let below: Bool
+
+    init(_ frame: CGRect, visibleHeight: CGFloat) {
+        above = frame.minY < -1
+        showing = frame.maxY > 0 && frame.minY < visibleHeight
+        below = frame.maxY > visibleHeight + 1
     }
 }
 

@@ -84,7 +84,7 @@ final class SwiftBackend: TerminalBackend {
             self?.exited = true
             view?.handle(.childExited)
         }
-        session.onUpdate = { [weak view] in view?.handle(.screen) }
+        session.onUpdate = { [weak view] in view?.screenChanged() }
         session.surface.control = { [weak view] event, id in
             switch event {
             case .start: view?.handle(.control(.start, nil, session: id))

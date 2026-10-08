@@ -87,7 +87,7 @@ struct WindowTabBar: View {
             .overlay {
                 LocalReorder(item: .window(tab.id), edge: .horizontal, leadingButtonWidth: StripTab.closeSlotWidth,
                              spaceHover: tab.arrangement.panes.first(where: { $0.id == tab.arrangement.focusedPane })?.activeTab.map { terminal in
-                                 SpaceHoverDetails.make(tab: terminal, host: workspace.hosts.record(workspace.hosts.terminals[terminal.id]?.host ?? space.hostID),
+                                 SpaceHoverDetails.make(tab: workspace.liveTab(terminal.id) ?? terminal, host: workspace.hosts.record(workspace.hosts.terminals[terminal.id]?.host ?? space.hostID),
                                      runtime: TerminalRuntime.shared, title: title)
                              }, dragLabel: title, select: { workspace.selectWindow(tab.id) }, accepts: { item in
                     guard case .window(let id) = item else { return false }
@@ -103,7 +103,7 @@ struct WindowTabBar: View {
                     target.id != space.id && target.windows.first.map { workspace.canMoveWindow(tab.id, beside: $0.id) } == true
                 }) { target in
                     // The window goes beside the target space's last one.
-                    Button("Move to \(target.name)") {
+                    Button("Move to \(workspace.liveName(target))") {
                         if let last = target.windows.last { workspace.moveWindow(tab.id, beside: last.id) }
                     }
                 }

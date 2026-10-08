@@ -9,7 +9,8 @@ final class HerdrLaunch {
     private var activeDirectory: URL?
     private var retirements: [URL: Task<Void, Never>] = [:]
     private var tokens: [UUID: String] = [:]
-    private var timer: Timer?
+    /// Wakes on the mailbox directory's changes; requests arrive as renames, so each is complete when seen.
+    private var watcher: DispatchSourceFileSystemObject?
     /// Commands wrapped in this app's terminals: ssh plus the helper's listed programs (see install(_:)).
     private(set) var functions: [ShellCommandWrapper] = [.ssh, .helper(program: "herdr", key: "herdr")]
     private var shims: [ShellCommandWrapper] { functions }
@@ -37,12 +38,18 @@ final class HerdrLaunch {
             let bin = directory.appendingPathComponent("bin")
             try fm.createDirectory(at: bin, withIntermediateDirectories: false)
             try install(functions)
-            timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            let descriptor = open(directory.path, O_EVTONLY)
+            guard descriptor >= 0 else { throw HerdrFailure("The launch mailbox could not be watched.") }
+            let watcher = DispatchSource.makeFileSystemObjectSource(fileDescriptor: descriptor, eventMask: .write, queue: .main)
+            watcher.setEventHandler { [weak self] in
                 MainActor.assumeIsolated {
                     guard self?.activeDirectory?.path == directory.path else { return }
                     self?.consume()
                 }
             }
+            watcher.setCancelHandler { Darwin.close(descriptor) }
+            watcher.resume()
+            self.watcher = watcher
             ready = true
             return try JSONEncoder().encode(directory.path)
         }
@@ -93,7 +100,7 @@ final class HerdrLaunch {
     }
     @discardableResult
     func stop(after cleanup: Task<Void, Never>? = nil) -> Task<Void, Never> {
-        timer?.invalidate(); timer = nil; tokens.removeAll()
+        watcher?.cancel(); watcher = nil; tokens.removeAll()
         if let retired = activeDirectory {
             activeDirectory = nil
             if let cleanup {

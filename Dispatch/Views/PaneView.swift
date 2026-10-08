@@ -21,8 +21,9 @@ struct PaneView: View {
     /// Tabs take the host color with Liquid Glass; flat chrome keeps just the pane's top border.
     private var tabTint: HostTint? { RemoteTabHighlight.current == .fade ? hostTint : nil }
     private var window: Space.Window? { space.windows.first { $0.arrangement.panes.contains { $0.id == pane.id } } }
+    /// Live: a title change re-renders the views that show it, not the window (`Workspace.liveTab`).
     private func label(_ tab: TerminalTab) -> String {
-        TerminalRuntime.shared.label(for: tab, automatic: settings.values.automaticTabNames)
+        TerminalRuntime.shared.label(for: workspace.liveTab(tab.id) ?? tab, automatic: settings.values.automaticTabNames)
     }
     private var activeLabel: String? { pane.activeTab.map(label) }
     private var tabStyle: StripTab.Style { .current(controller.windowState) }
@@ -111,7 +112,7 @@ struct PaneView: View {
 
     private func tabHoverDetails(_ tab: TerminalTab) -> SpaceHoverDetails {
         let host = workspace.hosts.terminals[tab.focusedSurfaceID]?.host ?? space.hostID
-        return SpaceHoverDetails.make(tab: tab, host: workspace.hosts.record(host), runtime: TerminalRuntime.shared)
+        return SpaceHoverDetails.make(tab: workspace.liveTab(tab.id) ?? tab, host: workspace.hosts.record(host), runtime: TerminalRuntime.shared)
     }
 
     private var tmuxPaneHeader: some View {
@@ -217,7 +218,7 @@ struct PaneView: View {
             }
             Button("Move to New Space") { workspace.moveTabToNewSpace(tab.id) }
             ForEach(workspace.spaces.filter { $0.id != space.id && workspace.canMoveTab(tab.id, to: $0.focusedPane) }) { target in
-                Button("Move to \(target.name)") { workspace.moveTab(tab.id, to: target.focusedPane) }
+                Button("Move to \(workspace.liveName(target))") { workspace.moveTab(tab.id, to: target.focusedPane) }
             }
             Button("Close Tab") { controller.closeTab(tab.id) }
         }

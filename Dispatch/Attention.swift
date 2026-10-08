@@ -30,10 +30,12 @@ struct AttentionEntry: Identifiable {
                     let session = sessions[surface]
                     let urgency = PaneUrgency(session: session)
                     let host = workspace.hosts.record(workspace.hosts.terminals[surface]?.host ?? space.hostID)
-                    let label = tab.displayLabel(automatic: automaticNames, conversation: session?.active == true ? session?.conversationTitle : nil)
-                    let title = label
+                    // Only panes that want attention are shown or announced, so only theirs follow title changes.
+                    let shown = urgency == .idle ? tab : workspace.liveTab(tab.id) ?? tab
+                    let title = shown.displayLabel(automatic: automaticNames, conversation: session?.active == true ? session?.conversationTitle : nil)
                     let window = space.windows.first { $0.terminals.contains { $0.id == tab.id } }
-                    let path = ([host.id == .local ? "local" : host.name, space.name] + [window?.name].compactMap { $0 }).joined(separator: " › ")
+                    let name = urgency == .idle ? space.name : workspace.liveName(space)
+                    let path = ([host.id == .local ? "local" : host.name, name] + [window?.name].compactMap { $0 }).joined(separator: " › ")
                     result.append(Self(id: surface, title: title, path: path, urgency: urgency))
                 }
             }

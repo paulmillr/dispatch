@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// The Liquid Glass setting in effect, for chrome hosted outside the main view's environment; TerminalRuntime applies it.
@@ -5,6 +6,8 @@ import SwiftUI
 final class LiquidGlassStore {
     static let shared = LiquidGlassStore()
     var enabled = false
+    /// The system sidebar setting (Preferences.systemSidebar); it only applies with glass active.
+    var systemSidebar = false
 
     nonisolated static var supported: Bool {
         if #available(macOS 26, *) { return true }
@@ -12,6 +15,49 @@ final class LiquidGlassStore {
     }
     /// Only macOS 26 and later draw glass; earlier systems keep the flat chrome whatever the setting says.
     var active: Bool { enabled && Self.supported }
+    /// The sidebar is Dispatch's glass panel floating over the content, rather than a column (the system's, or flat).
+    var floatingSidebar: Bool { active && !systemSidebar }
+}
+
+/// The system's sidebar glass, as Finder and Mail have it. AppKit draws that material only for a split view's sidebar
+/// item, so this holds a split view controller with that item alone, filling the view; the system picks the material
+/// (and on each macOS its look). It is a background: it takes no clicks and has nothing for accessibility.
+@available(macOS 26, *)
+struct SystemSidebarGlass: NSViewRepresentable {
+    func makeNSView(context: Context) -> SystemSidebarGlassView { SystemSidebarGlassView() }
+    func updateNSView(_ view: SystemSidebarGlassView, context: Context) {}
+    /// All the room offered: the split view's own constraints would size it to its sidebar's minimum.
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: SystemSidebarGlassView, context: Context) -> CGSize? {
+        proposal.replacingUnspecifiedDimensions()
+    }
+}
+
+@available(macOS 26, *)
+final class SystemSidebarGlassView: NSView {
+    private let split = NSSplitViewController()
+
+    init() {
+        super.init(frame: .zero)
+        let sidebar = NSViewController()
+        sidebar.view = NSView()
+        let item = NSSplitViewItem(sidebarWithViewController: sidebar)
+        // The lone item always fills the view, however narrow or wide the column.
+        item.canCollapse = false
+        item.canCollapseFromWindowResize = false
+        item.minimumThickness = 0
+        item.maximumThickness = 100_000
+        split.addSplitViewItem(item)
+        addSubview(split.view)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric) }
+    override func layout() {
+        super.layout()
+        split.view.frame = bounds
+    }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func accessibilityChildren() -> [Any]? { [] }
 }
 
 /// Glass in `shape` while Liquid Glass is active, otherwise the flat `fallback` fill, if any.

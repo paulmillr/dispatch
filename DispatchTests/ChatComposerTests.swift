@@ -140,9 +140,6 @@ final class ChatComposerTests: XCTestCase {
         XCTAssertTrue(view.bands.allSatisfy { $0.animation(forKey: key) == nil })
     }
 
-    // Checks the compositor version of the composer motion (commented out in ChatComposerMotion.swift);
-    // disabled with it until that version is visually reviewed.
-    /*
     // In the app the chat sits inside nested hosting views, where each SwiftUI update
     // re-lays out the whole window: per-frame SwiftUI motion there exceeded AppKit's
     // Update Constraints pass limit while an agent worked on a long transcript.
@@ -174,7 +171,6 @@ final class ChatComposerTests: XCTestCase {
         session.busy = false
         try await TestSupport.eventually { [orbit.diamond, orbit.orbit, shimmer.band].allSatisfy { $0.animation(forKey: key) == nil } }
     }
-    */
 
     func testPlaceholderStaysStableAcrossReasoningAndToolActivity() async throws {
         try DesktopTestSupport.requireUnlocked()
@@ -623,12 +619,9 @@ private final class BorderCompositorCapture: @unchecked Sendable {
     }
 }
 
-// Used by the disabled compositor test above.
-/*
 /// Counts SwiftUI's update work in its host: each update schedules constraints and layout.
 private final class UpdateCountingHost: NSHostingView<AnyView> {
     var updates = 0
     override func updateConstraints() { updates += 1; super.updateConstraints() }
     override func layout() { updates += 1; super.layout() }
 }
-*/

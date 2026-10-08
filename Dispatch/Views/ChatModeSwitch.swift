@@ -37,7 +37,8 @@ struct ChatModeSwitch: View {
         .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: InterfaceMotion.modeSwitchDuration), value: session.showChat)
         .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: 0.15), value: typing && !hovering)
         .onHover { hovering = $0 }
-        .task(id: session.lastInputAt) {
+        // Only a floating switch dims while typing; a strip's must not re-render on every keystroke.
+        .task(id: floating ? session.lastInputAt : nil) {
             guard floating, let date = session.lastInputAt, Date().timeIntervalSince(date) < 1.2 else { typing = false; return }
             typing = true
             do { try await Task.sleep(for: .milliseconds(1200)) } catch { return }

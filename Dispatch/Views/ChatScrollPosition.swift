@@ -50,9 +50,13 @@ final class ChatScrollPosition {
     /// A live row arriving at the followed bottom glides there with its fade instead of jumping.
     static let arrivalGlide: TimeInterval = 0.22
     private var arrivalExpectedAt = -Double.infinity
-    private var glide: (from: CGFloat, start: TimeInterval, timer: Timer)?
+    private var glide: (from: CGFloat, start: TimeInterval, link: CADisplayLink)?
     /// SwiftUI's item scroll would land before the glide starts; hold it while one is pending or running.
-    var glidesToBottom: Bool { glide != nil || ProcessInfo.processInfo.systemUptime - arrivalExpectedAt < 0.3 }
+    var glidesToBottom: Bool {
+        let now = ProcessInfo.processInfo.systemUptime
+        return glide != nil || now - arrivalExpectedAt < 0.3 || now - rowExpectedAt < 0.3
+    }
+    private var rowExpectedAt = -Double.infinity
     var hasContent: (() -> Bool)?
     var recoverViewport: ((Anchor?, Bool) -> Void)?
     private var pending: Anchor?
@@ -497,7 +501,7 @@ final class ChatScrollPosition {
     func cancelPreservation() { pending = nil; realizationAttempts = 0; previousDocumentY = nil; prependGeometry = nil; prependFallbacks = []; restoredPending = false }
     func disconnect() {
         recordDiagnostic(.disconnected, force: true)
-        cancelGlide(); arrivalExpectedAt = -Double.infinity
+        cancelGlide(); arrivalExpectedAt = -Double.infinity; rowExpectedAt = -Double.infinity
         diagnosticState = nil; diagnosticRows = nil; swiftUIScroll = nil
         mountCheckGeneration = UUID(); mountBlank = false; firstScrollPending = false; attachedAt = nil
         stopViewportChecks(); hasContent = nil; recoverViewport = nil
@@ -519,6 +523,12 @@ final class ChatScrollPosition {
         cancelPreservation(); cancelGlide(); saved = nil
         pinToBottom()
     }
+    /// A live row without an entrance (in a burst): layout pins it at once, as a glide would, so no later item
+    /// scroll adds another pass. Reduce Motion keeps the item scroll, as for any arrival.
+    func expectRow() {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        rowExpectedAt = ProcessInfo.processInfo.systemUptime
+    }
     /// The session is inserting a live row while the reader follows the bottom.
     func expectArrival() {
         guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
@@ -534,11 +544,11 @@ final class ChatScrollPosition {
         let now = ProcessInfo.processInfo.systemUptime
         if now - arrivalExpectedAt < 0.3, destination > scroll.contentView.bounds.minY, scroll.window?.isVisible == true {
             arrivalExpectedAt = -Double.infinity
-            let timer = Timer(timeInterval: 1 / 120, repeats: true) { [weak self] _ in
-                MainActor.assumeIsolated { self?.glideFrame() }
-            }
-            RunLoop.main.add(timer, forMode: .common)
-            glide = (scroll.contentView.bounds.minY, now, timer)
+            // One step per displayed frame, in the display cycle that SwiftUI's arrival fade updates in. A timer
+            // out of phase with it, or faster than the display, scrolls and lays out the transcript again.
+            let link = scroll.displayLink(target: GlideStep { [weak self] in self?.glideFrame() }, selector: #selector(GlideStep.step))
+            link.add(to: .main, forMode: .common)
+            glide = (scroll.contentView.bounds.minY, now, link)
             return
         }
         adjusting = true
@@ -565,7 +575,7 @@ final class ChatScrollPosition {
         if progress >= 1 { cancelGlide() }
     }
     private func cancelGlide() {
-        glide?.timer.invalidate(); glide = nil
+        glide?.link.invalidate(); glide = nil
     }
     private func updateScrollbar() {
         guard let scroll, let document = scroll.documentView else { return }
@@ -918,4 +928,11 @@ struct ChatScrollMarker: NSViewRepresentable {
         }
         override func layout() { super.layout(); position.geometryChanged() }
     }
+}
+
+/// A display link's target; the link retains it, and it holds its owner weakly.
+@MainActor private final class GlideStep: NSObject {
+    let action: () -> Void
+    init(_ action: @escaping () -> Void) { self.action = action }
+    @objc func step(_ link: CADisplayLink) { action() }
 }

@@ -4,10 +4,18 @@ import Observation
 /// All ownership changes happen here. Views never own shell lifetime.
 @MainActor @Observable
 final class Workspace {
-    private var committedLayout = WorkspaceLayout(spaces: [], selectedSpace: nil)
-    // Layout mutations publish a complete value through updateLayout.
+    // Layout mutations publish a complete value through updateLayout. Readers observe its structure; a change
+    // to tab titles or directories alone notifies only the views that show them (`liveTab`, `liveSpace`,
+    // `liveName`, `directory(forSurface:)`), so a terminal title never re-renders the whole window.
+    @ObservationIgnored private var committedLayout = WorkspaceLayout(spaces: [], selectedSpace: nil)
+    private var structureRevision: UInt64 = 0
+    @ObservationIgnored private var labelRevisions: [UUID: TabLabelRevisions] = [:]
+    private var layout: WorkspaceLayout {
+        _ = structureRevision
+        return committedLayout
+    }
     var spaces: [Space] {
-        get { committedLayout.spaces }
+        get { layout.spaces }
         set { commitLayout(WorkspaceLayout(spaces: newValue, selectedSpace: selectedSpace)) }
     }
     private(set) var layoutRevision: UInt64 = 0
@@ -15,7 +23,7 @@ final class Workspace {
     let footerLayout = WorkspaceFooterLayout()
     let prefixKeys = PrefixKeys()
     var selectedSpace: UUID? {
-        get { committedLayout.selectedSpace }
+        get { layout.selectedSpace }
         set { commitLayout(WorkspaceLayout(spaces: spaces, selectedSpace: newValue)) }
     }
     var focusRequest = UUID()
@@ -57,13 +65,70 @@ final class Workspace {
 
     private func commitLayout(_ next: WorkspaceLayout) {
         guard committedLayout != next else { return }
-        let changed = committedLayout.spaces != next.spaces
+        let previous = committedLayout
+        let changed = previous.spaces != next.spaces
         if changed {
             // Capture departure chrome before publishing the completed layout.
-            hostMoveMotion.reconcile(from: committedLayout.spaces, to: next.spaces, groupedByHost: spaceOrder == .tree)
+            hostMoveMotion.reconcile(from: previous.spaces, to: next.spaces, groupedByHost: spaceOrder == .tree)
         }
+        let labels = changed ? Self.labelChanges(from: previous.spaces, to: next.spaces) : (titles: [], directories: [])
+        let structural = previous.selectedSpace != next.selectedSpace
+            || (labels.titles.isEmpty && labels.directories.isEmpty)
+            || Self.unlabeled(previous.spaces) != Self.unlabeled(next.spaces)
         committedLayout = next
         if changed { layoutRevision &+= 1 }
+        if structural {
+            structureRevision &+= 1
+            let tabs = Set(next.spaces.flatMap(\.tabs).map(\.id))
+            labelRevisions = labelRevisions.filter { tabs.contains($0.key) }
+        }
+        for id in labels.titles { labelRevisions[id]?.title &+= 1 }
+        for id in labels.directories { labelRevisions[id]?.directory &+= 1 }
+    }
+
+    /// Tabs whose shown title (automatic or custom) or directory differs between two layouts.
+    private static func labelChanges(from old: [Space], to new: [Space]) -> (titles: [UUID], directories: [UUID]) {
+        let before = Dictionary(old.flatMap(\.tabs).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var titles: [UUID] = [], directories: [UUID] = []
+        for tab in new.flatMap(\.tabs) {
+            guard let previous = before[tab.id] else { continue }
+            if previous.title != tab.title || previous.customTitle != tab.customTitle { titles.append(tab.id) }
+            if previous.directory != tab.directory { directories.append(tab.id) }
+        }
+        return (titles, directories)
+    }
+
+    private static func unlabeled(_ spaces: [Space]) -> [Space] {
+        spaces.map { space in
+            var space = space
+            space.updateTabs { $0.title = ""; $0.customTitle = nil; $0.directory = "" }
+            return space
+        }
+    }
+
+    private func observeLabels(of id: UUID, title: Bool = true, directory: Bool = true) {
+        let revisions = labelRevisions[id] ?? TabLabelRevisions()
+        labelRevisions[id] = revisions
+        if title { _ = revisions.title }
+        if directory { _ = revisions.directory }
+    }
+
+    /// The tab's current value; reading it in a view re-renders on its title or directory as well as on the layout.
+    func liveTab(_ id: UUID) -> TerminalTab? {
+        observeLabels(of: id)
+        return committedLayout.spaces.lazy.flatMap(\.tabs).first { $0.id == id }
+    }
+
+    /// The space with its tabs' current titles and directories.
+    func liveSpace(_ space: Space) -> Space {
+        for tab in space.tabs { observeLabels(of: tab.id) }
+        return committedLayout.spaces.first { $0.id == space.id } ?? space
+    }
+
+    /// The space's current name, which can follow its first tab's directory.
+    func liveName(_ space: Space) -> String {
+        if space.usesDirectoryName, let first = space.tabs.first { observeLabels(of: first.id, title: false) }
+        return (committedLayout.spaces.first { $0.id == space.id } ?? space).name
     }
 
     var current: Space? { spaces.first { $0.id == selectedSpace } }
@@ -77,7 +142,8 @@ final class Workspace {
         }
     }
     func directory(forSurface id: UUID) -> String? {
-        spaces.lazy.flatMap(\.tabs).first { $0.id == id }?.directory
+        observeLabels(of: id, title: false)
+        return committedLayout.spaces.lazy.flatMap(\.tabs).first { $0.id == id }?.directory
     }
     var allTabIDs: Set<UUID> { Set(spaces.flatMap { $0.tabs.map(\.id) }) }
     var allSurfaceIDs: Set<UUID> { allTabIDs }
@@ -565,19 +631,12 @@ final class Workspace {
             return
         }
         guard let s = spaces.firstIndex(where: { $0.tabs.contains { $0.id == id } }) else { return }
-        func update(_ arrangement: inout PaneArrangement) {
-            for p in arrangement.panes.indices {
-                for t in arrangement.panes[p].tabs.indices where arrangement.panes[p].tabs[t].id == id {
-                    if let title { arrangement.panes[p].tabs[t].title = title }
-                    if let directory { arrangement.panes[p].tabs[t].directory = directory }
-                    if let customTitle { arrangement.panes[p].tabs[t].customTitle = customTitle.isEmpty ? nil : customTitle }
-                }
-            }
-        }
         updateLayout { next in
-            if next.spaces[s].containers.isEmpty { update(&next.spaces[s].arrangement) }
-            else {
-                for c in next.spaces[s].containers.indices { update(&next.spaces[s].containers[c].arrangement) }
+            next.spaces[s].updateTabs { tab in
+                guard tab.id == id else { return }
+                if let title { tab.title = title }
+                if let directory { tab.directory = directory }
+                if let customTitle { tab.customTitle = customTitle.isEmpty ? nil : customTitle }
             }
         }
     }
@@ -675,5 +734,25 @@ final class Workspace {
     /// Repairs ownership and selection; only the caller decides whether to close the shell.
     func detachTab(_ id: UUID) -> TerminalTab? {
         updateLayout { $0.detachTab(id) }
+    }
+}
+
+/// One tab's label changes, observed apart from the layout.
+@MainActor @Observable
+final class TabLabelRevisions {
+    var title: UInt64 = 0
+    var directory: UInt64 = 0
+}
+
+extension Space {
+    /// Visits every tab where it's stored: the native arrangement, or each container's.
+    mutating func updateTabs(_ update: (inout TerminalTab) -> Void) {
+        func visit(_ arrangement: inout PaneArrangement) {
+            for p in arrangement.panes.indices {
+                for t in arrangement.panes[p].tabs.indices { update(&arrangement.panes[p].tabs[t]) }
+            }
+        }
+        if containers.isEmpty { visit(&arrangement) }
+        else { for c in containers.indices { visit(&containers[c].arrangement) } }
     }
 }

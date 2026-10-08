@@ -645,6 +645,46 @@ final class ChatScrollStabilityTests: XCTestCase {
         XCTAssertTrue(condition(), "History did not reach the expected settled state", file: file, line: line)
     }
 
+    /// A burst of live rows: the first enters, the rest appear in place, and layout keeps each at the bottom.
+    func testBurstRowsFollowTheBottomWithoutEntrances() async throws {
+        try DesktopTestSupport.requireUnlocked(); AppFont.register()
+        try XCTSkipIf(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, "Reduce Motion keeps the item scroll")
+        let coordinator = ChatCoordinator(enabled: false)
+        defer { coordinator.stop() }
+        let session = coordinator.session(for: UUID())
+        session.sessionID = "burst-follow"; session.showChat = true
+        session.turns = (0..<20).map { index in
+            ChatTurn(id: "turn-\(index)", items: [.init(id: "answer-\(index)", kind: .assistant,
+                text: String(repeating: "An earlier answer with several lines of text.\n\n", count: 3))])
+        }
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 650), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.orderOut(nil); window.contentView = nil; window.close() }
+        window.contentView = NSHostingView(rootView: ChatView(session: session, coordinator: coordinator, focused: false, floatingSwitch: false))
+        window.makeKeyAndOrderFront(nil)
+        try await Task.sleep(for: .milliseconds(400))
+        let scroll = try XCTUnwrap(PresentationTestSupport.views(of: NSScrollView.self, in: XCTUnwrap(window.contentView))
+            .max { ($0.documentView?.bounds.height ?? 0) < ($1.documentView?.bounds.height ?? 0) })
+        func gap() -> CGFloat { (scroll.documentView?.bounds.maxY ?? 0) - scroll.contentView.bounds.maxY }
+        XCTAssertTrue(session.atBottom)
+        session.active = true; session.busy = true; session.activeTurnID = "live"
+        for index in 0..<12 {
+            session.insert(.init(id: "burst-\(index)", kind: .assistant,
+                                 text: String(repeating: "Burst row \(index) adds a few lines.\n\n", count: 1 + index % 4)), turnID: "live")
+            let row = try XCTUnwrap(session.visibleTranscriptRows.first { $0.item?.id == "burst-\(index)" })
+            XCTAssertEqual(session.transcriptArrivals.receipt(for: row.id) != nil, index == 0, "Only the burst's first row enters (row \(index))")
+            try await Task.sleep(for: .milliseconds(80))
+            // After the first row's glide, each quiet row is at the bottom within the interval it arrived in.
+            if index >= 4 {
+                XCTAssertTrue(session.atBottom, "row \(index)")
+                XCTAssertLessThanOrEqual(gap(), 24, "Newest row must be visible; row \(index), gap=\(gap())")
+            }
+        }
+        try await TestSupport.eventually(timeout: .seconds(1)) { !session.scrollPosition.glidesToBottom }
+        XCTAssertTrue(session.atBottom)
+        XCTAssertLessThanOrEqual(gap(), 24, "The burst ends at the bottom; gap=\(gap())")
+    }
+
     func testBottomFollowingSurvivesLargeRepliesAndStopsWhenReadingHistory() async throws {
         try DesktopTestSupport.requireUnlocked(); AppFont.register()
         let coordinator = ChatCoordinator(enabled: false)

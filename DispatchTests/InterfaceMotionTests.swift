@@ -9,6 +9,8 @@ final class InterfaceMotionTests: XCTestCase {
     func testChatArrivalsExcludeHistoryStreamingAndAcknowledgedPrompts() throws {
         let session = ChatSession(id: UUID())
         session.showChat = true
+        // Every row here arrives at once; the burst rule has its own test.
+        session.transcriptArrivals.burstInterval = 0
         let opened = ProcessInfo.processInfo.systemUptime
         var reply = ChatItem(id: "reply", kind: .assistant, text: "Hello")
         session.insert(reply, turnID: "live")
@@ -56,6 +58,28 @@ final class InterfaceMotionTests: XCTestCase {
         XCTAssertFalse(promptReceipt.consume(since: opened))
         session.resetConversation()
         XCTAssertNil(session.transcriptArrivals.receipt(for: "optimistic"))
+    }
+
+    func testChatArrivalBurstsMoveOnlyTheirFirstRow() throws {
+        let session = ChatSession(id: UUID())
+        session.showChat = true
+        func receipt(_ id: String) -> ChatTranscriptArrivals.Receipt? {
+            session.visibleTranscriptRows.first { $0.item?.id == id }.flatMap { session.transcriptArrivals.receipt(for: $0.id) }
+        }
+        session.insert(.init(id: "first", kind: .assistant, text: "First"), turnID: "live")
+        session.insert(.init(id: "second", kind: .assistant, text: "Second"), turnID: "live")
+        XCTAssertNotNil(receipt("first"), "A burst's first row enters")
+        XCTAssertNil(receipt("second"), "The rest of the burst appears in place")
+        let arrivals = session.transcriptArrivals
+        XCTAssertFalse(arrivals.admitsMotion(now: ProcessInfo.processInfo.systemUptime + arrivals.burstInterval / 2))
+        XCTAssertTrue(arrivals.admitsMotion(now: ProcessInfo.processInfo.systemUptime + arrivals.burstInterval),
+                      "A row after a quiet interval enters again")
+        session.resetConversation()
+        session.atBottom = true
+        session.optimisticPrompt = .init(id: "prompt", kind: .user, text: "Next")
+        XCTAssertNotNil(session.transcriptArrivals.receipt(for: "prompt"), "The user's own prompt always enters")
+        session.insert(.init(id: "reply", kind: .assistant, text: "Reply"), turnID: "next")
+        XCTAssertNil(receipt("reply"), "A reply right after the prompt joins its entrance")
     }
 
     func testChatArrivalFadesAndMovesWithoutChangingLayoutAndReducedMotionOnlyFades() async throws {

@@ -17,11 +17,11 @@ struct ChatComposerFocusChrome: View {
                 // icon) where Send sits on the footer row; focus grows it from that corner into the composer, the
                 // circle easing into the composer's corners, with the borders (working animation included) on its edge.
                 // Unfocused while the agent works, the row shows its activity on the pane's own background.
-                let state = AgentWorkingState(session)
+                let working = AgentWorkingState.isWorking(session)
                 let radius: CGFloat = focused ? 12 : lineHeight / 2
                 Color.clear
                     .liquidGlass(in: RoundedRectangle(cornerRadius: radius, style: .continuous))
-                    .opacity(focused || !(state.visible && !state.loading) ? 1 : 0)
+                    .opacity(focused || !working ? 1 : 0)
                     .overlay {
                         Color.clear.modifier(ChatComposerBorder(session: session, active: focused, cornerRadius: radius))
                             .opacity(focused ? 1 : 0)
@@ -42,47 +42,6 @@ struct ChatComposerFocusChrome: View {
     }
 }
 
-struct ChatComposerOrbit: View {
-    @Environment(\.chatTheme) private var theme
-    let seconds: TimeInterval
-    let moving: Bool
-
-    var body: some View {
-        let pulse = moving ? (1 - cos(seconds * 2 * .pi / 1.6)) / 2 : 1
-        ZStack {
-            Text("◆").font(.system(size: 11.5)).foregroundStyle(theme.accent)
-                .opacity(0.55 + 0.45 * pulse).scaleEffect(moving ? 0.92 + 0.16 * pulse : 1)
-            if moving {
-                Circle().fill(theme.accent).frame(width: 4, height: 4)
-                    .shadow(color: theme.accent.opacity(0.7), radius: 3)
-                    .offset(y: -8)
-                    .rotationEffect(.degrees(seconds.truncatingRemainder(dividingBy: 1.4) / 1.4 * 360))
-            }
-        }.frame(width: 16, height: 20).accessibilityHidden(true)
-    }
-}
-
-struct ChatComposerStatus: View {
-    @Environment(\.chatTheme) private var theme
-    let label: String
-    let seconds: TimeInterval
-    let moving: Bool
-
-    var body: some View {
-        Text(label).fontWeight(.medium).lineLimit(1).foregroundStyle(theme.muted)
-            .overlay {
-                if moving {
-                    GeometryReader { geometry in
-                        LinearGradient(colors: [.clear, theme.ink, .clear], startPoint: .leading, endPoint: .trailing)
-                            .frame(width: 35)
-                            .offset(x: (geometry.size.width + 35) * seconds.truncatingRemainder(dividingBy: 2.4) / 2.4 - 35)
-                    }.mask(Text(label).fontWeight(.medium).lineLimit(1))
-                        .accessibilityHidden(true)
-                }
-            }
-    }
-}
-
 struct ChatComposerBorder: ViewModifier {
     @Environment(\.chatTheme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -93,8 +52,7 @@ struct ChatComposerBorder: ViewModifier {
     @State private var visible = false
 
     func body(content: Content) -> some View {
-        let state = AgentWorkingState(session)
-        let working = state.visible && !state.loading
+        let working = AgentWorkingState.isWorking(session)
         content
             .overlay {
                 RoundedRectangle(cornerRadius: cornerRadius)
@@ -105,12 +63,12 @@ struct ChatComposerBorder: ViewModifier {
                 RoundedRectangle(cornerRadius: cornerRadius)
                     .strokeBorder(working ? theme.accent.opacity(0.35)
                                   // On glass the panel's own edge already frames the idle input.
-                                  : (session.drafts.current.multiline ? theme.muted.opacity(0.55)
+                                  : (session.drafts.shape.multiline ? theme.muted.opacity(0.55)
                                      : LiquidGlassStore.shared.active ? .clear : theme.border))
                     .allowsHitTesting(false).accessibilityHidden(true)
             }
             .overlay {
-                if working && !state.waiting && !reduceMotion && session.showChat {
+                if working && !AgentWorkingState.isWaiting(session) && !reduceMotion && session.showChat {
                     ChatComposerAnimatedBorder(accent: theme.accent, moving: visible && active, radius: cornerRadius - 0.5)
                         .allowsHitTesting(false).accessibilityHidden(true)
                 }
@@ -259,9 +217,6 @@ struct ChatComposerAnimatedBorder: NSViewRepresentable {
     }
 }
 
-// Compositor version (Core Animation): moves the orbit, pulse, sweep and border without a SwiftUI
-// update per frame. Disabled until visually reviewed; the SwiftUI version above is live.
-/*
 /// The ◆ pulses while a dot circles it; still, the ◆ rests at full strength.
 struct ChatComposerOrbit: NSViewRepresentable {
     let moving: Bool
@@ -409,104 +364,6 @@ struct ChatComposerShimmer: NSViewRepresentable {
     }
 }
 
-/// A soft highlight laps the composer border while an agent works.
-struct ChatComposerAnimatedBorder: NSViewRepresentable {
-    let accent: Color
-    let moving: Bool
-
-    func makeNSView(context: Context) -> BorderView { BorderView(accent: accent) }
-
-    func updateNSView(_ view: BorderView, context: Context) {
-        view.accent = accent
-        view.moving = moving
-    }
-
-    static func dismantleNSView(_ view: BorderView, coordinator: ()) { view.stop() }
-
-    final class BorderView: CompositorView {
-        var accent: Color { didSet { if accent != oldValue { updateColors() } } }
-        private(set) var bands: [CAShapeLayer] = []
-        private var perimeter: CGFloat = 0
-        private var pathSize: CGSize = .zero
-        private static let bandCount = 24
-
-        init(accent: Color) {
-            self.accent = accent
-            super.init()
-            for _ in 0..<Self.bandCount {
-                let band = CAShapeLayer()
-                band.fillColor = nil; band.lineWidth = 1; band.lineCap = .butt
-                layer?.addSublayer(band)
-                bands.append(band)
-            }
-            updateColors()
-        }
-
-        override func layout() {
-            super.layout()
-            guard pathSize != bounds.size else { return }
-            pathSize = bounds.size
-            let rect = bounds.insetBy(dx: 0.5, dy: 0.5)
-            guard rect.width > 0, rect.height > 0 else { perimeter = 0; stop(); return }
-            let radius = min(7.5, min(rect.width, rect.height) / 2)
-            let path = CGMutablePath()
-            // The flipped view's increasing angles trace clockwise from top center.
-            path.move(to: CGPoint(x: rect.midX, y: rect.minY))
-            path.addLine(to: CGPoint(x: rect.maxX - radius, y: rect.minY))
-            path.addArc(center: CGPoint(x: rect.maxX - radius, y: rect.minY + radius), radius: radius,
-                        startAngle: -.pi / 2, endAngle: 0, clockwise: false)
-            path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - radius))
-            path.addArc(center: CGPoint(x: rect.maxX - radius, y: rect.maxY - radius), radius: radius,
-                        startAngle: 0, endAngle: .pi / 2, clockwise: false)
-            path.addLine(to: CGPoint(x: rect.minX + radius, y: rect.maxY))
-            path.addArc(center: CGPoint(x: rect.minX + radius, y: rect.maxY - radius), radius: radius,
-                        startAngle: .pi / 2, endAngle: .pi, clockwise: false)
-            path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + radius))
-            path.addArc(center: CGPoint(x: rect.minX + radius, y: rect.minY + radius), radius: radius,
-                        startAngle: .pi, endAngle: 3 * .pi / 2, clockwise: false)
-            path.closeSubpath()
-            perimeter = 2 * (rect.width + rect.height) + (2 * .pi - 8) * radius
-            CATransaction.begin(); CATransaction.setDisableActions(true)
-            for (index, band) in bands.enumerated() {
-                let length = perimeter * 0.22 * (1 - CGFloat(index) / CGFloat(Self.bandCount))
-                band.frame = bounds; band.path = path
-                band.lineDashPattern = [NSNumber(value: length), NSNumber(value: perimeter - length)]
-                band.lineDashPhase = length / 2
-            }
-            CATransaction.commit()
-            updateAnimations()
-        }
-
-        private func updateColors() {
-            CATransaction.begin(); CATransaction.setDisableActions(true)
-            var previous: CGFloat = 0
-            // Nested dashes form the same soft, symmetric highlight without
-            // adjacent segment seams. Each inner band adds only the missing alpha.
-            for (index, band) in bands.enumerated() {
-                let alpha = 0.8 * pow(sin(.pi * (CGFloat(index) + 0.5) / CGFloat(2 * Self.bandCount)), 2)
-                band.strokeColor = NSColor(accent).withAlphaComponent((alpha - previous) / (1 - previous)).cgColor
-                previous = alpha
-            }
-            CATransaction.commit()
-        }
-
-        override func redraw() {
-            for band in bands { band.contentsScale = window?.backingScaleFactor ?? 2 }
-        }
-
-        override func start(_ rate: CAFrameRateRange) {
-            guard perimeter > 0 else { return }
-            for band in bands {
-                let animation = CABasicAnimation(keyPath: "lineDashPhase")
-                animation.fromValue = band.lineDashPhase
-                animation.toValue = band.lineDashPhase - perimeter
-                animation.duration = 4
-                loop(animation, on: band, rate: rate)
-            }
-        }
-    }
-}
-
 /// Continuous motion runs in the compositor. Chat views sit inside the window's nested
 /// hosting views, where every SwiftUI update re-lays out the whole window: SwiftUI motion
 /// costs that on each frame, and behind a slow layout the next frame lands in the same
@@ -588,4 +445,3 @@ class CompositorView: NSView {
         CATransaction.commit()
     }
 }
-*/
