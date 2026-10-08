@@ -125,12 +125,24 @@ final class HostBackendCache {
     }
 }
 
-/// Both locations use the same primary action and explicit backend menu.
+/// The new-space buttons' plus: the SF Symbol at the label's size, a little smaller and heavier than its text so it
+/// sits on the text's cap height with a matching stroke.
+private struct NewSpacePlus: View {
+    let size: CGFloat
+    var body: some View {
+        Image(systemName: "plus").font(.system(size: (size * 0.82).rounded(), weight: .semibold)).accessibilityHidden(true)
+    }
+}
+
+/// Both locations use the same primary action, with the backend menu on a secondary click.
 struct NewSpaceButton: View {
     let workspace: Workspace
     var host: HostRecord?
     var metrics = SidebarMetrics.large(contentSize: 12.5)
+    /// A tree group's header button: the plus alone, shortcut in its tooltip.
     var grouped = false
+    /// A header button shows only while its group is hovered, empty or read by VoiceOver.
+    var revealed = true
     @Environment(\.appTypography) private var typography
     @State private var hovered = false
 
@@ -140,49 +152,54 @@ struct NewSpaceButton: View {
         if isLocalSidebar { return "⇧⌘N" }
         return host == nil || host?.id == (workspace.current?.hostID ?? .local) ? "⌘N" : nil
     }
+    /// What it makes: in a tree group, a space on that group's host.
+    private var title: String {
+        if grouped, let host { return host.id == .local ? "New local space" : "New space on \(host.name)" }
+        return isLocalSidebar ? "New local space" : "New space"
+    }
 
     var body: some View {
         Group {
-            if grouped {
-                // Host group headers: a small "+ space" beside the host name.
-                HStack(spacing: 6) {
-                    Text("+").font(AppFont.ui(size: metrics.headerSize + 2)).foregroundStyle(Chrome.palette.sidebarDetail)
-                    Text(isLocalSidebar ? "local" : "space")
-                    Text(shortcut ?? "")
-                        .font(.system(size: metrics.headerSize).monospacedDigit()).tracking(metrics.headerSize * 0.06)
-                        .foregroundStyle(Chrome.palette.faint)
-                        .fixedSize().frame(width: metrics.headerSize * 3.6, alignment: .trailing)
-                }
-                    .font(AppFont.ui(size: metrics.headerSize)).lineLimit(1)
-                    .foregroundStyle(hovered ? Chrome.ink : Chrome.palette.detail)
-                    .padding(.horizontal, 2).frame(height: metrics.headerHeight)
-                    .background(hovered ? Chrome.palette.hover : .clear, in: RoundedRectangle(cornerRadius: 4))
-            } else if glass {
-                glassLabel
-            } else if metrics.large {
-                tileLabel
-            } else {
-                rowLabel
-            }
+            if grouped { headerLabel } else { actionRow }
         }
         .allowsHitTesting(false)
         .overlay {
             NewSpaceControl(workspace: workspace, host: host?.id, identifier: host.map { "host-new-space-\($0.id.rawValue)" }
                 ?? "sidebar-new-space")
-                .accessibilityLabel(host?.id == .local ? "New local space" : "New space")
+                .accessibilityLabel(title)
                 .accessibilityIdentifier(host.map { "host-new-space-\($0.id.rawValue)" }
                     ?? "sidebar-new-space")
         }
         .onHover { hovered = $0 }
-        .help((isLocalSidebar ? "New local space" : "New space") + (shortcut.map { " (\($0))" } ?? "")
-              + " · Hold, double-click, or right-click for options")
+        .help(title + (shortcut.map { " (\($0))" } ?? "") + " · Right-click for options")
     }
 
-    /// Compact flat list: a row like a space's, the "+" in the status column.
-    private var rowLabel: some View {
-        HStack(spacing: 6) {
-            Text("+").frame(width: metrics.activitySize).foregroundStyle(Chrome.palette.sidebarHostLabel)
-            Text(isLocalSidebar ? "local" : "space").lineLimit(1)
+    /// A tree group's header button: a plus in the header's own control style, a soft capsule under the pointer and no
+    /// glass of its own; in Large's host chip, a small circle at the chip's trailing end.
+    private var headerLabel: some View {
+        let side = metrics.cards ? metrics.headerHeight - 6 : metrics.headerHeight
+        return Image(systemName: "plus")
+            .font(.system(size: (metrics.headerSize * (metrics.cards ? 0.9 : 1)).rounded(), weight: .semibold))
+            .foregroundStyle(hovered ? Chrome.ink : Chrome.palette.secondary)
+            .frame(width: side, height: side)
+            .background(hovered ? Chrome.palette.hover : .clear, in: Circle())
+            .contentShape(Circle())
+            .opacity(revealed || hovered ? 1 : 0)
+            .animation(.easeOut(duration: 0.12), value: revealed || hovered)
+    }
+
+    /// The flat order's action, as the host picker draws it: its icon (a plus, or the Mac's for a local space) in the
+    /// column the spaces' status or host icons fill, its shortcut ending where theirs do.
+    private var actionRow: some View {
+        let column = metrics.discSize > 0 ? metrics.discSize : metrics.activitySize
+        return HStack(spacing: metrics.cards ? 11 : metrics.icons ? 9 : 6) {
+            Group {
+                if let host, isLocalSidebar { HostGlyph(host: host, size: metrics.hostIconSize) }
+                else { NewSpacePlus(size: metrics.hostIconSize) }
+            }
+            .foregroundStyle(Chrome.palette.secondary)
+            .frame(width: column, height: column)
+            Text(title).lineLimit(1).truncationMode(.tail)
             Spacer(minLength: 0)
             if let shortcut {
                 Text(shortcut).font(.system(size: metrics.shortcutSize).monospacedDigit())
@@ -190,80 +207,13 @@ struct NewSpaceButton: View {
                     .foregroundStyle(Chrome.palette.secondary.opacity(0.7)).fixedSize()
             }
         }
-        .font(AppFont.ui(size: metrics.nameSize))
+        .font(AppFont.ui(size: metrics.cards ? metrics.nameSize - 1 : metrics.nameSize))
         .foregroundStyle(hovered ? Chrome.ink : Chrome.palette.detail)
-        .padding(.leading, 6).padding(.trailing, 8).frame(height: metrics.rowHeight)
-        .background(hovered ? Chrome.palette.hover : .clear, in: RoundedRectangle(cornerRadius: metrics.cornerRadius))
-    }
-
-    private var tileLabel: some View {
-        // S3c uses two 137-point buttons 44 points tall at the default font; both follow the space tiles' size.
-        let width = 137 * metrics.nameSize / 16, height = metrics.rowHeight - 4
-        return GeometryReader { area in
-            // Fit their contents together when the sidebar is narrower, keeping both actions on one row.
-            tileContents
-                .opacity(hovered ? 1 : 0.75)
-                .padding(.horizontal, 12)
-                .frame(width: width, height: height, alignment: .leading)
-                .scaleEffect(min(1, area.size.width / width), anchor: .leading)
-                .frame(width: area.size.width, height: height, alignment: .leading)
-        }
-        .frame(height: height)
-        .background(Chrome.palette.sidebarAction, in: RoundedRectangle(cornerRadius: 8))
-        .contentShape(RoundedRectangle(cornerRadius: 8))
-    }
-
-    private var glass: Bool { LiquidGlassStore.shared.active }
-
-    /// Liquid Glass: one of the two new-space capsules below the spaces panel, its glass blending with its neighbour's;
-    /// a faint capsule nested 2 points inside it marks the pointer.
-    private var glassLabel: some View {
-        // A narrow sidebar drops the legend before the label; the tooltip still names the shortcut.
-        ViewThatFits(in: .horizontal) {
-            glassContents(showsShortcut: true)
-            glassContents(showsShortcut: false)
-        }
-        .font(AppFont.ui(size: typography.tabSize)).lineLimit(1)
-        .foregroundStyle(hovered ? Chrome.ink : Chrome.palette.detail)
-        .padding(.horizontal, 12)
-        .frame(maxWidth: .infinity).frame(height: StripTab.glassTrackHeight(typography))
-        .background(hovered ? Chrome.palette.hover : .clear, in: Capsule().inset(by: 2))
-        .liquidGlass(in: Capsule())
-        .contentShape(Capsule())
-    }
-
-    private func glassContents(showsShortcut: Bool) -> some View {
-        HStack(spacing: 6) {
-            Text("+").foregroundStyle(Chrome.palette.sidebarHostLabel)
-            Text(isLocalSidebar ? "local" : "space")
-            Spacer(minLength: 0)
-            // Shortcuts sit on the right, as on space tiles.
-            if showsShortcut, let shortcut {
-                let size = typography.size(offset: -1.5)
-                Text(shortcut).font(.system(size: size).monospacedDigit()).tracking(size * 0.06)
-                    .foregroundStyle(Chrome.palette.secondary.opacity(0.7))
-            }
-        }
-    }
-
-    private var tileContents: some View {
-        HStack(spacing: 6) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text("+").font(AppFont.ui(size: metrics.nameSize)).frame(height: metrics.nameSize + 6)
-                    .foregroundStyle(Chrome.palette.sidebarHostLabel)
-                Text(isLocalSidebar ? "local" : "space")
-                    .font(AppFont.ui(size: metrics.nameSize)).lineLimit(1).minimumScaleFactor(0.8)
-            }
-            Spacer(minLength: 0)
-            // Shortcuts sit on the right, as on space tiles.
-            if let shortcut {
-                Text(shortcut)
-                    .font(.system(size: metrics.shortcutSize).monospacedDigit()).tracking(metrics.shortcutSize * 0.06)
-                    .foregroundStyle(Chrome.palette.secondary.opacity(0.7)).fixedSize()
-            }
-        }
-        .foregroundStyle(Chrome.ink)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.leading, metrics.cards ? 9 : metrics.icons ? 5 : 6).padding(.trailing, metrics.shortcutInset)
+        .frame(height: metrics.cards ? metrics.discSize + 8 : metrics.rowHeight)
+        .background(hovered ? Chrome.palette.hover : .clear,
+                    in: RoundedRectangle(cornerRadius: metrics.cornerRadius, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: metrics.cornerRadius, style: .continuous))
     }
 }
 
@@ -447,23 +397,10 @@ final class NewSpaceNativeButton: NSButton {
         choices[sender.tag]?()
     }
 
+    /// A click makes a space; the backend menu is the secondary click's, as a context menu (control-click too).
     override func mouseDown(with event: NSEvent) {
-        if event.clickCount == 2 || event.modifierFlags.contains(.control) { showOptions(at: convert(event.locationInWindow, from: nil)); return }
-        highlight(true)
-        defer { highlight(false) }
-        // Wait for release without firing the primary action. Holding the button
-        // opens the menu and consumes the eventual release instead of creating twice.
-        let deadline = Date(timeIntervalSinceNow: 0.45)
-        while let next = NSApp.nextEvent(matching: [.leftMouseUp, .leftMouseDragged],
-            until: deadline, inMode: .eventTracking, dequeue: true) {
-            if next.type == .leftMouseUp {
-                if bounds.contains(convert(next.locationInWindow, from: nil)) { performClick(nil) }
-                return
-            }
-            if hypot(next.locationInWindow.x - event.locationInWindow.x,
-                     next.locationInWindow.y - event.locationInWindow.y) > 4 { return }
-        }
-        showOptions(at: convert(event.locationInWindow, from: nil))
+        if event.modifierFlags.contains(.control) { showOptions(at: convert(event.locationInWindow, from: nil)); return }
+        super.mouseDown(with: event)
     }
 
     override func rightMouseDown(with event: NSEvent) { showOptions(at: convert(event.locationInWindow, from: nil)) }

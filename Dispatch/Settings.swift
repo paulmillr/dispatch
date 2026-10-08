@@ -23,6 +23,21 @@ enum AppTheme: String, Codable, CaseIterable {
 
 enum SpaceOrder: String, Codable, CaseIterable { case flat, tree, urgency }
 
+/// How the sidebar draws spaces: the dense compact list, Large's glass cards (host orb, name, details and status), or
+/// the host picker's rows, each led by its host's icon.
+enum SidebarStyle: String, Codable, CaseIterable {
+    case compact, large, icons
+    /// From the densest list to the roomiest, as Settings' space size slider steps through them.
+    static let bySize: [SidebarStyle] = [.compact, .icons, .large]
+    var label: String {
+        switch self {
+        case .compact: "Compact"
+        case .large: "Large"
+        case .icons: "Normal"
+        }
+    }
+}
+
 /// What a first SSH connection to a new host does about the Dispatch helper.
 enum NewHostPolicy: String, CaseIterable {
     case ask, full, plain
@@ -73,8 +88,13 @@ struct Preferences: Codable, Equatable {
     var fontFamily = "Source Code Pro"
     var chatFont = ChatFont.system
     var fontSize = 12.5
-    /// The comfortable sidebar is the default; off is the dense, compact sidebar.
-    var largeSidebarItems = true
+    /// The host picker's rows are the default.
+    var sidebarStyle = SidebarStyle.icons
+    /// Any but the dense, compact sidebar; setting it picks large or compact.
+    var largeSidebarItems: Bool {
+        get { sidebarStyle != .compact }
+        set { sidebarStyle = newValue ? .large : .compact }
+    }
     /// Branch names beside each space; used to come with large sidebar items.
     var showGitBranches = false
     /// macOS 26 Liquid Glass for the chat input, tab strips and sidebar, the same in a window and full screen.
@@ -86,7 +106,11 @@ struct Preferences: Codable, Equatable {
     var showHostColors = true
     var sidebarMetrics: SidebarMetrics { sidebarMetrics(glass: false) }
     func sidebarMetrics(glass: Bool) -> SidebarMetrics {
-        largeSidebarItems ? .large(contentSize: fontSize, glass: glass) : .compact(contentSize: fontSize)
+        switch sidebarStyle {
+        case .compact: .compact(contentSize: fontSize)
+        case .large: .large(contentSize: fontSize, glass: glass)
+        case .icons: .icons(contentSize: fontSize)
+        }
     }
     var sidebarFontSize: Double { sidebarMetrics.nameSize }
     // Reserve the activity slot even when idle so loading never resizes a tile.
@@ -156,13 +180,13 @@ struct Preferences: Codable, Equatable {
         case prefixKeys, backendPrefixKeys, keyGroups
         case hideSingleSpace, startingDirectory, rememberHosts, restoreTerminalOutput
         case enableDiagnostics
-        case largeSidebarItems, showGitBranches, liquidGlass, hostColors, showHostColors
+        case sidebarStyle, showGitBranches, liquidGlass, hostColors, showHostColors
         case improveTextContrast
         case spaces, closeLaunching, enableKittyGraphics
     }
 
     private enum LegacyCodingKeys: String, CodingKey {
-        case autoCloseNativeSpace, sidebarTheme, appearance
+        case autoCloseNativeSpace, sidebarTheme, appearance, largeSidebarItems
         case enableTmuxIntegration, enableHerdrIntegration, autoCloseTmuxNativeSpace, autoCloseHerdrNativeSpace
     }
 
@@ -182,17 +206,20 @@ struct Preferences: Codable, Equatable {
         // Removed font choices fall back without discarding the other settings.
         chatFont = try fields.decodeIfPresent(String.self, forKey: .chatFont).flatMap(ChatFont.init(rawValue:)) ?? chatFont
         fontSize = try fields.decodeIfPresent(Double.self, forKey: .fontSize) ?? fontSize
-        largeSidebarItems = try fields.decodeIfPresent(Bool.self, forKey: .largeSidebarItems) ?? largeSidebarItems
+        let legacy = try decoder.container(keyedBy: LegacyCodingKeys.self)
+        // Replaces `largeSidebarItems`. Every save wrote it, so on was usually the old default rather than a choice:
+        // it takes the new default, while off, an explicit choice, stays compact. An unknown style keeps the default.
+        let large = try legacy.decodeIfPresent(Bool.self, forKey: .largeSidebarItems)
+        sidebarStyle = try fields.decodeIfPresent(String.self, forKey: .sidebarStyle).flatMap(SidebarStyle.init(rawValue:))
+            ?? (large == false ? .compact : sidebarStyle)
         // Large sidebar items used to show branches; keep them for users who chose large
         // explicitly, not for everyone now that large is the default.
-        showGitBranches = try fields.decodeIfPresent(Bool.self, forKey: .showGitBranches)
-            ?? fields.decodeIfPresent(Bool.self, forKey: .largeSidebarItems) ?? showGitBranches
+        showGitBranches = try fields.decodeIfPresent(Bool.self, forKey: .showGitBranches) ?? large ?? showGitBranches
         liquidGlass = try fields.decodeIfPresent(Bool.self, forKey: .liquidGlass) ?? liquidGlass
         // An unknown color drops only that host's choice.
         hostColors = try fields.decodeIfPresent([String: String].self, forKey: .hostColors)?
             .compactMapValues(HostColor.init(rawValue:)) ?? hostColors
         showHostColors = try fields.decodeIfPresent(Bool.self, forKey: .showHostColors) ?? showHostColors
-        let legacy = try decoder.container(keyedBy: LegacyCodingKeys.self)
         if let selected = try fields.decodeIfPresent(AppTheme.self, forKey: .appTheme) {
             appTheme = selected
         } else if let palette = try legacy.decodeIfPresent(SidebarTheme.self, forKey: .sidebarTheme), palette != .dark {

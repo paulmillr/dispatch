@@ -150,6 +150,9 @@ final class ChatTests: XCTestCase {
         try await TestSupport.integrations(["codex", "claude", "pi"], enabled: false, chat: chat)
         XCTAssertEqual(chat.hookStatus("codex"), .off)
         XCTAssertEqual(chat.hookStatus("pi"), .off)
+        // Disabling leaves installed hooks in the file, so an earlier case's install would make
+        // this one a no-op (ready). Start from a Codex home without them.
+        try? FileManager.default.removeItem(at: Home.url.appendingPathComponent(".codex/hooks.json"))
         let base = ProcessInfo.processInfo.environment["TEST_RUNNER_TMPDIR"] ?? ProcessInfo.processInfo.environment["TMPDIR"] ?? FileManager.default.temporaryDirectory.path
         let state = URL(fileURLWithPath: base).appendingPathComponent("h" + UUID().uuidString.prefix(8))
         let fixture = try CodexEndpointFixture(prefix: "hooks", delay: 0.05, hooks: false, state: state)

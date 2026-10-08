@@ -47,7 +47,7 @@ final class SSHLinuxPiIntegrationTests: XCTestCase {
         try await remote(["/bin/mkdir", "-m", "700", root])
         for (source, destination) in [("scripts/claude_fixture.py", "claude_fixture.py"), ("scripts/pi_fixture.py", "pi_fixture.py"),
             ("scripts/fixture_barriers.py", "fixture_barriers.py"),
-            ("Helpers/helper4/harnesses/pi/resources/bridge.js", "pi-chat.js"), ("scripts/fixtures/pi-navigation.js", "pi-navigation.js")] {
+            ("helper/harnesses/pi/resources/bridge.js", "pi-chat.js"), ("scripts/fixtures/pi-navigation.js", "pi-navigation.js")] {
             try await remote(["/usr/bin/tee", root + "/" + destination], input: Data(contentsOf: CodexTestSupport.root.appendingPathComponent(source)))
         }
         let fixture = try SSHTestDaemon(master: ssh.launch.master,

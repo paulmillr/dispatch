@@ -19,7 +19,7 @@ struct SpaceBranchSource: Sendable {
         if machine == .local, observedHost == .local { return Self(key: Key(directory: tab.directory, connection: nil)) }
         // A plain SSH terminal's inherited local cwd is not authoritative remote directory metadata;
         // a helper pane on that host reads through the host's helper (its SSH connection with the git grant).
-        guard tab.terminal != nil, let connection = runtime.ssh.helper4Connections(granting: .git).first(where: { id in
+        guard tab.terminal != nil, let connection = runtime.ssh.helperConnections(granting: .git).first(where: { id in
             runtime.ssh.links[id].map { HostID.authenticated($0.greeting.host) } == observedHost
         }) else { return nil }
         return Self(key: Key(directory: tab.directory, connection: connection))

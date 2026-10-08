@@ -90,7 +90,8 @@ struct ChatComposerActivity: View {
                         ChatComposerOrbit(seconds: seconds, moving: moving)
                         ChatComposerStatus(label: state.label, seconds: seconds, moving: moving)
                         if !state.waiting {
-                            Text("· " + AgentWorkingAnimation.timeText(state, now: timeline.date, appeared: appeared))
+                            Text("· " + AgentWorkingAnimation.timeText(state, now: timeline.date, appeared: appeared,
+                                                                       reduceMotion: reduceMotion))
                                 .monospacedDigit().fixedSize()
                         }
                     }.foregroundStyle(theme.muted).contentShape(Rectangle())

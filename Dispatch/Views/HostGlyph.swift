@@ -6,25 +6,43 @@ extension HostRecord {
     }
 }
 
+/// A host's operating system as a glyph in a square `size` frame. Every kind draws the same visible size, its longer
+/// side filling `fill` of the frame: each is drawn at the scale that brings its own artwork there.
 struct HostGlyph: View {
     let host: HostRecord
     var size: CGFloat = 15
-    /// Overrides the SF Symbol point size, e.g. to match the local Mac's glyph.
-    var symbolSize: CGFloat?
+    /// The share of the frame each glyph's longer side fills: about the text's size at AppTypography.hostIconSize.
+    static let fill: CGFloat = 0.82
+
+    /// How much of its drawing box each kind's artwork fills along its longer side, measured from the rendered
+    /// glyphs (HostRegistryTests.testHostGlyphsDrawOneSizeAtEveryFontSize): the asset artwork leaves margins in its
+    /// 14-point viewBox, the Apple logo is narrower than tall, and the server rack fills its box edge to edge.
+    private enum Extent {
+        static let ubuntu: CGFloat = 0.95
+        static let debian: CGFloat = 0.745
+        static let freeBSD: CGFloat = 0.83
+        static let apple: CGFloat = 0.965
+        static let server: CGFloat = 1
+    }
+
     var body: some View {
         Group {
             if host.system?.distribution == "ubuntu" {
-                Canvas { context, size in Self.ubuntu(context, size: size) }
+                Canvas { context, size in Self.ubuntu(context, size: size) }.frame(width: box(Extent.ubuntu), height: box(Extent.ubuntu))
             } else if host.system?.distribution == "debian" {
-                Image("HostDebian").resizable().scaledToFit()
+                Image("HostDebian").resizable().scaledToFit().frame(width: box(Extent.debian), height: box(Extent.debian))
             } else if host.system?.os == "FreeBSD" {
-                Image("HostFreeBSD").resizable().scaledToFit()
+                Image("HostFreeBSD").resizable().scaledToFit().frame(width: box(Extent.freeBSD), height: box(Extent.freeBSD))
+            } else if host.system?.os == "Darwin" {
+                Image(systemName: "apple.logo").resizable().scaledToFit().frame(width: box(Extent.apple), height: box(Extent.apple))
             } else {
-                Image(systemName: host.system?.os == "Darwin" ? "apple.logo" : "server.rack")
-                    .font(.system(size: symbolSize ?? (size == 15 ? 12 : size)))
+                Image(systemName: "server.rack").resizable().scaledToFit().frame(width: box(Extent.server), height: box(Extent.server))
             }
         }.frame(width: size, height: size).accessibilityLabel(host.system?.label ?? "Remote host, OS unavailable")
     }
+
+    /// The drawing box that brings artwork filling `extent` of it to `fill` of the frame.
+    private func box(_ extent: CGFloat) -> CGFloat { size * Self.fill / extent }
 
     private static func ubuntu(_ context: GraphicsContext, size: CGSize) {
         let center = CGPoint(x: size.width / 2, y: size.height / 2)
@@ -312,7 +330,7 @@ struct HostConnectionDetails: View {
                 .padding(.horizontal, StatsStyle.glass ? -10 : -6)
         }.buttonStyle(.plain)
             .onHover { hoveredIntegration = $0 ? entry.id : nil }
-            .help("Change SSH integration for \(address). Right-click to reset." + (entry.grant.profile == .ordinary ? "" : " Helper: ~/.dispatch/bin/<digest>/dsptch"))
+            .help("Change SSH integration for \(address). Right-click to reset." + (entry.grant.profile == .ordinary ? "" : " Helper: ~/.dispatch/bin/versions/<digest>/dispatch-helper"))
             .accessibilityLabel("SSH integration: \(entry.grant.shortLabel). Change settings for \(address)")
             .accessibilityIdentifier("host-integration-settings")
             .contextMenu {
@@ -386,9 +404,9 @@ struct HostIdentityHeader: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            HostGlyph(host: host)
+            HostGlyph(host: host, size: typography.hostIconSize)
                 .foregroundStyle(host.tint?.foreground ?? Chrome.ink)
-                .frame(width: 28, height: 28)
+                .frame(width: typography.expanded(28), height: typography.expanded(28))
                 .background((host.tint?.foreground ?? Chrome.muted).opacity(0.15),
                             in: StatsStyle.glass ? AnyShape(Circle()) : AnyShape(RoundedRectangle(cornerRadius: 7)))
             VStack(alignment: .leading, spacing: 2) {

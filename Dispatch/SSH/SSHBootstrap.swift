@@ -5,7 +5,8 @@ import Darwin
 
 enum SSHBootstrap {
     /// Identifies the host platform, then places `resource/<platform>` in the digest-addressed private
-    /// cache unless an identical copy is already there. Returns the cache path and its shell checks.
+    /// cache (`~/.dispatch/bin/versions/<sha256>/`) unless an identical copy is already there.
+    /// Returns the cache path and its shell checks.
     private static func install(resource: String, resources: URL,
                                 run: (String, Data) async throws -> SSHCommand.Result) async throws
         -> (relativePath: String, preamble: String, verify: String) {
@@ -23,9 +24,9 @@ enum SSHBootstrap {
         let binary = try Data(contentsOf: resources.appendingPathComponent(resource + "/" + name))
         guard !binary.isEmpty, binary.count <= 32 * 1024 * 1024 else { throw HerdrFailure("SSH helper is missing or invalid.") }
         let digest = SHA256.hash(data: binary).map { String(format: "%02x", $0) }.joined()
-        let relativePath = ".dispatch/bin/" + digest + "/dsptch"
+        let relativePath = ".dispatch/bin/versions/" + digest + "/dispatch-helper"
         let preamble = cachePreamble(digest: digest)
-        let verify = "safe_file dsptch && test -x dsptch && test \"$(wc -c < dsptch | tr -d ' ')\" = '\(binary.count)' && test \"$(checksum dsptch)\" = '\(digest)'"
+        let verify = "safe_file dispatch-helper && test -x dispatch-helper && test \"$(wc -c < dispatch-helper | tr -d ' ')\" = '\(binary.count)' && test \"$(checksum dispatch-helper)\" = '\(digest)'"
         let existing = try await run(preamble + "\n" + verify, Data())
         if existing.status != 0 {
             // The exclusive private staging directory prevents following a
@@ -34,15 +35,15 @@ enum SSHBootstrap {
             let staging = "upload-" + UUID().uuidString.lowercased()
             let upload = """
             \(preamble)
-            test ! -e dsptch && test ! -L dsptch || safe_file dsptch || exit 1
+            test ! -e dispatch-helper && test ! -L dispatch-helper || safe_file dispatch-helper || exit 1
             mkdir '\(staging)' || exit 1
-            trap 'rm -f \(staging)/dsptch; rmdir \(staging) 2>/dev/null' EXIT HUP INT TERM
-            (set -C; cat > '\(staging)/dsptch') || exit 1
-            test "$(wc -c < '\(staging)/dsptch' | tr -d ' ')" = '\(binary.count)' || exit 1
-            test "$(checksum '\(staging)/dsptch')" = '\(digest)' || exit 1
-            chmod 700 '\(staging)/dsptch' || exit 1
-            test ! -e dsptch && test ! -L dsptch || safe_file dsptch || exit 1
-            mv -f '\(staging)/dsptch' dsptch || exit 1
+            trap 'rm -f \(staging)/dispatch-helper; rmdir \(staging) 2>/dev/null' EXIT HUP INT TERM
+            (set -C; cat > '\(staging)/dispatch-helper') || exit 1
+            test "$(wc -c < '\(staging)/dispatch-helper' | tr -d ' ')" = '\(binary.count)' || exit 1
+            test "$(checksum '\(staging)/dispatch-helper')" = '\(digest)' || exit 1
+            chmod 700 '\(staging)/dispatch-helper' || exit 1
+            test ! -e dispatch-helper && test ! -L dispatch-helper || safe_file dispatch-helper || exit 1
+            mv -f '\(staging)/dispatch-helper' dispatch-helper || exit 1
             \(verify)
             """
             let installed = try await run(upload, binary)
@@ -51,13 +52,13 @@ enum SSHBootstrap {
         return (relativePath, preamble, verify)
     }
 
-    /// helper4 is the SSH helper: upload it, release the waiting login (which execs `<helper> login …`),
+    /// The helper runs over SSH: upload it, release the waiting login (which execs `<helper> login …`),
     /// then reach that login's bus with `connect`; the bus exists only once the login runs.
-    static func startHelper4(master: SSHMaster, resources: URL, sessionID: String, publish: Bool,
+    static func startHelper(master: SSHMaster, resources: URL, sessionID: String, publish: Bool,
                             prepare: (@MainActor (String, HelperSession.Info) throws -> Void)? = nil) async throws
         -> (relativePath: String, session: HelperSession) {
         guard validSessionID(sessionID),
-              (try? String(contentsOf: resources.appendingPathComponent("helper4/protocol-version"), encoding: .utf8))?
+              (try? String(contentsOf: resources.appendingPathComponent("helper/protocol-version"), encoding: .utf8))?
                 .trimmingCharacters(in: .whitespacesAndNewlines) == String(HelperBinary.version) else {
             throw HerdrFailure("The SSH helper is unavailable.")
         }
@@ -68,13 +69,13 @@ enum SSHBootstrap {
             let seconds = Double(remaining.components.seconds) + Double(remaining.components.attoseconds) / 1e18
             return try await SSHCommand.run(executable: master.executable, arguments: master.arguments(command: command), input: input, timeout: seconds)
         }
-        let (relativePath, preamble, verify) = try await install(resource: "helper4", resources: resources, run: run)
+        let (relativePath, preamble, verify) = try await install(resource: "helper", resources: resources, run: run)
         // Verify the greeting before releasing the login: after its user command starts, a bad
         // helper channel cannot safely fall back by starting that command again.
         if publish || prepare != nil {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: master.executable)
-            process.arguments = master.arguments(command: preamble + "\n" + verify + " || exit 1\n" + captureExport + "exec ./dsptch --remote --capabilities '' --stdio")
+            process.arguments = master.arguments(command: preamble + "\n" + verify + " || exit 1\n" + captureExport + "exec ./dispatch-helper --remote --capabilities '' --stdio")
             let remaining = ContinuousClock.now.duration(to: deadline)
             guard remaining > .zero else { throw HerdrFailure("SSH integration setup timed out.") }
             let probe = try await SSHTimeout.run(remaining) { try await HelperSession(process: process) }
@@ -89,7 +90,7 @@ enum SSHBootstrap {
         }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: master.executable)
-        process.arguments = master.arguments(command: preamble + "\n" + verify + " || exit 1\n" + captureExport + "exec ./dsptch connect --session '" + sessionID + "'")
+        process.arguments = master.arguments(command: preamble + "\n" + verify + " || exit 1\n" + captureExport + "exec ./dispatch-helper connect --session '" + sessionID + "'")
         let remaining = ContinuousClock.now.duration(to: deadline)
         guard remaining > .zero else { throw HerdrFailure("SSH integration setup timed out.") }
         let session = try await SSHTimeout.run(remaining) { try await HelperSession(process: process) }
@@ -149,7 +150,7 @@ enum SSHBootstrap {
         precondition(digest.utf8.count == 64 && digest.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) })
         return privateDirectoryScript + """
 
-        enter_private bin && enter_private '\(digest)' || exit 1
+        enter_private bin && enter_private versions && enter_private '\(digest)' || exit 1
         checksum() {
           if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d ' ' -f 1
           elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | cut -d ' ' -f 1
@@ -163,7 +164,7 @@ enum SSHBootstrap {
         let value = relativePath ?? "unavailable"
         return privateDirectoryScript + """
 
-        enter_private launches || exit 1
+        enter_private sessions || exit 1
         enter_private '\(sessionID)' || exit 1
         test ! -e ready && test ! -L ready || exit 1
         (set -C; printf '%s\\n' \(HerdrLaunch.quote(value)) > ready.pending) || exit 1

@@ -7,7 +7,7 @@ final class SSHConnectionState {
     let request: SSHLaunchRequest
     var id: SSHConnectionID { request.connectionID }
     /// The helper on the server; its connection is lent to HelperApp for the remote families.
-    var helper4: HelperSession? { didSet { if helper4 != nil { helperInstalled = true } } }
+    var helper: HelperSession? { didSet { if helper != nil { helperInstalled = true } } }
     /// Stays set after the helper disconnects: the shell it authorized keeps running.
     private(set) var helperInstalled = false
     /// What the user granted the helper connection and whom it greeted.

@@ -179,7 +179,8 @@ struct SettingsView: View {
                 }
                 row("Size") {
                     HStack(spacing: 12) {
-                        SettingsFontSlider(value: $draft.fontSize).frame(height: 20)
+                        SettingsSlider(value: $draft.fontSize, range: 8...22, step: 0.5, label: "Font size",
+                                       identifier: "settings-font-size").frame(height: 20)
                             .help("8–22 pt · 0.5 pt steps")
                         (Text(draft.fontSize.formatted(.number.precision(.fractionLength(0...1))))
                             .foregroundColor(Chrome.ink) + Text(" pt").foregroundColor(Chrome.muted))
@@ -228,9 +229,20 @@ struct SettingsView: View {
                 .accessibilityIdentifier("custom-color-schemes")
             }
             settingsGroup("Sidebar & tabs") {
-                row("Large space list") {
-                    settingToggle("Large space list", isOn: $draft.largeSidebarItems)
-                        .accessibilityIdentifier("large-space-list")
+                // From the densest list to the roomiest, read out by name.
+                row("Space size") {
+                    let order = SidebarStyle.bySize
+                    HStack(spacing: 12) {
+                        SettingsSlider(value: Binding(get: { Double(order.firstIndex(of: draft.sidebarStyle) ?? 0) },
+                                                      set: { draft.sidebarStyle = order[min(order.count - 1, max(0, Int($0.rounded())))] }),
+                                       range: 0...Double(order.count - 1), step: 1, label: "Space size",
+                                       identifier: "space-list-style", stops: true,
+                                       describe: { order[min(order.count - 1, max(0, Int($0.rounded())))].label })
+                            .frame(height: 20)
+                        Text(draft.sidebarStyle.label).foregroundColor(Chrome.ink)
+                            .font(typography.font(offset: -0.5)).fixedSize()
+                            .frame(width: typography.expanded(60), alignment: .trailing)
+                    }.frame(width: pickerWidth)
                 }
                 row("Hide Git branches", detail: "Beside each space’s name") {
                     settingToggle("Hide Git branches", isOn: Binding(get: { !draft.showGitBranches },
@@ -679,45 +691,61 @@ private struct SettingsPageHeights: PreferenceKey {
     static var selectedText: Color { Chrome.ink }
 }
 
-/// Keep native slider input and accessibility with the mockup’s thin track and knob.
-private struct SettingsFontSlider: NSViewRepresentable {
+/// Keep native slider input and accessibility with the mockup’s thin track and knob. Values snap to `step`; with
+/// `stops`, each step is a choice, marked on the track and named by `describe` for VoiceOver.
+private struct SettingsSlider: NSViewRepresentable {
     @Binding var value: Double
-    func makeCoordinator() -> Coordinator { Coordinator(value: $value) }
+    let range: ClosedRange<Double>
+    let step: Double
+    let label: String
+    let identifier: String
+    /// A stepped picker's choices: marked on the track, the value read out by name.
+    var stops = false
+    var describe: ((Double) -> String)?
+    func makeCoordinator() -> Coordinator { Coordinator(value: $value, step: step) }
     func makeNSView(context: Context) -> NSSlider {
-        let slider = FontSlider()
-        slider.cell = FontSliderCell()
-        slider.minValue = 8; slider.maxValue = 22
+        let slider = SteppedSlider()
+        let cell = SliderCell()
+        cell.stops = stops ? Int(((range.upperBound - range.lowerBound) / step).rounded()) + 1 : 0
+        slider.cell = cell
+        slider.minValue = range.lowerBound; slider.maxValue = range.upperBound
+        slider.step = step
         slider.isContinuous = true
         slider.target = context.coordinator; slider.action = #selector(Coordinator.changed(_:))
-        slider.setAccessibilityLabel("Font size")
-        slider.setAccessibilityIdentifier("settings-font-size")
+        slider.setAccessibilityLabel(label)
+        slider.setAccessibilityIdentifier(identifier)
         return slider
     }
     func updateNSView(_ slider: NSSlider, context: Context) {
         context.coordinator.value = $value
         // A saved size outside the mockup’s range stays intact until edited.
         slider.doubleValue = value
+        slider.setAccessibilityValueDescription(describe?(value))
         slider.appearance = NSAppearance(named: Chrome.palette.isDark ? .darkAqua : .aqua)
         slider.needsDisplay = true
     }
     final class Coordinator: NSObject {
         var value: Binding<Double>
-        init(value: Binding<Double>) { self.value = value }
+        let step: Double
+        init(value: Binding<Double>, step: Double) { self.value = value; self.step = step }
         @objc func changed(_ slider: NSSlider) {
-            let rounded = (slider.doubleValue * 2).rounded() / 2
+            let rounded = (slider.doubleValue / step).rounded() * step
             slider.doubleValue = rounded
-            value.wrappedValue = rounded
+            if value.wrappedValue != rounded { value.wrappedValue = rounded }
         }
     }
-    final class FontSlider: NSSlider {
+    final class SteppedSlider: NSSlider {
+        var step = 1.0
         override func keyDown(with event: NSEvent) {
             if [123, 124, 125, 126].contains(event.keyCode) {
-                doubleValue = min(maxValue, max(minValue, doubleValue + ([124, 126].contains(event.keyCode) ? 0.5 : -0.5)))
+                doubleValue = min(maxValue, max(minValue, doubleValue + ([124, 126].contains(event.keyCode) ? step : -step)))
                 sendAction(action, to: target)
             } else { super.keyDown(with: event) }
         }
     }
-    final class FontSliderCell: NSSliderCell {
+    final class SliderCell: NSSliderCell {
+        /// Marks drawn along the track, one per choice; none for a continuous slider.
+        var stops = 0
         override func barRect(flipped: Bool) -> NSRect {
             let bounds = controlView?.bounds ?? .zero
             return NSRect(x: bounds.minX + 7, y: bounds.midY - 1.5, width: max(0, bounds.width - 14), height: 3)
@@ -729,12 +757,21 @@ private struct SettingsFontSlider: NSViewRepresentable {
         }
         override func drawBar(inside rect: NSRect, flipped: Bool) {
             let bar = barRect(flipped: flipped)
+            let filled = NSColor(srgbRed: 154/255, green: 154/255, blue: 162/255, alpha: 1)
             NSColor(SettingsControlStyle.border).setFill()
             NSBezierPath(roundedRect: bar, xRadius: 1.5, yRadius: 1.5).fill()
+            let knob = knobRect(flipped: flipped).midX
             var fill = bar
-            fill.size.width = max(0, knobRect(flipped: flipped).midX - bar.minX)
-            NSColor(srgbRed: 154/255, green: 154/255, blue: 162/255, alpha: 1).setFill()
+            fill.size.width = max(0, knob - bar.minX)
+            filled.setFill()
             NSBezierPath(roundedRect: fill, xRadius: 1.5, yRadius: 1.5).fill()
+            // Each choice a dot on the track, filled up to the knob.
+            guard stops > 1 else { return }
+            for index in 0..<stops {
+                let x = bar.minX + bar.width * CGFloat(index) / CGFloat(stops - 1)
+                (x <= knob + 0.5 ? filled : NSColor(SettingsControlStyle.border)).setFill()
+                NSBezierPath(ovalIn: NSRect(x: x - 3, y: bar.midY - 3, width: 6, height: 6)).fill()
+            }
         }
         override func drawKnob(_ knobRect: NSRect) {
             NSGraphicsContext.saveGraphicsState()

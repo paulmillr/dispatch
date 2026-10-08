@@ -209,9 +209,11 @@ final class TmuxPresentationTests: XCTestCase {
         let secondView = try XCTUnwrap(app.runtime.views[try XCTUnwrap(app.workspace.activeTab?.id)])
         let height = secondView.bounds.height
         XCTAssertTrue(app.workspace.applyLayout(.columns))
+        // Each column's own strip is shorter than the lone one (level capsules), so the
+        // terminals may grow, but neither loses height to a second bar.
         try await app.wait {
             firstView.window === app.window && secondView.window === app.window &&
-                abs(firstView.bounds.height - height) < 1 && abs(secondView.bounds.height - height) < 1
+                abs(firstView.bounds.height - secondView.bounds.height) < 1 && secondView.bounds.height > height - 1
         }
         let left = secondView.convert(secondView.bounds, to: nil)
         let right = firstView.convert(firstView.bounds, to: nil)

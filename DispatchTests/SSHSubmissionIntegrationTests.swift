@@ -66,7 +66,8 @@ final class SSHSubmissionIntegrationTests: XCTestCase {
         try await TestSupport.eventually(timeout: .seconds(15), diagnostic: "\(session.status ?? "No boundary result")\n\(TerminalTestSupport.screen(terminal: terminal))") {
             FileManager.default.fileExists(atPath: state.appendingPathComponent("shell.bin").path)
         }
-        try await TestSupport.eventually { session.submissionID == nil && !session.busy }
+        // The agent's exit reaches Chat on its own, after the submission settles.
+        try await TestSupport.eventually { session.submissionID == nil && !session.busy && !session.active }
         XCTAssertEqual(try String(contentsOf: state.appendingPathComponent("exit-status"), encoding: .utf8), "0")
         XCTAssertEqual(try Data(contentsOf: state.appendingPathComponent("paste.bin")), Data(("\u{1b}[200~" + draft + "\u{1b}[201~").utf8),
                        "The verified live agent received the complete paste before it exited")

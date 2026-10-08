@@ -226,8 +226,8 @@ final class SettingsSynchronizationTests: XCTestCase {
 
     func testLargeSidebarItemsPersistWithoutChangingContentFont() throws {
         let legacy = try JSONDecoder().decode(Preferences.self, from: Data("{\"fontSize\":16}".utf8))
-        XCTAssertTrue(legacy.largeSidebarItems, "The comfortable sidebar is the default")
-        XCTAssertEqual(legacy.sidebarFontSize, 17.5, "Large names follow the content font")
+        XCTAssertEqual(legacy.sidebarStyle, .icons, "The host picker's rows are the default")
+        XCTAssertEqual(legacy.sidebarFontSize, 15.5, "Icons names follow the content font, half a point smaller")
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let file = directory.appendingPathComponent("settings.json")
@@ -242,6 +242,161 @@ final class SettingsSynchronizationTests: XCTestCase {
         preferences.largeSidebarItems = true
         try store.save(preferences)
         XCTAssertEqual(SettingsStore(file: file).values.sidebarFontSize, 17.5)
+    }
+
+    /// The sidebar style setting replaces the large-items switch: off stays compact, while on, which every save wrote,
+    /// takes the new default (icons); a chosen style round-trips, and an unknown one keeps the default.
+    func testSidebarStyleMigratesFromLargeItemsAndRoundTrips() throws {
+        func decode(_ json: String) throws -> Preferences { try JSONDecoder().decode(Preferences.self, from: Data(json.utf8)) }
+        XCTAssertEqual(try decode("{}").sidebarStyle, .icons, "The host picker's rows are the default")
+        XCTAssertEqual(try decode(#"{"largeSidebarItems":false}"#).sidebarStyle, .compact, "Compact was a choice")
+        XCTAssertEqual(try decode(#"{"largeSidebarItems":true}"#).sidebarStyle, .icons, "Large was the old default every save wrote")
+        XCTAssertEqual(try decode(#"{"sidebarStyle":"large"}"#).sidebarStyle, .large)
+        XCTAssertTrue(try decode(#"{"largeSidebarItems":true}"#).showGitBranches, "Explicit large items kept their branches")
+        XCTAssertEqual(try decode(#"{"sidebarStyle":"icons","largeSidebarItems":false}"#).sidebarStyle, .icons)
+        XCTAssertEqual(try decode(#"{"sidebarStyle":"unknown"}"#).sidebarStyle, .icons)
+        var preferences = try decode("{}")
+        preferences.sidebarStyle = .icons
+        let json = String(decoding: try JSONEncoder().encode(preferences), as: UTF8.self)
+        XCTAssertTrue(json.contains(#""sidebarStyle":"icons""#))
+        XCTAssertFalse(json.contains("largeSidebarItems"), "One stored choice, not two")
+        XCTAssertEqual(try decode(json), preferences)
+        // The host picker's rows: the sidebar font, a 22-point icon disc in a 30-point row, rows 2 points apart.
+        let metrics = preferences.sidebarMetrics
+        XCTAssertTrue(metrics.icons)
+        XCTAssertEqual(metrics.nameSize, 12)
+        XCTAssertEqual(metrics.discSize, 22)
+        XCTAssertEqual(metrics.rowHeight, 30)
+        XCTAssertEqual(metrics.rowSpacing, 2)
+        preferences.fontSize = 20
+        XCTAssertEqual(preferences.sidebarMetrics.discSize, 35, "The disc grows with the font like the large tiles")
+        preferences.largeSidebarItems = false
+        XCTAssertEqual(preferences.sidebarStyle, .compact)
+    }
+
+    /// With Liquid Glass the sidebar is one panel from top to bottom: halfway down, well below the spaces and above
+    /// the footer, the panel still covers the column, while the window shows in the inset beside it.
+    func testGlassSidebarIsOnePanelFromTopToBottom() async throws {
+        try XCTSkipUnless(LiquidGlassStore.supported, "Liquid Glass needs macOS 26")
+        try DesktopTestSupport.requireUnlocked()
+        AppFont.register()
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = AppDelegate(settings: SettingsStore(file: directory.appendingPathComponent("settings.json")))
+        let workspace = controller.workspace
+        workspace.newLocalSpace()
+        workspace.newLocalSpace()
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 600),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: .darkAqua)
+        let root = NSHostingView(rootView: SpaceSidebar(workspace: workspace, settings: controller.settings, controller: controller))
+        window.contentView = root
+        window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil; window.close() }
+        let originalGlass = LiquidGlassStore.shared.enabled
+        defer { LiquidGlassStore.shared.enabled = originalGlass }
+        LiquidGlassStore.shared.enabled = true
+        controller.settings.values.spaceOrder = .flat
+        try await TestSupport.eventually {
+            root.layoutSubtreeIfNeeded()
+            return PresentationTestSupport.views(of: ReorderTrackingView.self, in: root)
+                .filter { if case .space = $0.configuration.item { return true }; return false }.count == 2
+        }
+        try await Task.sleep(for: .milliseconds(InterfaceMotion.viewDuration * 1000 + 100))
+        let bitmap = try await PresentationTestSupport.capture(window, named: "glass-sidebar", in: "sidebar-validation").bitmap
+        func brightness(x: Int) throws -> CGFloat {
+            let color = try XCTUnwrap(bitmap.colorAt(x: x, y: bitmap.pixelsHigh / 2)?.usingColorSpace(.deviceRGB))
+            return (color.redComponent + color.greenComponent + color.blueComponent) / 3
+        }
+        let scale = CGFloat(bitmap.pixelsWide) / root.bounds.width
+        let panel = try brightness(x: bitmap.pixelsWide / 2)
+        let inset = try brightness(x: Int(SpaceSidebar.glassInset / 2 * scale))
+        XCTAssertGreaterThan(abs(panel - inset), 0.02, "The panel covers the column halfway down (\(panel) vs the inset's \(inset))")
+    }
+
+    /// The icons style draws spaces as the host picker does, in both orders, flat and glass alike: 30-point rows 2 points
+    /// apart, each led by its host's icon, and tree groups without the indent and rule of the other styles.
+    func testIconsSidebarMatchesHostPickerRows() async throws {
+        try DesktopTestSupport.requireUnlocked()
+        AppFont.register()
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = AppDelegate(settings: SettingsStore(file: directory.appendingPathComponent("settings.json")))
+        let workspace = controller.workspace
+        workspace.newLocalSpace()
+        workspace.renameSpace(try XCTUnwrap(workspace.selectedSpace), to: "local")
+        workspace.newLocalSpace()
+        workspace.renameSpace(try XCTUnwrap(workspace.selectedSpace), to: "notes")
+        var remote = Space(name: "remote", directory: "/tmp")
+        let shell = SSHShell(destination: "admin@fixture")
+        remote.panes[0].tabs[0].machine = .ssh(shell)
+        let terminal = remote.tabs[0].id, generation = UUID()
+        workspace.hosts.begin(terminal, generation: generation, destination: shell.destination)
+        let greeting = SSHGreeting(version: 1, host: "fixture", boot: "test", uid: 501, home: "/tmp", capabilities: [])
+        workspace.hosts.update(terminal, generation: generation, destination: shell.destination, greeting: greeting, state: .connected)
+        remote.hostID = .authenticated("fixture")
+        workspace.spaces.append(remote)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 600),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: .darkAqua)
+        let root = NSHostingView(rootView: SpaceSidebar(workspace: workspace, settings: controller.settings, controller: controller))
+        window.contentView = root
+        window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil; window.close() }
+        let originalGlass = LiquidGlassStore.shared.enabled
+        defer { LiquidGlassStore.shared.enabled = originalGlass }
+        func rows() -> [CGRect] {
+            PresentationTestSupport.views(of: ReorderTrackingView.self, in: root)
+                .filter { if case .space = $0.configuration.item { return true }; return false }
+                .map { $0.convert($0.bounds, to: root) }.sorted { $0.minY < $1.minY }
+        }
+        for glass in [false] + (LiquidGlassStore.supported ? [true] : []) {
+            LiquidGlassStore.shared.enabled = glass
+            var flatStart: CGFloat?
+            for order: SpaceOrder in [.flat, .tree] {
+                controller.settings.values.spaceOrder = order
+                controller.settings.values.sidebarStyle = .icons
+                var diagnostic = ""
+                try await TestSupport.eventually(diagnostic: diagnostic) {
+                    root.layoutSubtreeIfNeeded()
+                    let frames = rows()
+                    diagnostic = "glass=\(glass), order=\(order), rows=\(frames)"
+                    return frames.count == 3 && frames.allSatisfy { abs($0.height - 30) < 1 }
+                }
+                let frames = rows()
+                // The two local spaces are neighbours in either order: one row apart, 2 points between them.
+                let local = frames.filter { frame in frames.contains { $0 != frame && abs($0.minX - frame.minX) < 1 } }
+                XCTAssertTrue(zip(local, local.dropFirst()).contains { abs($1.minY - $0.maxY - 2) < 1 },
+                              "Rows 2 points apart: \(diagnostic)")
+                if order == .flat { flatStart = frames.first?.minX }
+                else if let flatStart {
+                    for frame in frames {
+                        XCTAssertEqual(frame.minX, flatStart, accuracy: 0.5, "Tree rows keep the flat inset, without a rule: \(diagnostic)")
+                    }
+                }
+                _ = try await PresentationTestSupport.capture(window, named: "icons-sidebar-\(glass ? "glass" : "flat")-\(order.rawValue)",
+                                                              in: "sidebar-validation")
+            }
+        }
+        // Host icons grow with the font in every style: captured at a large size for review.
+        controller.settings.values.fontSize = 20
+        defer { controller.settings.values.fontSize = 12.5 }
+        for style in SidebarStyle.allCases {
+            controller.settings.values.sidebarStyle = style
+            for order: SpaceOrder in [.flat, .tree] {
+                controller.settings.values.spaceOrder = order
+                let rowHeight = controller.settings.values.sidebarMetrics.rowHeight
+                try await TestSupport.eventually {
+                    root.layoutSubtreeIfNeeded()
+                    let frames = rows()
+                    return frames.count == 3 && frames.allSatisfy { $0.height >= rowHeight - 1 }
+                }
+                _ = try await PresentationTestSupport.capture(window, named: "host-icons-20-\(style.rawValue)-\(order.rawValue)",
+                                                              in: "sidebar-validation")
+            }
+        }
     }
 
     func testLargeSidebarRowsResizeLiveInBothLayouts() async throws {
@@ -281,9 +436,8 @@ final class SettingsSynchronizationTests: XCTestCase {
                 controller.settings.values.spaceOrder = order
                 for large in [false, true, false] {
                     controller.settings.values.largeSidebarItems = large
-                    // Large flat tiles: only the remote space has a host line.
-                    let heights: [CGFloat] = !large ? [21, 21]
-                        : (order == .tree ? [32, 32] : [32, 46])
+                    // Large's cards are one height in either order: the host sits in their details line.
+                    let heights: [CGFloat] = !large ? [21, 21] : [58, 58]
                     var layoutDiagnostic = ""
                     try await TestSupport.eventually(diagnostic: layoutDiagnostic) {
                         let rows = PresentationTestSupport.views(of: ReorderTrackingView.self, in: root)
@@ -294,11 +448,12 @@ final class SettingsSynchronizationTests: XCTestCase {
                         if large {
                             let buttons = PresentationTestSupport.views(of: NewSpaceNativeButton.self, in: root)
                                 .filter { !$0.isHiddenOrHasHiddenAncestor }
-                            let buttonHeight: CGFloat = order == .tree ? 18 : 28
+                            // Tree: the plus at the end of each 26-point host chip. Flat: action rows as tall as an orb's.
+                            let buttonHeight: CGFloat = order == .tree ? 20 : 40
                             guard buttons.count == 2 && buttons.allSatisfy({ abs($0.bounds.height - buttonHeight) < 1 }) else { return false }
                             if order == .tree {
                                 let hosts = PresentationTestSupport.views(of: HostSecondaryClickView.self, in: root)
-                                    .filter { !$0.isHiddenOrHasHiddenAncestor && abs($0.bounds.height - 18) < 1 }
+                                    .filter { !$0.isHiddenOrHasHiddenAncestor && abs($0.bounds.height - 26) < 1 }
                                 guard hosts.count == 2 else { return false }
                                 let headers = hosts.map { $0.convert($0.bounds, to: root) }
                                 guard buttons.allSatisfy({ button in
@@ -325,20 +480,25 @@ final class SettingsSynchronizationTests: XCTestCase {
                                 _ = try await PresentationTestSupport.capture(window, named: "large-sidebar-loading-" + order.rawValue, in: "sidebar-validation")
                             }
                         }
-                        let snapshot = try await PresentationTestSupport.capture(window, named: "large-sidebar-two-line-" + order.rawValue, in: "sidebar-validation")
-                        if order == .tree { XCTAssertTrue(try snapshot.text().contains("LOCAL")) }
+                        let snapshot = try await PresentationTestSupport.capture(window, named: "large-sidebar-\(glass ? "glass" : "flat")-" + order.rawValue, in: "sidebar-validation")
+                        if order == .tree { XCTAssertTrue(try snapshot.text().contains("Local"), "The local host's chip") }
                         if order == .flat {
-                            XCTAssertTrue(try snapshot.text().contains("FIXTURE"))
+                            XCTAssertTrue(try snapshot.text().lowercased().contains("fixture"), "The remote card names its host")
                             for width: CGFloat in [264, 220, 200] {
                                 window.setContentSize(NSSize(width: width, height: 740))
-                                try await TestSupport.eventually {
+                                var frames: [NSRect] = []
+                                try await TestSupport.eventually(diagnostic: "New-space buttons at \(width): \(frames)") {
+                                    root.layoutSubtreeIfNeeded()
                                     let buttons = PresentationTestSupport.views(of: NewSpaceNativeButton.self, in: root)
                                         .filter { !$0.isHiddenOrHasHiddenAncestor }
-                                    guard buttons.count == 2 else { return false }
-                                    let frames = buttons.map { $0.convert($0.bounds, to: root) }.sorted { $0.minX < $1.minX }
-                                    return frames.allSatisfy { abs($0.width - (width - 26) / 2) < 1 && abs($0.height - 28) < 1 }
-                                        && abs(frames[0].midY - frames[1].midY) < 1
-                                        && abs(frames[1].minX - frames[0].maxX - 6) < 1
+                                    frames = buttons.map { $0.convert($0.bounds, to: root) }.sorted { $0.minY < $1.minY }
+                                    let cards = PresentationTestSupport.views(of: ReorderTrackingView.self, in: root)
+                                        .filter { if case .space = $0.configuration.item { return true }; return false }
+                                        .map { $0.convert($0.bounds, to: root) }
+                                    guard buttons.count == 2, let card = cards.first else { return false }
+                                    // Rows as wide as the cards above them, one under the other.
+                                    return frames.allSatisfy { abs($0.minX - card.minX) < 1 && abs($0.width - card.width) < 1 && abs($0.height - 40) < 1 }
+                                        && frames[1].minY >= frames[0].maxY - 1
                                 }
                                 _ = try await PresentationTestSupport.capture(window, named: "large-sidebar-flat-\(Int(width))", in: "sidebar-validation")
                             }
@@ -346,7 +506,7 @@ final class SettingsSynchronizationTests: XCTestCase {
                         } else {
                             workspace.selectSpace(remote.id)
                             try await Task.sleep(for: .milliseconds(300))
-                            _ = try await PresentationTestSupport.capture(window, named: "large-sidebar-tree-remote-selected", in: "sidebar-validation")
+                            _ = try await PresentationTestSupport.capture(window, named: "large-sidebar-\(glass ? "glass" : "flat")-tree-remote-selected", in: "sidebar-validation")
                         }
                     } else {
                         _ = try await PresentationTestSupport.capture(window, named: "small-sidebar-" + order.rawValue, in: "sidebar-validation")
@@ -454,8 +614,9 @@ final class SettingsSynchronizationTests: XCTestCase {
                         app.controller.settings.values.fontSize = size
                         for large in [false, true] {
                             app.controller.settings.values.largeSidebarItems = large
-                            // Native and tmux share one row: the 30-point strip, or the 38-point title row.
-                            let height = AppTypography(contentSize: size).expanded(fullScreen && !glass ? 30 : 38)
+                            // Native and tmux share one row: flat chrome's 30-point strip, or glass's 38-point row, in a
+                            // window and full screen alike.
+                            let height = AppTypography(contentSize: size).expanded(glass ? 38 : 30)
                             try await TestSupport.eventually {
                                 root.layoutSubtreeIfNeeded()
                                 let reveal = PresentationTestSupport.views(of: FullScreenSidebarRevealView.self, in: root).first
@@ -535,9 +696,15 @@ final class SettingsSynchronizationTests: XCTestCase {
                                 let button = root.convert(reveal.button.bounds, from: reveal.button)
                                 let buttonTop = root.isFlipped ? button.midY : root.bounds.height - button.midY
                                 XCTAssertEqual(buttonTop, top + height / 2, accuracy: 1)
-                            if !sidebar && backend != "split" && !glass {
-                                // The strip's slot replaces its inset: one 12-point gap after the button, not both.
-                                XCTAssertEqual(tabFrame.minX - button.maxX, 12, accuracy: 1, "Sidebar button gap: \(context)")
+                            if !sidebar && backend != "split" && !glass && !reveal.suppressed && !reveal.hosted {
+                                // The strip's slot replaces its inset: one 12-point gap after the button, not both. The
+                                // gap leads the strip (the selected tab may be a later one); a strip whose host mark
+                                // stands in for the button has no button to measure from.
+                                let leading = PresentationTestSupport.views(of: ReorderTrackingView.self, in: root)
+                                    .map { root.convert($0.bounds, from: $0) }
+                                    .filter { abs($0.midY - tabFrame.midY) < 1 }
+                                    .map(\.minX).min() ?? tabFrame.minX
+                                XCTAssertEqual(leading - button.maxX, 12, accuracy: 1, "Sidebar button gap: \(context)")
                             }
                             }
                             try PresentationTestSupport.save(snapshot.bitmap,

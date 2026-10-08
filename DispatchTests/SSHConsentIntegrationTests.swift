@@ -45,7 +45,7 @@ final class SSHConsentIntegrationTests: XCTestCase {
     }
 
     private func cacheSnapshot() throws -> [String: String] {
-        let root = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".dispatch/bin")
+        let root = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".dispatch/bin/versions")
         guard let entries = FileManager.default.enumerator(at: root,
             includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey], options: [.skipsHiddenFiles]) else { return [:] }
         var result: [String: String] = [:]

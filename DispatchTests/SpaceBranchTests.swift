@@ -186,7 +186,7 @@ final class SpaceBranchTests: XCTestCase {
             let data = Data("{\"largeSidebarItems\":\(large),\"fontSize\":16}".utf8)
             let preferences = try JSONDecoder().decode(Preferences.self, from: data)
             XCTAssertEqual(preferences.fontSize, 16)
-            XCTAssertEqual(preferences.sidebarRowHeight, large ? 41 : 24)
+            XCTAssertEqual(preferences.sidebarRowHeight, large ? 36 : 24, "On takes the default, the icons rows; off stays compact")
             try store.save(preferences)
             XCTAssertEqual(SettingsStore(file: file).values.largeSidebarItems, large)
         }

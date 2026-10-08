@@ -264,7 +264,7 @@ enum SSHLauncherCommand {
         let script = """
         prepare() {
           \(SSHBootstrap.privateDirectoryScript)
-          enter_private launches && enter_private '\(sessionID)' || exit 1
+          enter_private sessions && enter_private '\(sessionID)' || exit 1
           attempt=0
           while test ! -e ready && test ! -L ready && test "$attempt" -lt 325; do
             sleep 0.2
@@ -273,17 +273,16 @@ enum SSHLauncherCommand {
           safe_file ready || exit 1
           IFS= read -r helper < ready || exit 1
           rm -f ready
-          cd .. && rmdir '\(sessionID)' 2>/dev/null
           case "$helper" in
-            .dispatch/bin/*/dsptch)
-              digest=${helper#.dispatch/bin/}
-              digest=${digest%/dsptch}
+            .dispatch/bin/versions/*/dispatch-helper)
+              digest=${helper#.dispatch/bin/versions/}
+              digest=${digest%/dispatch-helper}
               test "${#digest}" = 64 || exit 1
               case "$digest" in *[!0-9a-f]*) exit 1;; esac
-              cd .. && enter_private bin && enter_private "$digest" || exit 1
-              safe_file dsptch && test -x dsptch || exit 1
-              if command -v sha256sum >/dev/null 2>&1; then hash=$(sha256sum dsptch | cut -d ' ' -f 1)
-              elif command -v shasum >/dev/null 2>&1; then hash=$(shasum -a 256 dsptch | cut -d ' ' -f 1)
+              cd ../.. && enter_private bin && enter_private versions && enter_private "$digest" || exit 1
+              safe_file dispatch-helper && test -x dispatch-helper || exit 1
+              if command -v sha256sum >/dev/null 2>&1; then hash=$(sha256sum dispatch-helper | cut -d ' ' -f 1)
+              elif command -v shasum >/dev/null 2>&1; then hash=$(shasum -a 256 dispatch-helper | cut -d ' ' -f 1)
               else exit 1; fi
               test "$hash" = "$digest" || exit 1
               printf '%s\\n' "$helper";;

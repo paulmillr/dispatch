@@ -410,7 +410,7 @@ final class CodexMainThreadTests: XCTestCase {
         defer { if !passed { print("Main Codex: \(session.sessionID ?? "none") / \(session.status ?? "none") / \(session.submissionFailure ?? "none")\n\(terminal.agentMenuScreen)") } }
         // This fixture's tmux server starts outside Dispatch. Supply the same
         // local launch context that newly managed native panes receive.
-        let launchContext = tmux ? "env DISPATCH_HELPER4_EXECUTABLE=" + HerdrLaunch.quote(try XCTUnwrap(HelperApp.executable).path) + " " : ""
+        let launchContext = tmux ? "env DISPATCH_HELPER_EXECUTABLE=" + HerdrLaunch.quote(try XCTUnwrap(HelperApp.executable).path) + " " : ""
         var binary = fixture.binary
         if packageLauncher {
             // Like npm's codex.js, keep a package launcher alive between

@@ -601,6 +601,69 @@ final class SettingsStatsPresentationTests: XCTestCase {
         XCTAssertFalse(stopped.contains("Copy path"), stopped)
     }
 
+    /// The space list is a stepped slider from the densest list to the roomiest: it starts on the default, steps with
+    /// the arrow keys, snaps a drag to the nearest style, reads the style's name to VoiceOver, and saves the choice.
+    /// The font size slider beside it keeps its half-point steps.
+    func testSpaceListPickerStepsThroughStylesBySize() async throws {
+        try DesktopTestSupport.requireUnlocked()
+        AppFont.register()
+        // Settings applies each saved change app-wide; put the app's preferences, and the stores applying them sets,
+        // back afterwards.
+        let applied = TerminalRuntime.shared.preferences
+        let glass = LiquidGlassStore.shared.enabled, chatTheme = ChatThemeStore.shared.current
+        defer {
+            try? TerminalRuntime.shared.apply(applied)
+            LiquidGlassStore.shared.enabled = glass
+            ChatThemeStore.shared.current = chatTheme
+        }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SettingsStore(file: directory.appendingPathComponent("settings.json"))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 550), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: SettingsView(store: store, workspace: Workspace(),
+            sshPermissions: SSHIntegrationPermissions(defaults: nil)))
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        defer { window.close(); window.contentView = nil }
+        let root = try XCTUnwrap(window.contentView)
+        func find(_ identifier: String) -> NSSlider? {
+            PresentationTestSupport.views(of: NSSlider.self, in: root).first { $0.accessibilityIdentifier() == identifier }
+        }
+        func slider(_ identifier: String) throws -> NSSlider {
+            try XCTUnwrap(find(identifier), "\(identifier) among \(PresentationTestSupport.views(of: NSSlider.self, in: root).map { $0.accessibilityIdentifier() })")
+        }
+        try await TestSupport.eventually { root.layoutSubtreeIfNeeded(); return find("space-list-style") != nil }
+        let styles = try slider("space-list-style")
+        XCTAssertEqual(SidebarStyle.bySize, [.compact, .icons, .large])
+        XCTAssertEqual(styles.doubleValue, 1, "Starts on the default, icons")
+        XCTAssertEqual(styles.accessibilityValueDescription(), "Normal")
+        func press(_ keyCode: UInt16) throws {
+            let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                                        windowNumber: window.windowNumber, context: nil, characters: "",
+                                                        charactersIgnoringModifiers: "", isARepeat: false, keyCode: keyCode))
+            styles.keyDown(with: event)
+        }
+        try press(124)
+        try await TestSupport.eventually { store.values.sidebarStyle == .large }
+        XCTAssertEqual(styles.doubleValue, 2)
+        try await TestSupport.eventually { styles.accessibilityValueDescription() == "Large" }
+        try press(124)
+        XCTAssertEqual(styles.doubleValue, 2, "The roomiest style is the last stop")
+        // A drag between stops lands on the nearest.
+        styles.doubleValue = 0.3
+        styles.sendAction(styles.action, to: styles.target)
+        XCTAssertEqual(styles.doubleValue, 0)
+        try await TestSupport.eventually { store.values.sidebarStyle == .compact }
+        styles.scrollToVisible(styles.bounds.insetBy(dx: 0, dy: -60))
+        _ = try await PresentationTestSupport.capture(window, named: "space-list-picker", in: "settings-validation")
+
+        let font = try slider("settings-font-size")
+        font.doubleValue = 13.3
+        font.sendAction(font.action, to: font.target)
+        try await TestSupport.eventually { store.values.fontSize == 13.5 }
+    }
+
     func testSettingsNativeControlsRemainVisibleWithImplementedOptions() async throws {
         try DesktopTestSupport.requireUnlocked()
         AppFont.register()
@@ -616,7 +679,7 @@ final class SettingsStatsPresentationTests: XCTestCase {
         defer { window.close(); window.contentView = nil }
         let root = try XCTUnwrap(window.contentView)
         for (tab, labels) in [
-            ("Appearance", ["Terminal font", "Chat font", "Size", "Theme", "Custom terminal", "Liquid Glass", "Sidebar & tabs", "Large space list", "Hide Git branches", "Hide with one space", "Automatic tab names"]),
+            ("Appearance", ["Terminal font", "Chat font", "Size", "Theme", "Custom terminal", "Liquid Glass", "Sidebar & tabs", "Space size", "Hide Git branches", "Hide with one space", "Automatic tab names"]),
             ("Keys", ["Number keys", "Spaces", "Tabs", "Splits", "Keyboard", "Use Option as Alt"]),
             ("Integrations", ["Agents", "show coding agent CLIs as chat", "Codex", "Claude", "Pi", "tmux & herdr", "Open tmux sessions as spaces", "tmux -CC attach", "Open herdr sessions as spaces"]),
             ("Hosts", ["Remote hosts", "On new hosts", "Ask"]),

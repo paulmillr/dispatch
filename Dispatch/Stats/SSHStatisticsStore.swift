@@ -103,7 +103,7 @@ protocol SSHStatisticsSampling: AnyObject {
     func processes() async throws -> SSHProcessCounters
     func sample() async throws -> SSHStatisticsCounters
     func disks() async throws -> [SSHStatisticsDisk]
-    /// Helpers that measure rates themselves (helper4) return finished values; nil = raw counters.
+    /// Helpers that measure rates themselves (helper) return finished values; nil = raw counters.
     func measuredSample() async throws -> SSHStatisticsSample?
     func measuredProcesses() async throws -> (processes: [HostProcess], partial: Bool)?
 }

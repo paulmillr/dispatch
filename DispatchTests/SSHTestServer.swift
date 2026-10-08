@@ -224,14 +224,14 @@ final class SSHTestServer {
     }
 }
 
-/// The app's helper4 bundle as the SSH bootstrap uploads it (resources/helper4/<platform> plus its
+/// The app's helper bundle as the SSH bootstrap uploads it (resources/helper/<platform> plus its
 /// protocol-version), copied for fixtures that alter the cache or count uploads.
 enum SSHHelperTestResources {
     static func prepare(under directory: URL) throws -> URL {
-        let source = try XCTUnwrap(Bundle.main.resourceURL).appendingPathComponent("helper4")
+        let source = try XCTUnwrap(Bundle.main.resourceURL).appendingPathComponent("helper")
         let resources = directory.appendingPathComponent("helper-resources")
         try FileManager.default.createDirectory(at: resources, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        try FileManager.default.copyItem(at: source, to: resources.appendingPathComponent("helper4"))
+        try FileManager.default.copyItem(at: source, to: resources.appendingPathComponent("helper"))
         return resources
     }
 }

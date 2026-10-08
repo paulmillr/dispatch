@@ -166,20 +166,21 @@ final class PlanOnePresentationTests: XCTestCase {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 420), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false; window.contentView = host; window.makeKeyAndOrderFront(nil)
         defer { window.close(); window.contentView = nil }
+        // Lowercased: Vision can misread a letter's case ("RepLacement").
         func renderedText() async throws -> String {
             try await Task.sleep(for: .milliseconds(300))
-            return try await PresentationTestSupport.capture(host).text()
+            return try await PresentationTestSupport.capture(host).text().lowercased()
         }
         let first = try await renderedText()
-        XCTAssertTrue(first.contains("Original source contents"), first)
+        XCTAssertTrue(first.contains("original source contents"), first)
         host.rootView = document("second.txt")
         let second = try await renderedText()
-        XCTAssertTrue(second.contains("Replacement source contents"), second)
-        XCTAssertFalse(second.contains("Original source contents"), second)
+        XCTAssertTrue(second.contains("replacement source contents"), second)
+        XCTAssertFalse(second.contains("original source contents"), second)
         host.rootView = document("missing.txt")
         let missing = try await renderedText()
         XCTAssertTrue(missing.replacingOccurrences(of: " ", with: "").contains("missing.txt"), missing)
-        XCTAssertFalse(missing.contains("Replacement source contents"), missing)
+        XCTAssertFalse(missing.contains("replacement source contents"), missing)
     }
 
     func testChatKeepsEarlierTurnsInNativeRender() async throws {

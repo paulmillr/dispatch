@@ -1,6 +1,6 @@
 {
   "baseline": "c1654ccb458b13dbdc92413413618c2acd7156ab",
-  "source": "helper4/multiplexers/tmux/tests/fixtures/screen.tsv",
+  "source": "helper/multiplexers/tmux/tests/fixtures/screen.tsv",
   "source_sha256": "b813344177b98da94138d785f181b6cd888b3121f65c187c1a48a06a3d8eddd7",
   "row": "3.5a-main-0",
   "column": 6,

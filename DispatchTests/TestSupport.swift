@@ -423,12 +423,12 @@ enum Replay {
         let directory = ProcessInfo.processInfo.environment["DISPATCH_REPLAY_DIRECTORY"]
             .map { URL(fileURLWithPath: $0) } ?? root.appendingPathComponent("Replay")
         let fixture = directory.appendingPathComponent("\(name.split(separator: "/").dropFirst().joined(separator: ".")).json")
-        let environment = ["DISPATCH_HELPER4_EXECUTABLE", "DISPATCH_REPLAY_FIXTURE", "DISPATCH_REPLAY_REPORT"].map {
+        let environment = ["DISPATCH_HELPER_EXECUTABLE", "DISPATCH_REPLAY_FIXTURE", "DISPATCH_REPLAY_REPORT"].map {
             ($0, ProcessInfo.processInfo.environment[$0])
         }
         let report = directory.appendingPathComponent("replay-\(UUID().uuidString).json")
-        // HelperApp starts the helper on first use, from DISPATCH_HELPER4_EXECUTABLE (its test override).
-        setenv("DISPATCH_HELPER4_EXECUTABLE", root.deletingLastPathComponent().appendingPathComponent("scripts/replay-helper.py").path, 1)
+        // HelperApp starts the helper on first use, from DISPATCH_HELPER_EXECUTABLE (its test override).
+        setenv("DISPATCH_HELPER_EXECUTABLE", root.deletingLastPathComponent().appendingPathComponent("scripts/replay-helper.py").path, 1)
         setenv("DISPATCH_REPLAY_FIXTURE", fixture.path, 1)
         setenv("DISPATCH_REPLAY_REPORT", report.path, 1)
         if !FileManager.default.fileExists(atPath: fixture.path) {

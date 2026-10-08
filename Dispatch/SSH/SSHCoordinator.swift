@@ -38,7 +38,7 @@ final class SSHCoordinator {
     }
     var links: [SSHConnectionID: Link] {
         connections.compactMapValues { state in
-            guard let grant = state.granted, let greeting = state.greeting, let helper = state.helper4,
+            guard let grant = state.granted, let greeting = state.greeting, let helper = state.helper,
                   let scope = state.request.integrationScope else { return nil }
             return Link(launch: state.request, grant: grant, scope: scope,
                         greeting: greeting, shellPID: helper.info.process?.pid, helperPath: state.helperPath)
@@ -200,27 +200,27 @@ final class SSHCoordinator {
                 runtime.chat.helperExited(.remote(id), status: Self.integrationDisabled, disabled: true)
             }
             if !reduced.selectedFeatures.contains(.statistics) { SSHStatisticsStore.shared.remove(id) }
-            if let helper = state.helper4 {
+            if let helper = state.helper {
                 let previous = state.reduction
                 state.reduction = Task { [weak self, weak state] in
                     await previous?.value
                     guard let self, let state, !Task.isCancelled, connections[id] === state,
-                          state.helper4 === helper else { return }
+                          state.helper === helper else { return }
                     do {
                         let _: HelperClient.Empty = try await SSHTimeout.run(.seconds(5)) {
                             try await helper.connection.request(
                                 "permissions.reduce", params: ["capabilities": reduced.capabilities.sorted()])
                         }
-                        if reduced.profile == .ordinary, state.helper4 === helper {
+                        if reduced.profile == .ordinary, state.helper === helper {
                             helperDisconnected(id, shellAvailable: true)
                         }
                     } catch {
-                        if state.helper4 === helper { helperDisconnected(id, shellAvailable: true) }
+                        if state.helper === helper { helperDisconnected(id, shellAvailable: true) }
                     }
                 }
             }
         }
-        for (id, request) in requests where request.integrationScope == scope && connections[id]?.helper4 == nil
+        for (id, request) in requests where request.integrationScope == scope && connections[id]?.helper == nil
             && request.integrationGrant.map({ $0.reduced(to: grant) != $0 }) == true {
             connections[id]?.launchTask?.cancel()
             Task { _ = try? await SSHCommand.run(executable: request.master.executable,
@@ -237,13 +237,13 @@ final class SSHCoordinator {
     }
 
     /// Connections whose remote helper runs with this feature granted.
-    func helper4Connections(granting feature: SSHIntegrationFeature) -> [SSHConnectionID] {
-        connections.values.filter { $0.helper4 != nil && $0.granted?.selectedFeatures.contains(feature) == true }.map(\.id)
+    func helperConnections(granting feature: SSHIntegrationFeature) -> [SSHConnectionID] {
+        connections.values.filter { $0.helper != nil && $0.granted?.selectedFeatures.contains(feature) == true }.map(\.id)
     }
 
     /// The remote helper and its login terminal behind an SSH tab.
-    func helper4(for tab: UUID) -> (connection: SSHConnectionID, terminal: UInt64)? {
-        guard let id = connectionForOrigin(tab), let terminal = connections[id]?.helper4?.info.terminal else { return nil }
+    func helper(for tab: UUID) -> (connection: SSHConnectionID, terminal: UInt64)? {
+        guard let id = connectionForOrigin(tab), let terminal = connections[id]?.helper?.info.terminal else { return nil }
         return (id, terminal)
     }
 
@@ -286,12 +286,12 @@ final class SSHCoordinator {
                 guard grant == requested, grant.isCurrent, grant.profile != .ordinary else {
                     throw HerdrFailure("SSH integration permission changed during authentication.")
                 }
-                try await startHelper4(request, state: state, grant: grant, resources: resources,
+                try await startHelper(request, state: state, grant: grant, resources: resources,
                                        recovering: recovering, startShell: startShell, prepare: prepare)
             } catch {
                 state?.launchFailure = error
                 guard let self, let state, connections[request.connectionID] === state else { return }
-                if connections[request.connectionID]?.helper4 != nil { helperDisconnected(request.connectionID) }
+                if connections[request.connectionID]?.helper != nil { helperDisconnected(request.connectionID) }
                 guard activeRequest(request.connectionID) != nil, !Task.isCancelled else { return }
                 TerminalRuntime.shared.hosts.failed(request.connectionID)
                 // Release a remote login waiting for bootstrap. It falls back
@@ -406,11 +406,11 @@ final class SSHCoordinator {
             try? FileManager.default.removeItem(at: URL(fileURLWithPath: request.master.controlPath).deletingLastPathComponent())
         }
     }
-    /// helper4 runs on the server like the local helper; the same client reaches it over SSH.
-    private func startHelper4(_ request: SSHLaunchRequest, state: SSHConnectionState, grant: SSHIntegrationGrant,
+    /// The SSH helper runs on the server like the local helper; the same client reaches it over SSH.
+    private func startHelper(_ request: SSHLaunchRequest, state: SSHConnectionState, grant: SSHIntegrationGrant,
                               resources: URL, recovering: Bool, startShell: Bool,
                               prepare: (@MainActor (String, HelperSession.Info) throws -> Void)?) async throws {
-        let started = try await SSHBootstrap.startHelper4(master: request.master, resources: resources,
+        let started = try await SSHBootstrap.startHelper(master: request.master, resources: resources,
                                                           sessionID: request.sessionID, publish: startShell, prepare: prepare)
         guard !Task.isCancelled, connections[request.connectionID] === state,
               request.integrationScope.flatMap(permissions.remembered).map({ grant.reduced(to: $0) == grant }) == true,
@@ -461,7 +461,7 @@ final class SSHCoordinator {
             started.session.close()
             throw CancellationError()
         }
-        state.helper4 = started.session
+        state.helper = started.session
         state.granted = grant
         state.greeting = greeting
         if let scope = request.integrationScope, grant.selectedFeatures.contains(.statistics) {
@@ -480,7 +480,7 @@ final class SSHCoordinator {
         hostTints[request.tabID] = (request.connectionID, HostTint(hostID: greeting.hostID))
         Task { [weak self, session = started.session] in
             for await _ in session.exited {}
-            guard let self, connections[request.connectionID]?.helper4 === session else { return }
+            guard let self, connections[request.connectionID]?.helper === session else { return }
             helperDisconnected(request.connectionID)
         }
         TerminalRuntime.shared.chat.connectHelper(TerminalRuntime.shared.chat.session(for: request.tabID))
@@ -497,10 +497,10 @@ final class SSHCoordinator {
                 scope: state.request.integrationScope, accountUID: greeting.uid, boot: greeting.boot,
                 origin: state.request.tabID, surfaces: [], restored: true, backends: helper.detachedRoutes)
         }
-        if let helper4 = connections[id]?.helper4 {
-            connections[id]?.helper4 = nil
+        if let helper = connections[id]?.helper {
+            connections[id]?.helper = nil
             Task { await HelperApp.shared.forget(id) }
-            helper4.close()
+            helper.close()
             TerminalRuntime.shared.chat.helperExited(.remote(id), status: disabled
                 ? Self.integrationDisabled : "SSH disconnected. Reconnect from the terminal to continue.", disabled: disabled)
             if let workspace = TerminalRuntime.shared.disconnect(id) { connections[id]?.workspace = workspace }
@@ -748,7 +748,7 @@ final class SSHCoordinator {
             if let error = connections[id]?.launchFailure { throw error }
             try Task.checkCancellation()
             guard committed, let state = connections[id], state.granted == grant,
-                  state.helper4?.info.process != nil, let greeting = state.greeting,
+                  state.helper?.info.process != nil, let greeting = state.greeting,
                   HostID.authenticated(greeting.host) == recipe.host,
                   recipe.accountUID == nil || recipe.accountUID == greeting.uid,
                   permissions.remembered(scope) == grant else {

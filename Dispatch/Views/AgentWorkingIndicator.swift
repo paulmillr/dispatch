@@ -162,7 +162,10 @@ struct AgentWorkingAnimation: View {
         return "\(seconds / 3600)h \(seconds / 60 % 60)m"
     }
 
-    static func timeText(_ state: AgentWorkingState, now: Date, appeared: Date, timeZone: TimeZone = .current) -> String {
+    /// With Reduce Motion a running clock counts the first 10 seconds, then steps every 5 (10s, 15s, 20s…), so it
+    /// changes less often; a finished turn keeps its exact duration.
+    static func timeText(_ state: AgentWorkingState, now: Date, appeared: Date, timeZone: TimeZone = .current,
+                         reduceMotion: Bool = false) -> String {
         if state.label == "Finished", let finished = state.finishedAt, now.timeIntervalSince(finished) >= 300 {
             let formatter = DateFormatter()
             formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -170,7 +173,9 @@ struct AgentWorkingAnimation: View {
             formatter.dateFormat = "h:mma"
             return formatter.string(from: finished).lowercased()
         }
-        return elapsedText((state.finishedAt ?? now).timeIntervalSince(state.started ?? appeared))
+        let elapsed = (state.finishedAt ?? now).timeIntervalSince(state.started ?? appeared)
+        guard reduceMotion, state.finishedAt == nil, elapsed >= 10 else { return elapsedText(elapsed) }
+        return elapsedText((elapsed / 5).rounded(.down) * 5)
     }
 
     var body: some View {
@@ -219,7 +224,7 @@ struct AgentWorkingAnimation: View {
                             }
                         }
                     if !state.waiting && !state.loading {
-                        Text("· \(Self.timeText(state, now: date, appeared: appeared))")
+                        Text("· \(Self.timeText(state, now: date, appeared: appeared, reduceMotion: reduceMotion))")
                             .monospacedDigit().foregroundStyle(theme.muted).fixedSize()
                     }
                     if !state.fragment.isEmpty {

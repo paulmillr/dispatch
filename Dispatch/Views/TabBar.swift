@@ -51,12 +51,19 @@ extension StripTab.Style {
 }
 
 extension StripTab {
-    /// Windowed strips keep the title row's height on every row; only the full-screen strip is shorter. A split pane's
-    /// glass capsule keeps a lone strip's margin above its track but none below, so the content starts right under it
-    /// while the track stays level with the traffic lights and the other rows.
+    /// The window's title row, which the traffic lights center in (MainWindow.titleBarHeight): 38 points on Liquid
+    /// Glass, room for the glass track and for the lights inside the sidebar panel's corner; 30 for flat chrome, its
+    /// strip's height in a window and full screen alike.
+    @MainActor static func titleRowHeight(_ typography: AppTypography) -> CGFloat {
+        typography.expanded(LiquidGlassStore.shared.active ? 38 : 30)
+    }
+
+    /// Every strip is the title row's height, in a window and full screen, and on every row. A split pane's glass
+    /// capsule keeps a lone strip's margin above its track but none below, so the content starts right under it while
+    /// the track stays level with the traffic lights and the other rows.
     @MainActor static func barHeight(titlebar: TitlebarPlacement?, style: Style, split: Bool = false,
                                      typography: AppTypography) -> CGFloat {
-        let height = typography.expanded(titlebar != nil || style == .outlined ? 38 : 30)
+        let height = typography.expanded(style == .outlined ? 38 : 30)
         guard style == .outlined && split else { return height }
         return (height + glassTrackHeight(typography)) / 2
     }
@@ -95,8 +102,10 @@ struct TabBar<Row: View>: View {
 
     @State private var barWidth: CGFloat = 0
     @State private var stripWidth: CGFloat = 0
-    /// The tabs' glass track, with the host mark's circle and gap before it.
+    /// The tabs' glass track, with the host mark, pane badge and overflow control before it.
     @State private var trackWidth: CGFloat = 0
+    /// The overflow control's width while it shows, which the tabs' viewport leaves to it.
+    @State private var overflowWidth: CGFloat = 0
     @State private var frames: [UUID: CGRect] = [:]
     @State private var scrollOffset: CGFloat = 0
     @State private var hovered: UUID?
@@ -122,8 +131,9 @@ struct TabBar<Row: View>: View {
     }
     /// The host mark: a lone strip's, or in a split layout only the first pane's; the others show their host by tint
     /// alone. With other spaces to switch to, a local strip leads with the Mac's muted mark, in a window and full screen
-    /// alike.
+    /// alike. A visible sidebar already lists the spaces under their hosts, so it takes the mark's place.
     private var mark: StripHost? {
+        guard !controller.sidebarVisible else { return nil }
         // The strip leading the window always carries it, so it can stand in for the sidebar toggle.
         guard !split || space.numberedPaneIDs.first == paneID || placement.sidebarSlot || placement.titlebar?.leading == true
         else { return nil }
@@ -135,6 +145,19 @@ struct TabBar<Row: View>: View {
     private var bareTitle: Bool { pill && placement.titlebar != nil && ids.count == 1 }
     /// The mark's circle and gap before the track, or none.
     private var markWidth: CGFloat { mark == nil ? 0 : StripHostMark.width(typography) }
+    /// The pane's tab-digit key, which a split pane's strip shows after the host mark, so the mark keeps the place of
+    /// the sidebar toggle it stands in for. None in the title row, which leads with the window's controls, in a narrow
+    /// strip, or with tabs unbound (the pane border marks focus then).
+    private var badgeNumber: Int? {
+        guard placement.titlebar?.leading != true, barWidth >= 260, space.usesPaneShortcuts,
+              !KeyGroupsStore.shared.current.tabs.isEmpty else { return nil }
+        return space.paneShortcutNumber(for: paneID)
+    }
+    /// The badge and its gap before the tabs, or none. Glass tabs outline from their edge, so it leaves them 2 more.
+    private var badgeWidth: CGFloat {
+        badgeNumber.map { PaneShortcutBadge.width(number: $0, glass: capsule, typography: typography) + (style == .strip ? 0 : 2) } ?? 0
+    }
+    private var showsOverflow: Bool { ids.count > 1 && overflowing && barWidth >= 320 }
     /// This strip leads the window with its host mark in place of the sidebar toggle (markReplacesSidebarToggle).
     private var replacesToggle: Bool {
         mark != nil && (placement.sidebarSlot || placement.titlebar?.leading == true)
@@ -148,22 +171,22 @@ struct TabBar<Row: View>: View {
         (reduceMotion ? AnyTransition.opacity : .scale(scale: 0.4).combined(with: .opacity))
             .animation(InterfaceMotion.animation(reduce: reduceMotion))
     }
-    /// The full-screen sidebar button's slot; just the strip inset once the mark replaces the button. Before the host mark it ends the mark's gap after the button's glass
-    /// circle, so button, mark and track sit evenly apart.
+    /// The full-screen sidebar button's slot; just the strip inset once the mark replaces the button. Before the host mark it ends the mark's gap after the button's
+    /// circle (the mark's size), so button, mark and track sit evenly apart.
     private var sidebarSlotWidth: CGFloat {
         if replacesToggle { return Chrome.stripInset }
-        return mark == nil ? Chrome.sidebarSlotWidth
-            : Chrome.sidebarButtonInset + (glass ? StripTab.glassTrackHeight(typography) : Chrome.sidebarButtonWidth)
-                + StripHostMark.gap
+        return mark == nil ? Chrome.sidebarSlotWidth(typography)
+            : Chrome.sidebarButtonInset + StripHostMark.size(typography).width + StripHostMark.gap
     }
-    /// The tabs' scroll viewport: the track less the mark's circle and gap. The mark's width applies in the same update that
-    /// shows it, so the tabs never lay out for a frame at the width they had without it.
-    private var tabViewport: CGFloat { max(0, trackWidth - markWidth) }
+    /// The tabs' scroll viewport: the track less the mark, badge and overflow control before the tabs. The mark's and
+    /// badge's widths apply in the same update that shows them, so the tabs never lay out for a frame at the width they
+    /// had without them.
+    private var tabViewport: CGFloat { max(0, trackWidth - markWidth - badgeWidth - (showsOverflow ? overflowWidth : 0)) }
     /// Measured against the whole strip, not the viewport the overflow control narrows: tab widths follow the
     /// viewport, so showing the control could otherwise end the overflow that showed it, looping layout.
     private var overflowing: Bool {
         // Tabs shrink to fit the strip, so only their floor can overflow it.
-        CGFloat(ids.count) * StripTab.minimumWidth(typography) > stripWidth - markWidth
+        CGFloat(ids.count) * StripTab.minimumWidth(typography) > stripWidth - markWidth - badgeWidth
     }
 
     var body: some View {
@@ -174,16 +197,6 @@ struct TabBar<Row: View>: View {
                     TitleRowLeading(controller: controller, marked: markWidth > 0)
                         .transition(markTransition)
                 }
-            } else if barWidth >= 260, space.usesPaneShortcuts, !KeyGroupsStore.shared.current.tabs.isEmpty,
-                      let number = space.paneShortcutNumber(for: paneID) {
-                // The badge is the pane's tab-digit key; with tabs unbound there is none (the pane border marks focus).
-                PaneShortcutBadge(number: number, focused: paneFocused,
-                                  feedbackID: workspace.paneFocusFeedback?.paneID == paneID ? workspace.paneFocusFeedback?.id : nil,
-                                  glass: capsule) {
-                    workspace.selectPane(at: number - 1)
-                }
-                // Glass tabs outline from their edge, so the badge needs room before them.
-                .padding(.trailing, style == .strip ? 0 : 2)
             }
             // Preserve the selected tab's close target in minimum-width panes.
             tabStrip.frame(minWidth: 48)
@@ -236,14 +249,8 @@ struct TabBar<Row: View>: View {
 
     private var tabStrip: some View {
         ScrollViewReader { scroll in
-            HStack(spacing: 0) {
-                if ids.count > 1 && overflowing && barWidth >= 320 {
-                    TabOverflowControl(items: overflowItems(), selected: selected, edges: edges, scroll: scroll, select: select)
-                        .padding(.trailing, 6)
-                }
-                GeometryReader { available in
-                    tabList(width: available.size.width, scroll: scroll)
-                }
+            GeometryReader { available in
+                tabList(width: available.size.width, scroll: scroll)
             }.background(GeometryReader { proxy in
                 Color.clear.onAppear { stripWidth = proxy.size.width }
                     .onChange(of: proxy.size.width) { _, value in stripWidth = value }
@@ -267,22 +274,44 @@ struct TabBar<Row: View>: View {
                         }
                 }
                 Spacer(minLength: 0)
-            }.frame(minWidth: max(0, width - markWidth), minHeight: rowHeight, alignment: .leading)
+            }.frame(minWidth: max(0, width - markWidth - badgeWidth - (showsOverflow ? overflowWidth : 0)),
+                    minHeight: rowHeight, alignment: .leading)
                 .tabStripContent()
         }
         .tabStripGeometry(frames: $frames, scroll: $scrollOffset)
         .onAppear { trackWidth = width }
         .onChange(of: width) { _, width in trackWidth = width; scrollToSelected(scroll) }
         .tabStripFade(edges)
-        // The host mark is its own glass circle before the track; the viewport already left room for it.
+        // The host mark leads, where the sidebar toggle it stands in for would be, then the pane's badge and the overflow
+        // control; the viewport already left room for them. Badge and control ease aside as the mark comes or goes, as
+        // the tabs do.
         return HStack(spacing: 0) {
             if let mark {
                 StripHostMark(host: mark, workspace: workspace, controller: controller)
                     .transition(markTransition)
             }
+            Group {
+                if let number = badgeNumber {
+                    PaneShortcutBadge(number: number, focused: paneFocused,
+                                      feedbackID: workspace.paneFocusFeedback?.paneID == paneID ? workspace.paneFocusFeedback?.id : nil,
+                                      glass: capsule) {
+                        workspace.selectPane(at: number - 1)
+                    }
+                    .padding(.trailing, style == .strip ? 0 : 2)
+                }
+                if showsOverflow {
+                    TabOverflowControl(items: overflowItems(), selected: selected, edges: edges, scroll: scroll, select: select)
+                        .padding(.trailing, 6)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { overflowWidth = $0 }
+                }
+            }
+            .animation(nil, value: typography)
+            .animation(InterfaceMotion.animation(reduce: reduceMotion), value: mark != nil)
             list.tabStripGlass(pill, tint: tabTint, bare: bareTitle)
                 // The tabs ease to their new width as the mark comes or goes. Keyed to that alone and scoped to the
-                // tabs, so nothing else changing in the same update (a font size, the sidebar) animates with it.
+                // tabs, so nothing else changing in the same update (a font size, the sidebar) animates with it. The
+                // mark follows the sidebar, so a font size landing with a sidebar toggle snaps the tabs instead.
+                .animation(nil, value: typography)
                 .animation(InterfaceMotion.animation(reduce: reduceMotion), value: mark != nil)
         }
         .frame(maxHeight: .infinity)

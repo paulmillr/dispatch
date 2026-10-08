@@ -346,7 +346,9 @@ final class NewSpacePresentationTests: XCTestCase {
         }
     }
 
-    func testEachHostOffersNewSpaceInItsHeaderWithLocalShortcutHint() async throws {
+    /// Each tree group's header ends in a plus that makes a space on its host: hidden until its header is under the pointer,
+    /// it sits above the group's spaces.
+    func testEachHostOffersNewSpaceInItsHeader() async throws {
         try DesktopTestSupport.requireUnlocked()
         AppFont.register()
         let previousPointer = CGEvent(source: nil)?.location
@@ -373,57 +375,66 @@ final class NewSpacePresentationTests: XCTestCase {
         window.contentView = NSHostingView(rootView: SpaceSidebar(workspace: workspace, settings: controller.settings, controller: controller))
         window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         defer { window.close(); window.contentView = nil }
-        func buttons() async throws -> [CGRect] {
-            try await PresentationTestSupport.capture(try XCTUnwrap(window.contentView)).recognizedText()
-                .filter { observation in
-                    let text = (observation.topCandidates(1).first?.string ?? "").replacingOccurrences(of: " ", with: "")
-                    return text.contains("+space") || text.contains("+local")
-                }
-                .map(\.boundingBox).sorted { $0.midY > $1.midY }
+        let root = try XCTUnwrap(window.contentView)
+        func control(_ host: HostID) -> NewSpaceNativeButton? {
+            PresentationTestSupport.views(of: NewSpaceNativeButton.self, in: root)
+                .first { $0.accessibilityIdentifier() == "host-new-space-\(host.rawValue)" }
         }
-        try await TestSupport.eventually { try await buttons().count == 2 }
+        try await TestSupport.eventually(diagnostic: "controls: \(PresentationTestSupport.views(of: NewSpaceNativeButton.self, in: root).map { $0.accessibilityIdentifier() })") {
+            root.layoutSubtreeIfNeeded(); return control(.local) != nil && control(remote.hostID) != nil
+        }
         let treeText = try await PresentationTestSupport.capture(window).text()
-        XCTAssertTrue(treeText.contains("local"), treeText)
+        XCTAssertTrue(treeText.contains("Local"), "Title-case headings: \(treeText)")
+        // Each plus sits in its host's header, above the group's spaces.
+        let rows = PresentationTestSupport.views(of: ReorderTrackingView.self, in: root)
+        for (host, id) in [(HostID.local, local), (remote.hostID, remote.id)] {
+            let row = try XCTUnwrap(rows.first { $0.configuration.item == .space(id) })
+            let plus = try XCTUnwrap(control(host))
+            let (rowFrame, plusFrame) = (root.convert(row.bounds, from: row), root.convert(plus.bounds, from: plus))
+            XCTAssertTrue(root.isFlipped ? plusFrame.maxY <= rowFrame.minY + 1 : plusFrame.minY >= rowFrame.maxY - 1,
+                          "\(host.rawValue)'s plus heads its spaces: \(plusFrame) over \(rowFrame)")
+        }
+        /// The plus's brightness at its center, read from the window.
+        func brightness(at point: NSPoint) async throws -> CGFloat {
+            let bitmap = try await PresentationTestSupport.capture(window).bitmap
+            let scale = CGFloat(bitmap.pixelsWide) / root.bounds.width
+            let inRoot = root.convert(point, from: nil)
+            let y = root.isFlipped ? inRoot.y : root.bounds.height - inRoot.y
+            let color = try XCTUnwrap(bitmap.colorAt(x: Int(inRoot.x * scale), y: Int(y * scale))?.usingColorSpace(.deviceRGB))
+            return (color.redComponent + color.greenComponent + color.blueComponent) / 3
+        }
         func clickButton(at index: Int) async throws {
-            let root = try XCTUnwrap(window.contentView)
             let host = index == 0 ? HostID.local : remote.hostID
-            let controls = PresentationTestSupport.views(of: NewSpaceNativeButton.self, in: root)
-            let control = try XCTUnwrap(controls.first { $0.accessibilityIdentifier() == "host-new-space-\(host.rawValue)" },
-                "host=\(host.rawValue), controls=\(controls.map { "\($0.accessibilityIdentifier() ?? "nil") \($0.convert($0.bounds, to: root))" }), scrolls=\(PresentationTestSupport.views(of: NSScrollView.self, in: root).map { "viewport=\($0.contentView.bounds) document=\(String(describing: $0.documentView?.bounds))" })")
-            // Glass keeps a compact list and scrolls newly selected rows into view.
-            // Reveal this host's header instead of treating the first visible label as local.
-            control.scrollToVisible(control.bounds)
-            var visible: CGRect?
-            try await TestSupport.eventually {
-                let frame = root.convert(control.bounds, from: control)
-                visible = try await buttons().first { box in
-                    frame.contains(NSPoint(x: box.midX * root.bounds.width,
-                        y: (root.isFlipped ? 1 - box.midY : box.midY) * root.bounds.height))
-                }
-                return visible != nil
+            let plus = try XCTUnwrap(control(host))
+            plus.scrollToVisible(plus.bounds)
+            root.layoutSubtreeIfNeeded()
+            let point = plus.convert(NSPoint(x: plus.bounds.midX, y: plus.bounds.midY), to: nil)
+            let hidden = try await brightness(at: point)
+            // The header's tracking area reports the pointer, which the window delivers whatever lies over the header;
+            // send it what the window would, as an unattended run can't move the pointer into a background window.
+            let tracker = try XCTUnwrap(PresentationTestSupport.views(of: PointerTrackingView.self, in: root).first {
+                $0.convert($0.bounds, to: nil).contains(point)
+            }, "\(host.rawValue)'s header tracks the pointer")
+            func pointer(_ type: NSEvent.EventType) throws -> NSEvent {
+                try XCTUnwrap(NSEvent.enterExitEvent(with: type, location: point, modifierFlags: [], timestamp: 0,
+                                                    windowNumber: window.windowNumber, context: nil, eventNumber: 0,
+                                                    trackingNumber: 0, userData: nil))
             }
-            let box = try XCTUnwrap(visible)
-            let point = root.convert(NSPoint(x: box.midX * root.bounds.width,
-                y: (root.isFlipped ? 1 - box.midY : box.midY) * root.bounds.height), to: nil)
-            let screen = window.convertPoint(toScreen: point)
-            let desktop = try XCTUnwrap(NSScreen.screens.first)
-            let position = CGPoint(x: screen.x, y: desktop.frame.maxY - screen.y)
-            XCTAssertEqual(CGWarpMouseCursorPosition(position), .success)
-            let move = try XCTUnwrap(CGEvent(mouseEventSource: nil, mouseType: .mouseMoved,
-                mouseCursorPosition: position, mouseButton: .left))
-            move.postToPid(getpid())
-            try await Task.sleep(for: .milliseconds(150))
+            var shown = hidden
+            tracker.mouseEntered(with: try pointer(.mouseEntered))
+            try await TestSupport.eventually(diagnostic: "\(host.rawValue)'s plus at \(point): hidden \(hidden), now \(shown)") {
+                shown = try await brightness(at: point)
+                return abs(shown - hidden) > 0.05
+            }
+            tracker.mouseExited(with: try pointer(.mouseExited))
+            try await TestSupport.eventually(diagnostic: "\(host.rawValue)'s plus hides again: \(shown)") {
+                shown = try await brightness(at: point)
+                return abs(shown - hidden) < 0.02
+            }
+            tracker.mouseEntered(with: try pointer(.mouseEntered))
+            try await TestSupport.eventually { abs(try await brightness(at: point) - hidden) > 0.05 }
             _ = try await PresentationTestSupport.capture(window, named: "new-space-hover-\(index)", in: "new-space-validation")
             try PresentationTestSupport.click(window, at: point)
-        }
-        let root = try XCTUnwrap(window.contentView)
-        let rows = PresentationTestSupport.views(of: ReorderTrackingView.self, in: root)
-        for (index, id) in [local, remote.id].enumerated() {
-            let row = try XCTUnwrap(rows.first { $0.configuration.item == .space(id) })
-            let frame = root.convert(row.bounds, from: row)
-            let box = try await buttons()[index]
-            let top = (root.isFlipped ? frame.minY : root.bounds.height - frame.maxY) / root.bounds.height
-            XCTAssertLessThan(1 - box.midY, top, "Each new-space button sits in its host's header, above its spaces")
         }
         _ = try await PresentationTestSupport.capture(window, named: "per-host-before-remote", in: "new-space-validation")
         try await clickButton(at: 1)
@@ -445,11 +456,21 @@ final class NewSpacePresentationTests: XCTestCase {
         _ = try await PresentationTestSupport.capture(window, named: "shared-flat-two-line", in: "new-space-validation")
         let flatText = try await PresentationTestSupport.capture(root).text()
         XCTAssertTrue(flatText.contains("local"), flatText)
+        // Every style lists them as the host picker does: "New space", then "New local space" under it.
+        for style in SidebarStyle.bySize {
+            controller.settings.values.sidebarStyle = style
+            try await TestSupport.eventually {
+                root.layoutSubtreeIfNeeded()
+                let controls = PresentationTestSupport.views(of: NewSpaceNativeButton.self, in: root)
+                guard let here = controls.first(where: { $0.host == nil }), let local = controls.first(where: { $0.host == .local })
+                else { return false }
+                let (a, b) = (here.convert(here.bounds, to: nil), local.convert(local.bounds, to: nil))
+                return abs(a.midX - b.midX) < 1 && abs(a.width - b.width) < 1 && a.minY >= b.maxY - 1
+            }
+        }
         let flatControls = PresentationTestSupport.views(of: NewSpaceNativeButton.self, in: root)
         let newHere = try XCTUnwrap(flatControls.first { $0.host == nil })
         let newLocal = try XCTUnwrap(flatControls.first { $0.host == .local })
-        XCTAssertLessThan(newLocal.convert(newLocal.bounds, to: nil).midX,
-                          newHere.convert(newHere.bounds, to: nil).midX, "New local comes first, beside new space")
         workspace.selectSpace(remote.id)
         newHere.performClick(nil)
         XCTAssertEqual(workspace.spaces.count, 5)
@@ -497,7 +518,9 @@ final class NewSpacePresentationTests: XCTestCase {
         XCTAssertEqual(workspace.current?.hostID, remote)
     }
 
-    func testRightClickAndHoldRequestMenuWithoutCreatingSpace() async throws {
+    /// The backend menu is the secondary click's: a right-click or control-click opens it without making a space, and a
+    /// click makes one without it.
+    func testSecondaryClickRequestsMenuWithoutCreatingSpace() async throws {
         try DesktopTestSupport.requireUnlocked()
         let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 120, height: 60),
                               styleMask: [.titled], backing: .buffered, defer: false)
@@ -517,14 +540,15 @@ final class NewSpacePresentationTests: XCTestCase {
         button.rightMouseDown(with: try PresentationTestSupport.mouseEvent(.rightMouseDown, in: window, at: point))
         try await TestSupport.eventually { menus == 1 }
         XCTAssertEqual(created, 0)
-        // No release is queued: the native control must recognize the hold.
-        button.mouseDown(with: try PresentationTestSupport.mouseEvent(.leftMouseDown, in: window, at: point))
-        button.mouseUp(with: try PresentationTestSupport.mouseEvent(.leftMouseUp, in: window, at: point))
+        let controlClick = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: point, modifierFlags: .control,
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
+            eventNumber: 0, clickCount: 1, pressure: 1))
+        button.mouseDown(with: controlClick)
         try await TestSupport.eventually { menus == 2 }
-        XCTAssertEqual(created, 0, "Releasing a long press must not also create a space")
+        XCTAssertEqual(created, 0, "A control-click is a secondary click")
         try PresentationTestSupport.click(window, at: point)
-        XCTAssertEqual(created, 1)
-        XCTAssertEqual(menus, 2)
+        try await TestSupport.eventually { created == 1 }
+        XCTAssertEqual(menus, 2, "A click makes a space without the menu")
     }
 
     func testRightClickPresentsCachedMenuWhileDiscoveryIsPending() async throws {

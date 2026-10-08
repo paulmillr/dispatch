@@ -49,14 +49,14 @@ extension ChatCoordinator {
         // A live SSH origin stays remote when its helper or Chat permission is withdrawn.
         // Falling back to its local launcher would replace the retained conversation's status.
         if let connection = TerminalRuntime.shared.ssh.connectionForOrigin(tab.id),
-           !TerminalRuntime.shared.ssh.helper4Connections(granting: .chat).contains(connection) { return }
+           !TerminalRuntime.shared.ssh.helperConnections(granting: .chat).contains(connection) { return }
         // An SSH tab with a remote helper chats with the agents on that server.
-        let remote = TerminalRuntime.shared.ssh.helper4(for: tab.id)
+        let remote = TerminalRuntime.shared.ssh.helper(for: tab.id)
         guard let terminal = remote?.terminal ?? tab.terminal else { return }
         // Else the helper that runs the tab's terminal (a remote backend's space, or this Mac).
         let endpoint: HelperWorkspace.Endpoint = (remote?.connection ?? space.remote).map { .remote($0) } ?? .local
         if let connection = endpoint.connection,
-           !TerminalRuntime.shared.ssh.helper4Connections(granting: .chat).contains(connection) { return }
+           !TerminalRuntime.shared.ssh.helperConnections(granting: .chat).contains(connection) { return }
         session.host = endpoint.connection.flatMap { TerminalRuntime.shared.ssh.links[$0]?.greeting.host }
         loadLaunches()
         if let helper = session.helper, helper.route.terminal == terminal, helper.endpoint == endpoint {
@@ -101,12 +101,16 @@ extension ChatCoordinator {
             session.discoveryBlocked = false
             // A provisional binding ("") names no conversation yet; its first conversation is not a change.
             let conversation = page.session.isEmpty ? nil : page.session
+            let sameProcess = session.agentID == page.key && session.binding?.pid != nil
+                && session.binding?.pid == page.binding.pid && session.binding?.start == page.binding.start
+            // The same process losing its transcript is no new conversation: Codex closes its rollout before
+            // printing its exit hint, and rediscovery on that output reports it provisional. Keep the transcript
+            // and draft for its exit; a conversation it names next is the change.
+            if conversation == nil, session.sessionID != nil, sameProcess { return }
             if let previous = session.sessionID, previous != conversation {
                 rememberRemotePresentation(session)
                 session.helperTask?.cancel()
                 let result = session.command?.command?.replacementResult
-                let sameProcess = session.agentID == page.key && session.binding?.pid != nil
-                    && session.binding?.pid == page.binding.pid && session.binding?.start == page.binding.start
                 session.resetConversation(keepingConfiguration: sameProcess)
                 session.commandResult = result
             }
@@ -679,7 +683,7 @@ extension ChatCoordinator {
         let changed = disabledIntegrations.contains(key) == enabled
         if enabled { disabledIntegrations.remove(key) } else { disabledIntegrations.insert(key) }
         // Like the legacy hooks, the integration follows to connected SSH hosts that granted hooks.
-        let endpoints = [HelperWorkspace.Endpoint.local] + TerminalRuntime.shared.ssh.helper4Connections(granting: .hooks).map { .remote($0) }
+        let endpoints = [HelperWorkspace.Endpoint.local] + TerminalRuntime.shared.ssh.helperConnections(granting: .hooks).map { .remote($0) }
         if changed, let agent = SSHHookAgent(rawValue: key) {
             let ssh = TerminalRuntime.shared.ssh
             for endpoint in endpoints {
@@ -720,7 +724,7 @@ extension ChatCoordinator {
     }
 
     private func installed(_ key: String, endpoint: HelperWorkspace.Endpoint, terminal: UInt64? = nil, error: Error?) {
-        let current = endpoint.connection.map { TerminalRuntime.shared.ssh.helper4Connections(granting: .hooks).contains($0) } ?? true
+        let current = endpoint.connection.map { TerminalRuntime.shared.ssh.helperConnections(granting: .hooks).contains($0) } ?? true
         installationFailures[.init(key: key, endpoint: endpoint, terminal: terminal)] = current ? error?.localizedDescription : nil
     }
 
@@ -737,7 +741,7 @@ extension ChatCoordinator {
         integrationWork { chat in
             guard let connection = endpoint.connection, chat.enabled, !chat.disabledIntegrations.contains(key),
                   chat.helperInstalls[key].map({ $0.optional != true || $0.status != "off" }) == true,
-                  TerminalRuntime.shared.ssh.helper4Connections(granting: .hooks).contains(connection) else { return }
+                  TerminalRuntime.shared.ssh.helperConnections(granting: .hooks).contains(connection) else { return }
             guard chat.permits(key, on: endpoint) else { return }
             do {
                 _ = try await HelperChat.setup(endpoint, key: key, enabled: true, terminal: terminal)
@@ -754,7 +758,7 @@ extension ChatCoordinator {
     /// A newly connected SSH host gets the integrations installed on this Mac.
     func installHelperIntegrations(on connection: SSHConnectionID) {
         integrationWork { chat in
-            guard chat.enabled, TerminalRuntime.shared.ssh.helper4Connections(granting: .hooks).contains(connection) else { return }
+            guard chat.enabled, TerminalRuntime.shared.ssh.helperConnections(granting: .hooks).contains(connection) else { return }
             for key in (chat.helperLaunches ?? []).map(\.key)
             where !chat.disabledIntegrations.contains(key) && chat.helperInstalls[key].map({ $0.optional != true || $0.status != "off" }) == true {
                 guard chat.permits(key, on: .remote(connection)) else { continue }

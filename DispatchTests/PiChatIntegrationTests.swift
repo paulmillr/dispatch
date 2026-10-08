@@ -158,7 +158,7 @@ final class PiChatIntegrationTests: XCTestCase {
                 session.manualViewChoice = true
                 var args = ["python3", CodexTestSupport.root.appendingPathComponent("scripts/pi_fixture.py").path,
                             "--state", state.path, "--pi", pi,
-                            "--extension", CodexTestSupport.root.appendingPathComponent("Helpers/helper4/harnesses/pi/resources/bridge.js").path]
+                            "--extension", CodexTestSupport.root.appendingPathComponent("helper/harnesses/pi/resources/bridge.js").path]
                 if let resume { args += ["--session", resume] }
                 TerminalTestSupport.send(args.map(HerdrLaunch.quote).joined(separator: " "), to: terminal)
                 try await TestSupport.eventually(timeout: .seconds(20), diagnostic: "Pi discovery: \(session.status ?? "none")\n\(terminal.agentMenuScreen)") {
@@ -318,7 +318,7 @@ final class PiChatIntegrationTests: XCTestCase {
         defer { print("Pi \(backend) final: \(session.status ?? "none") / \(session.submissionFailure ?? "none")\n\(terminal.agentMenuScreen)") }
         session.manualViewChoice = true
         TerminalTestSupport.send(["python3", CodexTestSupport.root.appendingPathComponent("scripts/pi_fixture.py").path,
-            "--state", state.path, "--pi", pi, "--extension", CodexTestSupport.root.appendingPathComponent("Helpers/helper4/harnesses/pi/resources/bridge.js").path]
+            "--state", state.path, "--pi", pi, "--extension", CodexTestSupport.root.appendingPathComponent("helper/harnesses/pi/resources/bridge.js").path]
             .map(HerdrLaunch.quote).joined(separator: " "), to: terminal)
         try await TestSupport.eventually(timeout: .seconds(20)) {
             session.active && session.agentID == "pi" && !session.loadingHistory && !session.busy && session.sessionID != nil

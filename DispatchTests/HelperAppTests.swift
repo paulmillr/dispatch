@@ -3,8 +3,8 @@ import Darwin
 import XCTest
 @testable import DispatchApp
 
-/// The app's packaged helper (rewritten from upstream Helper2Tests for helper4). Each harness's hook payload
-/// normalization moved into the helper: Helpers/helper4/bin/tests/hooks.rs bundled_native_hook_round and
+/// The app's packaged helper (rewritten from upstream Helper2Tests for this helper). Each harness's hook payload
+/// normalization moved into the helper: helper/bin/tests/hooks.rs bundled_native_hook_round and
 /// the harness hook tests cover it.
 final class HelperAppTests: XCTestCase {
     private struct Launch: Decodable, Equatable { let key: String }

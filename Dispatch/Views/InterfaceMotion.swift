@@ -20,13 +20,15 @@ enum InterfaceMotion {
 struct AttentionMotion: ViewModifier {
     let pending: Bool
     var cornerRadius: CGFloat = 5
+    /// The accent rule along the leading edge; Large's rounded cards mark attention on their own edge instead.
+    var bar = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var flash = false
     func body(content: Content) -> some View {
         content
             .background(InterfaceMotion.accent.opacity(pending ? (flash ? 0.18 : 0.06) : 0), in: RoundedRectangle(cornerRadius: cornerRadius))
             .overlay(alignment: .leading) {
-                Rectangle().fill(InterfaceMotion.accent.opacity(pending ? 0.5 : 0)).frame(width: 2)
+                Rectangle().fill(InterfaceMotion.accent.opacity(pending && bar ? 0.5 : 0)).frame(width: 2)
             }
             .offset(x: flash && !reduceMotion ? 3 : 0)
             .animation(InterfaceMotion.animation(reduce: reduceMotion), value: flash)
@@ -89,13 +91,26 @@ struct PaneShortcutBadge: View {
     var glass = false
     let action: () -> Void
 
+    /// The badge's laid-out width, its trailing gap included, so a strip leaves the tabs room for it in the same update
+    /// that shows it (TabBar).
+    @MainActor static func width(number: Int, glass: Bool, typography: AppTypography) -> CGFloat {
+        labelWidth(KeyGroupsStore.shared.current.symbols(\.tabs) + String(number), glass: glass, typography: typography) + 4
+    }
+
+    @MainActor private static func labelWidth(_ key: String, glass: Bool, typography: AppTypography) -> CGFloat {
+        let text = ceil((key as NSString).size(withAttributes: [.font: AppFont.nativeShortcut(size: typography.size(offset: -2))]).width)
+        return glass ? max(text + 14, StripTab.glassTrackHeight(typography)) : text + 14
+    }
+
     var body: some View {
         let keys = KeyGroupsStore.shared.current, key = keys.symbols(\.tabs) + String(number)
         let stepping = keys.steps.tabs.map { "\nSwitch tabs in this pane with \(KeyGroups.symbols($0))[ and \(KeyGroups.symbols($0))]" } ?? ""
         Button(action: action) {
             if glass { glassLabel(key) } else { flatLabel(key) }
         }
-        .buttonStyle(.plain).fixedSize().padding(.trailing, 4)
+        // Exactly the width the strip leaves for it.
+        .buttonStyle(.plain).fixedSize().frame(width: Self.labelWidth(key, glass: glass, typography: typography))
+        .padding(.trailing, 4)
         .help("Focus pane \(number) · \(key)" + stepping)
         .accessibilityLabel("Focus pane \(number)")
         .accessibilityValue(focused ? "Focused" : "")

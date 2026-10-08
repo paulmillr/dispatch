@@ -9,10 +9,10 @@ final class SSHTransportTests: XCTestCase {
         try await remote { app, server, _ in
             let link = try XCTUnwrap(app.runtime.ssh.links.values.first)
             let resources = try SSHHelperTestResources.prepare(under: server.root)
-            let installed = try await SSHBootstrap.startHelper4(master: link.launch.master, resources: resources,
+            let installed = try await SSHBootstrap.startHelper(master: link.launch.master, resources: resources,
                 sessionID: link.launch.sessionID, publish: false)
             defer { installed.session.close() }
-            let cached = try await SSHBootstrap.startHelper4(master: link.launch.master, resources: resources,
+            let cached = try await SSHBootstrap.startHelper(master: link.launch.master, resources: resources,
                 sessionID: link.launch.sessionID, publish: false)
             defer { cached.session.close() }
             XCTAssertEqual(cached.relativePath, installed.relativePath)
@@ -286,7 +286,7 @@ final class SSHTransportTests: XCTestCase {
         for stage in ["probe", "upload", "connect"] {
             let fixture = try BootstrapFixture(paused: stage)
             defer { fixture.remove() }
-            let task = Task { _ = try await SSHBootstrap.startHelper4(master: fixture.master, resources: fixture.resources, sessionID: BootstrapFixture.session, publish: false) }
+            let task = Task { _ = try await SSHBootstrap.startHelper(master: fixture.master, resources: fixture.resources, sessionID: BootstrapFixture.session, publish: false) }
             try await TestSupport.eventually { FileManager.default.fileExists(atPath: fixture.marker.path) }
             let pid = try XCTUnwrap(Int32(String(contentsOf: fixture.marker, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)))
             let start = ContinuousClock.now
@@ -302,7 +302,7 @@ final class SSHTransportTests: XCTestCase {
         XCTAssertEqual(try fixture.uploadCount(), 0)
     }
 
-    // The old exec-stream cases (ledger S-8, S-41, S-62, S-217, S-442, S-456, S-601) on helper4's own streams
+    // The old exec-stream cases (ledger S-8, S-41, S-62, S-217, S-442, S-456, S-601) on the helper's own streams
     // over a real SSH login: one large, cancelled or stalled stream never blocks or poisons the other requests
     // on the connection, and bytes and exit status arrive exactly.
     private struct Read: Encodable { let path: String; let offset: UInt64; let length: UInt64 }
@@ -313,7 +313,7 @@ final class SSHTransportTests: XCTestCase {
         let app = try TmuxWalkthrough(); defer { app.close() }
         let server = try await SSHTestServer(); defer { server.stop() }
         let link = try await app.login(server, surface: XCTUnwrap(app.workspace.activeSurfaceID))
-        try await TestSupport.eventually(timeout: .seconds(20)) { app.runtime.ssh.helper4(for: link.launch.tabID) != nil }
+        try await TestSupport.eventually(timeout: .seconds(20)) { app.runtime.ssh.helper(for: link.launch.tabID) != nil }
         try await body(app, server, try await HelperApp.shared.connection(.remote(link.launch.connectionID)))
     }
 
@@ -444,12 +444,12 @@ final class SSHTransportTests: XCTestCase {
             XCTAssertEqual(root["future"] as? Bool, true)
             let stop = try XCTUnwrap((root["hooks"] as? [String: [[String: Any]]])?["Stop"]?.flatMap { $0["hooks"] as? [[String: Any]] ?? [] })
             XCTAssertEqual(stop.filter { $0["command"] as? String == "echo mine" }.map { $0["timeout"] as? Int }, [7])
-            XCTAssertTrue(String(decoding: first, as: UTF8.self).contains("dispatch-helper4"), "The helper's own handler is installed")
+            XCTAssertTrue(String(decoding: first, as: UTF8.self).contains("dispatch-helper"), "The helper's own handler is installed")
         }
     }
 
     func testGreetingCancellationAndLateCallbacksStayWithTheirConnection() async throws {
-        // helper4's hello: a cancelled handshake ends its own helper process, so a hello it would send later
+        // The helper's hello: a cancelled handshake ends its own helper process, so a hello it would send later
         // reaches nothing; truncated replies and malformed reported identities fail.
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("greeting-barriers-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -542,15 +542,15 @@ private struct BootstrapFixture: Sendable {
     }
     static let session = String(repeating: "a", count: 24)
     /// The bundle's binary for this Mac and where the bootstrap caches it in the fixture HOME.
-    var binary: URL { resources.appendingPathComponent("helper4/darwin-universal") }
+    var binary: URL { resources.appendingPathComponent("helper/darwin-universal") }
     var cached: URL {
         let digest = SHA256.hash(data: (try? Data(contentsOf: binary)) ?? Data()).map { String(format: "%02x", $0) }.joined()
-        return home.appendingPathComponent(".dispatch/bin/" + digest + "/dsptch")
+        return home.appendingPathComponent(".dispatch/bin/versions/" + digest + "/dispatch-helper")
     }
     /// One bootstrap: install, then `connect`, which finds no login here and fails; the error tells an
     /// install failure from that expected end.
     func bootstrap() async -> (any Error)? {
-        do { _ = try await SSHBootstrap.startHelper4(master: master, resources: resources, sessionID: Self.session, publish: false); return nil }
+        do { _ = try await SSHBootstrap.startHelper(master: master, resources: resources, sessionID: Self.session, publish: false); return nil }
         catch { return error }
     }
     static func installFailed(_ error: (any Error)?) -> Bool { error?.localizedDescription.contains("install") == true }

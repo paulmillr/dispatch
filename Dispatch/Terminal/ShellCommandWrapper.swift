@@ -17,7 +17,7 @@ struct ShellCommandWrapper: Equatable, Sendable {
     }
     /// A helper-listed program, run by the helper's typed launcher.
     static func helper(program: String, key: String) -> Self {
-        Self(name: program, arguments: ["launch", key], variable: "DISPATCH_HELPER4_EXECUTABLE")
+        Self(name: program, arguments: ["launch", key], variable: "DISPATCH_HELPER_EXECUTABLE")
     }
 
     var rawValue: String { name }

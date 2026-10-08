@@ -37,7 +37,7 @@ final class SSHPiIntegrationTests: XCTestCase {
         let settings = home.appendingPathComponent("settings.json")
         try Data("{\"quietStartup\":true,\"editorPaddingX\":2,\"theme\":\"dark\"}\n".utf8).write(to: settings)
         let managed = extensions.appendingPathComponent("dispatch-chat.js")
-        let source = try Data(contentsOf: CodexTestSupport.root.appendingPathComponent("Helpers/helper4/harnesses/pi/resources/bridge.js"))
+        let source = try Data(contentsOf: CodexTestSupport.root.appendingPathComponent("helper/harnesses/pi/resources/bridge.js"))
         let runtime = TerminalRuntime.shared, previous = runtime.chat
         runtime.chat = ChatCoordinator(enabled: true)
         defer { runtime.chat = previous }
@@ -159,7 +159,7 @@ final class SSHPiIntegrationTests: XCTestCase {
                 }
             }
             let launch = ["/usr/bin/env", "TZ=Asia/Kathmandu", "python3", CodexTestSupport.root.appendingPathComponent("scripts/pi_fixture.py").path,
-                "--state", state.path, "--pi", pi, "--extension", CodexTestSupport.root.appendingPathComponent("Helpers/helper4/harnesses/pi/resources/bridge.js").path,
+                "--state", state.path, "--pi", pi, "--extension", CodexTestSupport.root.appendingPathComponent("helper/harnesses/pi/resources/bridge.js").path,
                 "--extension", CodexTestSupport.root.appendingPathComponent("scripts/fixtures/pi-navigation.js").path].map(HerdrLaunch.quote).joined(separator: " ")
             phaseTimings.begin("agent_readiness")
             let exercised = try await Self.exercise(backend, app: app, launch: launch, transportOnly: transportOnly, timings: phaseTimings)

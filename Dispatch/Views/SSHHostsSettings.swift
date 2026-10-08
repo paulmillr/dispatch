@@ -95,7 +95,7 @@ struct SSHHostsSettings: View {
                 .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
                 .fixedSize(horizontal: false, vertical: true)
             // Where an uploaded helper lives, whichever policy put it there (SSHBootstrap, docs/security.md).
-            Text("Helper location on hosts: ~/.dispatch/bin/<hash>/dsptch")
+            Text("Helper location on hosts: ~/.dispatch/bin/versions/<hash>/dispatch-helper")
                 .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
                 .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
         }.padding(.horizontal, 14).padding(.vertical, 10)
@@ -176,11 +176,11 @@ struct SSHHostsSettings: View {
                     HStack(spacing: 10) {
                         Group {
                             if let host {
-                                HostGlyph(host: host, size: 13).foregroundStyle(host.tint?.foreground ?? Chrome.ink)
+                                HostGlyph(host: host, size: typography.hostIconSize).foregroundStyle(host.tint?.foreground ?? Chrome.ink)
                             } else {
                                 Image(systemName: "key").font(AppFont.ui(size: 10)).foregroundStyle(SettingsControlStyle.detail)
                             }
-                        }.frame(width: 13)
+                        }.frame(width: typography.hostIconSize)
                         Text(title).lineLimit(1).truncationMode(.middle)
                             .frame(maxWidth: .infinity, alignment: .leading).layoutPriority(1)
                         status(host)

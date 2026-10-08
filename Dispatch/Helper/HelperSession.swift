@@ -189,11 +189,11 @@ actor HelperApp {
   }
 
   /// The local helper: the bundled binary. Only a Debug build's test run may substitute another
-  /// (DISPATCH_HELPER4_EXECUTABLE); the same variable in a terminal's environment names that
+  /// (DISPATCH_HELPER_EXECUTABLE); the same variable in a terminal's environment names that
   /// terminal's helper, and an app launched from there must not adopt it.
   static var executable: URL? {
     #if DEBUG
-    if Home.testing, let path = ProcessInfo.processInfo.environment["DISPATCH_HELPER4_EXECUTABLE"] {
+    if Home.testing, let path = ProcessInfo.processInfo.environment["DISPATCH_HELPER_EXECUTABLE"] {
       return URL(fileURLWithPath: path)
     }
     #endif

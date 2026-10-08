@@ -3,7 +3,7 @@ import Foundation
 enum HelperWire {
   // The frame's representable body length: the codec's default bound.
   static let maximum = Int(UInt32.max) - 9
-  /// The helper's frame body limit (helper4 wire::LIMIT: 2 MB of text whose every byte may be a
+  /// The helper's frame body limit (helper wire::LIMIT: 2 MB of text whose every byte may be a
   /// six-byte escape, plus the result envelope). A remote helper is untrusted, so connections
   /// never accept or send a larger frame, whatever its hello advertises.
   static let limit = 12_000_013

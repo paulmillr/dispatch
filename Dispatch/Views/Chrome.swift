@@ -79,10 +79,11 @@ enum Chrome {
     static let stripInset: CGFloat = 12
     /// The full-screen sidebar button's inset from the screen's leading edge.
     static let sidebarButtonInset: CGFloat = 8
-    /// The flat full-screen sidebar button's width; with Liquid Glass it is a circle as tall as the strips' track.
-    static let sidebarButtonWidth: CGFloat = 32
-    /// The full-screen sidebar button (8–40 points) plus a 12-point gap. It replaces the strip's leading inset.
-    static let sidebarSlotWidth: CGFloat = 52
+    /// The full-screen sidebar button (a circle the host mark's size, StripHostMark.size) plus a 12-point gap. It
+    /// replaces the strip's leading inset. Liquid Glass keeps 52 points.
+    static func sidebarSlotWidth(_ typography: AppTypography) -> CGFloat {
+        LiquidGlassStore.shared.active ? 52 : sidebarButtonInset + StripHostMark.size(typography).width + 12
+    }
     static var palette: SidebarPalette { SidebarThemeStore.shared.current.palette }
     static var window: Color { palette.window }
     static var sidebar: Color { palette.sidebar }

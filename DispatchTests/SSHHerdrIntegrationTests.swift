@@ -111,7 +111,7 @@ final class SSHHerdrIntegrationTests: XCTestCase {
         let approval = PendingApproval(key: "native-permission-test", operation: "test operation") { decision = $0.decision }
         chat.approvals.append(approval)
         let originChat = app.runtime.chat.session(for: source)
-        originChat.helper = HelperChat(terminal: try XCTUnwrap(app.runtime.ssh.helper4(for: source)?.terminal), endpoint: remote)
+        originChat.helper = HelperChat(terminal: try XCTUnwrap(app.runtime.ssh.helper(for: source)?.terminal), endpoint: remote)
         originChat.active = true
         var tmuxSurface: UUID?
         var tmuxProcesses: String?

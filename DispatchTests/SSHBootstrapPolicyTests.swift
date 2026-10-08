@@ -33,11 +33,11 @@ final class SSHBootstrapPolicyTests: XCTestCase {
         let session = String(repeating: "a", count: 24)
         // An unmarked bundle, then one marked for another helper protocol (the old relay's "2").
         let resources = root.appendingPathComponent("ssh-resources")
-        try FileManager.default.createDirectory(at: resources.appendingPathComponent("helper4"), withIntermediateDirectories: true)
-        do { _ = try await SSHBootstrap.startHelper4(master: master, resources: resources, sessionID: session, publish: true); XCTFail("An unmarked bundle must refuse") }
+        try FileManager.default.createDirectory(at: resources.appendingPathComponent("helper"), withIntermediateDirectories: true)
+        do { _ = try await SSHBootstrap.startHelper(master: master, resources: resources, sessionID: session, publish: true); XCTFail("An unmarked bundle must refuse") }
         catch { }
-        try "2\n".write(to: resources.appendingPathComponent("helper4/protocol-version"), atomically: true, encoding: .utf8)
-        do { _ = try await SSHBootstrap.startHelper4(master: master, resources: resources, sessionID: session, publish: true); XCTFail("Another protocol's bundle must refuse") }
+        try "2\n".write(to: resources.appendingPathComponent("helper/protocol-version"), atomically: true, encoding: .utf8)
+        do { _ = try await SSHBootstrap.startHelper(master: master, resources: resources, sessionID: session, publish: true); XCTFail("Another protocol's bundle must refuse") }
         catch { }
         XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path))
     }
@@ -79,7 +79,7 @@ final class SSHBootstrapPolicyTests: XCTestCase {
         let digest = SHA256.hash(data: helper).map { String(format: "%02x", $0) }.joined()
         let prepared = try await run(SSHBootstrap.cachePreamble(digest: digest), home: root)
         XCTAssertEqual(prepared.status, 0)
-        let relative = ".dispatch/bin/" + digest + "/dsptch", path = root.appendingPathComponent(relative)
+        let relative = ".dispatch/bin/versions/" + digest + "/dispatch-helper", path = root.appendingPathComponent(relative)
         try helper.write(to: path)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: path.path)
         let published = try await run(SSHBootstrap.publish(sessionID: session, relativePath: relative), home: root)
@@ -99,7 +99,7 @@ final class SSHBootstrapPolicyTests: XCTestCase {
         let digest = String(repeating: "b", count: 64), session = "0123456789abcdef01234567"
         let prepared = try await run(SSHBootstrap.cachePreamble(digest: digest), home: root)
         XCTAssertEqual(prepared.status, 0)
-        let relative = ".dispatch/bin/" + digest + "/dsptch"
+        let relative = ".dispatch/bin/versions/" + digest + "/dispatch-helper"
         let helper = root.appendingPathComponent(relative)
         try "#!/bin/sh\nexit 88\n".write(to: helper, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: helper.path)
@@ -110,7 +110,7 @@ final class SSHBootstrapPolicyTests: XCTestCase {
         XCTAssertEqual(mismatch.status, 24)
         let second = try await run(SSHBootstrap.publish(sessionID: session, relativePath: relative), home: root)
         XCTAssertEqual(second.status, 0)
-        let ready = root.appendingPathComponent(".dispatch/launches/" + session + "/ready")
+        let ready = root.appendingPathComponent(".dispatch/sessions/" + session + "/ready")
         let target = root.appendingPathComponent("target")
         try (relative + "\n").write(to: target, atomically: true, encoding: .utf8)
         try FileManager.default.removeItem(at: ready)

@@ -130,7 +130,7 @@ struct MainView: View {
                                             fullScreen: true),
                                         hosted: host != nil,
                                         pinned: sidebarVisible || hasLeadingTabRow, rowHeight: leadingRowHeight,
-                                        glassSize: StripTab.glassTrackHeight(typography),
+                                        buttonSize: StripHostMark.size(typography).height,
                                         revealed: { revealShown = $0 }) { controller.toggleSidebar() }
                     .frame(width: 48).frame(maxHeight: .infinity)
                     .overlay(alignment: .topLeading) {
@@ -150,7 +150,9 @@ struct MainView: View {
             DispatchQueue.main.async { TerminalRuntime.shared.focusActive() }
         }
         .onChange(of: title) { _, title in controller.window.title = title }
-        .onChange(of: typography, initial: true) { _, value in (controller.window as? MainWindow)?.titleBarHeight = value.expanded(38) }
+        .onChange(of: StripTab.titleRowHeight(typography), initial: true) { _, height in
+            (controller.window as? MainWindow)?.titleBarHeight = height
+        }
         .onChange(of: settings.values.hideSingleSpace) { _, _ in controller.windowState.sidebarVisibilityOverride = nil }
         .onChange(of: minimumContentSize, initial: true) { _, size in controller.updateMinimumContentSize(size) }
         .onChange(of: controlsShift, initial: true) { _, shift in
@@ -184,7 +186,7 @@ struct MainView: View {
     private var minimumContentSize: CGSize {
         let panes = minimumTerminalSize
         return CGSize(width: max(620, (sidebarVisible ? max(420, panes.width) + typography.expanded(200) + 1 : panes.width)),
-                      height: max(400, panes.height + (showsHeader ? typography.expanded(38) + 1 : 0)))
+                      height: max(400, panes.height + (showsHeader ? StripTab.titleRowHeight(typography) + 1 : 0)))
     }
 
     /// The glass sidebar panel is inset from the window edge; the traffic lights move in with it so they sit inside
@@ -223,7 +225,7 @@ struct MainView: View {
         }
         .buttonStyle(.plain)
         .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: InterfaceMotion.spaceSwitchDuration), value: workspace.selectedSpace)
-        .padding(.horizontal, 14).frame(height: typography.expanded(38))
+        .padding(.horizontal, 14).frame(height: StripTab.titleRowHeight(typography))
         .background(Chrome.window)
         .accessibilityIdentifier("main-title-bar")
     }
@@ -440,8 +442,8 @@ private struct FullScreenSidebarReveal: NSViewRepresentable {
     let hosted: Bool
     let pinned: Bool
     let rowHeight: CGFloat
-    /// The strips' glass button size: with Liquid Glass the button is a circle that size.
-    let glassSize: CGFloat
+    /// The button's circle: the host mark's size (StripHostMark.size).
+    let buttonSize: CGFloat
     var revealed: (Bool) -> Void = { _ in }
     let toggle: () -> Void
     func makeNSView(context: Context) -> FullScreenSidebarRevealView { FullScreenSidebarRevealView() }
@@ -452,7 +454,7 @@ private struct FullScreenSidebarReveal: NSViewRepresentable {
         // Match LayoutPicker over a header; floating over terminal content needs a fill, or glass with Liquid Glass.
         // Inside the glass sidebar panel it is a plain icon like the header's others: no glass on glass, no box.
         let liquid = LiquidGlassStore.shared.active
-        view.glassSize = liquid ? glassSize : nil
+        view.size = buttonSize
         view.glass = liquid && !sidebarVisible
         view.button.layer?.backgroundColor = (pinned || view.glass ? NSColor.clear : NSColor(palette.window).withAlphaComponent(0.95)).cgColor
         view.button.layer?.borderColor = (liquid ? NSColor.clear : NSColor(palette.border)).cgColor
@@ -477,11 +479,11 @@ final class FullScreenSidebarRevealView: NSView {
             updateTrackingAreas()
         }
     }
-    /// With Liquid Glass, the strips' glass button size: the button is a circle that size, whether or not its glass
-    /// shows, so it keeps its frame as the sidebar slides over it. nil: the flat 32 × 20 box.
-    var glassSize: CGFloat? {
+    /// The button is a circle this size (the host mark's), whether or not its glass shows, so it keeps its frame as
+    /// the sidebar slides over it.
+    var size: CGFloat = 26 {
         didSet {
-            guard glassSize != oldValue else { return }
+            guard size != oldValue else { return }
             alignButton()
             updateTrackingAreas()
         }
@@ -581,7 +583,6 @@ final class FullScreenSidebarRevealView: NSView {
         button.image = NSImage(systemSymbolName: "sidebar.left", accessibilityDescription: nil)?
             .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 14, weight: .regular))
         button.wantsLayer = true
-        button.layer?.cornerRadius = 4
         button.layer?.borderWidth = 1
         button.focusRingType = .none
         button.setAccessibilityIdentifier("fullscreen-sidebar-toggle")
@@ -592,12 +593,8 @@ final class FullScreenSidebarRevealView: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) is unsupported") }
     private func alignButton() {
         // Match the tab controls as font size and native/tmux row heights change.
-        if let size = glassSize {
-            button.frame = NSRect(x: Chrome.sidebarButtonInset, y: (rowHeight - size) / 2, width: size, height: size)
-        } else {
-            button.frame = NSRect(x: Chrome.sidebarButtonInset, y: (rowHeight - 20) / 2, width: Chrome.sidebarButtonWidth, height: 20)
-        }
-        button.layer?.cornerRadius = glassSize == nil ? 4 : button.frame.height / 2
+        button.frame = NSRect(x: Chrome.sidebarButtonInset, y: (rowHeight - size) / 2, width: size, height: size)
+        button.layer?.cornerRadius = size / 2
         glassView?.frame = button.frame
         if #available(macOS 26, *) { (glassView as? NSGlassEffectView)?.cornerRadius = button.frame.height / 2 }
     }

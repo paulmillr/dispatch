@@ -1,4 +1,5 @@
 import XCTest
+import SwiftUI
 @testable import DispatchApp
 
 @MainActor
@@ -96,6 +97,108 @@ final class HostRegistryTests: XCTestCase {
             : ["[\(name)]", "api", "web", "[local]", "notes"])
         workspace.spaceOrder = .flat
         XCTAssertEqual(entries(), ["api", "notes", "web"], "A flat sidebar lists spaces without host headings")
+    }
+
+    /// With every color remembered, a new host still avoids the colors connected hosts show. A connection not yet
+    /// identified previews such a color, keeps it while another connects, and the new host it turns out to be keeps it.
+    func testNewHostsAvoidColorsConnectedHostsShow() throws {
+        let store = HostColorStore.shared, previous = (store.choices, store.automatic)
+        defer { store.choices = previous.0; store.automatic = previous.1 }
+        store.choices = [:]
+        let hosts = HostRegistry(defaults: nil)
+        func remember(_ name: String) -> HostID {
+            let terminal = UUID(), generation = UUID()
+            hosts.begin(terminal, generation: generation, destination: name)
+            hosts.update(terminal, generation: generation, destination: name, greeting: greeting(name), state: .connected)
+            hosts.remove(terminal)
+            return .authenticated(name)
+        }
+        func color(_ id: HostID) throws -> HostColor { try XCTUnwrap(hosts.record(id).tint).automatic }
+        // Every color twice over, none connected.
+        let remembered = try (0..<(HostColor.allCases.count * 2)).map { index in
+            let id = remember("remembered-\(index)")
+            _ = try color(id)
+            return id
+        }
+        XCTAssertEqual(Set(try remembered.map(color)), Set(HostColor.allCases))
+        // Three of them connect again.
+        var connected = try Set(remembered.prefix(3).map(color))
+        for id in remembered.prefix(3) { hosts.seed(UUID(), from: id, generation: UUID()) }
+        XCTAssertEqual(connected.count, 3, "Fixture: three different colors on screen")
+
+        let first = UUID(), second = UUID(), generation = UUID()
+        hosts.begin(first, generation: generation, destination: "new-one")
+        let pending = try XCTUnwrap(hosts.terminals[first]?.host)
+        XCTAssertTrue(pending.isProvisional)
+        let preview = try color(pending)
+        XCTAssertFalse(connected.contains(preview), "A pending connection doesn't borrow a color on screen")
+        connected.insert(preview)
+        // Another host connecting meanwhile neither takes the preview nor changes it.
+        let other = UUID(), otherGeneration = UUID()
+        hosts.begin(other, generation: otherGeneration, destination: "new-two")
+        hosts.update(other, generation: otherGeneration, destination: "new-two", greeting: greeting("new-two"), state: .connected)
+        let otherColor = try color(.authenticated("new-two"))
+        XCTAssertFalse(connected.contains(otherColor), "A new host takes a color no connected host shows")
+        XCTAssertEqual(try color(pending), preview, "A preview holds while its connection lasts")
+        connected.insert(otherColor)
+
+        hosts.update(first, generation: generation, destination: "new-one", greeting: greeting("new-one"), state: .connected)
+        XCTAssertEqual(try color(.authenticated("new-one")), preview, "The new host keeps the color it connected with")
+        XCTAssertNil(hosts.records[pending], "The placeholder goes once its connection is identified")
+        hosts.begin(second, generation: UUID(), destination: "new-three")
+        XCTAssertFalse(connected.contains(try color(try XCTUnwrap(hosts.terminals[second]?.host))))
+    }
+
+    /// Every host icon is one size, growing with the font, and every kind of glyph draws that size: its longer side
+    /// fills the same share of the frame and stays inside it, whether an SF Symbol, an asset or the drawn Ubuntu mark.
+    func testHostGlyphsDrawOneSizeAtEveryFontSize() throws {
+        let systems: [(String, HostSystem?)] = [
+            ("mac", .mac), ("linux", HostSystem(os: "Linux")), ("unknown", nil),
+            ("ubuntu", HostSystem(os: "Linux", distribution: "ubuntu")),
+            ("debian", HostSystem(os: "Linux", distribution: "debian")), ("freebsd", HostSystem(os: "FreeBSD")),
+        ]
+        for contentSize: CGFloat in [12.5, 16, 20] {
+            let size = AppTypography(contentSize: contentSize).hostIconSize
+            XCTAssertEqual(size, 15 * max(1, contentSize / 12.5), accuracy: 0.01)
+            for metrics in [SidebarMetrics.compact(contentSize: contentSize), .large(contentSize: contentSize),
+                            .icons(contentSize: contentSize)] {
+                XCTAssertEqual(metrics.hostIconSize, size, "The sidebar uses the app's host icon size")
+            }
+            for (name, system) in systems {
+                let host = HostRecord(id: HostID(rawValue: "ssh:" + name), name: name, system: system, destinations: [], order: 0)
+                let extent = try Self.inkExtent(HostGlyph(host: host, size: size).foregroundStyle(.black), side: size)
+                XCTAssertEqual(extent.longer, HostGlyph.fill, accuracy: 0.05,
+                               "\(name) at \(contentSize): its longer side fills the shared share of the frame")
+                XCTAssertTrue(extent.inside, "\(name) at \(contentSize) stays inside its frame")
+            }
+        }
+    }
+
+    /// The share of a `side`-point square the view's ink spans along its longer side, and whether it stays inside.
+    private static func inkExtent(_ view: some View, side: CGFloat) throws -> (longer: CGFloat, inside: Bool) {
+        // Rendered in a larger canvas, so ink past the frame shows instead of being cut off.
+        let canvas = side * 2, scale: CGFloat = 4
+        let renderer = ImageRenderer(content: view.frame(width: canvas, height: canvas))
+        renderer.scale = scale
+        let image = try XCTUnwrap(renderer.cgImage)
+        let width = image.width, height = image.height
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        let context = try XCTUnwrap(CGContext(data: &pixels, width: width, height: height, bitsPerComponent: 8,
+                                              bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        var minX = width, minY = height, maxX = -1, maxY = -1
+        for y in 0..<height {
+            for x in 0..<width where pixels[(y * width + x) * 4 + 3] > 25 {
+                minX = min(minX, x); maxX = max(maxX, x); minY = min(minY, y); maxY = max(maxY, y)
+            }
+        }
+        XCTAssertGreaterThanOrEqual(maxX, 0, "The glyph draws something")
+        let frame = side * scale, origin = (CGFloat(width) - frame) / 2
+        let longer = CGFloat(max(maxX - minX + 1, maxY - minY + 1)) / frame
+        let inside = CGFloat(minX) >= origin - 1 && CGFloat(maxX) <= origin + frame + 1
+            && CGFloat(minY) >= origin - 1 && CGFloat(maxY) <= origin + frame + 1
+        return (longer, inside)
     }
 
     func testHostsGetFreeColorsUntilAllAreTakenAndForgettingFreesOne() throws {

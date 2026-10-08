@@ -14,7 +14,7 @@ How the files were made:
 - Source: the RAW helper capture slice of the case. Decoding a scrubbed capture can be wrong, because masks change bytes inside binary frames.
 - Command: `scripts/capture-helper-wire.py --source <slice> --hello-from <the helper's whole capture> --codec <that build's HelperBinary.py>`.
   - `--hello-from` matters when the helper was shared by several cases: the slice then starts mid-session, and this puts the helper's hello first.
-- The output is written through `scripts/redact.py`, and `Helpers/helper4/tools/private.py --check` finds nothing.
+- The output is written through `scripts/redact.py`, and `helper/tools/private.py --check` finds nothing.
 
 | fixture | app commit, schema | source_sha256 (raw slice) |
 | --- | --- | --- |

@@ -38,6 +38,8 @@ struct AppTypography: Equatable {
     var sidebarShortcut: Font { AppFont.shortcut(size: contentSize - 0.5) }
     /// Grow text containers with larger fonts without shrinking their default hit areas.
     func expanded(_ dimension: CGFloat) -> CGFloat { dimension * max(1, contentSize / 12.5) }
+    /// Every host icon in the app (HostGlyph): about the text's size, growing with it.
+    var hostIconSize: CGFloat { expanded(15) }
     @MainActor func popoverHeight(_ dimension: CGFloat) -> CGFloat {
         min(expanded(dimension), max(200, (NSScreen.main?.visibleFrame.height ?? 900) - 80))
     }

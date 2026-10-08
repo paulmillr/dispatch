@@ -131,7 +131,7 @@ struct PaneView: View {
         // On glass a split pane's capsule like a native pane's strip, the strip's margin above it and none below; its
         // chat switch sits on the capsule's glass. Leading the window in full screen, it starts with the sidebar
         // button's slot, as a native strip does.
-        .padding(.leading, placement.sidebarSlot ? Chrome.sidebarSlotWidth : glassStrip ? 12 : 0)
+        .padding(.leading, placement.sidebarSlot ? Chrome.sidebarSlotWidth(typography) : glassStrip ? 12 : 0)
         .padding(.trailing, glassStrip ? 4 : 0)
         .stripCapsule(glassStrip, tint: tabTint)
         .padding(.horizontal, Chrome.stripInset)

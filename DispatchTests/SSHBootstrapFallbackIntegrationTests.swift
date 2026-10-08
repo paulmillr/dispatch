@@ -28,9 +28,9 @@ final class SSHBootstrapFallbackIntegrationTests: XCTestCase {
             upload)
               case "$command" in
                 *'cat >'*) printf reached > \(HerdrLaunch.quote(reached.path)); exit 1 ;;
-                *'safe_file dsptch && test -x dsptch'*) exit 1 ;;
+                *'safe_file dispatch-helper && test -x dispatch-helper'*) exit 1 ;;
               esac ;;
-            greeting) case "$command" in *'dsptch --remote --capabilities'*) printf reached > \(HerdrLaunch.quote(reached.path)); printf invalid-greeting; exit 0;; esac ;;
+            greeting) case "$command" in *'dispatch-helper --remote --capabilities'*) printf reached > \(HerdrLaunch.quote(reached.path)); printf invalid-greeting; exit 0;; esac ;;
           esac
         fi
         exec /usr/bin/ssh "$@"

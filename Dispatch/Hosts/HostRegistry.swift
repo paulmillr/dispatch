@@ -152,6 +152,9 @@ final class HostRegistry {
         var record = records[id] ?? HostRecord(id: id, name: prior?.name ?? Self.displayName(destination),
                                               destinations: prior?.destinations ?? [], order: prior?.order ?? nextOrder)
         if records[id] == nil, prior == nil { nextOrder += 1 }
+        // A new machine keeps the color its connection previewed while it was identified, so it doesn't change color
+        // as it connects.
+        if records[id] == nil, identity != nil, let preview = previewColor(previous.host) { record.colorName = preview.rawValue }
         if let prior, prior.order < record.order {
             record.name = prior.name; record.order = prior.order
         }
@@ -256,29 +259,58 @@ final class HostRegistry {
         persist()
     }
 
-    /// Each verified host keeps the automatic color it was first given: the one fewest
-    /// remembered hosts show (a chosen color counts instead), its own hash breaking ties.
-    /// Forgetting a host frees its color for the next new one.
+    /// Each verified host keeps the automatic color it was first given. A new host takes a color no connected host
+    /// shows when there is one, then the one fewest remembered hosts show (a chosen color counts instead), its own hash
+    /// breaking ties. Forgetting a host frees its color for the next new one. A connection not yet identified previews
+    /// the color a new host would get, without keeping it, so it doesn't borrow one already on screen either.
     private func assignColors() {
         let store = HostColorStore.shared
-        var used: [HostColor: Int] = [:]
-        for record in records.values {
-            guard let tint = record.tint, let shown = store.choices[tint.machine] ?? record.color else { continue }
-            used[shown, default: 0] += 1
+        let ordered = records.values.sorted { $0.order == $1.order ? $0.id.rawValue < $1.id.rawValue : $0.order < $1.order }
+        let live = Set(terminals.values.map(\.host))
+        var used: [HostColor: Int] = [:], shown: [HostColor: Int] = [:]
+        func count(_ color: HostColor, live connected: Bool) {
+            used[color, default: 0] += 1
+            if connected { shown[color, default: 0] += 1 }
         }
-        let unassigned = records.values.filter { $0.id.rawValue.hasPrefix("ssh:") && $0.color == nil }
-            .sorted { $0.order == $1.order ? $0.id.rawValue < $1.id.rawValue : $0.order < $1.order }
-        for record in unassigned {
+        for record in ordered {
+            guard let tint = record.tint, let color = store.choices[tint.machine] ?? record.color else { continue }
+            count(color, live: live.contains(record.id))
+        }
+        // A preview already on screen keeps its color while its connection lasts, and counts as shown.
+        var previews: [String: HostColor] = [:]
+        for record in ordered where record.id.isProvisional {
+            guard let tint = record.tint, store.choices[tint.machine] == nil,
+                  let color = store.automatic[tint.machine] else { continue }
+            previews[tint.machine] = color
+            count(color, live: true)
+        }
+        func free(_ seed: UInt32) -> HostColor {
+            let rank = { (color: HostColor) in (shown[color, default: 0], used[color, default: 0]) }
+            let best = HostColor.allCases.map(rank).min { $0 < $1 } ?? (0, 0)
+            let candidates = HostColor.allCases.filter { rank($0) == best }
+            return candidates[Int(seed % UInt32(candidates.count))]
+        }
+        for record in ordered where record.id.rawValue.hasPrefix("ssh:") && record.color == nil {
             guard let tint = record.tint else { continue }
-            let fewest = HostColor.allCases.map { used[$0, default: 0] }.min() ?? 0
-            let candidates = HostColor.allCases.filter { used[$0, default: 0] == fewest }
-            let color = candidates[Int(tint.seed % UInt32(candidates.count))]
+            let color = free(tint.seed)
             records[record.id]?.colorName = color.rawValue
-            if store.choices[tint.machine] == nil { used[color, default: 0] += 1 }
+            if store.choices[tint.machine] == nil { count(color, live: live.contains(record.id)) }
+        }
+        for record in ordered where record.id.isProvisional {
+            guard let tint = record.tint, store.choices[tint.machine] == nil, previews[tint.machine] == nil else { continue }
+            let color = free(tint.seed)
+            previews[tint.machine] = color
+            count(color, live: true)
         }
         store.automatic = Dictionary(records.values.compactMap { record in
             record.tint.flatMap { tint in record.color.map { (tint.machine, $0) } }
-        }, uniquingKeysWith: { first, _ in first })
+        }, uniquingKeysWith: { first, _ in first }).merging(previews) { assigned, _ in assigned }
+    }
+
+    /// The color a connection not yet identified previews (assignColors), which a new host it turns out to be keeps.
+    private func previewColor(_ host: HostID) -> HostColor? {
+        guard host.isProvisional, let tint = records[host]?.tint else { return nil }
+        return HostColorStore.shared.automatic[tint.machine]
     }
 
     private func persist() {

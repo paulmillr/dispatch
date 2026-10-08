@@ -455,7 +455,7 @@ final class InterfaceMotionTests: XCTestCase {
                                abs(c.blueComponent - background.blueComponent)) > 0.15 { rows.append(y) }
                     }
                     let minY = try XCTUnwrap(rows.min()), maxY = try XCTUnwrap(rows.max())
-                    XCTAssertEqual((CGFloat(minY + maxY) / 2 + 0.5) / scale, 19, accuracy: 0.75,
+                    XCTAssertEqual((CGFloat(minY + maxY) / 2 + 0.5) / scale, 15, accuracy: 0.75,
                         "Traffic lights jumped during open \(opened), frame \(sample), kind=\(kind.rawValue), before=\(String(describing: before[index])), after=\(after), pixels=\(minY)...\(maxY), scale=\(scale)")
                 }
                 if sample == 0 {

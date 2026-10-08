@@ -57,16 +57,9 @@ struct HostSessionStore {
             return connection.surfaces.isEmpty ? nil : connection
         }
         let surfaces = Set(connections.flatMap(\.surfaces))
-        var history: [UUID: String] = [:], historyBytes = 0
-        // Plain shells' text, local or SSH.
-        // A tab whose process has not started since the last launch keeps its restored text.
-        func keepHistory(_ tab: TerminalTab) {
-            guard includeHistory else { return }
-            let text = TerminalHistoryStore.tail(runtime.restoredHistory[tab.id] ?? runtime.views[tab.id]?.surface?.readHistory() ?? "")
-            if !text.isEmpty, historyBytes + text.utf8.count <= TerminalHistoryStore.totalLimit {
-                history[tab.id] = text; historyBytes += text.utf8.count
-            }
-        }
+        // Plain shells, local or SSH, in save order; their text is read after the walk below,
+        // since the tab closures must not capture main-actor reads (Xcode 26 region isolation).
+        var historyTabs: [UUID] = []
         // Host grouping normally isolates remote spaces. Filter individual tabs
         // as well, so a local shell never becomes a remote relaunch command.
         var spaces: [Space] = []
@@ -88,7 +81,7 @@ struct HostSessionStore {
                             var tab = tab
                             tab.launchCommand = nil; tab.isConnecting = false
                             if space.remote == nil { tab.terminal = nil }
-                            keepHistory(tab)
+                            historyTabs.append(tab.id)
                             return [tab]
                         }
                         var tab = tab
@@ -96,7 +89,7 @@ struct HostSessionStore {
                         if space.remote == nil { tab.terminal = nil }
                         if let connection = connections.first(where: { $0.surfaces.contains(tab.id) }) {
                             tab.machine = .ssh(connection.shell)
-                            keepHistory(tab)
+                            historyTabs.append(tab.id)
                         }
                         return [tab]
                     }
@@ -121,6 +114,14 @@ struct HostSessionStore {
             clean.arrangement = space.arrangement
             clean.splitRatios = space.splitRatios
             spaces.append(clean)
+        }
+        var history: [UUID: String] = [:], historyBytes = 0
+        // A tab whose process has not started since the last launch keeps its restored text.
+        for id in historyTabs where includeHistory {
+            let text = TerminalHistoryStore.tail(runtime.restoredHistory[id] ?? runtime.views[id]?.surface?.readHistory() ?? "")
+            if !text.isEmpty, historyBytes + text.utf8.count <= TerminalHistoryStore.totalLimit {
+                history[id] = text; historyBytes += text.utf8.count
+            }
         }
         let snapshot = Snapshot(hosts: workspace.liveHosts.filter { $0.id != .local }, spaces: spaces,
                                 selectedSpace: workspace.selectedSpace,

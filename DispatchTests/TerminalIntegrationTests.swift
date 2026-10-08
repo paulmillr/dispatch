@@ -318,15 +318,15 @@ final class TerminalIntegrationTests: XCTestCase {
         func assertWindowControlAlignment() throws {
             for kind in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
                 let button = try XCTUnwrap(window.standardWindowButton(kind))
-                XCTAssertEqual(window.frame.height - button.convert(button.bounds, to: nil).midY, 19, accuracy: 0.5,
-                    "Native controls stay centered in the original 38-point title row")
+                XCTAssertEqual(window.frame.height - button.convert(button.bounds, to: nil).midY, 15, accuracy: 0.5,
+                    "Native controls stay centered in the flat 30-point title row")
             }
         }
         try assertWindowControlAlignment()
         // Include native controls in the capture so row alignment can be
         // reviewed alongside the SwiftUI title and action buttons.
         let frameView = try XCTUnwrap(window.contentView?.superview)
-        let titlebarRect = frameView.convert(NSRect(x: 0, y: window.frame.height - 38, width: window.frame.width, height: 38), from: nil)
+        let titlebarRect = frameView.convert(NSRect(x: 0, y: window.frame.height - 30, width: window.frame.width, height: 30), from: nil)
         let titlebarBitmap = try XCTUnwrap(frameView.bitmapImageRepForCachingDisplay(in: titlebarRect))
         frameView.cacheDisplay(in: titlebarRect, to: titlebarBitmap)
         try PresentationTestSupport.save(titlebarBitmap, named: "titlebar-aligned", in: "ui-audit")

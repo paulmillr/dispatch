@@ -8,7 +8,7 @@ final class SSHFileConsistencyTests: XCTestCase {
         let app = try TmuxWalkthrough(); defer { app.close() }
         let server = try await SSHTestServer(); defer { server.stop() }
         let link = try await app.login(server, surface: XCTUnwrap(app.workspace.activeSurfaceID))
-        try await TestSupport.eventually(timeout: .seconds(20)) { app.runtime.ssh.helper4(for: link.launch.tabID) != nil }
+        try await TestSupport.eventually(timeout: .seconds(20)) { app.runtime.ssh.helper(for: link.launch.tabID) != nil }
         let path = server.root.appendingPathComponent("rollout.jsonl"), session = UUID().uuidString
         func line(_ type: String, _ payload: [String: String]) throws -> Data {
             try JSONSerialization.data(withJSONObject: ["type": type, "timestamp": "2000-01-01T00:00:00Z", "payload": payload], options: .sortedKeys) + Data([10])

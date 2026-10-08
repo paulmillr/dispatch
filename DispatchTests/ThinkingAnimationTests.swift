@@ -87,6 +87,24 @@ final class ThinkingAnimationTests: XCTestCase {
         XCTAssertEqual(AgentWorkingState(session).fragment, "")
     }
 
+    func testReduceMotionClockStepsEveryFiveSecondsAfterTen() throws {
+        let session = ChatSession(id: UUID())
+        session.active = true; session.busy = true; session.activeTurnID = "turn"
+        let start = Date(timeIntervalSinceReferenceDate: 0)
+        session.turns = [.init(id: "turn", started: start)]
+        let state = AgentWorkingState(session)
+        func shown(_ seconds: TimeInterval, reduceMotion: Bool = true) -> String {
+            AgentWorkingAnimation.timeText(state, now: start.addingTimeInterval(seconds), appeared: start, reduceMotion: reduceMotion)
+        }
+        XCTAssertEqual((1...10).map { shown(TimeInterval($0)) }, (1...10).map { "\($0)s" })
+        XCTAssertEqual([11, 14.9, 15, 19, 20, 59, 60, 64, 65].map { shown($0) },
+                       ["10s", "10s", "15s", "15s", "20s", "55s", "1m 0s", "1m 0s", "1m 5s"])
+        XCTAssertEqual(shown(14, reduceMotion: false), "14s", "Without Reduce Motion the clock counts every second")
+        let finished = state.finished(at: start.addingTimeInterval(13), label: "Finished")
+        XCTAssertEqual(AgentWorkingAnimation.timeText(finished, now: start.addingTimeInterval(20), appeared: start, reduceMotion: true),
+                       "13s", "A finished turn keeps its exact duration")
+    }
+
     func testFinishedDurationSwitchesToCompletionTimeAfterFiveMinutes() throws {
         let session = ChatSession(id: UUID())
         session.active = true; session.busy = true; session.activeTurnID = "turn"

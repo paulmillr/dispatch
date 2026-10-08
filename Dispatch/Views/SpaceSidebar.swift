@@ -9,15 +9,13 @@ struct SpaceSidebar: View {
     }
     private var sidebarFont: Font { AppFont.ui(size: metrics.nameSize) }
     private var sidebarDetailFont: Font { AppFont.ui(size: metrics.detailSize) }
-    /// The host strip in the footer keeps its own, larger icons, with or without glass.
-    private var footerIconSize: CGFloat { metrics.large ? 16 : 14 }
+    /// The footer's host icons are the app's host icon size, like the tab bar's host button in a cell as tall.
+    private var footerIconSize: CGFloat { typography.hostIconSize }
     private var footerCellHeight: CGFloat {
         glass ? StripTab.glassTrackHeight(typography) : max(typography.expanded(28), footerIconSize + 12)
     }
-    /// The glass footer's own panel is rounded like a button: a capsule around one row of hosts, keeping that radius
-    /// when they wrap. Its cells' hover capsules sit this far inside it, so their corners nest in its own.
+    /// The footer's cells sit this far inside the sidebar's edges.
     private static let footerInset: CGFloat = 4
-    private var footerRadius: CGFloat { footerCellHeight / 2 + Self.footerInset }
     @Bindable var workspace: Workspace
     @Bindable var settings: SettingsStore
     let controller: AppDelegate
@@ -28,6 +26,8 @@ struct SpaceSidebar: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var selection
     @State private var searchQuery = ""
+    /// The tree group whose header is under the pointer, which shows its new-space button.
+    @State private var hoveredHost: HostID?
     /// ⌘P opens the search field above the footer; a query keeps it open.
     private var searchOpen: Bool { controller.windowState.spaceSearchFocusRequest != nil }
     @FocusState private var searchFocused: Bool
@@ -96,56 +96,29 @@ struct SpaceSidebar: View {
             VStack(spacing: 0) {
                 // Outside full screen the window row carries the header's buttons. Search opens above the footer.
                 if windowControls { windowRow } else { header }
-                // On glass the top panel hugs the rows, scrolling once they outgrow the room. It takes their height in
-                // the same layout pass, so a new row and the panel's growth animate together, rather than the list
-                // first scrolling to a new space below the panel's old edge.
-                if glass {
-                    HuggingHeight(slack: Self.rowsSlack) { spaceList(listed: listed, attention: attention) }
-                } else {
-                    spaceList(listed: listed, attention: attention)
-                }
+                spaceList(listed: listed, attention: attention)
             }
-            // On glass the sidebar is two floating panels: header and spaces at the top, sized to them, and search
-            // and footer at the bottom, with the content showing between. The last row sits as far from the panel's
-            // bottom edge as the rows do from its sides, the list's slack included.
-            .padding(.bottom, glass ? Self.glassRowInset - Self.rowsSlack : 0)
             .layoutPriority(1)
-            .background { if glass { glassPanel.padding(.horizontal, Self.glassInset).padding(.top, Self.glassInset) } }
-            if glass {
-                // Outside the panel, so they stay in view however far the spaces scroll.
-                if settings.values.spaceOrder != .tree {
-                    newSpaceButtons.padding(.horizontal, Self.glassInset).padding(.top, Self.glassInset)
-                }
-                Spacer(minLength: Self.glassInset)
-                    .frame(maxWidth: .infinity)
-                    .overlay { trailingDrop.padding(.horizontal, Self.glassInset + Self.glassRowInset) }
-            }
             VStack(spacing: 0) {
                 if searchOpen || !searchQuery.isEmpty {
                     searchField.padding(.horizontal, glass ? 8 + Self.glassRowInset : 8).padding(.vertical, 6)
-                        // On glass a panel of its own, as wide as the top one, above the hosts' rounder one.
-                        .background { if glass { glassPanel.padding(.horizontal, Self.glassInset) } }
-                        .padding(.bottom, glass ? Self.glassInset : 0)
                 }
-                if !glass { Rectangle().fill(Chrome.border).frame(height: 1) }
+                // A hairline sets the footer apart: across the flat column, or inset like the rows in the glass panel.
+                Rectangle().fill(glass ? Chrome.border.opacity(0.6) : Chrome.border).frame(height: 1)
+                    .padding(.horizontal, glass ? Self.glassInset + Self.glassRowInset : 0)
                 hostStrip.modifier(WorkspaceFooter(workspace: workspace))
-                    .background {
-                        if glass {
-                            Color.clear.liquidGlass(in: RoundedRectangle(cornerRadius: footerRadius, style: .continuous))
-                                .padding(.horizontal, Self.glassInset)
-                        }
-                    }
+                    // The footer keeps the rows' inset from the panel's bottom edge.
+                    .padding(.bottom, glass ? Self.glassRowInset : 0)
             }
             .frame(maxWidth: glass ? .infinity : nil)
         }
-        // The footer stays inside the glass panel's bottom edge.
+        // With Liquid Glass the sidebar is one panel from top to bottom, floating over the content (MainView) at the
+        // glass inset, the title row keeping its place beside the traffic lights inside it.
+        .background { if glass { glassPanel.padding(.horizontal, Self.glassInset).padding(.top, Self.glassInset) } }
         .padding(.bottom, glass ? Self.glassInset : 0)
         .buttonStyle(.plain)
-        // Without glass, one flat sidebar column. With it, the panels above float over the content (MainView), and
-        // the title row keeps its place beside the traffic lights, inside the top panel.
+        // Without glass, one flat sidebar column.
         .background { if !glass { Chrome.sidebar } }
-        // The glass panel grows and shrinks with the spaces it lists, in step with their rows.
-        .animation(InterfaceMotion.animation(reduce: reduceMotion), value: glass ? listed.map(\.id) : [])
         .animation(InterfaceMotion.animation(reduce: reduceMotion), value: attention.count)
         .font(typography.sidebarFont).foregroundStyle(Chrome.ink)
         .environment(\.appTypography, typography)
@@ -168,27 +141,18 @@ struct SpaceSidebar: View {
     private var overflowBar: Bool {
         if #available(macOS 26, *) { return glass } else { return false }
     }
-    /// The flat order's "+ local" and "+ space": tiles after the last space, or on glass two capsules of their own below
-    /// the spaces panel, close enough that their glass blends. With only the local host, "+ local" would repeat
-    /// "+ space", so "+ space" stands alone in the left half rather than filling the row.
-    @ViewBuilder private var newSpaceButtons: some View {
+    /// The flat order's actions under the last space, as the host picker lists them: "New space", then "New local
+    /// space" while another host is live, where it differs from "New space".
+    private var newSpaceButtons: some View {
         let remote = workspace.liveHosts.contains(where: { $0.id != .local })
-        HStack(spacing: glass ? 4 : 6) {
-            if remote {
-                NewSpaceButton(workspace: workspace, host: workspace.hosts.record(.local), metrics: metrics)
-            }
+        return VStack(spacing: metrics.rowSpacing) {
             NewSpaceButton(workspace: workspace, metrics: metrics)
-            if !remote {
-                Color.clear.frame(maxWidth: .infinity, maxHeight: 0).accessibilityHidden(true)
-            }
+            if remote { NewSpaceButton(workspace: workspace, host: workspace.hosts.record(.local), metrics: metrics) }
         }
-        // A host arrives in its own update, before any space moves to it: "+ space" slides between the halves as
-        // "+ local" fades, the same both ways.
+        // A host arrives in its own update, before any space moves to it: "New local space" fades in and out.
         .animation(InterfaceMotion.animation(reduce: reduceMotion), value: remote)
-        // Blends glass across twice the capsules' gap, so they join at rest rather than only while they move.
-        .glassGroup(spacing: 8)
-        // Flat, a little more room than between spaces, so the actions read apart from the bare list.
-        .padding(.top, metrics.large && !glass ? metrics.rowSpacing / 2 : 0)
+        // A little more room than between spaces, so the actions read apart from the list.
+        .padding(.top, max(Self.glassRowInset, metrics.rowSpacing))
     }
     private var glassPanel: some View {
         Color.clear.liquidGlass(in: RoundedRectangle(cornerRadius: Self.glassRadius, style: .continuous))
@@ -202,8 +166,6 @@ struct SpaceSidebar: View {
     static let glassRadius: CGFloat = windowCornerRadius - glassInset
     /// The rows' inset inside the panel; their corners are the panel's less this, so highlights nest concentrically.
     static let glassRowInset: CGFloat = 4
-    /// The glass list's room past its rows, so rounding never makes the rows outgrow it and report the last one hidden.
-    static let rowsSlack: CGFloat = 2
 
     /// The rows' height, for telling which spaces the viewport hides; the glass panel takes its own size from layout.
     private func measureRows(_ height: CGFloat) {
@@ -258,10 +220,12 @@ struct SpaceSidebar: View {
     }
 
     /// Header buttons share one size in both sidebar modes.
+    /// The flat header controls' size (the shortcuts button's too).
+    private static let headerButtonSize: CGFloat = 24
     private func headerButton<Label: View>(active: Bool = false, @ViewBuilder label: () -> Label) -> some View {
         label()
             .font(.system(size: typography.size(offset: -1.5)))
-            .frame(width: 24, height: 24)
+            .frame(width: Self.headerButtonSize, height: Self.headerButtonSize)
             .foregroundStyle(active ? Chrome.ink : Chrome.palette.detail)
             .background(active ? Chrome.ink.opacity(0.07) : .clear, in: RoundedRectangle(cornerRadius: 4))
             .contentShape(Rectangle())
@@ -285,8 +249,8 @@ struct SpaceSidebar: View {
             }
         }
         .padding(.leading, controller.windowState.controlsInset).padding(.trailing, glass ? 8 + Self.glassRowInset : 8)
-        .frame(height: typography.expanded(38))
-        .padding(.bottom, headerGap(rowHeight: typography.expanded(38)))
+        .frame(height: StripTab.titleRowHeight(typography))
+        .padding(.bottom, headerGap(rowHeight: StripTab.titleRowHeight(typography)))
         .accessibilityIdentifier("sidebar-title-row")
     }
 
@@ -308,12 +272,13 @@ struct SpaceSidebar: View {
         .padding(.bottom, headerGap(rowHeight: headerHeight))
     }
 
-    /// The space between a header row (the window row or the full-screen header) and the first space. On glass the
-    /// row's controls, centered at the glass track's height, sit as far above it as large spaces sit apart, or the
-    /// panel's row inset where compact rows touch; the row's own extra height around them counts toward that.
+    /// The space between a header row (the window row or the full-screen header) and the first space. The row's
+    /// controls (the glass track's height, or the flat header buttons') sit as far above it as large spaces sit apart,
+    /// or the glass panel's row inset where compact rows touch; the row's own extra height around them counts toward
+    /// that.
     private func headerGap(rowHeight: CGFloat) -> CGFloat {
-        guard glass else { return 4 }
-        return max(metrics.rowSpacing, Self.glassRowInset) - (rowHeight - StripTab.glassTrackHeight(typography)) / 2
+        let controls = glass ? StripTab.glassTrackHeight(typography) : Self.headerButtonSize
+        return max(metrics.rowSpacing, Self.glassRowInset) - (rowHeight - controls) / 2
     }
 
     /// Tree groups spaces under their hosts; flat is one list.
@@ -347,18 +312,12 @@ struct SpaceSidebar: View {
         let below = spacesBelowViewport(in: listed)
         return ScrollViewReader { scroll in
             VStack(spacing: 0) {
-                // On glass the list ends with its rows, so the top panel can take their height (HuggingHeight); a
-                // GeometryReader would hide it. Flat, the rows stretch to the viewport for the trailing drop target.
-                if glass {
-                    rowsScroll(listed: listed, attention: attention, hidden: hidden, below: below, scroll: scroll, minHeight: 0)
-                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { viewportHeight = $0 }
-                } else {
-                    GeometryReader { area in
-                        rowsScroll(listed: listed, attention: attention, hidden: hidden, below: below, scroll: scroll,
-                                   minHeight: area.size.height)
-                            .onAppear { viewportHeight = area.size.height }
-                            .onChange(of: area.size.height) { _, height in viewportHeight = height }
-                    }
+                // The rows stretch to the viewport for the trailing drop target.
+                GeometryReader { area in
+                    rowsScroll(listed: listed, attention: attention, hidden: hidden, below: below, scroll: scroll,
+                               minHeight: area.size.height)
+                        .onAppear { viewportHeight = area.size.height }
+                        .onChange(of: area.size.height) { _, height in viewportHeight = height }
                 }
                 if !hidden.isEmpty && !overflowBar {
                     overflowButton(hidden: hidden, below: below, attention: attention, scroll: scroll)
@@ -385,9 +344,7 @@ struct SpaceSidebar: View {
                     })
                 Spacer(minLength: 0)
                     .frame(maxWidth: .infinity)
-                    .overlay {
-                        if !glass { trailingDrop }
-                    }
+                    .overlay { trailingDrop }
             }.padding(.horizontal, glass ? Self.glassInset + Self.glassRowInset : metrics.large ? 10 : 8)
                 .frame(minHeight: minHeight, alignment: .top)
         }
@@ -422,7 +379,7 @@ struct SpaceSidebar: View {
                 ForEach(listed) { space in
                     spaceRow(space, pending: attention.contains(space.id), shortcut: shortcuts[space.id] ?? "")
                 }
-                if !glass { newSpaceButtons }
+                newSpaceButtons
                 flatDetachedSection
             }
             if listed.isEmpty && matchingDetachedEntries.isEmpty { Text("No matching spaces").font(sidebarDetailFont).foregroundStyle(Chrome.muted).padding(10) }
@@ -431,39 +388,109 @@ struct SpaceSidebar: View {
         .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: 0.2), value: listed.map { "\($0.id):\($0.hostID.rawValue)" })
     }
 
+    /// A tree group's heading: the host's name in title case, its connection state while not connected after it in a
+    /// quieter tone. Compact leads with the host's icon; the icons style's rows carry it instead. Remote hosts keep
+    /// their color.
+    private func hostHeading(_ host: HostRecord) -> some View {
+        let state = workspace.hosts.state(host.id)
+        return HStack(spacing: 6) {
+            // Sized to the heading's text, not the app's host icons, so it fits the compact header.
+            if !metrics.large { HostGlyph(host: host, size: metrics.headerSize + 3) }
+            Text(host.id == .local ? "Local" : host.name)
+                .font(Font(AppFont.native(size: metrics.headerSize + 1, semibold: true)))
+                .lineLimit(1).truncationMode(.middle)
+            if host.id != .local && state != .connected {
+                Text(state.shortLabel).font(AppFont.ui(size: metrics.headerSize)).foregroundStyle(Chrome.muted)
+            }
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(host.tint?.foreground ?? Chrome.palette.secondary)
+        // The icons style lines its heading up as the host picker does, past the rows' inset.
+        .padding(.leading, metrics.icons ? 10 : 2).frame(height: metrics.headerHeight).contentShape(Rectangle())
+    }
+
+    /// Large's group header: the host's icon, name and connection state on a chip of its color, glass on Liquid Glass,
+    /// ending in the group's new-space button. The chip brightens as a space arrives from another host, as the compact
+    /// rule does. The button is the chip's neighbour, not inside the host's own button, so each keeps its clicks.
+    private func hostChip(_ host: HostRecord, arriving: Bool, newSpace: some View) -> some View {
+        let hue = host.tint?.foreground
+        let dark = Chrome.palette.isDark
+        let state = workspace.hosts.state(host.id)
+        return HStack(spacing: 0) {
+            HStack(spacing: 2) {
+                hostHeader(host) {
+                    HStack(spacing: 6) {
+                        HostGlyph(host: host, size: metrics.hostIconSize).foregroundStyle(hue ?? Chrome.palette.secondary)
+                        Text(host.id == .local ? "Local" : host.name)
+                            .font(Font(AppFont.native(size: metrics.headerSize + 1, semibold: true)))
+                            .foregroundStyle(hue ?? Chrome.palette.secondary)
+                            .lineLimit(1).truncationMode(.middle)
+                        if host.id != .local && state != .connected {
+                            Text(state.shortLabel).font(AppFont.ui(size: metrics.headerSize)).foregroundStyle(Chrome.muted)
+                        }
+                    }
+                    .padding(.leading, 8).frame(height: metrics.headerHeight).contentShape(Rectangle())
+                }.help(host.id == .local ? "Local" : host.details)
+                    .accessibilityIdentifier("host-card-\(host.id.rawValue)")
+                newSpace.padding(.trailing, 3)
+            }
+            .frame(height: metrics.headerHeight)
+            .background { Capsule().fill((hue ?? Chrome.ink).opacity(glass ? 0.06 : dark ? 0.12 : 0.08)) }
+            .liquidGlass(in: Capsule(), tint: host.tint?.glassWash)
+            .overlay {
+                Capsule().strokeBorder((hue ?? Chrome.ink).opacity(arriving ? 0.8 : dark ? 0.28 : 0.2), lineWidth: arriving ? 1.5 : 0.75)
+                    .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: 0.2), value: arriving)
+                    .allowsHitTesting(false)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
     private func hostGroup(_ host: HostRecord, spaces: [Space], attention: Set<UUID>, shortcuts: [UUID: String]) -> some View {
         let tint = host.tint?.foreground ?? Chrome.palette.secondary
         let arriving = workspace.hostMoveMotion.arrivals.values.contains(host.id)
+        // A heading's plus shows while its header is under the pointer, when the group has no spaces to click through
+        // to it, and always for VoiceOver; Large's chip always ends in it, the chip's own control.
+        let revealed = metrics.cards || hoveredHost == host.id || spaces.isEmpty || NSWorkspace.shared.isVoiceOverEnabled
+        let newSpace = NewSpaceButton(workspace: workspace, host: host, metrics: metrics, grouped: true, revealed: revealed)
+            .fixedSize()
         return LazyVStack(spacing: metrics.rowSpacing) {
-            HStack(spacing: 8) {
-                hostHeader(host) {
-                    HStack(spacing: 6) {
-                        HostGlyph(host: host, size: metrics.hostIconSize)
-                        Text(host.id == .local ? "LOCAL" : host.name.uppercased())
-                            .tracking(metrics.headerSize * 0.07).lineLimit(1).truncationMode(.middle)
-                        Spacer(minLength: 0)
-                        if host.id != .local && workspace.hosts.state(host.id) != .connected {
-                            Text(workspace.hosts.state(host.id).shortLabel).foregroundStyle(Chrome.muted)
-                        }
-                    }.font(AppFont.ui(size: metrics.headerSize)).foregroundStyle(tint)
-                        .padding(.leading, 2).frame(height: metrics.headerHeight).contentShape(Rectangle())
-                }.help(host.id == .local ? "Local" : host.details)
-                    .accessibilityIdentifier("host-card-\(host.id.rawValue)")
-                NewSpaceButton(workspace: workspace, host: host, metrics: metrics, grouped: true)
-                    .fixedSize()
-            }.frame(height: metrics.headerHeight)
-                // Compact rows have no gaps; keep the header off the first row.
-                .padding(.bottom, metrics.large ? 0 : 2)
+            Group {
+                if metrics.cards {
+                    hostChip(host, arriving: arriving, newSpace: newSpace)
+                } else {
+                    HStack(spacing: 8) {
+                        hostHeader(host) { hostHeading(host) }
+                            .help(host.id == .local ? "Local" : host.details)
+                            .accessibilityIdentifier("host-card-\(host.id.rawValue)")
+                        newSpace.padding(.trailing, max(0, metrics.shortcutInset - 6))
+                    }
+                }
+            }
+            .frame(height: metrics.headerHeight)
+            // The header's own button and drag tracker are AppKit views over it, which SwiftUI's hover doesn't see
+            // through; a tracking area does, in an inactive window too, as sidebars reveal their actions.
+            .background {
+                PointerTracker { inside in
+                    if inside { hoveredHost = host.id } else if hoveredHost == host.id { hoveredHost = nil }
+                }
+            }
+            // Compact rows have no gaps; keep the header off the first row.
+            .padding(.bottom, metrics.large ? 0 : 2)
             ForEach(spaces) { space in
                 spaceRow(space, pending: attention.contains(space.id), shortcut: shortcuts[space.id] ?? "")
             }
             detachedSection(host.id)
         }
-        .padding(.leading, metrics.large ? 13 : 8)
+        // A rule down a compact group's leading edge marks its host; the icons style marks every row with its icon,
+        // Large's cards each carry an orb under the group's chip.
+        .padding(.leading, metrics.large ? 0 : 8)
         .overlay(alignment: .leading) {
-            RoundedRectangle(cornerRadius: 2).fill(tint.opacity(arriving ? 0.9 : 0.55))
-                .frame(width: metrics.large ? 3 : 2).allowsHitTesting(false)
-                .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: 0.2), value: arriving)
+            if !metrics.large {
+                RoundedRectangle(cornerRadius: 2).fill(tint.opacity(arriving ? 0.9 : 0.55))
+                    .frame(width: metrics.large ? 3 : 2).allowsHitTesting(false)
+                    .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: 0.2), value: arriving)
+            }
         }
         .opacity(workspace.hosts.state(host.id) == .disconnected ? 0.65 : 1)
     }
@@ -716,8 +743,7 @@ struct SpaceSidebar: View {
         else {
             hostButton(host) {
                 HStack(spacing: 5) {
-                    HostGlyph(host: host, size: footerIconSize,
-                              symbolSize: host.system?.os == "Darwin" ? footerIconSize : nil).foregroundStyle(host.tint?.foreground ?? Chrome.ink)
+                    HostGlyph(host: host, size: footerIconSize).foregroundStyle(host.tint?.foreground ?? Chrome.ink)
                     Circle().fill(workspace.hosts.state(host.id) == .connected ? host.tint?.border ?? Chrome.muted : Chrome.muted.opacity(0.45))
                         .frame(width: 4, height: 4)
                 }.modifier(FooterHostCell(glass: glass, height: footerCellHeight))
@@ -741,7 +767,7 @@ struct SpaceSidebar: View {
 
     private var hostStatsButton: some View {
         hostButton(.local) {
-            Image(systemName: "apple.logo").font(.system(size: footerIconSize))
+            HostGlyph(host: workspace.hosts.record(.local), size: footerIconSize)
                 .modifier(FooterHostCell(glass: glass, height: footerCellHeight))
         }.foregroundStyle(Chrome.ink)
             .help("local · Host stats").accessibilityLabel("Local host stats")
@@ -855,19 +881,28 @@ private struct OverflowPanel: ViewModifier {
     }
 }
 
-/// Sizes its only subview to the subview's ideal height plus `slack`, up to the height offered: a scroll view hugs its
-/// content until it outgrows the room, then scrolls. It is decided during layout, so a change to the content and the
-/// resulting size land in the same transaction and animate together.
-private struct HuggingHeight: Layout {
-    let slack: CGFloat
+/// Reports the pointer entering and leaving its frame, whatever views lie over it and whether or not the window is
+/// active. It takes no clicks.
+private struct PointerTracker: NSViewRepresentable {
+    let changed: (Bool) -> Void
+    func makeNSView(context: Context) -> PointerTrackingView { PointerTrackingView() }
+    func updateNSView(_ view: PointerTrackingView, context: Context) { view.changed = changed }
+}
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        guard let subview = subviews.first else { return .zero }
-        let ideal = subview.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil))
-        return CGSize(width: proposal.width ?? ideal.width, height: min(ideal.height + slack, proposal.height ?? .infinity))
+final class PointerTrackingView: NSView {
+    var changed: (Bool) -> Void = { _ in }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                       owner: self))
     }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size))
+    override func mouseEntered(with event: NSEvent) { changed(true) }
+    override func mouseExited(with event: NSEvent) { changed(false) }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        // Leaving the window (a group closing, the sidebar hiding) never sends an exit.
+        if window == nil { changed(false) }
     }
 }

@@ -16,7 +16,7 @@ final class HerdrLaunch {
     /// The programs behind the wrappers' variables; the helper's only where its launches are wrapped.
     private var executables: [String: String] {
         var programs = ["DISPATCH_EXECUTABLE": Bundle.main.executablePath ?? ""]
-        programs["DISPATCH_HELPER4_EXECUTABLE"] = HelperApp.executable?.path ?? ""
+        programs["DISPATCH_HELPER_EXECUTABLE"] = HelperApp.executable?.path ?? ""
         return programs
     }
     var sshHandler: ((SSHLaunchRequest) -> Void)?

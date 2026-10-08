@@ -111,7 +111,7 @@ enum HelperStatistics {
   }
 }
 
-/// Statistics from a server's helper4, which measures rates itself.
+/// Statistics from a server's helper, which measures rates itself.
 @MainActor
 final class HelperStatisticsProvider: SSHStatisticsSampling {
   let id: SSHConnectionID

@@ -57,17 +57,17 @@ final class HerdrLaunchLifecycleTests: XCTestCase {
 
     func testFailedStartupCleansPartialGenerationAndCanRetry() throws {
         let launch = HerdrLaunch()
-        let helper = ProcessInfo.processInfo.environment["DISPATCH_HELPER4_EXECUTABLE"]
+        let helper = ProcessInfo.processInfo.environment["DISPATCH_HELPER_EXECUTABLE"]
         func restore() {
-            if let helper { setenv("DISPATCH_HELPER4_EXECUTABLE", helper, 1) }
-            else { unsetenv("DISPATCH_HELPER4_EXECUTABLE") }
+            if let helper { setenv("DISPATCH_HELPER_EXECUTABLE", helper, 1) }
+            else { unsetenv("DISPATCH_HELPER_EXECUTABLE") }
         }
         defer { restore(); launch.stop() }
         try launch.start()
         try launch.install([.helper(program: "codex", key: "codex")])
         let missing = launch.directory.appendingPathComponent("missing-helper")
         launch.stop()
-        setenv("DISPATCH_HELPER4_EXECUTABLE", missing.path, 1)
+        setenv("DISPATCH_HELPER_EXECUTABLE", missing.path, 1)
         XCTAssertThrowsError(try launch.start(), "Missing shell integration dependencies must fail startup")
         let failed = launch.directory
         XCTAssertFalse(FileManager.default.fileExists(atPath: failed.path))

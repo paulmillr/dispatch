@@ -93,8 +93,8 @@ struct StripTab: View {
                 if let legend { legendView(legend).padding(.trailing, 10) }
             }.padding(.leading, 2)
         }
-        // Strip tabs fill their bar (30 points, or a window's 38-point title row) so the selected rule sits on its
-        // bottom edge and stays put between local and remote tabs.
+        // Strip tabs fill their 30-point bar so the selected rule sits on its bottom edge and stays put between local
+        // and remote tabs.
         .frame(width: width, height: style == .strip ? nil : Self.glassTrackHeight(typography))
         .frame(minHeight: style == .strip ? typography.expanded(30) : nil, maxHeight: style == .strip ? .infinity : nil)
         .modifier(SelectedTabGlass(on: glassSelected))
@@ -165,13 +165,13 @@ struct StripHost {
     var provisional: Bool { record?.id.isProvisional == true }
 }
 
-/// Leads a lone strip's tabs, or a split layout's first pane's, while any of them is remote: the active tab's host
-/// glyph in the host color, or the Mac's, muted, while that tab is local, so the tabs keep their place across tab
-/// switches. With other spaces to switch to, it shows the Mac's on local strips too. Glass otherwise
+/// While the sidebar is hidden, leads a lone strip's tabs, or a split layout's first pane's, while any of them is
+/// remote: the active tab's host glyph in the host color, or the Mac's, muted, while that tab is local, so the tabs keep
+/// their place across tab switches. With other spaces to switch to, it shows the Mac's on local strips too. Glass otherwise
 /// shows the host only as a faint wash, where flat chrome has the pane's solid edge. On glass it is a circle of its own
-/// before the track (on a split pane's capsule, a circle on the capsule), `gap` points from it; flat, a plain button.
-/// Clicking it, or a secondary click, opens the space picker (StripSpacePicker). Leading the window with the sidebar
-/// hidden it also stands in for the sidebar toggle, which the picker carries.
+/// before the track (on a split pane's capsule, a circle on the capsule), `gap` points from it; flat, a plain circle.
+/// Clicking it, or a secondary click, opens the space picker (StripSpacePicker). Leading the window it also stands in
+/// for the sidebar toggle, which the picker carries.
 struct StripHostMark: View {
     @Environment(\.appTypography) private var typography
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -182,15 +182,15 @@ struct StripHostMark: View {
     var presentedChanged: ((Bool) -> Void)?
     @State private var presented = false
 
+    /// A remote tab whose host the registry has no record for yet: a server, as for any unidentified system.
+    private static let unknownHost = HostRecord(id: HostID(rawValue: "remote"), name: "Remote", destinations: [], order: .max)
     /// The gap between the mark and the track, matching the glass group's blend spacing.
     static let gap: CGFloat = 4
-    /// The mark's glass circle, as tall as the track, or without glass a plain button as big as the flat new-tab one.
+    /// The mark's circle: on glass as tall as the track, flat as tall as the flat new-tab button. The full-screen
+    /// sidebar button is a circle this size too.
     @MainActor static func size(_ typography: AppTypography) -> CGSize {
-        if LiquidGlassStore.shared.active {
-            let side = StripTab.glassTrackHeight(typography)
-            return CGSize(width: side, height: side)
-        }
-        return CGSize(width: 28, height: typography.expanded(26))
+        let side = LiquidGlassStore.shared.active ? StripTab.glassTrackHeight(typography) : typography.expanded(26)
+        return CGSize(width: side, height: side)
     }
     /// The mark and its gap: what the track gives up for it.
     @MainActor static func width(_ typography: AppTypography) -> CGFloat { size(typography).width + gap }
@@ -207,7 +207,7 @@ struct StripHostMark: View {
             // glyph dims under a pulse, so the connection landing reads as the same motion finishing.
             ZStack {
                 Group {
-                    if let record = host.record { HostGlyph(host: record) } else { Image(systemName: "server.rack").font(.system(size: 12)) }
+                    HostGlyph(host: host.record ?? Self.unknownHost, size: typography.hostIconSize)
                 }
                 .foregroundStyle(color)
                 .opacity(host.connecting ? 0.55 : 1)
@@ -331,7 +331,7 @@ private struct HostSwitchRipple: View {
     }
 }
 
-/// The mark's glass circle, or without glass the flat strip buttons' hover box.
+/// The mark's glass circle, or without glass a circle that fills under the pointer.
 private struct StripHostMarkSurface: ViewModifier {
     let tint: Color?
     @Environment(\.stripActionsMerged) private var onCapsule
@@ -343,8 +343,8 @@ private struct StripHostMarkSurface: ViewModifier {
         } else if LiquidGlassStore.shared.active {
             content.liquidGlass(in: Circle(), interactive: true, tint: tint).contentShape(Circle())
         } else {
-            content.background(hovered ? Chrome.palette.hover : .clear, in: RoundedRectangle(cornerRadius: 5))
-                .contentShape(Rectangle()).onHover { hovered = $0 }
+            content.background(hovered ? Chrome.palette.hover : .clear, in: Circle())
+                .contentShape(Circle()).onHover { hovered = $0 }
         }
     }
 }
@@ -415,13 +415,34 @@ struct StripSpacePicker: View {
             .padding(8)
         }
             Divider().padding(.horizontal, 12)
-            // The sidebar toggle, which the mark stands in for while the sidebar is hidden.
-            StripPickerAction(symbol: "sidebar.left", title: controller.sidebarVisible ? "Hide Sidebar" : "Show Sidebar",
-                              shortcut: "⌘\\") {
-                chosen()
-                controller.toggleSidebar()
+            VStack(spacing: 2) {
+                // The sidebar's "+ space" and "+ local": "New local space" only while another host is live, where it
+                // differs from "New space".
+                StripPickerAction(title: "New space", shortcut: "⌘N") {
+                    Image(systemName: "plus").font(.system(size: typography.size(offset: -1), weight: .medium))
+                } action: {
+                    chosen()
+                    controller.newSpace()
+                }
+                .accessibilityIdentifier("strip-space-picker-new-space")
+                if workspace.liveHosts.contains(where: { $0.id != .local }) {
+                    StripPickerAction(title: "New local space", shortcut: "⇧⌘N") {
+                        HostGlyph(host: workspace.hosts.record(.local), size: typography.hostIconSize)
+                    } action: {
+                        chosen()
+                        controller.newLocalSpace()
+                    }
+                    .accessibilityIdentifier("strip-space-picker-new-local-space")
+                }
+                // The sidebar toggle, which the mark stands in for while the sidebar is hidden.
+                StripPickerAction(title: controller.sidebarVisible ? "Hide sidebar" : "Show sidebar", shortcut: "⌘\\") {
+                    Image(systemName: "sidebar.left").font(.system(size: typography.size(offset: -1)))
+                } action: {
+                    chosen()
+                    controller.toggleSidebar()
+                }
+                .accessibilityIdentifier("strip-space-picker-sidebar")
             }
-            .accessibilityIdentifier("strip-space-picker-sidebar")
             .padding(8)
         }
         .font(typography.font(offset: -0.5)).foregroundStyle(Chrome.ink)
@@ -443,12 +464,13 @@ struct StripSpacePicker: View {
     }
 }
 
-/// A command under the picker's spaces, laid out like a space row: its symbol where a row's host disc sits.
-private struct StripPickerAction: View {
+/// A command under the picker's spaces, laid out like a space row: its icon where a row's host disc sits, and its
+/// shortcut in line with the rows', before the same check slot.
+private struct StripPickerAction<Icon: View>: View {
     @Environment(\.appTypography) private var typography
-    let symbol: String
     let title: String
     let shortcut: String
+    @ViewBuilder let icon: Icon
     let action: () -> Void
     @State private var hovered = false
 
@@ -456,11 +478,11 @@ private struct StripPickerAction: View {
         let shape = RoundedRectangle(cornerRadius: typography.expanded(12), style: .continuous)
         Button(action: action) {
             HStack(spacing: 9) {
-                Image(systemName: symbol).font(.system(size: typography.size(offset: -1)))
-                    .foregroundStyle(Chrome.palette.secondary)
+                icon.foregroundStyle(Chrome.palette.secondary)
                     .frame(width: typography.expanded(22), height: typography.expanded(22))
                 Text(title).foregroundStyle(Chrome.palette.secondary).frame(maxWidth: .infinity, alignment: .leading)
                 Text(shortcut).font(typography.shortcut()).foregroundStyle(Chrome.muted)
+                StripPickerCheck(shown: false, color: Chrome.ink)
             }
             .padding(.leading, 5).padding(.trailing, 10).padding(.vertical, 4)
             .background { if hovered { shape.fill(Chrome.palette.hover) } }
@@ -469,6 +491,20 @@ private struct StripPickerAction: View {
         .buttonStyle(.plain)
         .onHover { hovered = $0 }
         .accessibilityLabel(title)
+    }
+}
+
+/// The picker rows' trailing check: every row keeps its slot, so the shortcuts before it line up.
+private struct StripPickerCheck: View {
+    @Environment(\.appTypography) private var typography
+    let shown: Bool
+    let color: Color
+
+    var body: some View {
+        Image(systemName: "checkmark").font(.system(size: typography.size(offset: -2.5), weight: .semibold))
+            .foregroundStyle(color)
+            .opacity(shown ? 1 : 0)
+            .accessibilityHidden(!shown)
     }
 }
 
@@ -488,7 +524,7 @@ private struct StripSpaceRow: View {
         let shape = RoundedRectangle(cornerRadius: typography.expanded(12), style: .continuous)
         Button(action: action) {
             HStack(spacing: 9) {
-                HostGlyph(host: host, size: typography.size(offset: -1.5))
+                HostGlyph(host: host, size: typography.hostIconSize)
                     .foregroundStyle(host.tint?.foreground ?? Chrome.palette.secondary)
                     .frame(width: disc, height: disc)
                     // On the current row's glass a plain disc: no glass on glass.
@@ -502,9 +538,7 @@ private struct StripSpaceRow: View {
                 if !shortcut.isEmpty {
                     Text(shortcut).font(typography.shortcut()).foregroundStyle(Chrome.muted)
                 }
-                Image(systemName: "checkmark").font(.system(size: typography.size(offset: -2.5), weight: .semibold))
-                    .foregroundStyle(host.tint?.foreground ?? Chrome.ink)
-                    .opacity(selected ? 1 : 0)
+                StripPickerCheck(shown: selected, color: host.tint?.foreground ?? Chrome.ink)
             }
             .padding(.leading, 5).padding(.trailing, 10).padding(.vertical, 4)
             .background { if hovered && !selected { shape.fill(Chrome.palette.hover) } }

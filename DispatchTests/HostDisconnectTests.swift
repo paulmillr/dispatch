@@ -23,9 +23,9 @@ final class HostDisconnectTests: XCTestCase {
         }
         let settingsWindow = try XCTUnwrap(settings)
         defer { settingsWindow.close() }
-        try await clickText("Integrations", in: settingsWindow)
-        // Remote hosts is the last card: scroll it into view, expand the host's
-        // row, choose Forget host… and confirm inline.
+        try await clickText("Hosts", in: settingsWindow)
+        // The remote hosts list ends the Hosts tab: scroll it into view, expand the
+        // host's row, choose Forget host… and confirm inline.
         let settingsRoot = try XCTUnwrap(settingsWindow.contentView)
         @MainActor func scrollToBottom() -> Bool {
             guard let scroll = PresentationTestSupport.views(of: NSScrollView.self, in: settingsRoot).first(where: { !$0.isHiddenOrHasHiddenAncestor }),
@@ -35,9 +35,11 @@ final class HostDisconnectTests: XCTestCase {
             return true
         }
         let name = try XCTUnwrap(app.workspace.hosts.records[host]?.name)
-        try await TestSupport.eventually {
+        var page = ""
+        try await TestSupport.eventually(diagnostic: "Host \(name) not in settings: \(page)") {
             guard scrollToBottom() else { return false }
-            return try await PresentationTestSupport.capture(settingsWindow).text().contains(name)
+            page = try await PresentationTestSupport.capture(settingsWindow).text()
+            return page.contains(name)
         }
         try await clickText(name, in: settingsWindow)
         // The expanded row grows the page below the visible area.

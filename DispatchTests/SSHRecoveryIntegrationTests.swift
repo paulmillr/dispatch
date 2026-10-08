@@ -356,7 +356,7 @@ enum SSHChatTestSupport {
             session.active && session.remoteAgent != nil
         }
         try await eventually {
-            (try? await contents("codex-home/hooks.json").contains(".dispatch/h4/bin/dispatch-helper4")) == true
+            (try? await contents("codex-home/hooks.json").contains(".dispatch/bin/dispatch-helper")) == true
         }
         try await TestSupport.eventually(timeout: .seconds(10), diagnostic: TerminalTestSupport.screen(terminal: terminal)) {
             let screen = TerminalTestSupport.viewport(terminal: terminal)

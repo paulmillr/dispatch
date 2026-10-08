@@ -172,8 +172,8 @@ final class SSHConsumerCleanupTests: XCTestCase {
         XCTAssertEqual(list.status, 0)
         let logins = String(decoding: list.output, as: UTF8.self).split(separator: "\n").compactMap { line -> (pid: Int32, worker: Bool)? in
             let fields = line.split(whereSeparator: \.isWhitespace)
-            // The remote login (`dsptch login <profile> --session S …`) runs the session's helper bus.
-            guard fields.count >= 5, fields[1].hasSuffix("/dsptch"), fields[2] == "login",
+            // The remote login (`dispatch-helper login <profile> --session S …`) runs the session's helper bus.
+            guard fields.count >= 5, fields[1].hasSuffix("/dispatch-helper"), fields[2] == "login",
                   fields.contains(Substring(connection.launch.sessionID)) else { return nil }
             guard let pid = Int32(fields[0]) else { return nil }
             return (pid, fields[fields.count - 2] == "--login-worker")

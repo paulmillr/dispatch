@@ -1701,21 +1701,21 @@
 			inputFileListPaths = (
 			);
 			inputPaths = (
-				"$(SRCROOT)/build/helper4-rust/bin/darwin-universal",
-				"$(SRCROOT)/build/helper4-rust/bin/linux-aarch64",
-				"$(SRCROOT)/build/helper4-rust/bin/linux-x86_64",
-				"$(SRCROOT)/build/helper4-rust/bin/version",
-				"$(SRCROOT)/build/helper4-rust/bin/protocol-version",
+				"$(SRCROOT)/build/helper-rust/bin/darwin-universal",
+				"$(SRCROOT)/build/helper-rust/bin/linux-aarch64",
+				"$(SRCROOT)/build/helper-rust/bin/linux-x86_64",
+				"$(SRCROOT)/build/helper-rust/bin/version",
+				"$(SRCROOT)/build/helper-rust/bin/protocol-version",
 			);
 			name = "Install SSH helpers";
 			outputFileListPaths = (
 			);
 			outputPaths = (
-				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper4/darwin-universal",
-				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper4/linux-aarch64",
-				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper4/linux-x86_64",
-				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper4/version",
-				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper4/protocol-version",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/darwin-universal",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/linux-aarch64",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/linux-x86_64",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/version",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/protocol-version",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
@@ -1761,7 +1761,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "bash \"$SRCROOT/scripts/build-helper4.sh\"";
+			shellScript = "bash \"$SRCROOT/scripts/bundle-helper.sh\"";
 		};
 		D1567DE27BAB401554E5E596 /* Build portable SSH helpers */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -1772,7 +1772,7 @@
 			inputFileListPaths = (
 			);
 			inputPaths = (
-				"$(SRCROOT)/Helpers/helper4",
+				"$(SRCROOT)/helper",
 				"$(SRCROOT)/scripts/build-ssh-helper.sh",
 				"$(SRCROOT)/scripts/build-ssh-helper.py",
 				"$(SRCROOT)/scripts/setup-ssh-rust.py",
@@ -1781,11 +1781,11 @@
 			outputFileListPaths = (
 			);
 			outputPaths = (
-				"$(SRCROOT)/build/helper4-rust/bin/darwin-universal",
-				"$(SRCROOT)/build/helper4-rust/bin/linux-aarch64",
-				"$(SRCROOT)/build/helper4-rust/bin/linux-x86_64",
-				"$(SRCROOT)/build/helper4-rust/bin/version",
-				"$(SRCROOT)/build/helper4-rust/bin/protocol-version",
+				"$(SRCROOT)/build/helper-rust/bin/darwin-universal",
+				"$(SRCROOT)/build/helper-rust/bin/linux-aarch64",
+				"$(SRCROOT)/build/helper-rust/bin/linux-x86_64",
+				"$(SRCROOT)/build/helper-rust/bin/version",
+				"$(SRCROOT)/build/helper-rust/bin/protocol-version",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
