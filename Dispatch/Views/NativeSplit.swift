@@ -190,7 +190,12 @@ final class TerminalSplitView: NSSplitView, NSSplitViewDelegate {
             return
         }
         let start = arrangedSubviews[0].frame.width
-        if hidden, !sidebarAnimating, start > 0 { sidebarWidth = start }
+        if hidden, !sidebarAnimating, start > 0, start != sidebarWidth {
+            // The column reopens at the width it closed with; the shared width learns it too, or its next update
+            // would restore the older one.
+            sidebarWidth = start
+            if let onSidebarResize { DispatchQueue.main.async { onSidebarResize(start) } }
+        }
         sidebarAnimation?.cancel()
         sidebarHidden = hidden
         // Divider layers have their own AppKit layout; resizing our two hosts

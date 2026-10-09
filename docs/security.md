@@ -57,7 +57,7 @@ Any process running as you can read these values, but the tokens are not enough 
 
 - Programs can't read your clipboard: OSC 52 reads always get an empty reply, and kitty clipboard reads need a one-time grant from a real paste.
 - Programs can write to your clipboard without asking, from local tabs and plain SSH tabs. This covers OSC 52, the kitty clipboard protocol, and tmux paste buffers up to 8 MiB.
-- On SSH hosts with the Dispatch helper, clipboard writes are blocked unless **Remote programs can copy** is on (off).
+- On SSH hosts with the Dispatch helper, clipboard writes are blocked unless **Remote programs can copy** is on (on).
 
 **Paste.** The terminal detects unsafe pastes: text with newlines outside bracketed paste, or an embedded end-of-paste sequence. Dispatch confirms them automatically, so you never see a warning. There is no setting to turn this off.
 
@@ -104,7 +104,8 @@ Chat attaches to Codex, Claude Code, Pi, and Nanocodex sessions that are already
 - Claude: `$CLAUDE_CONFIG_DIR/settings.json` (default `~/.claude/settings.json`) gets `PermissionRequest` and `PreToolUse` for `AskUserQuestion`.
 - How the edit is made: Dispatch only adds or removes entries whose command is its own. It refuses invalid JSON and aborts if the file changed while it was working. It rewrites the whole file pretty-printed with sorted keys, so your formatting changes. It doesn't make a backup and doesn't set the file mode.
 - The hook command runs the helper's stable copy, `~/.dispatch/bin/dispatch-helper hook {codex,claude}`. It sends the hook's JSON — your prompts, tool inputs and outputs, and the agent's replies — to the running helper over a Unix socket in `~/.dispatch/run/*/` (folder 0700). It does nothing when no Dispatch helper is running.
-- Turning Chat or an agent's hooks off removes Dispatch's entries. The hook script itself stays on disk.
+- Turning Chat off removes Dispatch's Claude entries for the current helper path. It leaves the Codex entries in place, because Codex's trust is keyed by each hook's position. The hook script itself stays on disk.
+- To remove every Dispatch hook, for both agents and from any helper version, run `~/.dispatch/bin/dispatch-helper uninstall-hooks` (add `--dry-run` to preview). It edits `$CLAUDE_CONFIG_DIR`/`~/.claude/settings.json` and `$CODEX_HOME`/`~/.codex/hooks.json`, keeps other handlers, settings, the file mode and symlinks, and drops matcher groups and events it leaves empty. Codex asks again in `/hooks` to trust any of your own hooks that sit after a removed one. Turn Chat off first, or Dispatch installs its hooks again at the next launch.
 - Pi needs an explicit **Install** in Settings. That writes `~/.pi/agent/extensions/dispatch-chat.js` (0600) plus a checksum receipt, and refuses symlinked or foreign-owned folders. While Pi runs, the extension listens on `/tmp/dispatch-pi-<uid>/<pid>-<uuid>.sock` (0600, token required). Through that socket it serves Pi's state (including the current editor text), model list, prompt, steer, and abort. **Remove** deletes both files.
 
 <a id="hook-receiver"></a>**Hook receiver.** Dispatch accepts a hook request only when all of these hold:
@@ -196,7 +197,7 @@ The token routes the request to a pane. If the token doesn't match any pane, Dis
 - **Left behind after disconnect** (there is no uninstall):
   - in `~/.dispatch/`: the helper copy and the most recently used helper versions in `bin/`, herdr recovery records in `state/`, and session folders for up to a day;
   - lock files in agent config folders;
-  - the hook entries above;
+  - the hook entries above (run `~/.dispatch/bin/dispatch-helper uninstall-hooks` on the host to remove them);
 
 **Reconnect.** Reconnecting re-checks the machine ID, user, boot ID, and grant, and only reattaches to existing tmux/herdr sessions. Anything you type while a connection is recovering is discarded, not queued. Automatic reconnect (off by default) logs in with `BatchMode=yes` only, so it never prompts, and stops when OpenSSH refuses the login instead of retrying it.
 

@@ -602,7 +602,7 @@ class BuildEntryPointTests(unittest.TestCase):
 
     def testCleanRejectsExternalParentBeforeDeletingAnyCache(self):
         with tempfile.TemporaryDirectory() as external:
-            (self.root / 'Helpers').symlink_to(external, target_is_directory=True)
+            (self.root / 'helper').symlink_to(external, target_is_directory=True)
             cache = self.root / 'build/keep'
             cache.parent.mkdir()
             cache.write_text('cache')

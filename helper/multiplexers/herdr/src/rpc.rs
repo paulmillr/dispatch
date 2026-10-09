@@ -693,6 +693,30 @@ impl Herdr {
         }
         Err(expired("This herdr terminal is no longer available."))
     }
+    /// The directory of the pane a creation comes from: the split pane, else the target's focused pane
+    /// (herdr's focused pane for a new workspace).
+    pub(super) fn source_directory(&self, parent: Id, beside: Option<Id>) -> Option<String> {
+        let focused = |tab: &str| {
+            self.snapshot
+                .layouts
+                .iter()
+                .find(|layout| layout.key == tab)
+                .map(|layout| layout.focus.clone())
+        };
+        let pane = match beside.map_or_else(|| self.locate(parent), |id| self.locate(id)) {
+            Ok((Kind::Terminal, key)) => Some(key),
+            Ok((Kind::Tab, key)) => focused(&key),
+            Ok((Kind::Workspace, key)) => self
+                .snapshot
+                .workspaces
+                .iter()
+                .find(|workspace| workspace.key == key)
+                .and_then(|workspace| focused(&workspace.active)),
+            Err(_) => self.snapshot.focus[2].clone(),
+        }?;
+        let pane = self.snapshot.panes.iter().find(|p| p.key == pane)?;
+        pane.foreground.clone().or_else(|| pane.cwd.clone())
+    }
     pub(super) fn node(
         &mut self,
         io: &mut dyn Io,

@@ -17,8 +17,8 @@ from environment import load as load_test_environment
 LOCAL_ENVIRONMENT = load_test_environment()
 IMAGE = Path(LOCAL_ENVIRONMENT.get("linux_image", str(Path.home() / "VM-Archives/dispatch/ubuntu-26.04-arm64.raw")))
 DIGEST = "sha256:7efd5db211147e80053e3e998ab232845b3c10a5aa4e76b6f2c575a84608c863"
-HERDR = Path(LOCAL_ENVIRONMENT.get("linux_herdr", str(IMAGE.parent / "herdr-0.9.0-linux-aarch64")))
-HERDR_DIGEST = "9c8db20fb7e7427b138d5367113f1621ffd319f2f65d6f009e2594029115f0d2"
+HERDR = Path(LOCAL_ENVIRONMENT.get("linux_herdr", str(IMAGE.parent / "herdr-0.9.3-linux-aarch64")))
+HERDR_DIGEST = "4de7aa3e25678812e92960de64f7c2aaa1bca1f0f80a3c5e559837e231e1f5c0"
 
 
 def instances():

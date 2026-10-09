@@ -10,7 +10,7 @@ Launch with `tmux -CC new-session -A -s work`, or `herdr` (`--session NAME`, `se
 - **Detached** sidebar items reattach to the original client or session, never a replacement. The list lasts only for the current run.
 - Layout presets rearrange tabs locally; they never touch server processes or nested splits. Tabs move only between spaces on the same backend connection.
 - A successful handoff closes the launching tab, over SSH too. Settings no longer offers to keep it; `closeLaunching` stays in the preferences for settings files that turned it off and for tests that keep the tab as a shell to reattach from. The tmux gateway lives while native panes need it, and remote herdr keeps its SSH connection until the last native view detaches. A failed attach leaves the terminal usable.
-- Versions: herdr validated on 0.9.0, and its CLI forms pass through. tmux ≥ 3.7 reports bracketed-paste state. Older servers fall back to paste markers, with a Chat warning that readiness can't be verified. Ownership, copy-mode, disabled-input, and synchronized-pane checks still apply.
+- Versions: herdr validated on 0.9.3, and its CLI forms pass through. tmux ≥ 3.7 reports bracketed-paste state. Older servers fall back to paste markers, with a Chat warning that readiness can't be verified. Ownership, copy-mode, disabled-input, and synchronized-pane checks still apply.
 
 ## SSH
 

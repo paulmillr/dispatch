@@ -1,79 +1,79 @@
 {
   "codex": {
-    "version": "0.159.1",
+    "version": "0.162.0",
     "check": [
       "--version"
     ],
     "banner": "codex-cli {version}",
     "archives": {
       "arm64": {
-        "url": "https://github.com/openai/codex/releases/download/rust-v0.159.1/codex-package-aarch64-apple-darwin.tar.gz",
-        "sha256": "a8fc76ccb5230dd97fb6db01873fa9c12b5e1efdf32d13c2ba7f6e8489ccd893",
+        "url": "https://github.com/openai/codex/releases/download/rust-v0.162.0/codex-package-aarch64-apple-darwin.tar.gz",
+        "sha256": "5809ee90a9c3b59d438bb2663aefa0b43d86f825438b65d4504b31f82343628b",
         "binary": "bin/codex"
       },
       "x86_64": {
-        "url": "https://github.com/openai/codex/releases/download/rust-v0.159.1/codex-package-x86_64-apple-darwin.tar.gz",
-        "sha256": "b8e8e6e403ed4357dfac2f2e5bba0f22df3e6a6962c68da792d6720a32e0842a",
+        "url": "https://github.com/openai/codex/releases/download/rust-v0.162.0/codex-package-x86_64-apple-darwin.tar.gz",
+        "sha256": "928b421103f339683d0d9f8a648f7b591ae4be907cbd8a5418dda319ff2bbd3c",
         "binary": "bin/codex"
       }
     }
   },
   "claude": {
-    "version": "2.1.285",
+    "version": "2.1.295",
     "check": [
       "--version"
     ],
     "banner": "{version} (Claude Code)",
     "archives": {
       "arm64": {
-        "url": "https://downloads.claude.ai/claude-code-releases/2.1.285/darwin-arm64/claude",
-        "sha256": "51f09bd1e021d9fa8a1864c179799bd37cb39962a937935c5cf6823398e86db4",
+        "url": "https://downloads.claude.ai/claude-code-releases/2.1.295/darwin-arm64/claude",
+        "sha256": "0116ee2e0a513900b633d9951367f18747686478e2b462805b8c31609f047f70",
         "binary": "bin/claude",
         "format": "binary"
       },
       "x86_64": {
-        "url": "https://downloads.claude.ai/claude-code-releases/2.1.285/darwin-x64/claude",
-        "sha256": "24835f7ca4b4338c33ad21c98a3402d9c22f89b8055075d18828e97973844ec3",
+        "url": "https://downloads.claude.ai/claude-code-releases/2.1.295/darwin-x64/claude",
+        "sha256": "a6066492288585a1ef5e482cb28ad22714ab12cd48e367c0cee988b00cff724c",
         "binary": "bin/claude",
         "format": "binary"
       }
     }
   },
   "pi": {
-    "version": "1.0.4",
+    "version": "1.1.0",
     "check": [
       "--version"
     ],
     "banner": "{version}",
     "archives": {
       "arm64": {
-        "url": "https://github.com/earendil-works/pi/releases/download/v1.0.4/pi-darwin-arm64.tar.gz",
-        "sha256": "717dcd38a03849e919f9dec9daa96f5ca102e15ea33d804e5db57b1d47e513bc",
+        "url": "https://github.com/earendil-works/pi/releases/download/v1.1.0/pi-darwin-arm64.tar.gz",
+        "sha256": "3455b13de35c15a5893cdebc922678199e90a7ce99b06cbc23f37860e90d63c7",
         "binary": "pi/pi"
       },
       "x86_64": {
-        "url": "https://github.com/earendil-works/pi/releases/download/v1.0.4/pi-darwin-x64.tar.gz",
-        "sha256": "665022918678542dd7c87fe7b0da70d2a3dcd926bc6ff4cc712308f2ca313358",
+        "url": "https://github.com/earendil-works/pi/releases/download/v1.1.0/pi-darwin-x64.tar.gz",
+        "sha256": "8fdd9149ae27e7470a6a10ed8a7c0ed80738d55adec80a8d7764f6386d1e658b",
         "binary": "pi/pi"
       }
     }
   },
   "herdr": {
-    "version": "0.9.0",
+    "version": "0.9.3",
     "check": [
       "--version"
     ],
     "banner": "herdr {version}",
     "archives": {
       "arm64": {
-        "url": "https://github.com/herdrdev/herdr/releases/download/v0.9.0/herdr-macos-aarch64",
-        "sha256": "32b53df09872628059c789a69f02a6b8e29e14ddf26711421f3463f70c1aef17",
+        "url": "https://github.com/herdrdev/herdr/releases/download/v0.9.3/herdr-macos-aarch64",
+        "sha256": "5173a3e0ae42d5d1ab7ebfa5d5e6329f7c3d23f8e1a3677c7ce3231da2884157",
         "binary": "bin/herdr",
         "format": "binary"
       },
       "x86_64": {
-        "url": "https://github.com/herdrdev/herdr/releases/download/v0.9.0/herdr-macos-x86_64",
-        "sha256": "d0c920b2a126a74809fa1491411c9a097a44786cac9c2ca51b818a995581cf16",
+        "url": "https://github.com/herdrdev/herdr/releases/download/v0.9.3/herdr-macos-x86_64",
+        "sha256": "db62d548ff3e832b087a96b1894a08d26be3905f1830309cd556783f215d4054",
         "binary": "bin/herdr",
         "format": "binary"
       }

@@ -13,7 +13,7 @@ A dedicated Tart VM (default `dispatch-tests`; override with `--vm NAME` before 
 The host needs Apple Silicon, Xcode 26 with first launch completed, Homebrew in `/opt/homebrew`, `brew install openai/tools/tart`, and `bash scripts/setup.sh`. The image download is about 69 GB, plus disk and build products. The guest gets 4 CPUs, 8 GB of RAM, and a 1920×1080 pt Retina display.
 
 `test/vm.py` copies two host binaries from **fixed paths** (finding them on `PATH` isn't enough):
-- herdr 0.9.0 at `/opt/homebrew/bin/herdr`. Re-run setup after changing it.
+- herdr 0.9.3 at `/opt/homebrew/bin/herdr`. Re-run setup after changing it.
 - Native Codex from the global npm layout: `npm install --global --prefix /opt/homebrew @openai/codex`, giving `/opt/homebrew/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex`. Any version works.
 
 The full suite also needs Claude Code on `PATH` and the pinned Pi from `./run.sh --test`. Host binaries built for a newer macOS, or linked to host libraries, are rejected before copying.
@@ -60,7 +60,7 @@ Linux servers are small Lima VMs (Lima ≥ 2.0.0; 1 CPU, 1 GiB RAM, 8 GiB disk, 
 | File | SHA-256 |
 | --- | --- |
 | `ubuntu-26.04-arm64.raw` | `7efd5db211147e80053e3e998ab232845b3c10a5aa4e76b6f2c575a84608c863` |
-| `herdr-0.9.0-linux-aarch64` | `9c8db20fb7e7427b138d5367113f1621ffd319f2f65d6f009e2594029115f0d2` |
+| `herdr-0.9.3-linux-aarch64` | `4de7aa3e25678812e92960de64f7c2aaa1bca1f0f80a3c5e559837e231e1f5c0` |
 
 `ssh-vm.py` installs herdr only if it's missing. It never provisions agent CLIs, system tmux, Python, or the supported tmux 3.7c fixture (normally `/opt/dispatch-test-tools/tmux/bin/tmux`). Prepare those explicitly, keep system tmux alongside, and record versions and source hashes under `tmp/profiling/`.
 

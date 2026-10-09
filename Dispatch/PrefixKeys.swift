@@ -260,7 +260,7 @@ extension PrefixTable {
         "toggle_sidebar": { _ in .toggleSidebar },
     ]
 
-    /// herdr 0.9.0's default [keys] that map onto Dispatch.
+    /// herdr 0.9.3's default [keys] that map onto Dispatch.
     private static let herdrDefaultKeys: [String: String] = [
         "prefix": "ctrl+b", "help": "prefix+?", "settings": "prefix+s", "detach": "prefix+q",
         "open_notification_target": "prefix+o", "workspace_picker": "prefix+w", "goto": "prefix+g",

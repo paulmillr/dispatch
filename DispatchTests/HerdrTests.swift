@@ -269,6 +269,21 @@ final class HerdrTests: XCTestCase {
         XCTAssertEqual(tabs.map { $0.displayLabel(automatic: true, conversation: "Fix startup") }, ["Fix startup", "Mine", "Fix startup", "2", "Fix startup"])
         XCTAssertEqual(tabs.map { $0.displayLabel(automatic: true, conversation: nil) }, ["1", "Mine", "3", "2", "1"])
         XCTAssertEqual(tabs.map { $0.displayLabel(automatic: false, conversation: "Fix startup") }, ["1", "Mine", "3", "2", "1"])
+
+        // Numbered tabs fall back to their focused pane: a program's own title, then the folder at a prompt.
+        var pane = TerminalTab(directory: "/work/src/project")
+        pane.title = "~/work/src/project"
+        var numbered = ContainerTab(id: UUID(), node: 1, name: "2", renamed: false, numbered: true, arrangement: PaneArrangement(tab: pane))
+        XCTAssertEqual(numbered.displayLabel(automatic: true, conversation: nil), "project")
+        XCTAssertEqual(numbered.displayLabel(automatic: true, conversation: "Fix startup"), "Fix startup")
+        XCTAssertEqual(numbered.displayLabel(automatic: false, conversation: nil), "2")
+        pane.title = "vim notes.md"
+        XCTAssertEqual(numbered.displayLabel(automatic: true, conversation: nil, focused: pane), "vim notes.md")
+        var blank = TerminalTab(directory: "")
+        blank.title = ""
+        XCTAssertEqual(numbered.displayLabel(automatic: true, conversation: nil, focused: blank), "2")
+        numbered.renamed = true
+        XCTAssertEqual(numbered.displayLabel(automatic: true, conversation: nil), "2")
     }
 
     func testHandoffClosesOnlyLaunchingTabAndRemovesEmptySpace() async throws {
@@ -464,6 +479,25 @@ final class HerdrTests: XCTestCase {
         let tab = try XCTUnwrap(workspace.spaces.flatMap(\.tabs).first { $0.id == expected })
         let key = try XCTUnwrap(workspace.windowKey(of: tab))
         try await TestSupport.eventually { (try? herdr.snapshot().focused_tab_id) == key }
+    }
+
+    func testNewTabStartsInFocusedPaneDirectory() async throws {
+        let herdr = try await HerdrSession(); defer { herdr.close() }
+        let workspace = herdr.app.workspace
+        // herdr reports the real path (/private/tmp), which Foundation's symlink resolution would undo.
+        let directory = "/private" + herdr.root.appendingPathComponent("project").path
+        try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+        let view = try XCTUnwrap(workspace.activeTab.flatMap { herdr.app.runtime.views[$0.id] })
+        TerminalTestSupport.send("cd " + HerdrLaunch.quote(directory), to: view)
+        try await TestSupport.eventually(timeout: .seconds(10), diagnostic: TerminalTestSupport.screen(terminal: view)) {
+            let snapshot = try herdr.snapshot()
+            return snapshot.panes.first { $0.pane_id == snapshot.focused_pane_id }?.cwd == directory
+        }
+        let known = Set(try herdr.snapshot().panes.map(\.pane_id))
+        workspace.newTab()
+        try await TestSupport.eventually(timeout: .seconds(10)) { try herdr.snapshot().panes.count == known.count + 1 }
+        let created = try XCTUnwrap(try herdr.snapshot().panes.first { !known.contains($0.pane_id) })
+        XCTAssertEqual(created.cwd, directory, "A new tab starts where the focused pane is, as in herdr's own UI")
     }
 
     func testOptimisticCreationReusesPlaceholderAndMoveRetainsTerminal() async throws {

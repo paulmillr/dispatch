@@ -10,7 +10,7 @@ final class HerdrIntegrationTests: XCTestCase {
         let restoreRuntime = TestSupport.preserveRuntime()
         defer { restoreRuntime() }
         try DesktopTestSupport.requireUnlocked()
-        guard FileManager.default.isExecutableFile(atPath: TestSupport.tool("herdr")) else { throw XCTSkip("Install herdr 0.9.0 to run local integration tests.") }
+        guard FileManager.default.isExecutableFile(atPath: TestSupport.tool("herdr")) else { throw XCTSkip("Install herdr 0.9.3 to run local integration tests.") }
         let root = URL(fileURLWithPath: "/tmp/he-\(UUID().uuidString.prefix(8))")
         let bin = root.appendingPathComponent("bin alias")
         try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
@@ -144,7 +144,7 @@ final class HerdrIntegrationTests: XCTestCase {
         let restoreRuntime = TestSupport.preserveRuntime()
         defer { restoreRuntime() }
         try DesktopTestSupport.requireUnlocked()
-        guard FileManager.default.isExecutableFile(atPath: TestSupport.tool("herdr")) else { throw XCTSkip("Install herdr 0.9.0 to run local integration tests.") }
+        guard FileManager.default.isExecutableFile(atPath: TestSupport.tool("herdr")) else { throw XCTSkip("Install herdr 0.9.3 to run local integration tests.") }
         let root = URL(fileURLWithPath: "/tmp/hh-\(UUID().uuidString.prefix(8))")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
         let socket = root.appendingPathComponent("herdr.sock").path

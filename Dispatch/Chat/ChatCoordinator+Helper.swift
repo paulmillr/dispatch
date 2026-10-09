@@ -191,7 +191,9 @@ extension ChatCoordinator {
             }
             session.active = true
             if let version = state.version { session.version = version }
-            if session.sessionID != nil, !session.manualViewChoice, !session.exitRequested, !session.showChat {
+            // A native dialog owns the terminal (e.g. Claude's startup review of changed hooks, which
+            // runs after the session registers): Chat opens once it closes.
+            if session.sessionID != nil, state.dialog == nil, !session.manualViewChoice, !session.exitRequested, !session.showChat {
                 setChatVisible(true, session: session)
                 adoptTerminalTypeahead(session)
             }

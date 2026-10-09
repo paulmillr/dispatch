@@ -131,6 +131,8 @@ pub struct Pane {
     pub terminal: String,
     pub parent: String,
     pub cwd: Option<String>,
+    /// The foreground process's directory: what herdr's own new panes follow.
+    pub foreground: Option<String>,
     pub title: Option<String>,
     pub label: Option<String>,
 }
@@ -225,6 +227,7 @@ impl Snapshot {
                     terminal: text(p, "terminal_id")?,
                     parent: text(p, "tab_id")?,
                     cwd: optional(p, "cwd")?,
+                    foreground: optional(p, "foreground_cwd")?,
                     title: optional(p, "title")?,
                     label: optional(p, "label")?,
                 })

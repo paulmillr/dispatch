@@ -85,7 +85,9 @@ final class MainMockupPresentationTests: XCTestCase {
         controller.settings.values.spaceOrder = .tree
         let treeSnapshot = try await capture(window, "main-tree")
         let tree = try sidebarText(treeSnapshot, window: window)
-        XCTAssertFalse(tree.contains("this Mac")); XCTAssertTrue(tree.contains("+ local"), tree)
+        // The host heading's plus stays hidden until the pointer is over it (NewSpacePresentationTests).
+        XCTAssertFalse(tree.contains("this Mac")); XCTAssertTrue(tree.contains("Local"), tree)
+        XCTAssertFalse(tree.contains("+ local"), tree)
         let original = workspace.allTabIDs
         workspace.applyLayout(.grid)
         _ = try await capture(window, "main-grid")

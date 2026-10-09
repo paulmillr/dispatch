@@ -46,7 +46,10 @@ final class TerminalRuntime {
     }
 
     func label(for window: ContainerTab, automatic: Bool) -> String {
-        window.displayLabel(automatic: automatic, conversation: window.focusedTerminal.flatMap(liveConversationTitle))
+        let focused = window.focusedTerminal
+        // Only numbered windows read the pane's title, so only they re-render on it.
+        let live = automatic && window.numbered == true ? focused.map { workspace?.liveTab($0.id) ?? $0 } : nil
+        return window.displayLabel(automatic: automatic, conversation: focused.flatMap(liveConversationTitle), focused: live)
     }
 
     private func liveConversationTitle(_ tab: TerminalTab) -> String? {

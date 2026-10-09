@@ -3,6 +3,7 @@
   import Term
   import TermApple
   import Observation
+  import os
 
   /// App state and rendering for the common terminal family.
   @MainActor @Observable
@@ -514,11 +515,25 @@
               guard !stopped, subscribing[route]?.id == generation else { return }
             }
           }
+          // Topologies are whole states: of consecutive ones still queued for the main actor only the newest
+          // applies (a large server publishes a burst, e.g. one per discovered shell, and each costs a full pass).
+          let queue = OSAllocatedUnfairLock(initialState: [Result<HelperClient.Update, any Error>]())
           let observer = try await client.open(.init(mux: route.mux, key: key)) { [weak self] result in
+            let first = queue.withLock { queue in
+              if case .success(.topology) = result, case .success(.topology)? = queue.last {
+                queue[queue.count - 1] = result
+                return false
+              }
+              queue.append(result)
+              return queue.count == 1
+            }
+            guard first else { return }
             DispatchQueue.main.async {
               MainActor.assumeIsolated {
-                guard let self, self.subscribing[route]?.id == generation else { return }
-                self.update(result, route: route)
+                for result in queue.withLock({ queue in defer { queue = [] }; return queue }) {
+                  guard let self, self.subscribing[route]?.id == generation else { return }
+                  self.update(result, route: route)
+                }
               }
             }
           }
@@ -2175,6 +2190,7 @@
         hosts[route] = space.hostID
       }
       routes[topology.backend] = route
+      let herdr = multiplexer(of: topology.backend) == "herdr"
       let nodes = Dictionary(uniqueKeysWithValues: topology.nodes.map { ($0.id, $0) })
       if let restored = restoring[route] {
         let requested = Set(restored.presentation.flatMap(\.tabs).filter { $0.terminal != nil }.map(\.id))
@@ -2231,6 +2247,10 @@
         uniqueKeysWithValues: topology.layouts.map { ($0.container, $0) })
       var spaces: [Space] = []
       let under = { (node: UInt64, root: UInt64) in sequence(first: node) { nodes[$0]?.parent }.contains(root) }
+      // Indexed once: a large server has hundreds of windows, and a scan per window is quadratic.
+      let priorTabs = Dictionary(previous.flatMap(\.tabs).map { ($0.id, $0) }) { first, _ in first }
+      let priorContainers = Dictionary(previous.flatMap(\.containers).map { ($0.id, $0) }) { first, _ in first }
+      let terminalsByParent = Dictionary(grouping: topology.nodes.filter { $0.kind == .terminal }, by: \.parent)
       for root in topology.nodes where root.kind == .workspace && !root.detached {
         // A space shown while its creation was pending keeps its id: selection and drafts stay with it.
         if let created = topology.nodes.first(where: {
@@ -2269,7 +2289,7 @@
             let identifier = assigned[node.id] ?? id(key)
             identity[key] = identifier
             var tab =
-              previous.flatMap(\.tabs).first { $0.id == identifier }
+              priorTabs[identifier]
               ?? TerminalTab(
                 id: identifier, directory: node.cwd ?? workspace.defaultDirectory)
             tab.title = node.name
@@ -2306,16 +2326,14 @@
         let sources = containers.isEmpty ? [root] : containers
         var tabs: [ContainerTab] = []
         for source in sources {
-          let terminals = topology.nodes.filter {
-            $0.kind == .terminal && $0.parent == source.id
-          }
+          let terminals = terminalsByParent[source.id] ?? []
           guard let first = terminals.first else { continue }
           let values = terminals.map { node -> TerminalTab in
             let key = Key(route: route, entity: .node(node.key))
             let identifier = assigned[node.id] ?? id(key)
             identity[key] = identifier
             var tab =
-              previous.flatMap(\.tabs).first { $0.id == identifier }
+              priorTabs[identifier]
               ?? TerminalTab(
                 id: identifier, directory: node.cwd ?? workspace.defaultDirectory)
             tab.title = node.name
@@ -2346,7 +2364,7 @@
             // this app has an explicit inner-pane selection in flight; container selection
             // must not pin the old pane when that container gains a split.
             if commanding[route, default: 0] == 0,
-              let prior = previous.flatMap(\.containers).first(where: { $0.id == id(Key(route: route, entity: .node(source.key))) })?.arrangement,
+              let prior = priorContainers[id(Key(route: route, entity: .node(source.key)))]?.arrangement,
               let kept = prior.panes.first(where: { $0.id == prior.focusedPane }),
               prior.panes.contains(where: { $0.id == arrangement.focusedPane })
                 || kept.activeTab?.terminal.map({ focusTargets[$0, default: 0] > 0 }) == true,
@@ -2395,7 +2413,7 @@
           tabs.append(
             ContainerTab(
               id: identifier, node: source.id, name: source.name, renamed: source.renamed,
-              arrangement: arrangement))
+              numbered: herdr && source.renamed == false, arrangement: arrangement))
           _ = first
         }
         // Pending windows keep their presentation groups even when a topology predates their creation.

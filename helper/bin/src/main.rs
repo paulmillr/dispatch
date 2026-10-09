@@ -1,6 +1,8 @@
 use dispatch_helper_core::{DispatchHelper, api::Grid, system::System};
 use std::{collections::BTreeMap, path::PathBuf};
 
+mod uninstall;
+
 /// Programs typed in a helper shell run through `launch <key>`, and the helper invoked under
 /// such a name is that launch (old ssh-helper main.rs:47-51 argv0 aliases, startup.rs AGENTS;
 /// ShellCommandWrapper.swift:5). Claude follows once its launch takes arguments.
@@ -48,6 +50,9 @@ fn main() -> std::io::Result<()> {
     }
     if first("renderer") {
         return dispatch_helper_core::system::renderer::run();
+    }
+    if first("uninstall-hooks") {
+        std::process::exit(uninstall::run(&argv[1..])?);
     }
     if first("exit-status") {
         let session = argv

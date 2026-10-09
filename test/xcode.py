@@ -21,7 +21,7 @@ import replay
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / 'scripts'))
 import codex_fixture
-INPUTS = ("Dispatch", "DispatchTests", "Helpers", "Vendor", "ThirdPartyLicenses", "extras", "scripts", "test",
+INPUTS = ("Dispatch", "DispatchTests", "helper", "Vendor", "ThirdPartyLicenses", "extras", "scripts", "test",
           "project.yml",
           "Dispatch.xcodeproj/project.pbxproj", "Dispatch.xcodeproj/xcshareddata")
 IGNORED = {"target", "__pycache__", "LocalToolAudit", ".git", "xcuserdata", ".DS_Store"}

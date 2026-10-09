@@ -64,6 +64,25 @@ final class ChatDiscoveryTests: XCTestCase {
         XCTAssertTrue(session.inputBlocked, "Choosing Chat cannot bypass failed identity verification")
     }
 
+    /// Claude registers its session before startup dialogs such as the review of changed hooks;
+    /// Chat must not cover them, and opens on its own once the dialog closes.
+    func testNativeDialogDefersAutomaticChat() {
+        let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
+        let session = chat.session(for: UUID())
+        defer { chat.close(session.id) }
+        session.helper = HelperChat(terminal: 0); session.sessionID = "dialog"
+        func state(dialog: String?) -> HelperChat.State {
+            .init(busy: dialog != nil, activity: dialog == nil ? "idle" : "waiting", model: nil, model_label: nil, effort: nil,
+                  usage: nil, goal: nil, draft: nil, attention: nil, dialog: dialog, title: nil, compacting: false, service_tier: nil)
+        }
+        chat.receiveHelper(.state(state(dialog: "dialog open")), session: session)
+        XCTAssertTrue(session.active)
+        XCTAssertFalse(session.showChat, "A native dialog keeps Terminal in front")
+        chat.receiveHelper(.state(state(dialog: nil)), session: session)
+        XCTAssertTrue(session.showChat)
+        XCTAssertFalse(session.manualViewChoice)
+    }
+
     /// A helper chat failure blocks the chat like this.
     func testDiscoveryFailureRetainsChatAndDurableDraftWithoutAllowingInput() throws {
         let store = ChatDraftMemoryStore()

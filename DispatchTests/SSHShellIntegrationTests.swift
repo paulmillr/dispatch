@@ -209,8 +209,10 @@ final class SSHShellIntegrationTests: XCTestCase {
         pasteboard.clearContents(); pasteboard.setString("untouched", forType: .string)
         let remote = try await activeTerminal()
         try await ssh(helper, from: remote, helper: true)
+        XCTAssertTrue(app.runtime.preferences.allowRemoteClipboardWrites, "Programs on helper hosts can copy by default")
+        app.runtime.preferences.allowRemoteClipboardWrites = false
         try await copy("helper-off", in: remote)
-        try await assertRefused("Programs on helper hosts cannot copy by default")
+        try await assertRefused("Programs on helper hosts cannot copy with the setting off")
         app.runtime.preferences.allowRemoteClipboardWrites = true
         try await copy("helper-on", in: remote)
         try await app.wait { pasteboard.string(forType: .string) == "helper-on" }
@@ -227,7 +229,7 @@ final class SSHShellIntegrationTests: XCTestCase {
         TerminalTestSupport.send("\(HerdrLaunch.quote(TestSupport.tool("tmux"))) -u -L \(app.socket) -CC attach -t edge", to: remote)
         try await TestSupport.eventually(timeout: .seconds(10)) { app.workspace.spaces.contains { $0.structured && $0.remote != nil && $0.remote == app.runtime.link(of: remote.id)?.launch.connectionID } }
         _ = try app.server(["set-buffer", "-b", "remote", "tmux-off"])
-        try await assertRefused("tmux over the helper cannot copy by default")
+        try await assertRefused("tmux over the helper cannot copy with the setting off")
         app.runtime.preferences.allowRemoteClipboardWrites = true
         _ = try app.server(["set-buffer", "-b", "remote", "tmux-on"])
         try await app.wait { pasteboard.string(forType: .string) == "tmux-on" }

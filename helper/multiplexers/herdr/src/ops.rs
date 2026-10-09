@@ -89,7 +89,13 @@ impl Multiplexer for Herdr {
                 return;
             }
         };
-        if let Some(command) = command {
+        if let Some(mut command) = command {
+            // Like herdr's own new panes, tabs and workspaces, start where the source pane is.
+            if command.get_current_dir().is_none()
+                && let Some(directory) = self.source_directory(parent, beside)
+            {
+                command.current_dir(directory);
+            }
             if parent == self.backend && beside.is_none() {
                 let cwd = command
                     .get_current_dir()

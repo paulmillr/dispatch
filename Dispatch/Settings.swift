@@ -147,8 +147,8 @@ struct Preferences: Codable, Equatable {
     /// With the helper allowed, new hosts get every feature instead of the consent sheet.
     var autoGrantNewHosts = false
     /// Programs on this Mac and over plain SSH can always set the clipboard (OSC 52,
-    /// kitty clipboard, tmux buffers). On hosts with the helper, only when this is on.
-    var allowRemoteClipboardWrites = false
+    /// kitty clipboard, tmux buffers). On hosts with the helper, only when this is on (the default).
+    var allowRemoteClipboardWrites = true
     /// A helper connection lost while Dispatch runs logs back in by itself, with keys or the SSH agent only.
     var autoReconnectSSH = false
     var newHostPolicy: NewHostPolicy {

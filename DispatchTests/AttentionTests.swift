@@ -47,7 +47,7 @@ final class AttentionTests: XCTestCase {
         XCTAssertTrue(old.attentionDockBadge)
         XCTAssertTrue(old.attentionSound)
         XCTAssertTrue(old.enableHostDetection)
-        XCTAssertFalse(old.allowRemoteClipboardWrites, "Programs on helper hosts cannot set the clipboard by default")
+        XCTAssertTrue(old.allowRemoteClipboardWrites, "Programs on helper hosts can set the clipboard by default")
         XCTAssertFalse(old.showGitBranches)
         let large = try JSONDecoder().decode(Preferences.self, from: Data(#"{"largeSidebarItems":true}"#.utf8))
         XCTAssertTrue(large.showGitBranches, "Large sidebar items used to show branches")
@@ -65,7 +65,7 @@ final class AttentionTests: XCTestCase {
         updated.attentionDockBadge = false
         updated.attentionSound = false
         updated.enableHostDetection = false
-        updated.allowRemoteClipboardWrites = true
+        updated.allowRemoteClipboardWrites = false
         XCTAssertEqual(try JSONDecoder().decode(Preferences.self, from: JSONEncoder().encode(updated)), updated)
     }
 

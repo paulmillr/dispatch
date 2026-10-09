@@ -296,6 +296,8 @@ final class SettingsSynchronizationTests: XCTestCase {
             XCTAssertFalse(PresentationTestSupport.views(of: NSGlassEffectView.self, in: root, includingNestedMatches: true).isEmpty,
                            "The column draws AppKit's sidebar glass")
         }
+        // Tahoe's own sidebar (macOS 26) is itself a floating inset panel; it is flush from macOS 27.
+        guard #available(macOS 27, *) else { return }
         XCTAssertEqual(panel, inset, accuracy: 0.02, "The glass reaches the window's edge (\(panel) vs \(inset) at the edge)")
     }
 

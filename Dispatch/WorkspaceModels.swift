@@ -424,13 +424,18 @@ struct ContainerTab: Identifiable, Equatable, Codable {
     var name: String
     /// Native explicit names outrank conversation titles; absent in older saved presentations.
     var renamed: Bool? = nil
+    /// herdr numbers unnamed tabs by position; those show their focused pane's name instead.
+    var numbered: Bool? = nil
     var arrangement: PaneArrangement
     var terminals: [TerminalTab] { arrangement.panes.flatMap(\.tabs) }
     var focusedTerminal: TerminalTab? { arrangement.panes.first { $0.id == arrangement.focusedPane }?.activeTab }
 
-    func displayLabel(automatic: Bool, conversation: String?) -> String {
-        guard automatic, renamed != true, let conversation = TerminalTab.conversationLabel(conversation) else { return name }
-        return conversation
+    func displayLabel(automatic: Bool, conversation: String?, focused: TerminalTab? = nil) -> String {
+        guard automatic, renamed != true else { return name }
+        if let conversation = TerminalTab.conversationLabel(conversation) { return conversation }
+        guard numbered == true, let pane = focused ?? focusedTerminal else { return name }
+        let label = pane.displayLabel(automatic: true, conversation: nil)
+        return label.isEmpty ? name : label
     }
 
     /// The node that moves this window: its only terminal (every multiplexer moves a lone pane with its

@@ -124,9 +124,10 @@ final class ChatScrollPosition {
 
     func forwardWheel(_ event: NSEvent) { scroll?.scrollWheel(with: event) }
 
+    /// Measured from the offset following settles at, which leaves `bottomPadding` below the viewport.
     func isAtBottom(tolerance: CGFloat) -> Bool? {
         guard let scroll, let document = scroll.documentView else { return nil }
-        return document.bounds.maxY - scroll.contentView.bounds.maxY <= tolerance
+        return bottomOffset(scroll, document) - scroll.contentView.bounds.minY <= tolerance
     }
 
     func register(_ view: NSView, id: String) {

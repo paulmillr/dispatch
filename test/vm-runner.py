@@ -87,14 +87,14 @@ class SynchronizationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='dispatch-sync-') as temporary:
             base = Path(temporary)
             source, destination = base / 'source with spaces', base / 'guest'
-            for directory in [source / 'Dispatch', source / 'Helpers/ssh-helper/target', destination / 'build',
+            for directory in [source / 'Dispatch', source / 'helper/target', destination / 'build',
                               source / 'DispatchTests/LocalToolAudit', source / 'DispatchTests/Fixtures',
                               source / 'docs', destination / 'DispatchTests/LocalToolAudit', destination / 'docs']:
                 directory.mkdir(parents=True)
             file = source / 'Dispatch/file with spaces.swift'
             file.write_text('old!')
             (source / 'Dispatch/link').symlink_to(file.name)
-            (source / 'Helpers/ssh-helper/target/generated').write_text('omit')
+            (source / 'helper/target/generated').write_text('omit')
             (destination / 'build/keep').write_text('artifact')
             (source / 'DispatchTests/LocalToolAudit/private.jsonl').write_text('private conversation')
             (source / 'DispatchTests/Fixtures/rollout-private.jsonl').write_text('raw conversation')
@@ -113,12 +113,12 @@ class SynchronizationTests(unittest.TestCase):
 
             with patch.object(vm, 'ROOT', source), patch.object(vm, 'run', side_effect=local_run):
                 def sync():
-                    return vm.synchronize('test-vm', ['Dispatch', 'DispatchTests', 'Helpers', 'docs'], str(destination) + '/', relative=True)
+                    return vm.synchronize('test-vm', ['Dispatch', 'DispatchTests', 'helper', 'docs'], str(destination) + '/', relative=True)
                 sync()
                 copied = destination / 'Dispatch' / file.name
                 self.assertEqual(copied.read_text(), 'old!')
                 self.assertTrue((destination / 'Dispatch/link').is_symlink())
-                self.assertFalse((destination / 'Helpers/ssh-helper/target').exists())
+                self.assertFalse((destination / 'helper/target').exists())
                 self.assertFalse((destination / 'DispatchTests/LocalToolAudit').exists())
                 self.assertFalse((destination / 'DispatchTests/Fixtures/rollout-private.jsonl').exists())
                 self.assertFalse((destination / 'docs/STEPS.md').exists())

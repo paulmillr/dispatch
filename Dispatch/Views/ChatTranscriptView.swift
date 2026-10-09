@@ -308,8 +308,8 @@ struct ChatTranscriptView: View {
             // Observe the native viewport for both wheel and programmatic
             // scrolling. A second SwiftUI geometry preference would invalidate
             // the hosted layout on every pixel, just to calculate this again.
-            // Include the 22-point padding and 40-point follow margin.
-            if let atBottom = session.scrollPosition.isAtBottom(tolerance: 62), session.atBottom != atBottom {
+            // Include the 40-point follow margin.
+            if let atBottom = session.scrollPosition.isAtBottom(tolerance: 40), session.atBottom != atBottom {
                 // A growing reply briefly puts the bottom outside the viewport
                 // before SwiftUI applies its scroll. Preserve the captured
                 // follow intent through that layout; userScrolled cancels it

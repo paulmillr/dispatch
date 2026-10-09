@@ -531,4 +531,74 @@ final class HelperAppTests: XCTestCase {
         XCTAssertEqual(failure.code, "uncertain")
         XCTAssertTrue(failure.localizedDescription.contains("not retried"))
     }
+
+    /// `uninstall-hooks` removes Dispatch's handlers from any helper path (older helpers' too) and
+    /// keeps the user's handlers, other settings, file mode and a symlinked settings file.
+    func testUninstallHooksRemovesOnlyDispatchHandlers() throws {
+        let manager = FileManager.default
+        let home = manager.temporaryDirectory.appendingPathComponent("uninstall-\(UUID().uuidString.prefix(8))")
+        defer { try? manager.removeItem(at: home) }
+        for folder in [".claude", ".codex", "dotfiles"] {
+            try manager.createDirectory(at: home.appendingPathComponent(folder), withIntermediateDirectories: true)
+        }
+        let claude = home.appendingPathComponent("dotfiles/claude-settings.json")
+        try Data(#"""
+        {"model":"opus","hooks":{
+          "PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"guard.sh"},
+                                                   {"type":"command","command":"'/Users/a/.dispatch/bin/dispatch-helper' hook claude"}]},
+                        {"matcher":"AskUserQuestion","hooks":[{"type":"command","command":"'/Users/a/.dispatch/h4/bin/dispatch-helper4' hook claude"}]}],
+          "Stop":[{"hooks":[{"type":"command","command":"echo dispatch-helper hook claude"},
+                            {"type":"command","command":"'/x/dispatch-helper' hook claude; rm -rf ~"}]}]}}
+        """#.utf8).write(to: claude)
+        try manager.createSymbolicLink(at: home.appendingPathComponent(".claude/settings.json"), withDestinationURL: claude)
+        let codex = home.appendingPathComponent(".codex/hooks.json")
+        try Data(#"{"hooks":{"PermissionRequest":[{"hooks":[{"command":"'/Users/a/.dispatch/bin/dispatch-helper' hook codex","timeout":60,"type":"command"}]}],"Stop":[{"hooks":[{"command":"notify.sh","type":"command"}]}]}}"#.utf8).write(to: codex)
+        try manager.setAttributes([.posixPermissions: 0o640], ofItemAtPath: codex.path)
+
+        func run(_ arguments: [String]) throws -> (status: Int32, output: String) {
+            let process = Process(), pipe = Pipe()
+            process.executableURL = try XCTUnwrap(HelperApp.executable)
+            process.arguments = ["uninstall-hooks"] + arguments
+            var environment = ProcessInfo.processInfo.environment
+            environment["HOME"] = home.path
+            environment["CLAUDE_CONFIG_DIR"] = nil; environment["CODEX_HOME"] = nil
+            process.environment = environment
+            process.standardOutput = pipe; process.standardError = pipe
+            try process.run(); process.waitUntilExit()
+            return (process.terminationStatus, String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))
+        }
+        func hooks(_ file: URL) throws -> [String: [[String: Any]]] {
+            let root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+            return try XCTUnwrap(root["hooks"] as? [String: [[String: Any]]])
+        }
+        func commands(_ groups: [[String: Any]]?) -> [String] {
+            (groups ?? []).flatMap { ($0["hooks"] as? [[String: Any]] ?? []).compactMap { $0["command"] as? String } }
+        }
+
+        let preview = try run(["--dry-run"])
+        XCTAssertEqual(preview.status, 0, preview.output)
+        XCTAssertTrue(preview.output.contains("would remove 2 Dispatch hooks"), preview.output)
+        XCTAssertEqual(commands(try hooks(codex)["PermissionRequest"]).count, 1, "A dry run changes nothing")
+
+        let removal = try run([])
+        XCTAssertEqual(removal.status, 0, removal.output)
+        XCTAssertTrue(removal.output.contains("removed 2 Dispatch hooks"), removal.output)
+        XCTAssertTrue(removal.output.contains("removed 1 Dispatch hook\n"), removal.output)
+        let settings = try hooks(claude)
+        XCTAssertEqual(commands(settings["PreToolUse"]), ["guard.sh"], "The user's handler keeps its group; the emptied group goes")
+        XCTAssertEqual(settings["PreToolUse"]?.first?["matcher"] as? String, "Bash")
+        XCTAssertEqual(commands(settings["Stop"]).count, 2, "Commands that only look like the hook stay")
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: claude)) as? [String: Any])
+        XCTAssertEqual(root["model"] as? String, "opus")
+        XCTAssertEqual(try manager.destinationOfSymbolicLink(atPath: home.appendingPathComponent(".claude/settings.json").path), claude.path)
+        let events = try hooks(codex)
+        XCTAssertNil(events["PermissionRequest"], "An event left empty is dropped")
+        XCTAssertEqual(commands(events["Stop"]), ["notify.sh"])
+        XCTAssertEqual(try manager.attributesOfItem(atPath: codex.path)[.posixPermissions] as? Int, 0o640)
+
+        let again = try run([])
+        XCTAssertEqual(again.status, 0)
+        XCTAssertEqual(again.output.components(separatedBy: "no Dispatch hooks").count - 1, 2, again.output)
+        XCTAssertEqual(try run(["--force"]).status, 2, "Unknown options are refused")
+    }
 }

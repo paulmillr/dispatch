@@ -35,7 +35,7 @@ CODEX = Path("/opt/homebrew/lib/node_modules/@openai/codex/node_modules/"
 # OpenAI's quick start uses this image registry. Pin the image for reproducibility.
 IMAGE = ("ghcr.io/cirruslabs/macos-tahoe-xcode@sha256:"
          "e0721ddeae3c7c037b764c1aebd0b2d245495c16622413f5a567d7110d18d863")
-SOURCES = ["Dispatch", "DispatchTests", "Helpers", "Vendor", "ThirdPartyLicenses", "scripts", "test", "extras",
+SOURCES = ["Dispatch", "DispatchTests", "helper", "Vendor", "ThirdPartyLicenses", "scripts", "test", "extras",
            "project.yml", "run.sh"]
 
 
@@ -394,7 +394,7 @@ def synchronize(vm, sources, destination, relative=False):
     command = ["/usr/bin/rsync", "--archive", "--no-times", "--checksum", "--delete",
                "--delete-excluded", "--exclude=__pycache__", "--exclude=.DS_Store",
                "--exclude=LocalToolAudit/", "--exclude=rollout-*.jsonl", "--exclude=STEPS.md",
-               "--exclude=/Helpers/ssh-helper/target/", "--stats", "--rsync-path=/usr/bin/rsync",
+               "--exclude=/helper/target/", "--stats", "--rsync-path=/usr/bin/rsync",
                "-e", shlex.join([sys.executable, str(ROOT / "scripts/tart-rsync.py")])]
     if relative:
         command.append("--relative")

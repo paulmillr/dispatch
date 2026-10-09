@@ -485,14 +485,23 @@ final class SSHReconnectIntegrationTests: XCTestCase {
             return try snapshot.reads([text], in: sidebar)
         }
         let input = try await PresentationTestSupport.openSpaceSearch(app.controller, in: root)
+        // Types as the keyboard does, through the field editor: setting a field that is being edited leaves the
+        // editor's old text on screen and in the query.
+        func search(_ text: String) {
+            app.window.makeFirstResponder(input)
+            guard let editor = input.currentEditor() as? NSTextView else {
+                input.stringValue = text
+                NotificationCenter.default.post(name: NSControl.textDidChangeNotification, object: input)
+                return
+            }
+            editor.selectAll(nil)
+            editor.insertText(text, replacementRange: editor.selectedRange())
+        }
         for mode in [SpaceOrder.flat, .tree] {
             app.controller.settings.values.spaceOrder = mode
-            app.window.makeFirstResponder(input)
-            input.stringValue = "no-such-detached-space"
-            NotificationCenter.default.post(name: NSControl.textDidChangeNotification, object: input)
+            search("no-such-detached-space")
             try await TestSupport.eventually(diagnostic: "Sidebar OCR: \(seen)") { try await sidebarReads("No matching spaces") }
-            input.stringValue = server.destination
-            NotificationCenter.default.post(name: NSControl.textDidChangeNotification, object: input)
+            search(server.destination)
             try await TestSupport.eventually(diagnostic: "Sidebar OCR: \(seen)") {
                 try await sidebarReads("Research") && !seen.contains("No matching spaces")
             }
