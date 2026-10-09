@@ -251,5 +251,11 @@ final class ClaudeModelMenuTests: XCTestCase {
         XCTAssertFalse(ClaudeModelMenu.isEmptyComposer(pasted + "\n❯ 1. Yes"))
         XCTAssertFalse(ClaudeModelMenu.isEmptyComposer(composer.replacingOccurrences(of: "❯", with: "❯ unsent draft")))
         XCTAssertFalse(ClaudeModelMenu.isEmptyComposer(composer + "\n───\n❯ 1. Yes"))
+        // Claude 2.1.293 truncates the mode footer at 80 columns or fewer.
+        for footer in ["⏵⏵ auto mode on (shift+tab to cycle) · gh auth login for", "⏸ manual mode on · gh auth login for PR",
+                       "⏸ plan mode on · gh auth login for PR", "⏵⏵ accept edits on · gh auth login for PR"] {
+            XCTAssertTrue(ClaudeModelMenu.isEmptyComposer(composer.replacingOccurrences(of: "? for shortcuts", with: footer)), footer)
+        }
+        XCTAssertFalse(ClaudeModelMenu.isEmptyComposer(composer.replacingOccurrences(of: "? for shortcuts", with: "⏵⏵ auto mode o…")))
     }
 }

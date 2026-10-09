@@ -76,6 +76,14 @@ struct ClaudeModelMenu: Equatable {
         return label.isEmpty || (label.hasPrefix(" ") && label.hasSuffix(" ") && !label.contains("─"))
     }
 
+    /// Claude 2.1.293's permission-mode footer ("⏵⏵ auto mode on (shift+tab to cycle) · …").
+    /// At 80 columns or fewer it truncates before "← for agents" and "esc to interrupt".
+    static func isModeFooter(_ line: String) -> Bool {
+        guard line.hasPrefix("⏵⏵ ") || line.hasPrefix("⏸ ") else { return false }
+        let words = line.drop { $0 != " " }.split(omittingEmptySubsequences: false) { " ·(".contains($0) }.dropFirst()
+        return words.prefix { !$0.isEmpty }.last == "on"
+    }
+
     static func isEmptyComposer(_ screen: String, allowWorking: Bool = false) -> Bool {
         guard screen.utf8.count <= 65_536 else { return false }
         let lines = screen.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }
@@ -91,7 +99,7 @@ struct ClaudeModelMenu: Equatable {
             // A working footer also lists agents; it counts only when steering.
             if line.contains("esc to interrupt") { return allowWorking }
             // Claude retains this paste hint after accepting a multiline paste.
-            return line.contains("for shortcuts") || line.contains("for agents") || line == "paste again to expand"
+            return isModeFooter(line) || line.contains("for shortcuts") || line.contains("for agents") || line == "paste again to expand"
                 || line.range(of: #"← [0-9]+ agents?(\s|$)"#, options: .regularExpression) != nil
         }
     }

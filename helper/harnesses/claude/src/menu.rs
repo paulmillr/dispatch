@@ -415,7 +415,8 @@ pub fn ready(screen: &Screen, working: bool, name: Option<&str>) -> bool {
             if s.contains("esc to interrupt") {
                 return working;
             }
-            s.contains("for shortcuts")
+            mode(s)
+                || s.contains("for shortcuts")
                 || s.contains("for agents")
                 || *s == "paste again to expand"
                 || s.match_indices("← ").any(|(start, _)| {
@@ -428,6 +429,15 @@ pub fn ready(screen: &Screen, working: bool, name: Option<&str>) -> bool {
                         })
                 })
         })
+}
+/// Claude 2.1.293's permission-mode footer ('⏵⏵ auto mode on (shift+tab to cycle) · …',
+/// '⏸ manual mode on · …'). At 80 columns or fewer it truncates before '← for agents' and
+/// before 'esc to interrupt', so it shows the composer but not whether a turn is running.
+fn mode(s: &str) -> bool {
+    s.strip_prefix("⏵⏵ ")
+        .or_else(|| s.strip_prefix("⏸ "))
+        .and_then(|rest| rest.split([' ', '·', '(']).take_while(|word| !word.is_empty()).last())
+        == Some("on")
 }
 // Empty for a plain rule, otherwise the literal session name within the rule.
 fn border(s: &str) -> Option<&str> {
@@ -455,15 +465,17 @@ pub fn input(status: &str, name: Option<&str>, screen: &Screen, mode: Mode) -> b
         && (status == "idle" || steering && ["working", "busy"].contains(&status))
 }
 
-pub fn interrupt(status: &str, screen: &Screen) -> bool {
+/// A narrow footer drops 'esc to interrupt'; a busy status with the composer up still interrupts.
+pub fn interrupt(status: &str, name: Option<&str>, screen: &Screen) -> bool {
     !["idle", "waiting", "unknown"].contains(&status)
-        && lines(&screen.text).is_some_and(|lines| {
+        && (["working", "busy"].contains(&status) && ready(screen, true, name)
+            || lines(&screen.text).is_some_and(|lines| {
             lines
                 .filter(|line| !line.is_empty())
                 .rev()
                 .take(4)
                 .any(|line| line.to_lowercase().contains("esc to interrupt"))
-        })
+            }))
 }
 
 #[derive(Default, PartialEq)]
@@ -656,7 +668,7 @@ impl Walk {
                     || !(top..bottom).contains(&(screen.cursor.1 as usize))
             });
             return match goal {
-                Goal::Stop if interrupt(status, screen) => {
+                Goal::Stop if interrupt(status, name, screen) => {
                     self.stage = Stage::Exit;
                     Step::Submit(self.keys(5))
                 }
@@ -1013,5 +1025,52 @@ impl Walk {
             }
             _ => Step::Fail(error("invalid", "Not a model goal")),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Claude 2.1.293 composers captured from tmux at 60 and 120 columns.
+    fn screen(footer: &str) -> Screen {
+        let rule = "─".repeat(60);
+        Screen {
+            text: format!("✢ Churning… (6s · ↓ 187 tokens)\n{rule}\n❯ \n{rule}\n  {footer}\n"),
+            cursor: (2, 2),
+            faint_tail: false,
+        }
+    }
+
+    #[test]
+    fn narrow_mode_footer_is_a_composer() {
+        for footer in [
+            "⏵⏵ auto mode on (shift+tab to cycle) · gh auth login for",
+            "⏵⏵ auto mode on (shift+tab to cycle) · gh auth login for PR status · ← for …",
+            "⏸ manual mode on · gh auth login for PR",
+            "⏸ plan mode on · gh auth login for PR",
+            "⏵⏵ accept edits on · gh auth login for PR",
+        ] {
+            let screen = screen(footer);
+            assert!(ready(&screen, false, None), "{footer}");
+            assert!(input("idle", None, &screen, Mode::Prompt), "{footer}");
+            // The footer cannot show a running turn; the registry status does.
+            assert!(!input("busy", None, &screen, Mode::Prompt), "{footer}");
+            assert!(input("busy", None, &screen, Mode::Steer), "{footer}");
+            assert!(interrupt("busy", None, &screen), "{footer}");
+            assert!(!interrupt("idle", None, &screen), "{footer}");
+        }
+        assert!(!ready(&screen("⏵⏵ auto mode o…"), false, None));
+        assert!(!ready(&screen("gh auth login for PR status"), false, None));
+    }
+
+    #[test]
+    fn wide_working_footer_needs_steering() {
+        let screen = screen(
+            "⏵⏵ auto mode on (shift+tab to cycle) · gh auth login for PR status · esc to interrupt · ← for agents",
+        );
+        assert!(!ready(&screen, false, None));
+        assert!(ready(&screen, true, None));
+        assert!(interrupt("busy", None, &screen));
     }
 }
