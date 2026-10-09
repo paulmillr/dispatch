@@ -44,6 +44,7 @@ extension TerminalView {
             return
         }
         TerminalRuntime.shared.chat.sessions[id]?.lastInputAt = Date()
+        TerminalRuntime.shared.programs.acknowledge(id)
         guard let surface else { super.keyDown(with: event); return }
         let action: KeyEvent.Action = event.isARepeat ? .repeat : .press
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)

@@ -55,6 +55,8 @@ public enum Action {
     case colorOperation(ColorOperation)
     case kittyColorReport(KittyColor)
     case kittyClipboard(KittyString), kittyDnd(KittyString)
+    /// OSC 7501 (not Ghostty's): a program status report, clear or query.
+    case programStatus(ProgramStatusCommand)
 }
 
 public struct Movement { public var value: UInt16 }

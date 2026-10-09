@@ -342,7 +342,7 @@ struct SidebarSpaceCard: View {
     /// `label` is nil.
     private func statusPill(_ label: String?, activity: AgentActivity) -> some View {
         let color = activity.reconnecting ? Chrome.palette.warning : activity.offline ? Chrome.muted
-            : activity.blocked ? Chrome.palette.warning : activity.finished ? Chrome.accent : Chrome.ink
+            : activity.blocked || activity.failed ? Chrome.palette.warning : activity.finished ? Chrome.accent : Chrome.ink
         return HStack(spacing: 4) {
             AgentActivityGlyph(tabIDs: space.tabs.flatMap(\.surfaceIDs), connecting: connecting, size: metrics.activitySize)
                 .fixedSize()

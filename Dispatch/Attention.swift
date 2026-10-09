@@ -1,5 +1,6 @@
 import AppKit
 import Observation
+import Term
 @preconcurrency import UserNotifications
 
 enum PaneUrgency: Int, CaseIterable {
@@ -8,10 +9,12 @@ enum PaneUrgency: Int, CaseIterable {
         switch self { case .waiting: "●"; case .unread: "◆"; case .running: "◐"; case .idle: "·" }
     }
 
-    @MainActor init(session: ChatSession?) {
-        let waiting = session?.approvals.contains(where: \.pending) == true
-        let working = session?.active == true && session?.busy == true
-        self = waiting ? .waiting : working ? .running : session?.hasNewMessages == true ? .unread : .idle
+    /// `programs`: the surface's visible OSC 7501 records.
+    @MainActor init(session: ChatSession?, programs: [ProgramStatus] = []) {
+        let waiting = session?.approvals.contains(where: \.pending) == true || programs.contains { $0.state == .blocked }
+        let working = session?.active == true && session?.busy == true || programs.contains { $0.state == .working }
+        let unread = session?.hasNewMessages == true || programs.contains(where: \.finished)
+        self = waiting ? .waiting : working ? .running : unread ? .unread : .idle
     }
 }
 
@@ -22,13 +25,13 @@ struct AttentionEntry: Identifiable {
     let urgency: PaneUrgency
 
     @MainActor
-    static func entries(workspace: Workspace, sessions: [UUID: ChatSession], automaticNames: Bool = false) -> [Self] {
+    static func entries(workspace: Workspace, sessions: [UUID: ChatSession], programs: ProgramStatusStore? = nil, automaticNames: Bool = false) -> [Self] {
         var result: [Self] = []
         for space in workspace.presentationSpaces {
             for tab in space.tabs {
                 for surface in tab.surfaceIDs {
                     let session = sessions[surface]
-                    let urgency = PaneUrgency(session: session)
+                    let urgency = PaneUrgency(session: session, programs: programs?.visible(surface) ?? [])
                     let host = workspace.hosts.record(workspace.hosts.terminals[surface]?.host ?? space.hostID)
                     // Only panes that want attention are shown or announced, so only theirs follow title changes.
                     let shown = urgency == .idle ? tab : workspace.liveTab(tab.id) ?? tab
@@ -66,7 +69,7 @@ final class AttentionCoordinator: NSObject, UNUserNotificationCenterDelegate {
     var entries: [AttentionEntry] {
         guard let controller else { return [] }
         return AttentionEntry.entries(workspace: controller.workspace, sessions: TerminalRuntime.shared.chat.sessions,
-                                       automaticNames: controller.settings.values.automaticTabNames)
+                                       programs: TerminalRuntime.shared.programs, automaticNames: controller.settings.values.automaticTabNames)
             .filter { $0.urgency == .waiting || $0.urgency == .unread }
     }
     var waitingCount: Int { entries.filter { $0.urgency == .waiting }.count }

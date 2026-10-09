@@ -15,6 +15,8 @@ final class TerminalRuntime {
     /// Saved text for relaunched local tabs, shown when each one starts its shell (TerminalHistoryStore).
     var restoredHistory: [UUID: String] = [:]
     var chat: ChatCoordinator = ChatCoordinator()
+    /// What programs in each terminal report about themselves (OSC 7501).
+    let programs: ProgramStatusStore = ProgramStatusStore()
     let herdrLaunch: HerdrLaunch = HerdrLaunch()
     let ssh: SSHCoordinator = SSHCoordinator()
     lazy var hosts: HostCoordinator = HostCoordinator(runtime: self)
@@ -248,7 +250,7 @@ final class TerminalRuntime {
     func close(_ ids: [UUID]) {
         let ids = ids.filter { id in !helpers.values.contains { $0.retains(id) } }
         for helper in helpers.values { ids.forEach(helper.detach) }
-        for id in ids { ssh.closeTab(id); hosts.close(id); herdrLaunch.close(id); chat.close(id); views.removeValue(forKey: id)?.destroy() }
+        for id in ids { ssh.closeTab(id); hosts.close(id); herdrLaunch.close(id); chat.close(id); programs.close(id); views.removeValue(forKey: id)?.destroy() }
         prune()
     }
 

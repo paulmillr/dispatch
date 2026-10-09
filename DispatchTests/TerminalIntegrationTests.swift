@@ -116,6 +116,68 @@ final class TerminalIntegrationTests: XCTestCase {
         XCTAssertEqual(session.draft, "draft", "A completed sequence types nothing")
     }
 
+    /// A program in a real tab detects OSC 7501, reports itself, and its records reach Dispatch: a new
+    /// prompt ends what was working, and a done record shows until the user types.
+    func testProgramStatusReportsReachTheTab() async throws {
+        let restoreRuntime = TestSupport.preserveRuntime()
+        defer { restoreRuntime() }
+        try DesktopTestSupport.requireUnlocked()
+        let runtime = TerminalRuntime.shared
+        let controller = AppDelegate(), workspace = controller.workspace
+        runtime.workspace = workspace
+        runtime.start(preferences: Preferences())
+        runtime.chat.stop()
+        workspace.onCloseTabs = { runtime.close($0) }
+        workspace.newLocalSpace()
+        let probe = #"""
+        import base64, os, select, time, tty
+        tty.setcbreak(0)
+        os.write(1, b'\x1b]7501;?\x1b\\')
+        ready, _, _ = select.select([0], [], [], 5)
+        reply = os.read(0, 64) if ready else b''
+        os.write(1, (b'PROBE_REPLY_OK' if b'\x1b]7501;?' in reply else b'PROBE_REPLY_' + repr(reply).encode()) + b'\r\n')
+        os.write(1, b'\x1b]7501;state=working:app=probe\x1b\\')
+        os.write(1, b'\x1b]7501;state=blocked:kind=question:id=ask:msg=' + base64.b64encode(b'Continue?') + b'\x07')
+        os.write(1, b'PROBE_BLOCKED\r\n')
+        os.read(0, 1)
+        os.write(1, b'\x1b]7501;state=working:id=step\x1b\\\x1b]7501;state=clear:id=ask\x1b\\')
+        os.write(1, b'\x1b]7501;state=done:id=build:msg=' + base64.b64encode(b'Built') + b'\x1b\\')
+        os.write(1, b'\x1b]133;A\x07PROBE_PROMPT\r\n')
+        while True:
+            time.sleep(1)
+        """#
+        workspace.spaces[0].panes[0].tabs[0].launchCommand = "/usr/bin/python3 -u -c " + HerdrLaunch.quote(probe)
+        let id = try XCTUnwrap(workspace.activeSurfaceID)
+        let window = MainWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 650),
+            styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        controller.window = window; window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: MainView(workspace: workspace, settings: controller.settings, controller: controller))
+        window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil; window.close(); runtime.stop() }
+        try await TestSupport.eventually { runtime.views[id]?.surface != nil }
+        let terminal = try XCTUnwrap(runtime.views[id])
+        let screen = { TerminalTestSupport.screen(terminal: terminal) }
+        try await TestSupport.eventually(timeout: .seconds(10), diagnostic: screen()) { screen().contains("PROBE_BLOCKED") }
+        XCTAssertTrue(screen().contains("PROBE_REPLY_OK"), screen())
+        try await TestSupport.eventually(diagnostic: "\(runtime.programs.records[id] ?? [])") { runtime.programs.visible(id).count == 2 }
+        let blocked = runtime.programs.visible(id)
+        XCTAssertEqual(blocked.map(\.state), [.working, .blocked])
+        XCTAssertEqual(blocked.map(\.app), ["probe", "probe"], "A child takes its app from the root")
+        XCTAssertEqual(blocked.last?.kind, .question)
+        XCTAssertEqual(blocked.last?.summary, "probe · Question for you: Continue?")
+        XCTAssertEqual(PaneUrgency(session: nil, programs: blocked), .waiting)
+
+        terminal.keyDown(with: TerminalTestSupport.keyEvent(7, "x", in: window))
+        try await TestSupport.eventually(timeout: .seconds(10), diagnostic: screen()) { screen().contains("PROBE_PROMPT") }
+        // The prompt ended both working records; the done one stays until the user types again.
+        try await TestSupport.eventually(diagnostic: "\(runtime.programs.records[id] ?? [])") { runtime.programs.records[id]?.map(\.id) == ["build"] }
+        XCTAssertEqual(runtime.programs.visible(id).map(\.message), ["Built"])
+        XCTAssertEqual(PaneUrgency(session: nil, programs: runtime.programs.visible(id)), .unread)
+        terminal.keyDown(with: TerminalTestSupport.keyEvent(7, "x", in: window))
+        XCTAssertEqual(runtime.programs.visible(id), [])
+        XCTAssertEqual(runtime.programs.records[id]?.count, 1)
+    }
+
     func testTerminalVisibilityTracksChatWindowAndTabWithoutStoppingSession() async throws {
         let restoreRuntime = TestSupport.preserveRuntime()
         defer { restoreRuntime() }

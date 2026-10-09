@@ -16,6 +16,8 @@ public enum SurfaceMessage {
     case desktopNotification(Notification), progressReport(Progress)
     case startCommand, stopCommand(UInt8)
     case kittyClipboardRead(KittyClipboardRead), kittyClipboardWrite(KittyClipboardWrite)
+    /// The terminal's program status records after they changed (all of them, `app` inherited).
+    case programStatus([ProgramStatus])
     /// From the search (Ghostty's search thread callback).
     case searchTotal(Int?), searchSelected(Int?)
 }
@@ -70,6 +72,8 @@ public struct StreamHandler: Handler {
     /// Kitty clipboard: the session's password grants (a full reset drops them) and the open write.
     var grants = KittyGrants()
     var kittyWrite: KittyWrite?
+    /// OSC 7501 records (a full reset drops them; DECSTR keeps them).
+    public internal(set) var programs = ProgramStatusRecords()
     enum Dcs { case inactive, ignore, xtgettcap([UInt8]), decrqss([UInt8]), control }
 
     public init(terminal: Terminal, options: HandlerOptions) {
@@ -177,6 +181,7 @@ public struct StreamHandler: Handler {
             grants = KittyGrants()
             termio.append(.colorSchemeReport(force: false))
             surface.append(.progressReport(Progress(state: .remove, progress: nil)))
+            if programs.reset() { surface.append(.programStatus([])) }
         case .setMode(let m): setMode(m.mode, true)
         case .resetMode(let m): setMode(m.mode, false)
         case .saveMode(let m): t.modes.save(m.mode)
@@ -232,6 +237,8 @@ public struct StreamHandler: Handler {
         case .semanticPrompt(let p):
             if p.action == .endInputStartOutput { surface.append(.startCommand) }
             if p.action == .endCommand { surface.append(.stopCommand(p.exitCode.map { (0...255).contains($0) ? UInt8($0) : 1 } ?? 0)) }
+            // A new prompt ends the programs that were working or blocked.
+            if p.action == .freshLineNewPrompt, programs.endTransient() { surface.append(.programStatus(programs.all)) }
             t.semanticPrompt(p)
         case .mouseShape(let s): setMouseShape(s)
         case .setAttribute(let a): if case .unknown = a {} else { t.setAttribute(a) }
@@ -239,6 +246,9 @@ public struct StreamHandler: Handler {
         case .dcsPut(let b): dcsPut(b)
         case .dcsUnhook: dcsUnhook()
         case .kittyClipboard(let k): kittyClipboard(k)
+        // Feature detection is the only reply: records are never sent back.
+        case .programStatus(.query(let end)): termio.append(.write(ascii("\u{1B}]7501;?") + terminator(end)))
+        case .programStatus(let c): if programs.apply(c) { surface.append(.programStatus(programs.all)) }
         case .apcStart: apc.start(kitty: t.kittyGraphicsEnabled)
         case .apcPut(let b): apc.feed(CollectionOfOne(b))
         case .apcPutSlice(let b): apc.feed(b)

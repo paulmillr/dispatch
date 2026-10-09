@@ -1,4 +1,5 @@
 import SwiftUI
+import Term
 
 struct SpaceSidebar: View {
     private var typography: AppTypography { AppTypography(contentSize: settings.values.fontSize) }
@@ -86,7 +87,8 @@ struct SpaceSidebar: View {
     private var attentionSpaceIDs: Set<UUID> {
         Set(workspace.spaces.filter { space in
             space.tabs.contains { tab in
-                tab.surfaceIDs.contains { TerminalRuntime.shared.chat.sessions[$0]?.approvals.contains(where: \.pending) == true }
+                tab.surfaceIDs.contains { TerminalRuntime.shared.chat.sessions[$0]?.approvals.contains(where: \.pending) == true
+                    || TerminalRuntime.shared.programs.visible($0).contains { $0.state == .blocked } }
             }
         }.map(\.id))
     }
@@ -96,6 +98,7 @@ struct SpaceSidebar: View {
         Set(workspace.spaces.filter { space in
             space.tabs.flatMap(\.surfaceIDs).contains { id in
                 TerminalRuntime.shared.chat.sessions[id].map { $0.hasNewMessages && !($0.active && $0.busy) } == true
+                    || TerminalRuntime.shared.programs.visible(id).contains(where: \.finished)
             }
         }.map(\.id))
     }

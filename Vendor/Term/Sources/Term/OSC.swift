@@ -40,6 +40,8 @@ struct OSCParser {
         for n in 10...19 { m[String(n)] = 2048 }
         for n in 110...119 { m[String(n)] = 2048 }
         for n in ["52", "66", "72", "99", "5522"] { m[n] = 8 << 20 }
+        // Program status (not Ghostty's): its prefixes, and the whole sequence is at most 4096 bytes (ESC ] 7501 ; body BEL).
+        (m["75"], m["750"], m["7501"]) = (0, 0, ProgramStatusCommand.sequenceLimit - 8)
         return m
     }()
 
@@ -80,6 +82,7 @@ struct OSCParser {
         case "133": return payload.flatMap(semanticPrompt)
         case "777": return terminated.flatMap(notify)
         case "1337": return terminated.flatMap(iterm2)
+        case "7501": return ProgramStatusCommand.parse(payload ?? [], t).map { .programStatus($0) }
         case "5522", "72":
             guard let p = payload else { return nil }
             let i = p.firstIndex(of: 0x3B)

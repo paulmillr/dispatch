@@ -297,13 +297,13 @@ fn query(bytes: &[u8]) -> bool {
         }
     }
     bytes.starts_with(b"\x1b]")
-        && number(&bytes[2..]).is_some_and(|n| [4, 10, 11, 12, 13, 14, 17, 19, 52].contains(&n))
+        && number(&bytes[2..]).is_some_and(|n| [4, 10, 11, 12, 13, 14, 17, 19, 52, 7501].contains(&n))
         && bytes.windows(2).any(|b| b == b";?")
 }
 
 #[cfg(test)]
 mod tests {
-    use super::Snapshot;
+    use super::{Filter, Snapshot};
     use std::collections::BTreeMap;
 
     fn snapshot(alternate: bool, preserve: bool) -> Vec<u8> {
@@ -325,6 +325,17 @@ mod tests {
 
     fn find(bytes: &[u8], needle: &[u8]) -> Option<usize> {
         bytes.windows(needle.len()).position(|w| w == needle)
+    }
+
+    /// Replayed output must not ask the terminal for a program status reply (OSC 7501 ?);
+    /// the reports themselves still reach it.
+    #[test]
+    fn program_status_query_is_dropped_but_reports_pass() {
+        let mut filter = Filter::new(1 << 20);
+        let out = filter.feed(b"a\x1b]7501;?\x1b\\b\x1b]7501;?\x07c").unwrap();
+        assert_eq!(&*out, b"abc");
+        let report = b"\x1b]7501;state=working:app=brew\x1b\\";
+        assert_eq!(&*filter.feed(report).unwrap(), report);
     }
 
     /// A preserving renderer left on the alternate screen (it missed the pane's exit from a

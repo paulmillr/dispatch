@@ -89,6 +89,8 @@ enum TerminalEvent {
     case title(String), tabTitle(String), pwd(String?), childExited
     case scrollbar(TerminalScrollState), background(r: UInt8, g: UInt8, b: UInt8)
     case startSearch(String), endSearch, searchTotal(Int?), searchSelected(Int?)
+    /// The terminal's OSC 7501 records after a change.
+    case programStatus([ProgramStatus])
 }
 
 extension TerminalView {
@@ -125,6 +127,9 @@ extension TerminalView {
             case .title(let title), .tabTitle(let title): runtime.workspace?.updateTab(self.id, title: title)
             case .pwd(let path): runtime.workspace?.updateTab(self.id, directory: path)
             case .childExited: self.didExit()
+            case .programStatus(let records):
+                guard runtime.views[self.id] === self else { return }
+                runtime.programs.update(self.id, records)
             case .scrollbar(let state): self.updateScrollback(state)
             case .background(let r, let g, let b): self.setBackground(r: r, g: g, b: b)
             }

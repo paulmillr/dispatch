@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Term
 
 struct SpaceHoverDetails: Equatable {
     let remote: Bool
@@ -33,6 +34,8 @@ struct SpaceHoverDetails: Equatable {
         let surfaces = tab.surfaceIDs
         let reconnect = surfaces.compactMap { runtime.hosts.reconnect.state(for: $0) }
         let sessions = surfaces.compactMap { runtime.chat.sessions[$0] }.filter { $0.active }
+        let programs = runtime.programs.visible(surfaces)
+        let program = [ProgramStatus.State.blocked, .error, .done, .working].lazy.compactMap { state in programs.first { $0.state == state } }.first
         let activity: String?
         if reconnect.contains(where: { $0.reconnecting }) { activity = "Reconnecting" }
         else if !reconnect.isEmpty { activity = "Disconnected" }
@@ -45,9 +48,11 @@ struct SpaceHoverDetails: Equatable {
             activity = session.agentTitle + " · Needs attention"
         } else if let session = sessions.first(where: { $0.activityCheck != nil }) {
             activity = session.agentTitle + " · Checking activity"
-        } else if let session = sessions.first(where: \.busy) {
+        } else if let program, program.state != .working { activity = program.summary }
+        else if let session = sessions.first(where: \.busy) {
             activity = session.agentTitle + " · " + (session.nativeActivity ?? "Working")
-        } else if let session = sessions.first { activity = session.agentTitle + " · Idle" }
+        } else if let program { activity = program.summary }
+        else if let session = sessions.first { activity = session.agentTitle + " · Idle" }
         else { activity = nil }
         return Self(remote: context.remote, route: context.route, backend: backend, directory: owner?.structured == true ? nil : context.directory,
                     title: title ?? tab.label, activity: activity)

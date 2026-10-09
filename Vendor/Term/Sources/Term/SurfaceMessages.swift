@@ -60,6 +60,7 @@ extension Surface {
             lastNotification = (t, digest)
             _ = host?.perform(.desktopNotification(title: n.title, body: n.body))
         case .progressReport(let p): _ = host?.perform(.progressReport(p))
+        case .programStatus(let records): _ = host?.perform(.programStatus(records))
         case .startCommand: commandStart = now()
         case .stopCommand(let code):
             guard let start = commandStart else { break }

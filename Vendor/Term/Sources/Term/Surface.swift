@@ -10,6 +10,8 @@ public enum SurfaceAction {
     case keySequenceEnd, openURL(OpenKind, [UInt8]), startSearch([UInt8]), endSearch
     case setTitle([UInt8]), colorChange(ColorKind, RGB), pwd([UInt8]), ringBell, desktopNotification(title: [UInt8], body: [UInt8])
     case progressReport(Progress), commandFinished(exitCode: UInt8, duration: UInt64), scrollbar(Scrollbar)
+    /// Every program status record of the terminal, after a change.
+    case programStatus([ProgramStatus])
     case searchTotal(Int?), searchSelected(Int?)
 }
 
@@ -219,6 +221,11 @@ public final class Surface {
 
     /// Text from the host (ghostty_surface_text): a paste.
     public func text(_ data: [UInt8]) { try? paste(data, allowUnsafe: true) }
+
+    /// The process exited: its working and blocked program status records end (done and error stay).
+    public func processExited() {
+        if handler.programs.endTransient() { handler.surface.append(.programStatus(handler.programs.all)) }
+    }
 
     /// Surface.needsConfirmQuit with Ghostty's default confirm-close-surface (true): a program is
     /// running unless the cursor is at a shell prompt (the host answers false once the child exited).

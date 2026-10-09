@@ -81,7 +81,12 @@ final class SwiftBackend: TerminalBackend {
         session.host(in: renderer)
         session.surface.host = host
         session.onExit = { [weak self, weak view] _ in
-            self?.exited = true
+            if let self {
+                self.exited = true
+                // Its working and blocked program status records end with the process.
+                self.session.locked { self.session.surface.processExited() }
+                self.session.pump()
+            }
             view?.handle(.childExited)
         }
         session.onUpdate = { [weak view] in view?.screenChanged() }
@@ -200,6 +205,7 @@ private final class SwiftHost: SurfaceHost {
         case .pwd(let path): event = .pwd(text(path))
         case .scrollbar(let s): event = .scrollbar(TerminalScrollState(total: UInt64(s.total), offset: UInt64(s.offset), visible: UInt64(s.len)))
         case .colorChange(.background, let c): event = .background(r: c.r, g: c.g, b: c.b)
+        case .programStatus(let records): event = .programStatus(records)
         default: return false
         }
         view?.handle(event)
