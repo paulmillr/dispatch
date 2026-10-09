@@ -251,16 +251,7 @@ impl Pending {
             if !self.seen.insert((form.turn.clone(), id.clone())) {
                 return Vec::new();
             }
-            // One async question under a live id and a positional snapshot id stays one form,
-            // keeping the first-seen id (arch.md: async question aliases; ChatCoordinator.swift:357-381).
-            if request.is_none()
-                && self.forms.iter().any(|(other, (existing, request))| {
-                    request.is_none()
-                        && existing.turn == form.turn
-                        && existing.interaction.questions == form.interaction.questions
-                        && (snapshot(other) || snapshot(&id))
-                })
-            {
+            if request.is_none() && self.alias(&id, &form) {
                 return Vec::new();
             }
             let interaction = form.interaction.clone();
@@ -325,6 +316,17 @@ impl Pending {
             .map(|(id, _)| id.clone())
             .collect::<Vec<_>>();
         self.clear(ids)
+    }
+
+    /// One async question under a live id and a positional snapshot id stays one form, keeping
+    /// the first-seen id (arch.md: async question aliases; ChatCoordinator.swift:357-381).
+    fn alias(&self, id: &str, form: &Form) -> bool {
+        self.forms.iter().any(|(other, (existing, request))| {
+            request.is_none()
+                && existing.turn == form.turn
+                && existing.interaction.questions == form.interaction.questions
+                && (snapshot(other) || snapshot(id))
+        })
     }
 
     fn clear(&mut self, ids: Vec<String>) -> Vec<Interaction> {
@@ -590,7 +592,8 @@ impl Pending {
             let id = key.1.clone();
             let new = self.seen.insert(key);
             match recovered.forms.get(&id) {
-                Some((form, _)) if new => {
+                // A rollout line names the live id of a question a thread snapshot opened.
+                Some((form, _)) if new && !self.alias(&id, form) => {
                     changed.push(form.interaction.clone());
                     self.forms.insert(id, (form.clone(), None));
                 }

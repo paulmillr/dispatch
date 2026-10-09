@@ -583,7 +583,8 @@ impl Multiplexer for Native {
         done: Done<()>,
     ) {
         match self.terminal(terminal) {
-            Ok(owner) if !owner.exited && !owner.closed && owner.input.is_empty() => {
+            // Typing waits behind queued user input (e.g. a focus report), never behind another typist.
+            Ok(owner) if !owner.exited && !owner.closed && owner.input.iter().all(|queued| queued.process.is_none()) => {
                 let mut bytes = Vec::new();
                 let mut ends = VecDeque::new();
                 for part in input {
@@ -597,7 +598,10 @@ impl Multiplexer for Native {
                     Ok(()) => {
                         // Keep the intents distinct, like Ghostty paste followed by Return.
                         owner.input.back_mut().unwrap().ends = ends;
-                        self.inspect(io, terminal);
+                        // Behind other input, the writer verifies this entry once it reaches the front.
+                        if owner.input.len() == 1 {
+                            self.inspect(io, terminal);
+                        }
                     }
                     Err(done) => deferred(done)(io, Err(error("input_unavailable", ""))),
                 }

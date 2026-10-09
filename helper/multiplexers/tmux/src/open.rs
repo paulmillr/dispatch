@@ -233,6 +233,12 @@ impl Tmux {
             done(self, io, Err(error("Tmux backend is still opening")));
             return;
         }
+        backend.done.push(done);
+        self.reopen(io, id);
+    }
+    /// The pending restore of `id`: refresh its retained live clients, reopen the ended ones.
+    pub(crate) fn reopen(&mut self, io: &mut dyn Io, id: Id) {
+        let backend = self.backends.get_mut(&id).unwrap();
         let retained: Vec<_> = backend
             .retained()
             .into_iter()
@@ -253,7 +259,9 @@ impl Tmux {
             } else {
                 Err(error("Tmux backend is unavailable"))
             };
-            done(self, io, result);
+            for done in std::mem::take(&mut backend.done) {
+                done(self, io, result.clone());
+            }
             return;
         }
         let backend = self.backends.get_mut(&id).unwrap();
@@ -265,7 +273,6 @@ impl Tmux {
             .iter()
             .filter(|index| !backend.clients[**index].live())
             .count();
-        backend.done.push(done);
         for index in retained {
             let client = &self.backends[&id].clients[index];
             let snapshot = client.snapshot.as_ref().unwrap();

@@ -227,7 +227,19 @@ impl Tmux {
                                 .snapshot = previous.flatten();
                         }
                     }
-                    if (first || expected)
+                    let backend = &mux.backends[&location.backend];
+                    // A restore's control client lost meanwhile: its server reopens like any ended client.
+                    if expected
+                        && result.is_err()
+                        && backend.clients[location.client].ended
+                        && !backend.remote
+                        && backend.opening == 0
+                        && !backend.done.is_empty()
+                    {
+                        mux.backends.get_mut(&location.backend).unwrap().clients[location.client]
+                            .expected = None;
+                        mux.reopen(io, location.backend);
+                    } else if (first || expected)
                         && let Err(error) = &result
                     {
                         mux.failed(io, location.backend, error.clone());
@@ -296,6 +308,23 @@ impl Tmux {
             return;
         }
         self.changed = false;
+        // A restore's control client lost before its fresh read: its server reopens like any ended client.
+        let mut lost = Vec::new();
+        for (&id, backend) in &mut self.backends {
+            if backend.remote || backend.opening != 0 || backend.done.is_empty() {
+                continue;
+            }
+            let mut ended = false;
+            for client in backend.clients.iter_mut().filter(|c| c.ended && c.snapshot.is_some()) {
+                ended |= client.expected.take().is_some();
+            }
+            if ended {
+                lost.push(id);
+            }
+        }
+        for id in lost {
+            self.reopen(io, id);
+        }
         let previous = std::mem::take(&mut self.nodes);
         let dividers = std::mem::take(&mut self.dividers);
         let mut drafts = Vec::new();

@@ -32,16 +32,17 @@ final class HerdrTests: XCTestCase {
     func testLargeSessionSkipsIdleInvalidationAndPreservesChangedIdentities() async throws {
         let herdr = try await HerdrSession(); defer { herdr.close() }
         let workspace = herdr.app.workspace
-        // The old fixture's size: 20 workspaces of 25 tabs, the last one labelled "Original".
+        // 20 workspaces of 22 tabs, the last one labelled "Original": each tab holds a pty, and macOS allows 511
+        // (kern.tty.ptmx_max), some of which the rest of the Mac already uses.
         let source = try XCTUnwrap(herdr.snapshot().workspaces.first).workspace_id
         for _ in 1..<20 { _ = try herdr.api("workspace.create", ["source_workspace_id": source, "focus": false]) }
         for space in try herdr.snapshot().workspaces {
-            for _ in 1..<25 { _ = try herdr.api("tab.create", ["workspace_id": space.workspace_id, "focus": false]) }
+            for _ in 1..<22 { _ = try herdr.api("tab.create", ["workspace_id": space.workspace_id, "focus": false]) }
         }
         let last = try XCTUnwrap(herdr.snapshot().workspaces.last).workspace_id
         _ = try herdr.api("workspace.rename", ["workspace_id": last, "label": "Original"])
         try await TestSupport.eventually(timeout: .seconds(60)) {
-            herdr.spaces.count == 20 && herdr.spaces.flatMap(\.tabs).count == 500 && herdr.spaces.last?.name == "Original"
+            herdr.spaces.count == 20 && herdr.spaces.flatMap(\.tabs).count == 440 && herdr.spaces.last?.name == "Original"
         }
         let ids = workspace.allSurfaceIDs
         let changes = OSAllocatedUnfairLock(initialState: 0)

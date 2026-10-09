@@ -117,10 +117,20 @@ final class TmuxEdgeCaseTests: XCTestCase {
         let client = try XCTUnwrap(try app.server(["-L", other, "list-clients", "-F", "#{client_control_mode} #{client_pid}"])
             .split(separator: "\n").first { $0.hasPrefix("1 ") }.flatMap { pid_t($0.dropFirst(2)) })
         XCTAssertEqual(kill(client, SIGKILL), 0)
+        // Its server answers the reopen only after the first restore: that work stays pending meanwhile.
+        let server = try XCTUnwrap(pid_t(try app.server(["-L", other, "display-message", "-p", "#{pid}"]).trimmingCharacters(in: .whitespacesAndNewlines)))
+        XCTAssertEqual(kill(server, SIGSTOP), 0)
+        defer { kill(server, SIGCONT) }
         app.workspace.restoreDetached([first.id, second.id])
         XCTAssertTrue(app.workspace.isRestoringDetached(second.id))
         try await app.wait { !app.workspace.detached.contains { $0.id == first.id } }
         XCTAssertTrue(app.workspace.detached.contains { $0.id == second.id }, "Restoring a different server's same-numbered pane must not remove pending work")
+        XCTAssertTrue(app.workspace.isRestoringDetached(second.id))
+        XCTAssertEqual(kill(server, SIGCONT), 0)
+        // The lost control client's server reopens and shows its work again.
+        try await app.wait { !app.workspace.isRestoringDetached(second.id) && app.workspace.spaces.filter(\.structured).count == 2 }
+        XCTAssertFalse(app.workspace.detached.contains { $0.id == second.id })
+        XCTAssertNil(app.error)
     }
 
     func testPendingLocalTabRenameUsesLatestTitleWhenCreationCompletes() async throws {

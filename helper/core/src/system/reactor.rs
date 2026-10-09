@@ -405,7 +405,11 @@ mod platform {
             };
             // SAFETY: change has Darwin's kevent layout; no event output is requested.
             if unsafe { kevent(queue, &change, 1, ptr::null_mut(), 0, ptr::null()) } < 0 {
-                return Err(io::Error::last_os_error());
+                let error = io::Error::last_os_error();
+                // A revoked terminal (its SSH session hung up) already dropped the filter.
+                if enabled || error.kind() != io::ErrorKind::NotFound {
+                    return Err(error);
+                }
             }
         }
         Ok(())

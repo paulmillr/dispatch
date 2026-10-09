@@ -478,17 +478,29 @@ final class SSHReconnectIntegrationTests: XCTestCase {
         let root = try XCTUnwrap(app.window.contentView)
         // The sidebar column alone; OCR through the shared retries (no language correction, enlarged pixels).
         let sidebar = CGRect(x: 0, y: 0, width: 264 / root.bounds.width, height: 1)
-        var seen = ""
+        var seen = "", rows: Data?
         func sidebarReads(_ text: String) async throws -> Bool {
             let snapshot = try await PresentationTestSupport.capture(app.window)
             seen = try snapshot.text(in: sidebar)
-            return try snapshot.reads([text], in: sidebar)
+            if seen.contains(text) { return true }
+            // WindowServer shows a commit a frame later, so a capture right after typing can hold the previous frame.
+            // The OCR retries (seconds per miss) run only on rows (above the blinking caret) unchanged since the last capture.
+            let image = try XCTUnwrap(snapshot.bitmap.cgImage)
+            let shown = image.cropping(to: CGRect(x: 0, y: 0, width: CGFloat(image.width) * sidebar.width, height: CGFloat(image.height) * 0.8))
+                .flatMap { NSBitmapImageRep(cgImage: $0).tiffRepresentation }
+            defer { rows = shown }
+            return try shown == rows && snapshot.reads([text], in: sidebar)
         }
         let input = try await PresentationTestSupport.openSpaceSearch(app.controller, in: root)
-        // Types as the keyboard does, through the field editor: setting a field that is being edited leaves the
-        // editor's old text on screen and in the query.
-        func search(_ text: String) {
-            app.window.makeFirstResponder(input)
+        // Types as the keyboard does, into the key window through the field editor: setting a field that is being
+        // edited leaves the editor's old text on screen and in the query, and a background window's field doesn't
+        // reach the query at all.
+        func search(_ text: String) async throws {
+            try await TestSupport.eventually(timeout: .seconds(10)) {
+                NSApp.activate(ignoringOtherApps: true); app.window.makeKeyAndOrderFront(nil)
+                return app.window.isKeyWindow && NSApp.isActive
+            }
+            app.window.makeFirstResponder(input); rows = nil
             guard let editor = input.currentEditor() as? NSTextView else {
                 input.stringValue = text
                 NotificationCenter.default.post(name: NSControl.textDidChangeNotification, object: input)
@@ -499,9 +511,9 @@ final class SSHReconnectIntegrationTests: XCTestCase {
         }
         for mode in [SpaceOrder.flat, .tree] {
             app.controller.settings.values.spaceOrder = mode
-            search("no-such-detached-space")
+            try await search("no-such-detached-space")
             try await TestSupport.eventually(diagnostic: "Sidebar OCR: \(seen)") { try await sidebarReads("No matching spaces") }
-            search(server.destination)
+            try await search(server.destination)
             try await TestSupport.eventually(diagnostic: "Sidebar OCR: \(seen)") {
                 try await sidebarReads("Research") && !seen.contains("No matching spaces")
             }
