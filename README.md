@@ -1,21 +1,19 @@
 # Dispatch
 
-A macOS terminal, reimagined for the agentic era.
+A terminal app for macs, which supercharges your existing workflows.
 
-- 💬 **Chat mode:** turns CLI agents into real chat (Codex, Claude, Pi,
-  [Nanocodex](https://github.com/gakonst/nanocodex))
-- 🪟 **Tmux & herdr:** native tabs, smooth scrolling, copy-paste
-- 🔔 **Notifications:** know when an agent needs you
-- 🗂️ **Spaces & tabs:** vertical spaces, horizontal tabs, colorized per-machine
-- ✂️ **Smart splits:** regroup existing tabs instead of opening new ones
+- 💬 Using agents? It transforms CLI/TUI into real chat with notifications.
+- 🪟 Using tmux/herdr? It maps their tabs onto native app’s tabs and spaces.
+- 🗂️ Using ssh? It groups spaces per-host.
+- 🎨 Not using anything? Polished liquid glass design, themes & GPU acceleration.
 
-All of this while being:
+That’s it. No bloat!
 
-- 🏎 **Fast:** Swift rewrite of libghostty
-- ⌨️ **Keyboard-first:** works with your tmux/herdr control key
-- 🎨 **Design-focused:** it's an old-school terminal, just modernized and UX-friendly. We fight bloat!
+[![](https://github.com/user-attachments/assets/e937fe12-4eae-4a04-86f3-fb5d23118bcd)](https://github.com/user-attachments/assets/e937fe12-4eae-4a04-86f3-fb5d23118bcd)
 
 ## Quick start
+
+Dispatch is a normal terminal. The goal is to improve user's workflow, not to change it.
 
 1. Locally it can be used as-is. For SSH: use standard command e.g. `ssh host`
     - SSH-ing somewhere presents a popup, which asks to upload optional dispatch-helper
@@ -26,6 +24,7 @@ All of this while being:
     - There is a separate key combo to steer; also it's possible to steer queued message
     - Multi-line editor is enabled with shift+enter. It highlights markdown code brackets
     - Requires codex-cli 0.161.0, claude 2.1.293, pi 1.1.0 or nanocodex
+    - Try [Nanocodex](https://github.com/gakonst/nanocodex): Codex rebuilt so that it's faster and can be embedded in third party applications via an ergonomic library API
 4. Try splits: open 4 tabs, use ctrl+1, ctrl+2, ctrl+3, ctrl+4
 
 Extra features:
@@ -33,6 +32,11 @@ Extra features:
 - Spaces: tree view, reopen on launch, restore history, git branch titles, compact space list
 - Check out sidebar footer: clicking on a host brings up stats widget
 - Auto-improve text contrast on light themes
+- OSC-7501 support
+
+## How it works
+
+There are two parts: Swift macos app and Rust helper. Rust helper parses tmux/herdr windows, adds hooks to agent chats, to ensure everything stays smooth. It also monitors system usage. It has no extended rights and opens no listening ports. Audit it by yourself!
 
 ## Run
 
