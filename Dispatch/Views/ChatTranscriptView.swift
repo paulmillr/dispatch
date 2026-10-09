@@ -76,7 +76,7 @@ struct ChatTranscriptView: View {
                 // Scrolling to the bottom aligns this marker's bottom edge, so it spans a floating input.
                 Color.clear.frame(height: 1 + bottomContentInset).id("bottom")
             }
-            .padding(22).frame(maxWidth: .infinity)
+            .padding(Self.padding).frame(maxWidth: .infinity)
             .padding(.top, topContentInset)
             .id(viewportGeneration)
             .background(ChatScrollViewport(position: session.scrollPosition))
@@ -247,7 +247,11 @@ struct ChatTranscriptView: View {
             })
     }
 
+    /// The transcript's padding, around its rows and below the "bottom" marker.
+    static let padding: CGFloat = 22
+
     private func connectScrollPosition(_ scroll: ScrollViewProxy) {
+        session.scrollPosition.bottomPadding = Self.padding
         session.scrollPosition.diagnosticState = { [weak session] in
             guard let session else { return nil }
             return .init(revision: session.revision, historyRevision: session.historyRevision,

@@ -188,32 +188,73 @@ struct NewSpaceButton: View {
             .animation(.easeOut(duration: 0.12), value: revealed || hovered)
     }
 
-    /// The flat order's action, as the host picker draws it: its icon (a plus, or the Mac's for a local space) in the
-    /// column the spaces' status or host icons fill, its shortcut ending where theirs do.
-    private var actionRow: some View {
-        let column = metrics.discSize > 0 ? metrics.discSize : metrics.activitySize
-        return HStack(spacing: metrics.cards ? 11 : metrics.icons ? 9 : 6) {
+    /// The flat order's "+ local" and "+ space", side by side under the last space: a capsule each on Liquid Glass,
+    /// their glass blending with their neighbour's; otherwise tiles in Large or rows in compact.
+    @ViewBuilder private var actionRow: some View {
+        if glass { glassLabel } else if metrics.large { tileLabel } else { rowLabel }
+    }
+
+    private var glass: Bool { LiquidGlassStore.shared.active }
+
+    /// Compact flat list: a row like a space's, the icon in the status column.
+    private var rowLabel: some View {
+        fitted(iconSize: metrics.hostIconSize, iconWidth: max(metrics.activitySize, metrics.hostIconSize), shortcutSize: metrics.shortcutSize)
+            .font(AppFont.ui(size: metrics.nameSize))
+            .foregroundStyle(hovered ? Chrome.ink : Chrome.palette.detail)
+            .padding(.leading, 6).padding(.trailing, 8).frame(height: metrics.rowHeight)
+            .background(hovered ? Chrome.palette.hover : .clear, in: RoundedRectangle(cornerRadius: metrics.cornerRadius))
+            .contentShape(RoundedRectangle(cornerRadius: metrics.cornerRadius))
+    }
+
+    /// Large without glass: a filled tile as tall as the glass capsules, each filling half the row.
+    private var tileLabel: some View {
+        fitted(iconSize: typography.hostIconSize, shortcutSize: typography.size(offset: -1.5))
+            .font(AppFont.ui(size: typography.tabSize))
+            .foregroundStyle(Chrome.ink).opacity(hovered ? 1 : 0.75)
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity).frame(height: StripTab.glassTrackHeight(typography))
+            .background(Chrome.palette.sidebarAction, in: RoundedRectangle(cornerRadius: 8))
+            .contentShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    /// Liquid Glass: one of the two new-space capsules, its glass blending with its neighbour's; a faint capsule nested
+    /// 2 points inside it marks the pointer.
+    private var glassLabel: some View {
+        fitted(iconSize: typography.hostIconSize, shortcutSize: typography.size(offset: -1.5))
+            .font(AppFont.ui(size: typography.tabSize))
+            .foregroundStyle(hovered ? Chrome.ink : Chrome.palette.detail)
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity).frame(height: StripTab.glassTrackHeight(typography))
+            .background(hovered ? Chrome.palette.hover : .clear, in: Capsule().inset(by: 2))
+            .liquidGlass(in: Capsule())
+            .contentShape(Capsule())
+    }
+
+    /// "local" led by the Mac's icon or "space" by a plus, with its shortcut on the right, as on space tiles. A narrow
+    /// sidebar drops the shortcut before the label; the tooltip still names it.
+    private func fitted(iconSize: CGFloat, iconWidth: CGFloat? = nil, shortcutSize: CGFloat) -> some View {
+        ViewThatFits(in: .horizontal) {
+            contents(iconSize: iconSize, iconWidth: iconWidth, shortcutSize: shortcutSize, showsShortcut: true)
+            contents(iconSize: iconSize, iconWidth: iconWidth, shortcutSize: shortcutSize, showsShortcut: false)
+        }
+        .lineLimit(1)
+    }
+
+    private func contents(iconSize: CGFloat, iconWidth: CGFloat?, shortcutSize: CGFloat, showsShortcut: Bool) -> some View {
+        HStack(spacing: 6) {
             Group {
-                if let host, isLocalSidebar { HostGlyph(host: host, size: metrics.hostIconSize) }
-                else { NewSpacePlus(size: metrics.hostIconSize) }
+                if let host, isLocalSidebar { HostGlyph(host: host, size: iconSize) }
+                else { NewSpacePlus(size: iconSize) }
             }
             .foregroundStyle(Chrome.palette.secondary)
-            .frame(width: column, height: column)
-            Text(title).lineLimit(1).truncationMode(.tail)
+            .frame(width: iconWidth)
+            Text(isLocalSidebar ? "local" : "space")
             Spacer(minLength: 0)
-            if let shortcut {
-                Text(shortcut).font(.system(size: metrics.shortcutSize).monospacedDigit())
-                    .tracking(metrics.shortcutSize * 0.06)
-                    .foregroundStyle(Chrome.palette.secondary.opacity(0.7)).fixedSize()
+            if showsShortcut, let shortcut {
+                Text(shortcut).font(.system(size: shortcutSize).monospacedDigit()).tracking(shortcutSize * 0.06)
+                    .foregroundStyle(Chrome.palette.secondary.opacity(0.7))
             }
         }
-        .font(AppFont.ui(size: metrics.cards ? metrics.nameSize - 1 : metrics.nameSize))
-        .foregroundStyle(hovered ? Chrome.ink : Chrome.palette.detail)
-        .padding(.leading, metrics.cards ? 9 : metrics.icons ? 5 : 6).padding(.trailing, metrics.shortcutInset)
-        .frame(height: metrics.cards ? metrics.discSize + 8 : metrics.rowHeight)
-        .background(hovered ? Chrome.palette.hover : .clear,
-                    in: RoundedRectangle(cornerRadius: metrics.cornerRadius, style: .continuous))
-        .contentShape(RoundedRectangle(cornerRadius: metrics.cornerRadius, style: .continuous))
     }
 }
 

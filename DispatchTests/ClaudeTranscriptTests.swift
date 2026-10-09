@@ -79,6 +79,34 @@ final class ClaudeTranscriptTests: XCTestCase {
         XCTAssertNotNil(state.turns.first?.ended)
     }
 
+    /// A message sent while Claude works is absorbed into the running turn and recorded only as a queued-command
+    /// attachment (stamped when it was queued, before the tool result it follows). It shows where Claude read it, in
+    /// that turn; queued task notifications and subagent hand-backs are not the user's.
+    func testMessagesAbsorbedMidTurnShowInTheirTurn() async throws {
+        func queued(_ id: String, after parent: String, _ prompt: String, mode: String = "prompt", origin: String, at time: String) throws -> Data {
+            try raw(["type": "attachment", "uuid": id, "parentUuid": parent, "sessionId": session, "isSidechain": false,
+                     "timestamp": time, "attachment": ["type": "queued_command", "prompt": prompt, "commandMode": mode,
+                                                       "origin": ["kind": origin], "timestamp": time]])
+        }
+        let state = try await open(try line("user", "u1", ["role": "user", "content": "Restore the buttons"],
+                                            extra: ["promptId": "p1", "origin": ["kind": "human"]])
+            + line("assistant", "a1", ["role": "assistant", "model": "fixture", "stop_reason": "tool_use", "content": [
+                ["type": "tool_use", "id": "call-1", "name": "Bash", "input": ["command": "make"]]]],
+                extra: ["parentUuid": "u1", "timestamp": "2000-01-01T10:00:01.000Z"])
+            + line("user", "r1", ["role": "user", "content": [["type": "tool_result", "tool_use_id": "call-1", "content": "built"]]],
+                   extra: ["parentUuid": "a1", "timestamp": "2000-01-01T10:00:07.000Z"])
+            + queued("q1", after: "r1", "Use the new icons", origin: "human", at: "2000-01-01T10:00:04.000Z")
+            + queued("q2", after: "q1", "<task-notification>\n<status>completed</status>\n</task-notification>",
+                     mode: "task-notification", origin: "task-notification", at: "2000-01-01T10:00:07.500Z")
+            + queued("q3", after: "q2", "<agent-message from=\"a1\">report</agent-message>", origin: "peer", at: "2000-01-01T10:00:07.600Z")
+            + line("assistant", "a2", ["role": "assistant", "model": "fixture", "stop_reason": "end_turn",
+                                       "content": [["type": "text", "text": "Icons done"]]],
+                   extra: ["parentUuid": "q3", "timestamp": "2000-01-01T10:00:09.000Z"]))
+        XCTAssertEqual(state.turns.count, 1, "The absorbed message starts no turn of its own")
+        XCTAssertEqual(items(state).map(\.kind), [.user, .tool, .user, .assistant])
+        XCTAssertEqual(items(state).filter { $0.kind == .user }.map(\.text), ["Restore the buttons", "Use the new icons"])
+    }
+
     func testIgnoresSidechainsInjectedContextAndRedactedThinking() async throws {
         let rows = try line("user", "side", ["role": "user", "content": "hidden sidechain"], extra: ["isSidechain": true])
             + line("user", "meta", ["role": "user", "content": "injected instructions"], extra: ["isMeta": true])

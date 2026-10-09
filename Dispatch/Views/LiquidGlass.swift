@@ -6,8 +6,8 @@ import SwiftUI
 final class LiquidGlassStore {
     static let shared = LiquidGlassStore()
     var enabled = false
-    /// The system sidebar setting (Preferences.systemSidebar); it only applies with glass active.
-    var systemSidebar = false
+    /// The Liquid sidebar setting (Preferences.liquidSidebar); it only applies with glass active.
+    var liquidSidebar = true
 
     nonisolated static var supported: Bool {
         if #available(macOS 26, *) { return true }
@@ -16,7 +16,7 @@ final class LiquidGlassStore {
     /// Only macOS 26 and later draw glass; earlier systems keep the flat chrome whatever the setting says.
     var active: Bool { enabled && Self.supported }
     /// The sidebar is Dispatch's glass panel floating over the content, rather than a column (the system's, or flat).
-    var floatingSidebar: Bool { active && !systemSidebar }
+    var floatingSidebar: Bool { active && liquidSidebar }
 }
 
 /// The system's sidebar glass, as Finder and Mail have it. AppKit draws that material only for a split view's sidebar

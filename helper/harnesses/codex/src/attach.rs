@@ -35,7 +35,8 @@ pub struct Main {
     /// yet, kept open (c1654cc CodexPatchConnection tracksMainThread): its thread/started binds,
     /// and the next identify lists again over it (a resumed thread starts no thread).
     pub watches: Channels,
-    pub snapshots: Rc<RefCell<Vec<(Binding, Json)>>>,
+    /// A thread's resume reply (true: its rollout exists), or its read while it has no rollout yet.
+    pub snapshots: Rc<RefCell<Vec<(Binding, Json, bool)>>>,
     /// Explicit native replacements, owned by a live identified channel or an open rollout.
     pub replacements: Rc<RefCell<BTreeMap<String, Binding>>>,
     waiters: Waiters,
@@ -350,6 +351,7 @@ impl Main {
             discovery,
             sessions: Vec::new(),
             candidates: Vec::new(),
+            read: None,
             uid: None,
             resolved: false,
             address: None,
@@ -397,7 +399,7 @@ struct Open {
     /// The server shows no main thread yet: on failure the connection stays as the TUI's watch.
     watch: bool,
     waiters: Waiters,
-    snapshots: Rc<RefCell<Vec<(Binding, Json)>>>,
+    snapshots: Rc<RefCell<Vec<(Binding, Json, bool)>>>,
     subscribed: bool,
     /// The TUI's waiter key (Main::begin).
     wait: String,
@@ -406,6 +408,8 @@ struct Open {
     discovery: Option<Discovery>,
     sessions: Vec<String>,
     candidates: Vec<Binding>,
+    /// The bound thread as last read: a thread without a rollout yet has no resume snapshot.
+    read: Option<Json>,
     uid: Option<u64>,
     address: Option<Address>,
     /// The socket's real path is known (`address` holds it).
@@ -554,6 +558,14 @@ impl Open {
                         error.message.starts_with("no rollout found for thread id ")
                     }) =>
                 {
+                    // A new conversation: its read still reports the configured model and effort.
+                    let session = current.binding.session.clone();
+                    if let Some(read) = current.read.take().filter(|read| {
+                        read.root().get("thread").and_then(|thread| thread.get("id"))
+                            .and_then(Value::string) == Some(session.as_str())
+                    }) {
+                        current.snapshots.borrow_mut().push((current.binding.clone(), read, false));
+                    }
                     current.finish(io, Ok(()));
                     return;
                 }
@@ -1034,6 +1046,7 @@ impl Open {
                     && let Some(binding) = location(thread, &self.binding.process)
                 {
                     self.candidates.push(binding);
+                    self.read = Some(document);
                 }
                 self.candidate(open, io)?;
             }
@@ -1058,6 +1071,7 @@ impl Open {
                 {
                     return Err(failure("thread", "Codex thread is not loaded"));
                 }
+                self.read = Some(document);
                 self.subscribe(open, io);
             }
             Stage::Resume => {
@@ -1072,7 +1086,7 @@ impl Open {
                 self.subscribed = true;
                 self.snapshots
                     .borrow_mut()
-                    .push((self.binding.clone(), document));
+                    .push((self.binding.clone(), document, true));
                 self.finish(io, Ok(()));
             }
         }
@@ -1189,7 +1203,7 @@ pub fn location(thread: Value<'_>, process: &Process) -> Option<Binding> {
 
 pub(super) fn locate(
     jobs: Jobs,
-    snapshots: Rc<RefCell<Vec<(Binding, Json)>>>,
+    snapshots: Rc<RefCell<Vec<(Binding, Json, bool)>>>,
     io: &mut dyn Io,
     channel: Rc<RefCell<Channel>>,
     done: Done<Option<Binding>>,
@@ -1210,20 +1224,23 @@ pub(super) fn locate(
         "thread/read",
         params,
         Box::new(move |io, result| {
-            let updated = result
-                .ok()
-                .and_then(|document| {
-                    document
-                        .root()
-                        .get("thread")
-                        .and_then(|thread| location(thread, &binding.process))
-                })
-                .filter(|next| next.session == binding.session);
-            let Some(updated) = updated.filter(|binding| binding.transcript.is_some()) else {
+            let Some((document, updated)) = result.ok().and_then(|document| {
+                let updated = document
+                    .root()
+                    .get("thread")
+                    .and_then(|thread| location(thread, &binding.process))
+                    .filter(|next| next.session == binding.session)?;
+                Some((document, updated))
+            }) else {
                 deferred(done)(io, Ok(Some(binding)));
                 return;
             };
-            let path = updated.transcript.clone().unwrap();
+            // A thread without a rollout yet: its read still reports the configured model and effort.
+            let Some(path) = updated.transcript.clone() else {
+                snapshots.borrow_mut().push((binding.clone(), document, false));
+                deferred(done)(io, Ok(Some(binding)));
+                return;
+            };
             jobs::submit(
                 &jobs,
                 io,
@@ -1232,6 +1249,7 @@ pub(super) fn locate(
                     let readable = matches!(result, Ok(dispatch_helper_core::api::Output::Metadata(metadata))
                         if metadata.kind == dispatch_helper_core::api::FileKind::File);
                     if !readable {
+                        snapshots.borrow_mut().push((binding.clone(), document, false));
                         deferred(done)(io, Ok(Some(binding)));
                         return;
                     }
@@ -1264,7 +1282,7 @@ pub(super) fn locate(
                                 {
                                     channel.borrow_mut().binding = updated.clone();
                                     channel.borrow_mut().ready = true;
-                                    snapshots.borrow_mut().push((updated.clone(), document));
+                                    snapshots.borrow_mut().push((updated.clone(), document, true));
                                     deferred(done)(io, Ok(Some(updated)));
                                 }
                                 _ => deferred(done)(io, Ok(Some(binding))),

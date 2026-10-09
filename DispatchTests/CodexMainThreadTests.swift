@@ -442,6 +442,9 @@ final class CodexMainThreadTests: XCTestCase {
             XCTAssertNotEqual(parent.executable, HelperApp.executable?.resolvingSymlinksInPath().path)
         }
         try await TestSupport.eventually(timeout: .seconds(15)) { session.sessionID != nil }
+        // A new conversation has no rollout to resume yet; it still shows its configured model before a turn.
+        try await TestSupport.eventually(timeout: .seconds(15)) { session.model == "dispatch-fixture" }
+        XCTAssertNil(session.effort, "The fixture leaves the effort at the model's default")
         let arguments = try XCTUnwrap(process.arguments)
         let endpoint = try XCTUnwrap(arguments.firstIndex(of: "--remote")).advanced(by: 1)
         let socket = String(arguments[endpoint].dropFirst("unix://".count))

@@ -471,6 +471,19 @@ final class ChatFormattingTests: XCTestCase {
         XCTAssertTrue(blocks.contains(.init(kind: .code("swift"), text: "let fence = \"```\"")))
         XCTAssertEqual(blocks.last, .init(kind: .code("python"), text: "print('unfinished')"))
     }
+    /// A streamed fence keeps its lines while its closing fence arrives a backtick at a time: an unfinished last line
+    /// that could still close it adds no line the next delta would take away.
+    func testStreamingFenceDoesNotShowItsClosingFenceAsCode() {
+        let opened = "Run:\n\n```swift\nscroll.scrollTo(\"bottom\")"
+        let expected = ChatMarkdownBlock(kind: .code("swift"), text: "scroll.scrollTo(\"bottom\")")
+        for tail in ["", "\n", "\n`", "\n``", "\n```", "\n```\n"] {
+            XCTAssertEqual(ChatMarkdownBlock.parse(opened + tail).last, expected, "tail \(tail.debugDescription)")
+        }
+        // Content that only starts like a fence, or a blank line inside the code, stays once more follows.
+        XCTAssertEqual(ChatMarkdownBlock.parse(opened + "\n`x").last?.text, "scroll.scrollTo(\"bottom\")\n`x")
+        XCTAssertEqual(ChatMarkdownBlock.parse(opened + "\n\nnext").last?.text, "scroll.scrollTo(\"bottom\")\n\nnext")
+        XCTAssertEqual(ChatMarkdownBlock.parse("~~~\nfirst\n~").last, .init(kind: .code("text"), text: "first"))
+    }
     func testSelectableMarkdownPreservesFormattingAndWrapping() async throws {
         guard #available(macOS 26, *) else { throw XCTSkip("Native selection bridge requires macOS 26") }
         AppFont.register()

@@ -22,7 +22,7 @@ struct AgentWorkingState: Equatable {
     /// `visible && !loading` without reading the transcript, for views that only place or frame the activity:
     /// a new record must not re-render them.
     static func isWorking(_ session: ChatSession) -> Bool {
-        session.active && session.busy && !(session.loadingHistory && !session.awaitingPromptAck)
+        session.active && (session.busy || !session.subagents.isEmpty) && !(session.loadingHistory && !session.awaitingPromptAck)
     }
 
     /// `waiting`, likewise without the transcript.
@@ -35,17 +35,19 @@ struct AgentWorkingState: Equatable {
         // Discovering the first rollout can start a history read after Submit.
         // Keep that submitted turn visible while its acknowledgement is loading.
         loading = session.loadingHistory && !session.awaitingPromptAck
-        visible = loading || (session.active && session.busy)
+        // Background subagents keep the row while the agent itself is idle.
+        visible = loading || (session.active && (session.busy || !session.subagents.isEmpty))
         waiting = !loading && (session.approvals.contains(where: \.pending) || session.waitingForAnswer
             || (session.questions.isEmpty && session.nativePrompt != nil))
         let turn: ChatTurn?
         if let id = session.activeTurnID { turn = session.turns.last { $0.id == id } }
         else { turn = session.turns.last }
         let current = turn != nil && turn?.ended == nil && !session.awaitingPromptAck
-        // A record without a time starts its turn at the epoch: unknown, so count from appearance.
+        // A record without a time starts its turn at the epoch: unknown, so count from when the session started
+        // working, as when the turn has ended but its subagents still run.
         let reported = turn.flatMap { current && $0.started.timeIntervalSince1970 > 0 ? $0.started : nil }
-        started = loading ? nil : (session.submittedThinkingAt ?? reported)
-        usesLocalClock = started == nil || session.submittedThinkingAt != nil
+        started = loading ? nil : (session.submittedThinkingAt ?? reported ?? session.workingSince)
+        usesLocalClock = loading || reported == nil || session.submittedThinkingAt != nil
         let items = visible && current && !loading ? (turn?.items ?? []) : []
         details = items.lazy.filter { $0.kind == .tool }.suffix(3).map { item in
             Detail(id: item.id, title: item.completed ? "Completed tool" : "Tool activity",
@@ -63,6 +65,14 @@ struct AgentWorkingState: Equatable {
             label = activity.label; fragment = Self.preview(activity.text)
         } else {
             label = "thinking"; fragment = ""
+        }
+        // Running subagents name the activity while the agent waits on them (its Agent tool) or is idle.
+        let agentTool = items.last { $0.kind == .tool && !$0.completed }.map { ["Agent", "Task"].contains($0.title) } ?? false
+        if !loading, !waiting, !session.subagents.isEmpty, agentTool || !session.busy {
+            let count = session.subagents.count
+            label = count == 1 ? "1 agent running" : "\(count) agents running"
+            var seen = Set<String>()
+            fragment = session.subagents.filter { seen.insert($0).inserted }.joined(separator: ", ")
         }
     }
 

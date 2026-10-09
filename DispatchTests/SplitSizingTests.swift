@@ -92,6 +92,28 @@ final class SplitSizingTests: XCTestCase {
         assertPaneMinima(content)
     }
 
+    /// The sidebar column takes the width the floating glass panel was resized to, whether shown then or later.
+    func testSidebarColumnTakesTheSharedSidebarWidth() {
+        let sidebar = TerminalSplitView()
+        sidebar.sidebar = true
+        sidebar.isVertical = true
+        sidebar.dividerStyle = .thin
+        sidebar.delegate = sidebar
+        sidebar.addArrangedSubview(NSView())
+        sidebar.addArrangedSubview(NSView())
+        sidebar.frame.size = CGSize(width: 1200, height: 400)
+        resize(sidebar)
+        XCTAssertEqual(sidebar.arrangedSubviews[0].frame.width, 264, accuracy: 0.01)
+        sidebar.applySidebarWidth(300)
+        XCTAssertEqual(sidebar.arrangedSubviews[0].frame.width, 300, accuracy: 0.01)
+        sidebar.setSidebarHidden(true)
+        sidebar.applySidebarWidth(230)
+        sidebar.setSidebarHidden(false)
+        XCTAssertEqual(sidebar.arrangedSubviews[0].frame.width, 230, accuracy: 0.01)
+        sidebar.applySidebarWidth(1000)
+        XCTAssertEqual(sidebar.arrangedSubviews[0].frame.width, 340, accuracy: 0.01, "Clamped as a divider drag is")
+    }
+
     private func nested(_ axis: SplitAxis, count: Int) -> PaneLayout {
         guard count > 1 else { return .pane(UUID()) }
         return .split(UUID(), axis, nested(axis, count: count - 1), .pane(UUID()))

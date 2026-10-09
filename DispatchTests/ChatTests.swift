@@ -493,6 +493,37 @@ final class ChatTests: XCTestCase {
         XCTAssertEqual(session.draft, "Unsent draft")
     }
 
+    /// /exit from Chat returns to Terminal whether the command's reply or the agent's exit comes
+    /// first; a state between them must not bring the chat back as a read-only transcript.
+    func testRequestedExitReturnsToTerminalWhicheverSignalArrivesFirst() {
+        let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
+        let session = chat.session(for: UUID())
+        defer { chat.close(session.id) }
+        let idle = HelperChat.State(busy: false, activity: nil, model: nil, model_label: nil, effort: nil, usage: nil,
+                                    goal: nil, draft: nil, attention: nil, title: nil, compacting: false, service_tier: nil)
+        session.helper = HelperChat(terminal: 1, session: "conversation", endpoint: .local)
+        session.agentID = "claude"; session.sessionID = "conversation"
+        chat.receiveHelper(.state(idle), session: session)
+        XCTAssertTrue(session.showChat, "Discovery shows the chat")
+        XCTAssertFalse(session.manualViewChoice)
+        // Reply first: the agent still reports state before it exits.
+        session.exitRequested = true
+        chat.setChatVisible(false, session: session, reason: "exit")
+        chat.receiveHelper(.state(idle), session: session)
+        XCTAssertFalse(session.showChat, "A late state must not reopen an exiting agent's chat")
+        chat.helperExited(.local, terminal: 1)
+        XCTAssertFalse(session.showChat)
+        XCTAssertFalse(session.exitRequested)
+        // The next agent is shown again; this time its exit arrives before the reply.
+        chat.receiveHelper(.state(idle), session: session)
+        XCTAssertTrue(session.showChat)
+        session.exitRequested = true
+        chat.helperExited(.local, terminal: 1)
+        XCTAssertFalse(session.showChat, "The exit itself returns to Terminal")
+        XCTAssertEqual(session.viewTransitions.last?.reason, "exit")
+        XCTAssertFalse(session.manualViewChoice, "A later agent in this terminal still opens in chat")
+    }
+
     func testRetainedHistoryRemainsReadableAfterProcessLookupFails() {
         let coordinator = ChatCoordinator(enabled: true)
         let session = coordinator.session(for: UUID())

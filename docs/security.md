@@ -63,7 +63,7 @@ Any process running as you can read these values, but the tokens are not enough 
 
 **Links.**
 
-- Cmd-click opens URLs and existing relative paths with `/usr/bin/open`.
+- Cmd-click opens HTTP(S) URLs and existing paths with `/usr/bin/open`; other URL schemes ask first.
 - OSC 8 hyperlinks are never opened by the Swift engine.
 - In chat, links open only if they are `http(s)` with a host and no embedded credentials. File citations open in an in-app preview (regular UTF-8 files up to 2 MB, symlinks followed). Every other link is removed. Chat doesn't load remote images.
 
@@ -224,7 +224,7 @@ Quitting doesn't ask for confirmation when only tmux and herdr tabs are open.
 | Settings | `~/Library/Application Support/Dispatch/Local/settings.json` | Preferences, including the starting folder | On change | Atomic write; default file mode |
 | Spaces | `…/Dispatch/host-session.json` | Spaces, tabs, titles, and folders; host records; SSH executables, options, and destinations; remote uid and boot ID; herdr recovery tokens; tmux sessions. No credentials or launch commands. | On window close and quit, while **Reopen spaces on launch** is on (on). Deleted when that setting is turned off. | 0600, atomic |
 | Terminal output | `…/Dispatch/terminal-history.json` | The raw text of plain local and SSH tabs: commands, output, and anything else visible, possibly secrets. Not tmux or herdr tabs. | Only on a normal quit, with **Restore tab history** (off) and **Reopen spaces** both on. Deleted from disk early in the next launch, ignored after 7 days, and deleted when the setting is turned off. | 0600, atomic, excluded from backups. Capped at one scrollback per tab and 1/32 of RAM in total. Replayed without control sequences. |
-| Chat drafts | `…/Dispatch/drafts.json` | Working and saved drafts, plus a copy of each prompt from before it is sent until delivery is confirmed, per host, agent, and conversation | 300 ms after typing stops, and at most every 2 s | Atomic write; default file mode; no expiry |
+| Chat drafts | `…/Dispatch/drafts.json` | Working and saved drafts, plus a copy of each prompt from before it is sent until delivery is confirmed, per host, agent, and conversation | 300 ms after typing stops, and at most every 2 s | Owner-only atomic write; excluded from backups; no expiry |
 | Helper files | `~/.dispatch/` | `bin/dispatch-helper`, the helper copy that hook entries run; `run/*/` hook sockets and startup files of running helpers; `routes/` which helper serves each hook; `state/` herdr recovery records | `bin/dispatch-helper` is refreshed when a helper writes a hook or startup command; each `run/*/` exists while its helper runs | Folders 0700, sockets 0600 |
 | Diagnostics | `~/Library/Logs/Dispatch/Diagnostics/` | Chat scroll and viewport events and geometry. Row IDs are replaced with keyed hashes; no conversation text, hosts, or paths. | Only while **Diagnostics** is on (off). Turning it off doesn't delete existing files. | 0600, rotated at 4 MiB |
 | UserDefaults (`dev.dispatch.local`) | `~/Library/Preferences` | Chat and hook switches, SSH grants (`SSHIntegrationPermissions.v2`), host records (`HostRegistry.v1`), herdr presentation, window frame | On change | Default |

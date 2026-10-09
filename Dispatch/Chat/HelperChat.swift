@@ -284,6 +284,8 @@ final class HelperChat {
     /// The agent's service tier ("priority" is Codex's /fast), when it reports one.
     let service_tier: String?
     var mode: String? = nil
+    /// Running subagents' types, oldest first; they can outlive their turn (absent from older helpers).
+    var agents: [String]? = nil
   }
 
   struct Choice: Decodable, Sendable {

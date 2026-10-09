@@ -45,8 +45,6 @@ struct AgentActivityGlyph: View {
     var size: CGFloat = 10
     var tile = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// How long the working glyph holds each half.
-    private static let swing: TimeInterval = 1.0
     var body: some View {
         let activity = AgentActivity(tabIDs: tabIDs, connecting: connecting)
         let (blocked, working, finished) = (activity.blocked, activity.working, activity.finished)
@@ -58,11 +56,6 @@ struct AgentActivityGlyph: View {
             if reconnecting {
                 // Match a monospace status glyph's visible width, not its font point size.
                 SSHConnectingIndicator(reduceMotion: reduceMotion, size: tile ? size * 0.75 : size == 10 ? 9 : size)
-            } else if state == "◐" && !reduceMotion {
-                // Working swings its filled half from side to side, every working glyph in step; Reduce Motion holds it.
-                TimelineView(.periodic(from: .distantPast, by: Self.swing)) { timeline in
-                    Text(Int((timeline.date.timeIntervalSinceReferenceDate / Self.swing).rounded()) % 2 == 0 ? "◐" : "◑")
-                }
             } else { Text(tile && blocked && !offline ? "◌" : state) }
         }
             .transformEnvironment(\.font) { if tile { $0 = AppFont.ui(size: 14) } }

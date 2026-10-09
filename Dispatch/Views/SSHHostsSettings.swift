@@ -110,11 +110,11 @@ struct SSHHostsSettings: View {
                     .toggleStyle(SettingsSwitchStyle(title: "Remote programs can copy", compact: true))
                     .accessibilityIdentifier("settings-remote-clipboard")
             }
-            Text("Programs on helper hosts can set this Mac’s clipboard.")
+            Text("Allows OSC 52 writes on helper hosts. Local and plain SSH always allow them.")
                 .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
                 .fixedSize(horizontal: false, vertical: true)
         }.padding(.horizontal, 14).padding(.vertical, 10)
-            .help("As with OSC 52 or tmux buffers. Local programs and plain SSH always can.")
+            .help("Controls OSC 52 and other remote clipboard writes on helper hosts.")
     }
 
     private var reconnectRow: some View {

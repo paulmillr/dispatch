@@ -2,6 +2,24 @@ import XCTest
 @testable import DispatchApp
 
 final class ClaudeModelMenuTests: XCTestCase {
+    /// Text typed into Terminal before Chat opened is read back from the plain composer only.
+    func testComposerTextReadsOnlyTheOneLineComposer() {
+        let empty = "Claude Code v2.1.287\n──── design ─\n❯ \n───\n  ⏵⏵ auto mode on (shift+tab to cycle) · ← 1 agent\n"
+        XCTAssertEqual(ClaudeModelMenu.composerText(empty), "")
+        XCTAssertEqual(ClaudeModelMenu.composerText(empty.replacingOccurrences(of: "❯ ", with: "❯ hello there  ")), "hello there")
+        XCTAssertEqual(ClaudeModelMenu.composerText(empty.replacingOccurrences(of: "❯ ", with: "❯ привет")), "привет")
+        // Captured from 2.1.285: a no-break space after the marker, and no shortcut hint while typing.
+        let typing = "Claude Code v2.1.285\n───\n❯\u{a0}thinking hello \n───\n  ⏸ manual mode on\n"
+        XCTAssertEqual(ClaudeModelMenu.composerText(typing), "thinking hello")
+        for other in [empty.replacingOccurrences(of: "❯ ", with: "❯hello"),
+                      empty.replacingOccurrences(of: "❯ \n", with: "❯ first\n  second\n"),
+                      empty.replacingOccurrences(of: "───\n  ⏵⏵", with: "───\n❯ 1. Yes\n  ⏵⏵"),
+                      empty + "───\n Do you want to proceed?\n",
+                      empty.replacingOccurrences(of: "──── design ─", with: "")] {
+            XCTAssertNil(ClaudeModelMenu.composerText(other), other)
+        }
+    }
+
     func testObservedComposerFooters() {
         // Footer text captured from the native 2.1.282 and 2.1.283 terminals.
         // Borders are shortened; the prompt and footer text are preserved.

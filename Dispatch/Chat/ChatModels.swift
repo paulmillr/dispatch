@@ -610,6 +610,14 @@ final class ChatSession: Identifiable {
         return rows
     }
 
+    /// A native record orders by its transcript position (its item date is the epoch),
+    /// so it shows its own time; a reply without a known time shows none.
+    private func replyTime(_ item: ChatItem, turnID: String) -> Date? {
+        let date = item.source.map { $0.time_ms.map { Date(timeIntervalSince1970: Double($0) / 1000) } }
+            ?? itemDates[ItemIdentity(turn: turnID, item: item.id)]
+        return date.flatMap { $0.timeIntervalSince1970 > 0 ? $0 : nil }
+    }
+
     private func preparedRows(for turn: ChatTurn, usedGroupIDs: inout Set<String>) -> TurnRows {
         // Ending or reordering a turn can change its rows without changing the
         // projected tool items. Keep their formatting identities stable when
@@ -650,7 +658,7 @@ final class ChatSession: Identifiable {
         }
         for item in items {
             let row = ChatTranscriptRow(id: item.rowID ?? "\(turn.id.utf8.count):\(turn.id):\(item.id)", item: item, approval: nil,
-                                        turnID: turn.id, replyTime: item.kind == .assistant ? itemDates[ItemIdentity(turn: turn.id, item: item.id)] : nil)
+                                        turnID: turn.id, replyTime: item.kind == .assistant ? replyTime(item, turnID: turn.id) : nil)
             if item.kind == .tool { tools.append(row); toolRevisions.insert(item.presentationID) }
             else { flushTools(); rows.append(row) }
         }
@@ -690,13 +698,26 @@ final class ChatSession: Identifiable {
     var terminalAttention: String?
     var inputBlocked: Bool { discoveryBlocked || terminalAttention != nil }
     var manualViewChoice = false
+    /// The user sent /exit or /quit to the current agent: Terminal is shown whichever of the
+    /// command's reply and the agent's exit arrives first, and no state brings Chat back.
+    var exitRequested = false
     var active = false
     var busy = false { didSet {
         cachedVisibleRows = nil
         if !busy { submittedThinkingAt = nil }
+        updateWorkingSince()
     } }
     // Keep a locally submitted turn on one clock across remote acknowledgement.
     var submittedThinkingAt: Date?
+    /// Subagent types the agent reports running (`State.agents`); background agents keep running while it is idle.
+    var subagents: [String] = [] { didSet { updateWorkingSince() } }
+    /// When the agent last became busy or started running subagents: the activity clock when no live turn has a
+    /// start (e.g. a turn that ended while its agents run). Lives here, not in a view, so rebuilding a view
+    /// (switching tabs) doesn't restart it.
+    private(set) var workingSince: Date?
+    private func updateWorkingSince() {
+        if !busy && subagents.isEmpty { workingSince = nil } else if workingSince == nil { workingSince = .now }
+    }
     var nativeActivity: String?
     var submissionID: UUID?
     var interruptionID: UUID?
@@ -921,7 +942,7 @@ final class ChatSession: Identifiable {
         loadingHistory = false; promptBoundary = nil
         hasEarlier = false; loadingEarlier = false; earlierError = nil; historyGeneration = nil
         hasNewMessages = false; scrollPosition.clear(); toolGroupIdentities = [:]; patchPairs = [:]; displayedTurns = [:]
-        busy = false; nativeActivity = nil; submissionID = nil; interruptionID = nil; activityCheck = nil; activeTurnID = nil; awaitingPromptAck = false; observedCommand = nil; stoppedTurnID = nil
+        busy = false; subagents = []; nativeActivity = nil; submissionID = nil; interruptionID = nil; activityCheck = nil; activeTurnID = nil; awaitingPromptAck = false; observedCommand = nil; stoppedTurnID = nil
         activityNeedsRefresh = false; activityRetryAfter = nil
         submissionFailure = nil; status = nil; title = nil; transcriptTitle = nil; configurationRequest = nil
         if !keepingConfiguration { reportedModel = nil; effort = nil }

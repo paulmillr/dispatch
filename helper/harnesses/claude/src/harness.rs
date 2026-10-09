@@ -80,6 +80,9 @@ pub struct Claude {
     due: BTreeSet<Key>,
     /// Updates for the next event: a chat opening re-delivers its open interactions (history has no Ui).
     queued: Vec<Update>,
+    /// Running subagents per session id, oldest first: (agent_id, agent_type) from SubagentStart
+    /// until SubagentStop. Background agents keep running after their turn ends.
+    agents: BTreeMap<String, Vec<(String, String)>>,
 }
 
 fn finish<T: 'static>(io: &mut dyn Io, done: Done<T>, result: Result<T, Error>) {
@@ -320,6 +323,61 @@ impl Claude {
             self.refresh(io, binding, path);
         }
     }
+    /// SubagentStart/SubagentStop lifecycle datagrams (no reply) update `State.agents`; a new or
+    /// ended session forgets its agents. True when the event was one of them.
+    fn subagent(&mut self, ui: &mut dyn Ui, event: &Event) -> bool {
+        let Event::Hook { message, reply: None, .. } = event else {
+            return false;
+        };
+        let Ok(document) = Json::parse(message) else {
+            return false;
+        };
+        let root = document.root();
+        let event = text(root, "hook_event_name").unwrap_or("");
+        let Some(session) = text(root, "session_id").filter(|s| uuid(s)) else {
+            return false;
+        };
+        let agent = text(root, "agent_id").unwrap_or("");
+        let changed = match event {
+            "SubagentStart" if !agent.is_empty() => {
+                let agents = self.agents.entry(session.to_owned()).or_default();
+                let kind = text(root, "agent_type").filter(|s| !s.trim().is_empty()).unwrap_or("agent");
+                !agents.iter().any(|(id, _)| id == agent) && {
+                    agents.push((agent.to_owned(), kind.to_owned()));
+                    true
+                }
+            }
+            "SubagentStop" => self.agents.get_mut(session).is_some_and(|agents| {
+                let count = agents.len();
+                agents.retain(|(id, _)| id != agent);
+                agents.len() != count
+            }),
+            // Lifecycle events Claude also delivers for the parent session; only a session
+            // boundary clears its agents.
+            "SessionStart" | "SessionEnd" => self.agents.remove(session).is_some_and(|a| !a.is_empty()),
+            _ => return false,
+        };
+        if self.agents.get(session).is_some_and(Vec::is_empty) {
+            self.agents.remove(session);
+        }
+        if changed {
+            let bindings = self
+                .sessions
+                .values()
+                .map(|s| s.binding.clone())
+                .filter(|b| b.session == session)
+                .collect::<Vec<_>>();
+            for binding in bindings {
+                if ui.terminal(&binding).is_some()
+                    && let Ok(state) = self.current(&binding)
+                {
+                    ui.update(Update::State { binding, state });
+                }
+            }
+        }
+        // SessionStart/SessionEnd are not ours alone: let other handlers see them.
+        matches!(event, "SubagentStart" | "SubagentStop")
+    }
     fn release(&mut self, io: &mut dyn Io, pid: u32) {
         self.interactions.exit(io, pid);
         self.walks.retain(|(owner, _, _), _| *owner != pid);
@@ -328,6 +386,9 @@ impl Claude {
         self.startup.retain(|(owner, _, _), _| *owner != pid);
         self.labels.retain(|(owner, _, _), _| *owner != pid);
         self.chosen.retain(|(owner, _, _), _| *owner != pid);
+        for (_, _, session) in self.sessions.keys().filter(|(owner, _, _)| *owner == pid) {
+            self.agents.remove(session);
+        }
         self.sessions.retain(|(owner, _, _), _| *owner != pid);
         self.newest.remove(&pid);
         self.live.retain(|(owner, _, _)| *owner != pid);
@@ -881,6 +942,9 @@ impl Harness for Claude {
         let Some(event) = self.sides.borrow_mut().event(io, ui, event) else {
             return;
         };
+        if self.subagent(ui, &event) {
+            return;
+        }
         let cache = &self.cache;
         if self.interactions.event(
             io,

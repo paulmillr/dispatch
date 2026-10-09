@@ -50,6 +50,9 @@ final class TerminalView: NSView {
     var markedText = ""
     var currentKeyEvent: NSEvent?
     var keyTextAccumulator: [String] = []
+    /// Plain text typed since the last Return; nil once another key (arrows, chords, paste) may
+    /// have edited the line. Chat adopts what was typed into an agent's prompt before it opened.
+    var typeahead: String? = ""
     var inputSuspensions = 0 {
         didSet { updateFocus() }
     }

@@ -51,11 +51,17 @@ struct ChatMarkdownBlock: Equatable {
                 let length = trimmed.prefix(while: { $0 == marker }).count
                 let language = String(trimmed.dropFirst(length)).trimmingCharacters(in: .whitespaces)
                 var code: [String] = []
+                var closed = false
                 while index < lines.count {
                     let next = lines[index].trimmingCharacters(in: .whitespaces)
                     index += 1
-                    if next.prefix(while: { $0 == marker }).count >= length && next.allSatisfy({ $0 == marker }) { break }
+                    if next.prefix(while: { $0 == marker }).count >= length && next.allSatisfy({ $0 == marker }) { closed = true; break }
                     code.append(lines[index - 1])
+                }
+                // A streaming fence's last line is still arriving: empty, or the closing fence's first backticks, it
+                // would show as a line that the next delta takes away again.
+                if !closed, let last = code.last?.trimmingCharacters(in: .whitespaces), last.allSatisfy({ $0 == marker }) {
+                    code.removeLast()
                 }
                 blocks.append(.init(kind: .code(language.isEmpty ? "text" : language), text: code.joined(separator: "\n")))
             } else if trimmed.isEmpty { flush() }

@@ -157,7 +157,7 @@ Fields here come from the production encoder and API definitions. Nullable field
 | `Snapshot` | `generation: String`; `session: Option<String>`; `version: Option<String>`; `initial: bool`; `caught_up: bool`; `invalidated: bool`; `awaiting_creation: bool`; `file: Option<FileIdentity>` |
 | `FileIdentity` | `device: u64`; `inode: u64` |
 | `FilePosition` | `file: FileIdentity`; `offset: u64` |
-| `State` | `busy: bool`; `activity: Option<String>`; `model: Option<String>`; `model_label: Option<String>`; `effort: Option<String>`; `usage: Option<String>`; `goal: Option<String>`; `draft: Option<String>`; `attention: Option<String>`; `leaf: Option<String>`; `dialog: Option<String>`; `title: Option<String>`; `version: Option<String>`; `pending: bool`; `compacting: bool`; `service_tier: Option<String>`; `mode: Option<String>` |
+| `State` | `busy: bool`; `activity: Option<String>`; `model: Option<String>`; `model_label: Option<String>`; `effort: Option<String>`; `usage: Option<String>`; `goal: Option<String>`; `draft: Option<String>`; `attention: Option<String>`; `leaf: Option<String>`; `dialog: Option<String>`; `title: Option<String>`; `version: Option<String>`; `pending: bool`; `compacting: bool`; `service_tier: Option<String>`; `mode: Option<String>`; `agents: Vec<String>` |
 | `Choice` | `id: String`; `label: String`; `detail: Option<String>` |
 | `Prefix` | `key: Option<String>`; `repeat_ms: Option<u64>`; `bindings: Vec<PrefixBinding>` |
 | `PrefixBinding` | `key: String`; `command: String`; `repeat: bool` |
@@ -187,6 +187,7 @@ Field contracts from the API:
 - `State.compacting`: Native context compaction is running (Claude PreCompact until PostCompact); the app keeps its own caption. c1654cc ChatCoordinator.swift:795-796.
 - `State.service_tier`: Native service tier (Codex /fast); c1654cc ChatCommands.swift:418-458 (serviceTier).
 - `State.mode`: Native collaboration mode, including the acknowledged /plan setting.
+- `State.agents`: Running subagents' types, oldest first (Claude SubagentStart until SubagentStop). They can outlive the turn that started them (background agents).
 - `Question.blocks`: Complete presentation, e.g. an approval operation as Block::Code with language json; c1654cc ChatSideConversation.swift:79-85.
 - `Interaction.key`: Stable approval metadata identity when separate requests need distinct decision ids. Absent when id already identifies both the metadata and the decision.
 - `Interaction.approval`: For approval interactions, normalized option0 allows and option1 denies. Additional choices and ordinary question indices keep their producer meanings.

@@ -13,6 +13,8 @@ struct NativeSplit: NSViewRepresentable {
     let axis: SplitAxis
     var sidebar = false
     var firstHidden = false
+    /// The sidebar column's width while shown; a divider drag writes it back.
+    var sidebarWidth: Binding<CGFloat>?
     var initialFraction: CGFloat = 0.5
     var controlledFraction: CGFloat?
     var onDividerChange: ((CGFloat) -> Void)?
@@ -42,6 +44,8 @@ struct NativeSplit: NSViewRepresentable {
         second.safeAreaRegions = []
         split.addArrangedSubview(sidebar ? SidebarClipView(host: first) : first)
         split.addArrangedSubview(second)
+        split.onSidebarResize = sidebarWidth.map { width in { width.wrappedValue = $0 } }
+        if let sidebarWidth { split.applySidebarWidth(sidebarWidth.wrappedValue) }
         split.setSidebarHidden(firstHidden)
         return split
     }
@@ -50,6 +54,8 @@ struct NativeSplit: NSViewRepresentable {
         if sidebar { split.dividerTint = NSColor(Chrome.palette.sidebarDivider) }
         split.fractionChanged = fractionChanged
         split.onDividerChange = onDividerChange
+        split.onSidebarResize = sidebarWidth.map { width in { width.wrappedValue = $0 } }
+        if let sidebarWidth { split.applySidebarWidth(sidebarWidth.wrappedValue) }
         if let clip = split.arrangedSubviews[0] as? SidebarClipView { clip.host.rootView = styledFirst }
         else { (split.arrangedSubviews[0] as? NSHostingView<AnyView>)?.rootView = styledFirst }
         (split.arrangedSubviews[1] as? NSHostingView<AnyView>)?.rootView = styledSecond
@@ -71,6 +77,8 @@ final class TerminalSplitView: NSSplitView, NSSplitViewDelegate {
     var sidebar = false
     var initialFraction: CGFloat = 0.5
     var onDividerChange: ((CGFloat) -> Void)?
+    /// A divider drag's new sidebar width.
+    var onSidebarResize: ((CGFloat) -> Void)?
     private var controlledFraction: CGFloat?
     private var draggingDivider = false
     var firstMinimumSize = PaneLayout.minimumPaneSize
@@ -89,12 +97,27 @@ final class TerminalSplitView: NSSplitView, NSSplitViewDelegate {
     override var dividerColor: NSColor { dividerTint }
 
     func splitViewDidResizeSubviews(_ notification: Notification) {
-        if sidebar, draggingDivider { userDidResize() }
+        if sidebar, draggingDivider {
+            userDidResize()
+            if !sidebarHidden, !sidebarAnimating, arrangedSubviews.count == 2, let onSidebarResize {
+                sidebarWidth = arrangedSubviews[0].frame.width
+                let width = sidebarWidth
+                DispatchQueue.main.async { onSidebarResize(width) }
+            }
+        }
         guard !sidebar, positioned, arrangedSubviews.count == 2, let fractionChanged else { return }
         let length = (isVertical ? bounds.width : bounds.height) - dividerThickness
         guard length > 0 else { return }
         let fraction = (isVertical ? arrangedSubviews[0].frame.width : arrangedSubviews[0].frame.height) / length
         DispatchQueue.main.async { fractionChanged(fraction) }
+    }
+
+    /// Takes the sidebar width chosen elsewhere (the floating panel's); a shown column moves to it at once.
+    func applySidebarWidth(_ width: CGFloat) {
+        guard sidebar, !draggingDivider, width != sidebarWidth else { return }
+        sidebarWidth = width
+        guard positioned, !sidebarHidden, !sidebarAnimating, arrangedSubviews.count == 2 else { return }
+        setPosition(clamped(width, length: bounds.width - dividerThickness), ofDividerAt: 0)
     }
 
     func applyControlledFraction(_ fraction: CGFloat?) {

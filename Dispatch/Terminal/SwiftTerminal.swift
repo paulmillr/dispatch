@@ -175,6 +175,13 @@ final class SwiftBackend: TerminalBackend {
 /// The surface's host: Dispatch's policy (and TermTool's ToolHost that the differential tests
 /// check against Ghostty): actions become
 /// TerminalEvents, the clipboard follows TerminalClipboard. Called on the main queue.
+enum TerminalLinkPolicy {
+    static func confirmationScheme(for value: String) -> String? {
+        guard let scheme = URLComponents(string: value)?.scheme?.lowercased() else { return nil }
+        return ["http", "https"].contains(scheme) ? nil : scheme
+    }
+}
+
 private final class SwiftHost: SurfaceHost {
     weak var view: TerminalView?
     weak var surface: Surface?
@@ -229,9 +236,21 @@ private final class SwiftHost: SurfaceHost {
     /// fail closed (the host declined them).
     func open(_ kind: SurfaceAction.OpenKind, _ url: [UInt8]) throws {
         guard kind != .osc8 else { throw CocoaError(.featureUnsupported) }
+        let value = String(decoding: url, as: UTF8.self)
+        if let scheme = TerminalLinkPolicy.confirmationScheme(for: value) {
+            let allowed = MainActor.assumeIsolated {
+                let alert = NSAlert()
+                alert.messageText = "Open \(scheme) link?"
+                alert.informativeText = String(value.prefix(512))
+                alert.addButton(withTitle: "Cancel")
+                alert.addButton(withTitle: "Open")
+                return alert.runModal() == .alertSecondButtonReturn
+            }
+            guard allowed else { throw CocoaError(.userCancelled) }
+        }
         let opener = Process()
         opener.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        opener.arguments = (kind == .text ? ["-t"] : []) + [String(decoding: url, as: UTF8.self)]
+        opener.arguments = (kind == .text ? ["-t"] : []) + [value]
         try opener.run()
     }
 

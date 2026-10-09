@@ -277,19 +277,21 @@ final class SettingsSynchronizationTests: XCTestCase {
     /// With Liquid Glass the sidebar is one panel from top to bottom: halfway down, well below the spaces and above
     /// the footer, the panel still covers the column, while the window shows in the inset beside it.
     func testGlassSidebarIsOnePanelFromTopToBottom() async throws {
-        let (panel, inset) = try await glassSidebarBrightness(systemSidebar: false, named: "glass-sidebar")
+        let (panel, inset) = try await glassSidebarBrightness(liquidSidebar: true, named: "glass-sidebar")
         XCTAssertGreaterThan(abs(panel - inset), 0.02, "The panel covers the column halfway down (\(panel) vs the inset's \(inset))")
     }
 
-    /// The system sidebar, as in Finder and Mail, is AppKit's own sidebar glass in a column flush with the window's
-    /// edge: no inset beside it, and the setting is off unless chosen.
-    func testSystemSidebarIsFlushWithTheWindowEdge() async throws {
+    /// With the Liquid sidebar off, the sidebar is AppKit's own sidebar glass, as in Finder and Mail, in a column flush
+    /// with the window's edge: no inset beside it. The Liquid sidebar stays on unless turned off.
+    func testLiquidSidebarOffIsFlushWithTheWindowEdge() async throws {
         let defaults = try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8))
-        XCTAssertFalse(defaults.systemSidebar, "The floating panel stays the default")
+        XCTAssertTrue(defaults.liquidSidebar, "The floating panel stays the default")
         var chosen = defaults
-        chosen.systemSidebar = true
+        chosen.liquidSidebar = false
         XCTAssertEqual(try JSONDecoder().decode(Preferences.self, from: JSONEncoder().encode(chosen)), chosen)
-        let (panel, inset) = try await glassSidebarBrightness(systemSidebar: true, named: "system-sidebar") { root in
+        let migrated = try JSONDecoder().decode(Preferences.self, from: Data(#"{"systemSidebar": true}"#.utf8))
+        XCTAssertFalse(migrated.liquidSidebar, "A chosen system sidebar keeps its column")
+        let (panel, inset) = try await glassSidebarBrightness(liquidSidebar: false, named: "system-sidebar") { root in
             guard #available(macOS 26, *) else { return }
             XCTAssertFalse(PresentationTestSupport.views(of: NSGlassEffectView.self, in: root, includingNestedMatches: true).isEmpty,
                            "The column draws AppKit's sidebar glass")
@@ -298,7 +300,7 @@ final class SettingsSynchronizationTests: XCTestCase {
     }
 
     /// A two-space glass sidebar's brightness halfway down: mid-column, and halfway into the floating panel's inset.
-    private func glassSidebarBrightness(systemSidebar: Bool, named name: String,
+    private func glassSidebarBrightness(liquidSidebar: Bool, named name: String,
                                         inspect: (NSView) throws -> Void = { _ in }) async throws -> (panel: CGFloat, inset: CGFloat) {
         try XCTSkipUnless(LiquidGlassStore.supported, "Liquid Glass needs macOS 26")
         try DesktopTestSupport.requireUnlocked()
@@ -313,10 +315,10 @@ final class SettingsSynchronizationTests: XCTestCase {
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.appearance = NSAppearance(named: .darkAqua)
-        let originalGlass = LiquidGlassStore.shared.enabled, originalSystem = LiquidGlassStore.shared.systemSidebar
-        defer { LiquidGlassStore.shared.enabled = originalGlass; LiquidGlassStore.shared.systemSidebar = originalSystem }
+        let originalGlass = LiquidGlassStore.shared.enabled, originalLiquid = LiquidGlassStore.shared.liquidSidebar
+        defer { LiquidGlassStore.shared.enabled = originalGlass; LiquidGlassStore.shared.liquidSidebar = originalLiquid }
         LiquidGlassStore.shared.enabled = true
-        LiquidGlassStore.shared.systemSidebar = systemSidebar
+        LiquidGlassStore.shared.liquidSidebar = liquidSidebar
         let root = NSHostingView(rootView: SpaceSidebar(workspace: workspace, settings: controller.settings, controller: controller))
         window.contentView = root
         window.makeKeyAndOrderFront(nil)
@@ -471,8 +473,9 @@ final class SettingsSynchronizationTests: XCTestCase {
                         if large {
                             let buttons = PresentationTestSupport.views(of: NewSpaceNativeButton.self, in: root)
                                 .filter { !$0.isHiddenOrHasHiddenAncestor }
-                            // Tree: the plus at the end of each 26-point host chip. Flat: action rows as tall as an orb's.
-                            let buttonHeight: CGFloat = order == .tree ? 20 : 40
+                            // Tree: the plus at the end of each 26-point host chip. Flat: "+ local" and "+ space" as tall
+                            // as the glass track.
+                            let buttonHeight: CGFloat = order == .tree ? 20 : 28
                             guard buttons.count == 2 && buttons.allSatisfy({ abs($0.bounds.height - buttonHeight) < 1 }) else { return false }
                             if order == .tree {
                                 let hosts = PresentationTestSupport.views(of: HostSecondaryClickView.self, in: root)
@@ -514,14 +517,15 @@ final class SettingsSynchronizationTests: XCTestCase {
                                     root.layoutSubtreeIfNeeded()
                                     let buttons = PresentationTestSupport.views(of: NewSpaceNativeButton.self, in: root)
                                         .filter { !$0.isHiddenOrHasHiddenAncestor }
-                                    frames = buttons.map { $0.convert($0.bounds, to: root) }.sorted { $0.minY < $1.minY }
+                                    frames = buttons.map { $0.convert($0.bounds, to: root) }.sorted { $0.minX < $1.minX }
                                     let cards = PresentationTestSupport.views(of: ReorderTrackingView.self, in: root)
                                         .filter { if case .space = $0.configuration.item { return true }; return false }
                                         .map { $0.convert($0.bounds, to: root) }
                                     guard buttons.count == 2, let card = cards.first else { return false }
-                                    // Rows as wide as the cards above them, one under the other.
-                                    return frames.allSatisfy { abs($0.minX - card.minX) < 1 && abs($0.width - card.width) < 1 && abs($0.height - 40) < 1 }
-                                        && frames[1].minY >= frames[0].maxY - 1
+                                    // "+ local" and "+ space" on one row, splitting the cards' width between them.
+                                    return frames.allSatisfy { abs($0.height - 28) < 1 } && abs(frames[0].midY - frames[1].midY) < 1
+                                        && abs(frames[0].width - frames[1].width) < 1
+                                        && abs(frames[0].minX - card.minX) < 1 && abs(frames[1].maxX - card.maxX) < 1
                                 }
                                 _ = try await PresentationTestSupport.capture(window, named: "large-sidebar-flat-\(Int(width))", in: "sidebar-validation")
                             }

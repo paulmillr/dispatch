@@ -718,6 +718,9 @@ pub struct State {
     pub service_tier: Option<String>,
     /// Native collaboration mode, including the acknowledged /plan setting.
     pub mode: Option<String>,
+    /// Running subagents' types, oldest first (Claude SubagentStart until SubagentStop). They
+    /// can outlive the turn that started them (background agents).
+    pub agents: Vec<String>,
 }
 
 /// A backend's prefix key table (Multiplexer::prefix): raw native key and command strings.

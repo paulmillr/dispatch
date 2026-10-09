@@ -450,6 +450,26 @@ impl Parser {
             }
             return out;
         }
+        // A message the user sent while Claude worked: Claude absorbs it into the running turn
+        // and records only this attachment, never a user line. Task notifications and subagent
+        // hand-backs are queued the same way but aren't the user's.
+        if kind == Some("attachment") {
+            if let Some(queued) = root.get("attachment")
+                && text(queued, "type") == Some("queued_command")
+                && text(queued, "commandMode") == Some("prompt")
+                && queued.get("origin").and_then(|v| text(v, "kind")) == Some("human")
+                && let body = content(queued.get("prompt"))
+                && !body.trim().is_empty()
+            {
+                out.push(Record {
+                    id: format!("user-{id}"),
+                    kind: RecordKind::User,
+                    text: body,
+                    ..record
+                });
+            }
+            return out;
+        }
         let Some(message) = root.get("message") else {
             return out;
         };

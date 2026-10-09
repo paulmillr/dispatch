@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 import Darwin
 
 /// Connection recipes and live process ownership stay outside presentation
@@ -129,6 +129,9 @@ final class HostCoordinator {
     private let watcher = HostProcessWatcher()
     lazy var reconnect = SSHReconnectController(runtime: runtime!)
     private var task: Task<Void, Never>?
+    /// Probes wait half a second while Dispatch is active and ten seconds otherwise; activation ends the wait.
+    private var nap: Task<Void, Never>?
+    private var activation: NSObjectProtocol?
     private var cursor = 0
     private var epoch = UUID()
     private var bindings: [UUID: Binding] = [:]
@@ -151,17 +154,30 @@ final class HostCoordinator {
 
     func start() {
         guard task == nil else { return }
+        activation = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification,
+                                                            object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.nap?.cancel() }
+        }
         task = Task { [weak self] in
-            while !Task.isCancelled {
-                await self?.poll()
-                try? await Task.sleep(for: .milliseconds(500))
+            while !Task.isCancelled, let self {
+                await self.poll()
+                await self.wait()
             }
         }
+    }
+
+    private func wait() async {
+        let interval: Duration = NSApp?.isActive == false ? .seconds(10) : .milliseconds(500)
+        let nap = Task { _ = try? await Task.sleep(for: interval) }
+        self.nap = nap
+        await nap.value
     }
 
     func stop() {
         epoch = UUID()
         task?.cancel(); task = nil
+        nap?.cancel(); nap = nil
+        activation.map(NotificationCenter.default.removeObserver); activation = nil
         reconnect.stop()
         for pending in pendingHosts.values { pending.task?.cancel() }
         pendingHosts.removeAll()

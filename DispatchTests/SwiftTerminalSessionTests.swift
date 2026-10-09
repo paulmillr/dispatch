@@ -8,6 +8,13 @@ import XCTest
 /// The Swift terminal's session and process lifecycle below Dispatch's views.
 @MainActor
 final class SwiftTerminalSessionTests: XCTestCase {
+    func testTerminalLinksConfirmNonWebSchemes() {
+        XCTAssertNil(TerminalLinkPolicy.confirmationScheme(for: "https://example.com"))
+        XCTAssertNil(TerminalLinkPolicy.confirmationScheme(for: "/tmp/report.txt"))
+        XCTAssertEqual(TerminalLinkPolicy.confirmationScheme(for: "file:///Applications/App.app"), "file")
+        XCTAssertEqual(TerminalLinkPolicy.confirmationScheme(for: "ssh://host"), "ssh")
+    }
+
     /// New fonts (size, family, padding, scale) replace the glyph atlases while earlier frames keep
     /// their textures: a reconfigured session must draw exactly like a fresh one, in every in-flight frame.
     func testReconfiguredSessionDrawsLikeAFreshOne() throws {

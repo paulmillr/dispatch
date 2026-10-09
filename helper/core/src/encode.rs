@@ -220,7 +220,8 @@ records! {
         pending,
         compacting,
         service_tier,
-        mode
+        mode,
+        agents
     };
     Choice {
         id,

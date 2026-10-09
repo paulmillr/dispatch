@@ -236,7 +236,31 @@ extension TerminalView {
         guard !inputParked else { return }
         var key = event
         key.text = text
+        trackTypeahead(key)
         _ = surface.key(key)
+    }
+
+    private func trackTypeahead(_ key: TerminalKey) {
+        guard key.action != .release, modifierForKeyCode(UInt16(clamping: key.keycode)) == nil else { return }
+        let plain = key.mods.intersection([.ctrl, .alt, .super]).isEmpty
+        if key.keycode == 36 || key.keycode == 76 {
+            typeahead = plain && !key.mods.contains(.shift) ? "" : nil
+        } else if key.keycode == 51, key.mods.subtracting(.capsLock).isEmpty {
+            typeahead = typeahead.map { String($0.dropLast()) }
+        } else if key.composing, key.text == nil {
+            // Preedit updates commit their text separately.
+        } else if plain, let text = key.text, !text.isEmpty,
+                  !text.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) {
+            typeahead?.append(text)
+        } else {
+            typeahead = nil
+        }
+    }
+
+    /// Erases `count` characters before the cursor, as the user's Delete key does.
+    func eraseTypedCharacters(_ count: Int) {
+        guard let surface, !inputParked else { return }
+        for _ in 0..<count { sendKey(TerminalKey(action: .press, keycode: 51, mods: []), text: "\u{7f}", to: surface) }
     }
 
     private func makeKeyEvent(_ event: NSEvent, action: KeyEvent.Action) -> TerminalKey {

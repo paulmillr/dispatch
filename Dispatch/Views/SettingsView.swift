@@ -196,12 +196,6 @@ struct SettingsView: View {
                         .disabled(!LiquidGlassStore.supported)
                         .accessibilityIdentifier("settings-liquid-glass")
                 }
-                row("System sidebar", detail: "Like Finder and Mail") {
-                    settingToggle("System sidebar", isOn: $draft.systemSidebar)
-                        .disabled(!LiquidGlassStore.supported || !draft.liquidGlass)
-                        .accessibilityIdentifier("settings-system-sidebar")
-                        .help("The sidebar in the system's sidebar glass at the window's edge, instead of a floating glass panel")
-                }
                 row("Theme", detail: "Automatic follows macOS") {
                     dropdown("Theme", selection: Binding(get: { draft.appTheme.label }, set: { label in
                         if let theme = AppTheme.allCases.first(where: { $0.label == label }) { draft.appTheme = theme }
@@ -249,6 +243,12 @@ struct SettingsView: View {
                             .font(typography.font(offset: -0.5)).fixedSize()
                             .frame(width: typography.expanded(60), alignment: .trailing)
                     }.frame(width: pickerWidth)
+                }
+                row("Liquid sidebar", detail: "Off uses a Finder-style sidebar") {
+                    settingToggle("Liquid sidebar", isOn: $draft.liquidSidebar)
+                        .disabled(!LiquidGlassStore.supported || !draft.liquidGlass)
+                        .accessibilityIdentifier("settings-liquid-sidebar")
+                        .help("A glass panel floating over the content; off, a column in the system's sidebar glass at the window's edge, as in Finder and Mail")
                 }
                 row("Hide Git branches", detail: "Beside each space’s name") {
                     settingToggle("Hide Git branches", isOn: Binding(get: { !draft.showGitBranches },

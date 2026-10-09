@@ -534,10 +534,18 @@ final class ChatScrollPosition {
         guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
         arrivalExpectedAt = ProcessInfo.processInfo.systemUptime
     }
+    /// The document's padding below its "bottom" marker. Item scrolling to that marker leaves the padding under the
+    /// viewport, so following stops there too: aiming at the document's end put a streamed reply that many points
+    /// too high for a frame, until the next item scroll brought it back down.
+    var bottomPadding: CGFloat = 0
+    /// The scroll offset that shows the "bottom" marker's edge at the viewport's, as item scrolling to it does.
+    private func bottomOffset(_ scroll: NSScrollView, _ document: NSView) -> CGFloat {
+        max(0, document.bounds.maxY - bottomPadding - scroll.contentView.bounds.height)
+    }
     private func pinToBottom() {
         guard !adjusting else { return }
         guard let scroll, let document = scroll.documentView else { return }
-        let destination = max(0, document.bounds.maxY - scroll.contentView.bounds.height)
+        let destination = bottomOffset(scroll, document)
         guard abs(destination - scroll.contentView.bounds.minY) > 0.25 else { return }
         // Each glide frame re-reads the bottom, so later growth joins the running glide.
         if glide != nil { return }
@@ -563,7 +571,7 @@ final class ChatScrollPosition {
         }
         let progress = min(1, (ProcessInfo.processInfo.systemUptime - glide.start) / Self.arrivalGlide)
         let eased = 1 - pow(1 - progress, 3)
-        let destination = max(0, document.bounds.maxY - scroll.contentView.bounds.height)
+        let destination = bottomOffset(scroll, document)
         let y = glide.from + (destination - glide.from) * eased
         if abs(y - scroll.contentView.bounds.minY) > 0.25 {
             adjusting = true

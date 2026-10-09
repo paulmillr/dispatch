@@ -242,7 +242,10 @@ import XCTest
         drafts.select(record.id)
         _ = try XCTUnwrap(drafts.prepareDelivery(consume: true))
         drafts.edit(text: "typing"); drafts.persist(flush: true)
+        XCTAssertEqual((try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path)
         let restarted = ChatSession(id: UUID(), draftRepository: ChatDraftRepository(store: store))
+        XCTAssertEqual((try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? NSNumber)?.intValue, 0o600)
         restarted.sessionID = "same"
         XCTAssertEqual(restarted.draft, "typing")
         XCTAssertEqual(restarted.drafts.saved, [record])

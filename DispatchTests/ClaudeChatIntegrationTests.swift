@@ -7,8 +7,9 @@ import XCTest
 final class ClaudeChatIntegrationTests: XCTestCase {
     func testLocalDiscoveryComposerThinkingToolsAndExit() async throws { try await walkthrough(exitOnly: false) }
     func testQuitReturnsKeyboardFocusToShell() async throws { try await walkthrough(exitOnly: true, exitCommand: "/quit") }
+    func testTypingBeforeChatOpensMovesToTheChatDraft() async throws { try await walkthrough(exitOnly: true, typeahead: true) }
 
-    private func walkthrough(exitOnly: Bool, exitCommand: String = "/exit") async throws {
+    private func walkthrough(exitOnly: Bool, exitCommand: String = "/exit", typeahead: Bool = false) async throws {
         let restoreRuntime = TestSupport.preserveRuntime()
         defer { restoreRuntime() }
         let phaseTimings = WalkthroughTimings(test: name, agent: "claude", transport: "local")
@@ -97,6 +98,18 @@ final class ClaudeChatIntegrationTests: XCTestCase {
             }
             XCTAssertEqual(session.agentID, "claude")
             XCTAssertEqual(session.agentTitle, "Claude Code")
+            if typeahead {
+                // Typed into Claude's prompt while Terminal still shows, then discovery opens Chat.
+                terminal.insertText("thinking hello", replacementRange: NSRange(location: NSNotFound, length: 0))
+                try await TestSupport.eventually(diagnostic: "Typed in Terminal\n\(screen())") {
+                    ClaudeModelMenu.composerText(screen()) == "thinking hello"
+                }
+                runtime.chat.setChatVisible(true, session: session)
+                runtime.chat.adoptTerminalTypeahead(session)
+                try await TestSupport.eventually(diagnostic: "Typeahead: \(session.draft)\n\(screen())") { session.draft == "thinking hello" }
+                XCTAssertNil(terminal.typeahead)
+                session.draft += " from chat"
+            }
             runtime.chat.chooseChat(true, session: session)
             // Ready for input: the helper's binding of this agent is live and it reports idle (the agent runs on
             // the helper's pty, not the app view's, so the view's foreground process does not name it).
@@ -104,7 +117,8 @@ final class ClaudeChatIntegrationTests: XCTestCase {
                 session.active && process.alive && !session.busy && session.activityCheck == nil &&
                     ClaudeModelMenu.isEmptyComposer(screen())
             }
-            session.draft = "thinking hello from chat"
+            if !typeahead { session.draft = "thinking hello from chat" }
+            XCTAssertEqual(session.draft, "thinking hello from chat")
             runtime.chat.submit(session)
             XCTAssertNotNil(session.optimisticPrompt)
             try await TestSupport.eventually(timeout: .seconds(15), diagnostic: "Claude reply: \(session.status ?? "none") \(session.submissionFailure ?? "none")\n\(screen())") {

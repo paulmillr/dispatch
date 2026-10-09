@@ -170,6 +170,9 @@ final class SSHReconnectIntegrationTests: XCTestCase {
         let terminal = try XCTUnwrap(app.runtime.views[source])
         TerminalTestSupport.send("printf 'RELAUNCH_%s\\n' READY", to: terminal)
         try await app.wait { TerminalTestSupport.screen(terminal: terminal).contains("RELAUNCH_READY") }
+        // The renderer's login prints the banner; the restarted ssh command's login must not repeat it.
+        let screen = TerminalTestSupport.screen(terminal: terminal)
+        XCTAssertLessThanOrEqual(screen.components(separatedBy: "Last login").count - 1, 1, screen)
     }
 
     func testQuitAndRelaunchRetainsTmuxUntilExplicitReconnect() async throws {

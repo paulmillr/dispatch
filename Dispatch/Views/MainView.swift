@@ -8,15 +8,17 @@ struct MainView: View {
     let controller: AppDelegate
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// The floating glass sidebar's width, panel inset included; dragging its trailing edge resizes it.
-    @State private var glassSidebarWidth: CGFloat = 264
+    /// The sidebar's visible width, the same for the split column and the floating glass panel, so switching between
+    /// them keeps it; dragging either one's trailing edge resizes it.
+    @State private var sidebarWidth: CGFloat = 264
     /// The full-screen edge reveal is showing its host mark, or the mark's picker is open.
     @State private var revealShown = false
     @State private var revealPicker = false
     private var sidebarVisible: Bool { controller.sidebarVisible }
-    /// With Liquid Glass the sidebar floats over the content instead of taking a split column, unless it is the
-    /// system sidebar.
+    /// With Liquid Glass and the Liquid sidebar, the sidebar floats over the content instead of taking a split column.
     private var glassSidebar: Bool { LiquidGlassStore.shared.floatingSidebar }
+    /// The floating sidebar's footprint: its panel, with the glass inset on either side.
+    private var glassSidebarWidth: CGFloat { sidebarWidth + 2 * SpaceSidebar.glassInset }
     private var showTmuxTabs: Bool {
         guard let space = workspace.current, space.structured else { return false }
         return (space.windowPresentation?.groups.count ?? 1) <= 1 && (titlebarTabs || WindowTabBar.showsTabs(space: space))
@@ -94,13 +96,13 @@ struct MainView: View {
             // under the floating sidebar, so toggling glass never remounts terminals or chats.
             NativeSplit(first: glassSidebar ? AnyView(Color.clear) : AnyView(spaceSidebar.accessibilityHidden(!sidebarVisible)),
                         second: AnyView(content.modifier(SidebarExtension(leading: glassSidebar && sidebarVisible ? glassSidebarWidth : 0))),
-                        axis: .columns, sidebar: true, firstHidden: !sidebarVisible || glassSidebar,
+                        axis: .columns, sidebar: true, firstHidden: !sidebarVisible || glassSidebar, sidebarWidth: $sidebarWidth,
                         firstMinimumSize: CGSize(width: typography.expanded(200), height: 120),
                         secondMinimumSize: minimumTerminalSize)
                 .overlay(alignment: .leading) {
                     if glassSidebar && sidebarVisible {
                         spaceSidebar.frame(width: glassSidebarWidth)
-                            .overlay(alignment: .trailing) { SidebarResizeHandle(width: $glassSidebarWidth, minimum: typography.expanded(200)) }
+                            .overlay(alignment: .trailing) { SidebarResizeHandle(width: $sidebarWidth, minimum: typography.expanded(200)) }
                             // Behind the glass, never over it: the content's top-left host edge (and wash) runs on
                             // under the panel, so it reads as one window-wide edge through the glass and its gap.
                             .background(alignment: .topLeading) {
@@ -636,7 +638,7 @@ private struct SidebarExtension: ViewModifier {
     }
 }
 
-/// The floating sidebar's trailing edge: drag to resize within the same bounds as the split column.
+/// The floating sidebar's trailing edge: drag to resize its panel within the same bounds as the split column.
 private struct SidebarResizeHandle: View {
     @Binding var width: CGFloat
     let minimum: CGFloat

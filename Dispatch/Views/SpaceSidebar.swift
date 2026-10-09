@@ -125,8 +125,8 @@ struct SpaceSidebar: View {
             .frame(maxWidth: glass ? .infinity : nil)
         }
         // With Liquid Glass the sidebar is one panel from top to bottom, floating over the content (MainView) at the
-        // glass inset, the title row keeping its place beside the traffic lights inside it. The system sidebar is
-        // a column in AppKit's sidebar glass instead, flush with the window's edges as in Finder and Mail.
+        // glass inset, the title row keeping its place beside the traffic lights inside it. With the Liquid sidebar
+        // off it is a column in AppKit's sidebar glass instead, flush with the window's edges as in Finder and Mail.
         .background { if glass { glassPanel } }
         .padding(.bottom, floating ? Self.glassInset : 0)
         .buttonStyle(.plain)
@@ -150,22 +150,31 @@ struct SpaceSidebar: View {
     }
 
     private var glass: Bool { LiquidGlassStore.shared.active }
-    /// Dispatch's own glass panel, inset from the window, rather than the system sidebar's column.
+    /// Dispatch's own glass panel, inset from the window (the Liquid sidebar), rather than the system sidebar's column.
     private var floating: Bool { LiquidGlassStore.shared.floatingSidebar }
     /// Whether the overflow control rides over the list as a bar (GlassScrollEdge) rather than below it.
     private var overflowBar: Bool {
         if #available(macOS 26, *) { return glass } else { return false }
     }
-    /// The flat order's actions under the last space, as the host picker lists them: "New space", then "New local
-    /// space" while another host is live, where it differs from "New space".
+    /// The flat order's "+ local" and "+ space" on one row after the last space, on Liquid Glass two capsules close
+    /// enough that their glass blends. With only the local host, "+ local" would repeat "+ space", so "+ space" stands
+    /// alone in the left half rather than filling the row.
     private var newSpaceButtons: some View {
         let remote = workspace.liveHosts.contains(where: { $0.id != .local })
-        return VStack(spacing: metrics.rowSpacing) {
+        return HStack(spacing: glass ? 4 : 6) {
+            if remote {
+                NewSpaceButton(workspace: workspace, host: workspace.hosts.record(.local), metrics: metrics)
+            }
             NewSpaceButton(workspace: workspace, metrics: metrics)
-            if remote { NewSpaceButton(workspace: workspace, host: workspace.hosts.record(.local), metrics: metrics) }
+            if !remote {
+                Color.clear.frame(maxWidth: .infinity, maxHeight: 0).accessibilityHidden(true)
+            }
         }
-        // A host arrives in its own update, before any space moves to it: "New local space" fades in and out.
+        // A host arrives in its own update, before any space moves to it: "+ space" slides between the halves as
+        // "+ local" fades, the same both ways.
         .animation(InterfaceMotion.animation(reduce: reduceMotion), value: remote)
+        // Blends glass across twice the capsules' gap, so they join at rest rather than only while they move.
+        .glassGroup(spacing: 8)
         // A little more room than between spaces, so the actions read apart from the list.
         .padding(.top, max(Self.glassRowInset, metrics.rowSpacing))
     }

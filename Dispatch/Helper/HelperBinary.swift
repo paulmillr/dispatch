@@ -2,8 +2,8 @@ import Foundation
 import CoreFoundation
 
 public enum HelperBinary {
-    public static let schema: [UInt8] = [255, 219, 180, 3, 50, 46, 145, 3]
-    public static let version: UInt64 = 257037446082255871
+    public static let schema: [UInt8] = [255, 226, 49, 155, 107, 79, 225, 204]
+    public static let version: UInt64 = 14763168377081029375
     public static let symbols: [String] = [
 ":",
 "activity",
@@ -11,6 +11,7 @@ public enum HelperBinary {
 "additions",
 "after",
 "agent",
+"agents",
 "answers",
 "approval",
 "at",
@@ -358,7 +359,7 @@ public enum HelperBinary {
 ["written", "may_have_sent", "reason"],
 ["generation", "session", "version", "initial", "caught_up", "invalidated", "awaiting_creation", "file"],
 ["id", "axis", "children"],
-["busy", "activity", "model", "model_label", "effort", "usage", "goal", "draft", "attention", "leaf", "dialog", "title", "version", "pending", "compacting", "service_tier", "mode"],
+["busy", "activity", "model", "model_label", "effort", "usage", "goal", "draft", "attention", "leaf", "dialog", "title", "version", "pending", "compacting", "service_tier", "mode", "agents"],
 ["waiting", "busy", "activity", "revision"],
 ["kind", "title", "symbol", "summary", "input", "language", "directory", "failed", "read", "search", "shell", "children", "orchestration", "patch", "confirmed_result", "additions", "deletions"],
 ["path", "selection", "source"],

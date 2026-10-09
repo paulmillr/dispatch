@@ -34,13 +34,15 @@ struct ChatDraftBucket: Codable {
     init(url: URL = Home.support.appendingPathComponent("drafts.json")) { self.url = url }
     func load() throws -> [String: ChatDraftBucket] {
         guard FileManager.default.fileExists(atPath: url.path) else { return [:] }
-        let document = try JSONDecoder().decode(Document.self, from: Data(contentsOf: url))
+        let data = try Data(contentsOf: url)
+        let document = try JSONDecoder().decode(Document.self, from: data)
         guard document.version == 1 else { throw CocoaError(.fileReadUnknown) }
+        let permissions = try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? NSNumber
+        if permissions?.intValue != 0o600 { try PrivateFile.write(data, to: url, excludedFromBackup: true) }
         return document.buckets
     }
     func save(_ buckets: [String: ChatDraftBucket]) throws {
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try JSONEncoder().encode(Document(buckets: buckets)).write(to: url, options: .atomic)
+        try PrivateFile.write(JSONEncoder().encode(Document(buckets: buckets)), to: url, excludedFromBackup: true)
     }
 }
 

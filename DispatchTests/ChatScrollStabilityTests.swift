@@ -645,6 +645,84 @@ final class ChatScrollStabilityTests: XCTestCase {
         XCTAssertTrue(condition(), "History did not reach the expected settled state", file: file, line: line)
     }
 
+    /// A streamed reply, delta by delta as Codex sends it: while the reader follows the bottom, every displayed frame
+    /// moves the transcript up or leaves it, never back down. Layout's pin and the item scroll queued for each delta
+    /// once aimed at bottoms 22 points apart, so a line could land too high in one frame and drop back in the next;
+    /// and a code block showed its closing fence's first backtick as a line until the rest arrived.
+    func testStreamedReplyNeverStepsBackWhileFollowing() async throws {
+        try DesktopTestSupport.requireUnlocked(); AppFont.register()
+        let coordinator = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
+        defer { coordinator.stop() }
+        let session = coordinator.session(for: UUID())
+        session.sessionID = "streamed-follow"; session.showChat = true
+        session.turns = (0..<20).map { index in
+            ChatTurn(id: "turn-\(index)", items: [.init(id: "answer-\(index)", kind: .assistant,
+                text: String(repeating: "An earlier answer with several lines of text.\n\n", count: 3))])
+        }
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 650), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.orderOut(nil); window.contentView = nil; window.close() }
+        window.contentView = NSHostingView(rootView: ChatView(session: session, coordinator: coordinator, focused: false, floatingSwitch: false))
+        window.makeKeyAndOrderFront(nil)
+        try await Task.sleep(for: .milliseconds(500))
+        let root = try XCTUnwrap(window.contentView)
+        let scroll = try XCTUnwrap(PresentationTestSupport.views(of: NSScrollView.self, in: root)
+            .max { ($0.documentView?.bounds.height ?? 0) < ($1.documentView?.bounds.height ?? 0) })
+        session.helper = HelperChat(terminal: 0)
+        session.active = true; session.busy = true; session.activeTurnID = "live"
+        func record(_ kind: String, _ id: String, text: String = "", completed: Bool = false) -> HelperChat.Record {
+            .init(id: id, turn: "live", kind: kind, text: text, title: "", output: "", blocks: [], completed: completed,
+                  exit_code: nil, patch: nil, time_ms: nil, documents: [], tool: nil, inline_reasoning: false)
+        }
+        coordinator.receiveHelper(.records([record("turn_started", "start"),
+                                            record("user", "prompt", text: "Why does the reply move?", completed: true)]), session: session)
+        try await TestSupport.eventually(timeout: .seconds(1)) { !session.scrollPosition.glidesToBottom }
+        try await Task.sleep(for: .milliseconds(200))
+        let reply = """
+            Each delta changes the row's **height**, and the transcript follows the bottom.
+
+            - The helper appends the delta to the `agentMessage` record.
+            - The app re-renders the markdown.
+
+            ```swift
+            scroll.scrollTo("bottom", anchor: .bottom)
+            ```
+
+            1. The text grows below the viewport.
+            2. Following brings it into view.
+
+            A final paragraph that wraps across several lines at this width, so the layout reflows while it streams in.
+            """
+        final class Sampler: NSObject {
+            var sample: () -> Void = {}
+            @objc func step(_ link: CADisplayLink) { sample() }
+        }
+        // Each displayed frame's scroll offset and document height (flipped: a larger offset shows later content).
+        var frames: [(offset: CGFloat, height: CGFloat)] = []
+        let sampler = Sampler()
+        sampler.sample = { frames.append((scroll.contentView.bounds.minY, scroll.documentView?.bounds.height ?? 0)) }
+        let link = scroll.displayLink(target: sampler, selector: #selector(Sampler.step(_:)))
+        link.add(to: .main, forMode: .common)
+        var text = "", index = reply.startIndex, count = 0
+        while index < reply.endIndex {
+            let end = reply.index(index, offsetBy: [3, 5, 2, 7, 4][count % 5], limitedBy: reply.endIndex) ?? reply.endIndex
+            text += reply[index..<end]; index = end; count += 1
+            coordinator.receiveHelper(.records([record("assistant", "reply", text: text)]), session: session)
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        coordinator.receiveHelper(.records([record("assistant", "reply", text: text, completed: true)]), session: session)
+        try await Task.sleep(for: .milliseconds(500))
+        link.invalidate()
+        XCTAssertGreaterThan(frames.count, 60, "Sampled every displayed frame")
+        XCTAssertGreaterThan((frames.last?.offset ?? 0) - (frames.first?.offset ?? 0), 100, "The reply grew and was followed")
+        // Following keeps the reply's last line in place, so its growth moves the transcript up; a step back down is
+        // a misaimed follow, or a reply that showed a line its next delta took away.
+        let steps = zip(frames, frames.dropFirst()).filter { $1.offset < $0.offset - 0.5 }
+            .map { "\($0.offset) -> \($1.offset) (document \($0.height) -> \($1.height))" }
+        XCTAssertEqual(steps, [], "The followed transcript stepped back down while the reply streamed")
+        XCTAssertTrue(session.atBottom)
+    }
+
     /// A burst of live rows: the first enters, the rest appear in place, and layout keeps each at the bottom.
     func testBurstRowsFollowTheBottomWithoutEntrances() async throws {
         try DesktopTestSupport.requireUnlocked(); AppFont.register()

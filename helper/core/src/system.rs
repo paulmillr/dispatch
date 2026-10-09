@@ -311,15 +311,14 @@ impl System {
     }
 
     /// Startup-only old engine execution policy; c1654cc TermApple/Launch.swift:248-259.
+    /// Always quiet: the renderer's own login already printed (or hushed) the banner in this
+    /// terminal, so a command's login must not print "Last login" a second time.
     pub(crate) fn command() -> Vec<std::ffi::OsString> {
         #[cfg(target_os = "macos")]
         {
             use std::ffi::OsString;
             if let Ok(account) = native::account() {
-                let mut args = vec![OsString::from("/usr/bin/login")];
-                if File::open(&account.home).is_ok() && account.home.join(".hushlogin").exists() {
-                    args.push("-q".into());
-                }
+                let mut args = vec![OsString::from("/usr/bin/login"), OsString::from("-q")];
                 args.extend([OsString::from("-flp"), account.name]);
                 if let Some(home) = std::env::var_os("HOME") {
                     let mut value = OsString::from("HOME=");

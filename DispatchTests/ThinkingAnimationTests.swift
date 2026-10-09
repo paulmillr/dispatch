@@ -87,6 +87,44 @@ final class ThinkingAnimationTests: XCTestCase {
         XCTAssertEqual(AgentWorkingState(session).fragment, "")
     }
 
+    func testClockSurvivesRebuiltViewAfterTurnEndsWhileAgentsRun() throws {
+        let session = ChatSession(id: UUID())
+        session.active = true; session.busy = true; session.activeTurnID = "turn"
+        let since = try XCTUnwrap(session.workingSince)
+        session.turns = [.init(id: "turn", started: since, ended: since.addingTimeInterval(5))]
+        let state = AgentWorkingState(session)
+        XCTAssertEqual(state.started, since, "An ended turn still busy counts from when the session started working")
+        // A tab switch rebuilds the view, so `appeared` is later; the clock must not restart from it.
+        XCTAssertEqual(AgentWorkingAnimation.timeText(state, now: since.addingTimeInterval(90), appeared: since.addingTimeInterval(80)), "1m 30s")
+        session.subagents = ["Explore"]
+        session.busy = false
+        XCTAssertEqual(session.workingSince, since, "Agents outliving their turn keep the same clock")
+        session.subagents = []
+        XCTAssertNil(session.workingSince)
+    }
+
+    func testRunningSubagentsNameTheActivity() {
+        let session = ChatSession(id: UUID())
+        session.active = true; session.busy = true; session.activeTurnID = "turn"
+        session.turns = [.init(id: "turn", items: [.init(id: "agent", kind: .tool, text: #"{"description":"Find the timer"}"#, title: "Agent")])]
+        session.subagents = ["Explore", "general-purpose", "Explore"]
+        var state = AgentWorkingState(session)
+        XCTAssertEqual(state.label, "3 agents running")
+        XCTAssertEqual(state.fragment, "Explore, general-purpose")
+        session.turns[0].items.append(.init(id: "shell", kind: .tool, text: #"{"command":"git status"}"#, title: "Bash"))
+        XCTAssertEqual(AgentWorkingState(session).label, "running", "The agent's own tool work keeps its label")
+        // Background agents: the turn ended and the agent is idle, but its agents still run.
+        session.turns[0].ended = .now; session.busy = false; session.subagents = ["Explore"]
+        state = AgentWorkingState(session)
+        XCTAssertTrue(state.visible)
+        XCTAssertTrue(AgentWorkingState.isWorking(session))
+        XCTAssertEqual(state.label, "1 agent running")
+        XCTAssertEqual(state.fragment, "Explore")
+        session.subagents = []
+        XCTAssertFalse(AgentWorkingState(session).visible)
+        XCTAssertFalse(AgentWorkingState.isWorking(session))
+    }
+
     func testReduceMotionClockStepsEveryFiveSecondsAfterTen() throws {
         let session = ChatSession(id: UUID())
         session.active = true; session.busy = true; session.activeTurnID = "turn"

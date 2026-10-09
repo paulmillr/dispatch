@@ -40,6 +40,26 @@ final class ChatToolGroupingTests: XCTestCase {
         XCTAssertEqual(session.turns.last?.items.map(\.id), ["prompt", "part:reply"])
     }
 
+    func testNativeReplyTimesShowTheirRecordedTimeNotTheEpoch() throws {
+        func record(_ id: String, _ kind: String, _ text: String, at time: Int64?) -> HelperChat.Record {
+            HelperChat.Record(id: id, turn: "turn", kind: kind, text: text, title: "", output: "", blocks: [],
+                              completed: true, exit_code: nil, patch: nil, time_ms: time, documents: [], tool: nil, inline_reasoning: false)
+        }
+        let session = ChatSession(id: UUID())
+        let date = Date(timeIntervalSince1970: 1_750_000_000)
+        let ms = Int64(date.timeIntervalSince1970 * 1000)
+        session.mergeHistorical([record("prompt", "user", "Hello", at: ms), record("reply", "assistant", "Hi", at: ms + 60_000)]
+            .compactMap { $0.display(at: Date(timeIntervalSince1970: 0)) })
+        XCTAssertEqual(session.transcriptRows.compactMap(\.replyTime), [date.addingTimeInterval(60)])
+        // A live reply carries its own time; one without a time shows none rather than the epoch.
+        for live in [record("live", "assistant", "Again", at: ms + 120_000), record("untimed", "assistant", "Later", at: nil)] {
+            let shown = try XCTUnwrap(live.display(at: Date(timeIntervalSince1970: 0)))
+            guard case .item(let item) = shown.action else { return XCTFail("not an item") }
+            session.insert(item, turnID: shown.turnID, at: shown.date)
+        }
+        XCTAssertEqual(session.transcriptRows.compactMap(\.replyTime), [date.addingTimeInterval(60), date.addingTimeInterval(120)])
+    }
+
     func testMockupGroupSummaryCountsOperationsWithoutDecodingOutput() {
         let items = [
             ChatItem(id: "read1", kind: .tool, text: #"{"cmd":"cat billing.swift"}"#, title: "exec_command"),

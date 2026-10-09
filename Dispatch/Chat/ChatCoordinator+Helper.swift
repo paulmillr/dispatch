@@ -17,6 +17,10 @@ extension ChatCoordinator {
         }
         for session in sessions.values
         where session.helper.map({ $0.endpoint == endpoint && (terminal == nil || $0.route.terminal == terminal) }) == true {
+            if session.exitRequested, !disabled {
+                session.exitRequested = false
+                setChatVisible(false, session: session, reason: "exit")
+            }
             rememberRemotePresentation(session)
             // An explicit exit can retire the subscription before its checked Return
             // reply arrives. Let that delivery verdict settle the draft and presentation.
@@ -24,7 +28,7 @@ extension ChatCoordinator {
                 session.helperTask?.cancel()
             }
             session.active = false
-            session.busy = false
+            session.busy = false; session.subagents = []
             session.relinquish()
             session.status = status ?? "\(session.agentTitle) exited. This transcript is read-only."
             if disabled {
@@ -82,7 +86,8 @@ extension ChatCoordinator {
             guard let self, let session, let helper, session.helper === helper else { return }
             session.loadingHistory = false
             // The conversation ended while its terminal lives (core f2befec1): as an agent exit.
-            if (error as? HelperFailure)?.code == "agent_exited" {
+            // A reopen after that exit finds the terminal retired ("expired").
+            if ["agent_exited", "expired"].contains((error as? HelperFailure)?.code) {
                 return self.helperExited(helper.endpoint, terminal: helper.route.terminal)
             }
             session.active = false
@@ -122,6 +127,7 @@ extension ChatCoordinator {
             session.transcriptPath = page.binding.transcript
             // AgentProcess names a process on this Mac; a remote agent's identity stays in its binding.
             let agent = page.binding.pid != nil && (session.binding?.pid, session.binding?.start) != (page.binding.pid, page.binding.start)
+            if agent { session.exitRequested = false }
             session.binding = page.binding
             if agent, let helper = session.helper { installHelperIntegration(page.key, endpoint: helper.endpoint, terminal: helper.route.terminal) }
             restoreRemotePresentation(session)
@@ -185,9 +191,12 @@ extension ChatCoordinator {
             }
             session.active = true
             if let version = state.version { session.version = version }
-            if session.sessionID != nil, !session.manualViewChoice, !session.showChat {
+            if session.sessionID != nil, !session.manualViewChoice, !session.exitRequested, !session.showChat {
                 setChatVisible(true, session: session)
+                adoptTerminalTypeahead(session)
             }
+            // Before busy, so a turn ending while its agents run keeps one working clock.
+            if session.subagents != state.agents ?? [] { session.subagents = state.agents ?? [] }
             session.busy = state.busy && !(session.agentID == "claude" && session.modelPicker != nil && state.activity == "waiting")
             session.nativeActivity = state.activity
             if !state.busy, state.dialog == nil { session.retiredInteraction = false }
@@ -223,6 +232,41 @@ extension ChatCoordinator {
             receiveHelper(interaction, session: session)
         case .exit:
             if let helper = session.helper { helperExited(helper.endpoint, terminal: helper.route.terminal) }
+        }
+    }
+
+    /// Text typed in Terminal after the launch command, before Chat opened, sits in Claude's own
+    /// prompt, where it would refuse every Chat send. When Claude's composer shows exactly that
+    /// text, it moves to the Chat draft ahead of anything typed there since.
+    func adoptTerminalTypeahead(_ session: ChatSession) {
+        guard session.agentID == "claude", let terminal = TerminalRuntime.shared.views[session.id],
+              let typed = terminal.typeahead, !typed.trimmingCharacters(in: .whitespaces).isEmpty,
+              // Delete removes one character; keep to characters that are one UTF-16 unit.
+              typed.unicodeScalars.count == typed.count, typed.unicodeScalars.allSatisfy({ $0.value <= 0xFFFF })
+        else { return }
+        terminal.typeahead = nil
+        let expected = typed.trimmingCharacters(in: .whitespaces)
+        operations.run(for: session.id) { [weak self, weak session, weak terminal] in
+            // The last keystrokes may still be on their way to Claude's screen.
+            @MainActor func settled(_ condition: (String) -> Bool) async -> Bool {
+                for _ in 0..<25 {
+                    guard let self, let session, let terminal, self.sessions[session.id] === session,
+                          session.active, session.showChat, !Task.isCancelled else { return false }
+                    // An empty composer shows a faint placeholder after the cursor.
+                    let tail = terminal.surface?.cursorFaintTail()
+                    let screen = ClaudeModelMenu.removingPlaceholder(terminal.agentMenuScreen, column: Int(tail?.column ?? 0),
+                                                                     row: Int(tail?.row ?? 0), faint: tail?.faint == true)
+                    if condition(screen) { return true }
+                    try? await Task.sleep(for: .milliseconds(40))
+                }
+                return false
+            }
+            guard await settled({ ClaudeModelMenu.composerText($0) == expected }), let terminal else { return }
+            terminal.eraseTypedCharacters(typed.count)
+            guard await settled({ ClaudeModelMenu.composerText($0) == "" }), let session else { return }
+            let draft = session.drafts.current, shift = typed.utf16.count
+            session.drafts.edit(text: typed + draft.text,
+                                selection: NSRange(location: draft.selection.location + shift, length: draft.selection.length))
         }
     }
 
@@ -403,6 +447,8 @@ extension ChatCoordinator {
         if !command { input.mode = immediately && wasBusy ? "steer" : "prompt"; session.busy = true }
         // A command is running until the harness replies.
         if command { session.command = ChatCommandRequest(text: text.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        let exits = command && ["/exit", "/quit"].contains(text.trimmingCharacters(in: .whitespacesAndNewlines))
+        if exits { session.exitRequested = true }
         session.helperTask = operations.run(for: session.id) { [weak self, weak session] in
             guard let self, let session else { return }
             do {
@@ -472,9 +518,7 @@ extension ChatCoordinator {
                 // A native turn or output may have acknowledged the command before its write reply.
                 session.optimisticPromptDelivered = true
                 session.lastInputAt = .now
-                if command, ["/exit", "/quit"].contains(text.trimmingCharacters(in: .whitespacesAndNewlines)) {
-                    self.setChatVisible(false, session: session)
-                }
+                if exits { self.setChatVisible(false, session: session, reason: "exit") }
                 // The picker is open: Terminal takes the keyboard, as the user's own switch would.
                 // Nothing prints back to Chat; a picked conversation arrives as a new history.
                 if opensTerminal {
@@ -483,6 +527,21 @@ extension ChatCoordinator {
                 }
             } catch {
                 guard session.helper === helper, session.submissionID == id else { return }
+                // The agent exited before the command's reply: the exit was delivered.
+                if exits, !session.active {
+                    if let delivery { session.drafts.finish(delivery, success: true) }
+                    if let queued { session.queuedMessages.removeAll { $0.id == queued.id } }
+                    session.command = nil
+                    session.observedCommand = nil
+                    session.awaitingPromptAck = false
+                    session.promptBoundary = nil
+                    session.submissionID = nil
+                    session.queuedSubmissionID = nil
+                    session.helperTask = nil
+                    self.setChatVisible(false, session: session, reason: "exit")
+                    return
+                }
+                if exits { session.exitRequested = false }
                 let attention = command && (error as? HelperFailure)?.code == "attention"
                 if let delivery { session.drafts.finish(delivery, success: attention) }
                 // The harness refused the command's arguments before running anything (old app's text).

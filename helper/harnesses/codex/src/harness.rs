@@ -1342,8 +1342,8 @@ impl Harness for Codex {
         }
         self.retire(io);
         let snapshots = std::mem::take(&mut *self.main.snapshots.borrow_mut());
-        for (binding, snapshot) in snapshots {
-            self.resumed(io, ui, binding, snapshot.root());
+        for (binding, snapshot, rollout) in snapshots {
+            self.resumed(io, ui, binding, snapshot.root(), rollout);
         }
     }
 }

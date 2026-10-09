@@ -246,7 +246,7 @@ final class ChatCoordinator {
         cancelSubmission(session)
         if !preservingPresentation { session.invalidateQueuedDestination() }
         session.drafts.persist(flush: true)
-        session.active = false; session.busy = false; session.activityCheck = nil; session.relinquish()
+        session.active = false; session.busy = false; session.subagents = []; session.activityCheck = nil; session.relinquish()
         session.activityNeedsRefresh = true; session.activityRetryAfter = nil
         if !preservingPresentation { session.setView(false, reason: "integration-disabled") }
         session.status = "\(session.agentTitle) exited. This transcript is read-only."

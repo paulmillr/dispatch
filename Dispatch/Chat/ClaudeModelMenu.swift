@@ -96,6 +96,21 @@ struct ClaudeModelMenu: Equatable {
         }
     }
 
+    /// The one-line draft in Claude's composer ("" when empty); nil for menus, dialogs, wrapped
+    /// or multiline drafts, and anything else that is not the plain bordered composer. Claude
+    /// separates the draft from "❯" with a no-break space and drops its shortcut hint while typing.
+    static func composerText(_ screen: String) -> String? {
+        guard screen.utf8.count <= 65_536 else { return nil }
+        let lines = screen.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }
+        func rule(_ line: String) -> Bool { !line.isEmpty && line.allSatisfy { $0 == "─" } }
+        guard let row = lines.lastIndex(where: { $0.hasPrefix("❯") }), row >= 1, row + 1 < lines.count,
+              isComposerTopBorder(lines[row - 1]), rule(lines[row + 1]),
+              !lines.dropFirst(row + 2).contains(where: rule) else { return nil }
+        let rest = lines[row].dropFirst()
+        guard rest.first?.isWhitespace != false else { return nil }
+        return rest.trimmingCharacters(in: .whitespaces)
+    }
+
     static func removingPlaceholder(_ screen: String, column: Int, row: Int, faint: Bool) -> String {
         guard faint else { return screen }
         var lines = screen.components(separatedBy: .newlines)

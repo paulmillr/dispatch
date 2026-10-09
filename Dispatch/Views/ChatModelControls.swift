@@ -10,9 +10,10 @@ struct ChatModelControls: View {
     /// The model's ID, never an agent's alias or catalog name for it ("Opus", "Claude Opus 5.5").
     private var modelLabel: String { Self.label(for: session.model) }
     /// Claude's banner and footer name the effort only when it differs from the
-    /// model's default, so a known model without one is on its default effort.
+    /// model's default, and Codex reports none while it is unset, so a known model
+    /// without one is on its default effort.
     private var effortLabel: String {
-        session.effort ?? (session.agentID == "claude" && session.model != session.agentTitle ? "default" : "unknown")
+        session.effort ?? (["claude", "codex"].contains(session.agentID) && session.model != session.agentTitle ? "default" : "unknown")
     }
 
     /// Family, then version: claude-opus-5-5[1m] → opus-5.5[1m], gpt-6.1-sol → sol-6.1. Also covers dated, legacy

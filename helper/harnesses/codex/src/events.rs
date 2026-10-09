@@ -9,12 +9,13 @@ impl Codex {
         ui: &mut dyn Ui,
         binding: Binding,
         root: Value<'_>,
+        rollout: bool,
     ) {
         if let Some(thread) = root.get("thread") {
             // A pathless chat can attach before the native server reports its rollout. Native
             // items omit question tool results; start the same validated history/follow then.
             if let Some(next) = crate::attach::location(thread, &binding.process)
-                .filter(|next| next.session == binding.session && next.transcript.is_some())
+                .filter(|next| rollout && next.session == binding.session && next.transcript.is_some())
                 .filter(|next| self.bindings.get(&binding.session)
                     .is_some_and(|known| known.transcript != next.transcript))
             {
@@ -25,6 +26,7 @@ impl Codex {
             }
             let mut states = self.states.borrow_mut();
             let state = states.entry(binding.session.clone()).or_default();
+            let before = state.clone();
             state.model = thread
                 .get("model")
                 .and_then(Value::string)
@@ -34,6 +36,13 @@ impl Codex {
                 .and_then(Value::string)
                 .map(str::to_owned);
             state.title = crate::native::title(thread);
+            // A thread without a rollout has no history read to publish its state.
+            if !rollout && *state != before {
+                ui.update(Update::State {
+                    binding: binding.clone(),
+                    state: state.clone(),
+                });
+            }
         }
         let Some(page) = root
             .get("initialTurnsPage")

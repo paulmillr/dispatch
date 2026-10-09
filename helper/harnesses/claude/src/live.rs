@@ -11,6 +11,11 @@ impl Claude {
             return Err(error("state", "Claude state is not loaded"));
         }
         let mut state = cache.map(|c| c.parser.state.clone()).unwrap_or_default();
+        state.agents = self
+            .agents
+            .get(&binding.session)
+            .map(|agents| agents.iter().map(|(_, kind)| kind.clone()).collect())
+            .unwrap_or_default();
         if let Some(registration) = registration {
             state.busy = registration.status != "idle";
             state.activity = Some(registration.status.clone());
