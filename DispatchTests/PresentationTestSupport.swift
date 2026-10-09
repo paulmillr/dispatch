@@ -234,6 +234,11 @@ enum PresentationTestSupport {
     /// SwiftUI controls have no NSView of their own, and SwiftUI vends their accessibility elements only to an
     /// assistive client: the lookup sets the enhanced-interface attribute VoiceOver sets, then restores it.
     static func accessibilityFrames(_ identifier: String, label: String? = nil, in window: NSWindow) -> [NSRect] {
+        accessibilityFrames(matching: { $0 == identifier }, label: label, in: window)
+    }
+
+    /// Frames of the accessibility elements whose identifier satisfies `matches`, e.g. a per-row identifier's prefix.
+    static func accessibilityFrames(matching matches: (String) -> Bool, label: String? = nil, in window: NSWindow) -> [NSRect] {
         let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
         let previous = NSApp.accessibilityAttributeValue(enhanced) as? Bool ?? false
         NSApp.accessibilitySetValue(true, forAttribute: enhanced)
@@ -242,7 +247,7 @@ enum PresentationTestSupport {
         // SwiftUI's elements implement the NSAccessibility methods without declaring the protocol in Swift.
         func visit(_ element: AnyObject, depth: Int) {
             guard depth < 64, visited.insert(ObjectIdentifier(element)).inserted else { return }
-            if element.accessibilityIdentifier?() == identifier, label.map({ element.accessibilityLabel?() == $0 }) ?? true,
+            if let identifier = element.accessibilityIdentifier?(), matches(identifier), label.map({ element.accessibilityLabel?() == $0 }) ?? true,
                let frame = element.accessibilityFrame?() {
                 frames.append(window.convertFromScreen(frame))
             }

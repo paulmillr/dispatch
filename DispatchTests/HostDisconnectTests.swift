@@ -55,13 +55,10 @@ final class HostDisconnectTests: XCTestCase {
             guard scrollToBottom() else { return false }
             return try await PresentationTestSupport.capture(settingsWindow).text().contains("Forget \(name)?")
         }
-        // Vision reads the confirmation's buttons as one line, "Cancel Forget":
-        // click the last word only.
-        let rows = try await PresentationTestSupport.capture(settingsWindow).recognizedText().compactMap { $0.topCandidates(1).first }
-        let buttons = try XCTUnwrap(rows.first { $0.string == "Forget" || $0.string.hasSuffix(" Forget") }, "\(rows.map(\.string))")
-        let box = try XCTUnwrap(buttons.boundingBox(for: XCTUnwrap(buttons.string.range(of: "Forget", options: .backwards)))).boundingBox
-        try await PresentationTestSupport.hoverAndClick(settingsWindow, at: settingsRoot.convert(NSPoint(x: box.midX * settingsRoot.bounds.width,
-            y: (settingsRoot.isFlipped ? 1 - box.midY : box.midY) * settingsRoot.bounds.height), to: nil))
+        // The confirmation button by its identifier: Vision misreads the red, semibold "Forget" on some displays.
+        let confirm = try XCTUnwrap(PresentationTestSupport.accessibilityFrames(matching: { $0.hasPrefix("settings-reset-host-confirm-") },
+                                                                               in: settingsWindow).first { !$0.isEmpty })
+        try await PresentationTestSupport.hoverAndClick(settingsWindow, at: NSPoint(x: confirm.midX, y: confirm.midY))
         try await released([session], in: app)
         XCTAssertNil(app.workspace.hosts.records[host])
         XCTAssertFalse(app.workspace.spaces.contains { $0.hostID == host })
