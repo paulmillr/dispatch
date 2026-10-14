@@ -200,6 +200,11 @@ struct SettingsView: View {
                         if let theme = AppTheme.allCases.first(where: { $0.label == label }) { draft.appTheme = theme }
                     }), choices: AppTheme.allCases.map(\.label))
                 }
+                row("Host colors", detail: "Remote tabs, borders and sidebar items; off marks them in gray") {
+                    settingToggle("Host colors", isOn: $draft.showHostColors)
+                        .accessibilityIdentifier("settings-host-colors")
+                        .help("Tints remote tabs, borders and sidebar items in each host’s color. Off, they’re marked in gray.")
+                }
                 separator
                 DisclosureGroup(isExpanded: $customColorsExpanded) {
                     if draft.appTheme == .automatic {
@@ -243,18 +248,11 @@ struct SettingsView: View {
                             .frame(width: typography.expanded(60), alignment: .trailing)
                     }.frame(width: pickerWidth)
                 }
-                row("Liquid sidebar", detail: "Off uses a Finder-style sidebar") {
-                    settingToggle("Liquid sidebar", isOn: $draft.liquidSidebar)
-                        .disabled(!LiquidGlassStore.supported || !draft.liquidGlass)
-                        .accessibilityIdentifier("settings-liquid-sidebar")
-                        .help("A glass panel floating over the content; off, a column in the system's sidebar glass at the window's edge, as in Finder and Mail")
+                row("Show git branch", detail: "Beside each space’s name") {
+                    settingToggle("Show git branch", isOn: $draft.showGitBranches)
+                        .accessibilityIdentifier("show-git-branch")
                 }
-                row("Hide Git branches", detail: "Beside each space’s name") {
-                    settingToggle("Hide Git branches", isOn: Binding(get: { !draft.showGitBranches },
-                                                                     set: { draft.showGitBranches = !$0 }))
-                        .accessibilityIdentifier("hide-git-branches")
-                }
-                row("Hide with one space") {
+                row("Hide sidebar with one space") {
                     settingToggle("Hide sidebar with one space", isOn: $draft.hideSingleSpace)
                 }
                 row("Automatic tab names") {
@@ -422,7 +420,6 @@ struct SettingsView: View {
     private var hostSettings: some View {
         SSHHostsSettings(workspace: workspace, permissions: sshPermissions, policy: $draft.newHostPolicy,
                          clipboard: $draft.allowRemoteClipboardWrites, reconnect: $draft.autoReconnectSSH,
-                         colors: $draft.showHostColors,
                          resetting: resettingSSH) {
             if hasActiveSSHConnections() { confirmingSSHReset = true } else { resetHosts() }
         }
@@ -437,7 +434,7 @@ struct SettingsView: View {
     private var integrationCards: some View {
         VStack(spacing: 8) {
             integrationCard("Agents", detail: "show coding agent CLIs as chat", enabled: chatEnabled) {
-                ForEach(Self.listedAgents(TerminalRuntime.shared.chat.helperLaunches ?? []), id: \.key) { helperAgentRow($0) }
+                ForEach(TerminalRuntime.shared.chat.listedLaunches, id: \.key) { agentRow($0) }
                 Text(agentsFootnote)
                     .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
                     .fixedSize(horizontal: false, vertical: true)
@@ -445,8 +442,11 @@ struct SettingsView: View {
                     .padding(.bottom, 8)
             }
             VStack(spacing: 0) {
-                Text("tmux & herdr").fontWeight(.semibold).foregroundStyle(SettingsControlStyle.selectedText)
-                    .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 11)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("tmux & herdr").fontWeight(.semibold).foregroundStyle(SettingsControlStyle.selectedText)
+                    Text("The original tab closes after attach.").font(typography.font(offset: -1.5))
+                        .foregroundStyle(SettingsControlStyle.detail)
+                }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 11)
                 separator
                 ForEach(multiplexers, id: \.self) { name in
                     cardOption("Open \(name) sessions as spaces", detail: sessionDetail(name), detailBelow: true) {
@@ -478,48 +478,21 @@ struct SettingsView: View {
         }
     }
 
-    /// Which integrations Chat installs and which are optional, from the helper's launches.
+    /// Where hooks go is each machine's choice, in Hosts; which agents' extensions are optional, from the helper.
     private var agentsFootnote: String {
         let chat = TerminalRuntime.shared.chat
-        let launches = chat.helperLaunches ?? []
-        let optional = launches.filter { chat.helperInstalls[$0.key]?.optional == true }.map(\.label)
-        let required = launches.map(\.label).filter { !optional.contains($0) }
-        let list = { (names: [String]) in names.count > 1 ? names.dropLast().joined(separator: ", ") + " and " + names.last! : names.first ?? "" }
-        return "Chat installs \(list(required)) hooks on this Mac and connected SSH hosts."
+        let optional = (chat.helperLaunches ?? []).filter { chat.helperInstalls[$0.key]?.optional == true }.map(\.label)
+        return "Choose which machines install each agent’s hooks in Hosts, starting with this Mac."
             + optional.map { " \($0)’s extension is optional." }.joined()
     }
 
-    /// The same row from the helper's installation facts, for any harness it lists.
-    /// The helper's agents in its own order, except Codex listed just above Claude Code. Only the list moves: a
-    /// launch's position is its protocol id, so the helper keeps its order.
-    private static func listedAgents(_ launches: [HelperClient.Launch]) -> [HelperClient.Launch] {
-        guard let codex = launches.firstIndex(where: { $0.key == "codex" }),
-              let claude = launches.firstIndex(where: { $0.key == "claude" }), codex > claude else { return launches }
-        var listed = launches
-        listed.insert(listed.remove(at: codex), at: claude)
-        return listed
-    }
-
-    private func helperAgentRow(_ launch: HelperClient.Launch) -> some View {
+    /// An agent on or off for Chat on every machine; Hosts chooses where its hooks are installed.
+    private func agentRow(_ launch: HelperClient.Launch) -> some View {
         let chat = TerminalRuntime.shared.chat
-        let install = chat.helperInstalls[launch.key], name = launch.label, status = chat.hookStatus(launch.key)
-        let text: String
-        switch status {
-        case .ready: text = "✓ ready"
-        case .restart:
-            if let trust = install?.trust { text = "restart \(name), then trust Dispatch in \(trust)" }
-            else if let reload = install?.reload { text = "run \(reload) in \(name) to finish" }
-            else { text = "restart \(name) to finish" }
-        case .off: text = install?.optional == true ? "needs its extension" : "not set up"
-        }
-        return cardOption(name, detail: text) {
-            if status == .off {
-                Button("Install") { chat.setHelperIntegration(launch.key, enabled: true) }
-                    .accessibilityIdentifier("settings-install-\(launch.key)")
-            } else if install?.optional == true {
-                Button("Remove") { chat.setHelperIntegration(launch.key, enabled: false) }
-                    .accessibilityIdentifier("settings-remove-\(launch.key)")
-            }
+        return cardOption(launch.label) {
+            settingToggle(launch.label, isOn: Binding(get: { !chat.disabledIntegrations.contains(launch.key) },
+                                                      set: { chat.setHelperIntegration(launch.key, enabled: $0) }), compact: true)
+                .accessibilityIdentifier("settings-agent-toggle-\(launch.key)")
         }.accessibilityIdentifier("settings-agent-\(launch.key)")
     }
 
@@ -595,11 +568,11 @@ struct SettingsView: View {
         }.padding(.vertical, 7)
     }
 
-    /// Which sessions "Open … sessions as spaces" takes, for the multiplexers Dispatch knows, and what happens to
-    /// the tab that started one.
-    private func sessionDetail(_ name: String) -> String {
+    /// Which sessions "Open … sessions as spaces" takes, for the multiplexers Dispatch knows; the card's header says
+    /// what happens to the tab that started one.
+    private func sessionDetail(_ name: String) -> String? {
         let commands = ["tmux": "tmux -CC or tmux -CC attach", "herdr": "herdr or herdr session attach"]
-        return (commands[name].map { "For \($0). " } ?? "") + "The original tab closes after attach."
+        return commands[name].map { "For \($0)." }
     }
 
 

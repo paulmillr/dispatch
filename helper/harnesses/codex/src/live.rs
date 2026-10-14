@@ -19,16 +19,23 @@ pub const KINDS: [RecordKind; 5] = [
 pub struct Live {
     pub records: Vec<Record>,
     pub active: Option<bool>,
+    /// The thread waits on an approval request (activeFlags waitingOnApproval); the main TUI answers it.
+    pub approval: bool,
 }
 
 impl Live {
     pub fn read(&mut self, method: &str, params: Value<'_>) -> Result<Vec<Record>, Error> {
         if method == "thread/status/changed" {
-            match params.get("status").and_then(|status| status.get("type")).and_then(Value::string) {
+            let status = params.get("status");
+            match status.and_then(|status| status.get("type")).and_then(Value::string) {
                 Some("active") => self.active = Some(true),
                 Some("idle") => self.active = Some(false),
                 _ => {}
             }
+            self.approval = status
+                .and_then(|status| status.get("activeFlags"))
+                .and_then(Value::array)
+                .is_some_and(|mut flags| flags.any(|flag| flag.string() == Some("waitingOnApproval")));
         }
         if matches!(method, "turn/started" | "turn/completed") {
             let turn = params.get("turn");

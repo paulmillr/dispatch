@@ -115,11 +115,13 @@ struct ConnectionRouteView: View {
         Group {
             Text(remote ? "ssh" : "local")
                 .foregroundStyle(Color(red: 126/255, green: 166/255, blue: 201/255)).fixedSize()
-            if !address.isEmpty { routeText.truncationMode(.middle) }
+            if !address.isEmpty { Self.address(route).truncationMode(.middle) }
         }.font(AppFont.ui(size: fontSize)).lineLimit(1)
     }
 
-    private var routeText: Text {
+    /// The route without its scheme, its `@` dimmed between account and host.
+    static func address(_ route: String) -> Text {
+        let address = route.hasPrefix("ssh://") ? String(route.dropFirst(6)) : route
         guard let at = address.firstIndex(of: "@") else { return Text(address).foregroundColor(Chrome.ink) }
         return Text(String(address[..<at])).foregroundColor(Chrome.ink)
             + Text("@").foregroundColor(Color(red: 92/255, green: 92/255, blue: 100/255))

@@ -24,10 +24,19 @@ final class ChatCoordinator {
     /// Integrations the user turned off. The helper keeps that choice only while it runs, so every
     /// connection is told again (installation.install enabled:false).
     var disabledIntegrations: Set<String> {
-        get { Set(defaults?.stringArray(forKey: "disabledIntegrations") ?? disabledInMemory) }
+        // Reading the stored copy first lets settings views observe a change.
+        get { let memory = disabledInMemory; return Set(defaults?.stringArray(forKey: "disabledIntegrations") ?? memory) }
         set { disabledInMemory = Array(newValue); defaults?.set(Array(newValue).sorted(), forKey: "disabledIntegrations") }
     }
-    @ObservationIgnored private var disabledInMemory: [String] = []
+    private var disabledInMemory: [String] = []
+    /// This Mac's agent hooks choices (Hosts settings), by launch key. Unset is allowed, as for an SSH host
+    /// that granted hooks; an agent turned off in `disabledIntegrations` stays off whatever this says.
+    var localHooks: [String: Bool] {
+        get { let memory = localHooksInMemory; return defaults?.dictionary(forKey: "localAgentHooks") as? [String: Bool] ?? memory }
+        set { localHooksInMemory = newValue; defaults?.set(newValue, forKey: "localAgentHooks") }
+    }
+    private var localHooksInMemory: [String: Bool] = [:]
+    func localHooksAllowed(_ key: String) -> Bool { localHooks[key] != false }
     /// Integration changes run one after another, so rapid toggles end in the last choice everywhere.
     /// All coordinators install into shared profiles; teardown joins the same queue.
     var integrationChanges: Task<Void, Never>? { Self.integrationTail }
@@ -93,7 +102,7 @@ final class ChatCoordinator {
     /// Installed hooks only reach agents started afterwards; a local agent
     /// already running when they were installed needs a restart (Pi: /reload).
     func hookStatus(_ agent: String) -> AgentHookStatus {
-        if disabledIntegrations.contains(agent) { return .off }
+        if disabledIntegrations.contains(agent) || !localHooksAllowed(agent) { return .off }
         switch helperInstalls[agent]?.status {
         case "restart": return .restart
         case "ready": return .ready

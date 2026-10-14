@@ -9,10 +9,6 @@ final class MainWindow: NSWindow {
     var titleBarHeight: CGFloat = 38 {
         didSet { if titleBarHeight != oldValue { alignWindowControls() } }
     }
-    /// Moves the traffic lights right of their native place, into the glass sidebar panel (WindowState.controlsShift).
-    var controlsShift: CGFloat = 0 {
-        didSet { if controlsShift != oldValue { alignWindowControls() } }
-    }
     /// Each button's native x, and the x this window last gave it: if a button isn't where it was put,
     /// AppKit has laid it out again and its current x is native.
     private var nativeControlX: [NSWindow.ButtonType: CGFloat] = [:]
@@ -35,7 +31,7 @@ final class MainWindow: NSWindow {
             if appliedControlX[kind].map({ abs(button.frame.minX - $0) > 0.01 }) ?? true {
                 nativeControlX[kind] = button.frame.minX
             }
-            let x = (nativeControlX[kind] ?? button.frame.minX) + controlsShift
+            let x = nativeControlX[kind] ?? button.frame.minX
             appliedControlX[kind] = x
             guard abs(rect.midY - centerY) > 0.01 || abs(button.frame.minX - x) > 0.01 else { continue }
             let center = parent.convert(NSPoint(x: rect.midX, y: centerY), from: nil)
@@ -47,12 +43,8 @@ final class MainWindow: NSWindow {
 @MainActor @Observable
 final class WindowState {
     var isFullScreen = false
-    /// Where title-row content starts: 16 points after the green button, wherever controlsShift puts it.
-    var controlsInset: CGFloat { nativeControlsInset + controlsShift }
-    /// controlsInset for the traffic lights' native place, read once from the window.
-    var nativeControlsInset: CGFloat = 82
-    /// How far right of their native place the traffic lights sit: into the glass sidebar panel while it shows.
-    var controlsShift: CGFloat = 0
+    /// Where title-row content starts: 16 points after the green button, read once from the window.
+    var controlsInset: CGFloat = 82
     var sidebarVisibilityOverride: Bool?
     var spaceSearchFocusRequest: UUID?
     /// The ⌘/ sheet outside chat: on the sidebar, or the content area when it is hidden.

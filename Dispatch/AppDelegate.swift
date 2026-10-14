@@ -11,7 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         didSet {
             (window as? MainWindow)?.state = windowState
             guard let button = window?.standardWindowButton(.zoomButton) else { return }
-            windowState.nativeControlsInset = button.convert(button.bounds, to: nil).maxX + 16
+            windowState.controlsInset = button.convert(button.bounds, to: nil).maxX + 16
         }
     }
     private var settingsWindow: NSWindow?

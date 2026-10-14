@@ -230,8 +230,10 @@ final class HostNativeIntegrationTests: XCTestCase {
         // Deliberately inherit the gateway capability. Attribution must replace
         // that ID with the native pane whose real shell owns the new process.
         let environment = app.runtime.herdrLaunch.environment(for: app.origin!.id)
-        let command = (["env"] + environment.map { $0.key + "=" + $0.value } + [System.executable.path, "--ssh-launch"]
-                       + server.options + [server.destination]).map(HerdrLaunch.quote).joined(separator: " ")
+        // Typed parts: Xcode 26's type checker gives up on one chain of untyped literals and closures.
+        let assignments: [String] = environment.map { "\($0.key)=\($0.value)" }
+        let arguments: [String] = ["env"] + assignments + [System.executable.path, "--ssh-launch"] + server.options + [server.destination]
+        let command = arguments.map(HerdrLaunch.quote).joined(separator: " ")
         TerminalTestSupport.send(command, to: view)
         app.workspace.newLocalSpace()
         let selected = app.workspace.selectedSpace, focus = app.workspace.focusRequest

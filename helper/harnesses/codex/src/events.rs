@@ -2,6 +2,8 @@ use super::Codex;
 use crate::channel::failure;
 use dispatch_helper_core::{api::*, json::Value};
 
+const APPROVAL: &str = "Codex needs approval in Terminal.";
+
 impl Codex {
     pub(super) fn resumed(
         &mut self,
@@ -253,6 +255,18 @@ impl Codex {
                     .and_then(|error| error.get("message"))
                     .and_then(Value::string)
                     .map(str::to_owned);
+            }
+            // An approval the TUI asks itself (its PermissionRequest hook is off, untrusted, or fell
+            // back): Chat cannot answer it, so it points to Terminal, as Claude's permission prompt
+            // does. A side conversation's approvals come to Dispatch instead.
+            if !side && live.is_some_and(|live| live.approval) {
+                state.dialog = Some("approval".into());
+                state.attention = Some(APPROVAL.into());
+            } else if state.dialog.as_deref() == Some("approval") {
+                state.dialog = None;
+                if state.attention.as_deref() == Some(APPROVAL) {
+                    state.attention = None;
+                }
             }
             ui.update(Update::State {
                 binding,

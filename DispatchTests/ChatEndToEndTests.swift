@@ -59,6 +59,61 @@ final class ChatEndToEndTests: XCTestCase {
         try await shippingBridgeWalkthrough(codeModeApprovals: true)
     }
 
+    /// No PermissionRequest hook reaches Dispatch (hooks off or untrusted): Codex asks in its own TUI, and Chat says
+    /// so instead of showing nothing. Approving in Terminal finishes the turn and Chat works again.
+    func testCodexApprovalWithoutHooksPointsToTerminal() async throws {
+        let restoreRuntime = TestSupport.preserveRuntime()
+        defer { restoreRuntime() }
+        let fixture = try CodexEndpointFixture(prefix: "dispatch-e2e-", delay: 0.005, hooks: false)
+        var passed = false
+        defer { fixture.stop(removeState: passed) }
+        try await fixture.start(timeout: .seconds(10))
+        let runtime = TerminalRuntime.shared, controller = AppDelegate()
+        let previousChat = runtime.chat
+        runtime.chat = ChatCoordinator(enabled: true)
+        runtime.workspace = controller.workspace
+        runtime.start(preferences: Preferences())
+        let workspace = controller.workspace
+        workspace.defaultDirectory = fixture.state.appendingPathComponent("work").path
+        workspace.onCloseTabs = { runtime.close($0) }; workspace.newSpace()
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 740), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; controller.window = window
+        window.contentView = NSHostingView(rootView: MainView(workspace: workspace, settings: controller.settings, controller: controller))
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        defer { window.close(); window.contentView = nil; runtime.stop(); runtime.chat = previousChat; observedTerminal = nil }
+        let id = workspace.activeTab!.id
+        try await eventually { runtime.views[id]?.surface != nil }
+        let terminal = runtime.views[id]!
+        observedTerminal = terminal
+        TerminalTestSupport.send(CodexTestSupport.command(state: fixture.state, binary: fixture.binary), to: terminal)
+        try await eventually { AgentModelMenu.containsModel(self.screen(terminal), slug: "dispatch-fixture default", name: "Dispatch fixture default") }
+        try await Task.sleep(for: .milliseconds(250))
+        terminal.surface?.text("initial local turn"); key(36, "\r", terminal)
+        let session = runtime.chat.session(for: id)
+        try await eventually { session.active && session.showChat && session.sessionID != nil }
+        try await eventually { !session.busy && session.turns.flatMap(\.items).contains { $0.text == "Local fixture reply: initial local turn" } }
+        session.draft = "approval allow"
+        runtime.chat.sendFromComposer(session)
+        let attention = "Codex needs approval in Terminal."
+        try await TestSupport.eventually(timeout: .seconds(10), diagnostic: "status=\(session.status ?? "none")\n\(screen(terminal))") {
+            session.terminalAttention == attention
+        }
+        XCTAssertEqual(session.status, attention)
+        XCTAssertTrue(session.approvals.isEmpty, "Without its hook, Chat holds no card it could answer")
+        runtime.chat.chooseChat(false, session: session)
+        try await eventually { self.screen(terminal).contains("Would you like to run") }
+        key(16, "y", terminal)
+        try await eventually { !session.busy }
+        runtime.chat.chooseChat(true, session: session)
+        XCTAssertNil(session.terminalAttention)
+        session.draft = "back in chat"
+        runtime.chat.sendFromComposer(session)
+        try await eventually { !session.busy && session.turns.flatMap(\.items).contains { $0.text == "Local fixture reply: back in chat" } }
+        XCTAssertNil(session.terminalAttention, "The finished approval must not block Chat again")
+        passed = true
+    }
+
     private func shippingBridgeWalkthrough(codeModeApprovals: Bool = false) async throws {
         let restoreRuntime = TestSupport.preserveRuntime()
         defer { restoreRuntime() }

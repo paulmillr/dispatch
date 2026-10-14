@@ -178,15 +178,13 @@ struct HostInformationView: View {
     private func details(at now: Date) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             HostIdentityHeader(host: host, state: state, latency: latency)
-            if !host.id.isProvisional, HostColorStore.shared.enabled, let tint = host.tint {
-                HostColorPicker(tint: tint)
-            }
             // On glass, spacing alone separates the connection facts; only the stats keep a rule.
             HostConnectionDetails(host: host, backends: backends,
                 checkingBackends: state == .connected && machine != nil && !HostBackendCache.shared.probeFailed(for: host.id),
                 integrations: TerminalRuntime.shared.ssh.integrationEntries(for: host.id),
                 changeIntegration: { TerminalRuntime.shared.ssh.editIntegration($0.scope) },
-                resetIntegration: { TerminalRuntime.shared.ssh.permissions.reset($0.scope) })
+                resetIntegration: { TerminalRuntime.shared.ssh.permissions.reset($0.scope) },
+                tint: !host.id.isProvisional && HostColorStore.shared.enabled ? host.tint : nil)
                 .padding(.top, 8).padding(.bottom, 4)
                 .overlay(alignment: .top) { if !StatsStyle.glass { Rectangle().fill(StatsStyle.track).frame(height: 1) } }
             if host.id.isProvisional {
@@ -241,8 +239,8 @@ struct HostInformationView: View {
 
 }
 
-/// Compact connection facts; backend and integration badges describe
-/// availability, while the integration label opens its chooser.
+/// Connection facts as a label column, like the stats' muted labels over plain values. Only the helper rows act:
+/// each opens its login's integration chooser.
 struct HostConnectionDetails: View {
     @Environment(\.appTypography) private var typography
     let host: HostRecord
@@ -251,8 +249,8 @@ struct HostConnectionDetails: View {
     let integrations: [SSHIntegrationPermissions.Entry]
     let changeIntegration: (SSHIntegrationPermissions.Entry) -> Void
     let resetIntegration: (SSHIntegrationPermissions.Entry) -> Void
+    var tint: HostTint? = nil
     @State private var hoveredIntegration: String?
-    private var accent: Color { Chrome.accent }
 
     private var destinations: [String] {
         host.destinations.isEmpty ? [host.hostname ?? host.name] : host.destinations
@@ -266,68 +264,88 @@ struct HostConnectionDetails: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 2) {
             ForEach(Array(destinations.enumerated()), id: \.element) { index, destination in
-                HStack(spacing: 8) {
-                    ConnectionRouteView(remote: host.id != .local, route: destination, fontSize: typography.size(offset: -0.5))
+                row(index == 0 ? (host.id == .local ? "local" : "ssh") : nil) {
+                    ConnectionRouteView.address(destination).lineLimit(1).truncationMode(.middle)
                         .textSelection(.enabled).help(destination)
-                    Spacer(minLength: 0)
-                    if index == 0 { backendBadges }
-                }.frame(minHeight: typography.expanded(20))
-            }
-            if integrations.isEmpty {
-                Text("Integration unavailable")
-                    .foregroundStyle(StatsStyle.muted).font(typography.font(offset: -1.5))
-                    .frame(minHeight: typography.expanded(26))
-            } else {
-                ForEach(integrations) { entry in helperRow(entry) }
-            }
-        }.frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var backendBadges: some View {
-        HStack(spacing: 4) {
-            if backends == nil {
-                Text(checkingBackends ? "…" : "—")
-                    .foregroundStyle(StatsStyle.muted)
-            } else if backendNames.isEmpty {
-                Text("no tmux or herdr")
-                    .foregroundStyle(Chrome.palette.warning)
-            } else {
-                ForEach(backendNames, id: \.self) { name in
-                    HStack(spacing: 3) {
-                        Image(systemName: "checkmark").font(.system(size: typography.size(offset: -4), weight: .medium))
-                        Text(name)
-                    }.foregroundStyle(accent)
-                        .padding(.horizontal, StatsStyle.glass ? 7 : 5).padding(.vertical, 2)
-                        .background(accent.opacity(0.07), in: StatsStyle.chip(radius: 4))
-                        .overlay { StatsStyle.chip(radius: 4).strokeBorder(accent.opacity(0.18)) }
                 }
             }
-        }.font(typography.font(offset: -2)).fixedSize()
-            .help(backendHelp)
-            .accessibilityElement(children: .ignore).accessibilityLabel(backendHelp)
-            .accessibilityIdentifier("host-available-backends")
+            row("backends") { backendsValue }
+                .help(backendHelp)
+                .accessibilityElement(children: .ignore).accessibilityLabel(backendHelp)
+                .accessibilityIdentifier("host-available-backends")
+            if integrations.isEmpty {
+                row("helper") { Text("unavailable").foregroundStyle(StatsStyle.muted) }
+            } else {
+                ForEach(Array(integrations.enumerated()), id: \.element.id) { index, entry in helperRow(entry, first: index == 0) }
+            }
+            if let tint {
+                row("color", alignment: .center) { HostColorPicker(tint: tint) }
+            }
+        }.font(typography.font(offset: -0.5)).frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func helperRow(_ entry: SSHIntegrationPermissions.Entry) -> some View {
+    /// One fact: its label in a column as wide as the widest label, so every value starts on the same edge.
+    private func row<Value: View>(_ label: String?, alignment: VerticalAlignment = .firstTextBaseline,
+                                  @ViewBuilder value: () -> Value) -> some View {
+        HStack(alignment: alignment, spacing: typography.expanded(10)) {
+            ZStack(alignment: .leading) {
+                Text("backends").hidden()
+                if let label { Text(label) }
+            }.font(typography.font(offset: -1.5)).foregroundStyle(StatsStyle.muted)
+            value().frame(maxWidth: .infinity, alignment: .leading)
+        }.frame(minHeight: typography.expanded(22))
+    }
+
+    private var backendsValue: Text {
+        if backends == nil { return Text(checkingBackends ? "checking…" : "—").foregroundColor(StatsStyle.muted) }
+        if backendNames.isEmpty { return Text("no tmux or herdr").foregroundColor(Chrome.palette.warning) }
+        return backendNames.dropFirst().reduce(Text(backendNames[0]).foregroundColor(StatsStyle.secondary)) {
+            $0 + Text(" · ").foregroundColor(StatsStyle.muted) + Text($1).foregroundColor(StatsStyle.secondary)
+        }
+    }
+
+    private func address(_ entry: SSHIntegrationPermissions.Entry) -> String {
         let destination = entry.scope.destination.replacingOccurrences(of: "ssh://", with: "")
-        let address = entry.scope.account + "@" + (destination.split(separator: "@").last.map(String.init) ?? destination)
+        return entry.scope.account + "@" + (destination.split(separator: "@").last.map(String.init) ?? destination)
+    }
+
+    /// With several logins each row names its own: the account alone when that tells them apart.
+    private func login(_ entry: SSHIntegrationPermissions.Entry) -> String? {
+        guard integrations.count > 1 else { return nil }
+        let accounts = integrations.map(\.scope.account)
+        return Set(accounts).count == accounts.count ? entry.scope.account : address(entry)
+    }
+
+    private func helperRow(_ entry: SSHIntegrationPermissions.Entry, first: Bool) -> some View {
+        let address = address(entry), hovered = hoveredIntegration == entry.id
+        let logins = integrations.compactMap(login)
         return Button { changeIntegration(entry) } label: {
-            HStack(spacing: 8) {
-                Text(integrations.count > 1 ? address : "Integration")
-                    .foregroundStyle(Color(red: 126/255, green: 166/255, blue: 201/255))
-                    .underline(hoveredIntegration == entry.id)
-                    .lineLimit(1).truncationMode(.middle)
-                Spacer(minLength: 4)
-                integrationBadge(entry)
-            }.font(typography.font(offset: -1.5))
-                .frame(minHeight: typography.expanded(26))
-                // A capsule highlight needs more room at its ends to clear the text.
-                .padding(.horizontal, StatsStyle.glass ? 10 : 6)
-                .background(Chrome.ink.opacity(hoveredIntegration == entry.id ? 0.04 : 0), in: StatsStyle.chip(radius: 5))
-                .contentShape(Rectangle())
-                .padding(.horizontal, StatsStyle.glass ? -10 : -6)
+            row(first ? "helper" : nil) {
+                HStack(spacing: 8) {
+                    if let name = login(entry) {
+                        // Every login takes the longest's width, so the choices line up.
+                        ZStack(alignment: .leading) {
+                            Text(logins.max { $0.count < $1.count } ?? name).hidden()
+                            Text(name).lineLimit(1).truncationMode(.middle)
+                        }.foregroundStyle(StatsStyle.muted)
+                    }
+                    Text(entry.grant.shortLabel).lineLimit(1)
+                        .foregroundStyle(entry.grant.profile == .ordinary ? Chrome.palette.warning
+                            : hovered ? Chrome.ink : StatsStyle.secondary)
+                    Spacer(minLength: 4)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: typography.size(offset: -3), weight: .semibold))
+                        .foregroundStyle(hovered ? StatsStyle.secondary : StatsStyle.muted)
+                        .accessibilityHidden(true)
+                }
+            }
+            // A capsule highlight needs more room at its ends to clear the text.
+            .padding(.horizontal, StatsStyle.glass ? 10 : 6)
+            .background(Chrome.ink.opacity(hovered ? 0.04 : 0), in: StatsStyle.chip(radius: 5))
+            .contentShape(Rectangle())
+            .padding(.horizontal, StatsStyle.glass ? -10 : -6)
         }.buttonStyle(.plain)
             .onHover { hoveredIntegration = $0 ? entry.id : nil }
             .help("Change SSH integration for \(address). Right-click to reset." + (entry.grant.profile == .ordinary ? "" : " Helper: ~/.dispatch/bin/versions/<digest>/dispatch-helper"))
@@ -339,36 +357,15 @@ struct HostConnectionDetails: View {
                     .accessibilityIdentifier("host-reset-permissions")
             }
     }
-
-    @ViewBuilder private func integrationBadge(_ entry: SSHIntegrationPermissions.Entry) -> some View {
-        if entry.grant.profile == .ordinary {
-            Text(entry.grant.shortLabel)
-                .foregroundStyle(Chrome.palette.warning)
-                .fixedSize()
-        } else {
-            HStack(spacing: 3) {
-                Image(systemName: "checkmark")
-                    .font(.system(size: typography.size(offset: -4), weight: .medium))
-                Text(entry.grant.shortLabel)
-            }.foregroundStyle(accent)
-                .padding(.horizontal, StatsStyle.glass ? 7 : 5).padding(.vertical, 2)
-                .background(accent.opacity(0.07), in: StatsStyle.chip(radius: 4))
-                .overlay { StatsStyle.chip(radius: 4).strokeBorder(accent.opacity(0.18)) }
-                .font(typography.font(offset: -2)).fixedSize()
-        }
-    }
 }
 
-/// Automatic, or one fixed color for this machine in every theme.
+/// Automatic, or one fixed color for this machine in every theme, in one row.
 struct HostColorPicker: View {
     let tint: HostTint
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Color").foregroundStyle(StatsStyle.muted)
-            LazyVGrid(columns: Array(repeating: GridItem(.fixed(18), spacing: 4), count: HostColor.allCases.count + 1), alignment: .leading, spacing: 4) {
-                swatch(nil)
-                ForEach(HostColor.allCases, id: \.self) { swatch($0) }
-            }
+        HStack(spacing: 4) {
+            swatch(nil)
+            ForEach(HostColor.allCases, id: \.self) { swatch($0) }
         }
     }
 

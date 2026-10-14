@@ -747,19 +747,11 @@ extension ChatCoordinator {
 
     /// Integration on/off is harness work in the helper (installation.install). Turning it off first returns
     /// pending approvals of that agent to its terminal. `key` is the helper's opaque launch key.
+    /// On, it installs on this Mac and connected SSH hosts whose agent hooks allow it; off, it is off on all of
+    /// them, leaving each machine's own choice for when it is turned on again.
     func setHelperIntegration(_ key: String, enabled: Bool) {
-        let changed = disabledIntegrations.contains(key) == enabled
         if enabled { disabledIntegrations.remove(key) } else { disabledIntegrations.insert(key) }
-        // Like the legacy hooks, the integration follows to connected SSH hosts that granted hooks.
         let endpoints = [HelperWorkspace.Endpoint.local] + TerminalRuntime.shared.ssh.helperConnections(granting: .hooks).map { .remote($0) }
-        if changed, let agent = SSHHookAgent(rawValue: key) {
-            let ssh = TerminalRuntime.shared.ssh
-            for endpoint in endpoints {
-                if let connection = endpoint.connection, let scope = ssh.links[connection]?.launch.integrationScope {
-                    ssh.permissions.saveHooks(enabled, for: scope, agent: agent)
-                }
-            }
-        }
         integrationWork { chat in
             for endpoint in endpoints {
                 if enabled, !chat.permits(key, on: endpoint) { continue }
@@ -791,14 +783,37 @@ extension ChatCoordinator {
         }
     }
 
+    /// This Mac's agent hooks (Hosts settings). Off, the local helper ignores the agent and its local chats return
+    /// to their terminals; on, it installs here, unless Chat or the agent is off in Integrations.
+    func setLocalHooks(_ key: String, allowed: Bool) {
+        localHooks[key] = allowed
+        if !allowed {
+            for session in sessions.values where session.agentID == key && session.helper?.endpoint == .local {
+                if helperInstalls[key]?.optional == true {
+                    end(session, preservingPresentation: false)
+                    suspendDiscovery(session, status: "\(session.agentTitle) hooks are off on this Mac. Continue in Terminal.")
+                } else { session.relinquish() }
+            }
+        } else if !enabled || disabledIntegrations.contains(key) { return }
+        integrationWork { chat in
+            do {
+                if let install = try await HelperChat.setup(.local, key: key, enabled: allowed, terminal: nil) {
+                    chat.helperInstalls[key] = install
+                }
+                chat.installed(key, endpoint: .local, error: nil)
+            } catch { chat.installed(key, endpoint: .local, error: error) }
+        }
+    }
+
     private func installed(_ key: String, endpoint: HelperWorkspace.Endpoint, terminal: UInt64? = nil, error: Error?) {
         let current = endpoint.connection.map { TerminalRuntime.shared.ssh.helperConnections(granting: .hooks).contains($0) } ?? true
         installationFailures[.init(key: key, endpoint: endpoint, terminal: terminal)] = current ? error?.localizedDescription : nil
     }
 
     private func permits(_ key: String, on endpoint: HelperWorkspace.Endpoint) -> Bool {
+        guard let connection = endpoint.connection else { return localHooksAllowed(key) }
         let ssh = TerminalRuntime.shared.ssh
-        guard let connection = endpoint.connection, let scope = ssh.links[connection]?.launch.integrationScope,
+        guard let scope = ssh.links[connection]?.launch.integrationScope,
               let agent = SSHHookAgent(rawValue: key) else { return true }
         return ssh.permissions.hooks(scope, agent: agent) != false
     }
@@ -848,6 +863,17 @@ extension ChatCoordinator {
         }
     }
 
+    /// The helper's agents in its own order, except Codex listed just above Claude Code. Only the list moves: a
+    /// launch's position is its protocol id, so the helper keeps its order.
+    var listedLaunches: [HelperClient.Launch] {
+        let launches = helperLaunches ?? []
+        guard let codex = launches.firstIndex(where: { $0.key == "codex" }),
+              let claude = launches.firstIndex(where: { $0.key == "claude" }), codex > claude else { return launches }
+        var listed = launches
+        listed.insert(listed.remove(at: codex), at: claude)
+        return listed
+    }
+
     /// Inactive composer hint, named from the helper's launches rather than a fixed agent list.
     func placeholder(_ session: ChatSession) -> String {
         if session.active { return "Reply…" }
@@ -864,7 +890,7 @@ extension ChatCoordinator {
             chat.helperLaunches = launches
             for launch in launches {
                 // A new helper starts with every integration enabled: repeat the user's turned-off ones.
-                let off = chat.disabledIntegrations.contains(launch.key) || !chat.enabled
+                let off = chat.disabledIntegrations.contains(launch.key) || !chat.enabled || !chat.localHooksAllowed(launch.key)
                 guard var install = try? await HelperChat.setup(.local, key: launch.key, enabled: nil, terminal: nil) else { continue }
                 if off, install.status != "off", let changed = try? await HelperChat.setup(.local, key: launch.key, enabled: false, terminal: nil) {
                     install = changed

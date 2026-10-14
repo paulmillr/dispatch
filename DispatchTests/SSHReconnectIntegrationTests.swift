@@ -87,8 +87,10 @@ final class SSHReconnectIntegrationTests: XCTestCase {
         // The fixture server predates Dispatch; explicitly supply the gateway
         // capability just as the native shell integration does for new servers.
         let environment = app.runtime.herdrLaunch.environment(for: try XCTUnwrap(app.origin?.id))
-        let command = (["env"] + environment.map { $0.key + "=" + $0.value } + [System.executable.path, "--ssh-launch"]
-            + server.options + [server.destination]).map(HerdrLaunch.quote).joined(separator: " ")
+        // Typed parts: Xcode 26's type checker gives up on one chain of untyped literals and closures.
+        let assignments: [String] = environment.map { "\($0.key)=\($0.value)" }
+        let arguments: [String] = ["env"] + assignments + [System.executable.path, "--ssh-launch"] + server.options + [server.destination]
+        let command = arguments.map(HerdrLaunch.quote).joined(separator: " ")
         TerminalTestSupport.send(command + "; printf 'LOCAL_EXIT_%s\\n' \"$?\"", to: terminal)
         try await TestSupport.eventually(timeout: .seconds(20)) {
             app.runtime.ssh.links.values.contains { $0.launch.tabID == pane.id && $0.shellPID != nil }

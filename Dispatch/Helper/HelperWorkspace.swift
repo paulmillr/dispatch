@@ -82,6 +82,9 @@
     /// Tabs whose terminal started a claimed client, closed once it opens when the user wants that.
     @ObservationIgnored private var imports: [HelperBackend.Route: Set<UUID>] = [:]
     @ObservationIgnored private var gateways: [UUID: (backend: UInt64, terminal: UInt64)] = [:]
+    /// The gateways of the helper this one replaced (a reconnect), by the route each carried: still hidden, each becomes
+    /// this helper's gateway once that route opens here.
+    @ObservationIgnored private var inherited: [UUID: HelperBackend.Route] = [:]
     /// The host of the tab whose terminal started each imported backend's client (an SSH login's host
     /// for tmux -CC there): that backend's tabs are on the same host (old HostCoordinator: tmux tabs
     /// inherit their gateway's context, herdr surfaces their endpoint's).
@@ -231,6 +234,8 @@
         terminals = previous.terminals
         pendingSpaces = previous.pendingSpaces
         renaming = previous.renaming.mapValues { (name: $0.name, node: nil, failed: false) }
+        // The replaced helper is dropped once it owns no space: the launchers it hid must stay hidden without it.
+        inherited = previous.inherited.merging(previous.gateways.compactMapValues { previous.routes[$0.backend] }) { $1 }
       }
       let shutdown = TerminalRuntime.shared.shutdown
       let ready = Task {
@@ -624,9 +629,44 @@
     }
 
     /// A launcher hidden as some helper's gateway. An SSH login's tmux -CC is the remote helper's gateway,
-    /// while the login's own terminal stays in this Mac's topology: no topology may show it as a space again.
+    /// while the login's own terminal stays in this Mac's topology: no topology may show it as a space again,
+    /// including while a reconnect hands it to the replacement helper.
     private func carried(_ tab: UUID) -> Bool {
-      gateways[tab] != nil || workspace?.helpers.values.contains { $0.gateways[tab] != nil } == true
+      let carries = { (helper: HelperWorkspace) in helper.gateways[tab] != nil || helper.inherited[tab] != nil }
+      return carries(self) || workspace?.helpers.values.contains(where: carries) == true
+    }
+
+    /// A reopened route takes over the gateways it had before the reconnect: the SSH login, logged in again in its
+    /// tab, carries this connection now. A login that did not come back (recovery logged in through another tab)
+    /// has ended: its shell is retired like an ended gateway's.
+    private func carry(_ route: HelperBackend.Route, backend: UInt64) {
+      let tabs = inherited.filter { $0.value == route }.map(\.key)
+      guard !tabs.isEmpty, let workspace else { return }
+      var ended: [UUID] = []
+      for tab in tabs {
+        inherited.removeValue(forKey: tab)
+        guard TerminalRuntime.shared.views[tab] != nil else { continue }
+        if let terminal = observedTerminal(tab) {
+          gateways[tab] = (backend, terminal)
+        } else {
+          terminate(launcher: tab)
+          ended.append(tab)
+        }
+      }
+      print("Helper gateways carried: route=\(route), backend=\(backend), tabs=\(tabs), ended=\(ended)")
+      if !ended.isEmpty { workspace.onCloseTabs(ended) }
+    }
+
+    /// Ends the shell this Mac's helper runs for a hidden launcher (an SSH login's own terminal); false if none does.
+    @discardableResult
+    private func terminate(launcher tab: UUID) -> Bool {
+      guard let shell = workspace?.helpers.values.compactMap({ helper in
+        helper.assigned.first { $0.value == tab }.map { (helper: helper, terminal: $0.key) }
+      }).first else { return false }
+      if shell.helper.snapshots.values.contains(where: { $0.nodes.contains { $0.id == shell.terminal } }) {
+        shell.helper.close(shell.terminal, policy: .terminate)
+      }
+      return true
     }
 
     /// Terminal clients carrying this backend, including ordinary SSH control mode.
@@ -1826,14 +1866,7 @@
         // The renderer is only a subscription. Retire its owned shell too, or a later native
         // topology will import the hidden launcher again as an ordinary space. An SSH login's shell
         // is the terminal this Mac's helper started for its tab, never the remote login observed here.
-        let shell = workspace.helpers.values.compactMap { helper in
-          helper.assigned.first { $0.value == tab }.map { (helper: helper, terminal: $0.key) }
-        }.first
-        if let shell {
-          if shell.helper.snapshots.values.contains(where: { $0.nodes.contains { $0.id == shell.terminal } }) {
-            shell.helper.close(shell.terminal, policy: .terminate)
-          }
-        } else if !observes(tab) {
+        if !terminate(launcher: tab), !observes(tab) {
           close(gateway.terminal, policy: .terminate)
         }
       }
@@ -2055,6 +2088,7 @@
             }
           }
           snapshots[route] = topology
+          carry(route, backend: topology.backend)
           if creating[route, default: 0] == 0 { try apply(topology, route: route) }
           for (helper, id) in adopted {
             helper.forget(id)

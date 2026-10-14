@@ -59,9 +59,9 @@ enum RemoteTabHighlight {
 }
 
 enum ChatFont: String, Codable, CaseIterable {
+    case system = "San Francisco"
     case sameAsCode = "Same as code"
     case comicSans = "Comic Sans"
-    case system = "System UI"
 
     // Match median rendered lowercase height, not font-reported x-height, to Source Code Pro at 14 pt.
     // Named fonts keep this calibration when the code font changes; Same as code stays unscaled.
@@ -100,9 +100,6 @@ struct Preferences: Codable, Equatable {
     /// macOS 26 Liquid Glass for the chat input, tab strips and sidebar, the same in a window and full screen.
     /// On by default; earlier systems ignore it and keep the flat chrome.
     var liquidGlass = true
-    /// With Liquid Glass, the sidebar is Dispatch's glass panel floating over the content; off, it is a column at the
-    /// window's edge in AppKit's sidebar glass, as in Finder and Mail.
-    var liquidSidebar = true
     /// Colors chosen for SSH hosts, by HostTint.machine; others keep their automatic color.
     var hostColors: [String: HostColor] = [:]
     /// Off draws remote hosts in neutral gray: they stay marked, but not by hue.
@@ -183,13 +180,13 @@ struct Preferences: Codable, Equatable {
         case prefixKeys, backendPrefixKeys, keyGroups
         case hideSingleSpace, startingDirectory, rememberHosts, restoreTerminalOutput
         case enableDiagnostics
-        case sidebarStyle, showGitBranches, liquidGlass, liquidSidebar, hostColors, showHostColors
+        case sidebarStyle, showGitBranches, liquidGlass, hostColors, showHostColors
         case improveTextContrast
         case spaces, closeLaunching, enableKittyGraphics
     }
 
     private enum LegacyCodingKeys: String, CodingKey {
-        case autoCloseNativeSpace, sidebarTheme, appearance, largeSidebarItems, systemSidebar
+        case autoCloseNativeSpace, sidebarTheme, appearance, largeSidebarItems
         case enableTmuxIntegration, enableHerdrIntegration, autoCloseTmuxNativeSpace, autoCloseHerdrNativeSpace
     }
 
@@ -219,9 +216,6 @@ struct Preferences: Codable, Equatable {
         // explicitly, not for everyone now that large is the default.
         showGitBranches = try fields.decodeIfPresent(Bool.self, forKey: .showGitBranches) ?? large ?? showGitBranches
         liquidGlass = try fields.decodeIfPresent(Bool.self, forKey: .liquidGlass) ?? liquidGlass
-        // Replaces `systemSidebar`, its inverse.
-        liquidSidebar = try fields.decodeIfPresent(Bool.self, forKey: .liquidSidebar)
-            ?? legacy.decodeIfPresent(Bool.self, forKey: .systemSidebar).map(!) ?? liquidSidebar
         // An unknown color drops only that host's choice.
         hostColors = try fields.decodeIfPresent([String: String].self, forKey: .hostColors)?
             .compactMapValues(HostColor.init(rawValue:)) ?? hostColors

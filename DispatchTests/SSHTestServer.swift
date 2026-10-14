@@ -47,8 +47,8 @@ final class SSHTestServer {
     /// integrations): inside the server's root, never the account's own (as the local helper's test home).
     var agents: URL { root.appendingPathComponent("agents") }
     private let transportOnly: Bool
-    /// Started through sudo only when DISPATCH_UNPRIVILEGED_SSHD=0 (the VM runner).
-    /// test/xcode.py defaults to 1: a user-owned sshd and a Debug helper that accepts it.
+    /// Started through sudo only when DISPATCH_UNPRIVILEGED_SSHD=0 (needs passwordless sudo).
+    /// test/xcode.py and the VM runner default to 1: a user-owned sshd.
     private let privileged: Bool
     private static var permissionsByRoot: [String: Set<SSHIntegrationScope>] = [:]
 

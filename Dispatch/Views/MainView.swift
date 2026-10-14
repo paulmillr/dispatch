@@ -8,17 +8,12 @@ struct MainView: View {
     let controller: AppDelegate
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// The sidebar's visible width, the same for the split column and the floating glass panel, so switching between
-    /// them keeps it; dragging either one's trailing edge resizes it.
+    /// The sidebar column's width; dragging its trailing edge resizes it.
     @State private var sidebarWidth: CGFloat = 264
     /// The full-screen edge reveal is showing its host mark, or the mark's picker is open.
     @State private var revealShown = false
     @State private var revealPicker = false
     private var sidebarVisible: Bool { controller.sidebarVisible }
-    /// With Liquid Glass and the Liquid sidebar, the sidebar floats over the content instead of taking a split column.
-    private var glassSidebar: Bool { LiquidGlassStore.shared.floatingSidebar }
-    /// The floating sidebar's footprint: its panel, with the glass inset on either side.
-    private var glassSidebarWidth: CGFloat { sidebarWidth + 2 * SpaceSidebar.glassInset }
     private var showTmuxTabs: Bool {
         guard let space = workspace.current, space.structured else { return false }
         return (space.windowPresentation?.groups.count ?? 1) <= 1 && (titlebarTabs || WindowTabBar.showsTabs(space: space))
@@ -92,29 +87,10 @@ struct MainView: View {
                 titleBar
                 Rectangle().fill(Chrome.border).frame(height: 1)
             }
-            // The content keeps one identity in both modes: with glass, its column only gains a leading safe area
-            // under the floating sidebar, so toggling glass never remounts terminals or chats.
-            NativeSplit(first: glassSidebar ? AnyView(Color.clear) : AnyView(spaceSidebar.accessibilityHidden(!sidebarVisible)),
-                        second: AnyView(content.modifier(SidebarExtension(leading: glassSidebar && sidebarVisible ? glassSidebarWidth : 0))),
-                        axis: .columns, sidebar: true, firstHidden: !sidebarVisible || glassSidebar, sidebarWidth: $sidebarWidth,
+            NativeSplit(first: AnyView(spaceSidebar.accessibilityHidden(!sidebarVisible)), second: AnyView(content),
+                        axis: .columns, sidebar: true, firstHidden: !sidebarVisible, sidebarWidth: $sidebarWidth,
                         firstMinimumSize: CGSize(width: typography.expanded(200), height: 120),
                         secondMinimumSize: minimumTerminalSize)
-                .overlay(alignment: .leading) {
-                    if glassSidebar && sidebarVisible {
-                        spaceSidebar.frame(width: glassSidebarWidth)
-                            .overlay(alignment: .trailing) { SidebarResizeHandle(width: $sidebarWidth, minimum: typography.expanded(200)) }
-                            // Behind the glass, never over it: the content's top-left host edge (and wash) runs on
-                            // under the panel, so it reads as one window-wide edge through the glass and its gap.
-                            .background(alignment: .topLeading) {
-                                // The gaps around the split panels show the terminal color scheme's background.
-                                ChatThemeStore.shared.current.terminal
-                                if let edge = leadingHostEdge {
-                                    Color.clear.hostTintBorder(edge.tint, surfaceID: edge.surfaceID, stripHeight: edge.stripHeight)
-                                }
-                            }
-                            .transition(.move(edge: .leading))
-                    }
-                }
                 .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: InterfaceMotion.sidebarDuration), value: sidebarVisible)
         }
         .font(typography.font(offset: -0.5, design: .monospaced))
@@ -158,27 +134,6 @@ struct MainView: View {
         }
         .onChange(of: settings.values.hideSingleSpace) { _, _ in controller.windowState.sidebarVisibilityOverride = nil }
         .onChange(of: minimumContentSize, initial: true) { _, size in controller.updateMinimumContentSize(size) }
-        .onChange(of: controlsShift, initial: true) { _, shift in
-            controller.windowState.controlsShift = shift
-            (controller.window as? MainWindow)?.controlsShift = shift
-        }
-    }
-
-    /// The host color along the top of the content's top-left: the tmux space's, or the top-left native pane's.
-    private var leadingHostEdge: (tint: HostTint, surfaceID: UUID?, stripHeight: CGFloat)? {
-        guard let space = workspace.current else { return nil }
-        let ssh = TerminalRuntime.shared.ssh
-        let style = StripTab.Style.current(controller.windowState)
-        if space.structured {
-            guard let tab = space.activeTab, let tint = ssh.tint(for: tab) else { return nil }
-            return (tint, tab.focusedSurfaceID, showTmuxTabs || groupedTmux(space) ? tmuxStripHeight : 0)
-        }
-        guard let pane = space.panes.first(where: { $0.id == space.layout.paneIDs.first }),
-              let tab = pane.activeTab, let tint = ssh.tint(for: tab) else { return nil }
-        let strip = PaneView.showsTabs(pane: pane, space: space) || titlebarTabs
-        return (tint, tab.focusedSurfaceID,
-                strip ? StripTab.barHeight(titlebar: titlebarTabs ? TitlebarPlacement() : nil, style: style,
-                                           split: space.numberedPaneIDs.count > 1, typography: typography) : 0)
     }
 
     private var spaceSidebar: SpaceSidebar {
@@ -190,12 +145,6 @@ struct MainView: View {
         let panes = minimumTerminalSize
         return CGSize(width: max(620, (sidebarVisible ? max(420, panes.width) + typography.expanded(200) + 1 : panes.width)),
                       height: max(400, panes.height + (showsHeader ? StripTab.titleRowHeight(typography) + 1 : 0)))
-    }
-
-    /// The glass sidebar panel is inset from the window edge; the traffic lights move in with it so they sit inside
-    /// the panel's corner rather than against its edge.
-    private var controlsShift: CGFloat {
-        glassSidebar && sidebarVisible && !controller.windowState.isFullScreen ? SpaceSidebar.glassInset : 0
     }
 
     /// With Liquid Glass, tmux strips lie over the panes instead of taking their own row, in full screen too.
@@ -264,14 +213,16 @@ struct MainView: View {
                         .resizable().interpolation(.high).frame(width: 72, height: 72)
                         .accessibilityHidden(true)
                     Text("A space to work.").font(typography.font(offset: 4.5))
-                    HStack(spacing: 12) {
+                    HStack(spacing: 10) {
                         Button { workspace.newNativeSpace() } label: {
-                            HStack { Text("New Space"); Text("⌘N").font(typography.shortcut()) }
+                            EmptyStateAction(symbol: "plus", title: "New Space", shortcut: "⌘N")
                         }.keyboardShortcut("n")
                         Button { workspace.newTab() } label: {
-                            HStack { Text("New Tab"); Text("⌘T").font(typography.shortcut()) }
+                            EmptyStateAction(symbol: "macwindow.badge.plus", title: "New Tab", shortcut: "⌘T")
                         }.keyboardShortcut("t")
                     }
+                    .buttonStyle(.plain)
+                    .glassGroup(spacing: 10)
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
@@ -328,6 +279,51 @@ struct MainView: View {
                                       },
                                       firstMinimumSize: first.minimumSize, secondMinimumSize: second.minimumSize,
                                       fractionChanged: serverWindow ? nil : { workspace.resizeDivider(id, in: space.id, fraction: $0) }).id(id))
+        }
+    }
+}
+
+/// An empty window's action, drawn like the sidebar's new-space capsules: on Liquid Glass a glass capsule with a faint
+/// capsule nested inside it under the pointer; otherwise a filled tile.
+private struct EmptyStateAction: View {
+    @Environment(\.appTypography) private var typography
+    let symbol: String
+    let title: String
+    let shortcut: String
+    @State private var hovered = false
+
+    var body: some View {
+        let glass = LiquidGlassStore.shared.active
+        let shortcutSize = typography.size(offset: -1.5)
+        HStack(spacing: 6) {
+            Image(systemName: symbol).font(.system(size: (typography.hostIconSize * 0.82).rounded(), weight: .semibold))
+                .foregroundStyle(Chrome.palette.secondary).accessibilityHidden(true)
+            Text(title)
+            Text(shortcut).font(.system(size: shortcutSize).monospacedDigit()).tracking(shortcutSize * 0.06)
+                .foregroundStyle(Chrome.palette.secondary.opacity(0.7)).padding(.leading, 4)
+        }
+        .lineLimit(1)
+        .font(AppFont.ui(size: typography.tabSize))
+        .foregroundStyle(hovered ? Chrome.ink : Chrome.palette.detail)
+        .padding(.horizontal, 14).frame(height: StripTab.glassTrackHeight(typography))
+        .modifier(EmptyStateActionSurface(glass: glass, hovered: hovered))
+        .onHover { hovered = $0 }
+    }
+}
+
+private struct EmptyStateActionSurface: ViewModifier {
+    let glass: Bool
+    let hovered: Bool
+
+    func body(content: Content) -> some View {
+        if glass {
+            content.background(hovered ? Chrome.palette.hover : .clear, in: Capsule().inset(by: 2))
+                .liquidGlass(in: Capsule())
+                .contentShape(Capsule())
+        } else {
+            content.background(Chrome.palette.sidebarAction, in: RoundedRectangle(cornerRadius: 8))
+                .opacity(hovered ? 1 : 0.85)
+                .contentShape(RoundedRectangle(cornerRadius: 8))
         }
     }
 }
@@ -625,42 +621,6 @@ final class FullScreenSidebarRevealView: NSView {
         super.viewWillMove(toWindow: newWindow)
     }
     @objc private func clicked() { toggle?() }
-}
-
-/// The content under a floating glass sidebar: laid out right of it, with its own background continuing beneath
-/// (backgrounds extend into safe areas), so the glass floats over the same ground as the panes. No mirrored
-/// background extension: at the leading edge it would mostly copy the tab strips, smeared into a band.
-/// The modifier stays attached at zero, keeping the content's identity when Liquid Glass or the sidebar toggles.
-private struct SidebarExtension: ViewModifier {
-    let leading: CGFloat
-    func body(content: Content) -> some View {
-        content.safeAreaPadding(.leading, leading)
-    }
-}
-
-/// The floating sidebar's trailing edge: drag to resize its panel within the same bounds as the split column.
-private struct SidebarResizeHandle: View {
-    @Binding var width: CGFloat
-    let minimum: CGFloat
-    @State private var start: CGFloat?
-    @State private var hovering = false
-
-    var body: some View {
-        Color.clear.frame(width: 8).contentShape(Rectangle())
-            .onHover { inside in
-                if inside, !hovering { NSCursor.resizeLeftRight.push() } else if !inside, hovering { NSCursor.pop() }
-                hovering = inside
-            }
-            .onDisappear { if hovering { NSCursor.pop(); hovering = false } }
-            .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .global)
-                .onChanged { value in
-                    let origin = start ?? width
-                    start = origin
-                    width = min(max(minimum, origin + value.translation.width), max(340, minimum * 1.7))
-                }
-                .onEnded { _ in start = nil })
-            .accessibilityHidden(true)
-    }
 }
 
 /// The window's title follows the active tab's label. Leaf views read it, so a title change re-renders them

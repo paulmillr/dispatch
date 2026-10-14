@@ -144,7 +144,8 @@ final class SSHRecoveryIntegrationTests: XCTestCase {
             let attributes = try FileManager.default.attributesOfItem(atPath: control.controlPath)
             return [(attributes[.type] as? FileAttributeType)?.rawValue ?? "", "\((attributes[.ownerAccountID] as? NSNumber)?.uint32Value ?? 0)"]
         }
-        XCTAssertEqual(attributes, [FileAttributeType.typeSocket.rawValue, "\(getuid())"])
+        // The owner as recorded: the account the recording's run had (System.uid), not this machine's.
+        XCTAssertEqual(attributes, [FileAttributeType.typeSocket.rawValue, "\(System.uid)"])
         XCTAssertTrue(master.alive)
         XCTAssertEqual(System.signal(master.pid, SIGKILL), 0)
     }

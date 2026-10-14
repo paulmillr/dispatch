@@ -274,24 +274,10 @@ final class SettingsSynchronizationTests: XCTestCase {
         XCTAssertEqual(preferences.sidebarStyle, .compact)
     }
 
-    /// With Liquid Glass the sidebar is one panel from top to bottom: halfway down, well below the spaces and above
-    /// the footer, the panel still covers the column, while the window shows in the inset beside it.
-    func testGlassSidebarIsOnePanelFromTopToBottom() async throws {
-        let (panel, inset) = try await glassSidebarBrightness(liquidSidebar: true, named: "glass-sidebar")
-        XCTAssertGreaterThan(abs(panel - inset), 0.02, "The panel covers the column halfway down (\(panel) vs the inset's \(inset))")
-    }
-
-    /// With the Liquid sidebar off, the sidebar is AppKit's own sidebar glass, as in Finder and Mail, in a column flush
-    /// with the window's edge: no inset beside it. The Liquid sidebar stays on unless turned off.
-    func testLiquidSidebarOffIsFlushWithTheWindowEdge() async throws {
-        let defaults = try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8))
-        XCTAssertTrue(defaults.liquidSidebar, "The floating panel stays the default")
-        var chosen = defaults
-        chosen.liquidSidebar = false
-        XCTAssertEqual(try JSONDecoder().decode(Preferences.self, from: JSONEncoder().encode(chosen)), chosen)
-        let migrated = try JSONDecoder().decode(Preferences.self, from: Data(#"{"systemSidebar": true}"#.utf8))
-        XCTAssertFalse(migrated.liquidSidebar, "A chosen system sidebar keeps its column")
-        let (panel, inset) = try await glassSidebarBrightness(liquidSidebar: false, named: "system-sidebar") { root in
+    /// With Liquid Glass, the sidebar is AppKit's own sidebar glass, as in Finder and Mail, in a column flush with the
+    /// window's edge: no inset beside it.
+    func testGlassSidebarIsFlushWithTheWindowEdge() async throws {
+        let (panel, inset) = try await glassSidebarBrightness(named: "system-sidebar") { root in
             guard #available(macOS 26, *) else { return }
             XCTAssertFalse(PresentationTestSupport.views(of: NSGlassEffectView.self, in: root, includingNestedMatches: true).isEmpty,
                            "The column draws AppKit's sidebar glass")
@@ -301,8 +287,8 @@ final class SettingsSynchronizationTests: XCTestCase {
         XCTAssertEqual(panel, inset, accuracy: 0.02, "The glass reaches the window's edge (\(panel) vs \(inset) at the edge)")
     }
 
-    /// A two-space glass sidebar's brightness halfway down: mid-column, and halfway into the floating panel's inset.
-    private func glassSidebarBrightness(liquidSidebar: Bool, named name: String,
+    /// A two-space glass sidebar's brightness halfway down: mid-column, and halfway into where an inset would be.
+    private func glassSidebarBrightness(named name: String,
                                         inspect: (NSView) throws -> Void = { _ in }) async throws -> (panel: CGFloat, inset: CGFloat) {
         try XCTSkipUnless(LiquidGlassStore.supported, "Liquid Glass needs macOS 26")
         try DesktopTestSupport.requireUnlocked()
@@ -317,10 +303,9 @@ final class SettingsSynchronizationTests: XCTestCase {
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.appearance = NSAppearance(named: .darkAqua)
-        let originalGlass = LiquidGlassStore.shared.enabled, originalLiquid = LiquidGlassStore.shared.liquidSidebar
-        defer { LiquidGlassStore.shared.enabled = originalGlass; LiquidGlassStore.shared.liquidSidebar = originalLiquid }
+        let originalGlass = LiquidGlassStore.shared.enabled
+        defer { LiquidGlassStore.shared.enabled = originalGlass }
         LiquidGlassStore.shared.enabled = true
-        LiquidGlassStore.shared.liquidSidebar = liquidSidebar
         let root = NSHostingView(rootView: SpaceSidebar(workspace: workspace, settings: controller.settings, controller: controller))
         window.contentView = root
         window.makeKeyAndOrderFront(nil)

@@ -242,13 +242,34 @@ final class SettingsStatsPresentationTests: XCTestCase {
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
         defer { window.close(); window.contentView = nil }
-        let text = try await capture(window, "host-information").text()
-        for label in ["homelab", "Ubuntu", "connected", "ssh", "ops@homelab.test", "Integration unavailable", "Disconnect"] {
+        let card = try await capture(window, "host-information")
+        let text = try card.text()
+        for label in ["homelab", "Ubuntu", "connected", "ssh", "ops@homelab.test", "backends", "helper", "unavailable", "color", "Disconnect"] {
             XCTAssertTrue(text.replacingOccurrences(of: " ", with: "").contains(label.replacingOccurrences(of: " ", with: "")),
                           "Missing \(label): \(text)")
         }
         XCTAssertFalse(text.contains("cpu"), text)
         XCTAssertFalse(text.contains("Reconnect"), text)
+        // The color label closes the label column, under helper, with every swatch on its own row.
+        func label(_ title: String) throws -> CGRect {
+            try XCTUnwrap(card.recognizedText().compactMap { observation -> CGRect? in
+                guard let recognized = observation.topCandidates(1).first,
+                      let range = recognized.string.range(of: title, options: .caseInsensitive) else { return nil }
+                return try? recognized.boundingBox(for: range)?.boundingBox
+            }.min { $0.minX < $1.minX }, "No \(title): \(text)")
+        }
+        let helper = try label("helper"), color = try label("color")
+        XCTAssertLessThan(color.midY, helper.minY, "color follows helper")
+        let row = Int((1 - color.midY) * CGFloat(card.bitmap.pixelsHigh))
+        var swatches = 0, inSwatch = false
+        for x in Int(color.maxX * CGFloat(card.bitmap.pixelsWide))..<card.bitmap.pixelsWide {
+            let pixel = try XCTUnwrap(card.bitmap.colorAt(x: x, y: row)?.usingColorSpace(.sRGB))
+            let saturated = pixel.saturationComponent > 0.3 && pixel.brightnessComponent > 0.3
+            if saturated, !inSwatch { swatches += 1 }
+            inSwatch = saturated
+        }
+        // The automatic swatch's wand can split its circle in two.
+        XCTAssertGreaterThanOrEqual(swatches, HostColor.allCases.count + 1, "Swatches beside the color label")
 
         var reconnects = 0, forgotten = 0
         window.contentView = NSHostingView(rootView: HostInformationView(host: host, state: .disconnected,
@@ -367,28 +388,28 @@ final class SettingsStatsPresentationTests: XCTestCase {
             let text = try snapshot.text()
             // Vision can interleave right-aligned words with badges above and
             // misclassify the case of individual lowercase glyphs.
-            for label in ["ssh", "tmux", "herdr", "integration"] {
+            for label in ["ssh", "backends", "tmux", "herdr", "helper"] {
                 XCTAssertTrue(text.lowercased().contains(label), text)
             }
-            // Full-image OCR can merge the isolated feature count with the
-            // backend badges above. Read the status row separately, retaining
-            // the exact count assertion against the actual rendered pixels.
-            let statusText = try snapshot.text(in: CGRect(x: 0.5, y: 0, width: 0.5, height: 0.55), corrected: false)
+            // The helper label leads its row (the value can say "no helper" too). Read the value from that row
+            // alone, retaining the exact count assertion against the actual rendered pixels.
+            let helper = try XCTUnwrap(snapshot.recognizedText().compactMap { observation -> CGRect? in
+                guard let recognized = observation.topCandidates(1).first,
+                      let range = recognized.string.range(of: "helper", options: .caseInsensitive) else { return nil }
+                return try? recognized.boundingBox(for: range)?.boundingBox
+            }.min { $0.minX < $1.minX }, text)
+            let statusText = try snapshot.text(in: CGRect(x: helper.maxX, y: helper.minY - helper.height / 2,
+                                                          width: 1 - helper.maxX, height: helper.height * 2), corrected: false)
             XCTAssertTrue(statusText.lowercased().contains(title), statusText)
             XCTAssertFalse(text.lowercased().contains("reset"), text)
             XCTAssertFalse(text.contains("Available backends"), text)
             XCTAssertFalse(text.contains(".dispatch"), text)
             XCTAssertEqual(root.fittingSize.height, loadingHeight, accuracy: 0.5)
-            for title in ["Integration"] {
-                let observation = try XCTUnwrap(snapshot.recognizedText().first { $0.topCandidates(1).first?.string.contains(title) == true })
-                let recognized = try XCTUnwrap(observation.topCandidates(1).first)
-                let range = try XCTUnwrap(recognized.string.range(of: title))
-                let box = try XCTUnwrap(recognized.boundingBox(for: range)).boundingBox
-                let point = NSPoint(x: box.midX * root.bounds.width, y: (root.isFlipped ? 1 - box.midY : box.midY) * root.bounds.height)
-                try PresentationTestSupport.click(window, at: root.convert(point, to: nil))
-                // SwiftUI handles the posted mouse-up on the next event turn.
-                try await Task.sleep(for: .milliseconds(50))
-            }
+            // The whole row is the button, its label included.
+            let point = NSPoint(x: helper.midX * root.bounds.width, y: (root.isFlipped ? 1 - helper.midY : helper.midY) * root.bounds.height)
+            try PresentationTestSupport.click(window, at: root.convert(point, to: nil))
+            // SwiftUI handles the posted mouse-up on the next event turn.
+            try await Task.sleep(for: .milliseconds(50))
             if width == 280 {
                 for (backends, expected, absent) in [
                     (Set<SpaceBackend>([.native]), "no tmux or herdr", ""),
@@ -456,7 +477,7 @@ final class SettingsStatsPresentationTests: XCTestCase {
         try await TestSupport.eventually { latency.state == .ready }
         let ready = try await capture(window, "host-latency-ready").text()
         XCTAssertTrue(ready.contains("ms"), ready)
-        XCTAssertTrue(ready.contains("Integration unavailable"), ready)
+        XCTAssertTrue(ready.contains("helper") && ready.contains("unavailable"), ready)
         XCTAssertFalse(ready.contains("Available backends"), ready)
         XCTAssertEqual(root.fittingSize, loadingSize)
         XCTAssertTrue(latency.help.contains("Last measured"))
@@ -679,7 +700,7 @@ final class SettingsStatsPresentationTests: XCTestCase {
         defer { window.close(); window.contentView = nil }
         let root = try XCTUnwrap(window.contentView)
         for (tab, labels) in [
-            ("Appearance", ["Terminal font", "Chat font", "Size", "Theme", "Custom terminal", "Liquid Glass", "Sidebar & tabs", "Space size", "Hide Git branches", "Hide with one space", "Automatic tab names"]),
+            ("Appearance", ["Terminal font", "Chat font", "Size", "Theme", "Custom terminal", "Liquid Glass", "Sidebar & tabs", "Space size", "Show git branch", "Hide sidebar with one space", "Automatic tab names"]),
             ("Keys", ["Number keys", "Spaces", "Tabs", "Splits", "Keyboard", "Use Option as Alt"]),
             ("Integrations", ["Agents", "show coding agent CLIs as chat", "Codex", "Claude", "Pi", "tmux & herdr", "Open tmux sessions as spaces", "tmux -CC attach", "Open herdr sessions as spaces"]),
             ("Hosts", ["Remote hosts", "On new hosts", "Ask"]),
@@ -776,7 +797,7 @@ final class SettingsStatsPresentationTests: XCTestCase {
         let snapshot = try await capture(window, "settings-host-integrations")
         // Vision may insert a space after punctuation in monospaced hostnames.
         let text = try snapshot.text().lowercased().replacingOccurrences(of: ". ", with: ".")
-        for label in ["remote hosts", "reset all", "other logins", "plain ssh", "stats", "files", "alice", "bob", "carol", "build.example", "archive.example"] {
+        for label in ["this mac", "reset all", "other logins", "plain ssh", "stats", "files", "alice", "bob", "carol", "build.example", "archive.example"] {
             XCTAssertTrue(text.contains(label), text)
         }
         // All entries remain listed even though this workspace has no remote hosts.

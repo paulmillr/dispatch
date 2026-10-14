@@ -111,6 +111,67 @@ final class SSHSpaceTests: XCTestCase {
         XCTAssertEqual(app.workspace.spaces.map(\.id), [first, second], "The ended gateway's SSH login must not return as a space")
     }
 
+    /// A reconnect replaces the remote helper whose gateway hid the SSH login. The replacement carries the hidden
+    /// login on: a later local topology (a new local space) must not show it with its tmux -CC history, and closing
+    /// the last tmux space still ends it.
+    func testSSHTmuxHandoffLoginStaysHiddenAcrossReconnect() async throws {
+        let app = try TmuxWalkthrough(autoClose: true); defer { app.close() }
+        let server = try await SSHTestServer(); defer { server.stop() }
+        let login = try XCTUnwrap(app.workspace.activeTab?.id)
+        _ = try await app.login(server, surface: login)
+        try await app.attach(); try await app.ready()
+        try await app.wait { !app.workspace.allTabIDs.contains(login) }
+        let tmux = try XCTUnwrap(app.workspace.selectedSpace)
+        let tab = try XCTUnwrap(app.workspace.activeTab?.id)
+        let host = try XCTUnwrap(app.workspace.hosts.terminals[tab]?.host)
+        app.runtime.hosts.disconnect(host)
+        try await app.wait { app.runtime.hosts.reconnect.state(for: tab) != nil }
+        app.runtime.hosts.reconnect.reconnect(hostID: host, sourceSurfaceID: tab)
+        try await TestSupport.eventually(timeout: .seconds(30), diagnostic: "spaces: \(app.workspace.spaces.map { ($0.id, $0.structured, $0.remote) })") {
+            app.runtime.hosts.reconnect.state(for: tab) == nil
+                && app.workspace.spaces.contains { $0.id == tmux && $0.structured && $0.remote != nil && !app.workspace.helper($0)!.stopped }
+        }
+        func newLocalSpace() async throws -> UUID {
+            app.workspace.newLocalSpace()
+            let created = try XCTUnwrap(app.workspace.selectedSpace)
+            try await app.wait { app.workspace.spaces.first { $0.id == created }?.backend != nil }
+            return created
+        }
+        let first = try await newLocalSpace()
+        XCTAssertEqual(app.workspace.spaces.map(\.id), [tmux, first], "The reconnected SSH login must stay hidden")
+        app.controller.closeSpace(tmux)
+        try await app.wait { app.runtime.views[login] == nil && !app.workspace.spaces.contains(where: \.structured) }
+        let second = try await newLocalSpace()
+        XCTAssertEqual(app.workspace.spaces.map(\.id), [first, second], "The ended gateway's SSH login must not return as a space")
+    }
+
+    /// The hidden SSH login's launcher ends while offline, so recovery logs in through a temporary tab: the login's
+    /// leftover shell ends with the replaced helper's gateway instead of returning as a space.
+    func testSSHTmuxHandoffLoginEndsWhenRecoveryLogsInElsewhere() async throws {
+        let app = try TmuxWalkthrough(autoClose: true); defer { app.close() }
+        let server = try await SSHTestServer(); defer { server.stop() }
+        let login = try XCTUnwrap(app.workspace.activeTab?.id)
+        _ = try await app.login(server, surface: login)
+        try await app.attach(); try await app.ready()
+        try await app.wait { !app.workspace.allTabIDs.contains(login) }
+        let tmux = try XCTUnwrap(app.workspace.selectedSpace)
+        let tab = try XCTUnwrap(app.workspace.activeTab?.id)
+        let host = try XCTUnwrap(app.workspace.hosts.terminals[tab]?.host)
+        app.runtime.hosts.disconnect(host)
+        try await app.wait { app.runtime.hosts.reconnect.state(for: tab) != nil }
+        app.runtime.ssh.closeTab(login)
+        app.runtime.hosts.reconnect.reconnect(hostID: host, sourceSurfaceID: tab)
+        try await TestSupport.eventually(timeout: .seconds(30), diagnostic: "spaces: \(app.workspace.spaces.map { ($0.id, $0.name, $0.structured, $0.remote) })") {
+            app.runtime.hosts.reconnect.state(for: tab) == nil && app.workspace.spaces.map(\.id) == [tmux]
+                && !app.workspace.helper(app.workspace.spaces[0])!.stopped
+        }
+        try await app.wait { app.runtime.views[login] == nil }
+        app.workspace.newLocalSpace()
+        let created = try XCTUnwrap(app.workspace.selectedSpace)
+        try await app.wait { app.workspace.spaces.first { $0.id == created }?.backend != nil }
+        XCTAssertEqual(app.workspace.spaces.map(\.id), [tmux, created], "The ended SSH login must not return as a space")
+    }
+
     func testRemoteTmuxPopupCreatesBackendAndLocalSpaces() async throws {
         let app = try TmuxWalkthrough(autoClose: true)
         defer { app.close() }

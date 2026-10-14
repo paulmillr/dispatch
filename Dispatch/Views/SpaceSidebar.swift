@@ -127,11 +127,9 @@ struct SpaceSidebar: View {
             }
             .frame(maxWidth: glass ? .infinity : nil)
         }
-        // With Liquid Glass the sidebar is one panel from top to bottom, floating over the content (MainView) at the
-        // glass inset, the title row keeping its place beside the traffic lights inside it. With the Liquid sidebar
-        // off it is a column in AppKit's sidebar glass instead, flush with the window's edges as in Finder and Mail.
+        // With Liquid Glass the sidebar is a column in AppKit's sidebar glass, flush with the window's edges as in
+        // Finder and Mail.
         .background { if glass { glassPanel } }
-        .padding(.bottom, floating ? Self.glassInset : 0)
         .buttonStyle(.plain)
         // Without glass, one flat sidebar column.
         .background { if !glass { Chrome.sidebar } }
@@ -153,8 +151,6 @@ struct SpaceSidebar: View {
     }
 
     private var glass: Bool { LiquidGlassStore.shared.active }
-    /// Dispatch's own glass panel, inset from the window (the Liquid sidebar), rather than the system sidebar's column.
-    private var floating: Bool { LiquidGlassStore.shared.floatingSidebar }
     /// Whether the overflow control rides over the list as a bar (GlassScrollEdge) rather than below it.
     private var overflowBar: Bool {
         if #available(macOS 26, *) { return glass } else { return false }
@@ -182,11 +178,8 @@ struct SpaceSidebar: View {
         .padding(.top, max(Self.glassRowInset, metrics.rowSpacing))
     }
     @ViewBuilder private var glassPanel: some View {
-        if !floating, #available(macOS 26, *) {
+        if #available(macOS 26, *) {
             SystemSidebarGlass().ignoresSafeArea().accessibilityHidden(true)
-        } else {
-            Color.clear.liquidGlass(in: RoundedRectangle(cornerRadius: Self.glassRadius, style: .continuous))
-                .padding(.horizontal, Self.glassInset).padding(.top, Self.glassInset)
         }
     }
     /// The glass panel's inset from the window edges and from the content beside it.

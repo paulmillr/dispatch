@@ -1,10 +1,10 @@
 import SwiftUI
 
-/// Remote hosts: the policy for new hosts, then each known machine with one
-/// line per login showing what its helper may do. A login is keyed by account
-/// and SSH configuration, so one machine can have several; logins not yet
-/// matched to a machine this launch are listed at the end. Clicking a row
-/// edits its logins' helper choices in place.
+/// Hosts: how SSH connections behave, then this Mac's agent hooks and each known
+/// remote machine with one line per login showing what its helper may do. A login
+/// is keyed by account and SSH configuration, so one machine can have several;
+/// logins not yet matched to a machine this launch are listed at the end. Clicking
+/// a row edits its choices in place.
 struct SSHHostsSettings: View {
     typealias Entry = SSHIntegrationPermissions.Entry
     @Environment(\.appTypography) private var typography
@@ -14,7 +14,6 @@ struct SSHHostsSettings: View {
     var policy: Binding<NewHostPolicy> = .constant(.ask)
     var clipboard: Binding<Bool> = .constant(false)
     var reconnect: Binding<Bool> = .constant(false)
-    var colors: Binding<Bool> = .constant(true)
     var resetting = false
     var forgetAll: () -> Void = {}
     var logins: (HostID) -> [String] = { host in TerminalRuntime.shared.ssh.integrationEntries(for: host).map(\.id) }
@@ -40,9 +39,32 @@ struct SSHHostsSettings: View {
         let grouped = hosts.map { host in (host, logins(host.id).compactMap { permissions.entries[$0] }) }
         let matched = Set(grouped.flatMap { $0.1.map(\.id) })
         let other = entries.filter { !matched.contains($0.id) }
+        VStack(spacing: 8) {
+            connections
+            hostList(grouped: grouped, other: other)
+        }
+    }
+
+    /// Defaults for every SSH connection, new hosts included.
+    private var connections: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Connections").fontWeight(.semibold).foregroundStyle(SettingsControlStyle.selectedText)
+                .padding(.horizontal, 14).padding(.vertical, 11)
+            separator
+            policyRow
+            separator.padding(.horizontal, 14)
+            reconnectRow
+            separator.padding(.horizontal, 14)
+            clipboardRow
+        }.background(Chrome.sidebar, in: RoundedRectangle(cornerRadius: 8))
+            .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(Chrome.border) }
+            .accessibilityIdentifier("settings-connections")
+    }
+
+    private func hostList(grouped: [(HostRecord, [Entry])], other: [Entry]) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 12) {
-                Text("Remote hosts").fontWeight(.semibold).foregroundStyle(SettingsControlStyle.selectedText)
+                Text("Hosts").fontWeight(.semibold).foregroundStyle(SettingsControlStyle.selectedText)
                 Spacer(minLength: 0)
                 // Always offered: it also clears a stale saved session with nothing listed.
                 Button(resetting ? "Resetting…" : "Reset all…", action: forgetAll)
@@ -52,13 +74,7 @@ struct SSHHostsSettings: View {
                     .help("Disconnect SSH and forget every host’s saved tabs, helper choices and caches. Global preferences are kept.")
             }.padding(.horizontal, 14).padding(.vertical, 11)
             separator
-            policyRow
-            separator.padding(.horizontal, 14)
-            clipboardRow
-            separator.padding(.horizontal, 14)
-            reconnectRow
-            separator.padding(.horizontal, 14)
-            colorsRow
+            localRow
             if !grouped.isEmpty || !other.isEmpty { separator }
             ForEach(grouped, id: \.0.id) { host, logins in
                 row(id: host.id.rawValue, host: host, logins: logins)
@@ -131,21 +147,6 @@ struct SSHHostsSettings: View {
                 .fixedSize(horizontal: false, vertical: true)
         }.padding(.horizontal, 14).padding(.vertical, 10)
             .help("For connections with the helper, retrying after sleep or a network change. Hosts that ask for a password, connections you disconnect, and hosts reopened at launch wait for Reconnect.")
-    }
-
-    private var colorsRow: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 12) {
-                Text("Host colors")
-                Spacer(minLength: 0)
-                Toggle("Host colors", isOn: colors).labelsHidden()
-                    .toggleStyle(SettingsSwitchStyle(title: "Host colors", compact: true))
-                    .accessibilityIdentifier("settings-host-colors")
-            }
-            Text("Tints remote tabs, borders and sidebar items in each host’s color. Off, they’re marked in gray.")
-                .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
-                .fixedSize(horizontal: false, vertical: true)
-        }.padding(.horizontal, 14).padding(.vertical, 10)
     }
 
     private func policyDetail(_ policy: NewHostPolicy) -> String {
@@ -370,8 +371,14 @@ struct SSHHostsSettings: View {
     }
 
     private func agentToggle(_ choice: SSHIntegrationDraft.Choice, on: Bool, entry: Entry) -> some View {
-        Button { update(entry) { $0.toggle(choice) } } label: {
-            Text(choice.title).font(typography.font(offset: -1.5))
+        toggleChip(choice.title, on: on, identifier: "settings-feature-\(Self.chipTitle(choice))-\(entry.id)") {
+            update(entry) { $0.toggle(choice) }
+        }
+    }
+
+    private func toggleChip(_ title: String, on: Bool, identifier: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title).font(typography.font(offset: -1.5))
                 .foregroundStyle(on ? Chrome.ink : SettingsControlStyle.detail)
                 .padding(.horizontal, 8).padding(.vertical, 2)
                 .background(on ? Chrome.ink.opacity(0.08) : .clear, in: RoundedRectangle(cornerRadius: 5))
@@ -381,10 +388,10 @@ struct SSHHostsSettings: View {
                 }
                 .contentShape(Rectangle())
         }.buttonStyle(.plain)
-            .accessibilityLabel("\(choice.title) Chat hooks")
+            .accessibilityLabel("\(title) Chat hooks")
             .accessibilityValue(on ? "On" : "Off")
-            .accessibilityIdentifier("settings-feature-\(Self.chipTitle(choice))-\(entry.id)")
-            .help("Install \(choice.title) Chat hooks in this account’s configuration when it starts")
+            .accessibilityIdentifier(identifier)
+            .help("Install \(title) Chat hooks in this account’s configuration when it starts")
     }
 
     /// Additions reach a live helper only after reconnecting; say which, and offer it.
@@ -450,6 +457,110 @@ struct SSHHostsSettings: View {
             .font(typography.font(offset: -1.5))
             .foregroundStyle(disabled ? SettingsControlStyle.detail.opacity(0.6) : destructive ? Color.red : Chrome.accent)
             .disabled(disabled).accessibilityIdentifier(identifier)
+    }
+
+    // MARK: This Mac
+
+    /// This Mac's agent hooks: which agents' hooks it installs, and how each stands. Only this Mac reports its
+    /// hooks' state; an SSH host shows what it allows.
+    private var localRow: some View {
+        let open = expanded == Self.localID, chat = TerminalRuntime.shared.chat
+        let launches = chat.listedLaunches
+        let local = workspace.hosts.record(.local)
+        return VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(InterfaceMotion.animation(reduce: reduceMotion)) { expanded = open ? nil : Self.localID; forgetting = nil }
+            } label: {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 10) {
+                        HostGlyph(host: local, size: typography.hostIconSize).foregroundStyle(Chrome.ink)
+                            .frame(width: typography.hostIconSize)
+                        Text("This Mac").lineLimit(1).frame(maxWidth: .infinity, alignment: .leading).layoutPriority(1)
+                        Text("local").font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail).fixedSize()
+                        Image(systemName: "chevron.right").font(AppFont.ui(size: 9, weight: .semibold))
+                            .foregroundStyle(SettingsControlStyle.detail).rotationEffect(.degrees(open ? 90 : 0))
+                    }
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 4) {
+                            ForEach(launches, id: \.key) { launch in chip(launch.key, on: localOn(launch.key)) }
+                        }.fixedSize()
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel("Agent hooks: " + launches.map { "\($0.label) \(localOn($0.key) ? "on" : "off")" }
+                                .joined(separator: ", "))
+                        let summary = chat.enabled ? launches.filter { localOn($0.key) }.map { "\($0.label) \(localStatus($0))" }
+                            .joined(separator: " · ") : "Chat is off in Integrations"
+                        if !summary.isEmpty {
+                            Text(summary).font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }.padding(.leading, 23)
+                }.padding(.horizontal, 14).padding(.vertical, 9).contentShape(Rectangle())
+            }.buttonStyle(.plain)
+                .accessibilityLabel("This Mac")
+                .accessibilityValue(open ? "Expanded" : "Collapsed")
+                .accessibilityHint("Shows the agent hooks for this Mac")
+                .accessibilityIdentifier("settings-host-\(Self.localID)")
+            if open { localEditor(launches) }
+        }
+    }
+
+    private func localEditor(_ launches: [HelperClient.Launch]) -> some View {
+        let chat = TerminalRuntime.shared.chat
+        return VStack(alignment: .leading, spacing: 10) {
+            VStack(spacing: 0) {
+                option("Agent hooks", detail: "chat hooks · attention") {
+                    HStack(spacing: 4) {
+                        ForEach(launches, id: \.key) { launch in
+                            toggleChip(launch.key, on: chat.localHooksAllowed(launch.key), identifier: "settings-local-hooks-\(launch.key)") {
+                                chat.setLocalHooks(launch.key, allowed: !chat.localHooksAllowed(launch.key))
+                            }
+                        }
+                    }
+                }
+                ForEach(launches.filter { chat.localHooksAllowed($0.key) }, id: \.key) { launch in
+                    separator
+                    option(launch.label, detail: localStatus(launch), indented: true) {
+                        if needsInstall(launch.key) {
+                            Button("Install") { chat.setHelperIntegration(launch.key, enabled: true) }
+                                .accessibilityIdentifier("settings-install-\(launch.key)")
+                        }
+                    }.accessibilityIdentifier("settings-local-agent-\(launch.key)")
+                }
+            }.background(Chrome.window, in: RoundedRectangle(cornerRadius: 7))
+                .overlay { RoundedRectangle(cornerRadius: 7).strokeBorder(SettingsControlStyle.border) }
+            Text("Off, Dispatch ignores the agent’s hooks here and leaves its settings as they are. Agents turned off in Integrations stay off on every machine.")
+                .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
+                .fixedSize(horizontal: false, vertical: true)
+        }.padding(.leading, 37).padding(.trailing, 14).padding(.bottom, 12)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("settings-host-editor-\(Self.localID)")
+    }
+
+    private static let localID = "local"
+
+    /// Hooks this Mac uses: allowed here, with Chat and the agent on in Integrations.
+    private func localOn(_ key: String) -> Bool {
+        let chat = TerminalRuntime.shared.chat
+        return chat.enabled && !chat.disabledIntegrations.contains(key) && chat.localHooksAllowed(key)
+    }
+
+    private func needsInstall(_ key: String) -> Bool {
+        localOn(key) && TerminalRuntime.shared.chat.hookStatus(key) == .off
+    }
+
+    /// How an agent's hooks stand on this Mac, from the local helper's installation facts.
+    private func localStatus(_ launch: HelperClient.Launch) -> String {
+        let chat = TerminalRuntime.shared.chat, install = chat.helperInstalls[launch.key]
+        if !chat.enabled || chat.disabledIntegrations.contains(launch.key) { return "off in Integrations" }
+        if !chat.localHooksAllowed(launch.key) { return "off" }
+        switch chat.hookStatus(launch.key) {
+        case .ready: return "✓ ready"
+        case .restart:
+            if let trust = install?.trust { return "restart \(launch.label), then trust Dispatch in \(trust)" }
+            if let reload = install?.reload { return "run \(reload) in \(launch.label) to finish" }
+            return "restart \(launch.label) to finish"
+        case .off: return install?.optional == true ? "needs its extension" : "not set up"
+        }
     }
 
     // MARK: Saving
