@@ -110,10 +110,7 @@ struct SSHHostsSettings: View {
             Text(policyDetail(policy.wrappedValue))
                 .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
                 .fixedSize(horizontal: false, vertical: true)
-            // Where an uploaded helper lives, whichever policy put it there (SSHBootstrap, docs/security.md).
-            Text("Helper location on hosts: ~/.dispatch/bin/versions/<hash>/dispatch-helper")
-                .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
-                .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                .help(policyHelp(policy.wrappedValue))
         }.padding(.horizontal, 14).padding(.vertical, 10)
     }
 
@@ -126,11 +123,11 @@ struct SSHHostsSettings: View {
                     .toggleStyle(SettingsSwitchStyle(title: "Remote programs can copy", compact: true))
                     .accessibilityIdentifier("settings-remote-clipboard")
             }
-            Text("Allows OSC 52 writes on helper hosts. Local and plain SSH always allow them.")
+            Text("To your clipboard, via OSC 52 · helper hosts only")
                 .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
                 .fixedSize(horizontal: false, vertical: true)
         }.padding(.horizontal, 14).padding(.vertical, 10)
-            .help("Controls OSC 52 and other remote clipboard writes on helper hosts.")
+            .help("Controls OSC 52 and other remote clipboard writes on helper hosts. Local and plain SSH always allow them.")
     }
 
     private var reconnectRow: some View {
@@ -142,18 +139,30 @@ struct SSHHostsSettings: View {
                     .toggleStyle(SettingsSwitchStyle(title: "Reconnect automatically", compact: true))
                     .accessibilityIdentifier("settings-ssh-auto-reconnect")
             }
-            Text("Logs back in with your keys or SSH agent when a connection drops.")
+            Text("After a drop, with your keys or SSH agent")
                 .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
                 .fixedSize(horizontal: false, vertical: true)
         }.padding(.horizontal, 14).padding(.vertical, 10)
             .help("For connections with the helper, retrying after sleep or a network change. Hosts that ask for a password, connections you disconnect, and hosts reopened at launch wait for Reconnect.")
     }
 
+    /// One line per policy; only the policies that upload a helper name where it goes.
     private func policyDetail(_ policy: NewHostPolicy) -> String {
         switch policy {
-        case .ask: "Ask which helper features to allow on each new host."
-        case .full: "Installs the helper without asking. It can see processes, files you can read, agent transcripts and Git."
-        case .plain: "Plain SSH: no stats, files or remote chat."
+        case .ask: "Ask which helper features to allow · helper in ~/.dispatch"
+        case .full: "Install the helper in ~/.dispatch without asking"
+        case .plain: "No helper: no stats, files or remote chat"
+        }
+    }
+
+    /// The rest: what Full features lets the helper see, and the uploaded helper's exact place (SSHBootstrap,
+    /// docs/security.md).
+    private func policyHelp(_ policy: NewHostPolicy) -> String {
+        let location = "The helper is kept at ~/.dispatch/bin/versions/<hash>/dispatch-helper."
+        switch policy {
+        case .ask: return location
+        case .full: return "The helper can see processes, files you can read, agent transcripts and Git. " + location
+        case .plain: return "Hosts connect over plain SSH."
         }
     }
 
@@ -464,8 +473,8 @@ struct SSHHostsSettings: View {
     /// This Mac's agent hooks: which agents' hooks it installs, and how each stands. Only this Mac reports its
     /// hooks' state; an SSH host shows what it allows.
     private var localRow: some View {
-        let open = expanded == Self.localID, chat = TerminalRuntime.shared.chat
-        let launches = chat.listedLaunches
+        let open = expanded == Self.localID
+        let launches = TerminalRuntime.shared.chat.listedLaunches
         let local = workspace.hosts.record(.local)
         return VStack(alignment: .leading, spacing: 0) {
             Button {
@@ -480,20 +489,9 @@ struct SSHHostsSettings: View {
                         Image(systemName: "chevron.right").font(AppFont.ui(size: 9, weight: .semibold))
                             .foregroundStyle(SettingsControlStyle.detail).rotationEffect(.degrees(open ? 90 : 0))
                     }
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack(spacing: 4) {
-                            ForEach(launches, id: \.key) { launch in chip(launch.key, on: localOn(launch.key)) }
-                        }.fixedSize()
-                            .accessibilityElement(children: .ignore)
-                            .accessibilityLabel("Agent hooks: " + launches.map { "\($0.label) \(localOn($0.key) ? "on" : "off")" }
-                                .joined(separator: ", "))
-                        let summary = chat.enabled ? launches.filter { localOn($0.key) }.map { "\($0.label) \(localStatus($0))" }
-                            .joined(separator: " · ") : "Chat is off in Integrations"
-                        if !summary.isEmpty {
-                            Text(summary).font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }.padding(.leading, 23)
+                    localSummary(launches).font(typography.font(offset: -1.5))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.leading, 23)
                 }.padding(.horizontal, 14).padding(.vertical, 9).contentShape(Rectangle())
             }.buttonStyle(.plain)
                 .accessibilityLabel("This Mac")
@@ -528,7 +526,7 @@ struct SSHHostsSettings: View {
                 }
             }.background(Chrome.window, in: RoundedRectangle(cornerRadius: 7))
                 .overlay { RoundedRectangle(cornerRadius: 7).strokeBorder(SettingsControlStyle.border) }
-            Text("Off, Dispatch ignores the agent’s hooks here and leaves its settings as they are. Agents turned off in Integrations stay off on every machine.")
+            Text("Off, Dispatch ignores the agent’s hooks here and leaves its settings as they are. Agents turned off in Chat mode stay off on every machine.")
                 .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
                 .fixedSize(horizontal: false, vertical: true)
         }.padding(.leading, 37).padding(.trailing, 14).padding(.bottom, 12)
@@ -536,9 +534,24 @@ struct SSHHostsSettings: View {
             .accessibilityIdentifier("settings-host-editor-\(Self.localID)")
     }
 
+    /// One line for every agent: an agent whose hooks this Mac uses with how they stand, the rest struck through.
+    private func localSummary(_ launches: [HelperClient.Launch]) -> Text {
+        guard TerminalRuntime.shared.chat.enabled else {
+            return Text("Chat mode is off").foregroundColor(SettingsControlStyle.detail)
+        }
+        return launches.enumerated().reduce(Text("")) { line, item in
+            let (index, launch) = item
+            let separator = Text(index == 0 ? "" : " · ").foregroundColor(SettingsControlStyle.detail)
+            let entry = localOn(launch.key)
+                ? Text(launch.label).foregroundColor(Chrome.ink) + Text(" " + localStatus(launch)).foregroundColor(SettingsControlStyle.detail)
+                : Text(launch.label).strikethrough(color: SettingsControlStyle.detail.opacity(0.6)).foregroundColor(SettingsControlStyle.detail)
+            return line + separator + entry
+        }
+    }
+
     private static let localID = "local"
 
-    /// Hooks this Mac uses: allowed here, with Chat and the agent on in Integrations.
+    /// Hooks this Mac uses: allowed here, with Chat mode and the agent on.
     private func localOn(_ key: String) -> Bool {
         let chat = TerminalRuntime.shared.chat
         return chat.enabled && !chat.disabledIntegrations.contains(key) && chat.localHooksAllowed(key)
@@ -551,7 +564,7 @@ struct SSHHostsSettings: View {
     /// How an agent's hooks stand on this Mac, from the local helper's installation facts.
     private func localStatus(_ launch: HelperClient.Launch) -> String {
         let chat = TerminalRuntime.shared.chat, install = chat.helperInstalls[launch.key]
-        if !chat.enabled || chat.disabledIntegrations.contains(launch.key) { return "off in Integrations" }
+        if !chat.enabled || chat.disabledIntegrations.contains(launch.key) { return "off in Chat mode" }
         if !chat.localHooksAllowed(launch.key) { return "off" }
         switch chat.hookStatus(launch.key) {
         case .ready: return "✓ ready"

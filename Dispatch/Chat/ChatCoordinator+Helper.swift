@@ -784,7 +784,7 @@ extension ChatCoordinator {
     }
 
     /// This Mac's agent hooks (Hosts settings). Off, the local helper ignores the agent and its local chats return
-    /// to their terminals; on, it installs here, unless Chat or the agent is off in Integrations.
+    /// to their terminals; on, it installs here, unless Chat mode or the agent is off.
     func setLocalHooks(_ key: String, allowed: Bool) {
         localHooks[key] = allowed
         if !allowed {

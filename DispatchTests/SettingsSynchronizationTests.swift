@@ -638,7 +638,7 @@ final class SettingsSynchronizationTests: XCTestCase {
                             }
                             try await Task.sleep(for: .milliseconds(100))
                             let split = try XCTUnwrap(PresentationTestSupport.views(of: TerminalSplitView.self, in: root).first(where: \.sidebar))
-                            try await TestSupport.eventually { split.sidebarHidden == (!sidebar || glass) && !split.sidebarAnimating }
+                            try await TestSupport.eventually { split.sidebarHidden == !sidebar && !split.sidebarAnimating }
                             let frame = root.convert(split.bounds, from: split)
                             let top = root.isFlipped ? frame.minY : root.bounds.height - frame.maxY
                             let tabRow = try XCTUnwrap(PresentationTestSupport.views(of: ReorderTrackingView.self, in: root).first {

@@ -11,7 +11,7 @@ struct ShortcutRow: Identifiable {
     /// What each digit group does; Settings › Keys describes its recorders the same way.
     static let tabDigits = "switch to tab (or pane when split)"
     static let spaceDigits = "switch to space"
-    static let splitDigits = "splits: single / 2-column / 2 above / 2x2 grid"
+    static let splitDigits = "set layout: single / 2 columns / 2 above / 2 × 2 grid"
 
     /// The digit chords lead, in Settings › Keys' order and following it; then stepping through tabs and spaces, and
     /// the prefix keys last.

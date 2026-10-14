@@ -42,7 +42,8 @@ final class SettingsStatsPresentationTests: XCTestCase {
             return font.isFixedPitch || font.fontDescriptor.symbolicTraits.contains(.monoSpace)
         }.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
         XCTAssertFalse(expected.isEmpty)
-        XCTAssertEqual(SettingsView.monospacedFontFamilies, expected)
+        // The default font leads the menu.
+        XCTAssertEqual(SettingsView.monospacedFontFamilies, ["Source Code Pro"] + expected.filter { $0 != "Source Code Pro" })
     }
 
     func testStatsPopoverKeepsTheRightInformationVisible() async throws {
@@ -307,7 +308,7 @@ final class SettingsStatsPresentationTests: XCTestCase {
         // Settings gives the card its width; unconstrained, wrapped details size the window.
         window.contentView = NSHostingView(rootView: SSHHostsSettings(workspace: workspace, permissions: SSHIntegrationPermissions(defaults: nil)).frame(width: 500))
         let troubleshooting = try await capture(window, "settings-offline-host-troubleshooting").text()
-        for label in ["Remote hosts", "On new hosts", "Remote programs can copy", "homelab", "Reset all"] {
+        for label in ["Connections", "On new hosts", "Remote programs can copy", "homelab", "Reset all"] {
             XCTAssertTrue(troubleshooting.contains(label), troubleshooting)
         }
         XCTAssertFalse(troubleshooting.contains("Forget host…"), "Host actions stay in the collapsed editor")
@@ -590,8 +591,8 @@ final class SettingsStatsPresentationTests: XCTestCase {
             try PresentationTestSupport.click(window, at: root.convert(NSPoint(x: box.midX * root.bounds.width,
                 y: (root.isFlipped ? 1 - box.midY : box.midY) * root.bounds.height), to: nil))
         }
-        // Diagnostics is a switch in the Extra page's Troubleshooting group.
-        try await click("Extra")
+        // Diagnostics is a switch in the General page's Troubleshooting group.
+        try await click("General")
         try await Task.sleep(for: .milliseconds(200))
         func toggleDiagnostics() async throws {
             try await bottom()
@@ -700,11 +701,10 @@ final class SettingsStatsPresentationTests: XCTestCase {
         defer { window.close(); window.contentView = nil }
         let root = try XCTUnwrap(window.contentView)
         for (tab, labels) in [
-            ("Appearance", ["Terminal font", "Chat font", "Size", "Theme", "Custom terminal", "Liquid Glass", "Sidebar & tabs", "Space size", "Show git branch", "Hide sidebar with one space", "Automatic tab names"]),
+            ("Appearance", ["Terminal font", "Chat font", "Size", "Theme", "Host colors", "Custom terminal", "Liquid Glass", "Sidebar & tabs", "Space size", "Show git branch", "Hide sidebar with one space"]),
             ("Keys", ["Number keys", "Spaces", "Tabs", "Splits", "Keyboard", "Use Option as Alt"]),
-            ("Integrations", ["Agents", "show coding agent CLIs as chat", "Codex", "Claude", "Pi", "tmux & herdr", "Open tmux sessions as spaces", "tmux -CC attach", "Open herdr sessions as spaces"]),
-            ("Hosts", ["Remote hosts", "On new hosts", "Ask"]),
-            ("Extra", ["Startup", "Starting folder", "Reopen spaces on launch", "Restore tab history", "Notifications", "Notify", "Dock badge", "Sound", "Troubleshooting", "Diagnostics"])
+            ("General", ["Startup", "Starting folder", "Reopen spaces on launch", "Restore tab history", "Terminal", "Open tmux sessions as spaces", "tmux -CC attach", "Open herdr sessions as spaces", "Kitty graphics", "Automatic tab names", "Notifications", "Notify", "Dock badge", "Sound", "Troubleshooting", "Diagnostics"]),
+            ("Agents & Hosts", ["Chat mode", "coding agent CLIs as chat", "Codex", "Claude", "Pi", "Connections", "On new hosts", "Ask", "This Mac"])
         ] {
             if tab != "Appearance" { try await PresentationTestSupport.selectSettingsTab(tab, in: window) }
             var snapshots = [try await capture(window, "settings-\(tab)")]
@@ -723,11 +723,6 @@ final class SettingsStatsPresentationTests: XCTestCase {
             // 40a2a2d variant-aware reading (uncorrected, enlarged, tiles) for every expected label.
             for label in labels {
                 XCTAssertTrue(try snapshots.contains { try $0.reads([label]) }, "Missing \(label) in \(tab):\n\(text)")
-            }
-            if tab == "Extra" {
-                // Extra fits a 1280×832 screen's usable height without scrolling; Appearance scrolls there.
-                let needed = document.bounds.height + root.bounds.height - scroll.contentView.bounds.height
-                XCTAssertLessThanOrEqual(needed, 795, "\(tab) needs \(needed) pt")
             }
             if tab == "Appearance" {
                 XCTAssertFalse(text.contains("Use Option as Alt"), "Keyboard behaviour lives under Keys")

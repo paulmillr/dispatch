@@ -1,7 +1,7 @@
 import SwiftUI
 import CoreText
 
-/// Compact settings grouped into General, Appearance, Integrations, and Keys.
+/// Compact settings grouped into Appearance, Keys, General, and Agents & Hosts.
 struct SettingsView: View {
     // Keep the controls stable while the user adjusts content typography.
     private let typography = AppTypography()
@@ -44,12 +44,17 @@ struct SettingsView: View {
                   CTFontSymbolicTraits(rawValue: symbolic).contains(.traitMonoSpace) else { return nil }
             return CTFontDescriptorCopyAttribute(descriptor, kCTFontFamilyNameAttribute) as? String
         })
+        // The default font leads; the rest follow alphabetically.
+        let lead = Preferences().fontFamily
         return candidates.filter { family in
             guard !["Andale Mono", "Courier New"].contains(family) else { return false }
             // Preserve the existing regular-face check for mixed-pitch families.
             guard let font = NSFontManager.shared.font(withFamily: family, traits: [], weight: 5, size: 13) else { return false }
             return font.isFixedPitch || font.fontDescriptor.symbolicTraits.contains(.monoSpace)
-        }.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        }.sorted { a, b in
+            if a == lead || b == lead { return a == lead }
+            return a.localizedStandardCompare(b) == .orderedAscending
+        }
     }
 
     var body: some View {
@@ -77,9 +82,8 @@ struct SettingsView: View {
                 switch selectedTab {
                 case .appearance: appearanceSettings
                 case .keys: keySettings
-                case .integrations: integrationSettings
-                case .hosts: hostSettings
-                case .extra: extraSettings
+                case .general: generalSettings
+                case .hosts: agentsAndHosts
                 }
             }.id(selectedTab)
             .padding(.horizontal, 12)
@@ -144,9 +148,8 @@ struct SettingsView: View {
     private enum SettingsTab: String, CaseIterable {
         case appearance = "Appearance"
         case keys = "Keys"
-        case integrations = "Integrations"
-        case hosts = "Hosts"
-        case extra = "Extra"
+        case general = "General"
+        case hosts = "Agents & Hosts"
     }
 
     private func settingsPage<Content: View>(@ViewBuilder content: () -> Content) -> some View {
@@ -255,17 +258,13 @@ struct SettingsView: View {
                 row("Hide sidebar with one space") {
                     settingToggle("Hide sidebar with one space", isOn: $draft.hideSingleSpace)
                 }
-                row("Automatic tab names") {
-                    settingToggle("Automatic tab names", isOn: $draft.automaticTabNames)
-                    .help("An agent's conversation title, a running program's own title, or the folder at an idle prompt. Off shows the terminal title. Renamed tabs keep their names.")
-                }
             }
         }
     }
 
-    /// The rest: what opens at launch and where new spaces start, attention notifications, and diagnostics for
-    /// troubleshooting.
-    private var extraSettings: some View {
+    /// What opens at launch and where new spaces start, how terminals behave, attention notifications, and
+    /// diagnostics for troubleshooting.
+    private var generalSettings: some View {
         VStack(spacing: 8) {
             settingsGroup("Startup") {
                 row("Starting folder", detail: "New spaces start here; new tabs follow the current folder") {
@@ -287,6 +286,23 @@ struct SettingsView: View {
                         .accessibilityIdentifier("settings-restore-terminal-output")
                         .help("Saves the text of local and plain SSH tabs when Dispatch quits normally; SSH tabs show it before they reconnect. It is kept for the next launch only, excluded from backups, deleted as Dispatch starts, and ignored after a week. Turning this off deletes it.")
                         .disabled(!draft.rememberHosts)
+                }
+            }
+            settingsGroup("Terminal") {
+                ForEach(multiplexers, id: \.self) { name in
+                    row("Open \(name) sessions as spaces", detail: sessionDetail(name)) {
+                        settingToggle("Open \(name) sessions as spaces", isOn: $draft.spaces[on: name])
+                    }
+                }
+                Text("The original tab closes after attach.")
+                    .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 9)
+                row("Kitty graphics", detail: "Lets terminal programs display images") {
+                    settingToggle("Kitty graphics", isOn: $draft.enableKittyGraphics)
+                }
+                row("Automatic tab names") {
+                    settingToggle("Automatic tab names", isOn: $draft.automaticTabNames)
+                    .help("An agent's conversation title, a running program's own title, or the folder at an idle prompt. Off shows the terminal title. Renamed tabs keep their names.")
                 }
             }
             settingsGroup("Notifications") {
@@ -416,53 +432,23 @@ struct SettingsView: View {
         .help("Click, then hold the modifiers for \(title.lowercased()) and release them. ⌫ removes the shortcut; Esc cancels.")
     }
 
-    /// Remote hosts: what the helper may do on each, and how connections behave.
-    private var hostSettings: some View {
-        SSHHostsSettings(workspace: workspace, permissions: sshPermissions, policy: $draft.newHostPolicy,
-                         clipboard: $draft.allowRemoteClipboardWrites, reconnect: $draft.autoReconnectSSH,
-                         resetting: resettingSSH) {
-            if hasActiveSSHConnections() { confirmingSSHReset = true } else { resetHosts() }
-        }
-    }
-
-    @ViewBuilder
-    private var integrationSettings: some View {
-        integrationCards.task { TerminalRuntime.shared.chat.loadLaunches() }
-    }
-
-    @ViewBuilder
-    private var integrationCards: some View {
+    /// Chat mode's agents, then how SSH connections behave and each machine's choices, this Mac first: an agent
+    /// switch and the host lines it affects share the page.
+    private var agentsAndHosts: some View {
         VStack(spacing: 8) {
-            integrationCard("Agents", detail: "show coding agent CLIs as chat", enabled: chatEnabled) {
+            integrationCard("Chat mode", detail: "coding agent CLIs as chat", enabled: chatEnabled) {
                 ForEach(TerminalRuntime.shared.chat.listedLaunches, id: \.key) { agentRow($0) }
-                Text(agentsFootnote)
-                    .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.bottom, 8)
             }
-            VStack(spacing: 0) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("tmux & herdr").fontWeight(.semibold).foregroundStyle(SettingsControlStyle.selectedText)
-                    Text("The original tab closes after attach.").font(typography.font(offset: -1.5))
-                        .foregroundStyle(SettingsControlStyle.detail)
-                }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 11)
-                separator
-                ForEach(multiplexers, id: \.self) { name in
-                    cardOption("Open \(name) sessions as spaces", detail: sessionDetail(name), detailBelow: true) {
-                        settingToggle("Open \(name) sessions as spaces", isOn: $draft.spaces[on: name], compact: true)
-                    }
-                }
-            }.padding(.horizontal, 14)
-                .background(Chrome.sidebar, in: RoundedRectangle(cornerRadius: 8))
-                .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(Chrome.border) }
-            integrationCard("Kitty graphics", detail: "let terminal programs display images", enabled: $draft.enableKittyGraphics,
-                            hasOptions: false) { EmptyView() }
-        }
-        if let chatError = TerminalRuntime.shared.chat.error {
-            Text(chatError).font(typography.font(offset: -1.5)).foregroundStyle(.red).textSelection(.enabled)
-                .padding(.top, 8)
-        }
+            if let chatError = TerminalRuntime.shared.chat.error {
+                Text(chatError).font(typography.font(offset: -1.5)).foregroundStyle(.red).textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            SSHHostsSettings(workspace: workspace, permissions: sshPermissions, policy: $draft.newHostPolicy,
+                             clipboard: $draft.allowRemoteClipboardWrites, reconnect: $draft.autoReconnectSSH,
+                             resetting: resettingSSH) {
+                if hasActiveSSHConnections() { confirmingSSHReset = true } else { resetHosts() }
+            }
+        }.task { TerminalRuntime.shared.chat.loadLaunches() }
     }
 
     private func resetHosts() {
@@ -476,14 +462,6 @@ struct SettingsView: View {
                 error = nil
             } catch { self.error = "Could not reset SSH hosts: \(error.localizedDescription)" }
         }
-    }
-
-    /// Where hooks go is each machine's choice, in Hosts; which agents' extensions are optional, from the helper.
-    private var agentsFootnote: String {
-        let chat = TerminalRuntime.shared.chat
-        let optional = (chat.helperLaunches ?? []).filter { chat.helperInstalls[$0.key]?.optional == true }.map(\.label)
-        return "Choose which machines install each agent’s hooks in Hosts, starting with this Mac."
-            + optional.map { " \($0)’s extension is optional." }.joined()
     }
 
     /// An agent on or off for Chat on every machine; Hosts chooses where its hooks are installed.
@@ -504,8 +482,10 @@ struct SettingsView: View {
     private func restoreDefaults() {
         draft = Preferences()
         keyError = nil
-        if selectedTab == .integrations {
+        if selectedTab == .hosts {
+            // This Mac's agent hooks first, so restoring the agents installs them here again.
             let chat = TerminalRuntime.shared.chat
+            chat.localHooks = [:]
             chat.setEnabled(true)
             chat.restoreHelperIntegrations()
         }

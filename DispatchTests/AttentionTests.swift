@@ -297,8 +297,8 @@ final class AttentionTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(150))
         let root = try XCTUnwrap(window.contentView)
         let tabs = try await PresentationTestSupport.capture(window)
-        // Notifications is a group on the Extra page.
-        let extra = try XCTUnwrap(tabs.recognizedText().first { $0.topCandidates(1).first?.string == "Extra" })
+        // Notifications is a group on the General page.
+        let extra = try XCTUnwrap(tabs.recognizedText().first { $0.topCandidates(1).first?.string == "General" })
         let point = NSPoint(x: extra.boundingBox.midX * root.bounds.width,
                             y: (root.isFlipped ? 1 - extra.boundingBox.midY : extra.boundingBox.midY) * root.bounds.height)
         try PresentationTestSupport.click(window, at: root.convert(point, to: nil))

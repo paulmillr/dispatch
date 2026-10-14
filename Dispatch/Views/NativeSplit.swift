@@ -91,8 +91,11 @@ final class TerminalSplitView: NSSplitView, NSSplitViewDelegate {
     private var resizing = false
     private(set) var sidebarHidden = false
     private var sidebarWidth: CGFloat = 264
-    private var sidebarAnimation: Task<Void, Never>?
+    private var sidebarAnimation: SidebarSlide?
     private var animatedWidth: CGFloat?
+    /// The narrower of the sidebar's widths before and after the slide: the content keeps the width beside it for
+    /// the whole slide and only moves, so its terminals and chats lay out once rather than on every frame.
+    private var slideNarrowest: CGFloat = 0
     var sidebarAnimating: Bool { animatedWidth != nil }
     override var dividerThickness: CGFloat { sidebarHidden ? 0 : super.dividerThickness }
     var dividerTint = NSColor(white: 0.13, alpha: 1) {
@@ -196,7 +199,7 @@ final class TerminalSplitView: NSSplitView, NSSplitViewDelegate {
         guard sidebar, arrangedSubviews.count == 2 else { return }
         if hidden == sidebarHidden {
             if !animated, sidebarAnimating {
-                sidebarAnimation?.cancel(); animatedWidth = nil
+                sidebarAnimation?.invalidate(); sidebarAnimation = nil; animatedWidth = nil
                 if !hidden { arrangedSubviews[0].setFrameSize(NSSize(width: sidebarWidth, height: bounds.height)) }
                 arrangedSubviews[0].isHidden = hidden
                 resizeSubviews(withOldSize: bounds.size)
@@ -210,7 +213,7 @@ final class TerminalSplitView: NSSplitView, NSSplitViewDelegate {
             sidebarWidth = start
             if let onSidebarResize { DispatchQueue.main.async { onSidebarResize(start) } }
         }
-        sidebarAnimation?.cancel()
+        sidebarAnimation?.invalidate(); sidebarAnimation = nil
         sidebarHidden = hidden
         // Divider layers have their own AppKit layout; resizing our two hosts
         // alone leaves the old divider composited over the expanded terminal.
@@ -224,38 +227,45 @@ final class TerminalSplitView: NSSplitView, NSSplitViewDelegate {
         }
         arrangedSubviews[0].isHidden = false
         animatedWidth = start
-        sidebarAnimation = Task { @MainActor [weak self] in
-            let began = ProcessInfo.processInfo.systemUptime
-            while let self, !Task.isCancelled {
-                let fraction = min(1, (ProcessInfo.processInfo.systemUptime - began) / InterfaceMotion.sidebarDuration)
-                self.animatedWidth = start + (target - start) * (1 - pow(1 - fraction, 3))
-                self.resizeSubviews(withOldSize: self.bounds.size)
-                if fraction >= 1 {
-                    self.animatedWidth = nil
-                    self.arrangedSubviews[0].isHidden = hidden
-                    self.resizeSubviews(withOldSize: self.bounds.size)
-                    break
-                }
-                do { try await Task.sleep(for: .milliseconds(8)) } catch { break }
-            }
+        slideNarrowest = min(start, target)
+        resizeSubviews(withOldSize: bounds.size)
+        // Frames step with the display's refresh, so each one lands on a screen update.
+        sidebarAnimation = SidebarSlide(view: self) { [weak self] elapsed in
+            guard let self else { return true }
+            let fraction = min(1, elapsed / InterfaceMotion.sidebarDuration)
+            self.animatedWidth = start + (target - start) * (1 - pow(1 - fraction, 3))
+            self.resizeSubviews(withOldSize: self.bounds.size)
+            guard fraction >= 1 else { return false }
+            self.sidebarAnimation = nil
+            self.animatedWidth = nil
+            self.arrangedSubviews[0].isHidden = hidden
+            self.needsDisplay = true
+            self.resizeSubviews(withOldSize: self.bounds.size)
+            return true
         }
     }
 
     override func resizeSubviews(withOldSize oldSize: NSSize) {
         guard arrangedSubviews.count == 2 else { super.resizeSubviews(withOldSize: oldSize); return }
-        // Manual child-frame changes leave NSSplitView's cached divider on
-        // screen unless its own backing store is invalidated as well.
-        needsDisplay = true
         if let clip = arrangedSubviews[0] as? SidebarClipView {
             clip.pinnedWidth = sidebarHidden || sidebarAnimating ? clamped(sidebarWidth, length: bounds.width - super.dividerThickness) : nil
         }
         if let width = animatedWidth {
             let position = min(max(0, width), bounds.width)
+            // Only the strip the divider crossed needs redrawing; the whole view is a window-sized layer.
+            let crossed = max(arrangedSubviews[0].frame.width, position) + super.dividerThickness
+            setNeedsDisplay(NSRect(x: 0, y: 0, width: crossed, height: bounds.height))
             arrangedSubviews[0].frame = NSRect(x: 0, y: 0, width: position, height: bounds.height)
+            // The content's width holds for the slide, so moving it doesn't resize it; the window's trailing edge
+            // clips the overhang.
+            let inset = slideNarrowest > 0 ? slideNarrowest + dividerThickness : 0
             arrangedSubviews[1].frame = NSRect(x: position + dividerThickness, y: 0,
-                width: max(0, bounds.width - position - dividerThickness), height: bounds.height)
+                width: max(0, bounds.width - inset), height: bounds.height)
             return
         }
+        // Manual child-frame changes leave NSSplitView's cached divider on
+        // screen unless its own backing store is invalidated as well.
+        needsDisplay = true
         if sidebarHidden {
             arrangedSubviews[0].frame = .zero
             arrangedSubviews[1].frame = bounds
@@ -289,6 +299,41 @@ final class TerminalSplitView: NSSplitView, NSSplitViewDelegate {
 
     func splitView(_ splitView: NSSplitView, shouldHideDividerAt dividerIndex: Int) -> Bool { sidebarHidden }
     func splitView(_ splitView: NSSplitView, canCollapseSubview subview: NSView) -> Bool { false }
+}
+
+/// Calls `step` with the time since the slide began on each of the view's display refreshes, until it returns true.
+@MainActor private final class SidebarSlide: NSObject {
+    private var link: CADisplayLink?
+    private var fallback: Timer?
+    private var began: CFTimeInterval?
+    private let step: (CFTimeInterval) -> Bool
+
+    init(view: NSView, step: @escaping (CFTimeInterval) -> Bool) {
+        self.step = step
+        super.init()
+        let link = view.displayLink(target: self, selector: #selector(tick(_:)))
+        link.add(to: .main, forMode: .common)
+        self.link = link
+        // A window off screen gets no refreshes; the slide still ends on time.
+        fallback = Timer.scheduledTimer(withTimeInterval: InterfaceMotion.sidebarDuration + 0.1, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.finish() }
+        }
+    }
+
+    private func finish() {
+        guard link != nil else { return }
+        _ = step(.infinity)
+        invalidate()
+    }
+
+    @objc private func tick(_ link: CADisplayLink) {
+        let now = link.timestamp
+        let began = self.began ?? now
+        self.began = began
+        if step(now - began) { invalidate() }
+    }
+
+    func invalidate() { link?.invalidate(); link = nil; fallback?.invalidate(); fallback = nil }
 }
 
 /// Animate the visible viewport, keeping the sidebar's text layout at its full

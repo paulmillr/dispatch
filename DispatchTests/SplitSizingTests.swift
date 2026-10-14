@@ -92,7 +92,7 @@ final class SplitSizingTests: XCTestCase {
         assertPaneMinima(content)
     }
 
-    /// The sidebar column takes the width the floating glass panel was resized to, whether shown then or later.
+    /// The sidebar column takes the shared sidebar width, whether shown then or later.
     func testSidebarColumnTakesTheSharedSidebarWidth() {
         let sidebar = TerminalSplitView()
         sidebar.sidebar = true
