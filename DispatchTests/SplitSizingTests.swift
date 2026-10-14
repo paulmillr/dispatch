@@ -6,7 +6,7 @@ import XCTest
 @MainActor
 final class SplitSizingTests: XCTestCase {
     func testTypographyUpdatesAcrossNativeSplitsAndMotionHosts() async throws {
-        let space = UUID(), pane = UUID()
+        let space = System.uuid(), pane = System.uuid()
         func tree(size: CGFloat) -> some View {
             NativeSplit(first: AnyView(TypographyProbe()), second: AnyView(
                 MotionContent(content: AnyView(NativeSplit(first: AnyView(TypographyProbe()),
@@ -34,12 +34,12 @@ final class SplitSizingTests: XCTestCase {
         XCTAssertEqual(nested(.columns, count: 3).minimumSize, CGSize(width: 542, height: 120))
         XCTAssertEqual(nested(.columns, count: 4).minimumSize, CGSize(width: 723, height: 120))
         XCTAssertEqual(nested(.rows, count: 4).minimumSize, CGSize(width: 180, height: 483))
-        let grid = PaneLayout.split(UUID(), .rows, nested(.columns, count: 2), nested(.columns, count: 2))
+        let grid = PaneLayout.split(System.uuid(), .rows, nested(.columns, count: 2), nested(.columns, count: 2))
         XCTAssertEqual(grid.minimumSize, CGSize(width: 361, height: 241))
     }
 
     func testNestedNativeSplitsPreservePaneMinimaOnResizeAndDividerDrags() {
-        let grid = PaneLayout.split(UUID(), .rows, nested(.columns, count: 2), nested(.columns, count: 2))
+        let grid = PaneLayout.split(System.uuid(), .rows, nested(.columns, count: 2), nested(.columns, count: 2))
         for layout in [nested(.columns, count: 3), nested(.columns, count: 4), nested(.rows, count: 4), grid] {
             let view = makeView(layout)
             view.frame.size = CGSize(width: layout.minimumSize.width + 300, height: layout.minimumSize.height + 150)
@@ -115,8 +115,8 @@ final class SplitSizingTests: XCTestCase {
     }
 
     private func nested(_ axis: SplitAxis, count: Int) -> PaneLayout {
-        guard count > 1 else { return .pane(UUID()) }
-        return .split(UUID(), axis, nested(axis, count: count - 1), .pane(UUID()))
+        guard count > 1 else { return .pane(System.uuid()) }
+        return .split(System.uuid(), axis, nested(axis, count: count - 1), .pane(System.uuid()))
     }
 
     private func makeView(_ layout: PaneLayout) -> NSView {

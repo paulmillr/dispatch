@@ -3,8 +3,8 @@ use crate::{
     api::*,
     encode::{Encode, notify},
     helper::{DispatchHelper, Replies},
-    json::Value,
-    wire,
+    json::Data,
+    wire::{self, body::Encoded},
 };
 use std::{cell::{Cell, RefCell}, collections::BTreeMap, path::Path, rc::Rc};
 mod chat;
@@ -213,7 +213,7 @@ pub(crate) struct Request<'a> {
     pub helper: &'a mut DispatchHelper,
     pub io: &'a mut dyn Io,
     pub replies: Replies,
-    pub document: Rc<Json>,
+    pub document: Rc<Encoded>,
     pub fd: i32,
     pub id: u64,
 }
@@ -293,20 +293,20 @@ pub(crate) fn invalid(field: &str) -> Error {
         message: format!("Invalid or missing {field}"),
     }
 }
-fn text<'a>(p: Value<'a>, name: &str) -> Result<&'a str, Error> {
+fn text<'a>(p: &Data<'a>, name: &str) -> Result<&'a str, Error> {
     p.get(name)
-        .and_then(Value::string)
+        .and_then(Data::string)
         .ok_or_else(|| invalid(name))
 }
-pub(crate) fn number(p: Value<'_>, name: &str) -> Result<u64, Error> {
+pub(crate) fn number(p: &Data<'_>, name: &str) -> Result<u64, Error> {
     p.get(name)
-        .and_then(Value::unsigned)
+        .and_then(Data::unsigned)
         .ok_or_else(|| invalid(name))
 }
 /// terminals.create environment: K=V entries added to the created command (e.g. the app's
 /// typed-launch shell functions, like c1654cc NativeSSHEnvironment.swift:56-77).
-fn environment(p: Value<'_>) -> Result<Vec<(String, String)>, Error> {
-    let Some(values) = p.get("environment").and_then(Value::array) else {
+fn environment(p: &Data<'_>) -> Result<Vec<(String, String)>, Error> {
+    let Some(values) = p.get("environment").and_then(Data::array) else {
         return Ok(Vec::new());
     };
     values
@@ -319,11 +319,11 @@ fn environment(p: Value<'_>) -> Result<Vec<(String, String)>, Error> {
         })
         .collect()
 }
-fn optional(p: Value<'_>, name: &str) -> Option<u64> {
-    p.get(name).and_then(Value::unsigned)
+fn optional(p: &Data<'_>, name: &str) -> Option<u64> {
+    p.get(name).and_then(Data::unsigned)
 }
-fn flag(p: Value<'_>, name: &str) -> bool {
-    p.get(name).and_then(Value::boolean).unwrap_or(false)
+fn flag(p: &Data<'_>, name: &str) -> bool {
+    p.get(name).and_then(Data::boolean).unwrap_or(false)
 }
 fn plugin(method: &str) -> &str {
     match method {
@@ -331,12 +331,12 @@ fn plugin(method: &str) -> &str {
         _ => "stats",
     }
 }
-fn cell(p: Value<'_>, name: &str) -> Result<Option<u16>, Error> {
+fn cell(p: &Data<'_>, name: &str) -> Result<Option<u16>, Error> {
     optional(p, name)
         .map(|v| u16::try_from(v).map_err(|_| invalid(name)))
         .transpose()
 }
-fn size(p: Value<'_>) -> Result<Grid, Error> {
+fn size(p: &Data<'_>) -> Result<Grid, Error> {
     let p = p.get("size").unwrap_or(p);
     Ok(Grid {
         columns: u16::try_from(number(p, "columns")?).map_err(|_| invalid("columns"))?,
@@ -344,11 +344,11 @@ fn size(p: Value<'_>) -> Result<Grid, Error> {
         pixels: cell(p, "cell_width")?.zip(cell(p, "cell_height")?),
     })
 }
-fn scroll(p: Value<'_>) -> Result<Scroll, Error> {
+fn scroll(p: &Data<'_>) -> Result<Scroll, Error> {
     Ok(Scroll {
         lines: p
             .get("lines")
-            .and_then(Value::signed)
+            .and_then(Data::signed)
             .ok_or_else(|| invalid("lines"))?,
         page: flag(p, "page"),
         at: cell(p, "column")?.zip(cell(p, "row")?),
@@ -357,7 +357,7 @@ fn scroll(p: Value<'_>) -> Result<Scroll, Error> {
     })
 }
 /// memberships.place `place`: `kind` names the Place variant; ids are global entity ids.
-fn place(p: Value<'_>) -> Result<Place, Error> {
+fn place(p: &Data<'_>) -> Result<Place, Error> {
     let p = p.get("place").ok_or_else(|| invalid("place"))?;
     Ok(match text(p, "kind")? {
         "restore" => Place::Restore,
@@ -382,65 +382,37 @@ fn place(p: Value<'_>) -> Result<Place, Error> {
             },
             ratio: p
                 .get("ratio")
-                .and_then(Value::number)
+                .and_then(Data::number)
                 .ok_or_else(|| invalid("ratio"))?,
         },
         _ => return Err(invalid("kind")),
     })
 }
-fn mode(p: Value<'_>) -> Result<Mode, Error> {
-    match p.get("mode").and_then(Value::string).unwrap_or("prompt") {
+fn mode(p: &Data<'_>) -> Result<Mode, Error> {
+    match p.get("mode").and_then(Data::string).unwrap_or("prompt") {
         "prompt" => Ok(Mode::Prompt),
         "steer" => Ok(Mode::Steer),
         "follow_up" => Ok(Mode::FollowUp),
         _ => Err(invalid("mode")),
     }
 }
-fn strings(p: Value<'_>, name: &str) -> Result<Vec<String>, Error> {
+fn strings(p: &Data<'_>, name: &str) -> Result<Vec<String>, Error> {
     p.get(name)
-        .and_then(Value::array)
+        .and_then(Data::array)
         .ok_or_else(|| invalid(name))?
         .map(|v| v.string().map(str::to_owned).ok_or_else(|| invalid(name)))
         .collect()
 }
-pub(crate) fn bytes(p: Value<'_>) -> Result<Vec<u8>, Error> {
+pub(crate) fn bytes(p: &Data<'_>) -> Result<Vec<u8>, Error> {
     data(p.get("bytes").ok_or_else(|| invalid("bytes"))?)
 }
-pub fn data(v: Value<'_>) -> Result<Vec<u8>, Error> {
-    if let Some(values) = v.array() {
-        return values
-            .map(|v| {
-                v.unsigned()
-                    .and_then(|n| u8::try_from(n).ok())
-                    .ok_or_else(|| invalid("bytes"))
-            })
-            .collect();
-    }
-    let s = v.string().ok_or_else(|| invalid("bytes"))?;
-    let mut out = Vec::new();
-    let mut bits = 0u32;
-    let mut used = 0;
-    for c in s.bytes().take_while(|c| *c != b'=') {
-        let n = match c {
-            b'A'..=b'Z' => c - b'A',
-            b'a'..=b'z' => c - b'a' + 26,
-            b'0'..=b'9' => c - b'0' + 52,
-            b'+' => 62,
-            b'/' => 63,
-            _ => return Err(invalid("bytes")),
-        };
-        bits = (bits << 6) | u32::from(n);
-        used += 6;
-        if used >= 8 {
-            used -= 8;
-            out.push((bits >> used) as u8);
-        }
-    }
-    Ok(out)
+/// Bytes from the wire (tag 11).
+pub fn data(v: &Data<'_>) -> Result<Vec<u8>, Error> {
+    v.bytes().map(<[u8]>::to_vec).ok_or_else(|| invalid("bytes"))
 }
-fn answers(p: Value<'_>) -> Result<Vec<(String, Answer)>, Error> {
+fn answers(p: &Data<'_>) -> Result<Vec<(String, Answer)>, Error> {
     p.get("answers")
-        .and_then(Value::object)
+        .and_then(Data::object)
         .ok_or_else(|| invalid("answers"))?
         .map(|(key, v)| {
             let answer = if let Some(s) = v.string() {
@@ -454,7 +426,7 @@ fn answers(p: Value<'_>) -> Result<Vec<(String, Answer)>, Error> {
                     })
                     .collect::<Result<_, _>>()?,
                 )
-            } else if v.kind() == crate::json::Kind::Null {
+            } else if matches!(v, Data::Null) {
                 Answer::Skip
             } else {
                 return Err(invalid("answers"));
@@ -465,8 +437,8 @@ fn answers(p: Value<'_>) -> Result<Vec<(String, Answer)>, Error> {
 }
 
 impl Request<'_> {
-    fn closing(&self, p: Value<'_>) -> Done<()> {
-        let prompt = p.get("policy").and_then(Value::string) == Some("prompt");
+    fn closing(&self, p: &Data<'_>) -> Done<()> {
+        let prompt = p.get("policy").and_then(Data::string) == Some("prompt");
         let check = flag(p, "check");
         let done = self.done(None);
         Box::new(move |io, result| {
@@ -487,7 +459,7 @@ impl Request<'_> {
         })
     }
     /// Protocol result: Closed
-    fn close(&mut self, p: Value<'_>) -> Result<(), Error> {
+    fn close(&mut self, p: &Data<'_>) -> Result<(), Error> {
         let (_, mux) = self.mux(p)?;
         let node = local(number(p, "node")?);
         let how = match text(p, "policy")? {
@@ -528,7 +500,7 @@ impl Request<'_> {
         }
         Ok(())
     }
-    fn attached(&self, p: Value<'_>) -> Result<Done<()>, Error> {
+    fn attached(&self, p: &Data<'_>) -> Result<Done<()>, Error> {
         let terminal = reference(self.helper.route(p), local(number(p, "terminal")?));
         Ok(window(
             self.replies.clone(),
@@ -540,7 +512,7 @@ impl Request<'_> {
         ))
     }
     /// Protocol result: null; input_window renewal follows committed native input
-    fn input(&mut self, p: Value<'_>) -> Result<(), Error> {
+    fn input(&mut self, p: &Data<'_>) -> Result<(), Error> {
         let terminal = number(p, "terminal")?;
         let bytes = bytes(p)?;
         let count = u32::try_from(bytes.len()).map_err(|_| invalid("input credit"))?;
@@ -632,8 +604,8 @@ impl Request<'_> {
         })
     }
     /// Protocol result: null
-    fn reduce(&mut self, p: Value<'_>) -> Result<(), Error> {
-        let requested = p.get("capabilities").and_then(Value::array).ok_or_else(|| invalid("capabilities"))?
+    fn reduce(&mut self, p: &Data<'_>) -> Result<(), Error> {
+        let requested = p.get("capabilities").and_then(Data::array).ok_or_else(|| invalid("capabilities"))?
             .map(|v| v.string().map(str::to_owned).ok_or_else(|| invalid("capabilities")))
             .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
         let removed = {
@@ -698,7 +670,7 @@ impl Request<'_> {
         }
         Ok(())
     }
-    fn mux(&self, p: Value<'_>) -> Result<(usize, Shared<dyn Multiplexer>), Error> {
+    fn mux(&self, p: &Data<'_>) -> Result<(usize, Shared<dyn Multiplexer>), Error> {
         let index = self.helper.route(p);
         self.helper
             .multiplexers
@@ -712,7 +684,7 @@ impl Request<'_> {
     }
     fn agent(
         &self,
-        p: Value<'_>,
+        p: &Data<'_>,
     ) -> Result<(usize, Shared<dyn Multiplexer>, Shared<dyn Harness>, Binding), Error> {
         let terminal = number(p, "terminal")?;
         let index = self
@@ -724,7 +696,7 @@ impl Request<'_> {
             .ok_or_else(|| invalid("terminal"))?;
         let (harness, binding) = self
             .helper
-            .binding(terminal, p.get("session").and_then(Value::string))?;
+            .binding(terminal, p.get("session").and_then(Data::string))?;
         Ok((
             index,
             self.helper.multiplexers[index].clone(),
@@ -736,7 +708,7 @@ impl Request<'_> {
             binding,
         ))
     }
-    fn sent(&self, p: Value<'_>, goal: Option<Goal>) -> Result<Done<Sent>, Error> {
+    fn sent(&self, p: &Data<'_>, goal: Option<Goal>) -> Result<Done<Sent>, Error> {
         let (_, mux, harness, binding) = self.agent(p)?;
         let terminal = number(p, "terminal")?;
         let mut reply = self.done(None);
@@ -778,7 +750,7 @@ impl Request<'_> {
     /// without a native result for it gets the same checked send as chat.send.
     /// Protocol result: Outcome
     /// Protocol producers: Harness.command, Harness.send
-    fn command(&mut self, p: Value<'_>) -> Result<(), Error> {
+    fn command(&mut self, p: &Data<'_>) -> Result<(), Error> {
         let (_, mux, harness, binding) = self.agent(p)?;
         let terminal = number(p, "terminal")?;
         let key = (terminal, binding.session.clone());
@@ -913,7 +885,7 @@ impl Request<'_> {
     }
     fn fallback<T: 'static>(
         &self,
-        p: Value<'_>,
+        p: &Data<'_>,
         goal: Goal,
         done: Done<T>,
         convert: fn(Menu) -> T,
@@ -935,7 +907,7 @@ impl Request<'_> {
     }
     /// Protocol result: Sent
     /// Protocol producers: Multiplexer.keys
-    fn answer(&mut self, p: Value<'_>, dismiss: bool) -> Result<(), Error> {
+    fn answer(&mut self, p: &Data<'_>, dismiss: bool) -> Result<(), Error> {
         let (_, _, harness, binding) = self.agent(p)?;
         let terminal = number(p, "terminal")?;
         let interaction = text(p, "interaction")?;
@@ -1055,18 +1027,18 @@ impl Request<'_> {
         Ok(())
     }
     /// The app's command line through the helper's execution prefix; None without one.
-    fn script(&self, p: Value<'_>) -> Result<Option<std::process::Command>, Error> {
+    fn script(&self, p: &Data<'_>) -> Result<Option<std::process::Command>, Error> {
         let Some(script) = p
             .get("command")
-            .and_then(Value::string)
+            .and_then(Data::string)
             .filter(|s| !s.is_empty())
         else {
             return Ok(None);
         };
-        let prefix = &self.helper.execution;
+        let prefix = self.io.execution();
         let mut command = std::process::Command::new(&prefix[0]);
         command.args(&prefix[1..]);
-        if cfg!(target_os = "macos") && prefix[0] == "/usr/bin/login" {
+        if self.io.os() == "macos" && prefix[0] == "/usr/bin/login" {
             command.arg(format!("exec -l {script}"));
         } else {
             command.arg(script);
@@ -1075,11 +1047,11 @@ impl Request<'_> {
         Ok(Some(command))
     }
     /// The request's environment and cwd (else the parent's cwd) onto a command.
-    fn place(&self, p: Value<'_>, command: &mut std::process::Command) -> Result<(), Error> {
+    fn place(&self, p: &Data<'_>, command: &mut std::process::Command) -> Result<(), Error> {
         command.envs(environment(p)?);
         let cwd = p
             .get("cwd")
-            .and_then(Value::string)
+            .and_then(Data::string)
             .filter(|s| !s.is_empty())
             .map(std::path::PathBuf::from)
             .or_else(|| {
@@ -1134,7 +1106,7 @@ macro_rules! registered {
 macro_rules! operations {
     ($r:ident,$p:ident; $($name:literal => $schema:expr, $target:ident $method:ident ($($arg:expr),*) $reply:ident;)*) => {
         pub const OPERATIONS: &[&str] = &[$($name),*];
-        pub(crate) fn parameters(root: Value<'_>, allowed: impl FnOnce(&str) -> bool) -> Result<(&str, Value<'_>), Error> {
+        pub(crate) fn parameters<'a>(root: &'a Data<'a>, allowed: impl FnOnce(&str) -> bool) -> Result<(&'a str, &'a Data<'a>), Error> {
             params::validate(root, params::Rule::Object(&[
                 ("method", params::Rule::Text),
                 ("params", params::Rule::Any),
@@ -1167,7 +1139,7 @@ macro_rules! operations {
                     _ => false,
                 }
             }
-            pub fn dispatch(&mut $r, name: &str, $p: Value<'_>) -> Result<(), Error> {
+            pub fn dispatch(&mut $r, name: &str, $p: &Data<'_>) -> Result<(), Error> {
                 match name {
                     $(
                         $name => operation!($r, $p, $target, $method, [$($arg),*], $reply),
@@ -1202,7 +1174,7 @@ macro_rules! operation {
             let process = binding.process.clone();
             let call = checked(done, move |io, done| {
                 let root = document.root();
-                let $p = root.get("params").unwrap_or(root);
+                let $p = root.get("params").unwrap_or(&root);
                 let _ = $p;
                 let mut done = Some(done);
                 let result: Result<(), Error> = (|| {
@@ -1219,7 +1191,7 @@ macro_rules! operation {
         }
     }};
     ($r:ident,$p:ident,plugin,$m:ident,[$($a:expr),*],$reply:ident) => {{
-        let name = $p.get("plugin").and_then(Value::string).unwrap_or(plugin(stringify!($m)));
+        let name = $p.get("plugin").and_then(Data::string).unwrap_or(plugin(stringify!($m)));
         let plugin = $r.helper.plugins.iter()
             .find(|v| v.borrow().name() == name)
             .cloned()
@@ -1287,7 +1259,7 @@ macro_rules! reply {
             $p,
             Some(Goal::Select {
                 model: text($p, "model")?.into(),
-                effort: $p.get("effort").and_then(Value::string).map(str::to_owned),
+                effort: $p.get("effort").and_then(Data::string).map(str::to_owned),
             }),
         )?
     };
@@ -1296,7 +1268,7 @@ include!("dispatch/table.rs");
 
 impl Request<'_> {
     /// Protocol result: Binding when opening; null when closing
-    fn side(&mut self, p: Value<'_>, close: bool) -> Result<(), Error> {
+    fn side(&mut self, p: &Data<'_>, close: bool) -> Result<(), Error> {
         let (_, _, harness, binding) = self.agent(p)?;
         let terminal = number(p, "terminal")?;
         let sides = self.helper.sides.clone();
@@ -1350,7 +1322,7 @@ impl Request<'_> {
         Ok(())
     }
     /// Protocol result: Vec<Backend> without mux; Vec<String> with mux
-    fn backends(&mut self, p: Value<'_>) -> Result<(), Error> {
+    fn backends(&mut self, p: &Data<'_>) -> Result<(), Error> {
         if optional(p, "mux").is_some() {
             let (_, mux) = self.mux(p)?;
             let done = self.done(None);
@@ -1407,12 +1379,12 @@ impl Request<'_> {
         Ok(())
     }
     /// Protocol result: Id, published as backend.opened
-    fn open(&mut self, p: Value<'_>) -> Result<(), Error> {
+    fn open(&mut self, p: &Data<'_>) -> Result<(), Error> {
         let (index, mux) = self.mux(p)?;
         let done = self.unit_id(index, Some("backend.opened"));
         let key = p
             .get("key")
-            .and_then(Value::string)
+            .and_then(Data::string)
             .or_else(|| {
                 self.helper
                     .default
@@ -1425,7 +1397,7 @@ impl Request<'_> {
         Ok(())
     }
     /// Protocol result: list of {mux, name, external, claimed, program} for every registered multiplexer
-    fn multiplexers(&mut self, _p: Value<'_>) -> Result<(), Error> {
+    fn multiplexers(&mut self, _p: &Data<'_>) -> Result<(), Error> {
         let kinds: Vec<Mux> = self
             .helper
             .multiplexers
@@ -1446,13 +1418,13 @@ impl Request<'_> {
         Ok(())
     }
     /// Protocol result: notifications until cancellation; only failure ends the request.
-    fn observe(&mut self, p: Value<'_>) -> Result<(), Error> {
+    fn observe(&mut self, p: &Data<'_>) -> Result<(), Error> {
         number(p, "terminal")?;
         self.mux(p)?;
         Ok(())
     }
     /// Protocol result: null. enabled:false stops claiming that mux's clients in terminals.
-    fn claim(&mut self, p: Value<'_>) -> Result<(), Error> {
+    fn claim(&mut self, p: &Data<'_>) -> Result<(), Error> {
         let (index, mux) = self.mux(p)?;
         let enabled = flag(p, "enabled");
         let resets = self.helper.resets.clone();
@@ -1473,7 +1445,7 @@ impl Request<'_> {
 
     /// Protocol result: null once the client the probe found in `terminal` left
     /// Protocol producers: Multiplexer.release
-    fn release(&mut self, p: Value<'_>) -> Result<(), Error> {
+    fn release(&mut self, p: &Data<'_>) -> Result<(), Error> {
         let (index, mux) = self.mux(p)?;
         let terminal = number(p, "terminal")?;
         if self.helper.launching.borrow().contains_key(&terminal) {
@@ -1508,19 +1480,18 @@ impl Request<'_> {
         mux.borrow_mut().release(self.io, &client, done);
         Ok(())
     }
-    /// Protocol result: the unchanged params JSON value
-    fn echo(&mut self, p: Value<'_>) -> Result<(), Error> {
-        let body = p.write()?;
+    /// Protocol result: the unchanged params value
+    fn echo(&mut self, p: &Data<'_>) -> Result<(), Error> {
         self.replies.borrow_mut().push_back((
             self.fd,
             wire::Kind::Response,
             self.id,
-            [b"{\"result\":".as_slice(), &body, b"}"].concat(),
+            crate::encode::value(&crate::encode::Fields(&[("result", p as &dyn Encode)])),
         ));
         Ok(())
     }
     /// Protocol result: Vec<Launch>
-    fn launches(&mut self, _p: Value<'_>) -> Result<(), Error> {
+    fn launches(&mut self, _p: &Data<'_>) -> Result<(), Error> {
         self.done(None)(
             self.io,
             Ok(self
@@ -1542,7 +1513,7 @@ impl Request<'_> {
         Ok(())
     }
     /// Protocol result: null
-    fn publish(&mut self, p: Value<'_>) -> Result<(), Error> {
+    fn publish(&mut self, p: &Data<'_>) -> Result<(), Error> {
         let (_, mux) = self.mux(p)?;
         let cursor = p.get("cursor").ok_or_else(|| invalid("cursor"))?;
         let cursor = (
@@ -1572,19 +1543,10 @@ pub(crate) fn reply<T: Encode + 'static>(
 ) -> Done<T> {
     Box::new(move |_, result| match result {
         Ok(value) => {
-            let body = if let Some(method) = long {
-                let mut out = b"{\"method\":".to_vec();
-                method.encode(&mut out);
-                out.extend(b",\"params\":");
-                value.encode(&mut out);
-                out.push(b'}');
-                out
-            } else {
-                let mut out = b"{\"result\":".to_vec();
-                value.encode(&mut out);
-                out.push(b'}');
-                out
-            };
+            let body = crate::encode::value(&crate::encode::Fields(&match &long {
+                Some(method) => vec![("method", method as &dyn Encode), ("params", &value)],
+                None => vec![("result", &value as &dyn Encode)],
+            }));
             replies.borrow_mut().push_back((
                 fd,
                 if long.is_some() {

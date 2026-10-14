@@ -1,8 +1,8 @@
 use super::*;
 
-fn json(result: io::Result<Output>) -> Result<Json, Error> {
+fn json(result: io::Result<Output>) -> Result<Encoded, Error> {
     match result {
-        Ok(Output::Bytes(bytes)) => Json::parse(&bytes),
+        Ok(Output::Value(bytes)) => Encoded::plain(&bytes),
         Ok(_) => Err(error("Herdr launch context is missing.")),
         Err(error) => Err(native::error(error.to_string())),
     }
@@ -26,7 +26,7 @@ impl Herdr {
             }
         }
         let process = process.clone();
-        let input = match json::write(&D::Object(vec![("pid", D::Unsigned(process.pid.into()))])) {
+        let input = match body::encode_plain(&D::Object(vec![("pid", D::Unsigned(process.pid.into()))])) {
             Ok(input) => input,
             Err(error) => {
                 self.defer(io, done, Err(error));
@@ -37,7 +37,7 @@ impl Herdr {
             io,
             Job::Native {
                 name: "process",
-                input,
+                value: input,
             },
             Box::new(move |mux, io, result| {
                 let facts = match json(result) {
@@ -72,14 +72,13 @@ impl Herdr {
                         ),
                     ),
                 ];
-                let executable = process.executable.to_string_lossy();
                 if typed {
                     fields.extend([
                         ("start", D::Array(process.start.into_iter().map(D::Unsigned).collect())),
-                        ("executable", D::String(&executable)),
+                        ("executable", D::from(process.executable.as_path())),
                     ]);
                 }
-                let input = match json::write(&D::Object(fields)) {
+                let input = match body::encode_plain(&D::Object(fields)) {
                     Ok(input) => input,
                     Err(error) => {
                         mux.defer(io, done, Err(error));
@@ -91,7 +90,7 @@ impl Herdr {
                     io,
                     Job::Native {
                         name: "environment",
-                        input,
+                        value: input,
                     },
                     Box::new(move |mux, io, result| {
                         let result = json(result).and_then(|environment| {
@@ -105,24 +104,27 @@ impl Herdr {
                         });
                         match result {
                             Ok(Some(_)) if typed => {
-                                mux.job(io, Job::Native { name: "process.environment", input: complete }, Box::new(move |mux, io, result| {
+                                mux.job(io, Job::Native { name: "process.environment", value: complete }, Box::new(move |mux, io, result| {
                                     let home = mux.config.environment.get("HOME").map(PathBuf::from).unwrap_or_default();
                                     let config = match json(result).and_then(|environment| Config::context(&process, &facts, &environment, (mux.config.uid, &home), true)) {
                                         Ok(Some(config)) => config,
                                         Ok(None) => { mux.defer(io, done, Ok(None)); return; },
                                         Err(error) => { mux.defer(io, done, Err(error)); return; },
                                     };
-                                    let input = json::write(&D::Object(vec![
+                                    let input = body::encode_plain(&D::Object(vec![
                                         ("program", D::String("herdr")),
-                                        ("cwd", D::String(&config.directory.to_string_lossy())),
+                                        ("cwd", D::from(config.directory.as_path())),
                                         ("path", D::String(config.environment.get("PATH").map(String::as_str).unwrap_or_default())),
-                                        ("skip", D::String(&process.executable.to_string_lossy())),
+                                        ("skip", D::from(process.executable.as_path())),
                                     ])).unwrap();
-                                    mux.job(io, Job::Native { name: "file.program", input }, Box::new(move |mux, io, result| {
-                                        match json(result).and_then(|value| text(value.root(), "path")) {
+                                    mux.job(io, Job::Native { name: "file.program", value: input }, Box::new(move |mux, io, result| {
+                                        let path = json(result).and_then(|value| {
+                                            value.root().get("path").and_then(D::path).map(PathBuf::from).ok_or_else(|| error("Invalid herdr field path."))
+                                        });
+                                        match path {
                                             Ok(path) => {
                                                 let mut config = config;
-                                                config.executable = path.into();
+                                                config.executable = path;
                                                 mux.prepare(io, config, done);
                                             }
                                             Err(error) => mux.defer(io, done, Err(error)),

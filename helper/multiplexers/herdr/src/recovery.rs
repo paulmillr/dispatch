@@ -9,19 +9,20 @@ pub(super) struct Admission {
     pid: Option<u32>,
 }
 
+/// The recovery registration: this helper's own file, an encoded plain value.
 pub(super) fn record(
     config: &Config,
     owner: &auth::Endpoint,
-    facts: &Json,
+    facts: &Encoded,
 ) -> Result<Vec<u8>, Error> {
-    let bytes = json::write(&D::Object(vec![
-        ("socket", D::String(&owner.path.to_string_lossy())),
+    let bytes = body::encode_plain(&D::Object(vec![
+        ("socket", D::from(owner.path.as_path())),
         ("session", D::String(&config.session)),
-        ("directory", D::String(&config.directory.to_string_lossy())),
+        ("directory", D::from(config.directory.as_path())),
         ("uid", D::Unsigned(config.uid.into())),
         ("device", D::Unsigned(owner.device)),
         ("inode", D::Unsigned(owner.inode)),
-        ("server", D::Value(facts.root())),
+        ("server", facts.root()),
     ]))?;
     if bytes.len() > 16384 {
         return Err(error(
@@ -31,31 +32,28 @@ pub(super) fn record(
     Ok(bytes)
 }
 
-pub(super) fn read(value: Value<'_>, template: &Config) -> Result<(Config, auth::Endpoint), Error> {
-    let uid = field(value, "uid")?.unsigned();
-    if uid != Some(template.uid.into()) {
+pub(super) fn read(value: &D<'_>, template: &Config) -> Result<(Config, auth::Endpoint), Error> {
+    let field = |key: &str| value.get(key).ok_or_else(|| error(format!("Missing herdr field {key}.")));
+    let path = |key: &str| field(key)?.path().map(PathBuf::from).ok_or_else(|| error(format!("Invalid herdr field {key}.")));
+    if field("uid")?.unsigned() != Some(template.uid.into()) {
         return Err(error("Herdr registration belongs to another user."));
     }
-    let path = PathBuf::from(text(value, "socket")?);
-    if !path.is_absolute() {
+    let socket = path("socket")?;
+    if !socket.is_absolute() {
         return Err(error("Invalid herdr socket path."));
     }
-    let server = process::read(field(value, "server")?)?;
+    let server = Process::read(field("server")?).ok_or_else(|| error("Invalid process field."))?;
     let owner = auth::Endpoint {
-        path: path.clone(),
-        device: field(value, "device")?
-            .unsigned()
-            .ok_or_else(|| error("Invalid herdr device."))?,
-        inode: field(value, "inode")?
-            .unsigned()
-            .ok_or_else(|| error("Invalid herdr inode."))?,
+        path: socket.clone(),
+        device: field("device")?.unsigned().ok_or_else(|| error("Invalid herdr device."))?,
+        inode: field("inode")?.unsigned().ok_or_else(|| error("Invalid herdr inode."))?,
         server,
     };
     let config = Config {
         executable: owner.server.executable.clone(),
-        socket: path,
-        session: text(value, "session")?,
-        directory: PathBuf::from(text(value, "directory")?),
+        socket,
+        session: field("session")?.string().map(str::to_owned).ok_or_else(|| error("Invalid herdr field session."))?,
+        directory: path("directory")?,
         environment: template.environment.clone(),
         uid: template.uid,
     };
@@ -212,20 +210,17 @@ impl Herdr {
         done: Action<Option<String>>,
         fd: i32,
     ) {
-        let input = json::write(&D::Object(vec![(
-            "path",
-            D::String(&config.socket.to_string_lossy()),
-        )]))
-        .unwrap();
+        let input = body::encode_plain(&D::Object(vec![("path", D::from(config.socket.as_path()))])).unwrap();
         self.job(
             io,
             Job::Native {
                 name: "file.realpath",
-                input,
+                value: input,
             },
             Box::new(move |mux, io, result| {
-                let path = auth::document(result)
-                    .and_then(|json| text(json.root(), "path").map(PathBuf::from));
+                let path = auth::document(result).and_then(|value| {
+                    value.root().get("path").and_then(D::path).map(PathBuf::from).ok_or_else(|| error("Invalid herdr field path."))
+                });
                 let mut config = config;
                 match path {
                     Ok(path) if path.is_absolute() => config.socket = path,
@@ -280,7 +275,7 @@ impl Herdr {
                             let path = io
                                 .storage()
                                 .map_err(|reason| error(reason.to_string()))?
-                                .join(format!("herdr-{token}.json"));
+                                .join(format!("herdr-{token}"));
                             let bytes = record(&config, &owner, &facts)?;
                             Ok::<_, Error>((format!("herdr/{token}"), path, bytes))
                         })();
@@ -335,15 +330,15 @@ impl Herdr {
             return;
         };
         let path = match io.storage() {
-            Ok(path) => path.join(format!("herdr-{token}.json")),
+            Ok(path) => path.join(format!("herdr-{token}")),
             Err(reason) => {
                 self.defer(io, done, Err(error(reason.to_string())));
                 return;
             }
         };
         let key = key.to_owned();
-        let input = json::write(&D::Object(vec![
-            ("path", D::String(&path.to_string_lossy())),
+        let input = body::encode_plain(&D::Object(vec![
+            ("path", D::from(path.as_path())),
             ("limit", D::Unsigned(16384)),
         ]))
         .unwrap();
@@ -351,30 +346,26 @@ impl Herdr {
             io,
             Job::Native {
                 name: "file.private",
-                input,
+                value: input,
             },
             Box::new(move |mux, io, result| {
-                let parsed = auth::document(result).and_then(|json| {
-                    let before = field(json.root(), "before")?;
-                    let after = field(json.root(), "after")?;
-                    let data = text(json.root(), "data")?;
-                    if before.write()? != after.write()?
-                        || before.get("uid").and_then(Value::unsigned)
-                            != Some(mux.config.uid.into())
-                        || before
-                            .get("mode")
-                            .and_then(Value::unsigned)
-                            .is_none_or(|mode| mode & 0o077 != 0)
-                        || before.get("links").and_then(Value::unsigned) != Some(1)
-                        || before.get("kind").and_then(Value::string) != Some("file")
-                        || before.get("size").and_then(Value::unsigned) != Some(data.len() as u64)
+                let parsed = auth::document(result).and_then(|file| {
+                    let file = file.root();
+                    let missing = || error("Herdr recovery registration is not private or changed.");
+                    let before = file.get("before").ok_or_else(missing)?;
+                    let after = file.get("after").ok_or_else(missing)?;
+                    let data = file.get("data").and_then(D::bytes).ok_or_else(missing)?;
+                    if body::encode_plain(before)? != body::encode_plain(after)?
+                        || before.get("uid").and_then(D::unsigned) != Some(mux.config.uid.into())
+                        || before.get("mode").and_then(D::unsigned).is_none_or(|mode| mode & 0o077 != 0)
+                        || before.get("links").and_then(D::unsigned) != Some(1)
+                        || before.get("kind").and_then(D::string) != Some("file")
+                        || before.get("size").and_then(D::unsigned) != Some(data.len() as u64)
                         || data.len() > 16384
                     {
-                        return Err(error(
-                            "Herdr recovery registration is not private or changed.",
-                        ));
+                        return Err(missing());
                     }
-                    read(Json::parse(data.as_bytes())?.root(), &mux.config)
+                    read(&body::decode_plain(data)?, &mux.config)
                 });
                 let (config, owner) = match parsed {
                     Ok(value) => value,

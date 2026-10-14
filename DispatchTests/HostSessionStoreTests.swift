@@ -6,7 +6,7 @@ import XCTest
 final class HostSessionStoreTests: XCTestCase {
     func testResetOneHostClearsSavedTabsAndRecipesAndKeepsOtherHosts() throws {
         let runtime = TerminalRuntime.shared, previous = runtime.workspace
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = System.temporary.appendingPathComponent(System.uuid().uuidString)
         let store = HostSessionStore(url: root.appendingPathComponent("host-session.json"))
         let controller = AppDelegate(settings: SettingsStore(file: root.appendingPathComponent("settings.json")), hostSessionStore: store)
         let workspace = controller.workspace; runtime.workspace = workspace
@@ -42,12 +42,12 @@ final class HostSessionStoreTests: XCTestCase {
 
     func testResetReleasesConnectingLauncherBeforeHelperOwnership() async throws {
         let runtime = TerminalRuntime.shared, previous = runtime.workspace
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = System.temporary.appendingPathComponent(System.uuid().uuidString)
         let control = root.appendingPathComponent("control")
         try FileManager.default.createDirectory(at: control, withIntermediateDirectories: true)
         let workspace = Workspace(); runtime.workspace = workspace; workspace.newLocalSpace()
         defer { runtime.hosts.stop(); runtime.workspace = previous; try? FileManager.default.removeItem(at: root) }
-        let request = SSHLaunchRequest(tabID: try XCTUnwrap(workspace.activeSurfaceID), token: "fixture", connectionID: .init(),
+        let request = SSHLaunchRequest(tabID: try XCTUnwrap(workspace.activeSurfaceID), token: "fixture", connectionID: .init(System.uuid()),
             credential: "reset-credential", master: .init(executable: "/usr/bin/true", controlPath: control.appendingPathComponent("master").path,
                 destination: "fixture"), shell: .init(destination: "fixture"))
         runtime.hosts.connecting(request)
@@ -55,7 +55,7 @@ final class HostSessionStoreTests: XCTestCase {
         XCTAssertTrue(runtime.hasActiveSSHConnections, "Connecting SSH needs confirmation even before a host row is visible")
         try await runtime.resetSSHState()
         let reply = root.appendingPathComponent(request.connectionID.rawValue.uuidString + ".sshresume")
-        let decision = try JSONDecoder().decode(SSHResumeDecision.self, from: Data(contentsOf: reply))
+        let decision = try JSONDecoder().decode(SSHResumeDecision.self, from: System.read(reply))
         XCTAssertEqual(decision.credential, request.credential)
         XCTAssertEqual(decision.exitStatus, 130)
         XCTAssertFalse(FileManager.default.fileExists(atPath: control.path))
@@ -64,7 +64,7 @@ final class HostSessionStoreTests: XCTestCase {
 
     func testResetClearsOfflineHostsAndSavedSessionWhileKeepingLocalStateAndPreferences() async throws {
         let runtime = TerminalRuntime.shared, previous = runtime.workspace
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = System.temporary.appendingPathComponent(System.uuid().uuidString)
         let store = HostSessionStore(url: root.appendingPathComponent("host-session.json"))
         let settings = SettingsStore(file: root.appendingPathComponent("settings.json"))
         let controller = AppDelegate(settings: settings, hostSessionStore: store)
@@ -101,7 +101,7 @@ final class HostSessionStoreTests: XCTestCase {
 
     func testRoundTripRestoresOfflineTabsWithoutStartingConnectionsAndOverwritesOneFile() async throws {
         let runtime = TerminalRuntime.shared, previous = runtime.workspace
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = System.temporary.appendingPathComponent(System.uuid().uuidString)
         let store = HostSessionStore(url: root.appendingPathComponent("host-session.json"))
         defer {
             runtime.hosts.stop(); runtime.workspace = previous
@@ -203,7 +203,7 @@ final class HostSessionStoreTests: XCTestCase {
 
     func testRemoteBackendPresentationSurvivesSessionSaveAndRestore() throws {
         let runtime = TerminalRuntime.shared, previous = runtime.workspace
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = System.temporary.appendingPathComponent(System.uuid().uuidString)
         let store = HostSessionStore(url: root.appendingPathComponent("host-session.json"))
         let workspace = Workspace(); runtime.workspace = workspace
         defer { runtime.hosts.stop(); runtime.workspace = previous; try? FileManager.default.removeItem(at: root) }
@@ -246,7 +246,7 @@ final class HostSessionStoreTests: XCTestCase {
             space.structure([TerminalTab(directory: "/remote"), TerminalTab(directory: "/inner")], selected: 0, backend: 2)
             space.remote = connection; space.hostID = host
             workspace.spaces.append(space)
-            let nested = TerminalHostContext(host: .authenticated("inner"), generation: UUID(), state: .connected, authenticated: true)
+            let nested = TerminalHostContext(host: .authenticated("inner"), generation: System.uuid(), state: .connected, authenticated: true)
             workspace.hosts.associate(space.tabs[1].id, context: nested)
             expected[space.tabs[1].id] = nested
             expected[space.tabs[0].id] = .init(host: host, generation: connection.rawValue, state: .connected, authenticated: true)
@@ -278,7 +278,7 @@ final class HostSessionStoreTests: XCTestCase {
 
     func testQuitSavesBeforeRuntimeCleanupAndDoesNotOverwriteOnTerminationNotification() async throws {
         let runtime = TerminalRuntime.shared, previous = runtime.workspace
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = System.temporary.appendingPathComponent(System.uuid().uuidString)
         let store = HostSessionStore(url: root.appendingPathComponent("host-session.json"))
         let settings = SettingsStore(file: root.appendingPathComponent("settings.json"))
         settings.values.restoreTerminalOutput = true
@@ -354,7 +354,7 @@ final class HostSessionStoreTests: XCTestCase {
         XCTAssertTrue(try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8)).rememberHosts)
         XCTAssertFalse(try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8)).restoreTerminalOutput)
         let runtime = TerminalRuntime.shared, previous = runtime.workspace
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = System.temporary.appendingPathComponent(System.uuid().uuidString)
         let store = HostSessionStore(url: root.appendingPathComponent("host-session.json"))
         let settings = SettingsStore(file: root.appendingPathComponent("settings.json"))
         let controller = AppDelegate(settings: settings, hostSessionStore: store)
@@ -398,7 +398,7 @@ final class HostSessionStoreTests: XCTestCase {
 
     func testForgetHostRemovesOnlyThatHostAndUpdatesSnapshotImmediately() throws {
         let runtime = TerminalRuntime.shared, previous = runtime.workspace
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = System.temporary.appendingPathComponent(System.uuid().uuidString)
         let store = HostSessionStore(url: root.appendingPathComponent("host-session.json"))
         let controller = AppDelegate(settings: SettingsStore(file: root.appendingPathComponent("settings.json")), hostSessionStore: store)
         let workspace = controller.workspace; runtime.workspace = workspace
@@ -445,7 +445,7 @@ final class HostSessionStoreTests: XCTestCase {
         let runtime = TerminalRuntime.shared, previous = runtime.workspace
         let workspace = Workspace(); runtime.workspace = workspace
         defer { _ = workspace.spaces }
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = System.temporary.appendingPathComponent(System.uuid().uuidString)
         let store = HostSessionStore(url: root.appendingPathComponent("host-session.json"))
         defer { runtime.workspace = previous; try? FileManager.default.removeItem(at: root) }
         XCTAssertFalse(store.restore(runtime: runtime))
@@ -457,7 +457,7 @@ final class HostSessionStoreTests: XCTestCase {
         XCTAssertFalse(store.restore(runtime: runtime))
         // Saved output older than a week, from another version, shorter than its header says, or
         // left half-written by a killed quit is never shown, and none of it stays on disk.
-        let history = store.terminalHistory, tab = UUID()
+        let history = store.terminalHistory, tab = System.uuid()
         let leftover = root.appendingPathComponent(".terminal-history.json.tmp-killed")
         for header in [TerminalHistoryStore.Header(saved: Date(timeIntervalSinceNow: -8 * 24 * 60 * 60), tabs: [.init(id: tab, bytes: 3)]),
                        TerminalHistoryStore.Header(version: 2, saved: Date(), tabs: [.init(id: tab, bytes: 3)]),
@@ -467,7 +467,7 @@ final class HostSessionStoreTests: XCTestCase {
             XCTAssertEqual(history.take(), [:])
             XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.path).filter { $0.contains("terminal-history") }, [])
         }
-        try history.save([tab: "recent", UUID(): ""])
+        try history.save([tab: "recent", System.uuid(): ""])
         XCTAssertEqual(history.take(), [tab: "recent"])
     }
 }

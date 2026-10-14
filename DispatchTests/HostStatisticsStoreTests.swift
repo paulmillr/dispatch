@@ -36,7 +36,7 @@ final class HostStatisticsStoreTests: XCTestCase {
         XCTAssertNil(unknown.peakCPU)
         let token = try XCTUnwrap(store.subscribe(.ssh(key)))
         defer { store.unsubscribe(token) }
-        try await Task.sleep(for: .milliseconds(30))
+        try await TestSupport.pause(for: .milliseconds(30))
         let value = store.snapshot(.ssh(key))
         XCTAssertEqual(value.memoryPercent, 42)
         XCTAssertEqual(value.uptime, 123)
@@ -87,7 +87,7 @@ final class HostStatisticsStoreTests: XCTestCase {
         let key = try XCTUnwrap(remote.register(provider, grant: .init(profile: .statistics)))
         let store = HostStatisticsStore(local: HostStats(), remote: remote)
         let token = try XCTUnwrap(store.subscribe(.ssh(key)))
-        try await Task.sleep(for: .milliseconds(30))
+        try await TestSupport.pause(for: .milliseconds(30))
         store.unsubscribe(token)
         let count = provider.samples
         try await TestSupport.eventually { provider.samples > count }
@@ -101,7 +101,7 @@ final class HostStatisticsStoreTests: XCTestCase {
     }
 
     func testChartsBreakAtMissingSamplesAndAdvancePastDisconnectedHistory() {
-        let now = Date()
+        let now = System.date()
         var snapshot = HostStatisticsSnapshot(host: "remote", account: "alice", remote: true, state: .stale, date: now)
         snapshot.history = [
             .init(date: now.addingTimeInterval(-901), cpu: 99),
@@ -123,7 +123,7 @@ final class HostStatisticsStoreTests: XCTestCase {
 
     func testAllHistoryAppendPathsAreBounded() {
         let entry = SSHStatisticsStore.Series(scope: Provider().scope)
-        let now = Date()
+        let now = System.date()
         entry.append(.init(date: now.addingTimeInterval(-3601), cpu: 12))
         entry.append(.init(date: now, cpu: 13))
         XCTAssertEqual(entry.history.count, 1)
@@ -170,7 +170,7 @@ final class HostStatisticsStoreTests: XCTestCase {
         local.stop()
         XCTAssertEqual(local.state, .stale)
         let stoppedCount = local.history.count
-        try await Task.sleep(for: .milliseconds(100))
+        try await TestSupport.pause(for: .milliseconds(100))
         XCTAssertEqual(local.history.count, stoppedCount)
     }
 

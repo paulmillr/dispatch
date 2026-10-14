@@ -58,7 +58,7 @@ impl Usage {
             self.turns.insert(turn, (input, output, cost));
         }
     }
-    pub fn payload(&self) -> Option<String> {
+    pub fn payload(&self) -> Option<dispatch_helper_core::wire::body::Encoded> {
         if self.turns.is_empty() && self.context.is_none() {
             return None;
         }
@@ -87,9 +87,7 @@ impl Usage {
         {
             info.push(("total_cost_usd", Data::Real(cost)));
         }
-        document(Data::Object(vec![("info", Data::Object(info))]))
-            .ok()
-            .map(|doc| super::printable(Some(doc.root())))
+        dispatch_helper_core::wire::body::Encoded::value(&Data::Object(vec![("info", Data::Object(info))])).ok()
     }
 }
 pub fn text(v: Value<'_>, key: &str) -> String {

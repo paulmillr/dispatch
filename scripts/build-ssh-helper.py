@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Build the pinned Rust helper or replay tool offline for all supported platforms, and install
-the helper's three binaries into the app.
+"""Build the pinned Rust helper offline for all supported platforms, and install the helper's
+three binaries into the app.
 
 Xcode runs the build in its own target, in parallel with the terminal frameworks, and the
 app target only installs the finished binaries (--install-only)."""
@@ -76,7 +76,7 @@ def codec(messages, committed):
     return re.search(r"static let version: UInt64 = (\d+)", text).group(1) + "\n"
 
 
-def build(profile, target_dir, helper="helper", replay_tools=False, dry_run=False, capture=None):
+def build(profile, target_dir, helper="helper", dry_run=False, capture=None):
     settings = HELPERS[helper]
     capture = default_capture() if capture is None else capture
     toolchain = ROOT / "build/rust"
@@ -86,7 +86,7 @@ def build(profile, target_dir, helper="helper", replay_tools=False, dry_run=Fals
     target_dir = target_dir.resolve()
     # Helpers without the capture feature keep their own Cargo cache, so switching between Debug and
     # Release reuses each fully optimized link instead of redoing it. Both publish to target_dir/bin.
-    cache = target_dir if capture or replay_tools else target_dir / "without-capture"
+    cache = target_dir if capture else target_dir / "without-capture"
     if not dry_run:
         cache.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, PATH=str(toolchain / "bin") + os.pathsep + os.environ.get("PATH", ""),
@@ -95,7 +95,7 @@ def build(profile, target_dir, helper="helper", replay_tools=False, dry_run=Fals
                DYLD_FALLBACK_LIBRARY_PATH=str(toolchain / "lib") +
                (os.pathsep + os.environ["DYLD_FALLBACK_LIBRARY_PATH"] if os.environ.get("DYLD_FALLBACK_LIBRARY_PATH") else ""))
     crate = ROOT / helper
-    binary = "examples/capture-redact" if replay_tools else "dispatch-" + helper
+    binary = "dispatch-" + helper
     protocol = settings["protocol"]
     cargo = str(toolchain / "bin/cargo")
     with nullcontext() if dry_run else (target_dir / ".build.lock").open("a") as lock:
@@ -105,8 +105,8 @@ def build(profile, target_dir, helper="helper", replay_tools=False, dry_run=Fals
             except BlockingIOError:
                 print("Waiting for another SSH helper build: " + str(target_dir), flush=True)
                 fcntl.flock(lock, fcntl.LOCK_EX)
-        print(("Planning " if dry_run else "Building ") + ("capture-redact" if replay_tools else helper) +
-              " (" + profile + ("" if replay_tools else ", capture" if capture else ", without capture") +
+        print(("Planning " if dry_run else "Building ") + helper +
+              " (" + profile + (", capture" if capture else ", without capture") +
               ", four targets in parallel)", flush=True)
         host = next(line.removeprefix("host: ") for line in
                     subprocess.check_output([str(toolchain / "bin/rustc"), "-vV"], env=env, text=True).splitlines()
@@ -116,9 +116,7 @@ def build(profile, target_dir, helper="helper", replay_tools=False, dry_run=Fals
         # One Cargo scheduler shares host dependencies and the CPU job budget
         # across all four targets. Separate Cargo processes would lock this cache.
         command = [cargo, "build", "--offline", "--frozen", "--profile", profile, "--message-format=json-render-diagnostics"]
-        if replay_tools:
-            command += ["--package", "dispatch-helper-core", "--example", "capture-redact"]
-        elif capture:
+        if capture:
             command += ["--features", "dispatch-" + helper + "/capture"]
         # Global rustflags override target-specific flags. Preserve caller flags
         # for macOS while keeping the existing static Linux linker configuration.
@@ -135,14 +133,14 @@ def build(profile, target_dir, helper="helper", replay_tools=False, dry_run=Fals
         for arch in ("aarch64", "x86_64"):
             target = arch + "-unknown-linux-musl"
             command += ["--target", target, "--config", "target." + target + ".rustflags=" + json.dumps(linux_flags)]
-        output = target_dir / "bin" / "replay" if replay_tools else target_dir / "bin"
+        output = target_dir / "bin"
         if dry_run:
             print(json.dumps(dict(command=command, cwd=str(crate),
                                   setup=["python3", str(ROOT / "scripts/setup-ssh-rust.py"), "--offline"],
                                   outputs=[str(output / name) for name in NAMES]), indent=2))
             return
         messages = run(*command, cwd=crate, env=env, stdout=subprocess.PIPE, text=True).stdout
-        if settings.get("codec") and not replay_tools:
+        if settings.get("codec"):
             protocol = codec(messages, settings["codec"])
         output.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="package-", dir=target_dir) as directory:
@@ -156,8 +154,6 @@ def build(profile, target_dir, helper="helper", replay_tools=False, dry_run=Fals
             for name in NAMES:
                 (stage / name).chmod(0o755)
                 replace_if_changed(stage / name, output / name)
-            if replay_tools:
-                return
             version = hashlib.sha256(b"".join(hashlib.sha256((output / name).read_bytes()).digest() for name in NAMES)).hexdigest()
             write_if_changed(output / "version", version + "\n")
             write_if_changed(output / "protocol-version", protocol)
@@ -187,10 +183,32 @@ def install(target_dir, helper="helper"):
             replace_if_changed(source, directory / name)
 
 
+def verify(target_dir):
+    """The helper just built replays every helper capture in replays/ (the corpus) or the build fails:
+    a capture either replays on the latest helper or is dropped (`capture prune`), never silently."""
+    corpus = ROOT / "replays"
+    if not any(corpus.rglob("*.rpl.bz2")):
+        # The corpus is a git submodule; a checkout without it builds, unchecked.
+        print("warning: no replay corpus in " + str(corpus) + " (git submodule update --init replays); the helper is not checked against it", flush=True)
+        return
+    output = target_dir / ("replay-results-" + str(os.getpid()))
+    helper = target_dir / "bin/darwin-universal"
+    result = subprocess.run([str(helper), "capture", "replay", str(corpus), "--completion", "required", "--output", str(output)],
+                            stdout=subprocess.PIPE, text=True)
+    lines = result.stdout.splitlines()
+    for line in lines[:-1]:
+        if not line.startswith("pass\t"):
+            print("error: corpus capture does not replay on this helper: " + line, flush=True)
+    print(lines[-1] if lines else "corpus replay printed nothing", flush=True)
+    if result.returncode != 0:
+        raise SystemExit("The helper does not replay the corpus (results: " + str(output) + "); fix it, or drop what no longer applies: " + str(helper) + " capture prune " + str(corpus))
+    shutil.rmtree(output)
+
+
 def default_capture():
     # The capture feature is a test instrument (DISPATCH_CAPTURE writes all helper IO to disk unredacted;
-    # DISPATCH_REPLAY runs a trace). Debug builds and direct runs keep it for the test runners;
-    # Xcode Release builds and archives leave it out.
+    # DISPATCH_REPLAY runs a trace; `dispatch-helper capture` is the tool for captures). Debug builds and
+    # direct runs keep it for the test runners; Xcode Release builds and archives leave it out.
     return os.environ.get("CONFIGURATION") != "Release" and os.environ.get("ACTION") != "install"
 
 
@@ -212,16 +230,17 @@ if __name__ == "__main__":
                         help="Default: release for Xcode archives or DISPATCH_HELPER_PROFILE=release, local otherwise")
     parser.add_argument("--target-dir", type=Path, default=ROOT / "build/helper-rust",
                         help="Cargo output directory; override for isolated cold-build measurements")
-    parser.add_argument("--replay-tools", action="store_true",
-                        help="Build capture-redact examples into bin/replay without changing app helper resources")
     parser.add_argument("--dry-run", action="store_true", help="Print build commands and outputs without writing files")
     args = parser.parse_args()
     if args.profile not in ("local", "release"):
         parser.error("DISPATCH_HELPER_PROFILE must be local or release")
-    if args.install_only and (args.replay_tools or args.dry_run):
-        parser.error("--install-only cannot be combined with --replay-tools or --dry-run")
+    if args.install_only and args.dry_run:
+        parser.error("--install-only cannot be combined with --dry-run")
     if not args.install_only:
-        build(args.profile, args.target_dir, replay_tools=args.replay_tools, dry_run=args.dry_run)
-    # Replay tools and dry runs never touch the app's helper resources.
-    if not (args.build_only or args.replay_tools or args.dry_run):
+        build(args.profile, args.target_dir, dry_run=args.dry_run)
+    # Debug builds (the capture feature) check the helper against the corpus right after building it.
+    if args.build_only and default_capture() and not args.dry_run:
+        verify(args.target_dir.resolve())
+    # Dry runs never touch the app's helper resources.
+    if not (args.build_only or args.dry_run):
         install(args.target_dir)

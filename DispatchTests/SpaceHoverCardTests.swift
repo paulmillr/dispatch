@@ -11,7 +11,7 @@ final class SpaceHoverCardTests: XCTestCase {
         let window = NSWindow(contentRect: NSRect(x: screen.midX, y: screen.minY + 12, width: 240, height: 28),
             styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
-        let tab = UUID()
+        let tab = System.uuid()
         let row = ReorderTrackingView(configuration: LocalReorder(item: .tab(tab), edge: .horizontal,
             spaceHover: .init(remote: false, route: "", backend: "terminal", directory: nil, title: "Bottom tab"),
             accepts: { _ in false }, drop: { _, _ in }))
@@ -30,7 +30,7 @@ final class SpaceHoverCardTests: XCTestCase {
 
     func testRouteUsesTheSpacesAccountAndNeverItsLocalSSHLaunchDirectory() {
         let runtime = TerminalRuntime()
-        var space = Space(name: "nightly", directory: NSHomeDirectory() + "/src/nightly")
+        var space = Space(name: "nightly", directory: System.home.path + "/src/nightly")
         let host = HostRecord(id: .authenticated("fixture"), name: "homelab", destinations: ["wrong@other", "ops@10.0.0.12"], order: 0)
         space.hostID = host.id
         space.panes[0].tabs[0].machine = .ssh(SSHShell(destination: "ops@10.0.0.12"))
@@ -55,10 +55,10 @@ final class SpaceHoverCardTests: XCTestCase {
                 XCTAssertFalse(details.summary.contains("/stale/launch/path"))
             }
         }
-        let local = Space(name: "scratch", directory: NSHomeDirectory() + "/src")
+        let local = Space(name: "scratch", directory: System.home.path + "/src")
         XCTAssertEqual(SpaceHoverDetails.make(space: local, host: .local, runtime: runtime).directory, "~/src")
-        let sibling = Space(name: "other", directory: NSHomeDirectory() + "-other/src")
-        XCTAssertEqual(SpaceHoverDetails.make(space: sibling, host: .local, runtime: runtime).directory, NSHomeDirectory() + "-other/src")
+        let sibling = Space(name: "other", directory: System.home.path + "-other/src")
+        XCTAssertEqual(SpaceHoverDetails.make(space: sibling, host: .local, runtime: runtime).directory, System.home.path + "-other/src")
     }
 
     func testSpaceHoverCountsTabsTmuxWindowsAndAgentStates() {
@@ -75,7 +75,7 @@ final class SpaceHoverCardTests: XCTestCase {
         XCTAssertEqual(native.tabCount, "3 tabs")
         XCTAssertTrue(native.summary.hasSuffix(" · 3 tabs · 2 agents (1 unread)"), native.summary)
         // One window split into two panes is one tab.
-        var window = ContainerTab(id: UUID(), node: 1, name: "zsh",
+        var window = ContainerTab(id: System.uuid(), node: 1, name: "zsh",
                                    arrangement: PaneArrangement(tab: TerminalTab(directory: "/tmp")))
         window.arrangement.panes.append(Pane(tabs: [TerminalTab(directory: "/tmp")]))
         var tmux = Space(name: "tmux", directory: "/tmp")
@@ -166,7 +166,7 @@ final class SpaceHoverCardTests: XCTestCase {
         row.configuration.hoverFontSize = 18
         row.hover.refresh(from: row)
         XCTAssertTrue(row.hover.panel === panel)
-        let changed = try await PresentationTestSupport.capture(panel).text()
+        let changed = try await rendered { $0.contains("Remote workspace") }
         XCTAssertTrue(changed.contains("Remote workspace"), changed)
         XCTAssertTrue(changed.contains("ops@example.net"), changed)
         XCTAssertTrue(changed.contains("herdr"), changed)
@@ -187,7 +187,7 @@ final class SpaceHoverCardTests: XCTestCase {
         window.isReleasedWhenClosed = false
         var selections = 0
         let details = SpaceHoverDetails(remote: true, route: "ops@10.0.0.12", backend: "tmux", directory: "~/src/nightly", tabs: 3)
-        let row = ReorderTrackingView(configuration: LocalReorder(item: .space(UUID()), edge: .vertical,
+        let row = ReorderTrackingView(configuration: LocalReorder(item: .space(System.uuid()), edge: .vertical,
             spaceHover: details, select: { selections += 1 }, accepts: { _ in false }, drop: { _, _ in }))
         window.contentView = row
         window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)

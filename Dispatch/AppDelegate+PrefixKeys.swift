@@ -75,10 +75,9 @@ final class HerdrKeyConfig {
 
     /// HERDR_CONFIG_PATH, else $XDG_CONFIG_HOME/herdr, else ~/.config/herdr.
     static var url: URL {
-        let environment = ProcessInfo.processInfo.environment
-        if let path = environment["HERDR_CONFIG_PATH"], !path.isEmpty { return URL(fileURLWithPath: path) }
-        let base = environment["XDG_CONFIG_HOME"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
-            ?? Home.url.appendingPathComponent(".config")
+        if let path = System.environment("HERDR_CONFIG_PATH"), !path.isEmpty { return URL(fileURLWithPath: path) }
+        let base = System.environment("XDG_CONFIG_HOME").flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
+            ?? System.home.appendingPathComponent(".config")
         return base.appendingPathComponent("herdr/config.toml")
     }
 

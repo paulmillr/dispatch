@@ -514,7 +514,9 @@ final class TerminalIntegrationTests: XCTestCase {
         XCTAssertTrue(runtime.views[firstID]?.surface === surface)
 
         workspace.newSpace()
-        try await eventually { first.window == nil }
+        // A second space brings the sidebar back: the first space's panes must return after its slide (wall time), not
+        // be laid out mid-slide, where their split widths would depend on how far it had come.
+        try await eventually { first.window == nil && !sidebarSplit.sidebarHidden && !sidebarSplit.sidebarAnimating }
         // Hidden shells continue receiving output and retain their scrollback.
         send("printf '\\nBACKGROUND_%s\\n' ALIVE\n", to: surface)
         try await eventually { self.text(surface).contains("BACKGROUND_ALIVE") }
@@ -647,7 +649,7 @@ final class TerminalIntegrationTests: XCTestCase {
         for _ in 0..<5 {
             runtime.start(preferences: Preferences())
             XCTAssertNil(runtime.error)
-            let terminal = TerminalView(id: UUID(), directory: NSHomeDirectory(), launchCommand: "/usr/bin/yes", presentation: .standalone)
+            let terminal = TerminalView(id: System.uuid(), directory: System.home.path, launchCommand: "/usr/bin/yes", presentation: .standalone)
             let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 800, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
             window.contentView = terminal

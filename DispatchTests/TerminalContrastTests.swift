@@ -10,7 +10,7 @@ final class TerminalContrastTests: XCTestCase {
         let legacy = try JSONDecoder().decode(Preferences.self, from: Data(
             #"{"theme":"Dracula","lightTheme":"Ayu Light","appearance":"system"}"#.utf8))
         XCTAssertFalse(legacy.improveTextContrast)
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let directory = System.temporary.appendingPathComponent(System.uuid().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let file = directory.appendingPathComponent("settings.json")
         let store = SettingsStore(file: file)
@@ -44,7 +44,7 @@ final class TerminalContrastTests: XCTestCase {
         // Explicit application backgrounds must work independently of the theme.
         // The green row already has enough contrast and should retain its color.
         let script = #"printf '\033[2J\033[H\033[?25l\033[48;2;255;255;255m\033[38;2;238;238;0mPALE YELLOW TEXT\033[0m\r\n\033[48;2;0;0;0m\033[38;2;0;0;51mDARK BLUE TEXT\033[0m\r\n\033[48;2;0;0;0m\033[38;2;0;255;0mREADABLE GREEN TEXT\033[0m\r\n'; sleep 120"#
-        let terminal = TerminalView(id: UUID(), directory: "/tmp",
+        let terminal = TerminalView(id: System.uuid(), directory: "/tmp",
             launchCommand: "/bin/sh -c " + HerdrLaunch.quote(script), presentation: .standalone)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 660, height: 220),
             styleMask: [.titled], backing: .buffered, defer: false)

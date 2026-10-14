@@ -12,7 +12,7 @@ final class PiTranscriptTests: XCTestCase {
     }
 
     func testLiveSnapshotsSharePersistedBlockIDsWithoutChangingActivityOrConfiguration() throws {
-        let session = chat.session(for: UUID())
+        let session = chat.session(for: System.uuid())
         session.model = "fixture/model"; session.effort = "high"; session.busy = true
         let partial = record("live/text", "assistant", "par")
         let final = record("live/text", "assistant", "partial reply", completed: true)
@@ -27,7 +27,7 @@ final class PiTranscriptTests: XCTestCase {
     }
 
     func testCompletedTextAndThinkingSurviveAnOlderLiveSnapshot() throws {
-        let session = chat.session(for: UUID())
+        let session = chat.session(for: System.uuid())
         chat.receiveHelper(.records([record("thinking", "reasoning", "Synthetic"), record("text", "assistant", "Tool")]), session: session)
         chat.receiveHelper(.records([record("thinking", "reasoning", "Synthetic fixture trace"), record("text", "assistant", "Tool result received:")]), session: session)
         XCTAssertEqual(session.turns[0].items.map(\.text), ["Synthetic fixture trace", "Tool result received:"])
@@ -43,7 +43,7 @@ final class PiTranscriptTests: XCTestCase {
     }
 
     func testCompletedToolsRejectStaleLiveArgumentsAndAcceptLatePersistedCalls() throws {
-        let session = chat.session(for: UUID())
+        let session = chat.session(for: System.uuid())
         chat.receiveHelper(.records([record("call", "tool", "printf f")]), session: session)
         let stale = record("call", "tool", "printf fi")
         let done = record("call", "tool", "printf fixture", completed: true, output: "fixture")
@@ -54,7 +54,7 @@ final class PiTranscriptTests: XCTestCase {
         XCTAssertTrue(completed.allSatisfy(\.completed))
         chat.receiveHelper(.records([stale]), session: session)
         XCTAssertEqual(session.turns[0].items, completed)
-        let late = chat.session(for: UUID())
+        let late = chat.session(for: System.uuid())
         chat.receiveHelper(.page(.init(records: [record("call", "tool", "", completed: true, output: "fixture")], earlier: nil, state: nil, snapshot: nil)), session: late)
         chat.receiveHelper(.records([stale]), session: late)
         XCTAssertEqual(late.turns[0].items.map(\.text), [""])
@@ -64,7 +64,7 @@ final class PiTranscriptTests: XCTestCase {
     }
 
     func testFirstTurnLiveUserPrecedesReplyAndMergesWithPersistedHistory() throws {
-        let session = chat.session(for: UUID()); session.active = true
+        let session = chat.session(for: System.uuid()); session.active = true
         session.showOptimisticPrompt("first question")
         let user = record("user", "user", "first question", completed: true)
         chat.receiveHelper(.records([user, record("reply", "assistant", "par")]), session: session)
@@ -96,7 +96,7 @@ final class PiTranscriptTests: XCTestCase {
     private var chat: ChatCoordinator!
     private var root: URL!
     override func setUp() async throws {
-        root = FileManager.default.temporaryDirectory.appendingPathComponent("dispatch-pi-transcript-" + UUID().uuidString)
+        root = System.temporary.appendingPathComponent("dispatch-pi-transcript-" + System.uuid().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
     }
@@ -161,10 +161,10 @@ final class PiTranscriptTests: XCTestCase {
             let unsupported = try await open(try header(version: version) + message("u", ["role": "user", "content": "hidden"]), opens: false)
             XCTAssertTrue(items(unsupported).isEmpty, "version \(version)")
         }
-        let foreign = try await open(try header(session: UUID().uuidString) + message("u", ["role": "user", "content": "hidden"]), opens: false)
+        let foreign = try await open(try header(session: System.uuid().uuidString) + message("u", ["role": "user", "content": "hidden"]), opens: false)
         XCTAssertTrue(items(foreign).isEmpty, "Another session's file is not this conversation")
         let repeated = try await open(try header(version: 2) + message("v", ["role": "user", "content": "visible"])
-            + header(session: UUID().uuidString) + message("u", ["role": "user", "content": "hidden"], parent: "v"))
+            + header(session: System.uuid().uuidString) + message("u", ["role": "user", "content": "hidden"], parent: "v"))
         XCTAssertEqual(items(repeated).map(\.text), ["visible"], "A second, foreign header ends the transcript")
     }
 

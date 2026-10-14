@@ -1,4 +1,5 @@
 import AppKit
+import TermApple
 import XCTest
 @testable import DispatchApp
 
@@ -7,9 +8,29 @@ enum TestSupport {
     /// Observe a fixture effect once; replay restores its result without touching the recorded path or process.
     static func fixture<Input: Encodable, Output: Codable>(_ operation: String, input: Input,
                                                           _ body: () throws -> Output) throws -> Output {
-        try JSONDecoder().decode(Output.self, from: AppReplay.query(kind: "fixture." + operation,
-            input: JSONEncoder().encode(input)) { try JSONEncoder().encode(body()) })
+        try AppReplay.decode(Output.self, AppReplay.query(kind: "fixture." + operation,
+            input: AppReplay.value(input)) { try AppReplay.value(body()) })
     }
+
+    /// A process a test runs to its end live on purpose, in replay too (real shells, scripts, lsof): its status and
+    /// standard output (from the caller's Pipe when it set one). The journal does not see it, so it runs inside
+    /// AppReplay.live: replay's watchdog waits for it instead of calling the app idle. One whose result the recording
+    /// depends on is recorded instead (System.run, TestSupport.fixture). test/xcode.py refuses other process runs here.
+    nonisolated static func live(_ process: Process) throws -> System.Exit {
+        try AppReplay.live {
+            let output = process.standardOutput as? Pipe ?? Pipe()
+            process.standardOutput = output
+            try process.run()
+            output.fileHandleForWriting.closeFile()
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            process.wait()
+            return System.Exit(status: process.terminationStatus, output: data)
+        }
+    }
+
+    /// A process a test starts beside itself (a fixture server, a profiler). One the app's recording depends on starts
+    /// inside a recorded body (TestSupport.fixture, AppReplay.query), so replay starts nothing; else only in capture.
+    nonisolated static func start(_ process: Process) throws { try process.run() }
 
     /// Claude asks whether to trust a workspace it has not seen; a configuration shared by several
     /// fixtures (the test home's) gets each fixture's work directory trusted, its other choices kept.
@@ -17,24 +38,48 @@ enum TestSupport {
         let file = config.appendingPathComponent(".claude.json")
         // A missing profile is the fixture's to create (onboarding done, its work directory trusted); creating
         // it here first would leave Claude at its online welcome tour.
-        guard FileManager.default.fileExists(atPath: file.path) else { return }
-        var profile = (try? JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any]) ?? [:]
+        guard System.exists(file) else { return }
+        var profile = (try? JSONSerialization.jsonObject(with: System.read(file)) as? [String: Any]) ?? [:]
         var projects = profile["projects"] as? [String: Any] ?? [:]
         // Claude names the directory as it resolves it (/private/var for /var on macOS); trust both spellings.
-        let resolved = try XCTUnwrap(work.path.withCString { realpath($0, nil) })
-        defer { free(resolved) }
-        for path in Set([work.path, String(cString: resolved)]) {
+        // Resolving reads the disk: the fixture made that directory, which a replay never does.
+        let resolved = try System.observe("realpath", work.path) { () -> String in
+            guard let pointer = realpath(work.path, nil) else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .ENOENT) }
+            defer { free(pointer) }
+            return String(cString: pointer)
+        }
+        for path in Set([work.path, resolved]) {
             var project = projects[path] as? [String: Any] ?? [:]
             project["hasTrustDialogAccepted"] = true
             projects[path] = project
         }
         profile["projects"] = projects
-        try JSONSerialization.data(withJSONObject: profile).write(to: file)
+        try System.write(JSONSerialization.data(withJSONObject: profile), to: file)
     }
 
-    static let tools = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-        .appendingPathComponent("build/test-tools/bin").path
+    static let tools = System.checkout.appendingPathComponent("build/test-tools/bin").path
     static let path = HerdrLaunch.quote(tools + ":/Users/admin/dispatch-tests/test-tools:/opt/homebrew/bin")
+
+    /// Every case starts from the same process state, so its recording replays whatever ran before it: hosts discovered
+    /// anew, the chat's helper facts (launches, installations) asked anew, and every integration turned off until the
+    /// case turns it on (`integrations`); installed hooks stay on disk between cases, so "not turned off" would mean on.
+    /// The app is active: cases activate it and never undo that, and a fresh process starts inactive, while the app polls
+    /// branches, reports terminal focus and holds attention back only while active. What a case changes beyond that it
+    /// restores (TestState reports it otherwise).
+    static func isolate() {
+        reset(.shared)
+        let chat = TerminalRuntime.shared.chat
+        chat.helperLaunches = nil
+        chat.helperInstalls = [:]
+        chat.disabledIntegrations = launches
+        NSApp.activate(ignoringOtherApps: true)
+        let deadline = Date().addingTimeInterval(2)
+        while !NSApp.isActive, Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.01)) }
+        if !NSApp.isActive { print("Fixture activation: the app did not become active within 2 s") }
+    }
+
+    /// The helper's launch keys (helper/harnesses).
+    static let launches: Set<String> = ["claude", "codex", "nanocodex", "pi"]
 
     /// Independent cases discover their own hosts; cache reuse remains scoped to each case.
     static func reset(_ cache: HostBackendCache) {
@@ -75,6 +120,16 @@ enum TestSupport {
         try await eventually(timeout: .seconds(10), diagnostic: chat.error ?? "no error") {
             keys.allSatisfy { (chat.hookStatus($0) != .off) == enabled }
         }
+        // A case that turns some on turns them off again, in its own journal (case teardowns run before the shared one):
+        // the ones it left on, after the runtime stop it began (if any) ended, so the turn-off never races the helper's
+        // stop (it reached the stopping helper or started a new one, by timing).
+        if enabled {
+            ModalGuard.current?.addTeardownBlock { @MainActor in
+                await TerminalRuntime.shared.shutdown?.value
+                for key in keys where chat.hookStatus(key) != .off { chat.setHelperIntegration(key, enabled: false) }
+                await chat.integrationChanges?.value
+            }
+        }
     }
 
     static func tool(_ name: String) -> String {
@@ -91,6 +146,14 @@ enum TestSupport {
 
     /// Condition checks count toward the deadline instead of extending a fixed
     /// sleep count. Evaluate expensive diagnostics only on failure.
+    /// A test's own pause (the app's timers run meanwhile): capture waits and records where the test went on; replay
+    /// goes on there without waiting.
+    static func pause(for duration: Duration, file: StaticString = #filePath, line: UInt = #line) async throws {
+        if !AppReplay.replaying { try await Task.sleep(for: duration) }
+        await AppReplay.settle()
+        try await System.step(at: URL(fileURLWithPath: "\(file)").lastPathComponent + ":\(line)")
+    }
+
     static func eventually(timeout: Duration = .seconds(5), interval: Duration = .milliseconds(25),
                            file: StaticString = #filePath, line: UInt = #line,
                            diagnostic: @autoclosure () -> String = "Condition timed out",
@@ -119,13 +182,37 @@ enum TestSupport {
             let began = clock.now
             checks += 1
             defer { checking += began.duration(to: clock.now) }
-            return try await condition()
+            guard try await AppReplay.checking({ try await System.$polling.withValue(true) { try await condition() } }) else { return false }
+            // A sidebar slide runs on wall time: what a test reads or does next while one runs (pane widths, the
+            // terminal grids they give) would depend on how far it came, so no wait ends during one.
+            return !NSApp.windows.contains { window in
+                window.isVisible && window.contentView.map { PresentationTestSupport.views(of: TerminalSplitView.self, in: $0).contains(where: \.sidebarAnimating) } == true
+            }
         }
-        while true {
-            if try await check() { return }
-            guard clock.now < deadline else { break }
-            try await clock.sleep(until: min(deadline, clock.now.advanced(by: interval)))
+        // The test continues where the recording saw it continue: replay delivers nothing recorded later first. The
+        // condition holds once the app handled what it already read (capture records input when read, replay delivers
+        // it before the step either way). Capture reads on while the test checks: the step records where the first of
+        // its two checks began and returned, and replay holds what came after it began while the test waits; a check that
+        // keeps failing frees what was read while that check ran (it may have seen it), first one input at a time.
+        var mark = 0, end = 0
+        let held = try await AppReplay.waiting { () async throws -> Bool in
+            while true {
+                mark = AppReplay.mark
+                if try await check() {
+                    end = AppReplay.mark
+                    await AppReplay.settle()
+                    if try await check() { return true }
+                } else { await AppReplay.advance(mark) }
+                if let failure = AppReplay.failed {
+                    // A stalled replay ends the wait before its timeout: the diagnostic still says what the test saw.
+                    print("Fixture wait \(URL(fileURLWithPath: "\(file)").lastPathComponent):\(line) ended by the replay: \(diagnostic())")
+                    throw failure
+                }
+                guard clock.now < deadline else { return false }
+                try await clock.sleep(until: min(deadline, clock.now.advanced(by: interval)))
+            }
         }
+        if held { return try await System.step(at: URL(fileURLWithPath: "\(file)").lastPathComponent + ":\(line)", mark: mark..<end) }
         // XCTest's unwrap error stops the test without adding a second,
         // unrelated "unexpected error" to the failure at the caller's line.
         let satisfied: Bool? = nil
@@ -266,9 +353,9 @@ final class DispatchTestObserver: NSObject, XCTestObservation {
         return (["DispatchTests"] + parts.suffix(2).map(String.init)).joined(separator: "/")
     }
 
-    /// Case boundaries next to the helper captures (DISPATCH_CAPTURE=<dir>/helper-%p.jsonl, inherited
+    /// Case boundaries next to the helper captures (DISPATCH_CAPTURE=<dir>/helper-%p.rpl.bz2, inherited
     /// by every helper), so the captures can be cut per case.
-    private static let cases = ProcessInfo.processInfo.environment["DISPATCH_CAPTURE"].map {
+    private static let cases = System.environment("DISPATCH_CAPTURE").map {
         URL(fileURLWithPath: $0).deletingLastPathComponent().appendingPathComponent("cases.jsonl")
     }
 
@@ -296,21 +383,17 @@ final class DispatchTestObserver: NSObject, XCTestObservation {
     }
 
     /// The case's remote helper captures (SSHBootstrap.captureDirectory on each host it used) move to
-    /// <captures>/remote/<Class.test>/<host>/helper-<pid>-<start ns>.jsonl; per case, so remote clocks never matter.
+    /// <captures>/remote/<Class.test>/<host>/helper-<pid>-<start ns>.rpl.bz2; per case, so remote clocks never matter.
     private static func collectRemote(_ testCase: XCTestCase) {
         defer { SSHLinuxTestProfile.used.removeAll() }
         guard let cases, let directory = SSHBootstrap.captureDirectory else { return }
         let name = identifier(testCase).replacingOccurrences(of: "DispatchTests/", with: "").replacingOccurrences(of: "/", with: ".")
         let target = cases.deletingLastPathComponent().appendingPathComponent("remote").appendingPathComponent(name)
-        let script = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("test/capture.py").path
+        let script = System.checkout.appendingPathComponent("test/capture.py").path
         var sources: [(String, URL, [String])] = []
         // The loopback sshd runs as this account: the remote HOME is the account's, not this test's HOME.
-        if let account = getpwuid(getuid())?.pointee.pw_dir {
-            let source = URL(fileURLWithPath: String(cString: account)).appendingPathComponent(directory)
-            let local = target.appendingPathComponent("127.0.0.1")
-            sources.append((source.path, local, ["/bin/sh", "-c"]))
-        }
+        sources.append((System.machine.home.appendingPathComponent(directory).path, target.appendingPathComponent("127.0.0.1"),
+                        ["/bin/sh", "-c"]))
         for url in SSHLinuxTestProfile.used {
             guard let profile = try? JSONDecoder().decode(SSHLinuxTestProfile.self, from: Data(contentsOf: url)) else { continue }
             let host = target.appendingPathComponent(profile.destination)
@@ -322,43 +405,55 @@ final class DispatchTestObserver: NSObject, XCTestObservation {
             process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
             process.arguments = ["python3", script, "collect", "--directory", source, "--target", target.path, "--"] + command
             do {
-                try process.run()
-                process.waitUntilExit()
-                if process.terminationStatus != 0 { XCTFail("Capture collection failed; unacknowledged sources retained at \(source)") }
+                let exit = try TestSupport.live(process)
+                print(String(decoding: exit.output, as: UTF8.self), terminator: "")
+                if exit.status != 0 { XCTFail("Capture collection failed; unacknowledged sources retained at \(source)") }
             } catch { XCTFail("Capture collection could not start: \(error)") }
         }
     }
 
     func testCaseWillStart(_ testCase: XCTestCase) {
-        if Thread.isMainThread { MainActor.assumeIsolated { TestSupport.reset(.shared) } }
-        else { DispatchQueue.main.sync { MainActor.assumeIsolated { TestSupport.reset(.shared) } } }
+        if Thread.isMainThread { MainActor.assumeIsolated { TestSupport.isolate() } }
+        else { DispatchQueue.main.sync { MainActor.assumeIsolated { TestSupport.isolate() } } }
         ModalGuard.current = testCase
         Self.log(testCase, "start")
-        if let directory = ProcessInfo.processInfo.environment["DISPATCH_APP_CAPTURE"] {
+        Pty.journal = System.pty
+        let journal: URL?
+        do { journal = try Corpus.journal(Self.identifier(testCase)) } catch { XCTFail("\(error)"); journal = nil }
+        if let journal {
+            // The case replays its app journal: no I/O; it fails where the app does something the journal lacks.
+            do { try AppReplay.begin(url: journal, replaying: true) } catch { XCTFail("App replay setup failed: \(error)") }
+        } else if let directory = System.environment("DISPATCH_APP_CAPTURE") {
             let name = Self.identifier(testCase).split(separator: "/").dropFirst().joined(separator: ".")
-            let path = URL(fileURLWithPath: directory).appendingPathComponent(name).appendingPathComponent(UUID().uuidString + ".jsonl")
+            let path = URL(fileURLWithPath: directory).appendingPathComponent(name).appendingPathComponent(System.uuid().uuidString + ".rpl.bz2")
             do {
-                guard !Replay.enabled else { throw HelperFailure(code: "replay", message: "App capture and replay cannot run together") }
                 try AppReplay.begin(url: path, replaying: false)
                 Self.journals[Self.identifier(testCase)] = path.path
             } catch { XCTFail("App journal setup failed: \(error)") }
-            testCase.addTeardownBlock {
-                let cleanup = await MainActor.run { TerminalRuntime.shared.stop() }
-                await cleanup.value
-                for _ in 0..<500 where !AppReplay.settled { try? await Task.sleep(for: .milliseconds(10)) }
-                do { try AppReplay.finish() }
-                catch { XCTFail("App journal incomplete: \(error)") }
-            }
         }
-        if ProcessInfo.processInfo.environment["DISPATCH_TEST_CAPTURE"] == "1" {
-            if Replay.enabled { XCTFail("Whole capture and app replay cannot run together") }
-            else if let previous = ProcessInfo.processInfo.environment["DISPATCH_CAPTURE"] {
+        // Every case ends the same way, replayed, recorded or live: what the app started stops within the case, never
+        // in the next one's journal (a live case before a replayed one left its launch mailbox running).
+        let identifier = Self.identifier(testCase)
+        testCase.addTeardownBlock {
+            // Teardown starts where the recording's did: what the app did before it (its timers' rounds) comes first.
+            await AppReplay.settle(); try? await System.step(at: "teardown")
+            let cleanup = await MainActor.run { TerminalRuntime.shared.stop() }
+            await cleanup.value
+            for _ in 0..<500 where !AppReplay.settled { try? await Task.sleep(for: .milliseconds(10)) }
+            do {
+                let longest = AppReplay.longest
+                try AppReplay.finish()
+                if journal != nil { print("App replay verified: \(identifier) (longest wait \(longest.idle), capture \(longest.gap))") }
+            } catch { XCTFail("App journal incomplete: \(error)") }
+        }
+        if journal == nil, System.environment("DISPATCH_TEST_CAPTURE") == "1" {
+            if let previous = System.environment("DISPATCH_CAPTURE") {
                 let name = Self.identifier(testCase).split(separator: "/").dropFirst().joined(separator: ".")
                 let directory = URL(fileURLWithPath: previous).deletingLastPathComponent()
                 do {
                     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
                                                            attributes: [.posixPermissions: 0o700])
-                    let pattern = directory.appendingPathComponent("\(name)-%p.jsonl").path
+                    let pattern = directory.appendingPathComponent("\(name)-%p.rpl.bz2").path
                     setenv("DISPATCH_CAPTURE", pattern, 1)
                     // Registered first: all case cleanup and shared-state checks finish before the helper exits.
                     testCase.addTeardownBlock {
@@ -368,7 +463,7 @@ final class DispatchTestObserver: NSObject, XCTestObservation {
                     }
                 } catch { XCTFail("Whole capture setup failed: \(error)") }
             } else { XCTFail("Whole capture requires DISPATCH_CAPTURE") }
-        } else { Replay.start(testCase, name: Self.identifier(testCase)) }
+        }
         let state = Thread.isMainThread ? MainActor.assumeIsolated { TestState.shared() }
             : DispatchQueue.main.sync { TestState.shared() }
         // Teardown blocks run in reverse registration order: test-owned cleanup goes first.
@@ -380,85 +475,51 @@ final class DispatchTestObserver: NSObject, XCTestObservation {
     }
 }
 
-/// Replay runs (DISPATCH_TEST_REPLAY=1, TEST_RUNNER_DISPATCH_TEST_REPLAY for xcodebuild): each case's helper is
-/// scripts/replay-helper.py playing DispatchTests/Replay/<Class.test>.json, a real exchange of that case
-/// (scripts/capture-helper-wire.py). The case fails on a request the recording lacks or a recorded request
-/// the app never made; its own assertions run as in the end-to-end run. Missing recordings fail closed.
-enum Replay {
-    static let enabled = ProcessInfo.processInfo.environment["DISPATCH_TEST_REPLAY"] == "1"
-    static let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+/// The replay corpus, `replays/<TestFile>/<test>/<key>.rpl.bz2` (DISPATCH_REPLAYS: another root): a test with an app
+/// journal there replays it, one without runs live (recorded when the runner captures). DISPATCH_LIVE=1 runs every test
+/// live; DISPATCH_REPLAY_REQUIRED=1 fails a test without one. A journal of another protocol version is a wrong
+/// capture: the test fails (`capture prune` drops it).
+enum Corpus {
+    static let sources = System.checkout.appendingPathComponent("DispatchTests")
+    static let root = System.environment("DISPATCH_REPLAYS").map { URL(fileURLWithPath: $0) }
+        ?? System.checkout.appendingPathComponent("replays")
+    /// The file declaring each class: `class Name:` in the test sources.
+    static let files: [String: String] = {
+        var files: [String: String] = [:]
+        let urls = FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil)?.compactMap { $0 as? URL } ?? []
+        for url in urls where url.pathExtension == "swift" {
+            for line in (try? String(contentsOf: url, encoding: .utf8))?.split(separator: "\n") ?? [] {
+                guard let range = line.range(of: "class "), range.lowerBound == line.startIndex || line[line.index(before: range.lowerBound)] == " " else { continue }
+                let name = line[range.upperBound...].prefix { $0.isLetter || $0.isNumber || $0 == "_" }
+                if line[range.upperBound...].dropFirst(name.count).drop(while: { $0 == " " }).first == ":" {
+                    files[String(name)] = url.deletingPathExtension().lastPathComponent
+                }
+            }
+        }
+        return files
+    }()
 
-    static func start(_ testCase: XCTestCase, name: String) {
-        guard enabled else { return }
-        if ProcessInfo.processInfo.environment["DISPATCH_APP_REPLAY"] != nil {
-            do {
-                guard let index = ProcessInfo.processInfo.environment["DISPATCH_APP_REPLAY_INDEX"],
-                      let source = try JSONDecoder().decode([String: String].self, from: Data(contentsOf: URL(fileURLWithPath: index)))[name] else {
-                    throw HelperFailure(code: "replay", message: "No app recording selected for \(name); live execution is disabled")
-                }
-                try AppReplay.begin(url: URL(fileURLWithPath: source), replaying: true)
-                try AppReplay.listen { event in
-                    let receive: @MainActor @Sendable () -> Void = {
-                        do {
-                            guard try TerminalRuntime.shared.hosts.replay(event) else {
-                                throw HelperFailure(code: "replay", message: "Unknown app journal input: " + event.kind)
-                            }
-                        } catch { AppReplay.fail(error) }
-                    }
-                    if Thread.isMainThread { MainActor.assumeIsolated { receive() } }
-                    else { DispatchQueue.main.sync { MainActor.assumeIsolated { receive() } } }
-                }
-            } catch { XCTFail("App replay setup failed: \(error)") }
-            testCase.addTeardownBlock {
-                let cleanup = await MainActor.run { TerminalRuntime.shared.stop() }
-                await cleanup.value
-                for _ in 0..<500 where !AppReplay.settled { try? await Task.sleep(for: .milliseconds(10)) }
-                do {
-                    try AppReplay.finish()
-                    print("App replay verified: \(name)")
-                } catch { XCTFail("App replay incomplete: \(error)") }
-            }
-            return
-        }
-        let directory = ProcessInfo.processInfo.environment["DISPATCH_REPLAY_DIRECTORY"]
-            .map { URL(fileURLWithPath: $0) } ?? root.appendingPathComponent("Replay")
-        let fixture = directory.appendingPathComponent("\(name.split(separator: "/").dropFirst().joined(separator: ".")).json")
-        let environment = ["DISPATCH_HELPER_EXECUTABLE", "DISPATCH_REPLAY_FIXTURE", "DISPATCH_REPLAY_REPORT"].map {
-            ($0, ProcessInfo.processInfo.environment[$0])
-        }
-        let report = directory.appendingPathComponent("replay-\(UUID().uuidString).json")
-        // HelperApp starts the helper on first use, from DISPATCH_HELPER_EXECUTABLE (its test override).
-        setenv("DISPATCH_HELPER_EXECUTABLE", root.deletingLastPathComponent().appendingPathComponent("scripts/replay-helper.py").path, 1)
-        setenv("DISPATCH_REPLAY_FIXTURE", fixture.path, 1)
-        setenv("DISPATCH_REPLAY_REPORT", report.path, 1)
-        if !FileManager.default.fileExists(atPath: fixture.path) {
-            XCTFail("Replay: missing recording \(fixture.path); live helper is disabled")
-        }
-        testCase.addTeardownBlock {
-            await HelperApp.shared.stop()
-            defer {
-                for (name, value) in environment {
-                    if let value { setenv(name, value, 1) }
-                    else { unsetenv(name) }
-                }
-            }
-            // The player writes it when its stdin ends (stop closes it); up to 5 s.
-            for _ in 0..<500 where !FileManager.default.fileExists(atPath: report.path) {
-                try? await Task.sleep(for: .milliseconds(10))
-            }
-            guard let data = try? Data(contentsOf: report),
-                  let result = try? JSONSerialization.jsonObject(with: data) as? [String: [Any]] else {
-                return XCTFail("Replay: no report from the player for \(fixture.lastPathComponent)")
-            }
-            for (kind, values) in result where !values.isEmpty {
-                XCTFail("Replay \(kind): " + String(decoding: (try? JSONSerialization.data(withJSONObject: values, options: [.prettyPrinted, .sortedKeys])) ?? Data(), as: UTF8.self))
-            }
-            let fields = Set(["unexpected", "missing", "undelivered", "errors"])
-            XCTAssertEqual(Set(result.keys), fields, "Replay: incomplete player report at \(report.path)")
-            if Set(result.keys) == fields && result.values.allSatisfy(\.isEmpty) {
-                print("Replay verified: \(fixture.lastPathComponent); report=\(report.path)")
+    /// The test's journal (`DispatchTests/Class/test`), nil: it runs live. The corpus holds one per test (variants
+    /// come with deduplication).
+    static func journal(_ name: String) throws -> URL? {
+        let parts = name.split(separator: "/").map(String.init)
+        guard System.environment("DISPATCH_LIVE") != "1", parts.count == 3,
+              let file = files[parts[1]] else { return nil }
+        let directory = root.appendingPathComponent(file).appendingPathComponent(parts[2])
+        let urls = ((try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.lastPathComponent.hasSuffix(".rpl.bz2") }.sorted { $0.path < $1.path }
+        for url in urls {
+            switch try AppReplay.journal(url) {
+            case true?: return url
+            case false?: throw HelperFailure(code: "replay", message: url.path + " was recorded by another protocol version: capture prune")
+            case nil: continue
             }
         }
+        // Replaying a run (the runner's --replay): a test without its journal cannot run live.
+        if System.environment("DISPATCH_REPLAY_REQUIRED") == "1" {
+            throw HelperFailure(code: "replay", message: "No journal for \(name) in \(directory.path)")
+        }
+        return nil
     }
 }
 
@@ -556,7 +617,7 @@ extension ChatCoordinator {
 
     /// An existing transcript file opened as an archived conversation.
     func archived(_ url: URL, agent: String, session id: String, opens: Bool = true, timeout: Duration = .seconds(10)) async throws -> ChatSession {
-        let session = session(for: UUID())
+        let session = session(for: System.uuid())
         session.agentID = agent; session.sessionID = id; session.transcriptPath = url.path
         start()
         try await TestSupport.eventually(timeout: timeout, diagnostic: "archived \(agent) transcript: \(session.status ?? "loading")") {
@@ -665,7 +726,7 @@ extension Space {
         self.backend = backend; node = 1_000
         containers = tabs.enumerated().map { index, original in
             var tab = original; tab.terminal = UInt64(index + 1)
-            return ContainerTab(id: UUID(), node: UInt64(index + 1), name: name ?? "\(index)", arrangement: PaneArrangement(tab: tab))
+            return ContainerTab(id: System.uuid(), node: UInt64(index + 1), name: name ?? "\(index)", arrangement: PaneArrangement(tab: tab))
         }
         selectedContainer = containers[selected].id
     }

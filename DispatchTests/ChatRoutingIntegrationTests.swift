@@ -14,7 +14,7 @@ final class ChatRoutingIntegrationTests: XCTestCase {
         let controller = AppDelegate()
         runtime.chat = ChatCoordinator(enabled: true)
         let workspace = controller.workspace
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dispatch-codex-test-" + UUID().uuidString)
+        let directory = System.temporary.appendingPathComponent("dispatch-codex-test-" + System.uuid().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { CodexTestSupport.removeFixture(directory) }
         runtime.workspace = workspace; runtime.start(preferences: Preferences())
@@ -80,6 +80,6 @@ final class ChatRoutingIntegrationTests: XCTestCase {
 private extension TerminalView {
     func drainCodexForTest() {
         guard surface != nil else { return }
-        if let process = CodexTestSupport.process(self) { kill(process.pid, SIGTERM) }
+        if let process = CodexTestSupport.process(self) { System.signal(process.pid, SIGTERM) }
     }
 }

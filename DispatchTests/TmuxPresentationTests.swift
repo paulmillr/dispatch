@@ -8,7 +8,7 @@ final class TmuxPresentationTests: XCTestCase {
     func testSSHReattachRemapsPresentationWindowsWithoutCrossingAccountOrServer() throws {
         // Reconciliation uses helper-issued window identities; account/server identity admission
         // is the helper's contract, before a window reaches this common presentation consumer.
-        let windows = (0..<4).map { _ in UUID() }
+        let windows = (0..<4).map { _ in System.uuid() }
         let original = TabPresentation(windows: Array(windows.prefix(3)), selected: windows[1], preset: .columns)
         var restored = original
         restored.reconcile(windows, near: windows[0])
@@ -21,7 +21,7 @@ final class TmuxPresentationTests: XCTestCase {
         XCTAssertEqual(removed.preset, .single)
         XCTAssertEqual(removed.layout.paneIDs, [original.groups[0].id])
         var replaced = original
-        replaced.reconcile([UUID(), UUID()], near: nil)
+        replaced.reconcile([System.uuid(), System.uuid()], near: nil)
         XCTAssertEqual(replaced.groups, [])
         XCTAssertEqual(replaced.orderedWindows, [])
     }
@@ -284,6 +284,10 @@ final class TmuxPresentationTests: XCTestCase {
         }
         func ready() async throws {
             try await app.ready()
+            // The sidebar slides in on wall time; the first screen is sized for where it ends.
+            try await app.wait {
+                app.window.contentView.map { PresentationTestSupport.views(of: TerminalSplitView.self, in: $0).allSatisfy { !$0.sidebarAnimating } } ?? true
+            }
             try checkSize()
         }
         try await app.wait { app.workspace.activeTab.flatMap { app.target($0) } != nil && app.runtime.views[app.workspace.activeTab!.id]?.surface != nil }

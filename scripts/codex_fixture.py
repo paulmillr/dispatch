@@ -68,6 +68,7 @@ trust_level = "trusted"
 [features]
 shell_snapshot = false
 shell_snapshot_v2 = false
+worktrees = false
 
 [analytics]
 enabled = false

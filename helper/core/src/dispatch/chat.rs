@@ -80,7 +80,7 @@ impl Encode for Chat {
 
 impl Request<'_> {
     /// Protocol result: Observed
-    pub(super) fn state(&mut self, p: Value<'_>) -> Result<(), Error> {
+    pub(super) fn state(&mut self, p: &Data<'_>) -> Result<(), Error> {
         let (_, mux, harness, binding) = self.agent(p)?;
         let terminal = number(p, "terminal")?;
         let (_, parent) = self.helper.binding(terminal, None)?;
@@ -108,7 +108,7 @@ impl Request<'_> {
     }
 
     /// Protocol result: Page for {terminal, session?, earlier?} (a live binding); Archive for {transcript} alone (with terminal: invalid_input)
-    pub(super) fn page(&mut self, p: Value<'_>) -> Result<(), Error> {
+    pub(super) fn page(&mut self, p: &Data<'_>) -> Result<(), Error> {
         if let Some((harness, source)) = self.transcript(p)? {
             let done = self.done(None);
             harness.borrow_mut().read(self.io, &source, done);
@@ -118,7 +118,7 @@ impl Request<'_> {
             harness.borrow_mut().history(
                 self.io,
                 &binding,
-                p.get("earlier").and_then(Value::string),
+                p.get("earlier").and_then(Data::string),
                 done,
             );
         }
@@ -126,14 +126,14 @@ impl Request<'_> {
     }
     /// Protocol result: null
     /// Protocol producers: Harness.identify, Multiplexer.keys
-    pub(super) fn keys(&mut self, p: Value<'_>) -> Result<(), Error> {
+    pub(super) fn keys(&mut self, p: &Data<'_>) -> Result<(), Error> {
         let captured = p.get("binding").ok_or_else(|| invalid("binding"))?;
         let session = text(captured, "session")?;
         let terminal = number(p, "terminal")?;
         let (index, binding) = self.helper.binding(terminal, Some(session))?;
         let start = captured
             .get("start")
-            .and_then(Value::array)
+            .and_then(Data::array)
             .ok_or_else(|| invalid("binding.start"))?
             .map(|v| v.unsigned().ok_or_else(|| invalid("binding.start")))
             .collect::<Result<Vec<_>, _>>()?;
@@ -179,7 +179,7 @@ impl Request<'_> {
     /// Protocol result: Chat, published as chat.history
     /// A {transcript} selection: file-only, it grants no send, menu, identity or terminal
     /// authority.
-    fn transcript(&self, p: Value<'_>) -> Result<Option<(Shared<dyn Harness>, Transcript)>, Error> {
+    fn transcript(&self, p: &Data<'_>) -> Result<Option<(Shared<dyn Harness>, Transcript)>, Error> {
         let Some(source) = p.get("transcript") else {
             return Ok(None);
         };
@@ -200,7 +200,7 @@ impl Request<'_> {
             session: text(source, "session")?.into(),
             earlier: source
                 .get("earlier")
-                .and_then(Value::string)
+                .and_then(Data::string)
                 .map(str::to_owned),
         };
         Ok(Some((harness, source)))
@@ -208,7 +208,7 @@ impl Request<'_> {
 
     /// Protocol result: Chat for {terminal, session?}; for {transcript}, chat.archive
     /// notifications (the first read, then each later one with records or a new State).
-    pub(super) fn chat(&mut self, p: Value<'_>) -> Result<(), Error> {
+    pub(super) fn chat(&mut self, p: &Data<'_>) -> Result<(), Error> {
         if let Some((harness, source)) = self.transcript(p)? {
             let watch = self.io.watch(&source.path, false).map_err(|e| Error {
                 code: "io",
@@ -330,7 +330,7 @@ impl Request<'_> {
 /// Read a followed archive from its cursor: the first and each later read with records or a
 /// changed State are chat.archive notifications; an error ends the request. Changes during a read cause one more.
 pub(crate) fn follow(io: &mut dyn Io, archives: &Archives, replies: &Replies, key: (i32, u64)) {
-    let (harness, source) = {
+    let (harness, source, first) = {
         let mut archives = archives.borrow_mut();
         let Some(followed) = archives.get_mut(&key) else {
             return;
@@ -340,9 +340,8 @@ pub(crate) fn follow(io: &mut dyn Io, archives: &Archives, replies: &Replies, ke
             return;
         }
         followed.reading = true;
-        (followed.harness.clone(), followed.source.clone())
+        (followed.harness.clone(), followed.source.clone(), followed.state.is_none())
     };
-    let first = source.later.is_none();
     let (archives, replies) = (archives.clone(), replies.clone());
     // Every read is a notification while the watch lives; only an error responds (ends it).
     let reply = super::reply(replies.clone(), key.0, key.1, Some("chat.archive"));
@@ -359,7 +358,7 @@ pub(crate) fn follow(io: &mut dyn Io, archives: &Archives, replies: &Replies, ke
                 followed.reading = false;
                 match &result {
                     Ok(archive) => {
-                        followed.source.later = Some(archive.snapshot.later.clone());
+                        followed.source.later = archive.snapshot.later.clone();
                         changed = followed.state.as_ref() != Some(&archive.state);
                         followed.state = Some(archive.state.clone());
                     }

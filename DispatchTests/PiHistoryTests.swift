@@ -8,7 +8,7 @@ import XCTest
 @MainActor
 final class PiHistoryTests: XCTestCase {
     func testExplicitLeafAppendIsIncrementalAndBranchSwitchInvalidatesOlderPages() throws {
-        let session = chat.session(for: UUID())
+        let session = chat.session(for: System.uuid())
         func records(_ index: Int) -> [HelperChat.Record] {
             ["user", "assistant"].map { kind in
                 .init(id: (kind == "user" ? "u" : "a") + String(index), turn: "u\(index)", kind: kind,
@@ -80,13 +80,13 @@ final class PiHistoryTests: XCTestCase {
     /// A transcript file that is not there is an error for an archived chat (waiting for pi's first save
     /// belongs to the live chat, moved with the leaf cases).
     func testInitialMissingFileWaitsForPersistenceButLaterLossRemainsAnError() async throws {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("dispatch-pi-history-\(UUID()).jsonl")
+        let url = System.temporary.appendingPathComponent("dispatch-pi-history-\(System.uuid()).jsonl")
         let missing = try await chat.archived(url, agent: "pi", session: sessionID, opens: false)
         XCTAssertTrue(missing.turns.isEmpty)
     }
 
     func testWrongSessionMissingParentsAndReplacementAreRejectedOrReloaded() async throws {
-        let wrong = try await open(try setup() + turn(0), session: UUID().uuidString, opens: false)
+        let wrong = try await open(try setup() + turn(0), session: System.uuid().uuidString, opens: false)
         XCTAssertTrue(wrong.turns.isEmpty)
         let orphan = try await open(try setup() + user("orphan", parent: "absent", text: "must not substitute nearby entries"), opens: false)
         XCTAssertTrue(orphan.turns.isEmpty)
@@ -98,7 +98,7 @@ final class PiHistoryTests: XCTestCase {
     private lazy var chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
 
     private func open(_ data: Data, session: String? = nil, opens: Bool = true) async throws -> ChatSession {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("dispatch-pi-history-\(UUID()).jsonl")
+        let url = System.temporary.appendingPathComponent("dispatch-pi-history-\(System.uuid()).jsonl")
         try data.write(to: url)
         addTeardownBlock { try? FileManager.default.removeItem(at: url) }
         return try await chat.archived(url, agent: "pi", session: session ?? sessionID, opens: opens)

@@ -7,8 +7,16 @@ import Foundation
 /// its own connection; a subscription keeps a separate, buffered connection.
 final class HerdrSocket {
     let fd: Int32
+    private let path: String
     private var buffer = HerdrLineBuffer()
+    /// The server is another process: whether it accepts, and its answers, are observed through the app journal.
     init(path: String) throws {
+        self.path = path
+        var live: Int32 = -1
+        _ = try System.observe("herdr.connect", path) { live = try Self.open(path); return true }
+        fd = live
+    }
+    private static func open(_ path: String) throws -> Int32 {
         let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
         guard descriptor >= 0 else { throw HerdrFailure("Could not open herdr socket.") }
         var connected = false
@@ -33,9 +41,10 @@ final class HerdrSocket {
         guard result == 0 else { throw HerdrFailure("Could not connect to herdr at \(path): \(String(cString: strerror(errno)))") }
         var uid: uid_t = 0, gid: gid_t = 0
         guard getpeereid(descriptor, &uid, &gid) == 0, uid == getuid() else { throw HerdrFailure("Herdr socket belongs to another user.") }
-        fd = descriptor; connected = true
+        connected = true
+        return descriptor
     }
-    deinit { close(fd) }
+    deinit { if fd >= 0 { close(fd) } }
 
     func write(_ data: Data) throws {
         try data.withUnsafeBytes { bytes in
@@ -64,11 +73,14 @@ final class HerdrSocket {
             try buffer.append(bytes.prefix(count))
         }
     }
+    /// A test's requests to the server are its actions, in order (reads while it polls: see System.polling).
     @discardableResult
     func request(_ method: String, params: Data = Data("{}".utf8)) throws -> Data {
-        let rpc = HerdrRPC()
-        try write(rpc.encode(method, params: params))
-        return try rpc.decode(line())
+        try System.act("herdr.request", [path, method, String(decoding: params, as: UTF8.self)]) {
+            let rpc = HerdrRPC()
+            try write(rpc.encode(method, params: params))
+            return try rpc.decode(line())
+        }
     }
 }
 
@@ -122,7 +134,7 @@ struct HerdrLineBuffer {
 /// Wire behavior shared by local sockets and SSH streams. Transports retain
 /// their own I/O, cancellation, and connection lifetime rules.
 struct HerdrRPC {
-    let id = UUID().uuidString
+    let id = System.uuid().uuidString
 
     func encode(_ method: String, params: Data) throws -> Data {
         let object: [String: Any] = ["id": id, "method": method,

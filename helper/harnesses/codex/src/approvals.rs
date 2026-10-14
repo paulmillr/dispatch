@@ -109,13 +109,13 @@ impl Approvals {
     }
 
     fn walk(&mut self, io: &mut dyn Io, check: Check) {
-        let input = json::write(&Data::Object(vec![(
+        let input = dispatch_helper_core::wire::body::encode_plain(&Data::Object(vec![(
             "pid",
             Data::Unsigned(check.pid.into()),
         )]));
-        let job = input.map(|input| Job::Native {
+        let job = input.map(|value| Job::Native {
             name: "process",
-            input,
+            value,
         });
         match job.map(|job| io.submit(job)) {
             Ok(Ok(work)) => {
@@ -127,19 +127,18 @@ impl Approvals {
 
     /// One ancestry step: the owner, the next parent, or None when the sender is unrelated.
     fn step(check: &mut Check, result: &Result<Output, std::io::Error>) -> Option<Option<Binding>> {
-        let Ok(Output::Bytes(bytes)) = result else {
+        let Ok(Output::Value(bytes)) = result else {
             return None;
         };
-        let document = Json::parse(bytes).ok()?;
-        let root = document.root();
-        let pid = root.get("pid").and_then(Value::unsigned)?;
+        let root = dispatch_helper_core::wire::body::decode_plain(bytes).ok()?;
+        let pid = root.get("pid").and_then(Data::unsigned)?;
         if pid != u64::from(check.pid) || !check.seen.insert(check.pid) {
             return None;
         }
         let start: Vec<u64> = root
             .get("start")?
             .array()?
-            .filter_map(Value::unsigned)
+            .filter_map(Data::unsigned)
             .collect();
         if let Some(owner) = check.owners.iter().find(|owner| {
             owner.pid == check.pid && owner.start.is_none_or(|owned| owned[..] == start[..])
@@ -147,8 +146,8 @@ impl Approvals {
             return Some(Some(owner.binding.clone()));
         }
         // Never pass a different Codex process to reach an older ancestor.
-        let executable = root.get("executable").and_then(Value::string).unwrap_or("");
-        if Path::new(executable)
+        let executable = root.get("executable").and_then(Data::path).unwrap_or(Path::new(""));
+        if executable
             .file_name()
             .is_some_and(|name| name == "codex")
         {
@@ -156,7 +155,7 @@ impl Approvals {
         }
         check.pid = root
             .get("parent")
-            .and_then(Value::unsigned)
+            .and_then(Data::unsigned)
             .and_then(|parent| u32::try_from(parent).ok())
             .filter(|parent| *parent != 0)?;
         Some(None)

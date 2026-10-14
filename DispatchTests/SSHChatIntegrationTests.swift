@@ -39,12 +39,11 @@ final class SSHChatIntegrationTests: XCTestCase {
                 "display_name": "Dispatch fixture", "supported_reasoning_levels": [["effort": "medium", "description": "Fixture"]],
                 "shell_type": "unified_exec", "visibility": "list", "supported_in_api": true, "priority": 1,
                 "support_verbosity": false, "truncation_policy": ["mode": "bytes", "limit": 10000], "experimental_supported_tools": ["send_user_message_async"]]
-            try JSONSerialization.data(withJSONObject: ["models": [model]]).write(to: catalog)
+            try System.write(JSONSerialization.data(withJSONObject: ["models": [model]]), to: catalog)
             let config = fixture.state.appendingPathComponent("codex-home/config.toml")
             let encoder = JSONEncoder(); encoder.outputFormatting = .withoutEscapingSlashes
             let setting = String(decoding: try encoder.encode(catalog.path), as: UTF8.self)
-            try ("model_catalog_json = " + setting + "\n" + String(contentsOf: config, encoding: .utf8))
-                .write(to: config, atomically: true, encoding: .utf8)
+            try System.write(Data(("model_catalog_json = " + setting + "\n" + String(decoding: System.read(config), as: UTF8.self)).utf8), to: config)
         }
         let runtime = TerminalRuntime.shared, previous = runtime.chat
         runtime.chat = ChatCoordinator(enabled: true)
@@ -83,10 +82,10 @@ final class SSHChatIntegrationTests: XCTestCase {
                     : AgentModelMenu.containsModel(screen, slug: "dispatch-fixture", name: "Dispatch fixture")
             }
             if grant.hooks {
-                let configuration = try String(contentsOf: fixture.state.appendingPathComponent("codex-home/config.toml"), encoding: .utf8)
+                let configuration = String(decoding: try System.read(fixture.state.appendingPathComponent("codex-home/config.toml")), as: UTF8.self)
                 XCTAssertEqual(configuration.components(separatedBy: "trusted_hash").count - 1, 0,
                                "Installation must leave native hook review to the user")
-                XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.state.appendingPathComponent("codex-home/hooks.json").path))
+                XCTAssertTrue(System.exists(fixture.state.appendingPathComponent("codex-home/hooks.json")))
             } else {
                 let path = fixture.state.appendingPathComponent("codex-home/hooks.json").path
                 let exists = try TestSupport.fixture("file.exists", input: path) {
@@ -256,7 +255,7 @@ final class SSHChatIntegrationTests: XCTestCase {
         let work = fixture.state.appendingPathComponent("work")
         let path = work.appendingPathComponent("preview.txt")
         let source = try TestSupport.fixture("file.write", input: path) {
-            let source = "Remote source · \(UUID().uuidString)"
+            let source = "Remote source · \(System.uuid().uuidString)"
             try source.write(to: path, atomically: true, encoding: .utf8)
             return source
         }

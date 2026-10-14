@@ -5,7 +5,7 @@ import XCTest
 @MainActor
 final class PlanOneTests: XCTestCase {
     func testSourcePreviewUsesBoundedTypedTextOperation() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = System.temporary.appendingPathComponent(System.uuid().uuidString)
         let child = root.appendingPathComponent("child")
         try FileManager.default.createDirectory(at: child, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -35,7 +35,7 @@ final class PlanOneTests: XCTestCase {
     }
 
     func testSourcePreviewResolvesRelativeWorkdirAndRejectsOversizedAndBinaryFiles() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = System.temporary.appendingPathComponent(System.uuid().uuidString)
         let child = root.appendingPathComponent("child")
         try FileManager.default.createDirectory(at: child, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -148,7 +148,7 @@ final class PlanOneTests: XCTestCase {
         XCTAssertEqual(workspace.activeTab?.id, moved)
     }
     func testChatAvailabilityFollowsAttachmentAndSetting() {
-        let chat = ChatCoordinator(enabled: true); let session = chat.session(for: UUID())
+        let chat = ChatCoordinator(enabled: true); let session = chat.session(for: System.uuid())
         XCTAssertFalse(chat.canEnterChat(session))
         XCTAssertTrue(chat.chatAvailabilityHint(session).contains("Start"))
         chat.toggle(session.id); XCTAssertFalse(session.showChat)
@@ -170,7 +170,7 @@ final class PlanOneTests: XCTestCase {
         XCTAssertTrue(deletion.first?.diff.contains("-old") == true)
         let shellPatch = ToolDocument.parse(ChatItem(id: "shell", kind: .tool, text: "apply_patch <<'PATCH'\n" + patch + "\nPATCH\nprintf unrelated"))
         XCTAssertFalse(shellPatch.last?.diff.contains("unrelated") == true)
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let directory = System.temporary.appendingPathComponent(System.uuid().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         try "new\n".write(to: directory.appendingPathComponent("a.swift"), atomically: true, encoding: .utf8)
@@ -191,7 +191,7 @@ final class PlanOneTests: XCTestCase {
         XCTAssertFalse(sample.processes.isEmpty)
         XCTAssertTrue((0...100).contains(sample.memoryPercent))
         // Rows name the executable and count bytes: this test's own process is one of them.
-        let own = try XCTUnwrap(sample.processes.first { $0.id == Int(getpid()) })
+        let own = try XCTUnwrap(sample.processes.first { $0.id == Int(System.pid) })
         XCTAssertEqual(own.name, ProcessInfo.processInfo.processName)
         XCTAssertGreaterThan(own.memory, 0)
     }
@@ -214,7 +214,7 @@ final class PlanOneTests: XCTestCase {
         XCTAssertEqual(tab.displayLabel(automatic: true, conversation: "Fix startup"), "Server")
 
         // tmux windows follow the conversation over tmux's automatic name, but not over a hand-given one.
-        var window = ContainerTab(id: UUID(), node: 1, name: "claude", arrangement: PaneArrangement(tab: tab))
+        var window = ContainerTab(id: System.uuid(), node: 1, name: "claude", arrangement: PaneArrangement(tab: tab))
         XCTAssertEqual(window.displayLabel(automatic: true, conversation: "Fix startup"), "Fix startup")
         XCTAssertEqual(window.displayLabel(automatic: true, conversation: nil), "claude")
         XCTAssertEqual(window.displayLabel(automatic: false, conversation: "Fix startup"), "claude")
@@ -232,7 +232,7 @@ final class PlanOneTests: XCTestCase {
                                     ("FiraCode-Regular", "ttf", "Fira Code"),
                                     ("FiraCode-Bold", "ttf", "Fira Code"),
                                     ("0xProto-Regular", "otf", "0xProto")] {
-            XCTAssertNotNil(Bundle.main.url(forResource: name, withExtension: ext), name)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: System.resources.appendingPathComponent(name + "." + ext).path), name)
             let font = NSFontManager.shared.font(withFamily: family, traits: [], weight: 5, size: 12)
             XCTAssertEqual(font?.familyName, family)
         }

@@ -12,7 +12,7 @@ struct ChatTranscriptView: View {
     /// stays faint behind the glass but never shows through the strip's bare controls.
     var fadeTopInset: CGFloat = 0
     @State private var openedAt = ProcessInfo.processInfo.systemUptime
-    @State private var viewportGeneration = UUID()
+    @State private var viewportGeneration = System.uuid()
     private struct SearchRequest: Equatable {
         let query: String
         let revision: Int
@@ -279,7 +279,7 @@ struct ChatTranscriptView: View {
             let following = session.atBottom
             let target = anchor.flatMap { saved in session.visibleTranscriptRows.contains(where: { $0.id == saved.id }) ? saved : nil }
                 ?? session.visibleTranscriptRows.first.map { ChatScrollPosition.Anchor(id: $0.id, offset: 0) }
-            if rebuild { openedAt = ProcessInfo.processInfo.systemUptime; viewportGeneration = UUID() }
+            if rebuild { openedAt = ProcessInfo.processInfo.systemUptime; viewportGeneration = System.uuid() }
             let generation = viewportGeneration
             DispatchQueue.main.async {
                 guard viewportGeneration == generation, session.showChat,
@@ -343,7 +343,7 @@ struct ChatTranscriptView: View {
     }
 
     private var directory: String {
-        TerminalRuntime.shared.workspace?.directory(forSurface: session.id) ?? NSHomeDirectory()
+        TerminalRuntime.shared.workspace?.directory(forSurface: session.id) ?? System.home.path
     }
 }
 

@@ -10,6 +10,8 @@ use std::marker::PhantomData;
 pub(super) enum Item<'a, 'b> {
     Data(&'b Data<'a>),
     Value(Value<'a>),
+    /// One element of a written Data::Bytes array.
+    Byte(u8),
 }
 
 /// Tag bit for string bytes that are not inside a padded document (caller strings).
@@ -22,10 +24,10 @@ pub(super) fn write(root: Item<'_, '_>, format: Format) -> Result<Vec<u8>, Error
         (Item::Value(value), Format::Compact) => emit(value.subtree(), format),
         // A scalar is its own one-node layout (the most common write: one string or number).
         (Item::Data(Data::Value(value)), _) => write(Item::Value(*value), format),
-        (Item::Data(Data::Array(_) | Data::Object(_)), _) | (Item::Value(_), _) => {
+        (Item::Data(Data::Array(_) | Data::Object(_) | Data::Bytes(_)), _) | (Item::Value(_), _) => {
             emit(&layout(root, format != Format::Compact), format)
         }
-        (Item::Data(_), _) => emit(&[scalar(root)], format),
+        (Item::Data(_) | Item::Byte(_), _) => emit(&[scalar(root)], format),
     }
 }
 
@@ -47,6 +49,7 @@ fn key(text: &str, padded: bool) -> Node {
 /// Children still to lay out in one open container.
 enum Children<'a, 'b> {
     Items(std::slice::Iter<'b, Data<'a>>),
+    Bytes(std::slice::Iter<'b, u8>),
     Members(std::slice::Iter<'b, (&'a str, Data<'a>)>),
     /// Array elements of a parsed value (pretty layout descends into them).
     Values {
@@ -61,6 +64,7 @@ impl<'a, 'b> Iterator for Children<'a, 'b> {
     fn next(&mut self) -> Option<Self::Item> {
         match self {
             Children::Items(items) => items.next().map(|v| (None, Item::Data(v))),
+            Children::Bytes(bytes) => bytes.next().map(|v| (None, Item::Byte(*v))),
             Children::Members(members) => members
                 .next()
                 .map(|(k, v)| (Some(key(k, false)), Item::Data(v))),
@@ -103,6 +107,9 @@ fn layout(root: Item<'_, '_>, sort: bool) -> Vec<Node> {
             }
             Item::Data(Data::Array(items)) => {
                 Some((Kind::Array, items.len(), Children::Items(items.iter())))
+            }
+            Item::Data(Data::Bytes(bytes)) => {
+                Some((Kind::Array, bytes.len(), Children::Bytes(bytes.iter())))
             }
             Item::Data(Data::Object(members)) if !sort => Some((
                 Kind::Object,
@@ -186,10 +193,11 @@ fn scalar(item: Item<'_, '_>) -> Node {
             data: *v as u64,
         },
         Item::Data(Data::Unsigned(v)) => number(number::UNSIGNED, *v),
+        Item::Byte(v) => number(number::UNSIGNED, u64::from(v)),
         Item::Data(Data::Signed(v)) => number(number::SIGNED, *v as u64),
         Item::Data(Data::Real(v)) => number(number::REAL, v.to_bits()),
         Item::Data(Data::String(v)) => string(v, false),
-        Item::Data(Data::Array(_) | Data::Object(_) | Data::Value(_)) => {
+        Item::Data(Data::Array(_) | Data::Object(_) | Data::Bytes(_) | Data::Value(_)) => {
             unreachable!("handled by layout")
         }
     }

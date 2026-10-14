@@ -4,7 +4,7 @@ import XCTest
 @MainActor
 final class ChatOperationsTests: XCTestCase {
     func testCancelledActorCallRemainsPendingUntilItsLateCallbackReturns() async throws {
-        let operations = ChatOperations(), session = UUID()
+        let operations = ChatOperations(), session = System.uuid()
         var release: CheckedContinuation<Void, Never>?
         var settled = false
         let task = operations.run(for: session) {
@@ -22,7 +22,7 @@ final class ChatOperationsTests: XCTestCase {
     }
 
     func testSettlementIncludesFollowupWorkAndKeepsSessionsIndependent() async throws {
-        let operations = ChatOperations(), session = UUID(), other = UUID()
+        let operations = ChatOperations(), session = System.uuid(), other = System.uuid()
         var release: CheckedContinuation<Void, Never>?
         var otherRelease: CheckedContinuation<Void, Never>?
         var followedUp = false

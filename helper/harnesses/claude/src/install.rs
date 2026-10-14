@@ -5,7 +5,7 @@ use crate::{
 };
 use dispatch_helper_core::{
     api::*,
-    json::{self, Data, Json},
+    json::{Data, Json},
 };
 use std::{io, path::PathBuf};
 
@@ -165,7 +165,7 @@ impl Setup {
                 self.stage = Stage::Environment;
                 Ok(Next::Job(Job::Native {
                     name: "environment",
-                    input: json::write(&Data::Object(vec![
+                    value: dispatch_helper_core::wire::body::encode_plain(&Data::Object(vec![
                         ("pid", Data::Unsigned(process.pid.into())),
                         (
                             "names",
@@ -177,9 +177,9 @@ impl Setup {
                     ]))?,
                 }))
             }
-            (Stage::Environment, Output::Bytes(bytes)) => {
-                let doc = Json::parse(&bytes).map_err(|e| error("settings", e.message))?;
-                let home = crate::identity::home(doc.root(), self.home.clone())
+            (Stage::Environment, Output::Value(bytes)) => {
+                let value = dispatch_helper_core::wire::body::decode_plain(&bytes).map_err(|e| error("settings", e.message))?;
+                let home = crate::identity::home(&value, self.home.clone())
                     .ok_or_else(|| error("settings", "Claude home unavailable"))?;
                 if !home.is_absolute() {
                     return Err(error("settings", "Claude home is not absolute"));

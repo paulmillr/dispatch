@@ -27,18 +27,18 @@ pub(super) fn foreground(
     result: io::Result<Output>,
     shell: &Process,
 ) -> Result<Vec<Process>, Error> {
-    let Output::Bytes(bytes) = result.map_err(|error| native::error(error.to_string()))? else {
+    let Output::Value(bytes) = result.map_err(|error| native::error(error.to_string()))? else {
         return Err(error("Invalid foreground process result."));
     };
-    let json = Json::parse(&bytes)?;
-    let root = json.root();
-    if field(root, "group")?.signed() != Some(shell.foreground.into()) {
+    let root = body::decode_plain(&bytes)?;
+    if root.get("group").and_then(D::signed) != Some(shell.foreground.into()) {
         return Err(expired("The agent no longer owns this terminal."));
     }
-    let processes = field(root, "processes")?
-        .array()
+    let processes = root
+        .get("processes")
+        .and_then(D::array)
         .ok_or_else(|| error("Invalid foreground process list."))?
-        .map(read)
+        .map(|value| Process::read(value).ok_or_else(|| error("Invalid process field.")))
         .collect::<Result<Vec<_>, _>>()?;
     if processes.iter().any(|process| {
         process.tty != shell.tty
@@ -50,54 +50,3 @@ pub(super) fn foreground(
     Ok(processes)
 }
 
-pub(super) fn read(v: Value<'_>) -> Result<Process, Error> {
-    let unsigned = |name| {
-        field(v, name)?
-            .unsigned()
-            .ok_or_else(|| error("Invalid process field."))
-    };
-    let signed = |name| {
-        field(v, name)?
-            .signed()
-            .and_then(|n| i32::try_from(n).ok())
-            .ok_or_else(|| error("Invalid process field."))
-    };
-    let strings = |name| -> Result<Vec<String>, Error> {
-        field(v, name)?
-            .array()
-            .ok_or_else(|| error("Invalid process field."))?
-            .map(|v| {
-                v.string()
-                    .map(str::to_owned)
-                    .ok_or_else(|| error("Invalid process field."))
-            })
-            .collect()
-    };
-    let start: Vec<_> = field(v, "start")?
-        .array()
-        .ok_or_else(|| error("Invalid process birth."))?
-        .map(|v| v.unsigned().ok_or_else(|| error("Invalid process birth.")))
-        .collect::<Result<_, _>>()?;
-    let start = start
-        .try_into()
-        .map_err(|_| error("Invalid process birth."))?;
-    Ok(Process {
-        pid: unsigned("pid")?
-            .try_into()
-            .map_err(|_| error("Invalid PID."))?,
-        parent: unsigned("parent")?
-            .try_into()
-            .map_err(|_| error("Invalid PID."))?,
-        group: signed("group")?,
-        foreground: signed("foreground")?,
-        tty: unsigned("tty")?,
-        start,
-        executable: text(v, "executable")?.into(),
-        arguments: strings("arguments")?,
-        files: v
-            .get("files")
-            .and_then(Value::array)
-            .and_then(|v| v.map(OpenFile::parse).collect::<Option<Vec<_>>>())
-            .ok_or_else(|| error("Invalid open files."))?,
-    })
-}

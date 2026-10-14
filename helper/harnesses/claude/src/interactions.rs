@@ -1,12 +1,12 @@
 //! Live native hooks. System owns the stream; only a current observed chat can answer.
 use crate::{
-    history::{error, text},
+    history::error,
     hooks::Request,
     identity::Probe,
 };
 use dispatch_helper_core::{
     api::*,
-    json::{self, Data, Json, Value},
+    json::{Data, Json},
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -59,7 +59,7 @@ fn fallback(io: &mut dyn Io, reply: u64) {
 fn process(pid: u32) -> Result<Job, Error> {
     Ok(Job::Native {
         name: "process",
-        input: json::write(&Data::Object(vec![("pid", Data::Unsigned(pid.into()))]))?,
+        value: dispatch_helper_core::wire::body::encode_plain(&Data::Object(vec![("pid", Data::Unsigned(pid.into()))]))?,
     })
 }
 impl Check {
@@ -310,7 +310,7 @@ impl Interactions {
                 let mut check = self.checks.remove(work).unwrap();
                 let step = (|| {
                     let output = match result {
-                        Ok(Output::Bytes(bytes)) => Output::Bytes(bytes.clone()),
+                        Ok(Output::Value(bytes)) => Output::Value(bytes.clone()),
                         Ok(Output::Process(p)) => Output::Process(p.clone()),
                         Err(issue) => return Err(error("io", issue)),
                         _ => return Err(error("identity", "Missing Claude sender facts")),
@@ -324,12 +324,11 @@ impl Interactions {
                             seen,
                             bindings,
                         } => {
-                            let Output::Bytes(bytes) = output else {
+                            let Output::Value(bytes) = output else {
                                 return Err(error("identity", "Missing Claude sender"));
                             };
-                            let doc = Json::parse(&bytes)?;
-                            let root = doc.root();
-                            if root.get("pid").and_then(Value::unsigned) != Some((*pid).into())
+                            let root = dispatch_helper_core::wire::body::decode_plain(&bytes)?;
+                            if root.get("pid").and_then(Data::unsigned) != Some((*pid).into())
                                 || !seen.insert(*pid)
                             {
                                 return Err(error("identity", "Invalid Claude sender"));
@@ -347,16 +346,15 @@ impl Interactions {
                                 return Ok(Some(job));
                             }
                             // Never pass a different interactive Claude owner to reach an older ancestor.
-                            if text(root, "executable").is_some_and(|s| {
-                                PathBuf::from(s)
-                                    .file_name()
+                            if root.get("executable").and_then(Data::path).is_some_and(|s| {
+                                s.file_name()
                                     .is_some_and(|n| n == "claude" || n == "claude.exe")
                             }) {
                                 return Err(error("changed", "Claude sender has another owner"));
                             }
                             *pid = root
                                 .get("parent")
-                                .and_then(Value::unsigned)
+                                .and_then(Data::unsigned)
                                 .and_then(|p| u32::try_from(p).ok())
                                 .filter(|p| *p != 0)
                                 .ok_or_else(|| error("identity", "Claude sender is unrelated"))?;

@@ -6,8 +6,7 @@ use crate::{
 };
 use dispatch_helper_core::{
     api::*,
-    base64,
-    json::{self, Data, Kind},
+    json::{self, Data, Json, Kind},
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -49,10 +48,7 @@ impl Affinity {
         if value.len() > 16384 {
             return None;
         }
-        let text = json::write(&Data::String(value)).ok()?;
-        let document = Json::parse(&text).ok()?;
-        let bytes = base64::decode(document.root()).ok()?;
-        let document = Json::parse(&bytes).ok()?;
+        let document = Json::parse(value.as_bytes()).ok()?;
         let root = document.root();
         // Codable selects the first duplicate member, unlike Foundation projection.
         let get = |name| {
@@ -101,7 +97,9 @@ impl Affinity {
         if let Some(value) = &self.creation {
             fields.push(("creation", Data::String(value)));
         }
-        Ok(base64::encode(&json::write(&Data::Object(fields))?))
+        // tmux prints DEL in format output as the text `\177` (not JSON): keep it escaped.
+        let text = json::write(&Data::Object(fields))?;
+        Ok(String::from_utf8_lossy(&text).replace('\x7f', "\\u007f"))
     }
     pub fn command(&self, window: u64) -> Result<String, Error> {
         self.option(&format!("@{window}"), true)

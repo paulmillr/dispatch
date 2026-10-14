@@ -69,16 +69,16 @@ public final class Session {
     /// `scale`: the view's backing scale. The size is Ghostty's initial 800x600 pixels until the
     /// host sets it. `blocks`: where its pages come from and go (the process's shared ones: a
     /// closed terminal warms the next). `allowHostMedia`: opt-in file/shared-memory Kitty media
-    /// for a process trusted to name resources on this machine.
-    public init(config: Config, scale: Double, blocks: PageBlocks = SharedPageBlocks.shared, allowHostMedia: Bool = false) throws {
+    /// for a process trusted to name resources on this machine. `machine`: what it reads of the machine (OSC 7 accepts
+    /// file URLs for its name).
+    public init(config: Config, scale: Double, machine: Launch.Machine, blocks: PageBlocks = SharedPageBlocks.shared,
+                allowHostMedia: Bool = false) throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw Failure.noMetalDevice }
         metal = try MetalRenderer(device: device)
         (self.config, self.scale) = (config, scale)
         cells = try Self.cells(config, scale)
-        var options = HandlerOptions(), name = [CChar](repeating: 0, count: 256)
-        gethostname(&name, 255)
-        // This machine's name: OSC 7 accepts file URLs for it.
-        (options.hostname, options.version) = (Array(String(cString: name).utf8), ghosttyVersion)
+        var options = HandlerOptions()
+        (options.hostname, options.version) = (Array(machine.host.utf8), ghosttyVersion)
         var size = RenderSize(screen: (800, 600), cell: Self.cell(cells))
         size.pad(Self.padding(config, scale), .off)
         var o = TerminalOptions(cols: size.grid.cols, rows: size.grid.rows)

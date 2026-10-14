@@ -5,8 +5,9 @@ use crate::{
     side,
 };
 use dispatch_helper_core::{
-    api::{Binding, Done, Error, Expected, Io, Job, deferred},
+    api::{Binding, Done, Error, Expected, Io, Job, Process, deferred},
     json::{Data, Json, Value},
+    wire::body::Encoded,
 };
 use std::{cell::RefCell, collections::BTreeMap, path::PathBuf, process::Command, rc::Rc};
 
@@ -106,13 +107,10 @@ pub fn command(
         "process",
         pid,
         Box::new(move |io, result| {
-            let observed = match result.and_then(|document| {
-                let cwd = document
-                    .root()
-                    .get("cwd")
-                    .and_then(Value::string)
-                    .map(PathBuf::from);
-                Ok((jobs::process(document.root())?, cwd))
+            let observed = match result.and_then(|value| {
+                let value = value.root();
+                let cwd = value.get("cwd").and_then(Data::path).map(PathBuf::from);
+                Ok((jobs::process(&value)?, cwd))
             }) {
                 Ok(value) => value,
                 Err(error) => return deferred(done)(io, Err(error)),
@@ -205,7 +203,7 @@ fn environment(
                 "process",
                 pid,
                 Box::new(move |io, result| {
-                    let observed = match result.and_then(|document| jobs::process(document.root()))
+                    let observed = match result.and_then(|value| jobs::process(&value.root()))
                     {
                         Ok(observed) if same(&observed, &parent) => observed,
                         Ok(_) => {
@@ -214,7 +212,7 @@ fn environment(
                         }
                         Err(error) => return fail(io, scratch, error, done),
                     };
-                    let mut command = match cfg!(target_os = "linux") {
+                    let mut command = match io.os() == "linux" {
                         true => Command::new(format!("/proc/{}/exe", observed.pid)),
                         false => Command::new(&observed.executable),
                     };
@@ -223,10 +221,13 @@ fn environment(
                         .args(["app-server", "--stdio"])
                         .current_dir(&cwd)
                         .env_clear();
-                    let variables = environment.root().object().map(|values| {
+                    // Values are bytes: the parent's environment passes on unchanged.
+                    let environment = environment.root();
+                    let variables = environment.object().map(|values| {
                         values
                             .map(|(name, value)| {
-                                Some((name.to_owned(), value.string()?.to_owned()))
+                                use std::os::unix::ffi::OsStrExt;
+                                Some((name, std::ffi::OsStr::from_bytes(value.bytes()?)))
                             })
                             .collect::<Option<Vec<_>>>()
                     });
@@ -254,16 +255,46 @@ impl Open {
         let native = matches!(stage, Stage::Child);
         self.stage = stage;
         let pending = pending.clone();
-        let done = Box::new(move |io: &mut dyn Io, result| Self::advance(pending, io, result));
         if native {
+            // The side process's facts come from System (a native job), not from codex.
+            let done = Box::new(move |io: &mut dyn Io, result: Result<Encoded, Error>| {
+                let mut open = pending.borrow_mut();
+                let result = result
+                    .and_then(|value| jobs::process(&value.root()))
+                    .and_then(|observed| open.child(&pending, io, observed));
+                if let Err(error) = result {
+                    open.finish(io, Err(error));
+                }
+            });
             jobs::native(&self.jobs, io, name, params, done);
         } else {
+            let done = Box::new(move |io: &mut dyn Io, result| Self::advance(pending, io, result));
             self.channel
                 .as_ref()
                 .unwrap()
                 .borrow_mut()
                 .request(io, name, params, done);
         }
+    }
+
+    fn child(&mut self, pending: &Rc<RefCell<Self>>, io: &mut dyn Io, observed: Process) -> Result<(), Error> {
+        let channel = self.channel.as_ref().unwrap();
+        if observed.pid != channel.borrow().pid {
+            return Err(failure("process", "Side process changed"));
+        }
+        channel.borrow_mut().binding.process = observed;
+        self.stage = Stage::Initialize;
+        let pending = pending.clone();
+        initialize(
+            channel.clone(),
+            io,
+            "dispatch_side",
+            Box::new(move |io, result| {
+                let result = result.and_then(|_| Json::parse(b"{}"));
+                Self::advance(pending, io, result);
+            }),
+        );
+        Ok(())
     }
 
     fn finish(&mut self, io: &mut dyn Io, result: Result<Binding, Error>) {
@@ -335,25 +366,8 @@ impl Open {
     ) -> Result<(), Error> {
         let root = document.root();
         match self.stage {
-            Stage::Child => {
-                let observed = jobs::process(root)?;
-                let channel = self.channel.as_ref().unwrap();
-                if observed.pid != channel.borrow().pid {
-                    return Err(failure("process", "Side process changed"));
-                }
-                channel.borrow_mut().binding.process = observed;
-                self.stage = Stage::Initialize;
-                let pending = pending.clone();
-                initialize(
-                    channel.clone(),
-                    io,
-                    "dispatch_side",
-                    Box::new(move |io, result| {
-                        let result = result.and_then(|_| Json::parse(b"{}"));
-                        Self::advance(pending, io, result);
-                    }),
-                );
-            }
+            // Answered by a native job: Open::child.
+            Stage::Child => return Err(failure("process", "Side process facts arrived as a codex reply")),
             Stage::Initialize => {
                 let cwd = self.cwd.to_string_lossy().into_owned();
                 self.request(

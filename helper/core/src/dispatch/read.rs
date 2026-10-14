@@ -1,7 +1,7 @@
 use super::*;
 use std::cell::Cell;
 
-fn stamp(p: Value<'_>, name: &str) -> Result<i128, Error> {
+fn stamp(p: &Data<'_>, name: &str) -> Result<i128, Error> {
     let value = p.get(name).ok_or_else(|| invalid(name))?;
     value
         .string()
@@ -12,7 +12,7 @@ fn stamp(p: Value<'_>, name: &str) -> Result<i128, Error> {
 }
 
 /// files.read `revision`: each present field is checked, absent ones are not.
-fn guard(p: Value<'_>) -> Result<Guard, Error> {
+fn guard(p: &Data<'_>) -> Result<Guard, Error> {
     let present = |name| p.get(name).is_some();
     Ok(Guard {
         kind: present("kind")
@@ -38,10 +38,10 @@ fn guard(p: Value<'_>) -> Result<Guard, Error> {
 
 impl Request<'_> {
     /// Protocol result: binary chunks followed by Metadata
-    pub(super) fn read(&mut self, p: Value<'_>) -> Result<(), Error> {
+    pub(super) fn read(&mut self, p: &Data<'_>) -> Result<(), Error> {
         let name = p
             .get("plugin")
-            .and_then(Value::string)
+            .and_then(Data::string)
             .unwrap_or(plugin("read"));
         let plugin = self
             .helper
@@ -63,7 +63,7 @@ impl Request<'_> {
             length: p.get("length").map(|_| number(p, "length")).transpose()?,
             revision: p
                 .get("revision")
-                .filter(|v| v.kind() != crate::json::Kind::Null)
+                .filter(|v| !matches!(v, crate::json::Data::Null))
                 .map(guard)
                 .transpose()?
                 .unwrap_or_default(),

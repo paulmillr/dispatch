@@ -2,7 +2,7 @@
 use super::{System, native, queue::Queue};
 use crate::{
     api::{Address, Event, Io, Job, Output},
-    json::{self, Data, Json},
+    json::Data,
 };
 use std::{
     fs, io,
@@ -98,8 +98,8 @@ impl System {
     /// Release the completed login's transport while retaining the reactor and its clients.
     pub(crate) fn detach(&mut self) -> io::Result<()> {
         use std::os::fd::AsRawFd;
-        if let Some(result) = self.replay("stdio.detach", "") {
-            return result.map(|_| ());
+        if let Some(result) = self.replay("stdio.detach", Data::Null, |_| Some(())) {
+            return result;
         }
         let result = (|| {
             unsafe extern "C" {
@@ -124,7 +124,7 @@ impl System {
             self.signals.clear();
             Ok(())
         })();
-        self.record("stdio.detach", "", &result, &[])?;
+        self.record("stdio.detach", Data::Null, &result, Data::Null)?;
         result
     }
 }
@@ -205,11 +205,8 @@ pub fn connect(path: &Path) -> io::Result<()> {
         System::cwd()?.join(path)
     };
     let watch = io.watch(&absolute, false)?;
-    let input = json::write(&Data::Object(vec![(
-        "path",
-        Data::String(absolute.to_str().ok_or(io::ErrorKind::InvalidInput)?),
-    )]))
-    .map_err(|error| io::Error::other(error.message))?;
+    let value = crate::wire::body::encode_plain(&Data::Object(vec![("path", Data::from(absolute.as_path()))]))
+        .map_err(|error| io::Error::other(error.message))?;
     let mut pending = None;
     let mut changed = true;
     let mut denied = false;
@@ -217,7 +214,7 @@ pub fn connect(path: &Path) -> io::Result<()> {
         if changed && pending.is_none() {
             pending = Some(io.submit(Job::Native {
                 name: "file.lstat",
-                input: input.clone(),
+                value: value.clone(),
             })?);
             changed = false;
         }
@@ -237,10 +234,9 @@ pub fn connect(path: &Path) -> io::Result<()> {
                 match result {
                     Err(error) if error.kind() == io::ErrorKind::NotFound => denied = false,
                     Err(error) => return Err(error),
-                    Ok(Output::Bytes(bytes)) => {
-                        let document =
-                            Json::parse(&bytes).map_err(|error| io::Error::other(error.message))?;
-                        let metadata = document.root();
+                    Ok(Output::Value(bytes)) => {
+                        let metadata = crate::wire::body::decode_plain(&bytes)
+                            .map_err(|error| io::Error::other(error.message))?;
                         if metadata.get("kind").and_then(|v| v.string()) != Some("socket")
                             || metadata.get("uid").and_then(|v| v.unsigned()) != Some(uid.into())
                         {
@@ -274,7 +270,7 @@ pub fn connect(path: &Path) -> io::Result<()> {
         if (eof[1] && queues[1].front().is_none())
             || (eof[0] && queues[0].front().is_none())
         {
-            return io.finish_replay();
+            return io.finish(0).map(|_| ());
         }
         io.interest(
             input,

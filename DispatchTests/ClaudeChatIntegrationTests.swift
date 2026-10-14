@@ -20,18 +20,18 @@ final class ClaudeChatIntegrationTests: XCTestCase {
         let fm = FileManager.default
         let binary = [TestSupport.tool("claude")].first { fm.isExecutableFile(atPath: $0) }
         let claude = try XCTUnwrap(binary, "Run ./run.sh --test to prepare Claude Code")
-        let state = fm.temporaryDirectory.appendingPathComponent("dispatch-claude-chat-" + UUID().uuidString)
+        let state = System.temporary.appendingPathComponent("dispatch-claude-chat-" + System.uuid().uuidString)
         let fixture = Process()
         fixture.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
         fixture.arguments = [CodexTestSupport.root.appendingPathComponent("scripts/claude_fixture.py").path,
                              "serve", "--state", state.path, "--delay", "0.08"]
         fixture.standardOutput = FileHandle.nullDevice; fixture.standardError = FileHandle.nullDevice
-        try fixture.run()
+        let child = try System.Child(fixture)
         defer {
-            if fixture.isRunning { fixture.terminate(); fixture.waitUntilExit() }
+            child.stop()
             print("Claude Chat fixture: " + state.path)
         }
-        try await TestSupport.eventually { fm.fileExists(atPath: state.appendingPathComponent("endpoint.json").path) }
+        try await TestSupport.eventually { System.exists(state.appendingPathComponent("endpoint.json")) }
         phaseTimings.begin("runtime_setup")
         let runtime = TerminalRuntime.shared, controller = AppDelegate()
         let previousChat = runtime.chat
@@ -130,7 +130,7 @@ final class ClaudeChatIntegrationTests: XCTestCase {
             XCTAssertEqual(session.model, "dispatch-fixture")
             if exitOnly { try await exitToShell(); await finish(); passed = testRun?.failureCount == 0; return }
             let settingsPath = state.appendingPathComponent("claude-home/settings.json")
-            let savedSettings = try? Data(contentsOf: settingsPath)
+            let savedSettings = try? System.read(settingsPath)
             runtime.chat.openModelPicker(session, column: .model)
             try await TestSupport.eventually(timeout: .seconds(20), diagnostic: "Claude picker: \(session.modelPicker?.error ?? "none") busy=\(session.busy)\n\(screen())") {
                 session.modelPicker.map { !$0.loading && !$0.models.isEmpty } == true
@@ -158,7 +158,7 @@ final class ClaudeChatIntegrationTests: XCTestCase {
             NSApp.sendEvent(TerminalTestSupport.keyEvent(36, "\r", in: NSApp.keyWindow))
             try await TestSupport.eventually(timeout: .seconds(15), diagnostic: "Claude apply: \(picker.error ?? "none")\n\(screen())") { session.modelPicker == nil }
             XCTAssertEqual(session.model, ClaudeModelMenu.modelID(detail: model.detail) ?? model.name); XCTAssertEqual(session.effort, "low")
-            XCTAssertEqual(try? Data(contentsOf: settingsPath), savedSettings, "Chat selection must not change Claude's saved defaults")
+            XCTAssertEqual(try? System.read(settingsPath), savedSettings, "Chat selection must not change Claude's saved defaults")
             try await TestSupport.eventually { runtime.chat.canPickModel(session) }
             runtime.chat.openModelPicker(session, column: .effort)
             let cached = try XCTUnwrap(session.modelPicker)
@@ -191,7 +191,7 @@ final class ClaudeChatIntegrationTests: XCTestCase {
             declined.selectScope(try XCTUnwrap(declined.scope.first { $0.number == 2 }))
             try await TestSupport.eventually(timeout: .seconds(10), diagnostic: "Decline: \(declined.error ?? "none")\n\(screen())") { session.modelPicker == nil }
             XCTAssertEqual(session.model, beforeDecline); XCTAssertEqual(session.effort, "high")
-            XCTAssertEqual(try? Data(contentsOf: settingsPath), savedSettings)
+            XCTAssertEqual(try? System.read(settingsPath), savedSettings)
             try await TestSupport.eventually { !session.busy }
             _ = try await PresentationTestSupport.capture(window, named: "claude-chat", in: "claude-chat-audit")
             session.draft = "thinking first queued turn"

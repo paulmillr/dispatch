@@ -9,6 +9,7 @@ use dispatch_helper_core::{
     api::*,
     json::{self, Data, Value},
     rpc,
+    wire::body::Encoded,
 };
 use std::{
     collections::BTreeMap,
@@ -712,7 +713,7 @@ fn empty() -> Json {
 fn native(name: &'static str, fields: Vec<(&str, Data<'_>)>) -> Result<Job, Error> {
     Ok(Job::Native {
         name,
-        input: json::write(&Data::Object(fields))?,
+        value: dispatch_helper_core::wire::body::encode_plain(&Data::Object(fields))?,
     })
 }
 fn digest(bytes: &[u8]) -> String {

@@ -15,7 +15,7 @@ final class ChatPatchTests: XCTestCase {
             let record = record(state.rawValue, completed: state != .generating && state != .applying)
             let live = ChatCoordinator(enabled: true), resumed = ChatCoordinator(enabled: true)
             defer { live.stop(); resumed.stop() }
-            let a = live.session(for: UUID()), b = resumed.session(for: UUID())
+            let a = live.session(for: System.uuid()), b = resumed.session(for: System.uuid())
             live.receiveHelper(.records([record]), session: a)
             resumed.receiveHelper(.page(.init(records: [record], earlier: nil, state: nil, snapshot: nil)), session: b)
             XCTAssertEqual(a.turns.flatMap(\.items).map(\.patch), b.turns.flatMap(\.items).map(\.patch))
@@ -26,7 +26,7 @@ final class ChatPatchTests: XCTestCase {
     func testNotificationsAreScopedAndRequestsAreNotConsumed() {
         let chat = ChatCoordinator(enabled: true)
         defer { chat.stop() }
-        let target = chat.session(for: UUID()), other = chat.session(for: UUID())
+        let target = chat.session(for: System.uuid()), other = chat.session(for: System.uuid())
         chat.receiveHelper(.records([record("generating", completed: false)]), session: target)
         XCTAssertEqual(target.turns.flatMap(\.items).map(\.id), ["call"])
         XCTAssertTrue(other.turns.isEmpty)
@@ -34,13 +34,13 @@ final class ChatPatchTests: XCTestCase {
     }
 
     func testLegacyAndPaginatedHistoryRestoreStructuredChanges() async throws {
-        let session = UUID().uuidString
+        let session = System.uuid().uuidString
         let changes: [String: Any] = ["a.swift": ["type": "update", "unified_diff": "@@ -1 +1 @@\n-old\n+new", "move_path": "b.swift"]]
         for payload: [String: Any] in [
             ["type": "patch_apply_end", "call_id": "call", "turn_id": "turn", "changes": changes, "success": false, "status": "failed"],
             ["type": "item_completed", "turn_id": "turn", "item": ["type": "FileChange", "id": "call", "changes": changes, "status": "failed"]]
         ] {
-            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dispatch-patch-history-" + UUID().uuidString)
+            let directory = System.temporary.appendingPathComponent("dispatch-patch-history-" + System.uuid().uuidString)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: directory) }
             let values: [[String: Any]] = [["type": "session_meta", "payload": ["id": session]], ["type": "event_msg", "payload": payload]]
@@ -143,7 +143,7 @@ final class ChatPatchTests: XCTestCase {
     }
 
     func testSnapshotsRetainIdentityAndFinalStatusAcrossHistoryReplay() throws {
-        let session = ChatSession(id: UUID())
+        let session = ChatSession(id: System.uuid())
         func patch(_ diff: String, _ state: ChatPatch.State) throws -> ChatItem {
             try XCTUnwrap(ChatPatch.item(id: "call", changes: [["path": "file.swift", "diff": diff]], state: state))
         }
@@ -161,7 +161,7 @@ final class ChatPatchTests: XCTestCase {
         XCTAssertTrue(item.completed)
         XCTAssertEqual(item.title, "apply_patch")
         XCTAssertEqual(ToolPresentation(item).documents.count, 1)
-        let hooksFirst = ChatSession(id: UUID())
+        let hooksFirst = ChatSession(id: System.uuid())
         hooksFirst.insert(ChatItem(id: "tool-call", kind: .tool, text: "", completed: true), turnID: "turn")
         hooksFirst.insert(try patch("+failed", .failed), turnID: "turn")
         XCTAssertEqual(hooksFirst.turns[0].items[0].patch?.state, .failed, "An early hook completion cannot overwrite the authoritative patch result")
@@ -171,19 +171,19 @@ final class ChatPatchTests: XCTestCase {
     /// and an SSH terminal watching the same thread; a resumed chat restores the final diff.
     func testRealAppServerStreamsPatchBeforeCompletion() async throws {
         let binary = try CodexTestSupport.requireBinary()
-        let state = FileManager.default.temporaryDirectory.appendingPathComponent("dispatch-patch-" + UUID().uuidString)
+        let state = System.temporary.appendingPathComponent("dispatch-patch-" + System.uuid().uuidString)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
         process.arguments = [CodexTestSupport.root.appendingPathComponent("scripts/codex-patch-fixture.py").path,
                              "--codex", binary, "--state", state.path]
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.standardError
-        try process.run()
-        defer { if process.isRunning { process.terminate() }; print("Patch fixture: " + state.path) }
+        let child = try System.Child(process)
+        defer { child.stop(); print("Patch fixture: " + state.path) }
         try await TestSupport.eventually(timeout: .seconds(20), diagnostic: "Patch server did not start") {
-            FileManager.default.fileExists(atPath: state.appendingPathComponent("ready.json").path)
+            System.exists(state.appendingPathComponent("ready.json"))
         }
-        let metadata = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: state.appendingPathComponent("ready.json"))) as? [String: String])
+        let metadata = try XCTUnwrap(JSONSerialization.jsonObject(with: System.read(state.appendingPathComponent("ready.json"))) as? [String: String])
         let thread = try XCTUnwrap(metadata["thread"]), socket = try XCTUnwrap(metadata["socket"])
         let runtime = TerminalRuntime.shared, previous = runtime.chat
         runtime.chat = ChatCoordinator(enabled: true); defer { runtime.chat = previous }
@@ -221,38 +221,41 @@ final class ChatPatchTests: XCTestCase {
         }
         XCTAssertEqual(sessions[1].helper?.endpoint.connection != nil, true, "The SSH terminal's agent is bound by the host's helper")
         func patches(_ session: ChatSession) -> [ChatPatch] { session.turns.flatMap(\.items).compactMap(\.patch) }
-        try Data().write(to: state.appendingPathComponent("go"))
+        try System.write(Data(), to: state.appendingPathComponent("go"))
         // Every preview the chat shows while Codex is still working.
         var previews = Set<String>()
         try await TestSupport.eventually(timeout: .seconds(20), interval: .milliseconds(1), diagnostic: "No generating patch arrived") {
             previews.formUnion(patches(sessions[0]).filter { $0.state == .generating }.map { $0.documents.first?.diff ?? "" })
             return !previews.isEmpty
         }
-        XCTAssertFalse(FileManager.default.fileExists(atPath: state.appendingPathComponent("done.json").path), "Preview must arrive while Codex is working")
+        XCTAssertFalse(System.exists(state.appendingPathComponent("done.json")), "Preview must arrive while Codex is working")
         try await TestSupport.eventually(timeout: .seconds(20), interval: .milliseconds(1), diagnostic: "Patch did not finish") {
             previews.formUnion(patches(sessions[0]).filter { $0.state == .generating }.map { $0.documents.first?.diff ?? "" })
             return patches(sessions[0]).contains { $0.state == .completed }
         }
         XCTAssertGreaterThan(previews.count, 1, "The preview grows with the streamed patch")
-        XCTAssertEqual(try String(contentsOf: state.appendingPathComponent("work/live-diff.swift"), encoding: .utf8), "let first = 1\nlet second = 2\n")
+        XCTAssertEqual(try String(decoding: try System.read(state.appendingPathComponent("work/live-diff.swift")), as: UTF8.self), "let first = 1\nlet second = 2\n")
         try await TestSupport.eventually(timeout: .seconds(10), diagnostic: "SSH chat missed the completed patch") {
             patches(sessions[1]).contains { $0.state == .completed }
         }
         XCTAssertEqual(sessions.map { patches($0).count }, [1, 1], "One card per patch")
         // The thread opened again from its transcript restores the final diff.
-        let rollouts = FileManager.default.enumerator(at: state.appendingPathComponent("codex-home/sessions"), includingPropertiesForKeys: nil)
-        let rollout = try XCTUnwrap(rollouts?.compactMap { $0 as? URL }.first { $0.lastPathComponent.hasSuffix(thread + ".jsonl") })
+        let rollouts = state.appendingPathComponent("codex-home/sessions")
+        let rollout = URL(fileURLWithPath: try XCTUnwrap(System.process("file.find", [rollouts.path, thread + ".jsonl"]) {
+            FileManager.default.enumerator(at: rollouts, includingPropertiesForKeys: nil)?.compactMap { $0 as? URL }
+                .first { $0.lastPathComponent.hasSuffix(thread + ".jsonl") }?.path
+        }))
         let restored = try await runtime.chat.archived(rollout, agent: "codex", session: thread)
         XCTAssertEqual(patches(restored).map(\.state), [.completed])
         XCTAssertEqual(patches(restored).first?.documents.first?.diff, patches(sessions[0]).first?.documents.first?.diff)
-        try Data().write(to: state.appendingPathComponent("stop"))
+        try System.write(Data(), to: state.appendingPathComponent("stop"))
     }
     func testAddedDeletedAndInterruptedPatches() throws {
         let add = try XCTUnwrap(ChatPatch.item(id: "a", changes: [["path": "a.swift", "kind": ["type": "add"], "diff": "one\ntwo\n"]], state: .generating))
         let delete = try XCTUnwrap(ChatPatch.item(id: "d", changes: ["d.swift": ["type": "delete", "content": "old\n"]], state: .completed))
         XCTAssertEqual(ToolPresentation(add).additions, 2)
         XCTAssertEqual(ToolPresentation(delete).deletions, 1)
-        let session = ChatSession(id: UUID()); session.insert(add, turnID: "turn")
+        let session = ChatSession(id: System.uuid()); session.insert(add, turnID: "turn")
         session.finishPatches(in: "turn")
         XCTAssertEqual(session.turns[0].items[0].patch?.state, .interrupted)
         XCTAssertTrue(session.turns[0].items[0].completed)
@@ -262,7 +265,7 @@ final class ChatPatchTests: XCTestCase {
         let literal = String(decoding: try JSONSerialization.data(withJSONObject: input, options: .fragmentsAllowed), as: UTF8.self)
         let wrapper = ChatItem(id: "wrapper", kind: .tool, text: "text(await tools.apply_patch(\(literal)));", title: "functions.exec")
         let patch = try XCTUnwrap(ChatPatch.item(id: "actual", changes: [["path": "/tmp/file.swift", "diff": "@@ -1 +1 @@\n-old\n+new"]], state: .completed))
-        let session = ChatSession(id: UUID())
+        let session = ChatSession(id: System.uuid())
         func visible() -> [ChatItem] {
             session.transcriptRows.flatMap { row in row.group?.children.compactMap(\.item) ?? row.item.map { [$0] } ?? [] }
         }
@@ -305,7 +308,7 @@ final class ChatPatchTests: XCTestCase {
         let wrapper = ChatItem(id: "wrapper", kind: .tool, text: code, title: "exec",
             output: try output([#"{"output":"truncated preview","exit_code":0}"#, #"{"output":"later process output","exit_code":0}"#]), completed: true)
         let actual = ChatItem(id: "actual", kind: .tool, text: #"["/bin/zsh","-lc","rg --files Sources"]"#, title: "Shell", output: "complete command output", completed: true)
-        let session = ChatSession(id: UUID())
+        let session = ChatSession(id: System.uuid())
         session.turns = [.init(id: "turn", items: [wrapper, actual])]
         func visible() -> [ChatItem] { session.transcriptRows.flatMap { $0.group?.children.compactMap(\.item) ?? $0.item.map { [$0] } ?? [] } }
         let projected = visible()

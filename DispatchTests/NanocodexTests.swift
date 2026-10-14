@@ -5,12 +5,12 @@ import XCTest
 @MainActor
 final class NanocodexTests: XCTestCase {
     func testLiveEventsReconcileWithCommittedRolloutIncludingSteers() async throws {
-        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/nanocodex-0.6.5.jsonl")
+        let url = System.checkout.appendingPathComponent("DispatchTests/Fixtures/nanocodex-0.6.5.jsonl")
         let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
         defer { chat.stop() }
         let archive = try await chat.archived(url, agent: "nanocodex", session: "00000000-0000-7000-8000-000000000001")
         let helper = try XCTUnwrap(archive.helper), page = try await helper.page(earlier: nil)
-        let live = chat.session(for: UUID())
+        let live = chat.session(for: System.uuid())
         func rows(_ session: ChatSession) -> [String] {
             session.turns.flatMap(\.items).map { "\($0.kind.rawValue): " + ($0.kind == .tool ? $0.title + " → " + $0.output : $0.text) }
         }

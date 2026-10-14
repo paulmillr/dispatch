@@ -26,14 +26,14 @@ final class Workspace {
         get { layout.selectedSpace }
         set { commitLayout(WorkspaceLayout(spaces: spaces, selectedSpace: newValue)) }
     }
-    var focusRequest = UUID()
+    var focusRequest = System.uuid()
     struct PaneFocusFeedback {
-        let id = UUID()
+        let id = System.uuid()
         let paneID: UUID
         let expiresAt = Date.now.addingTimeInterval(0.55)
     }
     var paneFocusFeedback: PaneFocusFeedback?
-    var defaultDirectory = NSHomeDirectory()
+    var defaultDirectory = System.home.path
     let hosts = HostRegistry()
     var spaceOrder: SpaceOrder = .tree
     @ObservationIgnored var hostPlacements: [UUID: HostPlacement] = [:]
@@ -84,6 +84,13 @@ final class Workspace {
         }
         for id in labels.titles { labelRevisions[id]?.title &+= 1 }
         for id in labels.directories { labelRevisions[id]?.directory &+= 1 }
+        // A shown tab starts its terminal when the layout shows it, not when a render mounts its view: what the app
+        // asks its helper must not depend on whether a frame was drawn before the selection moved on.
+        if let space = current {
+            for pane in space.panes where space.layout.paneIDs.contains(pane.id) {
+                if let tab = pane.activeTab, tab.terminal == nil { helper(space)?.present(tab) }
+            }
+        }
     }
 
     /// Tabs whose shown title (automatic or custom) or directory differs between two layouts.
@@ -185,7 +192,7 @@ final class Workspace {
         var tab = TerminalTab(directory: defaultDirectory)
         tab.machine = machine
         tab.launchCommand = machine.command(running: backend?.command)
-        hosts.seed(tab.id, from: host, generation: UUID())
+        hosts.seed(tab.id, from: host, generation: System.uuid())
         var space = Space(name: nextSpaceName, tab: tab, usesDirectoryName: true)
         space.hostID = host
         addSpace(space)
@@ -240,7 +247,7 @@ final class Workspace {
         var tab = TerminalTab(directory: directory)
         tab.machine = machine; tab.launchCommand = machine.command()
         if machine != .local, let source = activeSurfaceID, let context = hosts.terminals[source] {
-            hosts.seed(tab.id, from: context.host, generation: UUID())
+            hosts.seed(tab.id, from: context.host, generation: System.uuid())
         }
         return tab
     }
@@ -297,7 +304,7 @@ final class Workspace {
     func selectSpace(_ id: UUID, node: UInt64? = nil) {
         guard spaces.contains(where: { $0.id == id }) else { return }
         selectedSpace = id
-        focusRequest = UUID()
+        focusRequest = System.uuid()
         let container = current?.containers.first { $0.id == current?.activeWindow?.id }
         if let target = node ?? container?.node ?? activeTab?.terminal { helper(current)?.focus(target) }
     }
@@ -491,7 +498,7 @@ final class Workspace {
                 next.spaces[s].presentation = presentation
                 next.spaces[s].splitRatios = [:]
             }
-            focusRequest = UUID()
+            focusRequest = System.uuid()
             return true
         }
         let tabs = current.tabs
@@ -563,7 +570,7 @@ final class Workspace {
             }
         }
         onCloseTabs(tab.surfaceIDs)
-        focusRequest = UUID()
+        focusRequest = System.uuid()
     }
 
     /// Same policy as `closeTab`: a programmatic close never asks.
@@ -591,7 +598,7 @@ final class Workspace {
         let ids = spaces[s].tabs.flatMap(\.surfaceIDs)
         removeSpace(at: s)
         onCloseTabs(ids)
-        focusRequest = UUID()
+        focusRequest = System.uuid()
     }
 
     /// Forgetting a host clears everything it still presents: tabs left in other hosts' spaces and spaces

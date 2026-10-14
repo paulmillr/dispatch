@@ -28,7 +28,7 @@ final class HostPlacementTests: XCTestCase {
         local.structure([TerminalTab(directory: "/local")], selected: 0, backend: 2)
         workspace.spaces.append(local)
         workspace.helpers[.local] = HelperWorkspace(workspace: workspace, renderer: nil)
-        let nested = TerminalHostContext(host: .authenticated("nested"), generation: UUID(),
+        let nested = TerminalHostContext(host: .authenticated("nested"), generation: System.uuid(),
                                          state: .connected, authenticated: true)
         let terminal = workspace.spaces[1].tabs[0].id
         workspace.hosts.associate(terminal, context: nested)
@@ -104,7 +104,7 @@ final class HostPlacementTests: XCTestCase {
         XCTAssertEqual(workspace.hosts.terminals[terminal]?.authenticated, true)
         coordinator.exited(replacement)
 
-        workspace.hosts.seed(terminal, from: .authenticated("fixture"), generation: UUID())
+        workspace.hosts.seed(terminal, from: .authenticated("fixture"), generation: System.uuid())
         var seeded = request()
         seeded.presentationScope = SSHIntegrationScope(executable: "/usr/bin/ssh", destination: "fixture",
                                                         configuration: "hostname fixture\nuser test\nport 22\n")
@@ -123,7 +123,7 @@ final class HostPlacementTests: XCTestCase {
         XCTAssertNil(workspace.hosts.terminals[terminal], "Stopping tracking must cancel pending presentation")
     }
 
-    private func enter(_ terminal: UUID, in workspace: Workspace, destination: String = "server", generation: UUID = UUID()) -> UUID {
+    private func enter(_ terminal: UUID, in workspace: Workspace, destination: String = "server", generation: UUID = System.uuid()) -> UUID {
         workspace.hosts.begin(terminal, generation: generation, destination: destination)
         workspace.placeHostTerminal(terminal)
         return generation
@@ -161,7 +161,7 @@ final class HostPlacementTests: XCTestCase {
         for _ in 0..<3 { workspace.newLocalSpace() }
         let greeting = SSHGreeting(version: 1, host: "shared", boot: "test", uid: 501, home: "/tmp", capabilities: [])
         for space in workspace.spaces {
-            let terminal = space.tabs[0].id, generation = UUID()
+            let terminal = space.tabs[0].id, generation = System.uuid()
             workspace.hosts.begin(terminal, generation: generation, destination: "shared")
             workspace.hosts.update(terminal, generation: generation, destination: "shared", greeting: greeting, state: .connected)
         }
@@ -287,7 +287,7 @@ final class HostPlacementTests: XCTestCase {
     func testFilterFindsHostAliasesAndMixedRowsAndUnknownHostsRemainReachable() throws {
         let workspace = Workspace(); workspace.newSpace(); workspace.newTab()
         let original = try XCTUnwrap(workspace.current), terminal = original.tabs[0].id
-        workspace.hosts.begin(terminal, generation: UUID(), destination: "alice@build-server")
+        workspace.hosts.begin(terminal, generation: System.uuid(), destination: "alice@build-server")
         XCTAssertEqual(workspace.spaces(matching: "BUILD-SERVER").map(\.id), [original.id])
         XCTAssertEqual(workspace.spaces(matching: "alice@").map(\.id), [original.id])
         XCTAssertEqual(workspace.spaces(matching: original.name).map(\.id), [original.id])

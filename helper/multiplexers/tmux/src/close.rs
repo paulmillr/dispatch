@@ -5,10 +5,59 @@ use crate::{
 };
 use dispatch_helper_core::{
     api::*,
-    json::{self, Data},
+    json::Data,
+    wire::body,
 };
+use std::collections::VecDeque;
+
+/// A server's kills in flight and the work waiting, in the order asked (`true`: a kill).
+#[derive(Default)]
+pub(crate) struct Order {
+    killing: usize,
+    waiting: VecDeque<(bool, Continue<()>)>,
+}
 
 impl Tmux {
+    /// Kills and creations on one server never overlap, and run in the order asked: a kill waits
+    /// for the creations in flight, a creation for the kills. A creation's anchor comes from a
+    /// snapshot the app relays late (it may be the window a close is killing), and a local
+    /// creation's own tmux client is not ordered with the control client's commands: the kill can
+    /// overtake an earlier `new-window -a -t @N` (tmux: "can't find window").
+    pub(crate) fn ordered(
+        &mut self,
+        io: &mut dyn Io,
+        backend: Option<Id>,
+        kill: bool,
+        job: Continue<()>,
+    ) {
+        let Some(id) = backend.filter(|id| self.backends.contains_key(id)) else {
+            return job(self, io, ());
+        };
+        self.backends.get_mut(&id).unwrap().order.waiting.push_back((kill, job));
+        self.proceed(io, id);
+    }
+    /// What waits runs while what it waits for is not in flight.
+    fn proceed(&mut self, io: &mut dyn Io, id: Id) {
+        for _ in 0..=self.backends.get(&id).map_or(0, |server| server.order.waiting.len()) {
+            let Some(server) = self.backends.get_mut(&id) else {
+                return;
+            };
+            let Some(&(kill, _)) = server.order.waiting.front() else {
+                return;
+            };
+            let busy = if kill {
+                server.clients.iter().any(|client| client.creating > 0)
+            } else {
+                server.order.killing > 0
+            };
+            if busy {
+                return;
+            }
+            let (_, job) = server.order.waiting.pop_front().unwrap();
+            server.order.killing += usize::from(kill);
+            job(self, io, ());
+        }
+    }
     /// A creation finished (its pane, if any, is in the latest snapshot); the last one
     /// performs a detach that waited for it, dismissing the new pane with the rest.
     pub(crate) fn settle(&mut self, io: &mut dyn Io, loc: Location, pane: Option<u32>) {
@@ -32,6 +81,7 @@ impl Tmux {
             }
             self.changed = true;
         }
+        self.proceed(io, loc.backend);
     }
     fn scope(
         &self,
@@ -305,30 +355,20 @@ impl Tmux {
                         return;
                     }
                 };
-                let input = json::write(&Data::Object(vec![("path", Data::String(&tty))])).unwrap();
+                let input = body::encode_plain(&Data::Object(vec![("path", Data::from(std::path::Path::new(&tty)))])).unwrap();
                 mux.job(
                     io,
                     Job::Native {
                         name: "file.lstat",
-                        input,
+                        value: input,
                     },
                     Box::new(move |mux, io, result| {
-                        let matches = match result {
-                            Ok(Output::Bytes(bytes)) => {
-                                Json::parse(&bytes).ok().is_some_and(|json| {
-                                    json.root().get("kind").and_then(|v| v.string())
-                                        == Some("character")
-                                        && json.root().get("tty").and_then(|v| v.unsigned())
-                                            == Some(shell.tty)
-                                })
-                            }
-                            _ => false,
-                        };
+                        let matches = matches!(&result, Ok(Output::Value(bytes)) if crate::discovery::tty(bytes, shell.tty));
                         if !matches {
                             done(mux, io, false);
                             return;
                         }
-                        let input = json::write(&Data::Object(vec![
+                        let input = body::encode_plain(&Data::Object(vec![
                             ("pid", Data::Unsigned(shell.pid.into())),
                             (
                                 "start",
@@ -342,16 +382,12 @@ impl Tmux {
                             io,
                             Job::Native {
                                 name: "idle",
-                                input,
+                                value: input,
                             },
                             Box::new(move |mux, io, result| {
                                 let idle = match result {
-                                    Ok(Output::Bytes(bytes)) => {
-                                        Json::parse(&bytes).ok().is_some_and(|json| {
-                                            json.root().get("idle").and_then(|v| v.boolean())
-                                                == Some(true)
-                                        })
-                                    }
+                                    Ok(Output::Value(bytes)) => body::decode_plain(&bytes)
+                                        .is_ok_and(|value| value.get("idle").and_then(Data::boolean) == Some(true)),
                                     _ => false,
                                 };
                                 if idle {
@@ -370,26 +406,40 @@ impl Tmux {
     /// Kills its targets like mutate; tmux ending the client meanwhile (%exit: the last window
     /// went with them) means they are gone, which is what was asked (old app: a clean end).
     fn kill(&mut self, io: &mut dyn Io, loc: Location, commands: Vec<String>, done: Done<()>) {
-        let count = commands.len();
-        self.request_count(
+        let done: Continue<Result<(), Error>> = Box::new(move |mux, io, result| {
+            if let Some(server) = mux.backends.get_mut(&loc.backend) {
+                server.order.killing -= 1;
+            }
+            mux.proceed(io, loc.backend);
+            finish(io, done, result);
+        });
+        self.ordered(
             io,
-            loc,
-            count,
-            commands,
-            Box::new(move |mux, io, result| {
-                let gone = mux
-                    .backends
-                    .get(&loc.backend)
-                    .and_then(|b| b.clients.get(loc.client))
-                    .is_some_and(|c| c.exited);
-                match result {
-                    Err(error) if !gone => finish(io, done, Err(error)),
-                    _ => mux.refresh(
-                        io,
-                        loc,
-                        Some(Box::new(move |_, io, _| finish(io, done, Ok(())))),
-                    ),
-                }
+            Some(loc.backend),
+            true,
+            Box::new(move |mux, io, ()| {
+                let count = commands.len();
+                mux.request_count(
+                    io,
+                    loc,
+                    count,
+                    commands,
+                    Box::new(move |mux, io, result| {
+                        let gone = mux
+                            .backends
+                            .get(&loc.backend)
+                            .and_then(|b| b.clients.get(loc.client))
+                            .is_some_and(|c| c.exited);
+                        match result {
+                            Err(error) if !gone => done(mux, io, Err(error)),
+                            _ => mux.refresh(
+                                io,
+                                loc,
+                                Some(Box::new(move |mux, io, _| done(mux, io, Ok(())))),
+                            ),
+                        }
+                    }),
+                );
             }),
         );
     }

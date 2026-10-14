@@ -1,7 +1,8 @@
 use crate::mux::Tmux;
 use dispatch_helper_core::{
     api::*,
-    json::{self, Data, Value},
+    json::Data,
+    wire::body,
 };
 use std::{
     cell::{Cell, RefCell},
@@ -31,46 +32,11 @@ pub(crate) struct Discovery {
 
 // Shared by discovery and the final mutation guard: the native foreground group is one observation.
 pub(crate) fn foreground(bytes: &[u8], shell: &Process) -> Option<Vec<Process>> {
-    let document = Json::parse(bytes).ok()?;
-    let root = document.root();
+    let root = body::decode_plain(bytes).ok()?;
     if shell.foreground <= 1 || root.get("group")?.signed()? != i64::from(shell.foreground) {
         return None;
     }
-    let members = root
-        .get("processes")?
-        .array()?
-        .map(|value| {
-            let integer = |key| value.get(key)?.signed();
-            let text = |key| {
-                value
-                    .get(key)?
-                    .array()?
-                    .map(|v| v.string().map(str::to_owned))
-                    .collect::<Option<Vec<_>>>()
-            };
-            Some(Process {
-                pid: integer("pid")?.try_into().ok()?,
-                parent: integer("parent")?.try_into().ok()?,
-                group: integer("group")?.try_into().ok()?,
-                foreground: integer("foreground")?.try_into().ok()?,
-                tty: value.get("tty")?.unsigned()?,
-                start: value
-                    .get("start")?
-                    .array()?
-                    .map(Value::unsigned)
-                    .collect::<Option<Vec<_>>>()?
-                    .try_into()
-                    .ok()?,
-                executable: value.get("executable")?.string()?.into(),
-                arguments: text("arguments")?,
-                files: value
-                    .get("files")?
-                    .array()?
-                    .map(OpenFile::parse)
-                    .collect::<Option<Vec<_>>>()?,
-            })
-        })
-        .collect::<Option<Vec<_>>>()?;
+    let members = root.get("processes")?.array()?.map(Process::read).collect::<Option<Vec<_>>>()?;
     members
         .iter()
         .all(|p| {
@@ -79,10 +45,11 @@ pub(crate) fn foreground(bytes: &[u8], shell: &Process) -> Option<Vec<Process>> 
         .then_some(members)
 }
 
+/// A file.lstat answer names a character device with this tty number.
 pub(crate) fn tty(bytes: &[u8], device: u64) -> bool {
-    Json::parse(bytes).ok().is_some_and(|doc| {
-        doc.root().get("kind").and_then(Value::string) == Some("character")
-            && doc.root().get("tty").and_then(Value::unsigned) == Some(device)
+    body::decode_plain(bytes).ok().is_some_and(|value| {
+        value.get("kind").and_then(Data::string) == Some("character")
+            && value.get("tty").and_then(Data::unsigned) == Some(device)
     })
 }
 
@@ -170,17 +137,17 @@ impl Tmux {
                             return;
                         }
                     };
-                    let input = json::write(&Data::Object(vec![("path", Data::String(&pane.tty))]))
+                    let input = body::encode_plain(&Data::Object(vec![("path", Data::from(std::path::Path::new(&pane.tty)))]))
                         .unwrap();
                     mux.job(
                         io,
                         Job::Native {
                             name: "file.lstat",
-                            input,
+                            value: input,
                         },
                         Box::new(move |mux, io, result| {
                             let matches = match result {
-                                Ok(Output::Bytes(bytes)) => tty(&bytes, shell.tty),
+                                Ok(Output::Value(bytes)) => tty(&bytes, shell.tty),
                                 _ => false,
                             };
                             if !matches {
@@ -193,16 +160,13 @@ impl Tmux {
                                 mux.discovery.pending.remove(&id);
                                 return;
                             }
-                            let input = json::write(&Data::Object(vec![(
-                                "tty",
-                                Data::Unsigned(shell.tty),
-                            )]))
-                            .unwrap();
+                            let input = body::encode_plain(&Data::Object(vec![("tty", Data::Unsigned(shell.tty))]))
+                                .unwrap();
                             mux.job(
                                 io,
                                 Job::Native {
                                     name: "foreground",
-                                    input,
+                                    value: input,
                                 },
                                 Box::new(move |mux, io, result| {
                                     mux.candidates(io, id, shell, result);
@@ -223,7 +187,7 @@ impl Tmux {
         result: std::io::Result<Output>,
     ) {
         let members = match result {
-            Ok(Output::Bytes(bytes)) => foreground(&bytes, &shell),
+            Ok(Output::Value(bytes)) => foreground(&bytes, &shell),
             _ => None,
         };
         let members: Vec<_> = members

@@ -13,8 +13,8 @@
     var onConnect: (UUID, HelperTerminal) -> Void = { _, _ in }
     var count: Int { connections.count }
     nonisolated(unsafe) private var listener: DispatchSourceRead?
-    private var connections: [UUID: HelperTerminal] = [:]
-    private var credentials: [UUID: (token: String, boundary: AppReplay.Boundary?)] = [:]
+    fileprivate var connections: [UUID: HelperTerminal] = [:]
+    fileprivate var credentials: [UUID: String] = [:]
     private var stopped = false
 
     init(directory: URL, executable: URL) throws {
@@ -55,6 +55,7 @@
       source.setCancelHandler { Darwin.close(fd) }
       listener = source
       ready = true
+      Self.live[path] = { [weak self] in self }
       source.resume()
     }
 
@@ -73,12 +74,10 @@
         + "\""
     }
 
-    func environment(id: UUID) throws -> [String] {
-      let credential = UUID().uuidString
-      let terminal = try AppReplay.identity(kind: "terminal", value: id)
-      let generation = try AppReplay.identity(kind: "renderer", value: UUID())
-      let boundary = try AppReplay.boundary(kind: "renderer", data: JSONEncoder().encode([terminal, generation]))
-      credentials.updateValue((credential, boundary), forKey: id)?.boundary?.cancel()
+    func environment(id: UUID) -> [String] {
+      // A command can carry it (a test's own renderer launch): the recorded one for this tab.
+      let credential = System.uuid(for: id.uuidString).uuidString
+      credentials[id] = credential
       return [
         "DISPATCH_RENDERER_SOCKET", path, "DISPATCH_RENDERER_TOKEN", credential,
         "DISPATCH_RENDERER_TAB", id.uuidString,
@@ -86,7 +85,7 @@
     }
 
     func revoke(_ id: UUID) {
-      credentials.removeValue(forKey: id)?.boundary?.cancel()
+      credentials[id] = nil
       for connection in Array(connections.values) where connection.tab == id {
         connection.close()
       }
@@ -99,9 +98,7 @@
       listener = nil
       for connection in Array(connections.values) { connection.close() }
       connections.removeAll()
-      let abandoned = credentials.values.compactMap(\.boundary)
       credentials.removeAll()
-      abandoned.forEach { $0.cancel() }
       try? FileManager.default.removeItem(at: directory)
     }
 
@@ -117,35 +114,7 @@
           Darwin.close(client)
           continue
         }
-        var boundary: AppReplay.Boundary?
-        let connection = HelperTerminal(
-          fd: client,
-          validate: { [weak self] id, token in
-            guard let self, self.credentials[id]?.token == token else { return false }
-            boundary = self.credentials.removeValue(forKey: id)?.boundary
-            return true
-          }, ready: { [weak self] id, channel in
-            let deliver: @Sendable () -> Void = { [weak self, weak channel] in
-              let receive: @MainActor @Sendable () -> Void = {
-                guard let self, let channel, self.connections[channel.id] === channel else { return }
-                self.onConnect(id, channel)
-              }
-              if Thread.isMainThread { MainActor.assumeIsolated { receive() } }
-              else { DispatchQueue.main.sync { MainActor.assumeIsolated { receive() } } }
-            }
-            do {
-              if let boundary {
-                try boundary.arrive(ready: deliver, failed: { [weak channel] _ in
-                  DispatchQueue.main.async { channel?.close() }
-                })
-              } else { deliver() }
-            } catch { channel.close() }
-          },
-          retired: { [weak self] id in
-            boundary?.cancel()
-            self?.connections.removeValue(forKey: id)
-          })
-        connections[connection.id] = connection
+        let connection = open(client)
         connection.start()
         Task { [weak connection] in
           try? await Task.sleep(for: .seconds(5))
@@ -155,9 +124,44 @@
     }
   }
 
+  extension HelperRenderer {
+    /// Live renderers by socket: a replayed child connects to the one it was launched for.
+    private static var live: [String: () -> HelperRenderer?] = [:]
+
+    /// Replay: `terminal`'s recorded child connected. It has no socket; its slave is the journal. A tab whose view
+    /// closed first (its credential is gone) refuses it, as live.
+    static func connect(_ terminal: System.Terminal) {
+      guard let tab = terminal.tab, let renderer = terminal.socket.flatMap({ live[$0]?() })
+      else { return AppReplay.fail(HelperFailure(code: "replay", message: "No live renderer for a recorded connection")) }
+      renderer.open(-1).replay(tab, token: renderer.credentials[tab] ?? "", terminal)
+    }
+
+    fileprivate func open(_ fd: Int32) -> HelperTerminal {
+      let connection = HelperTerminal(
+        fd: fd,
+        validate: { [weak self] id, token in
+          guard let self, self.credentials[id] == token else { return false }
+          self.credentials[id] = nil
+          return true
+        }, ready: { [weak self] id, channel in
+          let receive: @MainActor @Sendable () -> Void = { [weak self, weak channel] in
+            guard let self, let channel, self.connections[channel.id] === channel else { return }
+            self.onConnect(id, channel)
+          }
+          if Thread.isMainThread { MainActor.assumeIsolated { receive() } }
+          else { DispatchQueue.main.sync { MainActor.assumeIsolated { receive() } } }
+        },
+        retired: { [weak self] id in
+          self?.connections.removeValue(forKey: id)
+        })
+      connections[connection.id] = connection
+      return connection
+    }
+  }
+
   @MainActor
   final class HelperTerminal {
-    let id = UUID()
+    let id = System.uuid()
     private(set) var tab: UUID?
     private(set) var grid = HelperTopology.Grid(columns: 1, rows: 1)
     /// Input read before a consumer is installed waits here, in order, and is handed over on install.
@@ -183,6 +187,8 @@
     private let validate: (UUID, String) -> Bool
     private let ready: (UUID, HelperTerminal) -> Void
     private let retired: (UUID) -> Void
+    /// The child's terminal process in the app journal: its hello, sizes and slave join that stream.
+    private var journal: System.Terminal?
 
     init(
       fd: Int32, validate: @escaping (UUID, String) -> Bool,
@@ -290,22 +296,11 @@
           }
           files = descriptors.map { FileHandle(fileDescriptor: $0, closeOnDealloc: true) }
           descriptors.removeAll()
-          tab = id
-          let channel = HelperTransport(
-            read: files[0], write: files[1], capacity: 32 * 1024 * 1024)
-          transport = channel
-          guard resize() else {
+          journal = System.terminal(id)
+          guard connect(id, read: files[0], write: files[1]) else {
             close()
             return
           }
-          ready(id, self)
-          channel.start(
-            receive: { [weak self] data in
-              DispatchQueue.main.async {
-                guard let self, !self.stopped, !self.ending else { return }
-                if let onInput = self.onInput { onInput(data) } else { self.held.append(data) }
-              }
-            }, closed: { [weak self] _ in DispatchQueue.main.async { self?.close() } })
           let tail = Data(hello.dropFirst(end))
           hello.removeAll()
           guard tail.allSatisfy({ $0 == 82 }) else {
@@ -325,6 +320,36 @@
       }
     }
 
+    /// Replay: `terminal`'s recorded child said hello; its slave is the journal's.
+    func replay(_ id: UUID, token: String, _ terminal: System.Terminal) {
+      journal = terminal
+      terminal.connection = self
+      if let size = terminal.grid { grid = size }
+      // No descriptors: the journal is the slave (the replayed transport closes these placeholders).
+      let none = FileHandle(fileDescriptor: -1)
+      guard validate(id, token), connect(id, read: none, write: none) else { return close() }
+    }
+
+    private func connect(_ id: UUID, read: FileHandle, write: FileHandle) -> Bool {
+      tab = id
+      let channel = HelperTransport(
+        read: read, write: write, capacity: 32 * 1024 * 1024, ticket: journal?.ticket.channel("slave"))
+      transport = channel
+      guard journal?.ticket.replaying == true || resize() else { return false }
+      if journal?.ticket.replaying == false {
+        do { try journal?.ticket.emit(kind: "connect") } catch { AppReplay.fail(error) }
+      }
+      ready(id, self)
+      channel.start(
+        receive: { [weak self] data in
+          DispatchQueue.main.async {
+            guard let self, !self.stopped, !self.ending else { return }
+            if let onInput = self.onInput { onInput(data) } else { self.held.append(data) }
+          }
+        }, closed: { [weak self] _ in DispatchQueue.main.async { self?.close() } })
+      return true
+    }
+
     private func resize() -> Bool {
       guard let input = files.first, !stopped, !ending else { return ending }
       var size = winsize()
@@ -335,11 +360,18 @@
       let next = HelperTopology.Grid(
         columns: columns, rows: rows, cell_width: known(size.ws_xpixel / columns),
         cell_height: known(size.ws_ypixel / rows))
+      if next != grid, let journal, !journal.ticket.replaying {
+        do { try journal.ticket.emit(kind: "size", value: AppReplay.value(next)) } catch { AppReplay.fail(error) }
+      }
+      resized(next)
+      return true
+    }
+
+    func resized(_ next: HelperTopology.Grid) {
       if next != grid {
         grid = next
         onResize(next)
       }
-      return true
     }
   }
 #endif

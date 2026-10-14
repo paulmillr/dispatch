@@ -83,7 +83,7 @@ final class TerminalRuntime {
         self.preferences = preferences
         workspace?.closeLaunching = preferences.closeLaunching
         hosts.reconnect.automatic = preferences.autoReconnectSSH
-        if ProcessInfo.processInfo.environment["DISPATCH_TESTING"] != "1" {
+        if !System.testing {
             ChatViewportTrace.shared.setEnabled(preferences.enableDiagnostics)
         }
         SidebarThemeStore.shared.current = preferences.resolvedSidebarTheme
@@ -93,7 +93,7 @@ final class TerminalRuntime {
         HostColorStore.shared.choices = preferences.hostColors
         HostColorStore.shared.enabled = preferences.showHostColors
         chat.start()
-        guard let resources = Bundle.main.resourceURL else { error = "Terminal resources are missing."; return }
+        let resources = System.resources
         do {
             // The launch mailbox, shims and shell wrappers (ssh/codex --*-launch) serve every terminal;
             // helper terminals receive them through their creation environment.
@@ -112,7 +112,9 @@ final class TerminalRuntime {
             self.config = config
             ChatThemeStore.shared.current = ChatTheme(config: config, preferences: preferences)
             let executable = HelperApp.executable ?? resources.appendingPathComponent("dispatch-helper")
-            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("r-\(UUID().uuidString.prefix(8))")
+            // The app's own socket directory, made live in replay too: its run's own name (a replayed one meets the
+            // capture's leftover).
+            let directory = System.temporary.appendingPathComponent("r-\(UUID().uuidString.prefix(8))")
             let renderer = try HelperRenderer(directory: directory, executable: executable)
             renderer.onConnect = { [weak self] tab, channel in self?.workspace?.helper(containing: tab)?.attach(tab, channel) }
             self.renderer = renderer
@@ -156,9 +158,9 @@ final class TerminalRuntime {
         view.setBackground(r: config.background.r, g: config.background.g, b: config.background.b)
     }
 
-    /// Each new terminal's scrollback: 1/64 of this Mac's memory (256 MB with 16 GB), bounded so a
+    /// Each new terminal's scrollback: 1/64 of this Mac's `memory` (256 MB with 16 GB), bounded so a
     /// single output stream cannot claim gigabytes on high-memory Macs.
-    nonisolated static let scrollbackLimit = min(256_000_000, max(50_000_000, Int(clamping: ProcessInfo.processInfo.physicalMemory / 64)))
+    nonisolated static func scrollbackLimit(_ memory: UInt64) -> Int { min(256_000_000, max(50_000_000, Int(clamping: memory / 64))) }
 
     /// Dispatch's terminal config text (Ghostty's config syntax, read by the Swift terminal).
     private func makeConfig(_ settings: Preferences) throws -> String {
@@ -176,7 +178,7 @@ final class TerminalRuntime {
         macos-option-as-alt = \(settings.optionAsAlt ? "true" : "false")
         window-padding-x = 10
         window-padding-y = 8
-        scrollback-limit-bytes = \(Self.scrollbackLimit)
+        scrollback-limit-bytes = \(Self.scrollbackLimit(System.machine.memory))
         image-storage-limit = \(settings.enableKittyGraphics ? ImageStorage.defaultTotalLimit : 0)
         clipboard-read = ask
         clipboard-write = ask
@@ -304,7 +306,10 @@ final class TerminalRuntime {
         let id = tab.id
         guard chat.sessions[id]?.showChat != true,
               chat.sessions[id]?.terminalSearch.visible != true,
-              let view = views[id], view.isPresented, view.window?.isKeyWindow == true else { return }
+              let view = views[id], view.isPresented, view.window?.isKeyWindow == true,
+              // The open space search keeps the keyboard: a request queued before it opened (a tab mounting, a pane
+              // focusing after a detach) would take it back and close the still empty search.
+              (view.window as? MainWindow)?.state?.spaceSearchFocusRequest == nil else { return }
         view.window?.makeFirstResponder(view)
     }
 
@@ -334,6 +339,8 @@ final class TerminalRuntime {
             ("chat integrations", { await self.chat.integrationChanges?.value }),
             ("helper processes", { await HelperApp.shared.stop() }),
         ]
+        // Stopping from here on, not only once the task runs: a helper made meanwhile waits for this stop.
+        stopping = parts[0].0
         let task = Task {
             for (name, part) in parts { stopping = name; await part() }
             stopping = nil

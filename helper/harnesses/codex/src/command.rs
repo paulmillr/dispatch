@@ -5,6 +5,7 @@ use crate::channel::failure;
 use dispatch_helper_core::{
     api::*,
     json::{Data, Value},
+    wire::body::Encoded,
 };
 
 /// The one command a conversation may have in flight; ChatCommands.swift:302.
@@ -88,12 +89,11 @@ impl Reading {
         Ok(Sent::Keys(Vec::new()))
     }
 
-    pub(crate) fn step(&mut self, binding: &Binding, screen: &Screen, goal: Option<&str>, session: Option<&str>) -> Step {
+    pub(crate) fn step(&mut self, binding: &Binding, screen: &Screen, goal: Option<&Encoded>, session: Option<&str>) -> Step {
         // A native replacement moves the channel before its rendered result arrives.
         let connected = *self.connected.get_or_insert(session.is_some());
         if let Some(editor) = self.editor.clone() {
-            let objective = goal.and_then(|text| dispatch_helper_core::json::Json::parse(text.as_bytes()).ok())
-                .and_then(|document| document.root().get("objective").and_then(Value::string).map(str::to_owned));
+            let objective = goal.and_then(|goal| goal.root().get("objective").and_then(Data::string).map(str::to_owned));
             return match editor {
                 Editor::Ask => {
                     let Some(objective) = objective else { return Step::Fail(failure("goal", "No goal to edit.")); };

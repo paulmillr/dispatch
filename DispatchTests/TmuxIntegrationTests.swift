@@ -40,7 +40,7 @@ final class TmuxIntegrationTests: XCTestCase {
 
     func testLargeHistoryReplyAcrossTransportChunks() async throws {
         let app = try TmuxWalkthrough(); defer { app.close() }
-        let path = FileManager.default.temporaryDirectory.appendingPathComponent("tmux-history-" + UUID().uuidString)
+        let path = System.temporary.appendingPathComponent("tmux-history-" + System.uuid().uuidString)
         defer { try? FileManager.default.removeItem(at: path) }
         let rows = (0..<30_000).map { "history \($0) " + String(repeating: "x", count: 100) }
         let width = try XCTUnwrap(Int(try app.server(["display-message", "-p", "-t", "edge:0", "#{pane_width}"]).trimmingCharacters(in: .whitespacesAndNewlines)))
@@ -64,7 +64,7 @@ final class TmuxIntegrationTests: XCTestCase {
             }
         }
         defer { client.connection.cancel(observation); output.continuation.finish() }
-        let bytes = try await SSHTimeout.run(.seconds(15)) {
+        let bytes = try await SSHTimeout.run(.seconds(15), "attach") {
             var result = Data()
             for try await chunk in output.stream {
                 result += chunk
@@ -173,7 +173,7 @@ final class TmuxIntegrationTests: XCTestCase {
         // Claude Code copies with `tmux load-buffer -w`; tmux never forwards that clipboard
         // sequence to a control client, only %paste-buffer-changed. show-buffer then prints
         // the bytes raw inside its reply, so text resembling control lines must survive.
-        let copied = "copy \(UUID().uuidString)\n%end 1 2 1\n\tlast line\n"
+        let copied = "copy \(System.uuid().uuidString)\n%end 1 2 1\n\tlast line\n"
         _ = try app.server(["set-buffer", "-b", "claude copy", copied])
         try await app.wait { NSPasteboard.general.string(forType: .string) == copied }
     }
@@ -345,8 +345,8 @@ final class TmuxIntegrationTests: XCTestCase {
         let workspace = app.workspace, runtime = app.runtime
         let tmuxTab = try XCTUnwrap(workspace.activeTab), tmuxSpace = try XCTUnwrap(workspace.current)
         let tmuxTerminal = try XCTUnwrap(runtime.views[tmuxTab.id]), tmuxSurface = tmuxTerminal.surface
-        let root = URL(fileURLWithPath: "/tmp/hm-\(UUID().uuidString.prefix(8))")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        let root = URL(fileURLWithPath: "/tmp/hm-\(System.uuid().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let socket = root.appendingPathComponent("herdr.sock").path
         defer {
             _ = try? HerdrSocket(path: socket).request("server.stop")
@@ -397,20 +397,18 @@ final class TmuxIntegrationTests: XCTestCase {
         try DesktopTestSupport.requireUnlocked()
         let tmux = TestSupport.tool("tmux")
         guard FileManager.default.isExecutableFile(atPath: tmux) else { throw XCTSkip("Requires tmux") }
-        let socket = "dispatch-native-test-\(UUID().uuidString)"
+        let socket = "dispatch-native-test-\(System.uuid().uuidString)"
         func server(_ arguments: [String]) throws -> String {
-            let process = Process(), output = Pipe()
+            let process = Process()
             process.executableURL = URL(fileURLWithPath: tmux)
             process.arguments = ["-L", socket] + arguments
-            process.standardOutput = output; process.standardError = Pipe()
-            var environment = ProcessInfo.processInfo.environment
+            process.standardError = Pipe()
+            var environment = System.inherited
             environment.removeValue(forKey: "TMUX")
             process.environment = environment
-            try process.run()
-            let data = output.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-            XCTAssertEqual(process.terminationStatus, 0, arguments.joined(separator: " "))
-            return String(decoding: data, as: UTF8.self)
+            let exit = try System.run(process)
+            XCTAssertEqual(exit.status, 0, arguments.joined(separator: " "))
+            return String(decoding: exit.output, as: UTF8.self)
         }
         _ = try server(["-f", "/dev/null", "new-session", "-d", "-s", "native", "-x", "100", "-y", "35", "/bin/sh"])
         defer { _ = try? server(["kill-server"]) }
@@ -533,7 +531,7 @@ final class TmuxIntegrationTests: XCTestCase {
         let wrapped = "WRAPPED_" + String(repeating: "abcdef", count: 80) + "_END"
         TerminalTestSupport.send("printf '%s\\n' '\(wrapped)'", to: terminal)
         try await eventually { self.history(terminal).contains(wrapped) }
-        let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/tmux-vt.py").path
+        let fixture = System.checkout.appendingPathComponent("DispatchTests/Fixtures/tmux-vt.py").path
         TerminalTestSupport.send("/usr/bin/python3 '\(fixture)'", to: terminal)
         try await eventually { TerminalTestSupport.screen(terminal: terminal).contains("ALT_READY") }
         try await Task.sleep(for: .seconds(InterfaceMotion.viewDuration))
@@ -574,14 +572,13 @@ final class TmuxIntegrationTests: XCTestCase {
         // A second control client constrains tmux's size without changing our
         // font size or causing native/server resize commands to oscillate.
         _ = try server(["set-option", "-w", "-t", "@0", "window-size", "smallest"])
-        let other = Process(), otherInput = Pipe()
-        other.executableURL = URL(fileURLWithPath: tmux)
-        other.arguments = ["-u", "-L", socket, "-C", "attach", "-t", "native"]
-        other.standardInput = otherInput
-        other.standardOutput = FileHandle.nullDevice; other.standardError = FileHandle.nullDevice
-        try other.run()
-        defer { if other.isRunning { other.terminate() } }
-        try otherInput.fileHandleForWriting.write(contentsOf: Data("refresh-client -C 60,18\n".utf8))
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: tmux)
+        process.arguments = ["-u", "-L", socket, "-C", "attach", "-t", "native"]
+        process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
+        let other = try System.Child(process)
+        defer { other.stop() }
+        try other.write(Data("refresh-client -C 60,18\n".utf8))
         try await eventually {
             let value: [Int] = (try? size("@0", "#{window_width} #{window_height}")) ?? []
             return value.count == 2 && value[0] <= 60 && value[1] <= 18
@@ -589,8 +586,7 @@ final class TmuxIntegrationTests: XCTestCase {
         let cellWidth = surface.grid.cellWidth
         try await eventually { alternate.subviews.first.map { $0.frame.width < alternate.bounds.width } == true }
         XCTAssertEqual(surface.grid.cellWidth, cellWidth)
-        try otherInput.fileHandleForWriting.close()
-        try await eventually { !other.isRunning }
+        other.finish()
         _ = try server(["set-option", "-w", "-t", "@0", "window-size", "latest"])
         try await eventually { ((try? size("@0", "#{window_width}"))?.first ?? 0) > 60 }
 

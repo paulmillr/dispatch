@@ -80,7 +80,9 @@ enum PresentationTestSupport {
         }
 
         /// macOS 27 Vision drops lines or reads text upside down in narrow images taller than about 1475 pixels; the
-        /// same text in a shorter image reads (measured 2026-10-01, macOS 26 reads both). Overlapping tiles of a taller
+        /// same text in a shorter image reads (measured 2026-10-01, macOS 26 reads both). macOS 27.0.1 also reads nothing
+        /// at all in some sizes: a 1180x740 window at 2x (2360x1480), 2360x1470 and 4720x2960 read empty, while 2360x1400,
+        /// 2360x1475 and 1180x1480 crops of the same image read (measured 2026-10-11). Overlapping tiles of a taller
         /// region stay below that height; each tile overlaps the next by half, so every text line lies inside one.
         private func tiles(_ region: CGRect) -> [CGRect] {
             let tile = 1400 / CGFloat(bitmap.pixelsHigh), step = tile / 2
@@ -109,7 +111,7 @@ enum PresentationTestSupport {
                     try VNImageRequestHandler(cgImage: XCTUnwrap(bitmap.cgImage, file: file, line: line)).perform([request])
                 }
             } catch {
-                let name = "ocr-failure-\(UUID().uuidString)"
+                let name = "ocr-failure-\(System.uuid().uuidString)"
                 print("Vision failure \(file):\(line) image=\(name) size=\(bitmap.pixelsWide)x\(bitmap.pixelsHigh) region=\(request.regionOfInterest) corrected=\(corrected) revision=\(request.revision) device=automatic error=\(error)")
                 do { try PresentationTestSupport.save(bitmap, named: name, in: "ui-audit", file: file, line: line) }
                 catch { print("Vision failure image save failed: \(error)") }
@@ -129,12 +131,13 @@ enum PresentationTestSupport {
         }
     }
 
-    static func capture(_ window: NSWindow, named name: String? = nil, in directory: String = "ui-audit",
+    /// `published`: WindowServer already shows this window (it was captured before): no wait for it, so no recorded step.
+    static func capture(_ window: NSWindow, named name: String? = nil, in directory: String = "ui-audit", published: Bool = false,
                         file: StaticString = #filePath, line: UInt = #line) async throws -> Snapshot {
-        try await capture(XCTUnwrap(window.contentView, file: file, line: line), named: name, in: directory, file: file, line: line)
+        try await capture(XCTUnwrap(window.contentView, file: file, line: line), named: name, in: directory, published: published, file: file, line: line)
     }
 
-    static func capture(_ view: NSView, named name: String? = nil, in directory: String = "ui-audit",
+    static func capture(_ view: NSView, named name: String? = nil, in directory: String = "ui-audit", published: Bool = false,
                         file: StaticString = #filePath, line: UInt = #line) async throws -> Snapshot {
         measured("layout", file: file, line: line) { view.layoutSubtreeIfNeeded() }
         let bitmap: NSBitmapImageRep, positioned: Bool
@@ -144,8 +147,7 @@ enum PresentationTestSupport {
             var root = window
             for ancestor in sequence(first: window, next: { $0.parent ?? $0.sheetParent }) { root = ancestor }
             var metadata: SCShareableContent?
-            // AppKit can expose a visible window before WindowServer publishes its bounds.
-            try await TestSupport.eventually(file: file, line: line, diagnostic: "Capture window not published: \(root.windowNumber), frame=\(root.frame)") {
+            func shown() async throws -> Bool {
                 do { metadata = try await SCShareableContent.currentProcess }
                 catch {
                     print("Presentation metadata failed: window=\(window.windowNumber), visible=\(window.isVisible), frame=\(window.frame), error=\(error)")
@@ -153,6 +155,9 @@ enum PresentationTestSupport {
                 }
                 return metadata?.windows.first { $0.windowID == CGWindowID(root.windowNumber) }?.frame.isEmpty == false
             }
+            // AppKit can expose a visible window before WindowServer publishes its bounds.
+            if published { _ = try await shown() }
+            else { try await TestSupport.eventually(file: file, line: line, diagnostic: "Capture window not published: \(root.windowNumber), frame=\(root.frame)", shown) }
             let content = try XCTUnwrap(metadata, file: file, line: line)
             let source = try XCTUnwrap(content.windows.first { $0.windowID == CGWindowID(root.windowNumber) }, file: file, line: line)
             let bounds = window.convertToScreen(view.convert(view.bounds, to: nil))
@@ -219,8 +224,7 @@ enum PresentationTestSupport {
 
     nonisolated static func save(_ bitmap: NSBitmapImageRep, named name: String, in directory: String,
                      file: StaticString = #filePath, line: UInt = #line) throws {
-        let output = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("build").appendingPathComponent(directory)
+        let output = System.checkout.appendingPathComponent("build").appendingPathComponent(directory)
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
         let png = try measured("png", file: file, line: line) {
             try XCTUnwrap(bitmap.representation(using: .png, properties: [:]), file: file, line: line)

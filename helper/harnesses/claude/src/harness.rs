@@ -6,6 +6,7 @@ use crate::{
 };
 use dispatch_helper_core::api::*;
 use dispatch_helper_core::rpc::Grown;
+use dispatch_helper_core::{json::Data, wire::body::Encoded};
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::Path,
@@ -155,11 +156,11 @@ impl Claude {
         // the cache only speeds up the cursor it was left at.
         let mut resume = None;
         if matches!(source, Source::File(..)) && transcript.earlier.is_none() {
-            match transcript.later.as_deref().filter(|c| !c.is_empty()) {
+            match &transcript.later {
                 None => {
                     self.cache.remove(&source);
                 }
-                Some(text) => match archive::Cursor::read(text) {
+                Some(cursor) => match archive::Cursor::read(cursor) {
                     None => {
                         return finish(io, done, Err(error("changed", "Invalid Claude cursor")));
                     }
@@ -459,7 +460,7 @@ impl Claude {
             },
             state: cache.map(|c| c.parser.state.clone()).unwrap_or_default(),
             snapshot: Snapshot {
-                later: String::new(),
+                later: None,
                 session: cache.and_then(|c| c.parser.observed.clone()),
                 version: cache.and_then(|c| c.parser.version.clone()),
                 generation: cache.map(|c| c.generation.clone()).unwrap_or_default(),

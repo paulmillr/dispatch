@@ -432,120 +432,28 @@ summary raises an error rather than selecting the entire suite.
 
 ## Capture and replay runs
 
-Run the existing XCTest selection while preserving native helper lifetimes and the app journal:
+Tests replay their recorded I/O by default and run live when nothing is recorded for them:
 
 ```sh
-python3 test/xcode.py --capture investigation-01 DispatchTests/ChatTests
-python3 test/xcode.py --replay investigation-01 DispatchTests/ChatTests
-python3 test/xcode.py --replay captures/
-python3 test/xcode.py --tests-from build/replay/changed-tests.json --capture investigation-02
+python3 test/xcode.py DispatchTests/ChatTests                      # replay where replays/ has a journal, live otherwise
+python3 test/xcode.py --capture investigation-01 DispatchTests/ChatTests   # record live tests, store the passed ones
+python3 test/xcode.py --capture investigation-02 --live DispatchTests/ChatTests   # record every test
+python3 test/xcode.py --replay investigation-01 DispatchTests/ChatTests    # replay only that run's journals
 ```
 
-Capture and replay need a helper built with the `capture` Cargo feature. Debug builds and direct
-`scripts/build-ssh-helper.py` runs include it; Xcode Release builds and archives leave it out, and
-their helpers ignore `DISPATCH_CAPTURE` and `DISPATCH_REPLAY`.
-
-New recordings stage in ignored `build/captures/<run>/`, with `raw/`, `app/`, original
-executables in `helpers/<sha256>`, and `manifest.json`. After indexing, every explicitly
-passing variant is copied unchanged into `captures/<run>/`. Failed, skipped, and
-unattributed recordings remain in staging for investigation and must not be committed.
-Run names cannot be reused; a newer run does not replace earlier successful variants. `--tests-from`
-requires a non-empty JSON array of XCTest selectors so an empty changed set cannot
-accidentally run the full suite.
-
-Every live XCTest run first builds its candidate helper and replay tools, then replays
-**all retained native captures**. Any mismatch, incomplete replay, missing worker, or
-nonpassing retained record blocks the run and prints its case and fixture path. There
-is no bypass switch. Inspect the evidence before fixing the implementation or explicitly
-removing an intentionally obsolete fixture; the runner never removes or blesses mismatches.
-macOS runs locally; Linux defaults to the bundled x86-64 helper and `build/linux-ssh.json`.
-Use `--replay-helper PLATFORM=PATH`, `--replay-tool PLATFORM=PATH`, and
-`--replay-ssh PLATFORM=PATH` to select other platform binaries and workers.
-
-App journals use `app/<Class.test>/<invocation>.jsonl`. Replaying a corpus visits
-every variant, running multiple XCTest rounds when a case has several recordings.
-Each round keeps its own results under `build/app-replay/<id>/`. Different recorded event orderings remain separate
-replay cases, including versions from intermittently failing tests. A mismatch flags a
-case for investigation; it does not by itself prove flakiness or a regression. App replay
-does not require helper preflight, because it consumes recorded helper responses.
-
-Each native batch keeps the first mismatch in a private per-capture directory and
-links it from the report. Successful streams are not copied unless explicitly requested.
-Completion receipts distinguish a helper return (with its status) from a native-program
-handoff; handoff does not claim that the native program succeeded. Older empty receipts
-remain supported without inferring a completion kind.
-
-On the Mac, build the current helper and replay tools offline and verify every
-retained passing capture with one command:
-
-```sh
-python3 test/replay.py --build
-```
-
-This uses `captures/` and the existing `build/linux-ssh.json` worker for Linux
-recordings. It applies the same strict comparison as the XCTest preflight:
-missing inputs, incomplete replay, and mismatches fail and print the affected
-fixtures. Failed recordings stay under `build/captures/`, outside this corpus.
-`--dry-run` prints build plans without building or verifying captures.
-
-Compare explicitly supplied original and candidate helper artifacts:
-
-```sh
-python3 test/replay.py captures/ --helper macos=/path/to/candidate-helper \
-  --tool macos=/path/to/replay-tool
-python3 test/replay.py captures/ --helper macos=/path/to/candidate-helper \
-  --tool macos=/path/to/replay-tool --helper linux=/path/to/linux-helper \
-  --tool linux=/path/to/linux-replay-tool --ssh linux=build/linux-ssh.json --require-same
-```
-
-The helper comparison writes `report.json`, `changed-tests.json`,
-`unverified-tests.json`, and `rerun-tests.json` under `build/replay/<timestamp>/`.
-Pass `rerun-tests.json` to `--tests-from` with a new `--capture` name to capture
-changed or unverified cases. `changed-tests.json` selects only confirmed changes;
-unsupported or missing baselines remain explicitly unverified in the report.
-
-`passing-changed.json` isolates captures from previously passing app tests that the
-original helper replayed completely but the candidate cannot reproduce. `--require-same`
-returns failure for every changed or unverified variant and writes `gate.json`. The report retains
-every affected version and its replay evidence directory. `passing-changed-tests.json`
-selects those cases for a targeted live run. Investigate their first mismatch and
-relate it to the intended fix before accepting the change: it may be intentional,
-or it may expose a regression in previously working behavior. A new passing UI run
-does not replace the old capture or automatically explain its mismatch.
-
-The per-case SSH collector downloads an archive, checks every file checksum, publishes
-the snapshot, then separately acknowledges its hash. It **never deletes source files**:
-a helper may still be writing after a failed test. Unchanged acknowledged bytes are
-skipped on later collections; changed versions keep their own checksum directory and
-original filename. Transfer, unpack, checksum, and conflicting-destination failures
-remain in the manifest and fail capture coverage. Source cleanup is a separate
-run-level action after producer lifetimes are known to have ended.
-
-Import historical captures without rewriting their bytes:
-
-```sh
-python3 test/capture.py import --run historical-01 --source /path/to/captures \
-  --helpers /path/to/original-helpers.json --source-commit ORIGINAL_COMMIT --dry-run
-```
-
-Inspect the dry run, then repeat without `--dry-run`. Helper mappings are an array of
-`{platform, path, image}`: platform is `macos` or `linux`, path names the original
-binary to preserve, and image is its original absolute execution path. Unknown
-legacy identities remain unknown. `--bindings FILE` can supply verified baseline
-attributions keyed by `raw/`-relative capture path, each with the capture `sha256`,
-`helper_sha256`, `image`, `platform`, and `binding_proof: {path, sha256}`. The proof
-report and original helper must match their hashes; raw capture bytes never change.
-`--outcomes FILE` accepts the runner's array of `{identifier, outcome}` records.
+The corpus in `replays/` is a git submodule (`git submodule update --init replays`); without it only `--live` runs.
+The workflows, the corpus, the build's corpus check and the `capture` tool
+(inspect, grep, check, store, prune) are in [docs/replay.md](../docs/replay.md).
 
 Collection regression checks use an existing real native capture:
 
 ```sh
-TMPDIR="$PWD/build/capture-tests" DISPATCH_CAPTURE_TEST_SOURCE=/path/to/native.jsonl \
+TMPDIR="$PWD/build/capture-tests" DISPATCH_CAPTURE_TEST_SOURCE=/path/to/helper-capture.rpl.bz2 \
   python3 test/capture.test.py
 ```
 
 Create the project-local temporary directory first. No live helper or network is
-needed for this transfer/index check.
+needed for this transfer check.
 
 ## Earlier tooling verification
 

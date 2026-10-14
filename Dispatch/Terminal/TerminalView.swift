@@ -103,6 +103,8 @@ final class TerminalView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        // Replay: off screen this view gets no layout, so its pty cannot reach a recorded size meanwhile (no-op live).
+        System.terminal(id)?.ticket.offscreen(window == nil)
         NotificationCenter.default.removeObserver(self, name: NSWindow.didChangeOcclusionStateNotification, object: nil)
         NotificationCenter.default.removeObserver(self, name: NSWindow.didChangeScreenNotification, object: nil)
         if let window {
@@ -157,15 +159,13 @@ final class TerminalView: NSView {
         let variables: [String]
         if let helper {
             command = helper.command
-            do { variables = try helper.environment(id: id) }
-            catch { AppReplay.fail(error); return }
-            workingDirectory = Home.url.path
+            variables = helper.environment(id: id)
+            workingDirectory = System.home.path
         } else {
             // A standalone view runs its own command (nil = the login shell).
-            let testing = ProcessInfo.processInfo.environment["DISPATCH_TESTING"] == "1"
-            variables = testing ? ["HOME", Home.url.path, "GHOSTTY_ZSH_ZDOTDIR", "/var/empty", "DISPATCH_TESTING", "1"] : []
+            variables = System.testing ? ["HOME", System.home.path, "GHOSTTY_ZSH_ZDOTDIR", "/var/empty", "DISPATCH_TESTING", "1"] : []
             // Native tests must not source the user's shell plugins/update checks.
-            command = launchCommand ?? (testing ? "/bin/zsh" : nil)
+            command = launchCommand ?? (System.testing ? "/bin/zsh" : nil)
             workingDirectory = directory
         }
         // Kitty file and shared-memory transports name resources on this Mac. Remote output must

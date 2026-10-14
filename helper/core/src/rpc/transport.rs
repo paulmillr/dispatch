@@ -184,7 +184,7 @@ impl<C: Codec> Stream<C> {
                 .map_err(|_| io::ErrorKind::WouldBlock.into())
         };
         if let Err(error) = result {
-            write.finish(io, Some(copy(&error)));
+            write.finish(io, Some(crate::system::copy(&error)));
             return Err(error);
         }
         if write.length == 0 {
@@ -331,7 +331,7 @@ impl<C: Codec> Stream<C> {
             io.close(self.output);
         }
         for write in self.writes.drain(..) {
-            write.finish(io, Some(copy(error)));
+            write.finish(io, Some(crate::system::copy(error)));
         }
         self.queue = Queue::new(0);
     }
@@ -341,10 +341,4 @@ fn invalid(error: Error) -> io::Error {
         io::ErrorKind::InvalidData,
         format!("native framing: {error:?}"),
     )
-}
-fn copy(error: &io::Error) -> io::Error {
-    error
-        .raw_os_error()
-        .map(io::Error::from_raw_os_error)
-        .unwrap_or_else(|| io::Error::new(error.kind(), error.to_string()))
 }

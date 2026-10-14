@@ -14,7 +14,7 @@ final class PrefixKeysTests: XCTestCase {
     /// ⌃B arms only its terminal; the next key runs a binding or cancels, and every consumed key's
     /// release and repeats stay out of the terminal. ⌃B twice and Command chords are not consumed.
     func testPrefixSequencesRunBindingsAndLeaveOtherKeysToTheTerminal() {
-        let keys = PrefixKeys(), surface = UUID(), other = UUID()
+        let keys = PrefixKeys(), surface = System.uuid(), other = System.uuid()
         var table = PrefixStyle.tmux.table
         var performed: [PrefixAction] = []
         keys.table = { _ in table }

@@ -19,8 +19,7 @@ final class SSHLinuxPiIntegrationTests: XCTestCase {
         phaseTimings.begin("SSH_setup")
         var passed = false
         defer { phaseTimings.save(passed: passed && testRun?.failureCount == 0) }
-        let profile = try JSONDecoder().decode(SSHLinuxTestProfile.self,
-            from: Data(contentsOf: SSHLinuxTestProfile.configurationURL()))
+        let profile = try SSHLinuxTestProfile.load()
         let pi = try XCTUnwrap(profile.pi, "Add --pi PATH to the Linux test profile; no package is downloaded")
         let runtime = TerminalRuntime.shared, previous = runtime.chat
         runtime.chat = ChatCoordinator(enabled: true)
@@ -35,7 +34,7 @@ final class SSHLinuxPiIntegrationTests: XCTestCase {
             runtime.ssh.links.values.contains { $0.launch.tabID == origin && $0.shellPID != nil }
         }
         let ssh = try XCTUnwrap(runtime.ssh.links.values.first { $0.launch.tabID == origin })
-        let root = "/tmp/dispatch-pi-linux-" + UUID().uuidString, state = root + "/state"
+        let root = "/tmp/dispatch-pi-linux-" + System.uuid().uuidString, state = root + "/state"
         let socket = root + "/" + backend + ".sock"
         @discardableResult
         func remote(_ argv: [String], input: Data = Data()) async throws -> Data {
@@ -97,7 +96,9 @@ final class SSHLinuxPiIntegrationTests: XCTestCase {
             try await TestSupport.eventually(timeout: .seconds(15)) { !session.active }
             XCTAssertTrue(runtime.chat.canEnterChat(session))
             phaseTimings.begin("teardown")
-            await cleanup(); await app.close().value
+            await cleanup()
+            if backend == "tmux" { try await app.settleControlExit() }
+            await app.close().value
             passed = testRun?.failureCount == 0
         } catch {
             phaseTimings.begin("teardown")

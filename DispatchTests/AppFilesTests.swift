@@ -10,7 +10,7 @@ final class AppFilesTests: XCTestCase {
     func testExplicitTerminalHomeOverridesRemainLiteral() throws {
         func launch(_ overrides: [(String, String)]) throws -> Launch {
             try Launch(command: "/bin/zsh", directory: nil, overrides: overrides, config: SwiftEngine.parse("", dark: true),
-                       environment: ["HOME": "/inherited"], resources: nil, id: 1)
+                       environment: ["HOME": "/inherited"], machine: System.machine.launch, resources: nil, id: 1)
         }
         let base = try launch([])
         XCTAssertFalse(base.argv.contains("/usr/bin/env"))
@@ -31,7 +31,7 @@ final class AppFilesTests: XCTestCase {
     func testTerminfoBesideResourcesServesOnlyGhosttysEntry() throws {
         func launch(_ term: String) throws -> Launch {
             try Launch(command: "/bin/zsh", directory: nil, overrides: [], config: SwiftEngine.parse("term = " + term, dark: true),
-                       environment: ["HOME": "/inherited", "TERMINFO": "/inherited/terminfo"], resources: "/tmp/dispatch-resources/ghostty", id: 1)
+                       environment: ["HOME": "/inherited", "TERMINFO": "/inherited/terminfo"], machine: System.machine.launch, resources: "/tmp/dispatch-resources/ghostty", id: 1)
         }
         XCTAssertEqual(try launch("xterm-ghostty").env["TERMINFO"], "/tmp/dispatch-resources/terminfo")
         let system = try launch("xterm-256color")
@@ -42,30 +42,28 @@ final class AppFilesTests: XCTestCase {
     /// zsh's integration takes over ZDOTDIR; its bundled .zshenv must hand the user's startup
     /// files back, or local terminals start with zsh's bare prompt.
     func testBundledZshIntegrationSourcesTheUsersStartupFiles() throws {
-        let resources = try XCTUnwrap(Bundle.main.resourceURL).appendingPathComponent("ghostty")
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let resources = System.resources.appendingPathComponent("ghostty")
+        let directory = System.temporary.appendingPathComponent(System.uuid().uuidString)
         let user = directory.appendingPathComponent("zdotdir"), output = directory.appendingPathComponent("seen")
         try FileManager.default.createDirectory(at: user, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         try "DISPATCH_ZSHRC=sourced\n".write(to: user.appendingPathComponent(".zshrc"), atomically: true, encoding: .utf8)
         let launch = try Launch(command: "/bin/zsh", directory: nil, overrides: [], config: SwiftEngine.parse("", dark: true),
-                                environment: ["HOME": directory.path, "ZDOTDIR": user.path, "PATH": "/usr/bin:/bin"], resources: resources.path, id: 1)
+                                environment: ["HOME": directory.path, "ZDOTDIR": user.path, "PATH": "/usr/bin:/bin"], machine: System.machine.launch, resources: resources.path, id: 1)
         XCTAssertEqual(launch.env["ZDOTDIR"], resources.path + "/shell-integration/zsh")
         let zsh = Process()
         zsh.executableURL = URL(fileURLWithPath: "/bin/zsh")
         zsh.arguments = ["-i", "-c", #"print -r -- "$DISPATCH_ZSHRC $ZDOTDIR" > "$1""#, "zsh", output.path]
         zsh.environment = launch.env
         zsh.standardInput = FileHandle.nullDevice
-        zsh.standardOutput = FileHandle.nullDevice
         zsh.standardError = FileHandle.nullDevice
-        try zsh.run()
-        zsh.waitUntilExit()
+        _ = try TestSupport.live(zsh)
         XCTAssertEqual(try String(contentsOf: output, encoding: .utf8), "sourced \(user.path)\n")
     }
 
     func testTerminalChildrenLiveInTheTestHome() async throws {
         try DesktopTestSupport.requireUnlocked()
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let directory = System.temporary.appendingPathComponent(System.uuid().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let output = directory.appendingPathComponent("home.json")
@@ -80,21 +78,21 @@ final class AppFilesTests: XCTestCase {
         runtime.chat.stop()
         do {
             XCTAssertNil(runtime.error)
-            let terminal = TerminalView(id: UUID(), directory: directory.path, launchCommand: command, presentation: .standalone)
+            let terminal = TerminalView(id: System.uuid(), directory: directory.path, launchCommand: command, presentation: .standalone)
             let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 800, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
             window.contentView = terminal
             window.makeKeyAndOrderFront(nil)
             defer { terminal.destroy(); window.orderOut(nil); window.contentView = nil; window.close() }
-            try await TestSupport.eventually { FileManager.default.fileExists(atPath: output.path) }
-            let seen = try JSONDecoder().decode([String: String].self, from: Data(contentsOf: output))
-            XCTAssertEqual(seen, ["HOME": Home.url.path, "argv0": "-/bin/zsh", "ZDOTDIR": "/var/empty"])
+            try await TestSupport.eventually { System.exists(output) }
+            let seen = try JSONDecoder().decode([String: String].self, from: System.read(output))
+            XCTAssertEqual(seen, ["HOME": System.home.path, "argv0": "-/bin/zsh", "ZDOTDIR": "/var/empty"])
         } catch { await runtime.stop().value; throw error }
         await runtime.stop().value
     }
 
     func testStoresAndAgentSetupsLeaveTheUserFilesAlone() throws {
-        let home = NSHomeDirectory(), environment = ProcessInfo.processInfo.environment
+        let home = System.machine.home.path, environment = System.inherited
         func agent(_ variable: String, _ path: String) -> String { environment[variable].flatMap { $0.isEmpty ? nil : $0 } ?? home + path }
         let codex = agent("CODEX_HOME", "/.codex"), claude = agent("CLAUDE_CONFIG_DIR", "/.claude"), pi = agent("PI_CODING_AGENT_DIR", "/.pi/agent")
         // What Dispatch writes there: its own files, and in each agent's home what its setups manage.
@@ -132,19 +130,17 @@ final class AppFilesTests: XCTestCase {
         func run(_ script: String) throws -> [String] {
             let child = Process(), output = Pipe()
             (child.executableURL, child.arguments, child.standardOutput) = (URL(fileURLWithPath: "/bin/sh"), ["-c", script], output)
-            try child.run()
-            child.waitUntilExit()
-            return String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self).components(separatedBy: "\n")
+            return String(decoding: try TestSupport.live(child).output, as: UTF8.self).components(separatedBy: "\n")
         }
         // Its home, and the names of the variables that would move an agent's home that are set.
         let seen = try run(#"printf '%s\n' "$HOME" ${CODEX_HOME+CODEX_HOME} ${CLAUDE_CONFIG_DIR+CLAUDE_CONFIG_DIR} ${PI_CODING_AGENT_DIR+PI_CODING_AGENT_DIR}"#)
-        let moved = (seen.first == Home.url.path ? [] : ["HOME"]) + seen.dropFirst().filter { !$0.isEmpty }
+        let moved = (seen.first == System.home.path ? [] : ["HOME"]) + seen.dropFirst().filter { !$0.isEmpty }
         XCTAssertEqual(moved, [], "children see the user's home")
         guard moved.isEmpty else { return }
         // What agents write there lands in the test home, never in the user's.
         let probes = [".codex", ".claude", ".pi/agent"].map { $0 + "/dispatch-test-probe" }
         _ = try run(probes.map { #"mkdir -p "$HOME/$(dirname \#($0))" && touch "$HOME/\#($0)""# }.joined(separator: " && "))
-        XCTAssertEqual(probes.filter { FileManager.default.fileExists(atPath: NSHomeDirectory() + "/" + $0) }, [])
-        XCTAssertEqual(probes.filter { !FileManager.default.fileExists(atPath: Home.url.path + "/" + $0) }, [])
+        XCTAssertEqual(probes.filter { FileManager.default.fileExists(atPath: System.machine.home.path + "/" + $0) }, [])
+        XCTAssertEqual(probes.filter { !FileManager.default.fileExists(atPath: System.home.path + "/" + $0) }, [])
     }
 }

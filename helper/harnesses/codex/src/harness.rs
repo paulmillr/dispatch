@@ -656,7 +656,7 @@ impl Harness for Codex {
             let active = self.main.current(&binding.process);
             let session = active.as_ref().map(|current| current.session.as_str())
                 .or_else(|| self.main.bound(binding).then_some(binding.session.as_str()));
-            let step = reading.step(binding, screen, current.as_deref(), session);
+            let step = reading.step(binding, screen, current.as_ref(), session);
             if matches!(step, Step::Done(_)) && reading.replaces()
                 && let Some(session) = crate::menu::status(&screen.text).map(|status| status.session)
                     .or_else(|| self.main.current(&binding.process).map(|current| current.session))

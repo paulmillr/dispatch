@@ -1,11 +1,11 @@
 //! Native model/list fields, preserving the existing catalog projection.
 use dispatch_helper_core::{
     api::{Choice, Error, State},
-    json::{self, Data, Json, Kind, Value},
+    json::{Data, Json, Kind, Value},
 };
 use std::collections::BTreeSet;
 
-pub fn goal(value: Value<'_>) -> std::option::Option<String> {
+pub fn goal(value: Value<'_>) -> std::option::Option<dispatch_helper_core::wire::body::Encoded> {
     let mut fields = vec![
         ("objective", Data::String(value.get("objective")?.string()?)),
         ("status", Data::String(value.get("status")?.string()?)),
@@ -26,7 +26,7 @@ pub fn goal(value: Value<'_>) -> std::option::Option<String> {
     if let Some(budget) = value.get("tokenBudget").and_then(Value::signed) {
         fields.push(("tokenBudget", Data::Signed(budget)));
     }
-    String::from_utf8(json::write(&Data::Object(fields)).ok()?).ok()
+    dispatch_helper_core::wire::body::Encoded::value(&Data::Object(fields)).ok()
 }
 
 /// The thread title: `name` of a read/resumed thread, `threadName` of thread/name/updated; null
@@ -55,7 +55,7 @@ pub fn settings(value: Value<'_>, state: &mut State) {
         .map(str::to_owned);
 }
 
-pub fn usage(value: Value<'_>) -> std::option::Option<String> {
+pub fn usage(value: Value<'_>) -> std::option::Option<dispatch_helper_core::wire::body::Encoded> {
     let api = value.get("tokenUsage");
     let info = api.or_else(|| value.get("info"))?;
     let read = |value: std::option::Option<Value<'_>>| {
@@ -110,7 +110,7 @@ pub fn usage(value: Value<'_>) -> std::option::Option<String> {
     if let Some(cost) = cost {
         fields.push(("total_cost_usd", Data::Real(cost)));
     }
-    String::from_utf8(json::write(&Data::Object(vec![("info", Data::Object(fields))])).ok()?).ok()
+    dispatch_helper_core::wire::body::Encoded::value(&Data::Object(vec![("info", Data::Object(fields))])).ok()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -8,7 +8,6 @@ Native captures are replayed with live UI pipes and absent native producers.
 
 import argparse
 import asyncio
-import base64
 import hashlib
 import itertools
 import json
@@ -151,7 +150,7 @@ class Client:
 
     def output(self, terminal):
         return b"".join(
-            base64.b64decode(value["params"]["bytes"])
+            value["params"]["bytes"]
             for _, _, value in self.frames
             if value.get("method") == "terminal.output"
             and value["params"]["terminal"] == terminal

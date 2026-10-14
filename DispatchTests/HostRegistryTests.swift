@@ -26,7 +26,7 @@ final class HostRegistryTests: XCTestCase {
 
     func testIdentityMergesAliasesAndUsersWithoutMergingNames() {
         let hosts = HostRegistry(defaults: nil)
-        let first = UUID(), second = UUID(), third = UUID(), a = UUID(), b = UUID(), c = UUID()
+        let first = System.uuid(), second = System.uuid(), third = System.uuid(), a = System.uuid(), b = System.uuid(), c = System.uuid()
         hosts.begin(first, generation: a, destination: "alice@build")
         hosts.begin(second, generation: b, destination: "root@build-alias")
         XCTAssertNotEqual(hosts.terminals[first]?.host, hosts.terminals[second]?.host)
@@ -51,7 +51,7 @@ final class HostRegistryTests: XCTestCase {
         defer { runtime.workspace = previous }
         let local = TerminalTab(directory: "/tmp"), remote = TerminalTab(directory: "/tmp")
         XCTAssertNil(runtime.ssh.stripHost(active: local, among: [local, remote]), "An all-local strip has no host mark")
-        let generation = UUID()
+        let generation = System.uuid()
         workspace.hosts.begin(remote.focusedSurfaceID, generation: generation, destination: "strip-fixture")
         // Until the host identifies itself the mark pulses, neutral, under a placeholder identity; landing swaps it.
         let pending = try XCTUnwrap(runtime.ssh.stripHost(active: remote, among: [local, remote]))
@@ -107,7 +107,7 @@ final class HostRegistryTests: XCTestCase {
         store.choices = [:]
         let hosts = HostRegistry(defaults: nil)
         func remember(_ name: String) -> HostID {
-            let terminal = UUID(), generation = UUID()
+            let terminal = System.uuid(), generation = System.uuid()
             hosts.begin(terminal, generation: generation, destination: name)
             hosts.update(terminal, generation: generation, destination: name, greeting: greeting(name), state: .connected)
             hosts.remove(terminal)
@@ -123,10 +123,10 @@ final class HostRegistryTests: XCTestCase {
         XCTAssertEqual(Set(try remembered.map(color)), Set(HostColor.allCases))
         // Three of them connect again.
         var connected = try Set(remembered.prefix(3).map(color))
-        for id in remembered.prefix(3) { hosts.seed(UUID(), from: id, generation: UUID()) }
+        for id in remembered.prefix(3) { hosts.seed(System.uuid(), from: id, generation: System.uuid()) }
         XCTAssertEqual(connected.count, 3, "Fixture: three different colors on screen")
 
-        let first = UUID(), second = UUID(), generation = UUID()
+        let first = System.uuid(), second = System.uuid(), generation = System.uuid()
         hosts.begin(first, generation: generation, destination: "new-one")
         let pending = try XCTUnwrap(hosts.terminals[first]?.host)
         XCTAssertTrue(pending.isProvisional)
@@ -134,7 +134,7 @@ final class HostRegistryTests: XCTestCase {
         XCTAssertFalse(connected.contains(preview), "A pending connection doesn't borrow a color on screen")
         connected.insert(preview)
         // Another host connecting meanwhile neither takes the preview nor changes it.
-        let other = UUID(), otherGeneration = UUID()
+        let other = System.uuid(), otherGeneration = System.uuid()
         hosts.begin(other, generation: otherGeneration, destination: "new-two")
         hosts.update(other, generation: otherGeneration, destination: "new-two", greeting: greeting("new-two"), state: .connected)
         let otherColor = try color(.authenticated("new-two"))
@@ -145,7 +145,7 @@ final class HostRegistryTests: XCTestCase {
         hosts.update(first, generation: generation, destination: "new-one", greeting: greeting("new-one"), state: .connected)
         XCTAssertEqual(try color(.authenticated("new-one")), preview, "The new host keeps the color it connected with")
         XCTAssertNil(hosts.records[pending], "The placeholder goes once its connection is identified")
-        hosts.begin(second, generation: UUID(), destination: "new-three")
+        hosts.begin(second, generation: System.uuid(), destination: "new-three")
         XCTAssertFalse(connected.contains(try color(try XCTUnwrap(hosts.terminals[second]?.host))))
     }
 
@@ -207,7 +207,7 @@ final class HostRegistryTests: XCTestCase {
         store.choices = [:]
         let hosts = HostRegistry(defaults: nil)
         func connect(_ name: String) -> HostID {
-            let terminal = UUID(), generation = UUID()
+            let terminal = System.uuid(), generation = System.uuid()
             hosts.begin(terminal, generation: generation, destination: name)
             hosts.update(terminal, generation: generation, destination: name, greeting: greeting(name), state: .connected)
             hosts.remove(terminal)
@@ -236,12 +236,12 @@ final class HostRegistryTests: XCTestCase {
     }
 
     func testTreeOrderMovesHostsIncludingLocalAndPersists() throws {
-        let suite = "HostRegistryTests.order.\(UUID().uuidString)"
+        let suite = "HostRegistryTests.order.\(System.uuid().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let hosts = HostRegistry(defaults: defaults)
         for name in ["one", "two"] {
-            let terminal = UUID(), generation = UUID()
+            let terminal = System.uuid(), generation = System.uuid()
             hosts.begin(terminal, generation: generation, destination: name)
             hosts.update(terminal, generation: generation, destination: name, greeting: greeting(name), state: .connected)
         }
@@ -257,7 +257,7 @@ final class HostRegistryTests: XCTestCase {
     }
 
     func testStaleCallbacksCannotReplaceAConnectionAndFailuresAggregate() {
-        let hosts = HostRegistry(defaults: nil), terminal = UUID(), other = UUID(), old = UUID(), current = UUID(), live = UUID()
+        let hosts = HostRegistry(defaults: nil), terminal = System.uuid(), other = System.uuid(), old = System.uuid(), current = System.uuid(), live = System.uuid()
         hosts.begin(terminal, generation: old, destination: "old")
         hosts.begin(terminal, generation: current, destination: "new")
         XCTAssertNil(hosts.update(terminal, generation: old, destination: "old", greeting: greeting("old"), state: .connected))
@@ -276,14 +276,14 @@ final class HostRegistryTests: XCTestCase {
     func testOldGreetingsMetadataPersistenceSeedsAndEmptyCards() throws {
         let old = try JSONDecoder().decode(SSHGreeting.self, from: Data(#"{"version":1,"host":"old","boot":"b","uid":501,"home":"/tmp","capabilities":[]}"#.utf8))
         XCTAssertNil(old.hostname); XCTAssertNil(old.os)
-        let suite = "HostRegistryTests-\(UUID())", defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let suite = "HostRegistryTests-\(System.uuid())", defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        let hosts = HostRegistry(defaults: defaults), terminal = UUID(), generation = UUID()
+        let hosts = HostRegistry(defaults: defaults), terminal = System.uuid(), generation = System.uuid()
         hosts.begin(terminal, generation: generation, destination: "user@server")
         var known = greeting("identity")
         known.hostname = "actual-host"; known.os = "Linux"; known.distribution = "ubuntu"; known.osName = "Ubuntu 26.04"
         hosts.update(terminal, generation: generation, destination: "user@server", greeting: known, state: .connected)
-        let id = HostID.authenticated("identity"), seed = UUID(), seedGeneration = UUID()
+        let id = HostID.authenticated("identity"), seed = System.uuid(), seedGeneration = System.uuid()
         hosts.seed(seed, from: id, generation: seedGeneration)
         XCTAssertEqual(hosts.terminals[seed]?.host, id)
         XCTAssertEqual(hosts.terminals[seed]?.state, .connecting)
@@ -297,18 +297,18 @@ final class HostRegistryTests: XCTestCase {
         restored.reset()
         XCTAssertNil(defaults.object(forKey: "HostRegistry.v1"))
         XCTAssertEqual(Set(HostRegistry(defaults: defaults).records.keys), [.local])
-        restored.begin(terminal, generation: UUID(), destination: "fresh-alias")
+        restored.begin(terminal, generation: System.uuid(), destination: "fresh-alias")
         XCTAssertEqual(restored.terminals.count, 1)
         XCTAssertEqual(restored.records.values.first { $0.id != .local }?.order, 0)
     }
 
     func testPersistedExtremeOrderCannotOverflowWhenAnotherHostArrives() throws {
-        let suite = "HostRegistryTests-\(UUID())", defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let suite = "HostRegistryTests-\(System.uuid())", defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let saved = HostRecord(id: .authenticated("saved"), name: "saved", destinations: [], order: Int.max)
         defaults.set(try JSONEncoder().encode([saved]), forKey: "HostRegistry.v1")
-        let hosts = HostRegistry(defaults: defaults), generation = UUID()
-        hosts.begin(UUID(), generation: generation, destination: "next")
+        let hosts = HostRegistry(defaults: defaults), generation = System.uuid()
+        hosts.begin(System.uuid(), generation: generation, destination: "next")
         XCTAssertEqual(hosts.ordered([saved.id, .provisional(generation)]).map(\.name), ["Local", "saved", "next"])
     }
 
@@ -319,7 +319,7 @@ final class HostRegistryTests: XCTestCase {
         let clone = try XCTUnwrap(HostRegistry.loginScope(executable: "/usr/bin/ssh", destination: "alice@build",
             configuration: "hostname build\nuser alice\nport 22\nrequesttty force\nclearallforwardings yes\ncontrolpath /tmp/unique\n"))
         XCTAssertEqual(scope, clone)
-        let first = UUID(), second = UUID(), a = UUID(), b = UUID()
+        let first = System.uuid(), second = System.uuid(), a = System.uuid(), b = System.uuid()
         hosts.begin(first, generation: a, destination: scope.destination, state: .unverified, scope: scope)
         hosts.begin(second, generation: b, destination: scope.destination, state: .unverified, scope: clone)
         XCTAssertEqual(hosts.terminals[first]?.host, hosts.terminals[second]?.host)
@@ -330,8 +330,8 @@ final class HostRegistryTests: XCTestCase {
         XCTAssertEqual(hosts.terminals[second]?.state, .unverified)
         hosts.update(second, generation: b, destination: scope.destination, greeting: greeting("two"), state: .connected)
         XCTAssertNotEqual(hosts.terminals[first]?.host, hosts.terminals[second]?.host, "Conflicting machine identities split the group")
-        let third = UUID()
-        hosts.begin(third, generation: UUID(), destination: scope.destination, scope: scope)
+        let third = System.uuid()
+        hosts.begin(third, generation: System.uuid(), destination: scope.destination, scope: scope)
         XCTAssertEqual(hosts.terminals[third]?.host, .login(scope), "An ambiguous login must not choose either verified machine")
         hosts.remove(first, generation: b)
         XCTAssertNotNil(hosts.terminals[first], "Another tab cannot end this connection")
@@ -348,12 +348,12 @@ final class HostRegistryTests: XCTestCase {
         }
         XCTAssertNotEqual(base, HostRegistry.loginScope(executable: "/opt/bin/ssh", destination: "build", configuration: configuration))
         XCTAssertNil(HostRegistry.loginScope(executable: "/usr/bin/ssh", destination: "build", configuration: "user alice\n"))
-        let hosts = HostRegistry(defaults: nil), first = UUID()
-        hosts.begin(first, generation: UUID(), destination: "build", scope: base)
+        let hosts = HostRegistry(defaults: nil), first = System.uuid()
+        hosts.begin(first, generation: System.uuid(), destination: "build", scope: base)
         let original = hosts.terminals[first]?.host
         hosts.remove(first)
-        let second = UUID()
-        hosts.begin(second, generation: UUID(), destination: "build", scope: base)
+        let second = System.uuid()
+        hosts.begin(second, generation: System.uuid(), destination: "build", scope: base)
         XCTAssertEqual(hosts.terminals[second]?.host, original, "Reconnect reuses the stable login group")
     }
 

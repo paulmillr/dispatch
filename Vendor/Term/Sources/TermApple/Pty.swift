@@ -17,12 +17,42 @@ public final class Pty {
     /// another process, which must never be signaled or waited for. Main queue.
     public private(set) var pid: pid_t?
     var exit: DispatchSourceProcess?
-    let master: Master
+    let master: Master?
+
+    /// Tests capture or replay what crosses a pty (the host's journal): `journal` gets each launch.
+    /// Capturing, the process runs and the journal sees its reads, writes, exit and hangup; replaying,
+    /// no process runs and the journal delivers the recorded reads and exit itself.
+    public nonisolated(unsafe) static var journal: ((Launch) throws -> Journal?)?
+    public typealias Read = (UnsafeBufferPointer<UInt8>) -> Void
+    public typealias Exit = @MainActor (Int32) -> Void
+    public struct Journal {
+        let replaying: Bool, observe: (@escaping Read, @escaping Exit) -> (Read, Exit)
+        let write: ([UInt8], Bool) -> Bool, hangup: () -> Void
+        /// The window the pty has now: at its start and on each resize.
+        let resize: (winsize) -> Void
+        /// What the OS reports (the child's PID, the foreground group): given live, the journal's when replaying.
+        let process: (pid_t?) -> pid_t?, foreground: (pid_t) -> pid_t
+        public init(replaying: Bool, observe: @escaping (@escaping Read, @escaping Exit) -> (Read, Exit),
+                    write: @escaping ([UInt8], Bool) -> Bool, resize: @escaping (winsize) -> Void, hangup: @escaping () -> Void,
+                    process: @escaping (pid_t?) -> pid_t?, foreground: @escaping (pid_t) -> pid_t) {
+            (self.replaying, self.observe, self.write, self.hangup, self.resize) = (replaying, observe, write, hangup, resize)
+            (self.process, self.foreground) = (process, foreground)
+        }
+    }
+    private let journal: Journal?
 
     /// Starts `launch` with `size` as its window; `onRead` gets each batch of output on the parse
     /// thread (with the pty, to answer), `onExit` the status on the main queue.
     public init(size: winsize, launch: Launch, onRead: @escaping @Sendable (Pty, UnsafeBufferPointer<UInt8>) -> Void,
                 onExit: @escaping @MainActor (Int32) -> Void) throws {
+        journal = try Self.journal?(launch)
+        journal?.resize(size)
+        if let journal, journal.replaying {
+            master = nil
+            pid = journal.process(nil)
+            _ = journal.observe({ [weak self] bytes in if let self { onRead(self, bytes) } }, { [weak self] status in self?.pid = nil; onExit(status) })
+            return
+        }
         // Like Command.zig + Pty.childPreExec: fork; the child gets a new session with the slave
         // as its controlling terminal on 0-2 (forkpty's login_tty: setsid + TIOCSCTTY; macOS gives
         // no controlling terminal for just opening the tty, so posix_spawn can't), default signal
@@ -42,40 +72,50 @@ public final class Pty {
             _exit(127)
         }
         guard child > 0 else { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
-        pid = child
+        pid = journal?.process(child) ?? child
         do { master = try Master(m) } catch { Darwin.close(m); kill(child, SIGKILL); waitpid(child, nil, 0); throw error }
-        master.start { [weak self] bytes in if let self { onRead(self, bytes) } }
+        let read: Read = { [weak self] bytes in if let self { onRead(self, bytes) } }
+        let (observed, exited) = journal?.observe(read, onExit) ?? (read, onExit)
+        master?.start(observed)
         let exit = DispatchSource.makeProcessSource(identifier: child, eventMask: .exit, queue: .main)
         exit.setEventHandler { [weak self] in
             var status: Int32 = 0
             waitpid(child, &status, 0)
             self?.pid = nil
-            MainActor.assumeIsolated { onExit(status) }
+            MainActor.assumeIsolated { exited(status) }
         }
         exit.resume()
         self.exit = exit
     }
 
     /// Queued with bounded backpressure: false when a stalled child has filled the write budget.
-    @discardableResult public func write(_ bytes: [UInt8]) -> Bool { master.write(bytes) }
+    @discardableResult public func write(_ bytes: [UInt8]) -> Bool {
+        let accepted = master?.write(bytes) ?? true
+        return journal?.write(bytes, accepted) ?? accepted
+    }
 
     /// The terminal's foreground process group (ghostty_surface_foreground_pid).
-    public var foregroundPID: pid_t { tcgetpgrp(master.fd) }
+    public var foregroundPID: pid_t {
+        let live = master.map { tcgetpgrp($0.fd) } ?? 0
+        return journal?.foreground(live) ?? live
+    }
 
     /// TIOCSWINSZ: the grid and its pixel size.
     public func resize(_ size: winsize) {
         var ws = size
-        _ = ioctl(master.fd, TIOCSWINSZ, &ws)
+        if let master { _ = ioctl(master.fd, TIOCSWINSZ, &ws) }
+        journal?.resize(size)
     }
 
     /// Ends the process like Ghostty's Exec killCommand: SIGHUP to its process group, followed by
     /// SIGKILL if needed. Termination and reaping run off the caller so close cannot block the UI.
     public func close() {
+        journal?.hangup()
         guard let exit else { return }
         exit.setEventHandler {}
         exit.cancel()
         self.exit = nil
-        defer { pid = nil; master.stop() }
+        defer { pid = nil; master?.stop() }
         guard let pid else { return }
         let parentGroup = getpgid(0)
         Self.reaperQueue.async {

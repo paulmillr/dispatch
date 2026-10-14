@@ -23,7 +23,7 @@ enum HelperWire {
   }
 
   struct Content: Sendable {
-    let json: Data
+    let value: HelperBinary.Value
     let bytes: Data?
   }
 

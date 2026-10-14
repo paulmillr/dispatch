@@ -12,7 +12,7 @@ final class ChatScrollPosition {
         init(_ view: NSView) { self.view = view }
     }
     private var markers: [String: WeakMarker] = [:]
-    private let diagnosticID = UUID()
+    private let diagnosticID = System.uuid()
     private let diagnosticStarted = ProcessInfo.processInfo.systemUptime
     private lazy var diagnosticKey = SymmetricKey(size: .bits256)
     private var diagnosticEvents: [String: Int] = [:]
@@ -28,7 +28,7 @@ final class ChatScrollPosition {
     /// Latest SwiftUI scroll geometry, reported only while diagnostics record.
     var swiftUIScroll: ChatViewportTrace.SwiftUIScroll?
     private var attachedAt: TimeInterval?
-    private var mountCheckGeneration = UUID()
+    private var mountCheckGeneration = System.uuid()
     private var mountBlank = false
     private var firstScrollPending = false
     private weak var scroll: NSScrollView?
@@ -230,7 +230,7 @@ final class ChatScrollPosition {
     private func scheduleMountChecks() {
         attachedAt = ProcessInfo.processInfo.systemUptime
         mountBlank = false; firstScrollPending = true
-        let generation = UUID()
+        let generation = System.uuid()
         mountCheckGeneration = generation
         let interaction = interactionRevision
         for delay in [0.15, 0.4, 0.8] {
@@ -504,7 +504,7 @@ final class ChatScrollPosition {
         recordDiagnostic(.disconnected, force: true)
         cancelGlide(); arrivalExpectedAt = -Double.infinity; rowExpectedAt = -Double.infinity
         diagnosticState = nil; diagnosticRows = nil; swiftUIScroll = nil
-        mountCheckGeneration = UUID(); mountBlank = false; firstScrollPending = false; attachedAt = nil
+        mountCheckGeneration = System.uuid(); mountBlank = false; firstScrollPending = false; attachedAt = nil
         stopViewportChecks(); hasContent = nil; recoverViewport = nil
         automaticHistoryLoadsRemaining = 0; loadEarlier = nil
         saved = visibleAnchor() ?? saved

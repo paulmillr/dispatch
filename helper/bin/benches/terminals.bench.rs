@@ -2,8 +2,8 @@
 //! benched: 100+ terminals/sessions, latency and throughput"). Native backend, private HOME.
 //! Run: cargo bench -p dispatch-helper --bench terminals [-- quick]
 use dispatch_helper_core::{
-    json::{Json, Value},
-    wire::{self, Collector, Header, Kind, Received},
+    json::Data,
+    wire::{self, Collector, Header, Kind, Received, body::{self, Encoded}},
 };
 use std::{
     collections::BTreeMap,
@@ -85,19 +85,18 @@ impl Helper {
         }
     }
 
-    /// Request bodies are JSON until the binary wire flip switches this one encoder.
-    fn send(&mut self, method: &str, params: &str) -> u64 {
+    fn send(&mut self, method: &str, params: Data<'_>) -> u64 {
         self.serial += 1;
-        let body = format!(r#"{{"method":"{method}","params":{params}}}"#);
-        let frame = wire::frame(Kind::Request, self.serial, body.as_bytes()).unwrap();
+        let body = body::encode(&Data::Object(vec![("method", Data::String(method)), ("params", params)])).unwrap();
+        let frame = wire::packet(Kind::Request, self.serial, &body).unwrap();
         self.input.write_all(&frame).unwrap();
         self.serial
     }
 
     /// One whole message (chunks joined by the shared Collector); terminal output and exits
     /// are filed under their stream id.
-    fn next(&mut self) -> (Kind, u64, Json) {
-        let (header, text) = loop {
+    fn next(&mut self) -> (Kind, u64, Encoded) {
+        let (header, value) = loop {
             let mut head = [0; 13];
             self.output.read_exact(&mut head).unwrap();
             let header = Header::decode(&head, wire::LIMIT).unwrap();
@@ -107,24 +106,22 @@ impl Helper {
                 .collectors
                 .entry(header.id)
                 .or_insert_with(|| Collector::new(header.id, wire::LIMIT as usize));
-            if let Some(Received::Json(text)) = collector.push(header, &body).unwrap() {
+            if let Some(Received::Value(value)) = collector.push(header, &body).unwrap() {
                 self.collectors.remove(&header.id);
-                break (header, text);
+                break (header, value);
             }
         };
-        let value = Json::parse(&text).unwrap();
         let root = value.root();
-        match root.get("method").and_then(Value::string) {
+        match root.get("method").and_then(Data::string) {
             Some("terminal.output") => {
-                let bytes = root.get("params").unwrap().get("bytes").unwrap();
-                let bytes = dispatch_helper_core::base64::decode(bytes).unwrap();
+                let bytes = root.get("params").unwrap().get("bytes").unwrap().bytes().unwrap();
                 self.first.get_or_insert_with(Instant::now);
                 self.streams.entry(header.id).or_default().extend(bytes);
             }
             Some("terminal.exit") => {
                 let status = root.get("params").and_then(|p| p.get("status"));
                 self.exited
-                    .insert(header.id, status.and_then(Value::signed).unwrap_or(-1));
+                    .insert(header.id, status.and_then(Data::signed).unwrap_or(-1));
             }
             _ => {}
         }
@@ -132,22 +129,23 @@ impl Helper {
     }
 
     /// The response (or named notice) for one request; other frames are filed meanwhile.
-    fn wait(&mut self, id: u64, notice: Option<&str>) -> Json {
+    fn wait(&mut self, id: u64, notice: Option<&str>) -> Encoded {
         loop {
             let (kind, from, value) = self.next();
             let root = value.root();
             if from != id {
                 continue;
             }
-            assert!(root.get("error").is_none(), "{:?}", root.write());
-            let named = root.get("method").and_then(Value::string);
+            let error = root.get("error").and_then(|e| e.get("message")).and_then(Data::string);
+            assert!(error.is_none(), "{error:?}");
+            let named = root.get("method").and_then(Data::string);
             if kind == Kind::Response || (notice.is_some() && named == notice) {
                 return value;
             }
         }
     }
 
-    fn call(&mut self, method: &str, params: &str) -> Json {
+    fn call(&mut self, method: &str, params: Data<'_>) -> Encoded {
         let id = self.send(method, params);
         self.wait(id, None)
     }
@@ -155,39 +153,37 @@ impl Helper {
 
 /// Native root, then `count` terminals running `command`, each attached; returns (terminal, stream).
 fn terminals(helper: &mut Helper, count: usize, command: &str) -> Vec<(u64, u64)> {
-    let list = helper.call("backends.list", "{}");
-    let backends = list.root().get("result").unwrap();
+    let list = helper.call("backends.list", Data::Object(vec![]));
+    let root = list.root();
+    let backends = root.get("result").unwrap();
     let native = backends
         .array()
         .unwrap()
-        .find(|b| b.get("key").and_then(Value::string) == Some("native"))
+        .find(|b| b.get("key").and_then(Data::string) == Some("native"))
         .expect("native backend");
     let mux = native.get("mux").unwrap().unsigned().unwrap();
-    let open = helper.send("backends.open", &format!(r#"{{"mux":{mux},"key":"native"}}"#));
+    let open = helper.send("backends.open", Data::Object(vec![("mux", Data::Unsigned(mux)), ("key", Data::String("native"))]));
     let opened = helper.wait(open, Some("backend.opened"));
     let root = opened.root().get("params").unwrap().unsigned().unwrap();
-    let command = json_string(command);
     (0..count)
         .map(|_| {
             let created = helper.call(
                 "terminals.create",
-                &format!(r#"{{"parent":{root},"command":{command}}}"#),
+                Data::Object(vec![("parent", Data::Unsigned(root)), ("command", Data::String(command))]),
             );
             let terminal = created.root().get("result").unwrap().unsigned().unwrap();
             let stream = helper.send(
                 "terminals.attach",
-                &format!(r#"{{"terminal":{terminal},"rows":24,"columns":200}}"#),
+                Data::Object(vec![
+                    ("terminal", Data::Unsigned(terminal)),
+                    ("rows", Data::Unsigned(24)),
+                    ("columns", Data::Unsigned(200)),
+                ]),
             );
             helper.wait(stream, Some("terminal.attached"));
             (terminal, stream)
         })
         .collect()
-}
-
-fn json_string(text: &str) -> String {
-    let mut out = Vec::new();
-    wire::string(&mut out, text);
-    String::from_utf8(out).unwrap()
 }
 
 fn cpu(pid: u32) -> f64 {
@@ -201,7 +197,7 @@ fn cpu(pid: u32) -> f64 {
 /// helper.md: "minimal amount of resources", events instead of polling.
 fn idle(root: &Path, count: usize) {
     let mut helper = Helper::spawn(root);
-    helper.call("hello", "{}");
+    helper.call("hello", Data::Object(vec![]));
     let pid = helper.child.id();
     terminals(&mut helper, count, "exec cat");
     let threads = || -> BTreeMap<String, f64> {
@@ -233,17 +229,17 @@ fn percentile(sorted: &[Duration], p: usize) -> Duration {
 
 fn latency(root: &Path, count: usize, samples: usize) {
     let mut helper = Helper::spawn(root);
-    helper.call("hello", "{}");
+    helper.call("hello", Data::Object(vec![]));
     let terminals = terminals(&mut helper, count, "exec cat");
     let mut times = Vec::with_capacity(samples);
     for round in 0..samples {
         let (terminal, stream) = terminals[round % terminals.len()];
         let marker = format!("m{round}x");
-        let bytes: Vec<String> = format!("{marker}\n").bytes().map(|b| b.to_string()).collect();
+        let line = format!("{marker}\n");
         let start = Instant::now();
         helper.send(
             "terminals.input",
-            &format!(r#"{{"terminal":{terminal},"bytes":[{}]}}"#, bytes.join(",")),
+            Data::Object(vec![("terminal", Data::Unsigned(terminal)), ("bytes", Data::Bytes(line.as_bytes()))]),
         );
         loop {
             let seen = helper.streams.get(&stream).is_some_and(|out| {
@@ -269,7 +265,7 @@ fn latency(root: &Path, count: usize, samples: usize) {
 
 fn throughput(root: &Path, count: usize, size: usize) {
     let mut helper = Helper::spawn(root);
-    helper.call("hello", "{}");
+    helper.call("hello", Data::Object(vec![]));
     let pid = helper.child.id();
     // Each terminal waits on its own input until every terminal is attached (a time-based
     // wait loses to a slow 100-terminal setup); then exactly `size` bytes, no newline.
@@ -278,7 +274,7 @@ fn throughput(root: &Path, count: usize, size: usize) {
     let command = format!("sh -c \"read go; head -c {size} /dev/zero | tr '\\0' a\"");
     let terminals = terminals(&mut helper, count, &command);
     for (terminal, _) in &terminals {
-        helper.call("terminals.input", &format!(r#"{{"terminal":{terminal},"bytes":[10]}}"#));
+        helper.call("terminals.input", Data::Object(vec![("terminal", Data::Unsigned(*terminal)), ("bytes", Data::Bytes(b"\n"))]));
     }
     let cpu_before = cpu(pid);
     // Request round trips while output streams: a reply must not queue behind bulk output.
@@ -286,7 +282,7 @@ fn throughput(root: &Path, count: usize, size: usize) {
     let mut pending: Option<(u64, Instant)> = None;
     while terminals.iter().any(|(_, s)| !helper.exited.contains_key(s)) {
         if pending.is_none() && helper.first.is_some() {
-            pending = Some((helper.send("echo", r#"{"value":1}"#), Instant::now()));
+            pending = Some((helper.send("echo", Data::Object(vec![("value", Data::Unsigned(1))])), Instant::now()));
         }
         let (kind, id, _) = helper.next();
         if let Some((request, sent)) = pending

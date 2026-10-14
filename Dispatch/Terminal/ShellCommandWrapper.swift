@@ -50,13 +50,13 @@ struct ShellCommandWrapper: Equatable, Sendable {
     /// current or retired Dispatch shims retained by persistent shells.
     func executable(in environment: [String: String]) -> String? {
         let shim = environment["DISPATCH_HERDR_DIRECTORY"].map {
-            URL(fileURLWithPath: $0 + "/bin/" + name).resolvingSymlinksInPath().path
+            System.resolve(URL(fileURLWithPath: $0 + "/bin/" + name)).path
         }
         return (environment["PATH"] ?? "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
             .split(separator: ":", omittingEmptySubsequences: false)
             .map { URL(fileURLWithPath: ($0.isEmpty ? "." : String($0)) + "/" + name).path }
             .first { path in
-                let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+                let resolved = System.resolve(URL(fileURLWithPath: path)).path
                 var directory: ObjCBool = false
                 guard resolved != shim, FileManager.default.fileExists(atPath: path, isDirectory: &directory),
                       !directory.boolValue, FileManager.default.isExecutableFile(atPath: path) else { return false }

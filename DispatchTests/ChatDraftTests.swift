@@ -232,7 +232,7 @@ import XCTest
     }
 
     func testAtomicJSONRoundTripAndRestartNeverQueuesSnapshots() throws {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("drafts.json")
+        let url = System.temporary.appendingPathComponent(System.uuid().uuidString).appendingPathComponent("drafts.json")
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let store = ChatDraftFileStore(url: url)
         let drafts = ChatDraftCollection(repository: ChatDraftRepository(store: store))
@@ -244,14 +244,14 @@ import XCTest
         drafts.edit(text: "typing"); drafts.persist(flush: true)
         XCTAssertEqual((try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? NSNumber)?.intValue, 0o600)
         try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path)
-        let restarted = ChatSession(id: UUID(), draftRepository: ChatDraftRepository(store: store))
+        let restarted = ChatSession(id: System.uuid(), draftRepository: ChatDraftRepository(store: store))
         XCTAssertEqual((try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? NSNumber)?.intValue, 0o600)
         restarted.sessionID = "same"
         XCTAssertEqual(restarted.draft, "typing")
         XCTAssertEqual(restarted.drafts.saved, [record])
         XCTAssertTrue(restarted.queuedMessages.isEmpty); XCTAssertNil(restarted.submissionID)
         restarted.drafts.persist(flush: true)
-        let again = ChatSession(id: UUID(), draftRepository: ChatDraftRepository(store: store)); again.sessionID = "same"
+        let again = ChatSession(id: System.uuid(), draftRepository: ChatDraftRepository(store: store)); again.sessionID = "same"
         XCTAssertEqual(again.drafts.saved, [record])
     }
 
@@ -352,11 +352,11 @@ import XCTest
         XCTAssertTrue(store.buckets.isEmpty)
         try await Task.sleep(for: .milliseconds(400))
         XCTAssertEqual(store.buckets[drafts.scope]?.working.text, "ab")
-        let session = chat.session(for: UUID()); session.sessionID = "close"; session.draft = "close immediately"
+        let session = chat.session(for: System.uuid()); session.sessionID = "close"; session.draft = "close immediately"
         XCTAssertNotEqual(closing.buckets[session.drafts.scope]?.working.text, "close immediately", "The debounce has not written yet")
         chat.close(session.id)
         XCTAssertEqual(closing.buckets[session.drafts.scope]?.working.text, "close immediately")
-        let next = chat.session(for: UUID()); next.sessionID = "shutdown"; next.draft = "shutdown immediately"
+        let next = chat.session(for: System.uuid()); next.sessionID = "shutdown"; next.draft = "shutdown immediately"
         XCTAssertNotEqual(closing.buckets[next.drafts.scope]?.working.text, "shutdown immediately")
         chat.stop()
         XCTAssertEqual(closing.buckets[next.drafts.scope]?.working.text, "shutdown immediately")
@@ -372,7 +372,7 @@ extension ChatDraftTests {
         XCTAssertEqual(drafts.bucket.recovery.count, 1)
         drafts.finish(delivery, success: false)
         XCTAssertEqual(drafts.current.text, "first message"); XCTAssertTrue(drafts.bucket.recovery.isEmpty)
-        let session = ChatSession(id: UUID(), draftRepository: ChatDraftRepository(store: store))
+        let session = ChatSession(id: System.uuid(), draftRepository: ChatDraftRepository(store: store))
         session.sessionID = "old"; session.draft = "old conversation"
         let old = session.drafts.scope
         session.sessionID = nil; session.draft = "before new identification"
@@ -435,7 +435,7 @@ extension ChatDraftTests {
     }
 
     func testUnreadableStoreIsNotOverwrittenByAnEmptyCollection() throws {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let url = System.temporary.appendingPathComponent(System.uuid().uuidString)
         defer { try? FileManager.default.removeItem(at: url) }
         let malformed = Data("existing damaged recovery".utf8); try malformed.write(to: url)
         let repository = ChatDraftRepository(store: ChatDraftFileStore(url: url))

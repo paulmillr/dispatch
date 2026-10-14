@@ -7,14 +7,15 @@ struct SSHLinuxTestProfile: Decodable {
     /// Profiles the running case loaded: its remote helper captures are collected from those hosts.
     nonisolated(unsafe) static var used: Set<URL> = []
 
-    static func configurationURL(hostOnly: Bool = false) -> URL {
+    /// The machine's profile (the checkout's, else a test VM's), read through System: replay has the recorded one.
+    static func url(hostOnly: Bool = false) -> URL {
         let name = hostOnly ? "host-linux-ssh.json" : "linux-ssh.json"
-        let local = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-            .deletingLastPathComponent().appendingPathComponent("build/" + name)
-        let url = FileManager.default.fileExists(atPath: local.path) ? local : URL(fileURLWithPath: "/Users/admin/dispatch-tests/" + name)
+        let local = System.checkout.appendingPathComponent("build/" + name)
+        let url = System.exists(local) ? local : URL(fileURLWithPath: "/Users/admin/dispatch-tests/" + name)
         used.insert(url)
         return url
     }
+    static func load(hostOnly: Bool = false) throws -> Self { try JSONDecoder().decode(Self.self, from: System.read(url(hostOnly: hostOnly))) }
 
     let destination: String
     let options: [String]
@@ -41,7 +42,7 @@ final class SSHTestServer {
     let port: UInt16
     let daemon: Process
     let options: [String]
-    let destination = NSUserName() + "@127.0.0.1"
+    let destination = System.machine.name + "@127.0.0.1"
     /// Where agents of this server's sessions keep their configuration (and the remote helper installs its
     /// integrations): inside the server's root, never the account's own (as the local helper's test home).
     var agents: URL { root.appendingPathComponent("agents") }
@@ -53,7 +54,7 @@ final class SSHTestServer {
 
     init(grant: SSHIntegrationGrant = .init(profile: .full, hooks: true), transportOnly: Bool = false) async throws {
         self.transportOnly = transportOnly
-        privileged = !transportOnly && ProcessInfo.processInfo.environment["DISPATCH_UNPRIVILEGED_SSHD"] != "1"
+        privileged = !transportOnly && System.environment("DISPATCH_UNPRIVILEGED_SSHD") != "1"
         struct Created: Codable { let root: URL; let port: UInt16; let options: [String] }
         let daemon = Process()
         self.daemon = daemon
@@ -61,11 +62,11 @@ final class SSHTestServer {
         // Loopback sessions and retained local servers share this run's private helper
         // registry. Never make test hook senders fall back to the real account registry.
         let environment = ["DISPATCH_TEST_ROOT"].compactMap { name in
-            ProcessInfo.processInfo.environment[name].map { name + "=" + $0 }
+            System.environment(name).map { name + "=" + $0 }
         }
-        let created = try JSONDecoder().decode(Created.self, from: await AppReplay.run(kind: "fixture.ssh.start",
-            input: JSONEncoder().encode(["privileged": String(privileged), "tools": TestSupport.tools, "environment": environment.joined(separator: "\n")])) {
-            let root = URL(fileURLWithPath: "/tmp/hs-\(UUID().uuidString.prefix(8))")
+        let created = try AppReplay.decode(Created.self, await AppReplay.run(kind: "fixture.ssh.start",
+            input: AppReplay.value(["privileged": String(privileged), "tools": TestSupport.tools, "environment": environment.joined(separator: "\n")])) {
+            let root = URL(fileURLWithPath: "/tmp/hs-\(System.uuid().uuidString.prefix(8))")
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false,
                                                    attributes: [.posixPermissions: 0o700])
             let key = root.appendingPathComponent("key").path
@@ -108,8 +109,8 @@ final class SSHTestServer {
             daemon.executableURL = URL(fileURLWithPath: privileged ? "/usr/bin/sudo" : "/usr/sbin/sshd")
             daemon.arguments = (privileged ? ["-n", "/usr/sbin/sshd"] : []) + ["-D", "-e", "-f", config.path]
             daemon.standardInput = FileHandle.nullDevice; daemon.standardOutput = FileHandle.nullDevice; daemon.standardError = FileHandle.nullDevice
-            try daemon.run()
-            return try JSONEncoder().encode(Created(root: root, port: port, options: options))
+            try TestSupport.start(daemon)
+            return try AppReplay.value(Created(root: root, port: port, options: options))
         })
         self.root = created.root
         self.port = created.port
@@ -117,11 +118,11 @@ final class SSHTestServer {
         let root = created.root
         Self.permissionsByRoot[root.path] = []
         do {
-            _ = try await AppReplay.run(kind: "fixture.ssh.ready", input: JSONEncoder().encode(root)) {
+            _ = try await AppReplay.run(kind: "fixture.ssh.ready", input: AppReplay.value(root)) {
                 try await TestSupport.eventually(diagnostic: "Test SSH server unavailable; DISPATCH_UNPRIVILEGED_SSHD=0 requires passwordless sudo") {
                     Self.acceptingConnections(port: self.port)
                 }
-                return Data()
+                return .null
             }
             if !transportOnly { try await authorize(grant) }
         }
@@ -173,25 +174,24 @@ final class SSHTestServer {
                     return true
                 }
             }
-            _ = try AppReplay.query(kind: "fixture.ssh.stop", input: JSONEncoder().encode(root)) {
+            _ = try AppReplay.query(kind: "fixture.ssh.stop", input: AppReplay.value(root)) {
                 if daemon.isRunning {
                     if !privileged {
                         daemon.terminate()
-                        daemon.waitUntilExit()
+                        daemon.wait()
                         try? FileManager.default.removeItem(at: root)
-                        return Data()
+                        return .null
                     }
                     // Signal only the sudo/sshd process this fixture created. Sudo
                     // forwards termination to its owned daemon and waits for it.
                     let stop = Process(); stop.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
                     stop.arguments = ["-n", "/bin/kill", "-TERM", String(daemon.processIdentifier)]
                     stop.standardOutput = FileHandle.nullDevice; stop.standardError = FileHandle.nullDevice
-                    try stop.run(); stop.waitUntilExit()
-                    guard stop.terminationStatus == 0 || !daemon.isRunning else { throw HerdrFailure("Cannot stop test SSH daemon") }
+                    guard try TestSupport.live(stop).status == 0 || !daemon.isRunning else { throw HerdrFailure("Cannot stop test SSH daemon") }
                 }
-                daemon.waitUntilExit()
+                daemon.wait()
                 try? FileManager.default.removeItem(at: root)
-                return Data()
+                return .null
             }
         } catch { AppReplay.fail(error); XCTFail("Cannot stop test SSH daemon: " + error.localizedDescription) }
     }
@@ -228,8 +228,10 @@ final class SSHTestServer {
 /// protocol-version), copied for fixtures that alter the cache or count uploads.
 enum SSHHelperTestResources {
     static func prepare(under directory: URL) throws -> URL {
-        let source = try XCTUnwrap(Bundle.main.resourceURL).appendingPathComponent("helper")
+        let source = System.resources.appendingPathComponent("helper")
         let resources = directory.appendingPathComponent("helper-resources")
+        // Replay answers the server's stop from its recording, which leaves the root and this copy for the next replay.
+        try? FileManager.default.removeItem(at: resources)
         try FileManager.default.createDirectory(at: resources, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         try FileManager.default.copyItem(at: source, to: resources.appendingPathComponent("helper"))
         return resources

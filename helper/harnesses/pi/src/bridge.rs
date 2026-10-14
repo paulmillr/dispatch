@@ -4,6 +4,7 @@ use dispatch_helper_core::{
     api::*,
     json::{self, Data, Json, Value},
     rpc,
+    wire::body::{self, Encoded},
 };
 use std::{
     cell::RefCell,
@@ -91,8 +92,10 @@ pub fn fail(code: &'static str, message: impl Into<String>) -> Error {
         message: message.into(),
     }
 }
-pub fn home(runtime: &Shared, value: Value<'_>) -> Result<String, Error> {
-    let home = match value.get("HOME").and_then(Value::string) {
+pub fn home(runtime: &Shared, value: &Data<'_>) -> Result<String, Error> {
+    // Environment values are bytes; the agent directory is composed as text.
+    let variable = |name| value.get(name).and_then(Data::bytes).and_then(|v| std::str::from_utf8(v).ok());
+    let home = match variable("HOME") {
         Some(home) => home.to_owned(),
         None => runtime
             .borrow()
@@ -101,7 +104,7 @@ pub fn home(runtime: &Shared, value: Value<'_>) -> Result<String, Error> {
             .ok_or_else(|| fail("not_sent", "Pi account home is unavailable"))?
             .to_owned(),
     };
-    let configured = text(value, "PI_CODING_AGENT_DIR");
+    let configured = variable("PI_CODING_AGENT_DIR").unwrap_or_default().to_owned();
     let directory = if configured.is_empty() {
         format!("{home}/.pi/agent")
     } else if configured == "~" {
@@ -136,19 +139,19 @@ pub fn native(
     io: &mut dyn Io,
     name: &'static str,
     value: Data<'_>,
-    done: Done<Json>,
+    done: Done<Encoded>,
 ) {
-    match json::write(&value) {
+    match body::encode_plain(&value) {
         Err(error) => deferred(done)(io, Err(error)),
-        Ok(input) => job(
+        Ok(value) => job(
             runtime,
             io,
-            Job::Native { name, input },
+            Job::Native { name, value },
             Box::new(move |io, result| {
                 done(
                     io,
                     result.and_then(|out| match out {
-                        Output::Bytes(bytes) => Json::parse(&bytes),
+                        Output::Value(bytes) => Encoded::plain(&bytes),
                         _ => Err(fail("io", "Unexpected native result")),
                     }),
                 );
@@ -156,14 +159,15 @@ pub fn native(
         ),
     }
 }
-pub fn current(value: Value<'_>, process: &Process) -> bool {
-    value.get("pid").and_then(Value::unsigned) == Some(process.pid.into())
+/// A native process answer still names `process`.
+pub fn current(value: &Data<'_>, process: &Process) -> bool {
+    value.get("pid").and_then(Data::unsigned) == Some(process.pid.into())
         && value
             .get("start")
-            .and_then(Value::array)
-            .map(|a| a.filter_map(Value::unsigned).collect::<Vec<_>>())
+            .and_then(Data::array)
+            .map(|a| a.filter_map(Data::unsigned).collect::<Vec<_>>())
             == Some(process.start.to_vec())
-        && value.get("executable").and_then(Value::string) == process.executable.to_str()
+        && value.get("executable").and_then(Data::path) == Some(process.executable.as_path())
 }
 pub fn response(value: Value<'_>, id: &str, session: &str) -> Result<(), Error> {
     let invalid = || fail("may_have_sent", "Pi returned an invalid Chat response.");
@@ -254,20 +258,18 @@ pub fn call(
                 }
             };
             let next = saved.clone();
-            let path = record.socket.to_string_lossy().into_owned();
+            let socket = record.socket.clone();
             native(
                 &saved,
                 io,
                 "file.lstat",
-                Data::Object(vec![("path", Data::String(&path))]),
+                Data::Object(vec![("path", Data::from(socket.as_path()))]),
                 Box::new(move |io, result| {
                     let valid = result.as_ref().is_ok_and(|v| {
-                        text(v.root(), "kind") == "socket"
-                            && v.root().get("uid").and_then(Value::unsigned) == Some(record.uid)
-                            && v.root()
-                                .get("mode")
-                                .and_then(Value::unsigned)
-                                .is_some_and(|mode| mode & 0o077 == 0)
+                        let v = v.root();
+                        v.get("kind").and_then(Data::string) == Some("socket")
+                            && v.get("uid").and_then(Data::unsigned) == Some(record.uid)
+                            && v.get("mode").and_then(Data::unsigned).is_some_and(|mode| mode & 0o077 == 0)
                     });
                     if !valid {
                         done(
@@ -586,9 +588,10 @@ pub fn event(runtime: &Shared, io: &mut dyn Io, event: Event) {
                     Box::new(move |io, result| {
                         let valid = saved.borrow().channels.get(&fd).is_some_and(|channel| {
                             result.as_ref().is_ok_and(|peer| {
-                                peer.root().get("pid").and_then(Value::unsigned)
+                                let peer = peer.root();
+                                peer.get("pid").and_then(Data::unsigned)
                                     == Some(channel.process.pid.into())
-                                    && peer.root().get("uid").and_then(Value::unsigned)
+                                    && peer.get("uid").and_then(Data::unsigned)
                                         == saved
                                             .borrow()
                                             .registrations
@@ -617,7 +620,6 @@ pub fn event(runtime: &Shared, io: &mut dyn Io, event: Event) {
                             return;
                         };
                         let next = saved.clone();
-                        let peer = result.expect("verified peer result");
                         registration(
                             &saved,
                             io,
@@ -647,7 +649,8 @@ pub fn event(runtime: &Shared, io: &mut dyn Io, event: Event) {
                                     .get(&fd)
                                     .is_some_and(|channel| channel.input.is_empty());
                                 if probe {
-                                    finish(&next, io, fd, Ok(peer));
+                                    // A verified connection with no reply yet: an empty document.
+                                    finish(&next, io, fd, Json::parse(b"{}"));
                                 }
                             }),
                         );

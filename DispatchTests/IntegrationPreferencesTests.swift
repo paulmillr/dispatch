@@ -7,8 +7,8 @@ final class IntegrationPreferencesTests: XCTestCase {
     func testHerdrToggleRetainedLauncherEOFDetachAndClose() async throws {
         let app = try TmuxWalkthrough()
         defer { app.close() }
-        let root = URL(fileURLWithPath: "/tmp/hi-\(UUID().uuidString.prefix(8))")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        let root = URL(fileURLWithPath: "/tmp/hi-\(System.uuid().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let socket = root.appendingPathComponent("herdr.sock").path
         defer {
             _ = try? HerdrSocket(path: socket).request("server.stop")

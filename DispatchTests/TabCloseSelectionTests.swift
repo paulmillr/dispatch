@@ -84,8 +84,8 @@ final class TabCloseSelectionTests: XCTestCase {
         }
         let server = remote ? try await SSHTestServer() : nil
         defer { server?.stop() }
-        let root = URL(fileURLWithPath: "/tmp/hc-\(UUID().uuidString.prefix(8))")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        let root = URL(fileURLWithPath: "/tmp/hc-\(System.uuid().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let socket = root.appendingPathComponent("herdr.sock").path
         defer {
             if backend == .herdr { _ = try? HerdrSocket(path: socket).request("server.stop") }
@@ -140,10 +140,14 @@ final class TabCloseSelectionTests: XCTestCase {
                 return app.window.firstResponder === view && view.window === app.window
             }
         }
-        for count in 2...4 {
+        // A new tab starts its terminal once its view is shown: wait for that, so selecting or closing it next never
+        // races a view the next frame may or may not mount.
+        func add(_ count: Int) async throws {
             app.workspace.newTab()
-            try await app.wait { tabs().count == count }
+            let id = try XCTUnwrap(app.workspace.activeTab?.id)
+            try await app.wait { tabs().count == count && app.runtime.views[id]?.surface != nil }
         }
+        for count in 2...4 { try await add(count) }
         let original = tabs()
         // Visit a non-neighbor last to reproduce tmux's history-based fallback.
         app.workspace.selectTab(original[2]); app.workspace.selectTab(original[0])
@@ -171,10 +175,7 @@ final class TabCloseSelectionTests: XCTestCase {
         try await app.wait { tabs() == [original[3]] }
         try await settled(on: original[3])
 
-        for count in 2...4 {
-            app.workspace.newTab()
-            try await app.wait { tabs().count == count }
-        }
+        for count in 2...4 { try await add(count) }
         let final = tabs()
         app.workspace.selectTab(final[3]); app.controller.closeCurrentTab()
         try await app.wait { tabs().count == 3 }

@@ -20,20 +20,20 @@ final class NanocodexChatIntegrationTests: XCTestCase {
         guard fm.isExecutableFile(atPath: nanocodex) else {
             throw XCTSkip("Link a nanocodex build that includes #681 (0.6.6+) at build/test-tools/bin/nanocodex")
         }
-        let state = URL(fileURLWithPath: "/tmp/dispatch-nanocodex-chat-" + UUID().uuidString)
+        let state = URL(fileURLWithPath: "/tmp/dispatch-nanocodex-chat-" + System.uuid().uuidString)
         let fixture = Process(); fixture.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
         fixture.arguments = [CodexTestSupport.root.appendingPathComponent("scripts/codex_fixture.py").path,
                              "serve", "--state", state.path, "--no-hooks", "--delay", "0.04"]
         fixture.standardOutput = FileHandle.nullDevice; fixture.standardError = FileHandle.nullDevice
-        try fixture.run()
+        let child = try System.Child(fixture)
         defer {
-            if fixture.isRunning { fixture.terminate(); fixture.waitUntilExit() }
+            child.stop()
             print("Nanocodex Chat fixture: " + state.path)
         }
         // The fixture writes a placeholder before binding its real port.
         let endpoint = state.appendingPathComponent("endpoint.json")
         func port() -> Int? {
-            (try? JSONSerialization.jsonObject(with: Data(contentsOf: endpoint)) as? [String: Any])?["port"] as? Int
+            (try? JSONSerialization.jsonObject(with: System.read(endpoint)) as? [String: Any])?["port"] as? Int
         }
         try await TestSupport.eventually { (port() ?? 1) > 1 }
         let fixturePort = try XCTUnwrap(port())
@@ -143,7 +143,7 @@ final class NanocodexChatIntegrationTests: XCTestCase {
         session.draft = "after settings"; runtime.chat.submit(session)
         try await TestSupport.eventually(timeout: .seconds(15)) { !session.busy && reply("after settings") }
         XCTAssertEqual(session.sessionID, conversation)
-        let requests = try String(contentsOf: state.appendingPathComponent("requests.jsonl"), encoding: .utf8)
+        let requests = try String(decoding: try System.read(state.appendingPathComponent("requests.jsonl")), as: UTF8.self)
         XCTAssertTrue(requests.contains("\"effort\": \"low\"") || requests.contains("\"effort\":\"low\""))
     }
 }

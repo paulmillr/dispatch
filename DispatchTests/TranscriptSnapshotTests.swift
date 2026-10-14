@@ -10,7 +10,7 @@ final class TranscriptSnapshotTests: XCTestCase {
     private var chat: ChatCoordinator!
     private var root: URL!
     override func setUp() async throws {
-        root = FileManager.default.temporaryDirectory.appendingPathComponent("dispatch-snapshot-" + UUID().uuidString)
+        root = System.temporary.appendingPathComponent("dispatch-snapshot-" + System.uuid().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
     }
@@ -20,14 +20,14 @@ final class TranscriptSnapshotTests: XCTestCase {
     }
     /// A conversation whose transcript file is at `path` (which may not exist), opened as the app opens it.
     private func open(_ path: URL, agent: String, session id: String) -> ChatSession {
-        let session = chat.session(for: UUID())
+        let session = chat.session(for: System.uuid())
         session.agentID = agent; session.sessionID = id; session.transcriptPath = path.path
         chat.start()
         return session
     }
 
     func testClaudeTitleOutsideInitialPageUsesValidatedHistory() async throws {
-        let id = UUID().uuidString
+        let id = System.uuid().uuidString
         var rows: [[String: Any]] = [["type": "ai-title", "aiTitle": "Earlier title", "sessionId": id]]
         rows += (0..<500).map { ["type": "user", "uuid": "user-\($0)", "sessionId": id, "message": ["role": "user", "content": "Prompt \($0)"]] }
         let lines = try rows.map { String(decoding: try JSONSerialization.data(withJSONObject: $0), as: UTF8.self) }
@@ -38,20 +38,20 @@ final class TranscriptSnapshotTests: XCTestCase {
     }
 
     func testMissingTranscriptStillReportsReadFailure() async throws {
-        let session = open(root.appendingPathComponent("missing.jsonl"), agent: "codex", session: UUID().uuidString)
+        let session = open(root.appendingPathComponent("missing.jsonl"), agent: "codex", session: System.uuid().uuidString)
         try await TestSupport.eventually(diagnostic: "no read failure reported") { session.status != nil && !session.loadingHistory }
     }
 
     /// App availability fragment; the native snapshot regression owns append-during-read ordering.
     func testOpeningArchiveKeepsLoadedHistoryAvailable() async throws {
-        let id = UUID().uuidString, path = root.appendingPathComponent("snapshot-state.jsonl")
+        let id = System.uuid().uuidString, path = root.appendingPathComponent("snapshot-state.jsonl")
         let rows: [[String: Any]] = [
             ["type": "session_meta", "payload": ["id": id]],
             ["type": "event_msg", "payload": ["type": "user_message", "message": "retained"]],
             ["type": "event_msg", "payload": ["type": "user_message", "message": "appended"]]
         ]
         try rows.reduce(into: Data()) { $0 += try JSONSerialization.data(withJSONObject: $1) + Data([10]) }.write(to: path)
-        let session = chat.session(for: UUID())
+        let session = chat.session(for: System.uuid())
         session.sessionID = id; session.transcriptPath = path.path
         session.insert(ChatItem(id: "retained", kind: .user, text: "retained"), turnID: "history")
         let changes = OSAllocatedUnfairLock(initialState: 0)
@@ -65,7 +65,7 @@ final class TranscriptSnapshotTests: XCTestCase {
     }
 
     func testEmptyTranscriptIsPendingOnlyBeforeFirstHistory() async throws {
-        let id = UUID().uuidString, path = root.appendingPathComponent("empty.jsonl")
+        let id = System.uuid().uuidString, path = root.appendingPathComponent("empty.jsonl")
         try Data().write(to: path)
         let empty = open(path, agent: "codex", session: id)
         try await TestSupport.eventually { empty.helper != nil }

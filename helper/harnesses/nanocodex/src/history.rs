@@ -475,7 +475,7 @@ impl Nano {
                         device: metadata.device,
                         inode: metadata.inode,
                     }),
-                    later: String::new(),
+                    later: None,
                 },
                 state: State::default(),
             }),
@@ -539,7 +539,7 @@ impl Nano {
                         .then(|| read.start.to_string()),
                 },
                 snapshot: Snapshot {
-                    later,
+                    later: Some(later),
                     session: Some(read.session),
                     version: read.version,
                     generation,

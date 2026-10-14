@@ -7,7 +7,7 @@ import XCTest
     private var delegate: ChatComposer.Coordinator!
     private var session: ChatSession!
     private func editor(_ value: String = "") -> ChatComposer.ComposerTextView {
-        session = ChatSession(id: UUID(), draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
+        session = ChatSession(id: System.uuid(), draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
         session.showChat = true; session.draft = value
         delegate = ChatComposer.Coordinator(session)
         let text = ChatComposer.ComposerTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 100))

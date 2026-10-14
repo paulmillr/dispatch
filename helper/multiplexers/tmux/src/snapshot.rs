@@ -51,7 +51,9 @@ pub(crate) fn fields<const N: usize>(line: &str) -> Result<[&str; N], Error> {
         .map_err(|_| error("invalidFrame"))
 }
 impl Snapshot {
-    pub fn parse(windows: &Lines, panes: &Lines, focus: &Lines) -> Result<Self, Error> {
+    /// `affinities`: one `window|@dispatch-window` line per window; the value is JSON, so it is
+    /// the last field and its `|` stay (affinity.rs).
+    pub fn parse(windows: &Lines, panes: &Lines, focus: &Lines, affinities: &Lines) -> Result<Self, Error> {
         let result = (|| -> Result<Self, Error> {
             let mut values: Vec<Window> = Vec::new();
             for line in windows.iter() {
@@ -62,7 +64,7 @@ impl Snapshot {
                     Some(("1", rest)) => (Some(false), rest),
                     _ => (None, text.as_ref()),
                 };
-                let [w, full, visible, active, pane, affinity, name] = fields(text)?;
+                let [w, full, visible, active, pane, name] = fields(text)?;
                 let mut value = Window {
                     id: id(w, '@')?,
                     name: name.into(),
@@ -72,7 +74,7 @@ impl Snapshot {
                     pane: id(pane, '%')?
                         .try_into()
                         .map_err(|_| error("invalidFrame"))?,
-                    affinity: affinity.into(),
+                    affinity: String::new(),
                     renamed,
                 };
                 if value
@@ -93,6 +95,14 @@ impl Snapshot {
                     old.active |= active;
                 } else {
                     values.push(value);
+                }
+            }
+            for line in affinities.iter() {
+                let text = String::from_utf8_lossy(line);
+                let [w, affinity] = fields(&text)?;
+                let w = id(w, '@')?;
+                for window in values.iter_mut().filter(|window| window.id == w) {
+                    window.affinity = affinity.into();
                 }
             }
             let text =

@@ -147,8 +147,8 @@ final class ChatComposerTests: XCTestCase {
         try DesktopTestSupport.requireUnlocked()
         AppFont.register()
         let coordinator = ChatCoordinator(enabled: false)
-        let session = coordinator.session(for: UUID())
-        session.sessionID = UUID().uuidString; session.active = true; session.showChat = true; session.busy = true
+        let session = coordinator.session(for: System.uuid())
+        session.sessionID = System.uuid().uuidString; session.active = true; session.showChat = true; session.busy = true
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 916, height: 420), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.close(); window.contentView = nil }
@@ -175,7 +175,7 @@ final class ChatComposerTests: XCTestCase {
     func testPlaceholderStaysStableAcrossReasoningAndToolActivity() async throws {
         try DesktopTestSupport.requireUnlocked()
         let coordinator = ChatCoordinator(enabled: false, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
-        let session = coordinator.session(for: UUID())
+        let session = coordinator.session(for: System.uuid())
         session.active = true; session.showChat = true; session.busy = true
         session.activeTurnID = "working-placeholder"
         let draftRevision = session.drafts.current.revision
@@ -226,7 +226,7 @@ final class ChatComposerTests: XCTestCase {
     func testLocalCaretTracksNativeGeometryEditingAndFocus() async throws {
         try DesktopTestSupport.requireUnlocked()
         let coordinator = ChatCoordinator(enabled: false, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
-        let session = coordinator.session(for: UUID())
+        let session = coordinator.session(for: System.uuid())
         session.active = true; session.showChat = true
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 480),
                               styleMask: [.titled, .resizable], backing: .buffered, defer: false)
@@ -312,7 +312,7 @@ final class ChatComposerTests: XCTestCase {
         workspace.newSpace()
         let firstSpace = try XCTUnwrap(workspace.selectedSpace), firstTab = try XCTUnwrap(workspace.activeTab?.id)
         let session = coordinator.session(for: firstTab)
-        session.sessionID = UUID().uuidString; session.showChat = true
+        session.sessionID = System.uuid().uuidString; session.showChat = true
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 700), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false; controller.window = window
         window.contentView = NSHostingView(rootView: MainView(workspace: workspace, settings: controller.settings, controller: controller))
@@ -344,7 +344,7 @@ final class ChatComposerTests: XCTestCase {
     func testComposerFocusSurvivesMountingAfterItsFirstUpdate() async throws {
         try DesktopTestSupport.requireUnlocked()
         let coordinator = ChatCoordinator(enabled: true)
-        let session = coordinator.session(for: UUID())
+        let session = coordinator.session(for: System.uuid())
         session.active = true; session.showChat = true
         let host = NSHostingView(rootView: ChatView(session: session, coordinator: coordinator, focused: true, floatingSwitch: false))
         host.frame = NSRect(x: 0, y: 0, width: 800, height: 500)
@@ -387,8 +387,8 @@ final class ChatComposerTests: XCTestCase {
         try DesktopTestSupport.requireUnlocked()
         AppFont.register()
         let coordinator = ChatCoordinator(enabled: false)
-        let session = coordinator.session(for: UUID())
-        session.sessionID = UUID().uuidString; session.active = true; session.showChat = true
+        let session = coordinator.session(for: System.uuid())
+        session.sessionID = System.uuid().uuidString; session.active = true; session.showChat = true
         session.model = "gpt-6-astra"; session.effort = "high"
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 916, height: 420), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -450,8 +450,8 @@ final class ChatComposerTests: XCTestCase {
             preferences.chatFont = font
             ChatThemeStore.shared.current.typography = ChatTypography(preferences: preferences)
             let coordinator = ChatCoordinator(enabled: false)
-            let session = coordinator.session(for: UUID())
-            session.sessionID = UUID().uuidString; session.active = true; session.showChat = true
+            let session = coordinator.session(for: System.uuid())
+            session.sessionID = System.uuid().uuidString; session.active = true; session.showChat = true
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 916, height: 420), styleMask: [.titled], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
             defer { window.close(); window.contentView = nil }
@@ -500,8 +500,8 @@ final class ChatComposerTests: XCTestCase {
     }
 
     func testRecordedModelEffortLoadsOutsideRecentPageAndHistoryCannotRevertIt() async throws {
-        let id = UUID().uuidString
-        let path = FileManager.default.temporaryDirectory.appendingPathComponent("dispatch-effort-\(id).jsonl")
+        let id = System.uuid().uuidString
+        let path = System.temporary.appendingPathComponent("dispatch-effort-\(id).jsonl")
         defer { try? FileManager.default.removeItem(at: path) }
         func line(_ type: String, _ payload: [String: Any]) throws -> Data {
             var bytes = try JSONSerialization.data(withJSONObject: ["type": type, "timestamp": "2000-01-01T00:00:00.000Z", "payload": payload])
@@ -514,7 +514,7 @@ final class ChatComposerTests: XCTestCase {
         for index in 0..<450 { data += try line("event_msg", ["type": "agent_message", "turn_id": "current", "message": "Message \(index)"]) }
         try data.write(to: path)
         let coordinator = ChatCoordinator(enabled: false)
-        let session = coordinator.session(for: UUID())
+        let session = coordinator.session(for: System.uuid())
         session.sessionID = id; session.transcriptPath = path.path
         coordinator.start(); defer { coordinator.stop() }
         try await TestSupport.eventually(timeout: .seconds(3), diagnostic: "Composer state timed out") { session.effort == "high" }
@@ -540,7 +540,7 @@ extension ChatComposerTests {
         let previousTheme = ChatThemeStore.shared.current
         defer { ChatThemeStore.shared.current = previousTheme }
         let chat = ChatCoordinator(enabled: false, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
-        let session = chat.session(for: UUID()); session.sessionID = "composer-4a"; session.showChat = true; session.active = true
+        let session = chat.session(for: System.uuid()); session.sessionID = "composer-4a"; session.showChat = true; session.active = true
         for index in 1...8 { session.draft = "Draft \(index)"; session.drafts.keep() }
         session.draft = "Guard on the event id:\n```ts\nconst seen = await redis.set(event.id, true);\nif (seen) return;\n```\nThen add a regression test."
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 650), styleMask: [.titled, .resizable], backing: .buffered, defer: false)

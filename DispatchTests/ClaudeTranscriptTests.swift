@@ -21,7 +21,7 @@ final class ClaudeTranscriptTests: XCTestCase {
     private var chat: ChatCoordinator!
     private var root: URL!
     override func setUp() async throws {
-        root = FileManager.default.temporaryDirectory.appendingPathComponent("dispatch-claude-transcript-" + UUID().uuidString)
+        root = System.temporary.appendingPathComponent("dispatch-claude-transcript-" + System.uuid().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
     }

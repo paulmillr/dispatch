@@ -1,10 +1,6 @@
-//! UI request schemas. Native JSON projection retains its own duplicate policy.
+//! UI request schemas, checked on the decoded binary request.
 use super::invalid;
-use crate::{
-    api::Error,
-    json::{Kind, Value},
-};
-use std::collections::BTreeSet;
+use crate::{api::Error, json::Data};
 
 #[derive(Clone, Copy)]
 pub(super) enum Rule {
@@ -14,7 +10,6 @@ pub(super) enum Rule {
     Unsigned,
     Signed,
     Decimal,
-    Byte,
     Bytes,
     Stamp,
     Array(&'static Rule),
@@ -59,14 +54,15 @@ pub(super) const REVISION: &[(&str, Rule)] = &[
     ("changed_ns", Rule::Stamp),
 ];
 
-pub(super) fn validate(value: Value<'_>, rule: Rule, name: &str) -> Result<(), Error> {
+pub(super) fn validate(value: &Data<'_>, rule: Rule, name: &str) -> Result<(), Error> {
+    // The binary reader already refuses duplicate keys.
     let mut pending = vec![(value, rule, name)];
     loop {
         let Some((value, mut rule, name)) = pending.pop() else {
             return Ok(());
         };
         if let Rule::Nullable(inner) = rule {
-            if value.kind() == Kind::Null {
+            if matches!(value, Data::Null) {
                 continue;
             }
             rule = *inner;
@@ -77,36 +73,20 @@ pub(super) fn validate(value: Value<'_>, rule: Rule, name: &str) -> Result<(), E
             Rule::Unsigned => value.unsigned().is_some(),
             Rule::Signed => value.signed().is_some(),
             Rule::Decimal => value.number().is_some(),
-            Rule::Byte => value.unsigned().is_some_and(|n| u8::try_from(n).is_ok()),
+            Rule::Bytes => value.bytes().is_some(),
             Rule::Stamp => {
-                value.string().is_some_and(|s| s.parse::<i128>().is_ok())
-                    || value.signed().is_some()
+                value.string().is_some_and(|s| s.parse::<i128>().is_ok()) || value.signed().is_some()
                     || value.unsigned().is_some()
             }
-            Rule::Bytes if value.string().is_some() => true,
-            Rule::Bytes | Rule::Array(_) => {
-                let item = if let Rule::Array(item) = rule {
-                    *item
-                } else {
-                    Rule::Byte
-                };
-                let values = value.array().ok_or_else(|| invalid(name))?;
-                pending.extend(values.map(|value| (value, item, name)));
+            Rule::Array(item) => {
+                pending.extend(value.array().ok_or_else(|| invalid(name))?.map(|value| (value, *item, name)));
                 true
             }
             Rule::Object(_) | Rule::Any => {
                 if let Some(values) = value.object() {
-                    let mut keys = BTreeSet::new();
                     for (key, value) in values {
-                        if !keys.insert(key) {
-                            return Err(invalid(key));
-                        }
                         let item = if let Rule::Object(fields) = rule {
-                            fields
-                                .iter()
-                                .find(|(name, _)| *name == key)
-                                .map(|(_, rule)| *rule)
-                                .ok_or_else(|| invalid(key))?
+                            fields.iter().find(|(name, _)| *name == key).map(|(_, rule)| *rule).ok_or_else(|| invalid(key))?
                         } else {
                             Rule::Any
                         };

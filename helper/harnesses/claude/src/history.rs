@@ -1,7 +1,7 @@
 //! Claude's native JSONL projection, including invisible parent links.
 use dispatch_helper_core::{
     api::*,
-    json::{self, Data, Format, Json, Value},
+    json::{Data, Format, Json, Value},
     rpc::Lines,
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -112,12 +112,11 @@ impl Parser {
                 .filter_map(|key| usage.get(key).and_then(|v| v.unsigned()))
                 .sum::<u64>();
                 let last = Data::Object(vec![("total_tokens", Data::Unsigned(tokens))]);
-                self.state.usage = json::write(&Data::Object(vec![(
+                self.state.usage = dispatch_helper_core::wire::body::Encoded::value(&Data::Object(vec![(
                     "info",
                     Data::Object(vec![("last_token_usage", last)]),
                 )]))
-                .ok()
-                .and_then(|bytes| String::from_utf8(bytes).ok());
+                .ok();
             }
         }
     }

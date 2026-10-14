@@ -7,7 +7,7 @@ mod linux;
 #[cfg(target_os = "macos")]
 pub(super) mod macos;
 
-use crate::json::{self, Data};
+use crate::json::Data;
 #[cfg(target_os = "linux")]
 use std::path::Path;
 use std::{
@@ -20,7 +20,7 @@ fn invalid() -> io::Error {
     io::ErrorKind::InvalidData.into()
 }
 fn write(value: &Data<'_>) -> io::Result<Vec<u8>> {
-    json::write(value).map_err(|_| invalid())
+    crate::wire::body::encode_plain(value).map_err(|_| invalid())
 }
 #[cfg(target_os = "linux")]
 fn text(path: &str, limit: usize) -> io::Result<String> {

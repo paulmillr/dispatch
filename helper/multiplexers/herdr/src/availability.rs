@@ -36,24 +36,17 @@ impl Herdr {
             })
             .collect();
         if let Some(path) = self.shim.as_ref() {
-            let input = json::write(&D::Object(vec![(
-                "path",
-                D::String(&path.to_string_lossy()),
-            )]))
-            .unwrap();
+            let input = body::encode_plain(&D::Object(vec![("path", D::from(path.as_path()))])).unwrap();
             self.job(
                 io,
                 Job::Native {
                     name: "file.realpath",
-                    input,
+                    value: input,
                 },
                 Box::new(move |mux, io, result| {
-                    lookup.shim = auth::document(result).ok().and_then(|json| {
-                        json.root()
-                            .get("path")
-                            .and_then(Value::string)
-                            .map(PathBuf::from)
-                    });
+                    lookup.shim = auth::document(result)
+                        .ok()
+                        .and_then(|value| value.root().get("path").and_then(D::path).map(PathBuf::from));
                     mux.search(io, lookup);
                 }),
             );
@@ -67,24 +60,17 @@ impl Herdr {
             self.login(io, lookup);
             return;
         };
-        let input = json::write(&D::Object(vec![(
-            "path",
-            D::String(&path.to_string_lossy()),
-        )]))
-        .unwrap();
+        let input = body::encode_plain(&D::Object(vec![("path", D::from(path.as_path()))])).unwrap();
         self.job(
             io,
             Job::Native {
                 name: "file.realpath",
-                input,
+                value: input,
             },
             Box::new(move |mux, io, result| {
-                let resolved = auth::document(result).ok().and_then(|json| {
-                    json.root()
-                        .get("path")
-                        .and_then(Value::string)
-                        .map(PathBuf::from)
-                });
+                let resolved = auth::document(result)
+                    .ok()
+                    .and_then(|value| value.root().get("path").and_then(D::path).map(PathBuf::from));
                 if resolved.is_none() || resolved == lookup.shim {
                     mux.search(io, lookup);
                     return;

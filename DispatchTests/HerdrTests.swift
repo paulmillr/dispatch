@@ -52,7 +52,7 @@ final class HerdrTests: XCTestCase {
         // Server events that leave everything the app shows unchanged.
         let start = Date.timeIntervalSinceReferenceDate
         for _ in 0..<100 { _ = try herdr.api("workspace.rename", ["workspace_id": last, "label": "Original"]) }
-        try await Task.sleep(for: .milliseconds(500))
+        try await TestSupport.pause(for: .milliseconds(500))
         let idleTime = Date.timeIntervalSinceReferenceDate - start
         let invalidations = changes.withLock { $0 }
         var closed: [UUID] = []
@@ -110,7 +110,7 @@ final class HerdrTests: XCTestCase {
         // The launch is typed, then its tab closes before the server's session reaches the app.
         TerminalTestSupport.send(herdr.launch(), to: herdr.app.runtime.views[source]!)
         workspace.closeTab(source, policy: .terminate)
-        try await Task.sleep(for: .seconds(3))
+        try await TestSupport.pause(for: .seconds(3))
         XCTAssertEqual(workspace.selectedSpace, selected, "A late launch response must not focus a cancelled handoff")
     }
 
@@ -197,7 +197,7 @@ final class HerdrTests: XCTestCase {
             workspace.selectSurface(surface)
             let focusRequest = workspace.focusRequest
             herdr.resume()
-            try await Task.sleep(for: .seconds(1))
+            try await TestSupport.pause(for: .seconds(1))
             XCTAssertEqual(workspace.selectedSpace, first.id, "Observer events for older clicks must not change the latest selection")
             XCTAssertEqual(workspace.activeSurfaceID, surface, "Older command responses must not unmount the selected inner pane")
             XCTAssertEqual(workspace.focusRequest, focusRequest)
@@ -264,7 +264,7 @@ final class HerdrTests: XCTestCase {
     func testOnlyHerdrPositionLabelsYieldToConversationTitles() {
         // Native Graph coverage verifies these flags for the upstream reordered w1:t3,t1,t2,t4 and w2:t1 matrix.
         let tabs = zip(["1", "Mine", "3", "2", "1"], [false, true, false, true, false]).map { name, renamed in
-            ContainerTab(id: UUID(), node: 1, name: name, renamed: renamed,
+            ContainerTab(id: System.uuid(), node: 1, name: name, renamed: renamed,
                          arrangement: PaneArrangement(tab: TerminalTab(directory: "/tmp")))
         }
         XCTAssertEqual(tabs.map { $0.displayLabel(automatic: true, conversation: "Fix startup") }, ["Fix startup", "Mine", "Fix startup", "2", "Fix startup"])
@@ -274,7 +274,7 @@ final class HerdrTests: XCTestCase {
         // Numbered tabs fall back to their focused pane: a program's own title, then the folder at a prompt.
         var pane = TerminalTab(directory: "/work/src/project")
         pane.title = "~/work/src/project"
-        var numbered = ContainerTab(id: UUID(), node: 1, name: "2", renamed: false, numbered: true, arrangement: PaneArrangement(tab: pane))
+        var numbered = ContainerTab(id: System.uuid(), node: 1, name: "2", renamed: false, numbered: true, arrangement: PaneArrangement(tab: pane))
         XCTAssertEqual(numbered.displayLabel(automatic: true, conversation: nil), "project")
         XCTAssertEqual(numbered.displayLabel(automatic: true, conversation: "Fix startup"), "Fix startup")
         XCTAssertEqual(numbered.displayLabel(automatic: false, conversation: nil), "2")
@@ -343,14 +343,14 @@ final class HerdrTests: XCTestCase {
         workspace.newLocalSpace()
         let local = workspace.selectedSpace
         _ = try herdr.api("workspace.focus", ["workspace_id": w1])
-        try await Task.sleep(for: .milliseconds(500))
+        try await TestSupport.pause(for: .milliseconds(500))
         XCTAssertEqual(workspace.selectedSpace, local, "Remote focus does not steal a local view")
         // The same server reached over SSH is another helper's namespace: its views are its own.
         let remote = try await herdr.attachOverSSH()
         XCTAssertNotEqual(remote.tabs[0].id, tab.id)
         workspace.detachSpace(first.id)
         _ = try herdr.api("workspace.rename", ["workspace_id": w1, "label": "After detach"])
-        try await Task.sleep(for: .milliseconds(500))
+        try await TestSupport.pause(for: .milliseconds(500))
         XCTAssertFalse(workspace.spaces.contains { $0.id == first.id }, "Detached views do not reopen on every server change")
         XCTAssertTrue(workspace.spaces.contains { $0.id == remote.id })
     }
@@ -525,7 +525,7 @@ final class HerdrTests: XCTestCase {
         workspace.moveWindowToNewSpace(window)
         XCTAssertNotEqual(workspace.current?.id, initial.id, "The moved window shows in a new space at once: \(herdr.shown)")
         XCTAssertEqual(workspace.current?.activeTab?.surfaceIDs, [terminal])
-        try await Task.sleep(for: .seconds(1))
+        try await TestSupport.pause(for: .seconds(1))
         XCTAssertEqual(workspace.spaces.flatMap(\.tabs).filter { $0.id == terminal }.count, 1)
         XCTAssertFalse(closed.contains(terminal))
     }
@@ -571,7 +571,7 @@ final class HerdrTests: XCTestCase {
         XCTAssertEqual(try herdr.snapshot().workspaces.count, 2, "Neither creation nor layout is replayed")
         let settledRevision = workspace.layoutRevision
         _ = try herdr.api("workspace.rename", ["workspace_id": try XCTUnwrap(first.key), "label": first.name])
-        try await Task.sleep(for: .milliseconds(500))
+        try await TestSupport.pause(for: .milliseconds(500))
         XCTAssertEqual(workspace.layoutRevision, settledRevision, "An unchanged server state must not publish again")
     }
 
@@ -587,10 +587,10 @@ final class HerdrTests: XCTestCase {
         // A second launch waits on a held server while the app stops.
         try herdr.pause()
         TerminalTestSupport.send(herdr.launch(), to: view)
-        try await Task.sleep(for: .milliseconds(500))
+        try await TestSupport.pause(for: .milliseconds(500))
         await herdr.app.close().value
         herdr.resume()
-        try await Task.sleep(for: .seconds(1))
+        try await TestSupport.pause(for: .seconds(1))
         XCTAssertTrue(herdr.app.runtime.helpers.isEmpty, "A stopped app does not reconnect to the server")
         _ = launcher
     }
@@ -674,7 +674,7 @@ final class HerdrTests: XCTestCase {
 final class HerdrSession {
     let app: TmuxWalkthrough
     /// herdr's Unix socket must fit sockaddr_un even on macOS's long TMPDIR.
-    let root = URL(fileURLWithPath: "/tmp/hd-" + UUID().uuidString.prefix(8))
+    let root = URL(fileURLWithPath: "/tmp/hd-" + System.uuid().uuidString.prefix(8))
     var socket: String { root.appendingPathComponent("herdr.sock").path }
     private var server: SSHTestServer?
     private var paused: pid_t?
@@ -786,51 +786,43 @@ final class HerdrSession {
 
     /// The server process, from its socket's peer credentials.
     private func pid() throws -> pid_t {
-        let connection = try HerdrSocket(path: socket)
-        var pid: pid_t = 0, size = socklen_t(MemoryLayout<pid_t>.size)
-        XCTAssertEqual(getsockopt(connection.fd, SOL_LOCAL, LOCAL_PEERPID, &pid, &size), 0)
-        return pid
+        try System.observe("herdr.pid", socket) {
+            let connection = try HerdrSocket(path: socket)
+            var pid: pid_t = 0, size = socklen_t(MemoryLayout<pid_t>.size)
+            XCTAssertEqual(getsockopt(connection.fd, SOL_LOCAL, LOCAL_PEERPID, &pid, &size), 0)
+            return pid
+        }
     }
+
 
     /// Holds every reply: the server is stopped (SIGSTOP) until `resume()`.
     func pause() throws {
         let pid = try pid()
         paused = pid
-        XCTAssertEqual(kill(pid, SIGSTOP), 0)
+        XCTAssertEqual(System.signal(pid, SIGSTOP), 0)
     }
 
     func resume() {
-        if let paused { kill(paused, SIGCONT) }
+        if let paused { System.signal(paused, SIGCONT) }
         paused = nil
     }
 
     /// The held server dies: nothing it was asked answers.
     func crash() throws {
         let pid = try XCTUnwrap(paused)
-        XCTAssertEqual(kill(pid, SIGKILL), 0)
-        kill(pid, SIGCONT)
+        XCTAssertEqual(System.signal(pid, SIGKILL), 0)
+        System.signal(pid, SIGCONT)
         paused = nil
     }
 
-    /// Another writable client takes a terminal over at its own size until released.
-    final class Takeover {
-        let process = Process(), input = Pipe()
-        func release() {
-            try? input.fileHandleForWriting.write(contentsOf: Data("{\"type\":\"terminal.release\"}\n".utf8))
-            input.fileHandleForWriting.closeFile()
-            process.waitUntilExit()
-        }
-    }
-
-    func takeover(_ terminal: String, columns: Int, rows: Int) throws -> Takeover {
-        let takeover = Takeover()
-        takeover.process.executableURL = URL(fileURLWithPath: TestSupport.tool("herdr"))
-        takeover.process.arguments = ["terminal", "session", "control", terminal, "--takeover", "--cols", String(columns), "--rows", String(rows)]
-        takeover.process.environment = ProcessInfo.processInfo.environment.merging(["HERDR_SOCKET_PATH": socket]) { _, new in new }
-        takeover.process.standardInput = takeover.input
-        takeover.process.standardOutput = FileHandle.nullDevice; takeover.process.standardError = FileHandle.nullDevice
-        try takeover.process.run()
-        return takeover
+    /// Another writable client takes a terminal over at its own size until released (see System.Child.release).
+    func takeover(_ terminal: String, columns: Int, rows: Int) throws -> System.Child {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: TestSupport.tool("herdr"))
+        process.arguments = ["terminal", "session", "control", terminal, "--takeover", "--cols", String(columns), "--rows", String(rows)]
+        process.environment = System.inherited.merging(["HERDR_SOCKET_PATH": socket]) { _, new in new }
+        process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
+        return try System.Child(process)
     }
 
     func close() {
@@ -839,5 +831,13 @@ final class HerdrSession {
         server?.stop()
         app.close()
         try? FileManager.default.removeItem(at: root)
+    }
+}
+
+extension System.Child {
+    /// A herdr control client gives its terminal back and exits.
+    func release() {
+        try? write(Data("{\"type\":\"terminal.release\"}\n".utf8))
+        finish()
     }
 }

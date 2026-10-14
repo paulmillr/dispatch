@@ -44,7 +44,7 @@ pub fn run(
             let uid = match result.and_then(|v| {
                 v.root()
                     .get("uid")
-                    .and_then(Value::unsigned)
+                    .and_then(Data::unsigned)
                     .ok_or_else(|| bridge::fail("install", "The executing account is unavailable."))
             }) {
                 Ok(uid) => uid,
@@ -69,10 +69,7 @@ pub fn run(
                     "start",
                     Data::Array(process.start.iter().copied().map(Data::Unsigned).collect()),
                 ));
-                fields.push((
-                    "executable",
-                    Data::String(process.executable.to_str().unwrap_or("")),
-                ));
+                fields.push(("executable", Data::from(process.executable.as_path())));
             }
             bridge::native(
                 &saved,
@@ -87,7 +84,7 @@ pub fn run(
                             return;
                         }
                     };
-                    let home = match bridge::home(&next, root.root()) {
+                    let home = match bridge::home(&next, &root.root()) {
                         Ok(home) => PathBuf::from(home),
                         Err(error) => {
                             done(io, Err(error));
@@ -159,7 +156,7 @@ fn inspect(runtime: &Shared, io: &mut dyn Io, setup: SharedSetup, index: usize) 
         apply(runtime, io, setup);
         return;
     }
-    let path = setup.borrow().paths[index].to_string_lossy().into_owned();
+    let path = setup.borrow().paths[index].clone();
     let next = runtime.clone();
     bridge::native(
         runtime,
@@ -170,10 +167,10 @@ fn inspect(runtime: &Shared, io: &mut dyn Io, setup: SharedSetup, index: usize) 
             "file.private"
         },
         Data::Object(if index < 3 {
-            vec![("path", Data::String(&path))]
+            vec![("path", Data::from(path.as_path()))]
         } else {
             vec![
-                ("path", Data::String(&path)),
+                ("path", Data::from(path.as_path())),
                 ("limit", Data::Unsigned(1_048_576)),
             ]
         }),
@@ -189,22 +186,19 @@ fn inspect(runtime: &Shared, io: &mut dyn Io, setup: SharedSetup, index: usize) 
                     }
                 }
                 Ok(v) => {
-                    let metadata = if index < 3 {
-                        Some(v.root())
-                    } else {
-                        v.root().get("before")
-                    };
+                    let v = v.root();
+                    let metadata = if index < 3 { Some(&v) } else { v.get("before") };
                     let valid = metadata.is_some_and(|v| {
-                        v.get("uid").and_then(Value::unsigned) == Some(state.uid)
-                            && (index >= 3 || text(v, "kind") == "directory")
-                            && (index < 3 || v.get("links").and_then(Value::unsigned) == Some(1))
+                        v.get("uid").and_then(Data::unsigned) == Some(state.uid)
+                            && (index >= 3 || v.get("kind").and_then(Data::string) == Some("directory"))
+                            && (index < 3 || v.get("links").and_then(Data::unsigned) == Some(1))
                             && (index != 3
                                 || v.get("mode")
-                                    .and_then(Value::unsigned)
+                                    .and_then(Data::unsigned)
                                     .is_some_and(|mode| mode & 0o022 == 0))
                             && (index != 4
                                 || v.get("mode")
-                                    .and_then(Value::unsigned)
+                                    .and_then(Data::unsigned)
                                     .is_some_and(|v| v & 0o077 == 0))
                     });
                     if !valid {
@@ -215,7 +209,7 @@ fn inspect(runtime: &Shared, io: &mut dyn Io, setup: SharedSetup, index: usize) 
                         return;
                     }
                     if index >= 3 {
-                        let guard = |value: Value<'_>| {
+                        let guard = |value: &Data<'_>| {
                             Some(Guard::from(Metadata {
                                 kind: FileKind::File,
                                 size: value.get("size")?.unsigned()?,
@@ -225,8 +219,8 @@ fn inspect(runtime: &Shared, io: &mut dyn Io, setup: SharedSetup, index: usize) 
                                 changed_ns: value.get("ctime_ns")?.signed()?.into(),
                             }))
                         };
-                        let before = v.root().get("before").and_then(guard);
-                        let after = v.root().get("after").and_then(guard);
+                        let before = v.get("before").and_then(guard);
+                        let after = v.get("after").and_then(guard);
                         if before.is_none() || before != after {
                             let error = preserved(&state.paths[index]);
                             let done = state.done.take().unwrap();
@@ -235,7 +229,7 @@ fn inspect(runtime: &Shared, io: &mut dyn Io, setup: SharedSetup, index: usize) 
                             return;
                         }
                         state.expected.push(Expected::Same(before.unwrap()));
-                        state.files.push(Some(text(v.root(), "data").into_bytes()));
+                        state.files.push(Some(v.get("data").and_then(Data::bytes).unwrap_or_default().to_vec()));
                     }
                 }
                 Err(_) => {

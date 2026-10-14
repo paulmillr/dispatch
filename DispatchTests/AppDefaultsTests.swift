@@ -54,9 +54,9 @@ final class AppDefaultsTests: XCTestCase {
         let before = saved()
         // Never exercise these stores against the live defaults if the test isolation contract is
         // missing or regresses. A failure remains read-only instead of trying to repair user data.
-        XCTAssertTrue(Home.testing)
+        XCTAssertTrue(System.testing)
         XCTAssertNil(UserDefaults.app)
-        guard Home.testing, UserDefaults.app == nil else { return }
+        guard System.testing, UserDefaults.app == nil else { return }
         // The stores with their default defaults, through what the tests do with them.
         let scope = try XCTUnwrap(SSHIntegrationScope(executable: "/usr/bin/ssh", destination: "defaults-test", configuration: "hostname machine\nuser alice\n"))
         let permissions = TerminalRuntime.shared.ssh.permissions

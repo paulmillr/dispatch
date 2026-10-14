@@ -3,7 +3,8 @@ use crate::{
     history,
 };
 use dispatch_helper_core::api::*;
-use dispatch_helper_core::json::{self, Data, Value};
+use dispatch_helper_core::json::Data;
+use dispatch_helper_core::wire::body::{self, Encoded};
 use std::{
     cell::RefCell,
     collections::BTreeMap,
@@ -25,9 +26,10 @@ pub fn submit(jobs: &Jobs, io: &mut dyn Io, job: Job, done: Done<Output>) {
     }
 }
 
-pub fn native(jobs: &Jobs, io: &mut dyn Io, name: &'static str, input: Data<'_>, done: Done<Json>) {
-    let input = match json::write(&input) {
-        Ok(input) => input,
+/// A native job: its request and answer are encoded plain values (wire::body).
+pub fn native(jobs: &Jobs, io: &mut dyn Io, name: &'static str, input: Data<'_>, done: Done<Encoded>) {
+    let value = match body::encode_plain(&input) {
+        Ok(value) => value,
         Err(error) => {
             deferred(done)(io, Err(error));
             return;
@@ -36,10 +38,10 @@ pub fn native(jobs: &Jobs, io: &mut dyn Io, name: &'static str, input: Data<'_>,
     submit(
         jobs,
         io,
-        Job::Native { name, input },
+        Job::Native { name, value },
         Box::new(move |io, result| {
             let result = result.and_then(|output| match output {
-                Output::Bytes(bytes) => Json::parse(&bytes),
+                Output::Value(bytes) => Encoded::plain(&bytes),
                 _ => Err(failure("native", "Invalid native result")),
             });
             deferred(done)(io, result);
@@ -122,7 +124,7 @@ pub fn scan(
                     return native(&next, io, "process", Data::Object(vec![("pid", Data::Unsigned(process.pid.into()))]), Box::new(move |io, result| {
                         let gone = match result {
                             Err(failure) => failure.code == "not_found",
-                            Ok(document) => self::process(document.root()).is_ok_and(|current| current.pid != observed.pid || current.start != observed.start),
+                            Ok(value) => self::process(&value.root()).is_ok_and(|current| current.pid != observed.pid || current.start != observed.start),
                         };
                         deferred(done)(io, if gone { Ok(None) } else { Err(error) });
                     }));
@@ -162,31 +164,8 @@ pub fn scan(
     );
 }
 
-pub fn process(value: Value<'_>) -> Result<Process, Error> {
-    let read = || {
-        let mut start = value.get("start")?.array()?;
-        let start = [start.next()?.unsigned()?, start.next()?.unsigned()?];
-        Some(Process {
-            pid: value.get("pid")?.unsigned()?.try_into().ok()?,
-            parent: value.get("parent")?.unsigned()?.try_into().ok()?,
-            group: value.get("group")?.signed()?.try_into().ok()?,
-            foreground: value.get("foreground")?.signed()?.try_into().ok()?,
-            tty: value.get("tty")?.unsigned()?,
-            start,
-            executable: value.get("executable")?.string()?.into(),
-            arguments: value
-                .get("arguments")?
-                .array()?
-                .map(|value| Some(value.string()?.into()))
-                .collect::<Option<Vec<_>>>()?,
-            files: value
-                .get("files")?
-                .array()?
-                .map(OpenFile::parse)
-                .collect::<Option<Vec<_>>>()?,
-        })
-    };
-    read().ok_or_else(|| failure("process", "Invalid parent process"))
+pub fn process(value: &Data<'_>) -> Result<Process, Error> {
+    Process::read(value).ok_or_else(|| failure("process", "Invalid parent process"))
 }
 
 /// c1654cc AgentDiscovery.swift:151-156: Codex creates its rollout only with the first turn, so a

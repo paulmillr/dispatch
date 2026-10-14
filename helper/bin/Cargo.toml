@@ -20,6 +20,7 @@ dispatch-helper-stats = { path = "../plugins/stats" }
 [features]
 default = ["tmux"]
 tmux = ["dep:dispatch-helper-tmux"]
+# Capture and replay (core's test instrument) and the `capture` tool (src/capture.rs).
 capture = ["dispatch-helper-core/capture"]
 
 

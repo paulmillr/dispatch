@@ -20,7 +20,7 @@ final class SwiftTerminalSessionTests: XCTestCase {
     func testReconfiguredSessionDrawsLikeAFreshOne() throws {
         let text = Array("Hello, terminal: ABC xyz 0123 ->\r\nsecond line with the same glyphs".utf8)
         func session(_ size: Int) throws -> Session {
-            let session = try Session(config: SwiftEngine.parse("font-size = \(size)", dark: true), scale: 2)
+            let session = try Session(config: SwiftEngine.parse("font-size = \(size)", dark: true), scale: 2, machine: System.machine.launch)
             session.setSize(width: 640, height: 240)
             session.locked { text.withUnsafeBufferPointer { session.surface.feed($0) } }
             return session
@@ -46,7 +46,7 @@ final class SwiftTerminalSessionTests: XCTestCase {
     /// above the cursor go and its row moves to the top; the alternate screen is left to its program.
     func testClearScreenErasesHistoryAndKeepsTheAlternateScreen() throws {
         func session(_ bytes: String) throws -> Session {
-            let session = try Session(config: SwiftEngine.parse("", dark: true), scale: 1)
+            let session = try Session(config: SwiftEngine.parse("", dark: true), scale: 1, machine: System.machine.launch)
             session.setSize(width: 400, height: 120)
             let history = (1...40).map { "old \($0)" }.joined(separator: "\r\n") + "\r\n"
             session.locked { Array((history + bytes).utf8).withUnsafeBufferPointer { session.surface.feed($0) } }
@@ -134,12 +134,12 @@ final class SwiftTerminalSessionTests: XCTestCase {
     /// A process writing far more than one pty read: every byte arrives, in order, including the
     /// output written right before it exits.
     func testFloodArrivesCompleteAndInOrder() async throws {
-        let session = try Session(config: SwiftEngine.parse("", dark: true), scale: 1)
+        let session = try Session(config: SwiftEngine.parse("", dark: true), scale: 1, machine: System.machine.launch)
         session.setSize(width: 800, height: 600)
         let exited = expectation(description: "child exited")
         session.onExit = { _ in exited.fulfill() }
-        try session.start(Launch(command: "/usr/bin/seq 1 200000", directory: NSHomeDirectory(), overrides: [], config: Config(),
-                                 environment: ProcessInfo.processInfo.environment, resources: nil, id: 1))
+        try session.start(Launch(command: "/usr/bin/seq 1 200000", directory: System.home.path, overrides: [], config: Config(),
+                                 environment: System.inherited, machine: System.machine.launch, resources: nil, id: 1))
         await fulfillment(of: [exited], timeout: 30)
         // The screen: the last numbers, then the cursor's empty row.
         let rows = session.locked { session.surface.terminal.grid.rows }
@@ -155,7 +155,7 @@ final class SwiftTerminalSessionTests: XCTestCase {
     /// output, which is not; the text saved next is the shell's screen even under a full-screen program.
     /// A restored SSH tab shows the text with no process until it reconnects.
     func testRestoredHistoryPrecedesTheProcessDimmedAndIsReadFromThePrimaryScreen() async throws {
-        let view = TerminalView(id: UUID(), directory: "/tmp"), config = SwiftEngine.parse("", dark: true)
+        let view = TerminalView(id: System.uuid(), directory: "/tmp"), config = SwiftEngine.parse("", dark: true)
         let backend = try XCTUnwrap(SwiftBackend(config: config, view: view, renderer: NSView(), scale: 1,
                                                  allowHostMedia: false, history: TerminalHistoryStore.replay("old one\nold two")))
         defer { backend.close() }
@@ -188,7 +188,7 @@ final class SwiftTerminalSessionTests: XCTestCase {
         let line = Array((String(repeating: "x", count: 70) + "\r\n").utf8)
         let output = Array([[UInt8]](repeating: line, count: 200_000).joined())
         func kept(_ limit: String) throws -> Int {
-            let session = try Session(config: SwiftEngine.parse("scrollback-limit-bytes = \(limit)", dark: true), scale: 1)
+            let session = try Session(config: SwiftEngine.parse("scrollback-limit-bytes = \(limit)", dark: true), scale: 1, machine: System.machine.launch)
             session.setSize(width: 800, height: 600)
             return session.locked {
                 output.withUnsafeBufferPointer { session.surface.feed($0) }
@@ -204,8 +204,8 @@ final class SwiftTerminalSessionTests: XCTestCase {
     /// Once the child is reaped its PID can belong to another process: the pty must forget it, so
     /// closing never signals or waits for a process group that is no longer ours.
     func testReapedChildIsForgotten() async throws {
-        let launch = try Launch(command: "/usr/bin/true", directory: NSHomeDirectory(), overrides: [], config: Config(),
-                                environment: ProcessInfo.processInfo.environment, resources: nil, id: 1)
+        let launch = try Launch(command: "/usr/bin/true", directory: System.home.path, overrides: [], config: Config(),
+                                environment: System.inherited, machine: System.machine.launch, resources: nil, id: 1)
         let exited = expectation(description: "child exited")
         let pty = try Pty(size: winsize(ws_row: 24, ws_col: 80, ws_xpixel: 0, ws_ypixel: 0), launch: launch,
                           onRead: { _, _ in }, onExit: { _ in exited.fulfill() })
@@ -220,11 +220,11 @@ final class SwiftTerminalSessionTests: XCTestCase {
     func testClosingKillsAChildThatIgnoresHangup() async throws {
         let launch = try Launch(
             command: #"/bin/sh -c 'trap "" HUP; printf ready; while :; do sleep 1; done'"#,
-            directory: NSHomeDirectory(),
+            directory: System.home.path,
             overrides: [],
             config: Config(),
-            environment: ProcessInfo.processInfo.environment,
-            resources: nil,
+            environment: System.inherited,
+            machine: System.machine.launch, resources: nil,
             id: 1
         )
         let ready = expectation(description: "child installed its SIGHUP handler")
@@ -243,7 +243,7 @@ final class SwiftTerminalSessionTests: XCTestCase {
         pty.close()
         XCTAssertLessThan(started.duration(to: clock.now), .seconds(1))
         try await TestSupport.eventually {
-            kill(child, 0) == -1 && errno == ESRCH
+            System.process("gone", child) { kill(child, 0) == -1 && errno == ESRCH }
         }
     }
 
@@ -252,15 +252,15 @@ final class SwiftTerminalSessionTests: XCTestCase {
     /// wherever the pty's last reference goes away.
     func testClosingWithQueuedWritesReleasesThePty() async throws {
         // Descriptors by file identity: other threads may reuse a closed descriptor's number for another file.
-        func open() -> [Int32: String] {
+        func open() -> [Int32: String] { System.process("descriptors", "pty") {
             Dictionary(uniqueKeysWithValues: (0..<getdtablesize()).compactMap { fd -> (Int32, String)? in
                 var info = stat()
                 return fstat(fd, &info) == 0 ? (fd, "\(info.st_dev):\(info.st_ino):\(info.st_rdev)") : nil
             })
-        }
+        } }
         let before = open()
-        let launch = try Launch(command: "/bin/sleep 60", directory: NSHomeDirectory(), overrides: [], config: Config(),
-                                environment: ProcessInfo.processInfo.environment, resources: nil, id: 1)
+        let launch = try Launch(command: "/bin/sleep 60", directory: System.home.path, overrides: [], config: Config(),
+                                environment: System.inherited, machine: System.machine.launch, resources: nil, id: 1)
         var pty: Pty? = try Pty(size: winsize(ws_row: 24, ws_col: 80, ws_xpixel: 0, ws_ypixel: 0), launch: launch,
                                 onRead: { _, _ in }, onExit: { _ in })
         let descriptors = open().filter { before[$0.key] != $0.value }
@@ -279,14 +279,14 @@ final class SwiftTerminalSessionTests: XCTestCase {
     /// Output asking nothing of the host (no title, bell, clipboard...) never wakes the main queue:
     /// a hidden, unfocused session parses a whole flood without one main-queue post.
     func testHiddenOutputDoesNotWakeTheMainQueue() async throws {
-        let session = try Session(config: SwiftEngine.parse("", dark: true), scale: 1)
+        let session = try Session(config: SwiftEngine.parse("", dark: true), scale: 1, machine: System.machine.launch)
         session.setSize(width: 800, height: 600)
         session.setVisible(false)
         session.setFocus(false)
         let exited = expectation(description: "child exited")
         session.onExit = { _ in exited.fulfill() }
-        try session.start(Launch(command: "/usr/bin/seq 1 200000", directory: NSHomeDirectory(), overrides: [], config: Config(),
-                                 environment: ProcessInfo.processInfo.environment, resources: nil, id: 1))
+        try session.start(Launch(command: "/usr/bin/seq 1 200000", directory: System.home.path, overrides: [], config: Config(),
+                                 environment: System.inherited, machine: System.machine.launch, resources: nil, id: 1))
         await fulfillment(of: [exited], timeout: 30)
         let rows = session.locked { session.surface.terminal.grid.rows }
         try await TestSupport.eventually(timeout: .seconds(10)) {
@@ -302,10 +302,10 @@ final class SwiftTerminalSessionTests: XCTestCase {
     func testClosedSessionIsReleased() async throws {
         weak var released: Session?
         do {
-            let session = try Session(config: SwiftEngine.parse("", dark: true), scale: 1)
+            let session = try Session(config: SwiftEngine.parse("", dark: true), scale: 1, machine: System.machine.launch)
             released = session
-            try session.start(Launch(command: "/bin/sleep 60", directory: NSHomeDirectory(), overrides: [], config: Config(),
-                                     environment: ProcessInfo.processInfo.environment, resources: nil, id: 1))
+            try session.start(Launch(command: "/bin/sleep 60", directory: System.home.path, overrides: [], config: Config(),
+                                     environment: System.inherited, machine: System.machine.launch, resources: nil, id: 1))
             session.close()
         }
         try await TestSupport.eventually(timeout: .seconds(10)) { released == nil }
@@ -317,12 +317,12 @@ final class SwiftTerminalSessionTests: XCTestCase {
     func testClosedTerminalWarmsTheNext() async throws {
         let blocks = SharedPageBlocks()
         func flood() async throws -> Session {
-            let session = try Session(config: SwiftEngine.parse("", dark: true), scale: 1, blocks: blocks)
+            let session = try Session(config: SwiftEngine.parse("", dark: true), scale: 1, machine: System.machine.launch, blocks: blocks)
             session.setSize(width: 800, height: 600)
             let exited = expectation(description: "child exited")
             session.onExit = { _ in exited.fulfill() }
-            try session.start(Launch(command: "/usr/bin/seq 1 200000", directory: NSHomeDirectory(), overrides: [], config: Config(),
-                                     environment: ProcessInfo.processInfo.environment, resources: nil, id: 1))
+            try session.start(Launch(command: "/usr/bin/seq 1 200000", directory: System.home.path, overrides: [], config: Config(),
+                                     environment: System.inherited, machine: System.machine.launch, resources: nil, id: 1))
             await fulfillment(of: [exited], timeout: 30)
             try await TestSupport.eventually(timeout: .seconds(10)) {
                 session.locked { String(decoding: session.surface.readText(.active), as: UTF8.self) }.contains("200000")
@@ -366,7 +366,7 @@ final class SwiftTerminalSessionTests: XCTestCase {
             return bytes
         }
         let sessions = try (0..<2).map { _ in
-            let session = try Session(config: SwiftEngine.parse("", dark: true), scale: 1)
+            let session = try Session(config: SwiftEngine.parse("", dark: true), scale: 1, machine: System.machine.launch)
             session.setSize(width: width, height: height)
             return session
         }
@@ -401,14 +401,14 @@ final class SwiftTerminalSessionTests: XCTestCase {
     /// A remote-backed session keeps inline graphics but cannot make Kitty file or shared-memory
     /// requests against the Mac running Dispatch.
     func testKittyHostMediaCanBeDisabled() throws {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("dispatch-kitty-media-\(UUID())")
+        let url = System.temporary.appendingPathComponent("dispatch-kitty-media-\(System.uuid())")
         try Data([255, 0, 0, 255]).write(to: url)
         defer { try? FileManager.default.removeItem(at: url) }
         let request = "\u{1b}_Ga=q,t=f,f=32,s=1,v=1,S=4,i=7;"
             + Data(url.path.utf8).base64EncodedString() + "\u{1b}\\"
 
         func response(allowHostMedia: Bool) throws -> String {
-            let session = try Session(config: SwiftEngine.parse("", dark: true), scale: 1, allowHostMedia: allowHostMedia)
+            let session = try Session(config: SwiftEngine.parse("", dark: true), scale: 1, machine: System.machine.launch, allowHostMedia: allowHostMedia)
             return session.locked {
                 Array(request.utf8).withUnsafeBufferPointer { session.surface.feed($0) }
                 var replies: [UInt8] = []
@@ -433,12 +433,12 @@ final class SwiftTerminalSessionTests: XCTestCase {
             }
         }
 
-        let disabled = try Session(config: SwiftEngine.parse("image-storage-limit = 0", dark: true), scale: 1)
+        let disabled = try Session(config: SwiftEngine.parse("image-storage-limit = 0", dark: true), scale: 1, machine: System.machine.launch)
         let transmit = "\u{1b}_Ga=t,f=32,s=1,v=1,i=1;" + Data([255, 0, 0, 255]).base64EncodedString() + "\u{1b}\\"
         XCTAssertEqual(feed(transmit, to: disabled), "")
         XCTAssertTrue(disabled.surface.terminal.view.primary.images.images.isEmpty)
 
-        let enabled = try Session(config: SwiftEngine.parse("", dark: true), scale: 1)
+        let enabled = try Session(config: SwiftEngine.parse("", dark: true), scale: 1, machine: System.machine.launch)
         var commands = "\u{1b}_Ga=t,f=32,s=1,v=1,i=1,q=2;" + Data([255, 0, 0, 255]).base64EncodedString() + "\u{1b}\\"
         for placement in 1...ImageStorage.maxPlacements + 1 {
             commands += "\u{1b}_Ga=p,i=1,p=\(placement),C=1,q=1;\u{1b}\\"
@@ -451,8 +451,8 @@ final class SwiftTerminalSessionTests: XCTestCase {
     /// Workspace SSH/remote Herdr tabs and generic remote-output views such as the SSH login sheet
     /// all fail closed, while an ordinary local terminal retains host media support.
     func testTerminalViewSelectsHostMediaOnlyForTrustedLocalOutput() {
-        XCTAssertTrue(TerminalView(id: UUID(), directory: "/tmp").allowHostMedia)
-        XCTAssertFalse(TerminalView(id: UUID(), directory: "/tmp", machine: .ssh(SSHShell(destination: "host"))).allowHostMedia)
+        XCTAssertTrue(TerminalView(id: System.uuid(), directory: "/tmp").allowHostMedia)
+        XCTAssertFalse(TerminalView(id: System.uuid(), directory: "/tmp", machine: .ssh(SSHShell(destination: "host"))).allowHostMedia)
         // A remote helper's multiplexer tab (its space lives on an SSH link) and a space whose host is elsewhere.
         let runtime = TerminalRuntime(), workspace = Workspace()
         runtime.workspace = workspace
@@ -461,7 +461,7 @@ final class SwiftTerminalSessionTests: XCTestCase {
         workspace.spaces = [remote, moved]
         XCTAssertFalse(runtime.view(for: remote.tabs[0]).allowHostMedia)
         XCTAssertFalse(runtime.view(for: moved.tabs[0]).allowHostMedia)
-        XCTAssertFalse(TerminalView(id: UUID(), directory: "/tmp", launchCommand: "/usr/bin/ssh host", allowHostMedia: false).allowHostMedia)
+        XCTAssertFalse(TerminalView(id: System.uuid(), directory: "/tmp", launchCommand: "/usr/bin/ssh host", allowHostMedia: false).allowHostMedia)
     }
 
     /// Oversized PNG dimensions are rejected from IHDR, before ImageIO is allowed to construct a
@@ -501,7 +501,7 @@ final class SwiftTerminalSessionTests: XCTestCase {
     /// Nullable custom link expressions must make progress and must not create an invalid
     /// end-before-start selection while the pointer moves on the main actor.
     func testNullableLinkRegexDoesNotHangOrCrashHover() throws {
-        let session = try Session(config: SwiftEngine.parse("", dark: true), scale: 1)
+        let session = try Session(config: SwiftEngine.parse("", dark: true), scale: 1, machine: System.machine.launch)
         session.surface.config.links = [(try XCTUnwrap(Regex("a*")), nil)]
         session.locked { Array("abc".utf8).withUnsafeBufferPointer { session.surface.feed($0) } }
         let size = session.surface.size
@@ -513,7 +513,7 @@ final class SwiftTerminalSessionTests: XCTestCase {
     /// Terminal-controlled history can contain millions of overlapping occurrences; search keeps
     /// a useful recent result set without retaining one Match (and byte map) for every occurrence.
     func testSearchCapsOverlappingMatches() throws {
-        let session = try Session(config: SwiftEngine.parse("", dark: true), scale: 1)
+        let session = try Session(config: SwiftEngine.parse("", dark: true), scale: 1, machine: System.machine.launch)
         session.locked { Array(String(repeating: "a", count: 20_000).utf8).withUnsafeBufferPointer { session.surface.feed($0) } }
         var search = TerminalSearch(Array("a".utf8))
         search.feed(session.surface.terminal, dirty: true)
@@ -533,7 +533,7 @@ final class SwiftTerminalSessionTests: XCTestCase {
     /// A terminal's frames get a new display link when its view moves to another display and when
     /// the displays wake (a link whose display went away can stay silent); not for the same display.
     func testDisplayChangesAndWakeRelinkTheFrames() throws {
-        let backend = try XCTUnwrap(SwiftBackend(config: SwiftEngine.parse("", dark: true), view: TerminalView(id: UUID(), directory: "/tmp"),
+        let backend = try XCTUnwrap(SwiftBackend(config: SwiftEngine.parse("", dark: true), view: TerminalView(id: System.uuid(), directory: "/tmp"),
                                                  renderer: NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 100)), scale: 1, allowHostMedia: false))
         defer { backend.close() }
         backend.setDisplayID(1)
@@ -555,7 +555,7 @@ final class SwiftTerminalSessionTests: XCTestCase {
         window.orderFront(nil)
         defer { window.orderOut(nil); window.contentView = nil; window.close() }
         let scale = window.backingScaleFactor
-        let session = try Session(config: SwiftEngine.parse("", dark: true), scale: scale)
+        let session = try Session(config: SwiftEngine.parse("", dark: true), scale: scale, machine: System.machine.launch)
         defer { session.close() }
         session.host(in: view)
         session.setSize(width: Int(400 * scale), height: Int(200 * scale))

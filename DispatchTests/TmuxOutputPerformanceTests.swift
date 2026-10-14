@@ -10,7 +10,7 @@ final class TmuxOutputPerformanceTests: XCTestCase {
         try await app.attach(); try await app.ready()
         let tab = try XCTUnwrap(app.workspace.activeTab)
         let terminal = try XCTUnwrap(app.runtime.views[tab.id])
-        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let root = System.checkout
         let artifacts = root.appendingPathComponent("build/tmux-output-validation")
         try FileManager.default.createDirectory(at: artifacts, withIntermediateDirectories: true)
         let fixture = artifacts.appendingPathComponent("paths.txt")
@@ -59,18 +59,21 @@ final class TmuxOutputPerformanceTests: XCTestCase {
         try report.joined(separator: "\n").write(to: artifacts.appendingPathComponent("timings.txt"), atomically: true, encoding: .utf8)
         // Attaching a sampling profiler can suspend the target. Collect its
         // trace in a separate pass so those pauses do not enter UI timings.
+        // Replay profiles nothing: its output arrives at once, and waiting out the
+        // profiler's own seconds would leave the recording idle (a replay stall).
+        let profiling = !AppReplay.replaying
         let sampler = Process()
         sampler.executableURL = URL(fileURLWithPath: "/usr/bin/sample")
         sampler.arguments = [String(ProcessInfo.processInfo.processIdentifier), "5", "1", "-file", artifacts.appendingPathComponent("sample.txt").path]
         sampler.standardOutput = FileHandle.nullDevice; sampler.standardError = FileHandle.nullDevice
-        try sampler.run()
-        defer { if sampler.isRunning { sampler.terminate() } }
+        if profiling { try TestSupport.start(sampler) }
+        defer { if profiling, sampler.isRunning { sampler.terminate() } }
         TerminalTestSupport.send("/bin/cat \(HerdrLaunch.quote(fixture.path)); printf '\\nTMUX_PROFILE_%s\\n' DONE", to: terminal)
         try await TestSupport.eventually(timeout: .seconds(60), interval: .milliseconds(100)) {
             TerminalTestSupport.viewport(terminal: terminal).contains("TMUX_PROFILE_DONE")
         }
-        while sampler.isRunning { try await Task.sleep(for: .milliseconds(100)) }
-        XCTAssertEqual(sampler.terminationStatus, 0)
+        while profiling, sampler.isRunning { try await Task.sleep(for: .milliseconds(100)) }
+        if profiling { XCTAssertEqual(sampler.terminationStatus, 0) }
         _ = try await PresentationTestSupport.capture(app.window, named: "output-complete", in: "tmux-output-validation")
     }
 

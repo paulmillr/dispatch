@@ -1,7 +1,7 @@
 //! Native field projection and the c1654cc host/process rate policy.
 use dispatch_helper_core::{
     api::{Disk, Error, Row, Sample},
-    json::Value,
+    json::Data,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -34,13 +34,13 @@ fn invalid() -> Error {
         message: String::new(),
     }
 }
-fn count(value: Value<'_>, key: &str) -> Option<u64> {
+fn count(value: &Data<'_>, key: &str) -> Option<u64> {
     value.get(key)?.unsigned()
 }
-fn number(value: Value<'_>, key: &str) -> Option<f64> {
+fn number(value: &Data<'_>, key: &str) -> Option<f64> {
     value.get(key)?.number().filter(|n| n.is_finite())
 }
-fn text<'a>(value: Value<'a>, key: &str) -> Option<&'a str> {
+fn text<'a>(value: &Data<'a>, key: &str) -> Option<&'a str> {
     value.get(key)?.string()
 }
 fn safe(value: &str, limit: usize) -> bool {
@@ -69,21 +69,21 @@ impl Rates {
         }
     }
 
-    pub fn host(&mut self, value: Value<'_>, local: bool) -> Result<Sample, Error> {
+    pub fn host(&mut self, value: &Data<'_>, local: bool) -> Result<Sample, Error> {
         let time = number(value, "monotonic").ok_or_else(invalid)?;
         self.host_at(value, local, time)
     }
 
-    pub fn host_at(&mut self, value: Value<'_>, local: bool, time: f64) -> Result<Sample, Error> {
+    pub fn host_at(&mut self, value: &Data<'_>, local: bool, time: f64) -> Result<Sample, Error> {
         let boot = text(value, "boot").ok_or_else(invalid)?;
         let mut sample = Sample {
             boot: boot.into(),
-            cpu_present: value.get("cpu").and_then(Value::array).is_some(),
+            cpu_present: value.get("cpu").and_then(Data::array).is_some(),
             memory: count(value, "memoryTotal").zip(count(value, "memoryUsed")),
             swap: count(value, "swapTotal").zip(count(value, "swapUsed")),
             load: value
                 .get("load")
-                .and_then(Value::array)
+                .and_then(Data::array)
                 .map(|v| v.map(|n| n.number().ok_or_else(invalid)).collect())
                 .transpose()?
                 .unwrap_or_default(),
@@ -92,12 +92,12 @@ impl Rates {
         };
         let cpu: Option<Vec<Cpu>> = value
             .get("cpu")
-            .and_then(Value::array)
+            .and_then(Data::array)
             .map(|rows| {
                 rows.map(|row| {
                     let ticks = row
                         .get("ticks")
-                        .and_then(Value::array)
+                        .and_then(Data::array)
                         .map(|values| {
                             let values: Vec<u32> = values
                                 .map(|v| {
@@ -121,7 +121,7 @@ impl Rates {
             .transpose()?;
         let network: Option<Vec<Link>> = value
             .get("network")
-            .and_then(Value::array)
+            .and_then(Data::array)
             .map(|rows| {
                 rows.map(|row| {
                     Ok(Link {
@@ -226,7 +226,7 @@ impl Rates {
         Ok(sample)
     }
 
-    pub fn processes(&mut self, value: Value<'_>, local: bool) -> Result<(Vec<Row>, bool), Error> {
+    pub fn processes(&mut self, value: &Data<'_>, local: bool) -> Result<(Vec<Row>, bool), Error> {
         if local {
             return Ok((ps(text(value, "ps").ok_or_else(invalid)?), false));
         }
@@ -237,7 +237,7 @@ impl Rates {
         self.processes_at(value, time)
     }
 
-    pub fn processes_at(&mut self, value: Value<'_>, time: f64) -> Result<(Vec<Row>, bool), Error> {
+    pub fn processes_at(&mut self, value: &Data<'_>, time: f64) -> Result<(Vec<Row>, bool), Error> {
         let result = (|| {
             let boot = text(value, "boot")
                 .filter(|s| safe(s, 256))
@@ -247,11 +247,11 @@ impl Rates {
             }
             let truncated = value
                 .get("truncated")
-                .and_then(Value::boolean)
+                .and_then(Data::boolean)
                 .ok_or_else(invalid)?;
             let rows = value
                 .get("processes")
-                .and_then(Value::array)
+                .and_then(Data::array)
                 .ok_or_else(invalid)?;
             let before = self
                 .processes
@@ -353,10 +353,10 @@ pub fn ps(value: &str) -> Vec<Row> {
         .collect()
 }
 
-pub fn disks(value: Value<'_>) -> Result<Vec<Disk>, Error> {
+pub fn disks(value: &Data<'_>) -> Result<Vec<Disk>, Error> {
     value
         .get("disks")
-        .and_then(Value::array)
+        .and_then(Data::array)
         .ok_or_else(invalid)?
         .map(|row| {
             let identity = row.get("identity").ok_or_else(invalid)?;
@@ -375,7 +375,7 @@ pub fn disks(value: Value<'_>) -> Result<Vec<Disk>, Error> {
             let available = count(row, "free").ok_or_else(invalid)?.min(total);
             let paths = row
                 .get("paths")
-                .and_then(Value::array)
+                .and_then(Data::array)
                 .ok_or_else(invalid)?
                 .map(|p| p.string().map(Into::into).ok_or_else(invalid))
                 .collect::<Result<_, _>>()?;

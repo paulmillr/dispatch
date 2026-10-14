@@ -12,19 +12,19 @@ final class PiChatIntegrationTests: XCTestCase {
         try DesktopTestSupport.requireUnlocked()
         let fm = FileManager.default
         let pi = try XCTUnwrap([TestSupport.tool("pi")].first { fm.isExecutableFile(atPath: $0) })
-        let state = URL(fileURLWithPath: "/tmp/dispatch-pi-setup-" + UUID().uuidString)
+        let state = URL(fileURLWithPath: "/tmp/dispatch-pi-setup-" + System.uuid().uuidString)
         let fixture = Process(); fixture.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
         fixture.arguments = [CodexTestSupport.root.appendingPathComponent("scripts/claude_fixture.py").path,
                              "serve", "--state", state.path, "--delay", "0.025"]
         fixture.standardOutput = FileHandle.nullDevice; fixture.standardError = FileHandle.nullDevice
-        try fixture.run()
+        let child = try System.Child(fixture)
         defer {
-            if fixture.isRunning { fixture.terminate(); fixture.waitUntilExit() }
+            child.stop()
             print("Pi local managed extension fixture: " + state.path)
         }
-        try await TestSupport.eventually { fm.fileExists(atPath: state.appendingPathComponent("endpoint.json").path) }
+        try await TestSupport.eventually { System.exists(state.appendingPathComponent("endpoint.json")) }
         // The helper installs into its own Pi agent directory (the test home's); the fixture's Pi uses it too.
-        let home = Home.url.appendingPathComponent(".pi/agent"), script = home.appendingPathComponent("extensions/dispatch-chat.js")
+        let home = System.home.appendingPathComponent(".pi/agent"), script = home.appendingPathComponent("extensions/dispatch-chat.js")
         let extensions = home.appendingPathComponent("extensions")
         try fm.createDirectory(at: extensions, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let other = extensions.appendingPathComponent("unrelated.js")
@@ -54,11 +54,11 @@ final class PiChatIntegrationTests: XCTestCase {
         try await TestSupport.eventually(timeout: .seconds(20)) { nativeProcess() != nil && terminal.agentMenuScreen.contains("dispatch-fixture") }
         let process = try XCTUnwrap(nativeProcess())
         XCTAssertFalse(session.active)
-        XCTAssertFalse(fm.fileExists(atPath: script.path))
+        XCTAssertFalse(System.exists(script))
         let models = home.appendingPathComponent("models.json")
-        let savedModels = try Data(contentsOf: models), savedSettings = try Data(contentsOf: settings)
+        let savedModels = try System.read(models), savedSettings = try System.read(settings)
         try await TestSupport.integrations(["pi"], enabled: true, chat: runtime.chat)
-        XCTAssertNil(runtime.chat.error); XCTAssertTrue(fm.fileExists(atPath: script.path))
+        XCTAssertNil(runtime.chat.error); XCTAssertTrue(System.exists(script))
         XCTAssertFalse(session.active, "Installing on disk must wait for the native process to reload")
         TerminalTestSupport.send("/reload", to: terminal)
         try await TestSupport.eventually(timeout: .seconds(20), diagnostic: "Pi reload: \(session.status ?? "none")\n\(terminal.agentMenuScreen)") {
@@ -72,7 +72,7 @@ final class PiChatIntegrationTests: XCTestCase {
             !session.busy && session.turns.flatMap(\.items).contains { $0.kind == .assistant && $0.completed && $0.text == "Local Claude fixture reply: managed local Pi ready" }
         }
         let turns = session.turns.map(\.id)
-        let requests = try Data(contentsOf: state.appendingPathComponent("requests.jsonl"))
+        let requests = try System.read(state.appendingPathComponent("requests.jsonl"))
         session.draft = "preserve native dialog draft λ"
         TerminalTestSupport.send("/dispatch-test-question", to: terminal)
         try await TestSupport.eventually(timeout: .seconds(10)) {
@@ -91,21 +91,21 @@ final class PiChatIntegrationTests: XCTestCase {
         session.draft = "preserve disabled Pi draft 🥧"
         runtime.chat.setHelperIntegration("pi", enabled: false)
         XCTAssertFalse(session.active)
-        try await TestSupport.eventually { runtime.chat.hookStatus("pi") == .off && !fm.fileExists(atPath: script.path) }
+        try await TestSupport.eventually { runtime.chat.hookStatus("pi") == .off && !System.exists(script) }
         runtime.chat.submit(session)
         XCTAssertEqual(session.draft, "preserve disabled Pi draft 🥧")
         XCTAssertNotNil(session.submissionFailure)
         XCTAssertTrue(process.alive)
         let registration = home.appendingPathComponent("dispatch/sessions/\(process.pid).json")
         TerminalTestSupport.send("/reload", to: terminal)
-        try await TestSupport.eventually(timeout: .seconds(10)) { !fm.fileExists(atPath: registration.path) }
+        try await TestSupport.eventually(timeout: .seconds(10)) { !System.exists(registration) }
         XCTAssertFalse(session.active)
         XCTAssertEqual(nativeProcess(), process)
         XCTAssertEqual(session.turns.map(\.id), turns)
-        XCTAssertEqual(try Data(contentsOf: models), savedModels)
-        XCTAssertEqual(try Data(contentsOf: settings), savedSettings)
-        XCTAssertEqual(try Data(contentsOf: other), otherBytes)
-        XCTAssertEqual(try Data(contentsOf: state.appendingPathComponent("requests.jsonl")), requests)
+        XCTAssertEqual(try System.read(models), savedModels)
+        XCTAssertEqual(try System.read(settings), savedSettings)
+        XCTAssertEqual(try System.read(other), otherBytes)
+        XCTAssertEqual(try System.read(state.appendingPathComponent("requests.jsonl")), requests)
         TerminalTestSupport.send("/quit", to: terminal)
         try await TestSupport.eventually(timeout: .seconds(10)) { !process.alive }
     }
@@ -121,17 +121,17 @@ final class PiChatIntegrationTests: XCTestCase {
         let fm = FileManager.default
         let pi = try XCTUnwrap([TestSupport.tool("pi")].first { fm.isExecutableFile(atPath: $0) },
                                "Run ./run.sh --test to prepare Pi")
-        let state = URL(fileURLWithPath: "/tmp/dispatch-pi-chat-" + UUID().uuidString)
+        let state = URL(fileURLWithPath: "/tmp/dispatch-pi-chat-" + System.uuid().uuidString)
         let fixture = Process(); fixture.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
         fixture.arguments = [CodexTestSupport.root.appendingPathComponent("scripts/claude_fixture.py").path,
                              "serve", "--state", state.path, "--delay", "0.04"]
         fixture.standardOutput = FileHandle.nullDevice; fixture.standardError = FileHandle.nullDevice
-        try fixture.run()
+        let child = try System.Child(fixture)
         defer {
-            if fixture.isRunning { fixture.terminate(); fixture.waitUntilExit() }
+            child.stop()
             print("Pi Chat fixture: " + state.path)
         }
-        try await TestSupport.eventually { fm.fileExists(atPath: state.appendingPathComponent("endpoint.json").path) }
+        try await TestSupport.eventually { System.exists(state.appendingPathComponent("endpoint.json")) }
         phaseTimings.begin("runtime_setup")
         let runtime = TerminalRuntime.shared, controller = AppDelegate(), previousChat = runtime.chat
         runtime.chat = ChatCoordinator(enabled: true)
@@ -175,7 +175,7 @@ final class PiChatIntegrationTests: XCTestCase {
             let originalPath = try XCTUnwrap(session.transcriptPath)
             XCTAssertEqual(session.agentID, "pi")
             XCTAssertTrue(session.turns.isEmpty)
-            XCTAssertFalse(fm.fileExists(atPath: originalPath), "Pi must attach before its first assistant turn creates the transcript")
+            XCTAssertFalse(System.exists(URL(fileURLWithPath: originalPath)), "Pi must attach before its first assistant turn creates the transcript")
             runtime.chat.chooseChat(true, session: session)
 
             terminal.insertText("native draft", replacementRange: NSRange(location: NSNotFound, length: 0))
@@ -285,17 +285,17 @@ final class PiChatIntegrationTests: XCTestCase {
     private func transport(_ backend: String) async throws {
         let fm = FileManager.default
         let pi = try XCTUnwrap([TestSupport.tool("pi")].first { fm.isExecutableFile(atPath: $0) })
-        let state = URL(fileURLWithPath: "/tmp/dispatch-pi-" + backend + "-" + UUID().uuidString)
+        let state = URL(fileURLWithPath: "/tmp/dispatch-pi-" + backend + "-" + System.uuid().uuidString)
         let fixture = Process(); fixture.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
         fixture.arguments = [CodexTestSupport.root.appendingPathComponent("scripts/claude_fixture.py").path,
                              "serve", "--state", state.path, "--delay", "0.025"]
         fixture.standardOutput = FileHandle.nullDevice; fixture.standardError = FileHandle.nullDevice
-        try fixture.run()
+        let child = try System.Child(fixture)
         defer {
-            if fixture.isRunning { fixture.terminate(); fixture.waitUntilExit() }
+            child.stop()
             print("Pi \(backend) fixture: " + state.path)
         }
-        try await TestSupport.eventually { fm.fileExists(atPath: state.appendingPathComponent("endpoint.json").path) }
+        try await TestSupport.eventually { System.exists(state.appendingPathComponent("endpoint.json")) }
         let runtime = TerminalRuntime.shared, previous = runtime.chat
         runtime.chat = ChatCoordinator(enabled: true)
         defer { runtime.chat = previous }

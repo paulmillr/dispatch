@@ -78,7 +78,8 @@ impl Login {
         system.interest(signals, true, false)?;
         let identity_job = system.submit(Job::Native {
             name: "host.identity",
-            input: b"{}".to_vec(),
+            value: crate::wire::body::encode_plain(&crate::json::Data::Object(Vec::new()))
+                .map_err(|error| io::Error::other(error.message))?,
         })?;
         Ok(Rc::new(RefCell::new(Self {
             terminal: None,
@@ -287,7 +288,7 @@ impl Login {
         };
         let mux = &parts[(terminal >> 48) as usize];
         let id = crate::dispatch::local(terminal);
-        let lost = |error: &io::Error| error.raw_os_error() == Some(5)
+        let lost = |error: &io::Error| crate::system::errno(error) == Some(5)
             || matches!(error.kind(), io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionReset);
         if parent {
             state.lost = true;

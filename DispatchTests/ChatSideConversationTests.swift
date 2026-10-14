@@ -9,7 +9,7 @@ final class ChatSideConversationTests: XCTestCase {
     func testBlockingQuestionsPreserveChoiceAndCustomAnswers() throws {
         let chat = ChatCoordinator(enabled: true)
         defer { chat.stop() }
-        let session = chat.session(for: UUID())
+        let session = chat.session(for: System.uuid())
         session.sessionID = "parent"
         session.helper = HelperChat(terminal: 0)
         let questions = ["approach", "detail"].map { id in
@@ -54,7 +54,7 @@ final class ChatSideConversationTests: XCTestCase {
     func testLateRepliesCannotReopenClosedSheetOrEnterParent() {
         let chat = ChatCoordinator(enabled: true)
         defer { chat.stop() }
-        let parent = chat.session(for: UUID())
+        let parent = chat.session(for: System.uuid())
         let side = ChatSideConversation(mode: .btw, parentID: "parent", agentID: "fixture", model: "fixture")
         parent.sideConversation = side
         func reply(_ id: String, _ text: String) -> HelperChat.Record {
@@ -101,23 +101,23 @@ final class ChatSideConversationTests: XCTestCase {
 
     func testRealCodexForkKeepsSideReplyOutOfMainThread() async throws {
         let fixture = try CodexEndpointFixture(prefix: "dispatch-side-", delay: 0.01, hooks: false,
-            state: URL(fileURLWithPath: "/tmp/dispatch-q-" + UUID().uuidString.prefix(8)))
+            state: URL(fileURLWithPath: "/tmp/dispatch-q-" + System.uuid().uuidString.prefix(8)))
         var passed = false
         defer { fixture.stop(removeState: passed) }
         try await fixture.start(timeout: .seconds(15))
         let configURL = fixture.state.appendingPathComponent("codex-home/config.toml")
-        let config = try String(contentsOf: configURL, encoding: .utf8)
-        try config.replacingOccurrences(of: "[features]\n", with: "[features]\ndefault_mode_request_user_input = true\n")
-            .write(to: configURL, atomically: true, encoding: .utf8)
+        let config = try String(decoding: try System.read(configURL), as: UTF8.self)
+        try System.write(Data(config.replacingOccurrences(of: "[features]\n", with: "[features]\ndefault_mode_request_user_input = true\n").utf8),
+                         to: configURL)
         let socket = fixture.state.appendingPathComponent("codex.sock")
         let server = Process()
         server.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
         server.arguments = [CodexTestSupport.root.appendingPathComponent("scripts/codex_fixture.py").path,
             "app-server", "--state", fixture.state.path, "--codex", fixture.binary, "--remote", "unix://" + socket.path]
         server.standardOutput = FileHandle.nullDevice; server.standardError = FileHandle.nullDevice
-        try server.run()
-        defer { if server.isRunning { server.terminate() } }
-        try await TestSupport.eventually(timeout: .seconds(10)) { FileManager.default.fileExists(atPath: socket.path) }
+        let child = try System.Child(server)
+        defer { child.stop() }
+        try await TestSupport.eventually(timeout: .seconds(10)) { System.exists(socket) }
         let runtime = TerminalRuntime.shared, previous = runtime.chat
         runtime.chat = ChatCoordinator(enabled: true)
         defer { runtime.chat = previous }
@@ -251,7 +251,7 @@ final class ChatSideConversationTests: XCTestCase {
 
     func testReviewAndCoordinatorStopCloseSideOwnership() {
         let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
-        let session = chat.session(for: UUID())
+        let session = chat.session(for: System.uuid())
         session.active = true; session.sessionID = "parent"
         chat.apply([.init(key: "review-start", turnID: "review", date: Date(), action: .started, reviewing: true)],
                    to: session, earlier: false, historical: false)

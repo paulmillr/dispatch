@@ -255,8 +255,7 @@ final class SSHHerdrIntegrationTests: XCTestCase {
         TerminalTestSupport.send("for i in {1..200}; do printf 'REMOTE_SCROLL_%s\\n' $i; done", to: native)
         try await app.wait { TerminalTestSupport.screen(terminal: native).contains("REMOTE_SCROLL_200") }
         try await TestSupport.eventually { native.scrollbar.state.canScroll }
-        let wheel = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: 30, wheel2: 0, wheel3: 0))
-        native.scrollWheel(with: try XCTUnwrap(NSEvent(cgEvent: wheel)))
+        try TerminalTestSupport.wheel(30, at: native)
         try await TestSupport.eventually { !TerminalTestSupport.screen(terminal: native).contains("REMOTE_SCROLL_200") }
         app.workspace.newTab()
         try await app.wait { app.workspace.currentTabs.count == 2 && app.workspace.activeTab?.isConnecting == false }
@@ -323,7 +322,7 @@ final class SSHHerdrIntegrationTests: XCTestCase {
         let endpoint = space.hostID
         XCTAssertNotEqual(endpoint, .local)
         // The launching shell's channel closing must not take the helper connection with it.
-        try await Task.sleep(for: .seconds(2))
+        try await TestSupport.pause(for: .seconds(2))
         XCTAssertNotNil(app.runtime.helpers[.remote(connection)])
         XCTAssertNil(app.runtime.helpers[.remote(connection)]?.error)
         XCTAssertNotNil(app.runtime.ssh.links[connection])

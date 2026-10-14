@@ -1,9 +1,10 @@
 //! Native effects and completion routing. Reactor and workers are ported from helper2.
-mod capture;
+pub mod capture;
 mod effects;
 mod file;
+pub(crate) use file::{copy, errno};
 
-mod hooks;
+pub(crate) mod hooks;
 mod inspect;
 pub mod launch;
 pub mod login;
@@ -12,7 +13,6 @@ mod observe;
 mod process;
 pub mod queue;
 pub mod reactor;
-pub mod redact;
 pub mod renderer;
 pub mod replay;
 pub mod sender;
@@ -25,6 +25,7 @@ mod work;
 use crate::api::{
     Address, Event, Expected, FileKind, Grid, Io, Job, Metadata, Output, Spawned, Work,
 };
+use crate::json::Data;
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     fs::File,
@@ -46,6 +47,8 @@ struct ChildState {
     pty: bool,
     /// Ends with the helper (everything but daemons).
     owned: bool,
+    /// Leads its own process group (spawned children): ending it ends the group.
+    leader: bool,
     process: Child,
     exit: Option<reactor::Exit>,
     section: String,
@@ -64,9 +67,6 @@ fn context_control(name: &std::ffi::OsStr) -> bool {
     name.starts_with(b"DISPATCH_REPLAY") || name.starts_with(b"DISPATCH_CAPTURE")
 }
 
-/// Answers a hook sender's ownership question (B4) from its process chain, nearest first:
-/// None when this helper does not own it, else whether the agent is bound here.
-pub type Owner = Box<dyn Fn(&[(u32, u64)]) -> Option<bool>>;
 
 pub struct System {
     /// The fd whose readiness the last live events all were, how often, with no read, write,
@@ -86,13 +86,16 @@ pub struct System {
     modes: Option<renderer::native::Termios>,
     inherited: bool,
     sections: BTreeMap<RawFd, String>,
-    jobs: BTreeMap<Work, (String, Option<(u64, String)>)>,
+    /// A submitted job's section and, while traced, its order and encoded args (capture.rs).
+    jobs: BTreeMap<Work, (String, Option<(u64, Vec<u8>)>)>,
     files: file::Book,
     timers: BTreeSet<(Instant, String)>,
     ready: VecDeque<(String, Event)>,
     callbacks: VecDeque<(String, Box<dyn FnOnce(&mut dyn Io)>)>,
     /// Own pid, a startup fact (see `own`).
     pid: u32,
+    /// Io::os/arch: the startup facts' when replaying.
+    platform: (String, String, Vec<std::ffi::OsString>),
     /// `Io::after` callbacks with their deadline and owner section.
     later: Vec<(Instant, String, Box<dyn FnOnce(&mut dyn Io)>)>,
     /// Io::then continuations by work id, with the registering section.
@@ -108,7 +111,6 @@ pub struct System {
     capacity: usize,
     watched: BTreeMap<u64, String>,
     hooks: Option<hooks::Hooks>,
-    owner: Option<Owner>,
     routes: BTreeMap<String, PathBuf>,
     paused: Option<Instant>,
 }
@@ -118,7 +120,7 @@ impl Drop for System {
         // Private servers, clients and side agents end with their helper; daemons stay.
         for child in self.children.values() {
             if child.owned && !child.pty && child.status.is_none() {
-                let _ = native::end(child.process.id());
+                let _ = native::end(child.process.id(), child.leader);
             }
         }
         for child in self
@@ -148,79 +150,59 @@ impl Drop for System {
 impl System {
     /// The helper's working directory, distinct from replay control-file locations.
     pub fn cwd() -> io::Result<PathBuf> {
-        use crate::json::{Json, Value};
         use std::os::unix::ffi::OsStringExt;
         if let Some(bytes) = Self::startup("context")? {
-            let context = Json::parse(&bytes).map_err(|_| file::invalid())?;
-            let path = file::field(context.root(), "cwd", Value::string)?;
-            let path = PathBuf::from(std::ffi::OsString::from_vec(capture::unhex(path)?));
+            let context = crate::wire::body::decode_plain(&bytes).map_err(|_| file::invalid())?;
+            let path = file::field(&context, "cwd", Data::bytes)?;
+            let path = PathBuf::from(std::ffi::OsString::from_vec(path.to_vec()));
             if !path.is_absolute() { return Err(file::invalid()); }
             return Ok(path);
         }
         std::env::current_dir()
     }
 
+    /// The launch context (cwd, argv, environment) as the startup fact records it.
     fn context() -> io::Result<Vec<u8>> {
-        use crate::json::{self, Data};
-        let cwd = capture::hex(Self::cwd()?.as_os_str().as_encoded_bytes());
-        let argv: Vec<_> = std::env::args_os()
-            .map(|value| capture::hex(value.as_encoded_bytes()))
-            .collect();
-        let env: Vec<_> = std::env::vars_os()
+        let cwd = Self::cwd()?;
+        let argv: Vec<_> = std::env::args_os().collect();
+        let env: BTreeMap<_, _> = std::env::vars_os()
             .filter(|(name, _)| !context_control(name))
-            .collect::<BTreeMap<_, _>>()
-            .into_iter()
-            .map(|(name, value)| {
-                [
-                    capture::hex(name.as_encoded_bytes()),
-                    capture::hex(value.as_encoded_bytes()),
-                ]
-            })
             .collect();
-        json::write(&Data::Object(vec![
-            ("cwd", Data::String(&cwd)),
+        capture::value(&Data::Object(vec![
+            ("cwd", Data::Bytes(cwd.as_os_str().as_encoded_bytes())),
             (
                 "argv",
-                Data::Array(argv.iter().map(|value| Data::String(value)).collect()),
+                Data::Array(argv.iter().map(|value| Data::Bytes(value.as_encoded_bytes())).collect()),
             ),
             (
                 "env",
                 Data::Array(
                     env.iter()
-                        .map(|pair| {
-                            Data::Array(pair.iter().map(|value| Data::String(value)).collect())
+                        .map(|(name, value)| {
+                            Data::Array(vec![
+                                Data::Bytes(name.as_encoded_bytes()),
+                                Data::Bytes(value.as_encoded_bytes()),
+                            ])
                         })
                         .collect(),
                 ),
             ),
         ]))
-        .map_err(|_| file::invalid())
     }
 
+    /// A startup fact's recorded value: the capture's first records, read before anything else.
     fn startup(name: &str) -> io::Result<Option<Vec<u8>>> {
-        use crate::json::{Json, Value};
-        use std::io::BufRead;
         let Some(path) = Self::recording() else {
             return Ok(None);
         };
-        // Startup facts precede native effects; do not index the whole capture.
-        for line in io::BufReader::new(file::open(&path)?).lines() {
-            let line = line?;
-            let document = Json::parse(line.as_bytes()).map_err(|_| file::invalid())?;
-            let row = document.root();
-            if row.get("section").and_then(Value::string) != Some("startup") {
+        let (mut reader, _) = capture::trace::Reader::new(file::open(&path)?, file::LIMIT as usize)?;
+        for _ in 0.. {
+            let Some(record) = reader.next()? else { break };
+            if record.section != "startup" {
                 break;
             }
-            let op = row.get("op").and_then(Value::string);
-            if op == Some(name) {
-                let data = capture::unhex(file::field(row, "data", Value::string)?)?;
-                let Output::Bytes(bytes) = file::decode(&data)?.result? else {
-                    return Err(file::invalid());
-                };
-                return Ok(Some(bytes));
-            }
-            if !matches!(op, Some("account" | "pid" | "image" | "context" | "image.sha256")) {
-                break;
+            if record.op == name {
+                return Ok(Some(record.output));
             }
         }
         Ok(None)
@@ -230,17 +212,9 @@ impl System {
     pub fn image() -> io::Result<PathBuf> {
         use std::os::unix::ffi::OsStringExt;
         if let Some(bytes) = Self::startup("image")? {
-            return Ok(std::ffi::OsString::from_vec(bytes).into());
-        }
-        if Self::recording().is_some() {
-            if let Some(path) = std::env::var_os("DISPATCH_REPLAY_IMAGE") {
-                let path = PathBuf::from(path);
-                if !path.is_absolute() {
-                    return Err(io::Error::other("legacy replay image must be absolute"));
-                }
-                return Ok(path);
-            }
-            eprintln!("replay: legacy capture has no running image; effects using it require the original executable path");
+            let image = crate::wire::body::decode_plain(&bytes).map_err(|_| file::invalid())?;
+            let path = image.bytes().ok_or_else(file::invalid)?;
+            return Ok(std::ffi::OsString::from_vec(path.to_vec()).into());
         }
         std::env::current_exe()
     }
@@ -248,44 +222,31 @@ impl System {
     /// Reexec before startup consumers without mutating the calling process's environment.
     /// Legacy captures keep caller-supplied context; capture/replay controls always stay local.
     pub fn restore() -> io::Result<Option<Command>> {
-        use crate::json::{Json, Value};
         use std::{ffi::OsString, os::unix::ffi::OsStringExt};
         let Some(bytes) = Self::startup("context")? else {
             return Ok(None);
         };
-        let cwd = Self::cwd()?;
-        let exists = cwd.try_exists()?;
-        if bytes == Self::context()? && (!exists || cwd == std::env::current_dir()?) {
+        if bytes == Self::context()? {
             return Ok(None);
         }
         if std::env::var_os("DISPATCH_REPLAY_RESTORED").is_some() {
             return Err(io::Error::other("restored launch context differs; replay cannot restore this environment, cwd or argv"));
         }
-        let document = Json::parse(&bytes).map_err(|_| file::invalid())?;
-        let root = document.root();
-        let decode = |value: Value<'_>| -> io::Result<OsString> {
-            Ok(OsString::from_vec(capture::unhex(
-                value.string().ok_or_else(file::invalid)?,
-            )?))
+        let root = crate::wire::body::decode_plain(&bytes).map_err(|_| file::invalid())?;
+        let root = &root;
+        let decode = |value: &Data<'_>| -> io::Result<OsString> {
+            Ok(OsString::from_vec(value.bytes().ok_or_else(file::invalid)?.to_vec()))
         };
-        let mut arguments = root
-            .get("argv")
-            .and_then(Value::array)
-            .ok_or_else(file::invalid)?;
+        let mut arguments = file::field(root, "argv", Data::array)?;
         let mut command = Command::new(std::env::current_exe()?);
         command.arg0(decode(arguments.next().ok_or_else(file::invalid)?)?);
         for argument in arguments {
             command.arg(decode(argument)?);
         }
-        // Native effects replay through System; their logical cwd does not require the
-        // original fixture directory to survive cleanup. Keep physical restoration when possible.
-        if exists { command.current_dir(&cwd); }
+        // The recorded cwd is a recorded fact (System::cwd): effects replay through System, so the
+        // replay never enters that directory, which may be gone, private, or on another machine.
         command.env_clear();
-        for pair in root
-            .get("env")
-            .and_then(Value::array)
-            .ok_or_else(file::invalid)?
-        {
+        for pair in file::field(root, "env", Data::array)? {
             let mut pair = pair.array().ok_or_else(file::invalid)?;
             let name = decode(pair.next().ok_or_else(file::invalid)?)?;
             let value = decode(pair.next().ok_or_else(file::invalid)?)?;
@@ -310,10 +271,10 @@ impl System {
         Ok(Some(command))
     }
 
-    /// Startup-only old engine execution policy; c1654cc TermApple/Launch.swift:248-259.
+    /// This host's execution prefix (Io::execution); c1654cc TermApple/Launch.swift:248-259.
     /// Always quiet: the renderer's own login already printed (or hushed) the banner in this
     /// terminal, so a command's login must not print "Last login" a second time.
-    pub(crate) fn command() -> Vec<std::ffi::OsString> {
+    pub(crate) fn prefix() -> Vec<std::ffi::OsString> {
         #[cfg(target_os = "macos")]
         {
             use std::ffi::OsString;
@@ -332,17 +293,12 @@ impl System {
         vec!["/bin/sh".into(), "-c".into()]
     }
     pub(crate) fn stdio(&mut self) -> io::Result<(RawFd, RawFd)> {
-        let ids = if let Some(result) = self.replay("stdio", "") {
-            let bytes = result?;
-            let (parts, tail) = bytes.as_chunks::<4>();
-            let fds: Vec<_> = parts.iter().map(|v| i32::from_le_bytes(*v)).collect();
-            if fds.len() == 2 && fds[0] != fds[1] && tail.is_empty() {
-                Some([fds[0], fds[1]])
-            } else {
-                return Err(file::invalid());
-            }
-        } else {
-            None
+        let ids = match self.replay("stdio", Data::Null, |v| {
+            let fd = |name| v.get(name)?.signed()?.try_into().ok();
+            Some([fd("read")?, fd("write")?]).filter(|fds| fds[0] != fds[1])
+        }) {
+            Some(result) => Some(result?),
+            None => None,
         };
         if let Some(ids) = ids {
             for fd in ids {
@@ -378,23 +334,22 @@ impl System {
             }
             Ok((ids[0], ids[1]))
         })();
-        let bytes = result
-            .as_ref()
-            .map(|&(read, write)| [read.to_le_bytes(), write.to_le_bytes()].concat())
-            .unwrap_or_default();
-        self.record("stdio", "", &result, &bytes)?;
+        let output = result.as_ref().map_or(Data::Null, |&(read, write)| {
+            Data::Object(vec![("read", Data::Signed(read.into())), ("write", Data::Signed(write.into()))])
+        });
+        self.record("stdio", Data::Null, &result, output)?;
         result
     }
     /// A login has other bus consumers: deliver its frontend exit to the owning section.
     /// Ordinary stdio helpers keep the default fatal parent-loss policy.
     pub(crate) fn parent(&mut self, section: &str) -> io::Result<u32> {
-        if let Some(result) = self.replay("parent.route", section) {
-            return result.and_then(|bytes| bytes.try_into().map(u32::from_le_bytes).map_err(|_| file::invalid()));
+        if let Some(result) = self.replay("parent.route", section, |v| v.unsigned()?.try_into().ok()) {
+            return result;
         }
         let result = self.parent.as_mut().ok_or_else(|| io::Error::other("login frontend exited before startup"))
             .map(|(pid, _, route)| { *route = Some(section.into()); *pid });
-        let bytes = result.as_ref().map(|pid| pid.to_le_bytes().to_vec()).unwrap_or_default();
-        self.record("parent.route", section, &result, &bytes)?;
+        let output = result.as_ref().map_or(Data::Null, |&pid| Data::Unsigned(pid.into()));
+        self.record("parent.route", section, &result, output)?;
         result
     }
     /// Recorded IO source; startup routing uses this instead of the live stdin state.
@@ -405,35 +360,46 @@ impl System {
     /// Captures made before the startup fact was recorded need to be captured again.
     pub fn account() -> io::Result<(u32, PathBuf)> {
         use std::os::unix::ffi::OsStringExt;
-        let Some(path) = Self::recording() else {
+        if Self::recording().is_none() {
             return native::account().map(|account| (account.uid, account.home));
-        };
-        let replay = file::Replay::new(path.into(), 1)?;
-        let Output::Bytes(bytes) = replay.call("startup", "account", "")?.result? else {
-            return Err(file::invalid());
-        };
-        let (uid, home) = bytes.split_at_checked(4).ok_or_else(file::invalid)?;
+        }
+        let bytes = Self::startup("account")?.ok_or_else(file::invalid)?;
+        let account = crate::wire::body::decode_plain(&bytes).map_err(|_| file::invalid())?;
+        let account = &account;
         Ok((
-            u32::from_le_bytes(uid.try_into().unwrap()),
-            std::ffi::OsString::from_vec(home.to_vec()).into(),
+            file::field(account, "uid", Data::unsigned)?.try_into().map_err(|_| file::invalid())?,
+            std::ffi::OsString::from_vec(file::field(account, "home", Data::bytes)?.to_vec()).into(),
         ))
     }
     /// The helper's own pid, a startup fact after the account: replay returns the captured
     /// one. Unlike the account, a trace recorded before this fact replays with the live pid;
     /// only traces whose effects carry the pid (e.g. a native process job) must be re-captured.
     fn own() -> io::Result<u32> {
-        let Some(path) = Self::recording() else {
+        if Self::recording().is_none() {
             return Ok(std::process::id());
+        }
+        let bytes = Self::startup("pid")?.ok_or_else(file::invalid)?;
+        let pid = crate::wire::body::decode_plain(&bytes).map_err(|_| file::invalid())?;
+        pid.unsigned().and_then(|pid| u32::try_from(pid).ok()).ok_or_else(file::invalid)
+    }
+    /// The recorded platform (os, arch, execution prefix) when replaying, else this one.
+    fn platform() -> io::Result<(String, String, Vec<std::ffi::OsString>)> {
+        use std::os::unix::ffi::OsStringExt;
+        if Self::recording().is_none() {
+            return Ok((std::env::consts::OS.into(), std::env::consts::ARCH.into(), Self::prefix()));
+        }
+        let fact = |name| -> io::Result<Vec<u8>> { Self::startup(name)?.ok_or_else(file::invalid) };
+        let text = |name| -> io::Result<String> {
+            let bytes = fact(name)?;
+            let value = crate::wire::body::decode_plain(&bytes).map_err(|_| file::invalid())?;
+            value.string().map(str::to_owned).ok_or_else(file::invalid)
         };
-        let replay = file::Replay::new(path.into(), 1)?;
-        // Skip the account fact that precedes it; traces may hold neither.
-        let _ = replay.call("startup", "account", "");
-        Ok(match replay.call("startup", "pid", "").map(|c| c.result) {
-            Ok(Ok(Output::Bytes(bytes))) => {
-                u32::from_le_bytes(bytes.try_into().map_err(|_| file::invalid())?)
-            }
-            _ => std::process::id(),
-        })
+        let bytes = fact("execution")?;
+        let prefix = crate::wire::body::decode_plain(&bytes).map_err(|_| file::invalid())?;
+        let prefix = prefix.array().ok_or_else(file::invalid)?
+            .map(|part| part.bytes().map(|part| std::ffi::OsString::from_vec(part.to_vec())).ok_or_else(file::invalid))
+            .collect::<io::Result<_>>()?;
+        Ok((text("os")?, text("arch")?, prefix))
     }
     pub fn new(workers: usize, capacity: usize) -> io::Result<Self> {
         // Incident 2026-10-03: a direct `cargo test` with the real HOME overwrote, then deleted,
@@ -455,22 +421,32 @@ impl System {
         let capture = capture::Capture::new(capacity)?;
         if capture.enabled() {
             use std::os::unix::ffi::OsStrExt;
-            let account = Self::account().map(|(uid, home)| {
-                Output::Bytes([uid.to_le_bytes().as_slice(), home.as_os_str().as_bytes()].concat())
-            });
-            capture.result("startup", "account", "", &account)?;
-            let pid = Output::Bytes(std::process::id().to_le_bytes().to_vec());
-            capture.result("startup", "pid", "", &Ok(pid))?;
-            capture.result("startup", "image", "", &Self::image().map(|path| {
-                Output::Bytes(path.as_os_str().as_bytes().to_vec())
-            }))?;
-            capture.result(
-                "startup",
-                "context",
-                "",
-                &Self::context().map(Output::Bytes),
+            let account = Self::account();
+            capture.fact(
+                "account",
+                &account.as_ref().map(|(uid, home)| {
+                    Data::Object(vec![
+                        ("uid", Data::Unsigned((*uid).into())),
+                        ("home", Data::Bytes(home.as_os_str().as_bytes())),
+                    ])
+                }).map_err(|e| io::Error::new(e.kind(), e.to_string())),
             )?;
-            let digest = (|| -> io::Result<Output> {
+            capture.fact("pid", &Ok(Data::Unsigned(std::process::id().into())))?;
+            let image = Self::image();
+            capture.fact(
+                "image",
+                &image.as_ref().map(|path| Data::Bytes(path.as_os_str().as_bytes()))
+                    .map_err(|e| io::Error::new(e.kind(), e.to_string())),
+            )?;
+            match Self::context() {
+                Ok(context) => capture.record("startup", "context", &Data::Null, None, 0, context)?,
+                Err(error) => capture.fact("context", &Err(error))?,
+            }
+            capture.fact("os", &Ok(Data::String(std::env::consts::OS)))?;
+            capture.fact("arch", &Ok(Data::String(std::env::consts::ARCH)))?;
+            let prefix = Self::prefix();
+            capture.fact("execution", &Ok(Data::Array(prefix.iter().map(|part| Data::Bytes(part.as_bytes())).collect())))?;
+            let digest = (|| -> io::Result<[u8; 32]> {
                 let mut image = inspect::executable(std::process::id(), &std::env::current_exe()?)?;
                 let facts = |file: &File| -> io::Result<_> {
                     let m = file.metadata()?;
@@ -487,33 +463,37 @@ impl System {
                 if before != facts(&image)? {
                     return Err(io::Error::other("executing image changed during capture"));
                 }
-                Ok(Output::Bytes(hash.finish().to_vec()))
+                Ok(hash.finish())
             })();
-            capture.result("startup", "image.sha256", "", &digest)?;
+            capture.fact("image.sha256", &digest.as_ref().map(|digest| Data::Bytes(digest)).map_err(|e| io::Error::new(e.kind(), e.to_string())))?;
+            // A whole prefix at once: a snapshot of a running helper's capture already names its image.
+            if let Err(error) = capture.flush() {
+                eprintln!("capture invalid: {error}; live IO continues");
+            }
         }
         let mut bytes = [0; 16];
         if let Some(replay) = &capture.replay {
-            for op in ["account", "pid", "image", "context", "image.sha256"] {
-                if replay
-                    .rows
-                    .borrow()
-                    .get("startup")
-                    .and_then(|rows| rows.front())
-                    .is_some_and(|(_, name)| name == op)
-                {
+            for op in ["account", "pid", "image", "context", "os", "arch", "execution", "image.sha256"] {
+                if replay.peek("startup") == Some(op) {
                     // Recording stores annotation failures without aborting startup. Their
                     // consumers validate required values; draining metadata must do the same.
-                    let _ = replay.call("startup", op, "")?;
+                    let _ = replay.value("startup", op, &Data::Null)?;
                 }
             }
-            let Output::Bytes(data) = replay.call("ui", "random", "16")?.result? else {
-                return Err(file::invalid());
-            };
-            bytes.copy_from_slice(&<[u8; 16]>::try_from(data).map_err(|_| file::invalid())?);
+            let record = replay.value("ui", "random", &Data::Unsigned(16))?;
+            let value = crate::wire::body::decode_plain(&record.output).map_err(|_| file::invalid())?;
+            if record.error.is_some() {
+                return Err(file::failure(&value, &Self::platform()?.0)?);
+            }
+            bytes.copy_from_slice(value.bytes().filter(|data| data.len() == 16).ok_or_else(file::invalid)?);
         } else {
-            let result = random(&mut bytes).map(|_| Output::Bytes(bytes.to_vec()));
-            capture.result("ui", "random", "16", &result)?;
-            result?;
+            match random(&mut bytes) {
+                Ok(()) => capture.record("ui", "random", &Data::Unsigned(16), None, 0, capture::value(&Data::Bytes(&bytes))?)?,
+                Err(error) => {
+                    capture.failure("ui", "random", &Data::Unsigned(16), &error)?;
+                    return Err(error);
+                }
+            }
         }
         let mut reactor = reactor::Reactor::new()?;
         // Replay returns virtual routes/watches: never create external endpoints.
@@ -546,6 +526,7 @@ impl System {
             ready: VecDeque::new(),
             callbacks: VecDeque::new(),
             pid: Self::own()?,
+            platform: Self::platform()?,
             later: Vec::new(),
             continued: BTreeMap::new(),
             serial: 0,
@@ -558,7 +539,6 @@ impl System {
             capacity,
             watched: BTreeMap::new(),
             hooks,
-            owner: None,
             routes: BTreeMap::new(),
             paused: None,
             unconsumed: None,
@@ -568,51 +548,34 @@ impl System {
 
     /// Capture login's outer terminal once; replay never changes the live test terminal.
     pub(crate) fn terminal(&mut self) -> io::Result<(Option<renderer::native::Raw>, Grid)> {
-        if let Some(result) = self.replay("tty.start", "") {
-            return result
-                .and_then(|bytes| Self::dimensions(&bytes))
-                .map(|grid| (None, grid));
+        if let Some(result) = self.replay("tty.start", Data::Null, capture::read::grid) {
+            return result.map(|grid| (None, grid));
         }
         let result = renderer::native::Raw::new()
             .and_then(|raw| renderer::native::grid().map(|grid| (Some(raw), grid)));
-        let bytes = result
-            .as_ref()
-            .map(|(_, grid)| [grid.columns.to_le_bytes(), grid.rows.to_le_bytes()].concat())
-            .unwrap_or_default();
-        self.record("tty.start", "", &result, &bytes)?;
+        let output = result.as_ref().map_or(Data::Null, |(_, grid)| capture::grid(grid));
+        self.record("tty.start", Data::Null, &result, output)?;
         result
     }
 
     pub(crate) fn grid(&mut self) -> io::Result<Grid> {
-        if let Some(result) = self.replay("tty.grid", "") {
-            return result.and_then(|bytes| Self::dimensions(&bytes));
+        if let Some(result) = self.replay("tty.grid", Data::Null, capture::read::grid) {
+            return result;
         }
         let result = renderer::native::grid();
-        let bytes = result
-            .as_ref()
-            .map(|grid| [grid.columns.to_le_bytes(), grid.rows.to_le_bytes()].concat())
-            .unwrap_or_default();
-        self.record("tty.grid", "", &result, &bytes)?;
+        let output = result.as_ref().map_or(Data::Null, capture::grid);
+        self.record("tty.grid", Data::Null, &result, output)?;
         result
-    }
-
-    fn dimensions(bytes: &[u8]) -> io::Result<Grid> {
-        let bytes: [u8; 4] = bytes.try_into().map_err(|_| file::invalid())?;
-        Ok(Grid {
-            columns: u16::from_le_bytes([bytes[0], bytes[1]]),
-            rows: u16::from_le_bytes([bytes[2], bytes[3]]),
-            pixels: None,
-        })
     }
 
     /// Pass the startup outer-tty modes to the next PTY, even after stdin became raw.
     /// Login calls this once; ordinary tabs retain openpty defaults (old relay.rs:167).
     pub fn inherit(&mut self) -> io::Result<()> {
-        if let Some(result) = self.replay("pty.inherit", "") {
-            return result.map(|_| ());
+        if let Some(result) = self.replay("pty.inherit", Data::Null, |_| Some(())) {
+            return result;
         }
         self.inherited = true;
-        self.record("pty.inherit", "", &Ok(()), &[])
+        self.record("pty.inherit", Data::Null, &Ok(()), Data::Null)
     }
 
     pub fn section(&mut self, section: &str) {
@@ -627,10 +590,17 @@ impl System {
     }
 
     pub(crate) fn finish_replay(&self) -> io::Result<()> {
-        self.completion(&[])
+        self.completion(None)
     }
 
-    fn completion(&self, boundary: &[u8]) -> io::Result<()> {
+    /// Replay consumed the whole recording: write the receipt (DISPATCH_REPLAY_COMPLETE). It names
+    /// how this process ends ({kind, status}: the exit the replay must end with); the end of a
+    /// recording that just stops is an empty receipt (status 0).
+    fn completion(&self, end: Option<(&str, i32)>) -> io::Result<()> {
+        let boundary = match end {
+            Some((kind, status)) => capture::value(&Data::Object(vec![("kind", Data::String(kind)), ("status", Data::Signed(status.into()))]))?,
+            None => Vec::new(),
+        };
         if let Some(error) = self.failure.borrow().as_ref() {
             return Err(io::Error::new(error.kind(), error.to_string()));
         }
@@ -638,7 +608,7 @@ impl System {
             replay.finish()?;
             if !self.completed.get() {
                 if let Some(path) = std::env::var_os("DISPATCH_REPLAY_COMPLETE") {
-                    File::options().write(true).create_new(true).mode(0o600).open(path)?.write_all(boundary)?;
+                    File::options().write(true).create_new(true).mode(0o600).open(path)?.write_all(&boundary)?;
                     self.completed.set(true);
                 }
             }
@@ -649,12 +619,11 @@ impl System {
     /// Complete one CLI invocation, including setup and native launcher cleanup.
     pub fn finish(mut self, status: i32) -> io::Result<i32> {
         self.section("lifecycle");
-        let args = status.to_string();
-        if let Some(result) = self.replay("return", &args) { result?; }
-        else { self.record("return", &args, &Ok(()), &[])?; }
+        if let Some(result) = self.replay("return", Data::Signed(status.into()), |_| Some(())) { result?; }
+        else { self.record("return", Data::Signed(status.into()), &Ok(()), Data::Null)?; }
         if self.capture.replay.is_some() {
             self.capture.finish()?;
-            self.completion(format!("{{\"kind\":\"return\",\"status\":{status}}}").as_bytes())?;
+            self.completion(Some(("return", status)))?;
         } else if let Err(error) = self.capture.finish() {
             eprintln!("capture invalid: {error}; live IO continues");
         }
@@ -665,32 +634,26 @@ impl System {
     /// Handoff is not evidence that the replacement program ran or exited successfully.
     pub(crate) fn replace(&mut self, mut command: Command) -> io::Result<()> {
         self.section("lifecycle");
-        let args = format!("{command:?}");
-        if let Some(result) = self.replay("handoff", &args) {
+        let encoded = capture::value(&capture::command(&command))?;
+        let args = || crate::wire::body::decode_plain(&encoded).expect("encoded above");
+        if let Some(result) = self.replay("handoff", args(), |_| Some(())) {
             result?;
-            let failed = self.capture.replay.as_ref().unwrap().rows.borrow()
-                .get("lifecycle").and_then(|rows| rows.front()).is_some_and(|(_, op)| op == "exec.error");
+            let failed = self.capture.replay.as_ref().unwrap().peek("lifecycle") == Some("exec.error");
             if failed {
-                return self.replay("exec.error", &args).unwrap().map(|_| ());
+                return self.replay("exec.error", args(), |_| Some(())).unwrap();
             }
-            self.completion(b"{\"kind\":\"handoff\"}")?;
+            self.completion(Some(("handoff", 0)))?;
             std::process::exit(0);
         }
-        self.record("handoff", &args, &Ok(()), &[])?;
+        self.record("handoff", args(), &Ok(()), Data::Null)?;
         if let Err(error) = self.capture.flush() {
             eprintln!("capture invalid: {error}; live IO continues");
         }
         let error = command.exec();
-        let recorded = error.raw_os_error().map(io::Error::from_raw_os_error)
-            .unwrap_or_else(|| io::Error::new(error.kind(), error.to_string()));
-        self.record::<()>("exec.error", &args, &Err(recorded), &[])?;
+        self.record::<()>("exec.error", args(), &Err(file::copy(&error)), Data::Null)?;
         Err(error)
     }
 
-    /// Who answers hook senders' ownership questions; without one this helper owns nothing.
-    pub fn owner(&mut self, owner: Owner) {
-        self.owner = Some(owner);
-    }
 
     /// App output backpressure leaves native bytes unread and UI/worker readiness live.
     pub(crate) fn pressure(&mut self, paused: bool) -> io::Result<()> {
@@ -735,47 +698,50 @@ impl System {
         pending
     }
 
-    fn record<T>(
+    /// One effect: what was asked and what came back, as values; a failed effect records
+    /// its error instead of `output`.
+    fn record<'a, T>(
         &self,
         op: &str,
-        args: &str,
+        args: impl Into<Data<'a>>,
         result: &io::Result<T>,
-        bytes: &[u8],
+        output: Data<'_>,
     ) -> io::Result<()> {
         if !self.capture.enabled() {
             return Ok(());
         }
-        self.capture
-            .bytes(&self.section, op, args, result.as_ref().err(), bytes)
+        match result {
+            Ok(_) => self.capture.record(&self.section, op, &args.into(), None, 0, capture::value(&output)?),
+            Err(error) => self.capture.failure(&self.section, op, &args.into(), error),
+        }
     }
 
-    fn replay(&mut self, op: &str, args: &str) -> Option<io::Result<Vec<u8>>> {
-        let result = self
-            .capture
-            .replay
-            .as_ref()
-            .map(|replay| replay.call(&self.section, op, args));
-        if let Some(Err(error)) = &result {
-            self.failure
-                .borrow_mut()
-                .get_or_insert_with(|| io::Error::new(error.kind(), error.to_string()));
-        }
-        result.map(|completion| match completion?.result? {
-            Output::Bytes(bytes) => Ok(bytes),
-            _ => Err(file::invalid()),
-        })
+    /// The recorded outcome of `op` with `args`: its output as `read` takes it, or its error.
+    /// A record that differs, or an output `read` refuses, fails the replay.
+    fn replay<'a, T>(
+        &mut self,
+        op: &str,
+        args: impl Into<Data<'a>>,
+        read: impl FnOnce(&Data<'_>) -> Option<T>,
+    ) -> Option<io::Result<T>> {
+        let replay = self.capture.replay.as_ref()?;
+        let outcome = replay.value(&self.section, op, &args.into()).and_then(|record| {
+            let value = crate::wire::body::decode_plain(&record.output).map_err(|_| file::invalid())?;
+            Ok(match record.error {
+                Some(_) => Err(file::failure(&value, &self.platform.0)?),
+                None => Ok(read(&value).ok_or_else(file::invalid)?),
+            })
+        });
+        Some(outcome.unwrap_or_else(|error| {
+            self.failure.borrow_mut().get_or_insert_with(|| io::Error::new(error.kind(), error.to_string()));
+            Err(error)
+        }))
     }
 
     // Void effects report native failures later through next.error; validation failures
     // fail immediately at the next event boundary, without inventing an outcome.
-    fn ignored(&mut self, op: &str, args: &str) -> bool {
-        let Some(replay) = &self.capture.replay else {
-            return false;
-        };
-        if let Err(error) = replay.call(&self.section, op, args) {
-            self.failure.borrow_mut().get_or_insert(error);
-        }
-        true
+    fn ignored<'a>(&mut self, op: &str, args: impl Into<Data<'a>>) -> bool {
+        self.replay(op, args, |_| Some(())).is_some()
     }
 
     fn dispose(&mut self, fd: RawFd) -> io::Result<()> {
@@ -844,10 +810,10 @@ impl System {
             let replay = self.capture.replay.is_some();
             let result = (|| {
                 self.section("lifecycle");
-                if let Some(result) = self.replay("signal", &number.to_string()) { result?; }
-                else { self.record("signal", &number.to_string(), &Ok(()), &[])?; }
+                if let Some(result) = self.replay("signal", Data::Signed(number.into()), |_| Some(())) { result?; }
+                else { self.record("signal", Data::Signed(number.into()), &Ok(()), Data::Null)?; }
                 self.capture.finish()?;
-                if replay { self.completion(format!("{{\"kind\":\"signal\",\"signal\":{number}}}").as_bytes())?; }
+                if replay { self.completion(Some(("signal", 128 + number as i32)))?; }
                 Ok::<_, io::Error>(())
             })();
             if replay {
@@ -909,7 +875,7 @@ impl System {
                     .file(section, order, &args, self.files.sequence(section), result)?;
             }
             Ok((section, event)) => self.capture.event(section, event)?,
-            Err(_) => self.record("next.error", "", &result, &[])?,
+            Err(_) => self.record("next.error", Data::Null, &result, Data::Null)?,
         }
         if let Ok((section, Event::Timer { at })) = &result
             && section == "after"
@@ -948,24 +914,22 @@ impl System {
                 return Ok(event);
             }
             if let Some(replay) = &self.capture.replay {
-                if !replay.timed
-                    && let Some((at, section)) = self.timers.first().cloned()
-                    && at <= Instant::now()
-                {
-                    self.timers.remove(&(at, section.clone()));
-                    return Ok((section, Event::Timer { at }));
-                }
                 if let Some((section, row)) = replay.next()? {
-                    let completion = file::decode(&row.data)?;
                     let event = if row.op == "file.done" {
-                        let (order, args) = row.args.split_once(' ').ok_or_else(file::invalid)?;
-                        let order = order.parse::<u64>().map_err(|_| file::invalid())?;
+                        let completion = file::decode(row.sequence, &row.output, &self.platform.0)?;
+                        let done = crate::wire::body::decode_plain(&row.args).map_err(|_| file::invalid())?;
+                        let [order, job] = done.array().ok_or_else(file::invalid)?.collect::<Vec<_>>()[..]
+                        else {
+                            return Err(file::invalid());
+                        };
+                        let order = order.unsigned().ok_or_else(file::invalid)?;
+                        let args = capture::value(job)?;
                         let work = self
                             .jobs
                             .iter()
                             .find_map(|(work, (s, call))| {
                                 (s == &section
-                                    && call.as_ref().is_some_and(|(n, a)| *n == order && a == args))
+                                    && call.as_ref().is_some_and(|(n, a)| *n == order && *a == args))
                                 .then_some(*work)
                             })
                             .ok_or_else(file::invalid)?;
@@ -977,14 +941,12 @@ impl System {
                             work,
                             result: completion.result,
                         }
+                    } else if row.op == "next.error" {
+                        // The recorded failure of the next event, replayed as that failure.
+                        file::decode(row.sequence, &row.output, &self.platform.0)?.result?;
+                        return Err(file::invalid());
                     } else {
-                        let Output::Bytes(bytes) = completion.result? else {
-                            return Err(file::invalid());
-                        };
-                        if row.op == "next.error" {
-                            return Err(file::invalid());
-                        }
-                        capture::event(&bytes, replay.origin)?
+                        capture::event(&row.output, replay.origin)?
                     };
                     if let Event::Timer { at } = event {
                         self.timers
@@ -1052,7 +1014,7 @@ impl System {
             };
             if let Some(hooks) = &mut self.hooks {
                 self.ready
-                    .extend(hooks.ready(ready, &mut self.reactor, self.owner.as_ref())?);
+                    .extend(hooks.ready(ready, &mut self.reactor)?);
             }
             let mut changes = Vec::new();
             if let Some(watches) = &mut self.watches {
@@ -1152,12 +1114,8 @@ impl System {
 
 impl System {
     pub fn listen(&mut self, path: &Path) -> io::Result<RawFd> {
-        if let Some(result) = self.replay("listen", &path.to_string_lossy()) {
-            return result.and_then(|v| {
-                v.try_into()
-                    .map(i32::from_le_bytes)
-                    .map_err(|_| file::invalid())
-            });
+        if let Some(result) = self.replay("listen", Data::from(path), |v| v.signed()?.try_into().ok()) {
+            return result;
         }
         let result = (|| {
             let parent = path
@@ -1198,11 +1156,8 @@ impl System {
             self.sections.insert(fd, self.section.clone());
             Ok(fd)
         })();
-        let data = result
-            .as_ref()
-            .map(|v| v.to_le_bytes().to_vec())
-            .unwrap_or_default();
-        self.record("listen", &path.to_string_lossy(), &result, &data)?;
+        let output = result.as_ref().map_or(Data::Null, |&fd| Data::Signed(fd.into()));
+        self.record("listen", Data::from(path), &result, output)?;
         result
     }
 }
@@ -1212,7 +1167,7 @@ fn random(bytes: &mut [u8]) -> io::Result<()> {
 }
 
 /// The worker side of Job::Isolated: when this process was started as `<exe> native <name>`,
-/// run that one native job (JSON on stdin, result on stdout) and return the exit code (0, or
+/// run that one native job (its encoded value on stdin, the answer on stdout) and return the exit code (0, or
 /// the error's errno). Every binary that submits Job::Isolated calls this first in main.
 pub fn isolated() -> Option<i32> {
     use std::io::{Read, Write};
@@ -1323,23 +1278,23 @@ fn execute(job: Job) -> io::Result<Output> {
             Ok(Output::List(entries))
         }
         Job::Process { pid } => inspect::process(pid).map(Output::Process),
-        Job::Native { name, input } => native(name, &input).map(Output::Bytes),
+        Job::Native { name, value } => native(name, &value).map(Output::Value),
         Job::Isolated {
             name,
-            input,
+            value,
             deadline,
         } => {
             let mut command = Command::new(std::env::current_exe()?);
             command.args(["native", name]);
             let (status, stdout) =
-                process::run(command, input, Some(deadline), crate::wire::LIMIT as usize)?;
+                process::run(command, value, Some(deadline), crate::wire::LIMIT as usize)?;
             // The worker exits with the native error's errno; 0 is success.
             match status.code() {
                 Some(0) => Ok(stdout),
                 Some(code) => Err(io::Error::from_raw_os_error(code)),
                 None => Err(io::ErrorKind::Interrupted.into()),
             }
-            .map(Output::Bytes)
+            .map(Output::Value)
         }
         // The worker closure in System::submit runs Job::Lock and keeps the locked fd under the
         // work id (effects.rs); execute never sees a lock job.
@@ -1405,23 +1360,18 @@ fn metadata(value: std::fs::Metadata) -> Metadata {
 
 impl System {
     fn open(&mut self, op: &str) -> io::Result<(u64, PathBuf)> {
-        if let Some(result) = self.replay(op, "") {
-            let bytes = result?;
-            let text = std::str::from_utf8(&bytes).map_err(|_| file::invalid())?;
-            let (id, path) = text.split_once(' ').ok_or_else(file::invalid)?;
-            let path: PathBuf = path.into();
-            return Ok((id.parse().map_err(|_| file::invalid())?, path));
+        if let Some(result) = self.replay(op, Data::Null, |v| Some((v.get("route")?.unsigned()?, v.get("path")?.path()?.to_path_buf()))) {
+            return result;
         }
         let result = self
             .hooks
             .as_mut()
             .unwrap()
             .route(&self.section, &mut self.reactor);
-        let bytes = result
-            .as_ref()
-            .map(|(id, path)| format!("{id} {}", path.display()))
-            .unwrap_or_default();
-        self.record(op, "", &result, bytes.as_bytes())?;
+        let output = result.as_ref().map_or(Data::Null, |(route, path)| {
+            Data::Object(vec![("route", Data::Unsigned(*route)), ("path", Data::from(path.as_path()))])
+        });
+        self.record(op, Data::Null, &result, output)?;
         let (id, path) = result?;
         Ok((id, path))
     }

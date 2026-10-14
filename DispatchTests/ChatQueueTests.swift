@@ -97,7 +97,7 @@ final class ChatQueueTests: XCTestCase {
         }
         for previous in [nil, "previous"] as [String?] {
             let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
-            let session = chat.session(for: UUID())
+            let session = chat.session(for: System.uuid())
             session.helper = HelperChat(terminal: 0)
             session.active = true; session.busy = true; session.activeTurnID = previous
             session.showOptimisticPrompt("steer this turn", at: Date(timeIntervalSince1970: 100))
@@ -148,7 +148,8 @@ final class ChatQueueTests: XCTestCase {
         let (chat, session) = try queuedFixture()
         session.binding = .init(session: "original", transcript: nil, pid: 42, start: [1, 0], executable: "/bin/agent")
         session.awaitingPromptAck = true; session.promptBoundary = .firstRemoteTurn
-        // Real full047 app journal: old idle, new turn start, then busy in the same read.
+        // Real full047 app journal: old idle, new turn start, then busy in the same read. Whatever drains the queue in
+        // between (the send's own completion, mix52) finds the started turn busy, not the stale idle.
         for event in [HelperChat.Event.state(.init(busy: false, activity: nil, model: nil, model_label: nil,
                         effort: nil, usage: nil, goal: nil, draft: nil, attention: nil, title: nil,
                         compacting: false, service_tier: nil)),
@@ -159,6 +160,7 @@ final class ChatQueueTests: XCTestCase {
                         effort: nil, usage: nil, goal: nil, draft: nil, attention: nil, title: nil,
                         compacting: false, service_tier: nil))] {
             chat.receiveHelper(event, session: session)
+            chat.drainQueue(session)
             XCTAssertNil(session.queuedSubmissionID)
             XCTAssertEqual(session.queuedMessages.map(\.text), ["first", "second"])
         }
@@ -168,9 +170,9 @@ final class ChatQueueTests: XCTestCase {
 
     private func queuedFixture() throws -> (ChatCoordinator, ChatSession) {
         let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
-        let session = chat.session(for: UUID())
+        let session = chat.session(for: System.uuid())
         session.active = true; session.showChat = true; session.busy = true; session.sessionID = "original"
-        session.process = try XCTUnwrap(AgentProcess.capture(getpid()))
+        session.process = try XCTUnwrap(AgentProcess.capture(System.pid))
         // Queueing belongs to a helper chat; terminal 0 is no helper terminal (only the app's queue state).
         session.helper = HelperChat(terminal: 0)
         // Held while queueing: the app's queue state only, nothing uploaded to the stand-in.
@@ -262,9 +264,9 @@ final class ChatQueueTests: XCTestCase {
 
     func testIdleComposerSubmissionSkipsQueueUI() throws {
         let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
-        let session = chat.session(for: UUID())
+        let session = chat.session(for: System.uuid())
         session.active = true; session.showChat = true
-        session.process = try XCTUnwrap(AgentProcess.capture(getpid()))
+        session.process = try XCTUnwrap(AgentProcess.capture(System.pid))
         // Queueing belongs to a helper chat; terminal 0 is no helper terminal (only the app's queue state).
         session.helper = HelperChat(terminal: 0)
         session.draft = "send directly"
@@ -282,9 +284,9 @@ final class ChatQueueTests: XCTestCase {
 
     func testEditingKeepsOrderAndCancelRestoresOriginal() throws {
         let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
-        let session = chat.session(for: UUID())
+        let session = chat.session(for: System.uuid())
         session.active = true; session.busy = true
-        session.process = try XCTUnwrap(AgentProcess.capture(getpid()))
+        session.process = try XCTUnwrap(AgentProcess.capture(System.pid))
         // Queueing belongs to a helper chat; terminal 0 is no helper terminal (only the app's queue state).
         session.helper = HelperChat(terminal: 0)
         for text in ["first", "second", "/status"] { session.draft = text; chat.queue(session) }
@@ -306,9 +308,9 @@ final class ChatQueueTests: XCTestCase {
 
     func testCommandCompletionAndQueueNavigationDoNotSubmit() throws {
         let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
-        let session = chat.session(for: UUID())
+        let session = chat.session(for: System.uuid())
         session.active = true; session.busy = true
-        session.process = try XCTUnwrap(AgentProcess.capture(getpid()))
+        session.process = try XCTUnwrap(AgentProcess.capture(System.pid))
         // Queueing belongs to a helper chat; terminal 0 is no helper terminal (only the app's queue state).
         session.helper = HelperChat(terminal: 0)
         // The commands the helper's Codex harness reports (chat.history commands).
@@ -332,9 +334,9 @@ final class ChatQueueTests: XCTestCase {
     }
     func testMultilineControlReturnUsesSubmissionRoutingThroughAppKit() async throws {
         let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
-        let session = chat.session(for: UUID())
+        let session = chat.session(for: System.uuid())
         session.active = true; session.showChat = true; session.busy = true
-        session.process = try XCTUnwrap(AgentProcess.capture(getpid()))
+        session.process = try XCTUnwrap(AgentProcess.capture(System.pid))
         // Queueing belongs to a helper chat; terminal 0 is no helper terminal (only the app's queue state).
         session.helper = HelperChat(terminal: 0)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
@@ -370,9 +372,9 @@ final class ChatQueueTests: XCTestCase {
 
     func testMultilineSlashAndBangStayLiteralAcrossQueueEditingAndDelivery() throws {
         let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
-        let session = chat.session(for: UUID())
+        let session = chat.session(for: System.uuid())
         session.active = true; session.showChat = true; session.busy = true
-        session.process = try XCTUnwrap(AgentProcess.capture(getpid()))
+        session.process = try XCTUnwrap(AgentProcess.capture(System.pid))
         // Queueing belongs to a helper chat; terminal 0 is no helper terminal (only the app's queue state).
         session.helper = HelperChat(terminal: 0)
         for text in ["/new", "/terminal\nquoted text", "/model", "!echo example"] {
@@ -411,9 +413,9 @@ final class ChatQueueTests: XCTestCase {
         for theme in [ChatTheme.standard, configured] {
             ChatThemeStore.shared.current = theme
             let chat = ChatCoordinator(enabled: true)
-            let session = chat.session(for: UUID())
+            let session = chat.session(for: System.uuid())
             session.active = true; session.showChat = true; session.busy = true
-            session.process = try XCTUnwrap(AgentProcess.capture(getpid()))
+            session.process = try XCTUnwrap(AgentProcess.capture(System.pid))
         // Queueing belongs to a helper chat; terminal 0 is no helper terminal (only the app's queue state).
         session.helper = HelperChat(terminal: 0)
             let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 800, height: 600),
@@ -435,9 +437,9 @@ final class ChatQueueTests: XCTestCase {
 
     func testDraggingQueueHandleReordersWithoutPasteboard() async throws {
         let chat = ChatCoordinator(enabled: true)
-        let session = chat.session(for: UUID())
+        let session = chat.session(for: System.uuid())
         session.active = true; session.showChat = true; session.busy = true
-        session.process = try XCTUnwrap(AgentProcess.capture(getpid()))
+        session.process = try XCTUnwrap(AgentProcess.capture(System.pid))
         // Queueing belongs to a helper chat; terminal 0 is no helper terminal (only the app's queue state).
         session.helper = HelperChat(terminal: 0)
         let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 800, height: 600),
@@ -469,9 +471,9 @@ final class ChatQueueTests: XCTestCase {
 
     func testReturnAndKeypadEnterQueueWhileBusyAndCheckingActivity() async throws {
         let chat = ChatCoordinator(enabled: true)
-        let session = chat.session(for: UUID())
+        let session = chat.session(for: System.uuid())
         session.active = true; session.showChat = true; session.busy = true
-        session.version = "0.153.4"; session.process = try XCTUnwrap(AgentProcess.capture(getpid()))
+        session.version = "0.153.4"; session.process = try XCTUnwrap(AgentProcess.capture(System.pid))
         // A helper chat whose agent the helper has not bound: rows stay here, sends are refused (draft kept).
         session.helper = HelperChat(terminal: 0)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
@@ -539,12 +541,12 @@ final class ChatQueueTests: XCTestCase {
 
     func testQueueEditingValidationAndConversationReplacement() throws {
         let chat = ChatCoordinator(enabled: true)
-        let session = chat.session(for: UUID())
+        let session = chat.session(for: System.uuid())
         session.draft = "preserved"
         chat.queue(session)
         XCTAssertEqual(session.draft, "preserved"); XCTAssertTrue(session.queuedMessages.isEmpty)
         session.active = true; session.busy = true; session.version = "0.153.4"
-        session.process = try XCTUnwrap(AgentProcess.capture(getpid()))
+        session.process = try XCTUnwrap(AgentProcess.capture(System.pid))
         // Queueing belongs to a helper chat; terminal 0 is no helper terminal (only the app's queue state).
         session.helper = HelperChat(terminal: 0)
         for text in ["first", "second\nline"] { session.draft = text; chat.queue(session) }
@@ -662,7 +664,7 @@ final class ChatQueueTests: XCTestCase {
     }
 
     func testExplicitChatOptOutIsPreservedWithoutHooks() throws {
-        let domain = "dispatch-chat-opt-out-" + UUID().uuidString, defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        let domain = "dispatch-chat-opt-out-" + System.uuid().uuidString, defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
         defer { defaults.removePersistentDomain(forName: domain) }
         defaults.set(false, forKey: "agentChatEnabled")
         XCTAssertFalse(ChatCoordinator(defaults: defaults).enabled)

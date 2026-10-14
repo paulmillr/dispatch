@@ -359,33 +359,34 @@ impl Herdr {
         let path = self.controllers[&id].relay.as_ref().unwrap().path.clone();
         let uid = self.config.uid;
         let executable = self.owner.as_ref().unwrap().server.executable.clone();
-        let input = json::write(&D::Object(vec![("fd", D::Signed(fd.into()))])).unwrap();
+        let input = body::encode_plain(&D::Object(vec![("fd", D::Signed(fd.into()))])).unwrap();
         self.job(
             io,
             Job::Native {
                 name: "peer",
-                input,
+                value: input,
             },
             Box::new(move |mux, io, result| {
-                let permitted = auth::document(result).is_ok_and(|json| {
-                    json.root().get("uid").and_then(Value::unsigned) == Some(uid.into())
-                        && json.root().get("pid").and_then(Value::unsigned) == Some(pid.into())
+                let permitted = auth::document(result).is_ok_and(|value| {
+                    let value = value.root();
+                    value.get("uid").and_then(D::unsigned) == Some(uid.into())
+                        && value.get("pid").and_then(D::unsigned) == Some(pid.into())
                 });
                 if !permitted {
                     mux.relay_client(io, id, fd, &path, false);
                     return;
                 }
                 let input =
-                    json::write(&D::Object(vec![("pid", D::Unsigned(pid.into()))])).unwrap();
+                    body::encode_plain(&D::Object(vec![("pid", D::Unsigned(pid.into()))])).unwrap();
                 mux.job(
                     io,
                     Job::Native {
                         name: "process",
-                        input,
+                        value: input,
                     },
                     Box::new(move |mux, io, result| {
                         let permitted = auth::document(result)
-                            .and_then(|json| process::read(json.root()))
+                            .and_then(|value| Process::read(&value.root()).ok_or_else(|| error("Invalid process field.")))
                             .is_ok_and(|process| {
                                 process.pid == pid && process.executable == executable
                             });

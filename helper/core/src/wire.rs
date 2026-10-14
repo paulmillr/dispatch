@@ -1,14 +1,7 @@
 //! Binary UI framing: LE length, kind, connection-local u64 id and generated binary body.
-use crate::{
-    api,
-    json::{self, Data},
-};
+use crate::api;
 pub mod body;
-mod client;
-mod reader;
 mod stream;
-pub use client::Client;
-pub use reader::Reader;
 pub use stream::{CHUNK, Collector, Message, Progress, Received};
 
 /// Any generated schema change produces a different protocol version.
@@ -216,11 +209,7 @@ impl Decoder {
     }
 }
 
-pub fn string(output: &mut Vec<u8>, text: &str) {
-    output.extend_from_slice(&json::write(&Data::String(text)).unwrap());
-}
-
-/// Construct a frame from an in-memory native projection. JSON is never sent.
+/// Construct a frame from an encoded value (encode.rs); chunks and cancels carry raw bytes.
 pub fn frame(kind: Kind, id: u64, value: &[u8]) -> Result<Vec<u8>, Error> {
     if matches!(kind, Kind::Chunk | Kind::Cancel) {
         return packet(kind, id, value);
@@ -228,8 +217,7 @@ pub fn frame(kind: Kind, id: u64, value: &[u8]) -> Result<Vec<u8>, Error> {
     if value.len() > LIMIT as usize {
         return Err(Error::Limit);
     }
-    let body = body::from_json(value).map_err(|_| Error::Kind)?;
-    packet(kind, id, &body)
+    packet(kind, id, &[&body::SCHEMA[..], value].concat())
 }
 
 /// Shared byte framing for native protocols and the generated UI body codec.
@@ -254,7 +242,10 @@ pub fn reply(kind: Kind, id: u64, body: &[u8]) -> (Kind, Vec<u8>) {
             frame(
                 Kind::Response,
                 id,
-                br#"{"error":{"code":"too_large","message":"Response exceeds frame limit"}}"#,
+                &problem(&api::Error {
+                    code: "too_large",
+                    message: "Response exceeds frame limit".into(),
+                }),
             )
             .unwrap(),
         ),
@@ -262,12 +253,7 @@ pub fn reply(kind: Kind, id: u64, body: &[u8]) -> (Kind, Vec<u8>) {
 }
 
 pub(crate) fn problem(error: &api::Error) -> Vec<u8> {
-    let mut body = b"{\"error\":{\"code\":".to_vec();
-    string(&mut body, error.code);
-    body.extend_from_slice(b",\"message\":");
-    string(&mut body, &error.message);
-    body.extend_from_slice(b"}}");
-    body
+    crate::encode::value(&crate::encode::Fields(&[("error", error)]))
 }
 
 pub fn error(id: u64, error: &api::Error) -> Vec<u8> {
@@ -275,10 +261,8 @@ pub fn error(id: u64, error: &api::Error) -> Vec<u8> {
 }
 
 pub fn result(id: u64, body: &[u8]) -> Result<Vec<u8>, Error> {
-    let mut value = b"{\"result\":".to_vec();
-    value.extend_from_slice(body);
-    value.push(b'}');
-    frame(Kind::Response, id, &value)
+    use crate::encode::{Fields, Raw, value};
+    frame(Kind::Response, id, &value(&Fields(&[("result", &Raw(body))])))
 }
 
 pub fn topology(

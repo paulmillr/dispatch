@@ -33,7 +33,7 @@ final class SSHTransportTests: XCTestCase {
     func testRemoteTranscriptPagingMatchesLocalAndDetectsReplacement() async throws {
         try await remote { app, server, _ in
             let link = try XCTUnwrap(app.runtime.ssh.links.values.first)
-            let path = server.root.appendingPathComponent("history.jsonl"), id = UUID().uuidString
+            let path = server.root.appendingPathComponent("history.jsonl"), id = System.uuid().uuidString
             func line(_ type: String, _ payload: [String: String]) throws -> Data {
                 try JSONSerialization.data(withJSONObject: ["type": type, "timestamp": "2000-01-01T00:00:00Z", "payload": payload], options: [.sortedKeys]) + Data([10])
             }
@@ -44,7 +44,7 @@ final class SSHTransportTests: XCTestCase {
                 history += try line("event_msg", ["type": "user_message", "turn_id": "turn-\(index)", "message": "Message \(index)"])
                 history += try line("event_msg", ["type": "task_complete", "turn_id": "turn-\(index)"])
             }
-            try history.write(to: path)
+            try System.write(history, to: path)
             let source = HelperChat.Transcript(key: "codex", path: path.path, session: id)
             let local = HelperChat(archive: source), remote = HelperChat(archive: source, endpoint: .remote(link.launch.connectionID))
             var localPage = try await local.page(earlier: nil), remotePage = try await remote.page(earlier: nil)
@@ -62,12 +62,15 @@ final class SSHTransportTests: XCTestCase {
             }
             XCTAssertEqual(records.filter { $0.kind == "user" }.map(\.text), (0..<800).map { "Message \($0)" })
             let appended = try line("event_msg", ["type": "user_message", "turn_id": "new", "message": "Incremental"])
-            let file = try FileHandle(forWritingTo: path)
-            try file.seekToEnd(); try file.write(contentsOf: appended); try file.close()
+            _ = try System.act("file.append", [path.path, String(decoding: appended, as: UTF8.self)]) {
+                let file = try FileHandle(forWritingTo: path)
+                try file.seekToEnd(); try file.write(contentsOf: appended); try file.close()
+                return true
+            }
             let liveA = try await local.page(earlier: nil), liveB = try await remote.page(earlier: nil)
             XCTAssertEqual(liveB.records, liveA.records)
             XCTAssertTrue(liveB.records.contains { $0.text == "Incremental" })
-            try (header + appended).write(to: path, options: .atomic)
+            try System.write(header + appended, to: path)
             do {
                 let stale = try await remote.page(earlier: oldCursor)
                 XCTAssertTrue(stale.records.isEmpty)
@@ -218,32 +221,31 @@ final class SSHTransportTests: XCTestCase {
             return results
         }
         XCTAssertFalse(installed.contains { BootstrapFixture.installFailed($0) })
-        let cached = fixture.cached
-        let bytes = try Data(contentsOf: fixture.binary)
-        XCTAssertEqual(try Data(contentsOf: cached), bytes)
-        XCTAssertFalse(try FileManager.default.contentsOfDirectory(atPath: cached.deletingLastPathComponent().path).contains { $0.hasPrefix("upload-") })
+        let cached = fixture.cached, payload = fixture.payload
+        XCTAssertEqual(BootstrapFixture.digest(try System.read(cached)), payload.digest)
+        XCTAssertFalse(try System.list(cached.deletingLastPathComponent()).contains { $0.hasPrefix("upload-") })
         let beforeReuse = try fixture.uploadCount()
         let outcome1 = await fixture.bootstrap()
         XCTAssertFalse(BootstrapFixture.installFailed(outcome1))
         XCTAssertEqual(try fixture.uploadCount(), beforeReuse)
 
-        try Data(repeating: 0, count: bytes.count).write(to: cached)
+        try System.write(Data(repeating: 0, count: payload.size), to: cached)
         let outcome2 = await fixture.bootstrap()
         XCTAssertFalse(BootstrapFixture.installFailed(outcome2))
-        XCTAssertEqual(try Data(contentsOf: cached), bytes, "Equal-length corrupted bytes must not be executed")
+        XCTAssertEqual(BootstrapFixture.digest(try System.read(cached)), payload.digest, "Equal-length corrupted bytes must not be executed")
         XCTAssertEqual(try fixture.uploadCount(), beforeReuse + 1)
 
-        try FileManager.default.removeItem(at: cached)
+        try System.remove(cached)
         let partial = fixture.bin.appendingPathComponent("cat")
         try fixture.executable("#!/bin/sh\nprintf partial-upload; exit 1\n", at: partial)
         let outcome3 = await fixture.bootstrap()
         XCTAssertTrue(BootstrapFixture.installFailed(outcome3), "A partial upload must fail")
-        XCTAssertFalse(FileManager.default.fileExists(atPath: cached.path))
-        XCTAssertFalse(try FileManager.default.contentsOfDirectory(atPath: cached.deletingLastPathComponent().path).contains { $0.hasPrefix("upload-") })
+        XCTAssertFalse(System.exists(cached))
+        XCTAssertFalse(try System.list(cached.deletingLastPathComponent()).contains { $0.hasPrefix("upload-") })
         try FileManager.default.removeItem(at: partial)
         let outcome4 = await fixture.bootstrap()
         XCTAssertFalse(BootstrapFixture.installFailed(outcome4))
-        XCTAssertEqual(try Data(contentsOf: cached), bytes)
+        XCTAssertEqual(BootstrapFixture.digest(try System.read(cached)), payload.digest)
     }
 
     func testBootstrapRequiresChecksumsAndRejectsLinkedCachePaths() async throws {
@@ -262,24 +264,24 @@ final class SSHTransportTests: XCTestCase {
         try FileManager.default.createDirectory(at: elsewhere, withIntermediateDirectories: false)
         let sentinel = elsewhere.appendingPathComponent("helper")
         try Data("preserve me".utf8).write(to: sentinel)
-        try FileManager.default.removeItem(at: cached)
-        try FileManager.default.createSymbolicLink(at: cached, withDestinationURL: elsewhere)
+        try System.remove(cached)
+        try System.link(cached, to: elsewhere)
         let outcome7 = await fixture.bootstrap()
         XCTAssertTrue(BootstrapFixture.installFailed(outcome7), "Linked helper destination must fail before upload")
-        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: elsewhere.path), ["helper"], "mv must not place upload bytes inside a linked directory")
-        XCTAssertEqual(try Data(contentsOf: sentinel), Data("preserve me".utf8))
+        XCTAssertEqual(try System.list(elsewhere), ["helper"], "mv must not place upload bytes inside a linked directory")
+        XCTAssertEqual(try System.read(sentinel), Data("preserve me".utf8))
 
-        try FileManager.default.removeItem(at: cached)
-        try FileManager.default.createDirectory(at: cached, withIntermediateDirectories: false)
+        try System.remove(cached)
+        try System.directory(cached)
         let outcome8 = await fixture.bootstrap()
         XCTAssertTrue(BootstrapFixture.installFailed(outcome8), "Directory helper destination must fail before upload")
-        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: cached.path), [])
+        XCTAssertEqual(try System.list(cached), [])
 
-        try FileManager.default.removeItem(at: directory)
-        try FileManager.default.createSymbolicLink(at: directory, withDestinationURL: elsewhere)
+        try System.remove(directory)
+        try System.link(directory, to: elsewhere)
         let outcome9 = await fixture.bootstrap()
         XCTAssertTrue(BootstrapFixture.installFailed(outcome9), "Symlinked cache directory must fail")
-        XCTAssertEqual(try Data(contentsOf: sentinel), Data("preserve me".utf8))
+        XCTAssertEqual(try System.read(sentinel), Data("preserve me".utf8))
     }
 
     func testBootstrapCancellationAndUnsupportedPlatformLeaveNoLiveChannel() async throws {
@@ -287,13 +289,13 @@ final class SSHTransportTests: XCTestCase {
             let fixture = try BootstrapFixture(paused: stage)
             defer { fixture.remove() }
             let task = Task { _ = try await SSHBootstrap.startHelper(master: fixture.master, resources: fixture.resources, sessionID: BootstrapFixture.session, publish: false) }
-            try await TestSupport.eventually { FileManager.default.fileExists(atPath: fixture.marker.path) }
-            let pid = try XCTUnwrap(Int32(String(contentsOf: fixture.marker, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)))
+            try await TestSupport.eventually { System.exists(fixture.marker) }
+            let pid = try XCTUnwrap(Int32(String(decoding: try System.read(fixture.marker), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)))
             let start = ContinuousClock.now
             task.cancel()
             do { _ = try await task.value; XCTFail("Cancelled bootstrap must not publish a connection") } catch {}
             XCTAssertLessThan(start.duration(to: .now), .seconds(3))
-            try await TestSupport.eventually { kill(pid, 0) != 0 && errno == ESRCH }
+            try await TestSupport.eventually { System.process("gone", pid) { kill(pid, 0) != 0 && errno == ESRCH } }
         }
         let fixture = try BootstrapFixture(paused: "unsupported")
         defer { fixture.remove() }
@@ -343,7 +345,7 @@ final class SSHTransportTests: XCTestCase {
     func testLargeRemoteReadDoesNotBlockIndependentRequests() async throws {
         try await remote { _, server, connection in
             let bytes = pattern(8 << 20), file = server.root.appendingPathComponent("large.bin")
-            try bytes.write(to: file)
+            try System.write(bytes, to: file)
             async let large: (result: Metadata, bytes: Data) = connection.requestBinary(
                 "files.read", params: Read(path: file.path, offset: 0, length: UInt64(bytes.count)))
             var echoes: [Echo] = []
@@ -360,7 +362,7 @@ final class SSHTransportTests: XCTestCase {
     func testCancelledRemoteReadLeavesOtherStreamsAndTheConnectionUsable() async throws {
         try await remote { _, server, connection in
             let bytes = pattern(32 << 20), file = server.root.appendingPathComponent("cancelled.bin")
-            try bytes.write(to: file)
+            try System.write(bytes, to: file)
             let (id, ends) = try await observe(connection)
             async let other: (result: Metadata, bytes: Data) = connection.requestBinary(
                 "files.read", params: Read(path: file.path, offset: 0, length: 1 << 20))
@@ -387,7 +389,7 @@ final class SSHTransportTests: XCTestCase {
             let cancelled = await iterator.next()
             XCTAssertEqual(cancelled, true, "The stalled request must remain pending until cancellation")
             let bytes = pattern(4096), file = server.root.appendingPathComponent("after.bin")
-            try bytes.write(to: file)
+            try System.write(bytes, to: file)
             let read: (result: Metadata, bytes: Data) = try await connection.requestBinary(
                 "files.read", params: Read(path: file.path, offset: 0, length: 4096))
             XCTAssertEqual(read.bytes, bytes)
@@ -433,12 +435,11 @@ final class SSHTransportTests: XCTestCase {
             let link = try XCTUnwrap(app.runtime.ssh.links.values.first)
             let endpoint = HelperWorkspace.Endpoint.remote(link.launch.connectionID)
             let hooks = server.agents.appendingPathComponent("codex/hooks.json")
-            try Data(#"{"description":"Mine","future":true,"hooks":{"Stop":[{"matcher":".*","hooks":[{"type":"command","command":"echo mine","timeout":7}]}]}}"#.utf8)
-                .write(to: hooks)
+            try System.write(Data(#"{"description":"Mine","future":true,"hooks":{"Stop":[{"matcher":".*","hooks":[{"type":"command","command":"echo mine","timeout":7}]}]}}"#.utf8), to: hooks)
             _ = try await HelperChat.setup(endpoint, key: "codex", enabled: true, terminal: nil)
-            let first = try Data(contentsOf: hooks)
+            let first = try System.read(hooks)
             _ = try await HelperChat.setup(endpoint, key: "codex", enabled: true, terminal: nil)
-            XCTAssertEqual(try Data(contentsOf: hooks), first, "A second install changes nothing")
+            XCTAssertEqual(try System.read(hooks), first, "A second install changes nothing")
             let root = try XCTUnwrap(JSONSerialization.jsonObject(with: first) as? [String: Any])
             XCTAssertEqual(root["description"] as? String, "Mine")
             XCTAssertEqual(root["future"] as? Bool, true)
@@ -451,7 +452,7 @@ final class SSHTransportTests: XCTestCase {
     func testGreetingCancellationAndLateCallbacksStayWithTheirConnection() async throws {
         // The helper's hello: a cancelled handshake ends its own helper process, so a hello it would send later
         // reaches nothing; truncated replies and malformed reported identities fail.
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("greeting-barriers-" + UUID().uuidString)
+        let root = System.temporary.appendingPathComponent("greeting-barriers-" + System.uuid().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let helper = try XCTUnwrap(HelperApp.executable)
         func shell(_ script: String) -> Process {
@@ -505,7 +506,9 @@ private struct BootstrapFixture: Sendable {
     let marker: URL
 
     init(checksums: Bool = true, paused: String = "") throws {
-        root = URL(fileURLWithPath: "/tmp/hb-\(UUID().uuidString.prefix(8))")
+        root = URL(fileURLWithPath: "/tmp/hb-\(System.uuid().uuidString.prefix(8))")
+        // Replay makes the same root each run: what an interrupted earlier run left there goes first.
+        try? FileManager.default.removeItem(at: root)
         home = root.appendingPathComponent("home"); bin = root.appendingPathComponent("bin")
         resources = try SSHHelperTestResources.prepare(under: root)
         marker = root.appendingPathComponent("paused")
@@ -541,12 +544,21 @@ private struct BootstrapFixture: Sendable {
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
     }
     static let session = String(repeating: "a", count: 24)
-    /// The bundle's binary for this Mac and where the bootstrap caches it in the fixture HOME.
+    /// The bundle's binary for this Mac, its digest and size as the bootstrap observes them (replay answers the
+    /// recorded ones: a rebuilt helper changes no path or byte count the test asks about), and where the bootstrap
+    /// caches it in the fixture HOME.
     var binary: URL { resources.appendingPathComponent("helper/darwin-universal") }
-    var cached: URL {
-        let digest = SHA256.hash(data: (try? Data(contentsOf: binary)) ?? Data()).map { String(format: "%02x", $0) }.joined()
-        return home.appendingPathComponent(".dispatch/bin/versions/" + digest + "/dispatch-helper")
+    var payload: (digest: String, size: Int) {
+        struct Payload: Codable { let digest: String, size: Int }
+        let live = { () -> Payload in
+            let data = (try? Data(contentsOf: binary)) ?? Data()
+            return Payload(digest: Self.digest(data), size: data.count)
+        }
+        let payload = (try? System.observe("payload", binary.path, live)) ?? live()
+        return (payload.digest, payload.size)
     }
+    var cached: URL { home.appendingPathComponent(".dispatch/bin/versions/" + payload.digest + "/dispatch-helper") }
+    static func digest(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
     /// One bootstrap: install, then `connect`, which finds no login here and fails; the error tells an
     /// install failure from that expected end.
     func bootstrap() async -> (any Error)? {
@@ -557,8 +569,8 @@ private struct BootstrapFixture: Sendable {
 
     func uploadCount() throws -> Int {
         let path = root.appendingPathComponent("uploads")
-        guard FileManager.default.fileExists(atPath: path.path) else { return 0 }
-        return try String(contentsOf: path, encoding: .utf8).split(separator: "\n").count
+        guard System.exists(path) else { return 0 }
+        return String(decoding: try System.read(path), as: UTF8.self).split(separator: "\n").count
     }
     func remove() { try? FileManager.default.removeItem(at: root) }
 }

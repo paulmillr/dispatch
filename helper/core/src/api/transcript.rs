@@ -8,7 +8,7 @@ pub struct Transcript {
     pub session: String,
     pub earlier: Option<String>,
     /// Snapshot.later of the previous read: only records appended since then (archive watch).
-    pub later: Option<String>,
+    pub later: Option<crate::wire::body::Encoded>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,8 +36,8 @@ pub struct Snapshot {
     pub invalidated: bool,
     pub awaiting_creation: bool,
     pub file: Option<FileIdentity>,
-    /// Opaque resume point for the next read of this transcript (Transcript.later).
-    pub later: String,
+    /// Opaque resume point for the next read of this transcript (Transcript.later); None: none.
+    pub later: Option<crate::wire::body::Encoded>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -2,14 +2,14 @@ import Foundation
 import Observation
 
 struct ChatDraft: Codable, Identifiable, Equatable {
-    var id = UUID()
+    var id = System.uuid()
     var title: String?
     var text = ""
     var multiline = false
     var selection = NSRange(location: 0, length: 0)
     var modified = Date()
     // A restored copy may need a new UI identity, but retains this version ID.
-    var revision = UUID()
+    var revision = System.uuid()
     var label: String {
         title ?? String(text.components(separatedBy: .newlines).first { !$0.trimmingCharacters(in: .whitespaces).isEmpty }?.prefix(36) ?? "Draft")
     }
@@ -77,7 +77,7 @@ struct ChatDraftBucket: Codable {
                 guard var bucket = restored[key] else { continue }
                 for var draft in bucket.recovery.values.sorted(by: { $0.modified < $1.modified }) {
                     if bucket.saved.contains(where: { $0.revision == draft.revision }) || bucket.working.revision == draft.revision { continue }
-                    if bucket.saved.contains(where: { $0.id == draft.id }) || bucket.working.id == draft.id { draft.id = UUID() }
+                    if bucket.saved.contains(where: { $0.id == draft.id }) || bucket.working.id == draft.id { draft.id = System.uuid() }
                     bucket.saved.append(draft)
                 }
                 bucket.recovery = [:]; restored[key] = bucket
@@ -89,7 +89,7 @@ struct ChatDraftBucket: Codable {
                     // A failed initial read may leave a live editor with its
                     // own bucket for this conversation. Keep recovered disk
                     // drafts separately so its next save cannot erase them.
-                    buckets["recovered:" + UUID().uuidString] = bucket
+                    buckets["recovered:" + System.uuid().uuidString] = bucket
                 }
             }
             loaded = true; error = nil
@@ -152,10 +152,10 @@ struct ChatDraftDelivery {
     @ObservationIgnored private var editorEditing = false
     /// What views decide from the current draft. Typing that leaves it unchanged re-renders only the editor.
     private(set) var shape = ChatDraftShape()
-    private(set) var editorGeneration = UUID()
+    private(set) var editorGeneration = System.uuid()
     private var deleted: [(Int, ChatDraft)] = []
     var canUndoDelete: Bool { !deleted.isEmpty }
-    init(repository: ChatDraftRepository, provisional: String = UUID().uuidString) {
+    init(repository: ChatDraftRepository, provisional: String = System.uuid().uuidString) {
         self.repository = repository
         let initialScope = "provisional:" + provisional
         scope = initialScope
@@ -186,8 +186,8 @@ struct ChatDraftDelivery {
     }
     func beginProvisional() {
         persist(flush: true); repository.activeScopes.remove(scope)
-        scope = "provisional:" + UUID().uuidString; bucket = ChatDraftBucket()
-        repository.activeScopes.insert(scope); deleted = []; editorGeneration = UUID()
+        scope = "provisional:" + System.uuid().uuidString; bucket = ChatDraftBucket()
+        repository.activeScopes.insert(scope); deleted = []; editorGeneration = System.uuid()
     }
     /// Reattach an unidentified conversation only after discovery has verified
     /// the same remote process. Keep any text typed on the replacement surface.
@@ -208,7 +208,7 @@ struct ChatDraftDelivery {
         repository.migrate(scope, to: key)
         repository.remove(scope); repository.activeScopes.remove(scope)
         scope = key; bucket = restored; repository.activeScopes.insert(key)
-        deleted = []; editorGeneration = UUID(); persist(flush: true)
+        deleted = []; editorGeneration = System.uuid(); persist(flush: true)
     }
 
     func bind(host: String, agent: String, conversation: String) {
@@ -231,7 +231,7 @@ struct ChatDraftDelivery {
             repository.remove(scope)
         }
         repository.activeScopes.remove(scope); repository.activeScopes.insert(key)
-        scope = key; bucket = next; deleted = []; editorGeneration = UUID(); persist(flush: true)
+        scope = key; bucket = next; deleted = []; editorGeneration = System.uuid(); persist(flush: true)
     }
     func edit(text: String? = nil, multiline: Bool? = nil, selection: NSRange? = nil, fromEditor: Bool = false) {
         editorEditing = fromEditor
@@ -239,7 +239,7 @@ struct ChatDraftDelivery {
         var record = current
         if let text, record.text != text {
             record.text = text; record.multiline = record.multiline || text.contains("\n") || text.contains("\r")
-            record.modified = Date(); record.revision = UUID()
+            record.modified = Date(); record.revision = System.uuid()
         }
         if let multiline { record.multiline = multiline }
         if let selection { record.selection = selection }
@@ -252,7 +252,7 @@ struct ChatDraftDelivery {
         guard !current.isEmpty else { return }
         if bucket.selected == nil { bucket.saved.append(bucket.working); bucket.working = ChatDraft() }
         openFreshWorking()
-        editorGeneration = UUID(); persist(flush: true)
+        editorGeneration = System.uuid(); persist(flush: true)
     }
     private func openFreshWorking() {
         if !bucket.working.isEmpty { bucket.saved.append(bucket.working) }
@@ -260,7 +260,7 @@ struct ChatDraftDelivery {
     }
     func select(_ id: UUID?) {
         guard id == nil || bucket.saved.contains(where: { $0.id == id }) else { return }
-        bucket.selected = id; editorGeneration = UUID(); persist(flush: true)
+        bucket.selected = id; editorGeneration = System.uuid(); persist(flush: true)
     }
     func navigate(_ delta: Int) {
         let ids: [UUID?] = [nil] + bucket.saved.map { Optional($0.id) }
@@ -270,12 +270,12 @@ struct ChatDraftDelivery {
     func rename(_ id: UUID, title: String) {
         guard let index = bucket.saved.firstIndex(where: { $0.id == id }) else { return }
         bucket.saved[index].title = title.isEmpty ? nil : title
-        bucket.saved[index].modified = Date(); bucket.saved[index].revision = UUID(); persist(flush: true)
+        bucket.saved[index].modified = Date(); bucket.saved[index].revision = System.uuid(); persist(flush: true)
     }
     func delete(_ id: UUID) {
         guard let index = bucket.saved.firstIndex(where: { $0.id == id }) else { return }
         deleted.append((index, bucket.saved.remove(at: index)))
-        if bucket.selected == id { openFreshWorking(); editorGeneration = UUID() }
+        if bucket.selected == id { openFreshWorking(); editorGeneration = System.uuid() }
         persist(flush: true)
     }
     func undoDelete() {
@@ -285,14 +285,14 @@ struct ChatDraftDelivery {
         // Preserve any later edit under its own identity as well.
         if !records.contains(where: { $0.revision == record.revision }) {
             var restored = record
-            if records.contains(where: { $0.id == record.id }) { restored.id = UUID() }
+            if records.contains(where: { $0.id == record.id }) { restored.id = System.uuid() }
             bucket.saved.insert(restored, at: min(index, bucket.saved.count))
         }
         persist(flush: true)
     }
     func discard() {
         if let id = bucket.selected { delete(id) }
-        else { bucket.working = ChatDraft(); editorGeneration = UUID(); persist(flush: true) }
+        else { bucket.working = ChatDraft(); editorGeneration = System.uuid(); persist(flush: true) }
     }
     func restore(_ record: ChatDraft) {
         if current.id == record.id && current.revision == record.revision { persist(flush: true); return }
@@ -301,8 +301,8 @@ struct ChatDraftDelivery {
             persist(flush: true); return
         }
         var restored = record
-        if records.contains(where: { $0.id == record.id }) { restored.id = UUID() }
-        if current.isEmpty && selected == nil { bucket.working = restored; editorGeneration = UUID() }
+        if records.contains(where: { $0.id == record.id }) { restored.id = System.uuid() }
+        if current.isEmpty && selected == nil { bucket.working = restored; editorGeneration = System.uuid() }
         else { bucket.saved.append(restored) }
         persist(flush: true)
     }
@@ -313,7 +313,7 @@ struct ChatDraftDelivery {
         records += other.recovery.values.sorted { $0.modified < $1.modified }
         for var record in records {
             if bucket.saved.contains(where: { $0.revision == record.revision }) || bucket.working.revision == record.revision { continue }
-            if bucket.saved.contains(where: { $0.id == record.id }) || bucket.working.id == record.id { record.id = UUID() }
+            if bucket.saved.contains(where: { $0.id == record.id }) || bucket.working.id == record.id { record.id = System.uuid() }
             bucket.saved.append(record)
         }
         repository.remove(key); persist(flush: true)
@@ -327,7 +327,7 @@ struct ChatDraftDelivery {
     /// Native queue steering removes server-owned text before submitting it.
     /// Keep a durable recovery record without touching the composer's draft.
     func prepareRecovery(_ draft: ChatDraft) -> ChatDraftDelivery? {
-        let delivery = ChatDraftDelivery(scope: scope, id: UUID(), draft: draft)
+        let delivery = ChatDraftDelivery(scope: scope, id: System.uuid(), draft: draft)
         bucket.recovery[delivery.id] = draft
         persist()
         guard repository.flush() else { bucket.recovery[delivery.id] = nil; persist(); return nil }
@@ -336,10 +336,10 @@ struct ChatDraftDelivery {
     private func consumeCurrent(_ record: ChatDraft) {
         if let index = bucket.saved.firstIndex(where: { $0.id == record.id && $0.revision == record.revision }) {
             bucket.saved.remove(at: index)
-            if selected == record.id { openFreshWorking(); editorGeneration = UUID() }
+            if selected == record.id { openFreshWorking(); editorGeneration = System.uuid() }
         } else if bucket.working.id == record.id && bucket.working.revision == record.revision {
             bucket.working = ChatDraft()
-            if selected == nil { editorGeneration = UUID() }
+            if selected == nil { editorGeneration = System.uuid() }
         }
     }
     func forgetDelivery(_ delivery: ChatDraftDelivery) {
@@ -359,7 +359,7 @@ struct ChatDraftDelivery {
                 let records = old.saved + [old.working]
                 if !records.contains(where: { $0.revision == delivery.draft.revision }) {
                     var restored = delivery.draft
-                    if records.contains(where: { $0.id == restored.id }) { restored.id = UUID() }
+                    if records.contains(where: { $0.id == restored.id }) { restored.id = System.uuid() }
                     old.saved.append(restored)
                 }
             } else {

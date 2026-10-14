@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Exercise production tmux recovery lookup over SSH in an existing test VM."""
 import argparse
-import base64
 import hashlib
 import json
 from pathlib import Path
@@ -102,8 +101,8 @@ def main():
         assert native(sockets[0], "show-options", "-wv", "-t", recorded_window, "@creation-test") == marker
         remote("python3", "-c", "import pathlib,sys,time; p=pathlib.Path(sys.argv[1]); deadline=time.monotonic()+4\n"
                "while not p.exists() and time.monotonic()<deadline: time.sleep(.01)\nassert p.exists()", finished)
-        affinity = base64.b64encode(json.dumps({"version": 1, "group": str(uuid.uuid4()), "name": "worker fixture",
-                                               "order": 0, "creation": marker}).encode()).decode()
+        affinity = json.dumps({"version": 1, "group": str(uuid.uuid4()), "name": "worker fixture",
+                               "order": 0, "creation": marker})
         worker = [helper, "create-tmux-window", token, recorded_window.removeprefix("@"), "/tmp", marker, affinity]
         before_worker = native(sockets[0], "list-panes", "-a", "-F", "#{pane_id}:#{pane_pid}")
         assert remote(*worker, check=False).returncode != 0

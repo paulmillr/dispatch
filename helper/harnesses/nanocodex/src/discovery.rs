@@ -1,4 +1,5 @@
 use super::*;
+use dispatch_helper_core::wire::body::Encoded;
 use std::collections::VecDeque;
 #[derive(Clone, Copy)]
 enum Stage {
@@ -25,20 +26,22 @@ pub(super) struct Find {
     fd: Option<RawFd>,
     pub done: Done<Option<Binding>>,
 }
-fn same(v: Value<'_>, p: &Process, uid: u32) -> bool {
-    v.get("pid").and_then(Value::unsigned) == Some(p.pid.into())
-        && v.get("uid").and_then(Value::unsigned) == Some(uid.into())
-        && v.get("executable").and_then(Value::string) == p.executable.to_str()
+/// A native process answer names `p`, owned by `uid`.
+fn same(v: &Data<'_>, p: &Process, uid: u32) -> bool {
+    v.get("pid").and_then(Data::unsigned) == Some(p.pid.into())
+        && v.get("uid").and_then(Data::unsigned) == Some(uid.into())
+        && v.get("executable").and_then(Data::path) == Some(p.executable.as_path())
         && v.get("start")
-            .and_then(Value::array)
-            .map(|a| a.filter_map(Value::unsigned).collect::<Vec<_>>())
+            .and_then(Data::array)
+            .map(|a| a.filter_map(Data::unsigned).collect::<Vec<_>>())
             == Some(p.start.to_vec())
 }
-pub(crate) fn private(v: Value<'_>, uid: u32, kind: &str) -> bool {
-    string(v, "kind") == kind
-        && v.get("uid").and_then(Value::unsigned) == Some(uid.into())
+/// A native metadata answer: this kind, owned by `uid`, private.
+pub(crate) fn private(v: &Data<'_>, uid: u32, kind: &str) -> bool {
+    v.get("kind").and_then(Data::string) == Some(kind)
+        && v.get("uid").and_then(Data::unsigned) == Some(uid.into())
         && v.get("mode")
-            .and_then(Value::unsigned)
+            .and_then(Data::unsigned)
             .is_some_and(|m| m & 0o077 == 0)
 }
 fn uuid(s: &str) -> bool {
@@ -55,7 +58,7 @@ fn process(p: &Process) -> Result<Job, Error> {
     native("process", vec![("pid", Data::Unsigned(p.pid.into()))])
 }
 fn path(name: &'static str, p: &Path) -> Result<Job, Error> {
-    native(name, vec![("path", Data::String(&p.to_string_lossy()))])
+    native(name, vec![("path", Data::from(p))])
 }
 
 impl Nano {
@@ -143,7 +146,7 @@ impl Nano {
             return;
         }
         let doc = output.and_then(|o| match o {
-            Output::Bytes(b) => Json::parse(&b),
+            Output::Value(b) => Encoded::plain(&b),
             _ => Err(error(
                 "protocol",
                 "Nanocodex returned invalid native facts.",
@@ -163,21 +166,21 @@ impl Nano {
                 return;
             }
         };
-        let v = doc.root();
+        let v = &doc.root();
         let job = match f.stage {
             Stage::Process => {
                 if !same(v, &f.process, self.uid) {
                     (f.done)(io, Ok(None));
                     return;
                 }
-                let Some(birth) = v.get("started_at").and_then(Value::number) else {
+                let Some(birth) = v.get("started_at").and_then(Data::number) else {
                     (f.done)(io, Ok(None));
                     return;
                 };
                 // Old pi::birth subtracts Linux's one-second epoch uncertainty;
                 // nanocodex::decode then allows a further second for registration.
                 f.birth = birth
-                    - if self.remote && string(v, "pid_domain").starts_with("linux:") {
+                    - if self.remote && v.get("pid_domain").and_then(Data::string).unwrap_or("").starts_with("linux:") {
                         1.0
                     } else {
                         0.0
@@ -198,10 +201,7 @@ impl Nano {
                                     .collect(),
                             ),
                         ),
-                        (
-                            "executable",
-                            Data::String(&f.process.executable.to_string_lossy()),
-                        ),
+                        ("executable", Data::from(f.process.executable.as_path())),
                         (
                             "names",
                             Data::Array(vec![Data::String("HOME"), Data::String("CODEX_HOME")]),
@@ -210,15 +210,16 @@ impl Nano {
                 )
             }
             Stage::Environment => {
-                let codex = string(v, "CODEX_HOME");
-                let home = string(v, "HOME");
-                let base = if !codex.is_empty() && (self.remote || codex.starts_with('/')) {
-                    PathBuf::from(codex)
+                // Environment values are bytes, here paths.
+                let variable = |name| v.get(name).and_then(Data::path).unwrap_or(Path::new(""));
+                let (codex, home) = (variable("CODEX_HOME"), variable("HOME"));
+                let base = if !codex.as_os_str().is_empty() && (self.remote || codex.is_absolute()) {
+                    codex.to_path_buf()
                 } else {
-                    if home.is_empty() {
+                    if home.as_os_str().is_empty() {
                         self.home.clone()
                     } else {
-                        home.into()
+                        home.to_path_buf()
                     }
                     .join(".codex")
                 };
@@ -244,7 +245,7 @@ impl Nano {
                 let record = (|| -> Option<Json> {
                     let before = v.get("before")?;
                     let after = v.get("after")?;
-                    let bytes = v.get("data")?.string()?.as_bytes();
+                    let bytes = v.get("data")?.bytes()?;
                     if bytes.len() > 16384 || !private(before, self.uid, "file") {
                         return None;
                     }
@@ -343,8 +344,8 @@ impl Nano {
                 return;
             }
             Stage::Peer => {
-                if v.get("uid").and_then(Value::unsigned) != Some(self.uid.into())
-                    || v.get("pid").and_then(Value::unsigned) != Some(f.process.pid.into())
+                if v.get("uid").and_then(Data::unsigned) != Some(self.uid.into())
+                    || v.get("pid").and_then(Data::unsigned) != Some(f.process.pid.into())
                 {
                     io.close(f.fd.unwrap());
                     (f.done)(
@@ -430,7 +431,7 @@ impl Nano {
         native(
             "file.private",
             vec![
-                ("path", Data::String(&path.to_string_lossy())),
+                ("path", Data::from(path)),
                 (
                     "limit",
                     Data::Unsigned(if self.remote { 16384 } else { 65536 }),

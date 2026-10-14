@@ -16,10 +16,13 @@ final class SSHConsumerCleanupTests: XCTestCase {
         TerminalTestSupport.send(launch(server: server, socket: socket), to: try XCTUnwrap(app.runtime.views[source]))
         try await TestSupport.eventually(timeout: .seconds(15)) { app.workspace.current?.shows("herdr") == true }
         try await app.controller.resetSSHState()
+        // Nothing local remained, so reset opened a local space: its terminal starts once it is shown.
+        try await app.wait { app.workspace.activeTab.map { $0.terminal != nil && app.runtime.views[$0.id]?.surface != nil } == true }
         try await assertReleased(connection, processes: owned, app: app)
         XCTAssertEqual(Array(app.runtime.helpers.keys), [.local], "Reset leaves no remote helper workspace")
         XCTAssertTrue(app.runtime.helpers.values.allSatisfy { $0.error == nil })
-        XCTAssertTrue(app.workspace.spaces.allSatisfy { !$0.shows("herdr") && $0.hostID == .local })
+        // The herdr space leaves when the helper's topology says so, after the release.
+        try await TestSupport.eventually { app.workspace.spaces.allSatisfy { !$0.shows("herdr") && $0.hostID == .local } }
         let snapshot = try HerdrRPC.snapshot(from: HerdrSocket(path: socket).request("session.snapshot"))
         XCTAssertFalse(snapshot.panes.isEmpty, "Reset detaches the client and preserves the remote terminal")
     }
@@ -59,14 +62,14 @@ final class SSHConsumerCleanupTests: XCTestCase {
         let response = app.controller.requestTermination { allowed in
             XCTAssertTrue(allowed)
             XCTAssertNil(app.runtime.ssh.links[connection.launch.connectionID])
-            XCTAssertFalse(FileManager.default.fileExists(atPath: mailbox.path))
+            XCTAssertFalse(System.exists(mailbox))
             XCTAssertTrue(processes.allSatisfy { !$0.alive }, "Quit must finish private master/helper cleanup before replying")
             XCTAssertTrue(self.supervisors.allSatisfy { !$0.alive }, "Quit must finish login supervisor cleanup before replying")
             replies += 1
         }
         XCTAssertEqual(response, .terminateLater)
         XCTAssertEqual(replies, 0)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: mailbox.path))
+        XCTAssertTrue(System.exists(mailbox))
         XCTAssertEqual(app.controller.requestTermination { _ in XCTFail("Repeated Quit must share the pending termination") }, .terminateLater)
         try await TestSupport.eventually(timeout: .seconds(15)) { replies == 1 }
         try await assertReleased(connection, processes: processes, app: app)
@@ -81,10 +84,10 @@ final class SSHConsumerCleanupTests: XCTestCase {
         let mailbox = app.runtime.herdrLaunch.directory
         app.window.orderOut(nil); app.window.contentView = nil
         app.runtime.stop()
-        XCTAssertTrue(FileManager.default.fileExists(atPath: mailbox.path),
+        XCTAssertTrue(System.exists(mailbox),
                       "The retired mailbox must retain the control path while asynchronous master cleanup is pending")
         try await assertReleased(connection, processes: processes, app: app)
-        try await TestSupport.eventually { !FileManager.default.fileExists(atPath: mailbox.path) }
+        try await TestSupport.eventually { !System.exists(mailbox) }
     }
 
     func testFailedHerdrLaunchDoesNotRetainMasterAfterOriginExit() async throws {
@@ -97,7 +100,7 @@ final class SSHConsumerCleanupTests: XCTestCase {
         // A regular file cannot contain a Unix socket. Exercise a real herdr
         // server-start failure after the endpoint has already been registered.
         let blocked = server.root.appendingPathComponent("not-a-directory")
-        try Data("blocked".utf8).write(to: blocked)
+        try System.write(Data("blocked".utf8), to: blocked)
         let socket = blocked.appendingPathComponent("herdr.sock").path
         TerminalTestSupport.send(launch(server: server, socket: socket) + "; printf 'FAILED_HERDR_%s\\n' \"$?\"", to: original)
         try await TestSupport.eventually(timeout: .seconds(15), diagnostic: TerminalTestSupport.screen(terminal: original)) {
@@ -199,7 +202,7 @@ final class SSHConsumerCleanupTests: XCTestCase {
         let folder = URL(fileURLWithPath: connection.launch.master.controlPath).deletingLastPathComponent().path
         try await TestSupport.eventually(timeout: .seconds(15), diagnostic: "Master/helper processes or private control directory survived the final consumer") {
             app.runtime.ssh.links[connection.launch.connectionID] == nil &&
-                !FileManager.default.fileExists(atPath: folder) && processes.allSatisfy { !$0.alive } &&
+                !System.exists(URL(fileURLWithPath: folder)) && processes.allSatisfy { !$0.alive } &&
                 self.supervisors.allSatisfy { !$0.alive }
         }
     }

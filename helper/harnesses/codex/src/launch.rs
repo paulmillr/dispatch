@@ -5,7 +5,7 @@ use crate::{
 };
 use dispatch_helper_core::{
     api::*,
-    json::{Data, Value},
+    json::Data,
 };
 use std::{
     cell::RefCell,
@@ -359,7 +359,7 @@ impl Launch {
             Box::new(move |io, result| {
                 let uid = result
                     .ok()
-                    .and_then(|value| value.root().get("uid").and_then(Value::unsigned));
+                    .and_then(|value| value.root().get("uid").and_then(Data::unsigned));
                 let made = next.clone();
                 let create = Job::MakeDir {
                     path: root.clone(),
@@ -370,8 +370,7 @@ impl Launch {
                     io,
                     create,
                     Box::new(move |io, result| {
-                        let directory = root.to_string_lossy().into_owned();
-                        let input = Data::Object(vec![("path", Data::String(&directory))]);
+                        let input = Data::Object(vec![("path", Data::from(root.as_path()))]);
                         let checked = made.clone();
                         let created = result.is_ok();
                         jobs::native(
@@ -382,10 +381,9 @@ impl Launch {
                             Box::new(move |io, result| {
                                 // Shared /tmp: only a directory of ours, private to us.
                                 let private = result.ok().is_some_and(|value| {
-                                    let field =
-                                        |name| value.root().get(name).and_then(Value::unsigned);
-                                    value.root().get("kind").and_then(Value::string)
-                                        == Some("directory")
+                                    let value = value.root();
+                                    let field = |name| value.get(name).and_then(Data::unsigned);
+                                    value.get("kind").and_then(Data::string) == Some("directory")
                                         && uid.is_some()
                                         && field("uid") == uid
                                         && field("mode").is_some_and(|mode| mode & 0o777 == 0o700)

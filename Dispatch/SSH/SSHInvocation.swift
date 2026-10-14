@@ -86,7 +86,7 @@ struct SSHInvocation: Equatable, Sendable {
 
 struct SSHConnectionID: Hashable, Codable, Sendable {
     let rawValue: UUID
-    init(_ rawValue: UUID = UUID()) { self.rawValue = rawValue }
+    init(_ rawValue: UUID = System.uuid()) { self.rawValue = rawValue }
 }
 
 /// Auxiliary processes may use only this authenticated master. ProxyCommand
@@ -95,6 +95,22 @@ struct SSHMaster: Codable, Sendable {
     let executable: String
     let controlPath: String
     let destination: String
+
+    /// Ends this master (`ssh -O exit`) once: a caller asking while that exit runs, or after it succeeded,
+    /// shares it. Whether two callers send one command or two so never depends on when the first one
+    /// finished (a capture holds the same commands replay makes). Only after a failed exit (the master was
+    /// not listening yet) does a caller send another.
+    @MainActor @discardableResult func exit() -> Task<Void, Never> {
+        if let sent = Self.exits[controlPath], !sent.failed { return sent.task }
+        let path = controlPath
+        let task = Task { @MainActor in
+            let result = try? await SSHCommand.run(executable: executable, arguments: controlArguments("exit"), timeout: 3)
+            if result?.status != 0 { Self.exits[path]?.failed = true }
+        }
+        Self.exits[path] = (task, false)
+        return task
+    }
+    @MainActor private static var exits: [String: (task: Task<Void, Never>, failed: Bool)] = [:]
 
     func controlArguments(_ operation: String) -> [String] {
         ["-F", "/dev/null", "-S", controlPath, "-o", "ProxyCommand=/usr/bin/false",

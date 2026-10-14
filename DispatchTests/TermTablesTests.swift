@@ -1,5 +1,6 @@
 import XCTest
 @_spi(Test) import Term
+@testable import DispatchApp
 
 /// The Swift terminal's tables: Tables.swift is exactly what Vendor/Term/tables/gen.py makes of the
 /// vendored inputs (no Ghostty checkout needed), and the tables Term builds at first use equal
@@ -9,15 +10,12 @@ final class TermTablesTests: XCTestCase {
     private let tables = CodexTestSupport.root.appendingPathComponent("Vendor/Term/tables")
 
     func testGeneratedTablesMatchTheirInputs() throws {
-        let output = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".swift")
+        let output = System.temporary.appendingPathComponent(UUID().uuidString + ".swift")
         defer { try? FileManager.default.removeItem(at: output) }
         let python = Process()
         python.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
         python.arguments = ["-B", tables.appendingPathComponent("gen.py").path, tables.appendingPathComponent("inputs").path, output.path]
-        python.standardOutput = FileHandle.nullDevice
-        try python.run()
-        python.waitUntilExit()
-        XCTAssertEqual(python.terminationStatus, 0)
+        XCTAssertEqual(try TestSupport.live(python).status, 0)
         XCTAssertEqual(try Data(contentsOf: output), try Data(contentsOf: CodexTestSupport.root.appendingPathComponent("Vendor/Term/Sources/Term/Tables.swift")))
     }
 

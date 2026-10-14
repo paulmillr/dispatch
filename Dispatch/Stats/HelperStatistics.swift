@@ -131,7 +131,7 @@ final class HelperStatisticsProvider: SSHStatisticsSampling {
 
   private func request<Value: Decodable & Sendable>(_ method: String, seconds: Int = 3) async throws -> Value {
     let endpoint = HelperWorkspace.Endpoint.remote(id)
-    return try await SSHTimeout.run(.seconds(seconds)) {
+    return try await SSHTimeout.run(.seconds(seconds), "request") {
       try await HelperApp.shared.connection(endpoint).request(method, params: [String: String]())
     }
   }
@@ -149,7 +149,7 @@ final class HelperStatisticsProvider: SSHStatisticsSampling {
       memoryUsed: sample.memory?.last, swapTotal: sample.swap?.first, swapUsed: sample.swap?.last,
       load: sample.load, uptime: sample.uptime)
     return SSHStatisticsSample(
-      date: Date(), counters: counters, cpu: sample.cpu, cores: sample.cores,
+      date: System.date(), counters: counters, cpu: sample.cpu, cores: sample.cores,
       receivedPerSecond: sample.received, sentPerSecond: sample.sent)
   }
 

@@ -64,14 +64,14 @@ final class SSHSubmissionIntegrationTests: XCTestCase {
             XCTAssertTrue(session.draft.isEmpty, "The pending bubble owns the submitted draft during delivery")
         }
         try await TestSupport.eventually(timeout: .seconds(15), diagnostic: "\(session.status ?? "No boundary result")\n\(TerminalTestSupport.screen(terminal: terminal))") {
-            FileManager.default.fileExists(atPath: state.appendingPathComponent("shell.bin").path)
+            System.exists(state.appendingPathComponent("shell.bin"))
         }
         // The agent's exit reaches Chat on its own, after the submission settles.
         try await TestSupport.eventually { session.submissionID == nil && !session.busy && !session.active }
-        XCTAssertEqual(try String(contentsOf: state.appendingPathComponent("exit-status"), encoding: .utf8), "0")
-        XCTAssertEqual(try Data(contentsOf: state.appendingPathComponent("paste.bin")), Data(("\u{1b}[200~" + draft + "\u{1b}[201~").utf8),
+        XCTAssertEqual(String(decoding: try System.read(state.appendingPathComponent("exit-status")), as: UTF8.self), "0")
+        XCTAssertEqual(try System.read(state.appendingPathComponent("paste.bin")), Data(("\u{1b}[200~" + draft + "\u{1b}[201~").utf8),
                        "The verified live agent received the complete paste before it exited")
-        XCTAssertEqual(try Data(contentsOf: state.appendingPathComponent("shell.bin")), Data(),
+        XCTAssertEqual(try System.read(state.appendingPathComponent("shell.bin")), Data(),
                        "Neither Return nor a retried paste may reach the resumed shell")
         XCTAssertEqual(session.draft, draft, "An incomplete checked submission must retain the draft")
         XCTAssertFalse(session.active)

@@ -13,7 +13,7 @@ final class SSHLatency {
     @ObservationIgnored private var foreground = false
     @ObservationIgnored private var sleeping = false
     @ObservationIgnored private var task: Task<Void, Never>?
-    @ObservationIgnored private var generation = UUID()
+    @ObservationIgnored private var generation = System.uuid()
     @ObservationIgnored private let interval: Duration
     @ObservationIgnored private let backgroundInterval: Duration
 
@@ -23,7 +23,7 @@ final class SSHLatency {
     deinit { task?.cancel() }
 
     func reset() {
-        generation = UUID()
+        generation = System.uuid()
         task?.cancel(); task = nil; provider = nil
         milliseconds = nil; date = nil; state = .unavailable
         foreground = false; sleeping = false
@@ -51,7 +51,7 @@ final class SSHLatency {
         let immediate = self.provider !== provider || (!self.foreground && foreground) || (self.sleeping && !sleeping)
         let changedConnection = self.provider !== provider
         self.provider = provider; self.foreground = foreground; self.sleeping = sleeping
-        generation = UUID()
+        generation = System.uuid()
         let generation = generation, previous = task
         previous?.cancel()
         if provider == nil || sleeping || changedConnection {
@@ -64,7 +64,7 @@ final class SSHLatency {
             // popup toggles and reconnects. Old replies cannot update this generation.
             await previous?.value
             if !immediate {
-                do { try await Task.sleep(for: interval) } catch { return }
+                do { try await System.sleep(for: interval, "latency.first") } catch { return }
             }
             while !Task.isCancelled {
                 do {
@@ -75,13 +75,13 @@ final class SSHLatency {
                     let milliseconds = Double(elapsed.seconds) * 1000 + Double(elapsed.attoseconds) / 1e15
                     guard !Task.isCancelled, self?.generation == generation else { return }
                     self?.milliseconds = max(0, milliseconds)
-                    self?.date = Date()
+                    self?.date = System.date()
                     self?.state = .ready
                 } catch {
                     guard !Task.isCancelled, self?.generation == generation else { return }
                     self?.state = self?.milliseconds == nil ? .unavailable : .stale
                 }
-                do { try await Task.sleep(for: interval) } catch { return }
+                do { try await System.sleep(for: interval, "latency") } catch { return }
             }
         }
     }
@@ -157,7 +157,7 @@ final class SSHStatisticsStore {
         @ObservationIgnored var processRates = SSHProcessRates()
         @ObservationIgnored var retiredMetrics: Task<Void, Never>?
         @ObservationIgnored var retiredDisks: Task<Void, Never>?
-        @ObservationIgnored var generation = UUID()
+        @ObservationIgnored var generation = System.uuid()
         @ObservationIgnored var rates = SSHStatisticsRates()
         @ObservationIgnored var failed: Set<SSHConnectionID> = []
         @ObservationIgnored private let historyExpiry = StatisticsHistoryExpiry()
@@ -181,7 +181,7 @@ final class SSHStatisticsStore {
             trimHistory()
         }
         private func trimHistory() {
-            let cutoff = Date().addingTimeInterval(-historyRetention)
+            let cutoff = System.date().addingTimeInterval(-historyRetention)
             history.removeAll { $0.date <= cutoff }
             if history.isEmpty { history = [] }
             if history.count > 1801 { history.removeFirst(history.count - 1801) }
@@ -195,7 +195,7 @@ final class SSHStatisticsStore {
             stopTasks(preservingRates: true)
         }
         private func stopTasks(preservingRates: Bool) {
-            generation = UUID()
+            generation = System.uuid()
             metricsTask?.cancel(); retiredMetrics = metricsTask ?? retiredMetrics; metricsTask = nil
             disksTask?.cancel(); retiredDisks = disksTask ?? retiredDisks; disksTask = nil
             processesTask?.cancel(); retiredProcesses = processesTask ?? retiredProcesses; processesTask = nil
@@ -284,7 +284,7 @@ final class SSHStatisticsStore {
             entry.failed.remove(connection)
             entry.state = entry.latest == nil ? .unavailable : .stale
             entry.disksStale = true
-            entry.append(Point(date: Date()))
+            entry.append(Point(date: System.date()))
             if !entry.providers.isEmpty { start(entry, metricsImmediately: true) }
             updateLatency(entry)
         }
@@ -293,7 +293,7 @@ final class SSHStatisticsStore {
     func subscribe(_ key: Key, preferred: SSHConnectionID? = nil) -> UUID? {
         guard let entry = series[key] else { return nil }
         let startsForegroundSampling = entry.subscriptions.isEmpty
-        let token = UUID()
+        let token = System.uuid()
         entry.subscriptions.updateValue(preferred, forKey: token)
         if startsForegroundSampling { entry.changeSamplingCadence() }
         start(entry, metricsImmediately: startsForegroundSampling)
@@ -316,7 +316,7 @@ final class SSHStatisticsStore {
 
     func subscribeLatency(_ key: Key, preferred: SSHConnectionID? = nil) -> UUID? {
         guard let entry = series[key] else { return nil }
-        let token = UUID()
+        let token = System.uuid()
         entry.latencySubscriptions.updateValue(preferred, forKey: token)
         updateLatency(entry)
         return token
@@ -350,7 +350,7 @@ final class SSHStatisticsStore {
                 defer { if entry?.generation == generation { entry?.metricsTask = nil } }
                 await retired?.value
                 if !metricsImmediately {
-                    do { try await Task.sleep(for: samplingInterval) } catch { return }
+                    do { try await System.sleep(for: samplingInterval, "metrics.first") } catch { return }
                 }
                 while !Task.isCancelled {
                     guard let entry, entry.generation == generation, let provider = entry.provider() else { return }
@@ -381,12 +381,12 @@ final class SSHStatisticsStore {
                         self?.updateLatency(entry)
                         entry.rates.reset()
                         entry.state = entry.latest == nil ? .unavailable : .stale
-                        entry.append(Point(date: Date()))
+                        entry.append(Point(date: System.date()))
                         // Only another already registered, authorized connection
                         // may take over. Failed connections are never reopened.
                         if entry.provider() == nil { return }
                     }
-                    do { try await Task.sleep(for: samplingInterval) } catch { return }
+                    do { try await System.sleep(for: samplingInterval, "metrics") } catch { return }
                 }
             }
         }
@@ -418,7 +418,7 @@ final class SSHStatisticsStore {
                     } else {
                         entry.processes = nil; entry.processesPartial = false; entry.processRates.reset()
                     }
-                    do { try await Task.sleep(for: interval) } catch { return }
+                    do { try await System.sleep(for: interval, "processes") } catch { return }
                 }
             }
         }
@@ -438,7 +438,7 @@ final class SSHStatisticsStore {
                         guard !Task.isCancelled, entry.generation == generation else { return }
                         entry.disksStale = true
                     }
-                    do { try await Task.sleep(for: diskInterval) } catch { return }
+                    do { try await System.sleep(for: diskInterval, "disks") } catch { return }
                 }
             }
         }

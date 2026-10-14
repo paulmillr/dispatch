@@ -310,7 +310,7 @@ final class SSHIntegrationPermissions {
     private(set) var entries: [String: Entry] = [:]
     @ObservationIgnored private let defaults: UserDefaults?
     private struct PendingChoice<Value: Sendable> {
-        let id = UUID()
+        let id = System.uuid()
         let task: Task<Value?, Never>
         var waiters: Set<UUID> = []
     }
@@ -415,7 +415,7 @@ final class SSHIntegrationPermissions {
             choice = PendingChoice(task: Task { @MainActor in await present() })
             pendingHooks[scope.key, default: [:]][agent] = choice
         }
-        let waiter = UUID()
+        let waiter = System.uuid()
         pendingHooks[scope.key]?[agent]?.waiters.insert(waiter)
         let answer = await withTaskCancellationHandler {
             await choice.task.value

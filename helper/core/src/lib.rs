@@ -19,8 +19,3 @@ mod control;
 mod dispatch;
 mod encode;
 
-/// Shared native metadata encoding; uses the same codec as wire byte fields.
-pub mod base64 {
-    pub use crate::dispatch::data as decode;
-    pub use crate::encode::base64 as encode;
-}

@@ -14,13 +14,36 @@ final class SSHBootstrapPolicyTests: XCTestCase {
     }
 
     private func temporary() throws -> URL {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("dispatch-bootstrap-policy-" + UUID().uuidString)
+        let root = System.temporary.appendingPathComponent("dispatch-bootstrap-policy-" + System.uuid().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         return root
     }
 
     private func run(_ script: String, home: URL) async throws -> SSHCommand.Result {
         try await SSHCommand.run(executable: "/bin/sh", arguments: ["-c", "HOME=" + HerdrLaunch.quote(home.path) + "; export HOME; " + script], timeout: 5)
+    }
+
+    /// Whether two callers send one `-O exit` or two never depends on when the first one finished.
+    @MainActor
+    func testMasterExitIsSentOnceUnlessItFailed() async throws {
+        let root = try temporary(); defer { try? FileManager.default.removeItem(at: root) }
+        let count = root.appendingPathComponent("count"), status = root.appendingPathComponent("status")
+        let executable = root.appendingPathComponent("ssh")
+        try ("#!/bin/sh\nprintf x >> " + HerdrLaunch.quote(count.path) + "\nexit $(cat " + HerdrLaunch.quote(status.path) + ")\n")
+            .write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        let master = SSHMaster(executable: executable.path, controlPath: root.appendingPathComponent("control").path, destination: "test")
+        func sent() throws -> String { String(decoding: try System.read(count), as: UTF8.self) }
+        // The master was not listening yet: callers meanwhile share the failed exit, a later one sends another.
+        try "255".write(to: status, atomically: true, encoding: .utf8)
+        let first = master.exit(), second = master.exit()
+        await first.value; await second.value
+        XCTAssertEqual(try sent(), "x")
+        try "0".write(to: status, atomically: true, encoding: .utf8)
+        await master.exit().value
+        XCTAssertEqual(try sent(), "xx")
+        await master.exit().value
+        XCTAssertEqual(try sent(), "xx", "An ended master is not asked again")
     }
 
     func testOrdinaryAndUnmarkedBundlesNeverStartAnAuxiliaryCommand() async throws {
@@ -39,7 +62,7 @@ final class SSHBootstrapPolicyTests: XCTestCase {
         try "2\n".write(to: resources.appendingPathComponent("helper/protocol-version"), atomically: true, encoding: .utf8)
         do { _ = try await SSHBootstrap.startHelper(master: master, resources: resources, sessionID: session, publish: true); XCTFail("Another protocol's bundle must refuse") }
         catch { }
-        XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path))
+        XCTAssertFalse(System.exists(marker))
     }
 
     func testPrivateCacheRejectsSymlinksAndUnsafeModesWithoutChangingThem() async throws {
@@ -51,7 +74,7 @@ final class SSHBootstrapPolicyTests: XCTestCase {
         let digest = String(repeating: "a", count: 64)
         let linked = try await run(SSHBootstrap.cachePreamble(digest: digest), home: root)
         XCTAssertNotEqual(linked.status, 0)
-        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: outside.path), [])
+        XCTAssertEqual(try System.list(outside), [])
         try FileManager.default.removeItem(at: runtime)
         try FileManager.default.createDirectory(at: runtime, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o755])
         let unsafe = try await run(SSHBootstrap.cachePreamble(digest: digest), home: root)
@@ -69,7 +92,7 @@ final class SSHBootstrapPolicyTests: XCTestCase {
         let result = try await run(script, home: root)
         XCTAssertEqual(result.status, 23)
         XCTAssertTrue(String(decoding: result.output, as: UTF8.self).contains("quoted 'value' nested"))
-        XCTAssertEqual(try String(contentsOf: root.appendingPathComponent("count"), encoding: .utf8), "x")
+        XCTAssertEqual(String(decoding: try System.read(root.appendingPathComponent("count")), as: UTF8.self), "x")
     }
 
     func testStartedHelperFailureNeverReplaysCommandAndPublicSessionHasNoCredential() async throws {
@@ -80,15 +103,14 @@ final class SSHBootstrapPolicyTests: XCTestCase {
         let prepared = try await run(SSHBootstrap.cachePreamble(digest: digest), home: root)
         XCTAssertEqual(prepared.status, 0)
         let relative = ".dispatch/bin/versions/" + digest + "/dispatch-helper", path = root.appendingPathComponent(relative)
-        try helper.write(to: path)
-        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: path.path)
+        try System.write(helper, to: path, permissions: 0o700)
         let published = try await run(SSHBootstrap.publish(sessionID: session, relativePath: relative), home: root)
         XCTAssertEqual(published.status, 0)
         let command = "printf replay >> " + HerdrLaunch.quote(count.path)
         let script = SSHLauncherCommand.remoteCommand(sessionID: session, grant: .init(profile: .full), command: command)
         let result = try await run(script, home: root)
         XCTAssertEqual(result.status, 31)
-        XCTAssertEqual(try String(contentsOf: count, encoding: .utf8), "x")
+        XCTAssertEqual(String(decoding: try System.read(count), as: UTF8.self), "x")
         XCTAssertEqual(String(decoding: result.output, as: UTF8.self).split(separator: "\n").map(String.init), ["login", "full", "--session", session, command])
         XCTAssertFalse(script.contains("DISPATCH_SSH_TOKEN"))
         XCTAssertFalse(script.contains("/tmp/dispatch-ssh-"))
@@ -101,8 +123,7 @@ final class SSHBootstrapPolicyTests: XCTestCase {
         XCTAssertEqual(prepared.status, 0)
         let relative = ".dispatch/bin/versions/" + digest + "/dispatch-helper"
         let helper = root.appendingPathComponent(relative)
-        try "#!/bin/sh\nexit 88\n".write(to: helper, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: helper.path)
+        try System.write(Data("#!/bin/sh\nexit 88\n".utf8), to: helper, permissions: 0o700)
         let published = try await run(SSHBootstrap.publish(sessionID: session, relativePath: relative), home: root)
         XCTAssertEqual(published.status, 0)
         let script = SSHLauncherCommand.remoteCommand(sessionID: session, grant: .init(profile: .statistics), command: "exit 24")
@@ -113,10 +134,14 @@ final class SSHBootstrapPolicyTests: XCTestCase {
         let ready = root.appendingPathComponent(".dispatch/sessions/" + session + "/ready")
         let target = root.appendingPathComponent("target")
         try (relative + "\n").write(to: target, atomically: true, encoding: .utf8)
-        try FileManager.default.removeItem(at: ready)
-        try FileManager.default.createSymbolicLink(at: ready, withDestinationURL: target)
+        // The published ready file belongs to the commands' tree: replacing it is recorded with them.
+        _ = try System.act("file.link", [ready.path, target.path]) {
+            try FileManager.default.removeItem(at: ready)
+            try FileManager.default.createSymbolicLink(at: ready, withDestinationURL: target)
+            return true
+        }
         let linked = try await run(script, home: root)
         XCTAssertEqual(linked.status, 24)
-        XCTAssertEqual(try String(contentsOf: target, encoding: .utf8), relative + "\n")
+        XCTAssertEqual(String(decoding: try System.read(target), as: UTF8.self), relative + "\n")
     }
 }

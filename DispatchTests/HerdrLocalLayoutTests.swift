@@ -43,8 +43,8 @@ final class HerdrLocalLayoutTests: XCTestCase {
         defer { restoreRuntime() }
         try DesktopTestSupport.requireUnlocked()
         guard FileManager.default.isExecutableFile(atPath: TestSupport.tool("herdr")) else { throw XCTSkip("Install herdr for integration tests") }
-        let root = URL(fileURLWithPath: "/tmp/hv-\(UUID().uuidString.prefix(8))")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        let root = URL(fileURLWithPath: "/tmp/hv-\(System.uuid().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let socket = root.appendingPathComponent("herdr.sock").path
         let runtime = TerminalRuntime.shared, controller = AppDelegate(), workspace = controller.workspace
         runtime.workspace = workspace; runtime.start(preferences: Preferences())
@@ -141,19 +141,15 @@ final class HerdrLocalLayoutTests: XCTestCase {
         workspace.selectSurface(first.id)
         TerminalTestSupport.send("for i in {1..200}; do printf 'SCROLL_%03d\\n' $i; done", to: view)
         try await TestSupport.eventually { TerminalTestSupport.screen(terminal: view).contains("SCROLL_200") }
-        func wheel(_ amount: Int32, pixels: Bool = false, target: TerminalView) throws {
-            let event = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: pixels ? .pixel : .line, wheelCount: 1, wheel1: amount, wheel2: 0, wheel3: 0))
-            target.scrollWheel(with: try XCTUnwrap(NSEvent(cgEvent: event)))
-        }
-        try wheel(20, target: view)
+        try TerminalTestSupport.wheel(20, at: view)
         try await TestSupport.eventually(diagnostic: TerminalTestSupport.screen(terminal: view)) {
             let text = TerminalTestSupport.screen(terminal: view)
             return text.contains("SCROLL_") && !text.contains("SCROLL_200")
         }
         let scrolled = TerminalTestSupport.screen(terminal: view)
-        try wheel(-80, pixels: true, target: view)
+        try TerminalTestSupport.wheel(-80, units: .pixel, at: view)
         try await TestSupport.eventually { TerminalTestSupport.screen(terminal: view) != scrolled }
-        try wheel(-100, target: view)
+        try TerminalTestSupport.wheel(-100, at: view)
         try await TestSupport.eventually { TerminalTestSupport.screen(terminal: view).contains("SCROLL_200") }
         TerminalTestSupport.key(116, "\u{f72c}", view, modifiers: [.function, .numericPad])
         try await TestSupport.eventually { !TerminalTestSupport.screen(terminal: view).contains("SCROLL_200") }
@@ -163,7 +159,7 @@ final class HerdrLocalLayoutTests: XCTestCase {
         let probe = "import os,tty,termios; old=termios.tcgetattr(0); tty.setraw(0); os.write(1,b'\\x1b[?1000h\\x1b[?1006hMOUSE_'+b'READY\\r\\n'); data=os.read(0,128); os.write(1,b'\\x1b[?1000l\\x1b[?1006lWHEEL_'+data.hex().encode()+b'\\r\\n'); termios.tcsetattr(0,termios.TCSANOW,old)"
         TerminalTestSupport.send("python3 -c " + HerdrLaunch.quote(probe), to: view)
         try await TestSupport.eventually(diagnostic: TerminalTestSupport.screen(terminal: view)) { TerminalTestSupport.screen(terminal: view).contains("MOUSE_READY") }
-        try wheel(1, target: view)
+        try TerminalTestSupport.wheel(1, at: view)
         try await TestSupport.eventually(diagnostic: TerminalTestSupport.screen(terminal: view)) { TerminalTestSupport.screen(terminal: view).contains("WHEEL_1b5b3c") }
         _ = try await PresentationTestSupport.capture(window, named: "local-layouts", in: "herdr-local-layouts")
         workspace.newLocalSpace()

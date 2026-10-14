@@ -123,7 +123,7 @@ final class ChatModelPickerTests: XCTestCase {
 
     func testPickerAvailabilityRequiresIdleAttachedSession() {
         let coordinator = ChatCoordinator(enabled: true)
-        let session = coordinator.session(for: UUID())
+        let session = coordinator.session(for: System.uuid())
         // Attached: a helper chat (terminal 0 stands in; no request is made while the picker is refused).
         session.helper = HelperChat(terminal: 0)
         session.active = true
@@ -134,7 +134,7 @@ final class ChatModelPickerTests: XCTestCase {
         let blocked: [(ChatSession) -> Void] = [
             { $0.active = false }, { $0.busy = true },
             { $0.discoveryBlocked = true }, { $0.loadingHistory = true },
-            { $0.activityCheck = UUID() }, { $0.submissionID = UUID() }
+            { $0.activityCheck = System.uuid() }, { $0.submissionID = System.uuid() }
         ]
         for block in blocked {
             session.active = true; session.busy = false; session.version = "0.153.4"
@@ -281,10 +281,10 @@ final class ChatModelPickerTests: XCTestCase {
         if commandsOnly || transportOnly {
             let catalog = transportOnly ? fixture.state.appendingPathComponent("transport-models.json")
                 : CodexTestSupport.root.appendingPathComponent("DispatchTests/Fixtures/codex-command-models.json")
-            if transportOnly { try CodexTestSupport.transportModelCatalog().write(to: catalog, options: .atomic) }
+            if transportOnly { try System.write(CodexTestSupport.transportModelCatalog(), to: catalog) }
             let config = fixture.state.appendingPathComponent("codex-home/config.toml")
-            let contents = try String(contentsOf: config, encoding: .utf8)
-            try ("model_catalog_json = \"\(catalog.path)\"\n" + contents).write(to: config, atomically: true, encoding: .utf8)
+            let contents = try String(decoding: try System.read(config), as: UTF8.self)
+            try System.write(Data(("model_catalog_json = \"\(catalog.path)\"\n" + contents).utf8), to: config)
         }
         phaseTimings.begin("SSH_setup")
         let runtime = TerminalRuntime.shared, previous = runtime.chat
@@ -297,8 +297,8 @@ final class ChatModelPickerTests: XCTestCase {
             if backend.hasPrefix("ssh") { server = try await SSHTestServer() } else { server = nil }
             defer { server?.stop() }
             // Keep Unix-domain socket paths below sockaddr_un's path limit.
-            let backendRoot = server?.root ?? FileManager.default.temporaryDirectory
-                .appendingPathComponent("dmp-" + String(UUID().uuidString.prefix(8)))
+            let backendRoot = server?.root ?? System.temporary
+                .appendingPathComponent("dmp-" + String(System.uuid().uuidString.prefix(8)))
             try FileManager.default.createDirectory(at: backendRoot, withIntermediateDirectories: true)
             defer { if server == nil { CodexTestSupport.removeFixture(backendRoot) } }
             let socket = backendRoot.appendingPathComponent("herdr.sock").path
@@ -325,7 +325,10 @@ final class ChatModelPickerTests: XCTestCase {
             try await app.wait { runtime.views[id]?.surface != nil }
             let terminal = try XCTUnwrap(runtime.views[id])
             phaseTimings.begin("agent_readiness")
-            let command = CodexTestSupport.command(state: fixture.state, binary: fixture.binary)
+            // Over SSH to this Mac the login shell's TMPDIR is the account's /var/folders path: codex lists it in its
+            // instructions, which the compaction record's id hashes (a scrub cannot follow a hash). The fixture's own.
+            let command = (commandsOnly && backend.hasPrefix("ssh") ? "TMPDIR=" + HerdrLaunch.quote(fixture.state.path) + " " : "")
+                + CodexTestSupport.command(state: fixture.state, binary: fixture.binary)
             TerminalTestSupport.send(command, to: terminal)
             let session = runtime.chat.session(for: id)
             func wait(_ condition: () -> Bool) async throws {
@@ -341,7 +344,9 @@ final class ChatModelPickerTests: XCTestCase {
             if backend.hasPrefix("ssh") {
                 try await SSHChatTestSupport.trustHooks(state: fixture.state, command: command, session: session, terminal: terminal)
             }
-            try await wait { session.active && AgentModelMenu.containsModel(terminal.agentMenuScreen, slug: "dispatch-fixture", name: "Dispatch fixture") }
+            // Its chat history (the binding) arrived too: a prompt sent before it names no conversation, by timing.
+            try await wait { session.active && session.binding != nil && !session.loadingHistory
+                && AgentModelMenu.containsModel(terminal.agentMenuScreen, slug: "dispatch-fixture", name: "Dispatch fixture") }
             runtime.chat.chooseChat(true, session: session)
             session.draft = "initial picker turn"; runtime.chat.submit(session)
             try await wait { runtime.chat.canPickModel(session) && session.model == "dispatch-fixture"
@@ -473,7 +478,7 @@ final class ChatModelPickerTests: XCTestCase {
             XCTAssertEqual(try requests(fixture.state).count, initialRequests)
             if backend == "local" {
                 app.window.makeKeyAndOrderFront(nil)
-                session.focusRequest = UUID()
+                session.focusRequest = System.uuid()
                 try await Task.sleep(for: .milliseconds(350))
                 NSApp.sendEvent(TerminalTestSupport.keyEvent(46, "M", in: app.window, modifiers: [.command, .shift]))
             } else { runtime.chat.openModelPicker(session, column: .model) }

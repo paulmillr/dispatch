@@ -176,6 +176,10 @@ unsafe extern "C" {
 /// Pin the executable's mapped vnode, never a replacement at its old pathname.
 pub(super) fn image(pid: u32, path: &std::path::Path) -> io::Result<std::fs::File> {
     use std::os::unix::{ffi::OsStrExt, fs::MetadataExt};
+    // The kernel names a mapped image by its resolved path (/tmp is /private/tmp); the
+    // identity itself comes from the mapped vnode below, not from this name.
+    let resolved = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
+    let path = resolved.as_path();
     let mut address = 0u64;
     for _ in 0..16_384 {
         // SAFETY: native integer/byte layouts checked against proc_info.h in the ABI test.

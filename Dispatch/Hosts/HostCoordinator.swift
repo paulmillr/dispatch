@@ -12,31 +12,6 @@ final class HostCoordinator {
         let integrated: Bool
         var launch: SSHLaunchRequest? = nil
     }
-    private struct Address: Codable {
-        let connection: SSHConnectionID?
-        let terminal: UInt64
-    }
-    private struct Accepted: Codable {
-        let target: Address
-        let request: SSHLaunchRequest
-        let connecting: Bool
-    }
-    private struct Consent: Codable {
-        let target: Address
-        let request: SSHConsentRequest
-        let reply: URL
-    }
-    private struct Closed: Codable {
-        let connection: SSHConnectionID
-        let notice: SSHCloseNotice
-    }
-    private struct Sample: Codable {
-        let target: Address
-        let generation: UUID?
-        let next: UUID
-        let observation: HostProcessObservation
-    }
-
     private func owner(_ tab: UUID) -> HelperWorkspace? {
         let space = runtime?.workspace?.spaces.first(where: { $0.tabs.contains { $0.id == tab } })
         // A mux hides its original terminal while retaining that terminal's launch capability.
@@ -46,78 +21,24 @@ final class HostCoordinator {
             ?? (owners.count == 1 ? owners.first : nil)
     }
 
-    private func address(_ tab: UUID) throws -> Address {
-        guard let helper = owner(tab), let terminal = helper.terminal(of: tab) else {
-            let visible = runtime?.workspace?.spaces.contains { $0.tabs.contains { $0.id == tab } } == true
-            let retained = runtime?.helpers.values.filter { $0.controls(tab) }.count ?? 0
-            throw HelperFailure(code: "replay", message: "Host event has no owning helper terminal relationship: tab=\(tab) visible=\(visible) retainedOwners=\(retained)")
-        }
-        return Address(connection: helper.endpoint.connection, terminal: terminal)
-    }
-
-    private func terminal(_ address: Address) throws -> UUID {
-        let endpoint = address.connection.map(HelperWorkspace.Endpoint.remote) ?? .local
-        guard let tab = runtime?.helpers[endpoint]?.tab(of: address.terminal) else {
-            throw HelperFailure(code: "replay", message: "Recorded host terminal relationship is unavailable")
-        }
-        return tab
-    }
-
-    private func reject(_ error: any Error) {
-        AppReplay.fail(error)
-    }
-
-    func replay(_ event: AppReplay.Event) throws -> Bool {
-        switch event.kind {
-        case "in.host.accepted":
-            let value = try JSONDecoder().decode(Accepted.self, from: event.data)
-            var request = value.request; request.tabID = try terminal(value.target)
-            launch(request, connectingOnly: value.connecting)
-        case "in.host.consent":
-            let value = try JSONDecoder().decode(Consent.self, from: event.data)
-            let request = SSHConsentRequest(id: value.request.id, tabID: try terminal(value.target),
-                token: value.request.token, scope: value.request.scope, origin: value.request.origin)
-            runtime?.ssh.consent(request, reply: value.reply)
-        case "in.host.closed":
-            let value = try JSONDecoder().decode(Closed.self, from: event.data)
-            runtime?.ssh.channelClosed(value.connection, notice: value.notice)
-        case "in.host.probe":
-            let values = try JSONDecoder().decode([Sample].self, from: event.data)
-            for value in values {
-                let tab = try terminal(value.target), observation = value.observation
-                apply(.init(terminal: tab, foreground: observation.foreground, device: observation.device,
-                            process: observation.process, shell: observation.shell, scope: observation.scope,
-                            trackedAlive: observation.trackedAlive), generation: value.generation, next: value.next)
-            }
-            synchronize()
-        default: return false
-        }
-        return true
-    }
-
     func consent(_ request: SSHConsentRequest, reply: URL) {
-        guard !AppReplay.replaying, runtime?.isResettingSSH != true else { return }
+        guard runtime?.isResettingSSH != true else { return }
         let epoch = epoch
         Task { [weak self] in
-            guard let self, let tab = await watcher.locate(request.origin, in: targets()), self.epoch == epoch,
-                  await watcher.locate(request.origin, in: targets()) == tab, self.epoch == epoch else { return }
+            await self?.created()
+            guard let self, self.epoch == epoch else { return }
+            // An unanswered consent leaves the user's ssh waiting: say why.
+            guard let tab = await watcher.locate(request.origin, in: targets()), self.epoch == epoch,
+                  await watcher.locate(request.origin, in: targets()) == tab, self.epoch == epoch
+            else { return print("SSH consent unanswered: no single terminal runs its origin") }
             let attributed = SSHConsentRequest(id: request.id, tabID: tab, token: request.token,
                                                scope: request.scope, origin: request.origin)
-            do {
-                if AppReplay.enabled {
-                    try AppReplay.emit(kind: "host.consent", data: JSONEncoder().encode(
-                        Consent(target: address(tab), request: attributed, reply: reply)))
-                }
-                runtime?.ssh.consent(attributed, reply: reply)
-            } catch { reject(error) }
+            runtime?.ssh.consent(attributed, reply: reply)
         }
     }
 
     func closed(_ id: SSHConnectionID, notice: SSHCloseNotice) {
-        do {
-            try AppReplay.emit(kind: "host.closed", data: JSONEncoder().encode(Closed(connection: id, notice: notice)))
-            runtime?.ssh.channelClosed(id, notice: notice)
-        } catch { reject(error) }
+        runtime?.ssh.channelClosed(id, notice: notice)
     }
 
     private func launch(_ request: SSHLaunchRequest, connectingOnly: Bool) {
@@ -133,7 +54,7 @@ final class HostCoordinator {
     private var nap: Task<Void, Never>?
     private var activation: NSObjectProtocol?
     private var cursor = 0
-    private var epoch = UUID()
+    private var epoch = System.uuid()
     private var bindings: [UUID: Binding] = [:]
     private struct PendingHost {
         let generation: UUID
@@ -168,13 +89,13 @@ final class HostCoordinator {
 
     private func wait() async {
         let interval: Duration = NSApp?.isActive == false ? .seconds(10) : .milliseconds(500)
-        let nap = Task { _ = try? await Task.sleep(for: interval) }
+        let nap = Task { _ = try? await System.sleep(for: interval, "poll") }
         self.nap = nap
         await nap.value
     }
 
     func stop() {
-        epoch = UUID()
+        epoch = System.uuid()
         task?.cancel(); task = nil
         nap?.cancel(); nap = nil
         activation.map(NotificationCenter.default.removeObserver); activation = nil
@@ -276,7 +197,7 @@ final class HostCoordinator {
         let surfaces = Set(workspace.hosts.terminals.filter { $0.value.host == host }.map(\.key))
         let pending = bindings.values.filter { generations.contains($0.generation) && !$0.integrated }.compactMap(\.launch)
         // Invalidate discoveries suspended before the reset started.
-        epoch = UUID()
+        epoch = System.uuid()
         disconnect(host)
         runtime.ssh.resetHost(host, generations: generations, surfaces: surfaces, pending: pending)
         removePresentation(host, runtime: runtime, workspace: workspace)
@@ -315,34 +236,32 @@ final class HostCoordinator {
     /// The mailbox capability authorizes a launch but does not identify its
     /// pane. Match the live originating PTY, including inherited capabilities.
     func accept(_ request: SSHLaunchRequest, connectingOnly: Bool = false) {
-        guard runtime?.isResettingSSH != true, !AppReplay.replaying else { return }
+        guard runtime?.isResettingSSH != true else { return }
         let epoch = epoch
         Task { [weak self] in
-            guard let self, await watcher.validate(request), self.epoch == epoch else { return }
-            guard let origin = request.origin, let tab = await watcher.locate(origin, in: targets()),
-                  self.epoch == epoch else { return }
+            // A launch this refuses leaves the user's ssh waiting: always say why.
+            let refuse = { (reason: String) in print("SSH launch refused (\(connectingOnly ? "connecting" : "request")): " + reason) }
+            guard let self, self.epoch == epoch else { return }
+            await created()
+            guard await watcher.validate(request) else { return refuse("its processes are not this terminal's ssh") }
+            guard let origin = request.origin, let tab = await watcher.locate(origin, in: targets()) else {
+                return refuse("no terminal runs its origin")
+            }
             let targets = targets().filter { $0.terminal == tab }
             for start in stride(from: 0, to: targets.count, by: 16) {
                 guard self.epoch == epoch else { return }
                 let observations: [HostProcessObservation]
-                do { observations = try await AppReplay.unrecorded { await watcher.probe(Array(targets[start..<min(start + 16, targets.count)])) } }
-                catch { reject(error); return }
+                observations = await watcher.probe(Array(targets[start..<min(start + 16, targets.count)]))
                 let matches = observations.filter { $0.device == request.terminalDevice && $0.process == request.sshProcess }
-                if let match = matches.first, matches.count == 1, await watcher.validate(request),
-                   self.epoch == epoch,
-                   runtime?.workspace?.allSurfaceIDs.contains(match.terminal) == true {
-                    var attributed = request; attributed.tabID = match.terminal
-                    attributed.presentationScope = match.scope
-                    do {
-                        if AppReplay.enabled {
-                            try AppReplay.emit(kind: "host.accepted", data: JSONEncoder().encode(
-                                Accepted(target: address(attributed.tabID), request: attributed, connecting: connectingOnly)))
-                        }
-                        launch(attributed, connectingOnly: connectingOnly)
-                    } catch { reject(error) }
-                    return
-                }
+                guard let match = matches.first, matches.count == 1 else { continue }
+                guard await watcher.validate(request), self.epoch == epoch else { return refuse("its processes changed while probing") }
+                guard runtime?.workspace?.allSurfaceIDs.contains(match.terminal) == true else { return refuse("its terminal is gone") }
+                var attributed = request; attributed.tabID = match.terminal
+                attributed.presentationScope = match.scope
+                launch(attributed, connectingOnly: connectingOnly)
+                return
             }
+            refuse("no single ssh of its terminal is the one it names")
         }
     }
 
@@ -441,7 +360,7 @@ final class HostCoordinator {
             workspace.hosts.setState(state, generation: generation)
         }
         pendingHosts[terminal]?.task = Task { [weak self, weak workspace] in
-            do { try await ContinuousClock().sleep(until: deadline) } catch { return }
+            do { try await System.sleep(for: ContinuousClock.now.duration(to: deadline), "pending") } catch { return }
             guard let self, let workspace, runtime?.workspace === workspace else { return }
             presentPendingHost(terminal, generation: generation)
             synchronize()
@@ -469,6 +388,13 @@ final class HostCoordinator {
             if let backend = space.backend { workspace.helper(space)?.inherit(backend) }
         }
         workspace.regroupHosts()
+    }
+
+    /// A request from a new terminal can be read before the reply that gives its tab the terminal is handled (replay
+    /// hands both over at once): attribution waits for the creations in flight, or no target has the process's tty.
+    private func created() async {
+        guard let runtime else { return }
+        for helper in Array(runtime.helpers.values) { await helper.created() }
     }
 
     private func targets() -> [HostProcessTarget] {
@@ -503,7 +429,7 @@ final class HostCoordinator {
     }
 
     func poll() async {
-        guard !AppReplay.replaying, runtime?.isResettingSSH != true, let workspace = runtime?.workspace else { return }
+        guard runtime?.isResettingSSH != true, let workspace = runtime?.workspace else { return }
         let epoch = epoch
         let all = targets()
         guard !all.isEmpty else { return }
@@ -519,32 +445,21 @@ final class HostCoordinator {
         let generations = Dictionary(uniqueKeysWithValues: batch.compactMap { target in
             bindings[target.terminal].map { (target.terminal, $0.generation) }
         })
-        let observations: [HostProcessObservation]
-        do { observations = try await AppReplay.unrecorded { await watcher.probe(batch) } }
-        catch { reject(error); return }
+        let probed = await watcher.probe(batch)
         guard !Task.isCancelled, self.epoch == epoch, runtime?.workspace === workspace else { return }
-        do {
-            let current = targets()
-            let observations = observations.filter { observation in
-                owners[observation.terminal] === owner(observation.terminal)
-                    && terminals[observation.terminal] == owner(observation.terminal)?.terminal(of: observation.terminal)
-                    && current.contains { target in
-                        target.terminal == observation.terminal
-                            && batch.contains { $0.terminal == target.terminal && $0.source == target.source }
-                    }
-            }
-            let next = Dictionary(uniqueKeysWithValues: observations.map { ($0.terminal, UUID()) })
-            if AppReplay.enabled {
-                let samples = try observations.filter { bindings[$0.terminal] != nil || $0.process != nil }.map { observation in
-                    Sample(target: try address(observation.terminal), generation: generations[observation.terminal],
-                           next: next[observation.terminal]!, observation: observation)
+        let current = targets()
+        let observations = probed.filter { observation in
+            owners[observation.terminal] === owner(observation.terminal)
+                && terminals[observation.terminal] == owner(observation.terminal)?.terminal(of: observation.terminal)
+                && current.contains { target in
+                    target.terminal == observation.terminal
+                        && batch.contains { $0.terminal == target.terminal && $0.source == target.source }
                 }
-                try AppReplay.emit(kind: "host.probe", data: JSONEncoder().encode(samples))
-            }
-            for observation in observations {
-                apply(observation, generation: generations[observation.terminal], next: next[observation.terminal]!)
-            }
-        } catch { reject(error); return }
+        }
+        let next = Dictionary(uniqueKeysWithValues: observations.map { ($0.terminal, System.uuid()) })
+        for observation in observations {
+            apply(observation, generation: generations[observation.terminal], next: next[observation.terminal]!)
+        }
         synchronize()
     }
 }

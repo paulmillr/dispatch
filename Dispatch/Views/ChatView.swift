@@ -69,9 +69,9 @@ struct ChatView: View {
         }
         .onChange(of: focused) { _, focused in if !focused { session.shortcutsPresented = false } }
         .onChange(of: session.search.visible) { _, visible in
-            if !visible, focused { session.focusRequest = UUID() }
+            if !visible, focused { session.focusRequest = System.uuid() }
         }
-        .onChange(of: session.shortcutsPresented) { _, shown in if !shown { session.focusRequest = UUID() } }
+        .onChange(of: session.shortcutsPresented) { _, shown in if !shown { session.focusRequest = System.uuid() } }
         .onChange(of: session.queuedMessages.count) { old, count in
             if count > old && !coordinator.queueTipShown { queueTipPresented = true; coordinator.queueTipShown = true }
         }
@@ -266,7 +266,7 @@ struct ChatView: View {
         let size = theme.typography.replyLineHeight + 14
         return Button {
             (workspace ?? TerminalRuntime.shared.workspace)?.selectSurface(session.id)
-            session.focusRequest = UUID()
+            session.focusRequest = System.uuid()
         } label: {
             Image(systemName: "arrowshape.turn.up.left").font(.system(size: size * 0.4, weight: .medium))
                 .foregroundStyle(theme.muted)
@@ -287,7 +287,7 @@ struct ChatView: View {
     private var inactiveRow: some View {
         Button {
             (workspace ?? TerminalRuntime.shared.workspace)?.selectSurface(session.id)
-            session.focusRequest = UUID()
+            session.focusRequest = System.uuid()
         } label: {
             Text("Reply…").font(Font(theme.typography.reply))
                 .foregroundStyle(theme.muted)

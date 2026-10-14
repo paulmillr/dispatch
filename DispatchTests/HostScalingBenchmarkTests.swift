@@ -76,7 +76,7 @@ final class HostScalingBenchmarkTests: XCTestCase {
                             && app.workspace.hosts.terminals[id]?.authenticated == true
                     }
                     if config.backend == "tmux" {
-                        let serverRoot = "/tmp/dispatch-host-scaling-" + UUID().uuidString
+                        let serverRoot = "/tmp/dispatch-host-scaling-" + System.uuid().uuidString
                         let command = "mkdir -m 700 " + HerdrLaunch.quote(serverRoot) + "; touch " + HerdrLaunch.quote(serverRoot + "/.fixture")
                             + "; /usr/bin/tmux -u -S " + HerdrLaunch.quote(serverRoot + "/tmux.sock")
                             + " -f /dev/null -CC new-session -s benchmark /bin/bash"
@@ -91,8 +91,8 @@ final class HostScalingBenchmarkTests: XCTestCase {
                 try await TestSupport.eventually(timeout: .seconds(15)) {
                     app.runtime.views[id].map { $0.surface != nil && !TerminalTestSupport.viewport(terminal: $0).isEmpty } == true
                 }
-                let root = "/tmp/dispatch-host-scaling-" + UUID().uuidString
-                let conversation = UUID().uuidString
+                let root = "/tmp/dispatch-host-scaling-" + System.uuid().uuidString
+                let conversation = System.uuid().uuidString
                 let now = ISO8601DateFormatter().string(from: .now)
                 var records: [[String: Any]] = [
                     ["timestamp": now, "type": "session_meta", "payload": ["id": conversation, "cli_version": "0.153.2", "source": "cli", "cwd": root]],

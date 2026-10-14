@@ -29,7 +29,7 @@ final class SSHShellIntegrationTests: XCTestCase {
         for glass in [false] + (LiquidGlassStore.supported ? [true] : []) {
             LiquidGlassStore.shared.enabled = glass
             let local = try await capture(window, "border-local-\(glass)")
-            let generation = UUID()
+            let generation = System.uuid()
             workspace.hosts.begin(tab.id, generation: generation, destination: "fixture")
             workspace.hosts.update(tab.id, generation: generation, destination: "fixture",
                 greeting: SSHGreeting(version: 1, host: "border-fixture", boot: "test", uid: 501, home: "/tmp", capabilities: []), state: .connected)
@@ -94,9 +94,9 @@ final class SSHShellIntegrationTests: XCTestCase {
         // the host is the verified machine (accounts are grouped), another machine has its own color.
         let host = try XCTUnwrap(app.workspace.hosts.terminals[tab.id]).host
         let native = TerminalTab(directory: "/tmp"), elsewhere = TerminalTab(directory: "/tmp")
-        app.workspace.hosts.seed(native.id, from: host, generation: UUID())
+        app.workspace.hosts.seed(native.id, from: host, generation: System.uuid())
         XCTAssertEqual(app.runtime.ssh.tint(for: native), tint, "A tab on the host retains its tint without a live transport")
-        app.workspace.hosts.seed(elsewhere.id, from: .authenticated("another-machine"), generation: UUID())
+        app.workspace.hosts.seed(elsewhere.id, from: .authenticated("another-machine"), generation: System.uuid())
         XCTAssertNotEqual(app.runtime.ssh.tint(for: elsewhere), tint, "Tabs on different hosts retain distinct colors")
         try await Task.sleep(for: .milliseconds(1100))
         let remote = try await capture(app.window, "tint-remote")
@@ -146,7 +146,7 @@ final class SSHShellIntegrationTests: XCTestCase {
         XCTAssertLessThan(try distance(local, exited, x: x, y: 40), 0.015)
         XCTAssertFalse(TerminalTestSupport.screen(terminal: terminal).contains("locking failed"), "Integration loss must preserve the live shell's startup and history paths")
 
-        let aliasArguments = server.options + ["-o", "HostName=127.0.0.1", "-o", "HostKeyAlias=[127.0.0.1]:\(server.port)", NSUserName() + "@tint-test-alias"]
+        let aliasArguments = server.options + ["-o", "HostName=127.0.0.1", "-o", "HostKeyAlias=[127.0.0.1]:\(server.port)", System.machine.name + "@tint-test-alias"]
         try await SSHTestServer.authorize(arguments: aliasArguments)
         let alias = "ssh " + aliasArguments.map(HerdrLaunch.quote).joined(separator: " ")
         TerminalTestSupport.send(alias, to: terminal)
@@ -197,7 +197,7 @@ final class SSHShellIntegrationTests: XCTestCase {
         }
         /// OSC 52 from the remote shell, then a marker proving the terminal processed it.
         func copy(_ text: String, in terminal: TerminalView) async throws {
-            let marker = "COPIED_" + UUID().uuidString.prefix(8)
+            let marker = "COPIED_" + System.uuid().uuidString.prefix(8)
             TerminalTestSupport.send("printf '\\033]52;c;%s\\007%s_%s\\n' \(Data(text.utf8).base64EncodedString()) \(marker) DONE", to: terminal)
             try await app.wait { TerminalTestSupport.screen(terminal: terminal).contains(marker + "_DONE") }
         }

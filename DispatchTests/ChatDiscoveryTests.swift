@@ -7,15 +7,15 @@ import XCTest
 @MainActor
 final class ChatDiscoveryTests: XCTestCase {
     func testOpenFileReplacementCannotChangeDiscoveredMetadata() throws {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("dispatch-descriptor-" + UUID().uuidString + ".jsonl")
+        let url = System.temporary.appendingPathComponent("dispatch-descriptor-" + System.uuid().uuidString + ".jsonl")
         try Data("original".utf8).write(to: url)
         defer { try? FileManager.default.removeItem(at: url) }
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
-        let process = try XCTUnwrap(AgentProcess.capture(getpid()))
-        let opened = try XCTUnwrap(process.openFiles?.first { URL(fileURLWithPath: $0.path).resolvingSymlinksInPath() == url.resolvingSymlinksInPath() })
+        let process = try XCTUnwrap(AgentProcess.capture(System.pid))
+        let opened = try XCTUnwrap(process.openFiles?.first { System.resolve(URL(fileURLWithPath: $0.path)) == System.resolve(url) })
         XCTAssertEqual(opened.prefix(limit: 100), Data("original".utf8))
-        try Data("replacement".utf8).write(to: url, options: .atomic)
+        try System.write(Data("replacement".utf8), to: url)
         XCTAssertNil(opened.prefix(limit: 100), "A pathname must still refer to the process's open inode")
     }
 
@@ -31,7 +31,7 @@ final class ChatDiscoveryTests: XCTestCase {
         }
         let lines = [try row("user", "u1", ["role": "user", "content": "An agent-specific question"]),
                      try row("assistant", "a1", ["role": "assistant", "model": "fixture", "content": [["type": "text", "text": "An agent-specific answer"]]])]
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dispatch-adapter-" + UUID().uuidString)
+        let directory = System.temporary.appendingPathComponent("dispatch-adapter-" + System.uuid().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
@@ -44,7 +44,7 @@ final class ChatDiscoveryTests: XCTestCase {
 
     func testAttentionNeverChangesManualViewPreference() {
         let coordinator = ChatCoordinator(enabled: true)
-        let session = coordinator.session(for: UUID())
+        let session = coordinator.session(for: System.uuid())
         defer { coordinator.close(session.id) }
         coordinator.chooseChat(true, session: session)
         session.draft = "keep this draft"
@@ -68,7 +68,7 @@ final class ChatDiscoveryTests: XCTestCase {
     /// Chat must not cover them, and opens on its own once the dialog closes.
     func testNativeDialogDefersAutomaticChat() {
         let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
-        let session = chat.session(for: UUID())
+        let session = chat.session(for: System.uuid())
         defer { chat.close(session.id) }
         session.helper = HelperChat(terminal: 0); session.sessionID = "dialog"
         func state(dialog: String?) -> HelperChat.State {
@@ -87,11 +87,11 @@ final class ChatDiscoveryTests: XCTestCase {
     func testDiscoveryFailureRetainsChatAndDurableDraftWithoutAllowingInput() throws {
         let store = ChatDraftMemoryStore()
         let coordinator = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: store))
-        let session = coordinator.session(for: UUID())
+        let session = coordinator.session(for: System.uuid())
         defer { coordinator.close(session.id) }
-        session.sessionID = UUID().uuidString
+        session.sessionID = System.uuid().uuidString
         session.active = true
-        session.process = try XCTUnwrap(AgentProcess.capture(getpid()))
+        session.process = try XCTUnwrap(AgentProcess.capture(System.pid))
         coordinator.chooseChat(true, session: session)
         session.drafts.edit(text: "Unfinished 🧑🏽‍💻\nsecond line", selection: NSRange(location: 3, length: 2))
         let draft = session.drafts.current
@@ -116,7 +116,7 @@ final class ChatDiscoveryTests: XCTestCase {
 
     func testPreviouslyOpenedEmptyChatRemainsReachableAfterAttachmentEnds() {
         let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
-        let session = chat.session(for: UUID())
+        let session = chat.session(for: System.uuid())
         defer { chat.close(session.id) }
         session.active = true
         chat.chooseChat(true, session: session)
@@ -131,10 +131,10 @@ final class ChatDiscoveryTests: XCTestCase {
     func testAttentionSurvivesPollingAndBlocksEveryInputPath() throws {
         let store = ChatDraftMemoryStore()
         let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: store))
-        let session = chat.session(for: UUID())
+        let session = chat.session(for: System.uuid())
         defer { chat.close(session.id) }
         session.active = true; session.sessionID = "attention"
-        session.process = try XCTUnwrap(AgentProcess.capture(getpid()))
+        session.process = try XCTUnwrap(AgentProcess.capture(System.pid))
         chat.chooseChat(true, session: session)
         session.drafts.edit(text: "still editing", selection: NSRange(location: 3, length: 2))
         session.queuedMessages = [.init(text: "previously queued", process: session.process)]
@@ -164,11 +164,11 @@ final class ChatDiscoveryTests: XCTestCase {
 
     func testConversationResetPreservesExplicitViewChoice() {
         let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
-        let session = chat.session(for: UUID())
+        let session = chat.session(for: System.uuid())
         defer { chat.close(session.id) }
         for selected in [true, false] {
             chat.chooseChat(selected, session: session)
-            session.sessionID = UUID().uuidString
+            session.sessionID = System.uuid().uuidString
             session.draft = "Previous conversation draft"
             let scope = session.drafts.scope
             session.resetConversation()
@@ -189,19 +189,19 @@ final class ChatDiscoveryTests: XCTestCase {
             session.host = host
             session.binding = .init(session: session.sessionID ?? "", transcript: nil, pid: pid, start: [pid, 0], executable: "/bin/codex")
         }
-        let old = chat.session(for: UUID())
+        let old = chat.session(for: System.uuid())
         old.sessionID = "conversation"; remote(old, 10)
         chat.chooseChat(true, session: old)
         old.expanded = ["tool"]
         old.drafts.edit(text: "draft across reconnect", selection: NSRange(location: 6, length: 2))
         chat.requireTerminalAttention(old, status: "Old menu")
         chat.close(old.id)
-        let wrong = chat.session(for: UUID())
+        let wrong = chat.session(for: System.uuid())
         defer { chat.close(wrong.id) }
         wrong.sessionID = "conversation"; remote(wrong, 20, host: "other@host")
         chat.restoreRemotePresentation(wrong)
         XCTAssertFalse(wrong.showChat); XCTAssertTrue(wrong.draft.isEmpty)
-        let next = chat.session(for: UUID())
+        let next = chat.session(for: System.uuid())
         defer { chat.close(next.id) }
         next.sessionID = "conversation"; remote(next, 30)
         chat.restoreRemotePresentation(next)
@@ -217,7 +217,7 @@ final class ChatDiscoveryTests: XCTestCase {
     func testRemoteInteractionRetirementSurvivesEitherDisconnectCallbackOrder() {
         for subscriptionFirst in [true, false] {
             let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
-            let old = chat.session(for: UUID())
+            let old = chat.session(for: System.uuid())
             old.host = "account@host"; old.agentID = "claude"; old.sessionID = "conversation"
             old.helper = HelperChat(terminal: 1, session: "conversation", endpoint: .local)
             old.draft = "Unsent reconnect draft λ"
@@ -230,7 +230,7 @@ final class ChatDiscoveryTests: XCTestCase {
             XCTAssertEqual([approval.key, approval.operation], ["conversation:Bash", "Original command"])
             chat.close(old.id)
 
-            let next = chat.session(for: UUID())
+            let next = chat.session(for: System.uuid())
             next.host = "account@host"
             next.helper = HelperChat(terminal: 2, session: "conversation", endpoint: .local)
             let question = HelperChat.Question(id: "prompt", header: "Permission", text: "Original command", secret: false,
@@ -266,12 +266,12 @@ final class ChatDiscoveryTests: XCTestCase {
             session.host = "account@host"
             session.binding = .init(session: "", transcript: nil, pid: 10, start: [10, 0], executable: "/bin/codex")
         }
-        let old = chat.session(for: UUID()); remote(old)
+        let old = chat.session(for: System.uuid()); remote(old)
         chat.chooseChat(true, session: old)
         old.drafts.edit(text: "first prompt, never sent", selection: NSRange(location: 6, length: 3))
         let draft = old.drafts.current, scope = old.drafts.scope
         chat.close(old.id)
-        let next = chat.session(for: UUID()); remote(next)
+        let next = chat.session(for: System.uuid()); remote(next)
         defer { chat.close(next.id) }
         chat.restoreRemotePresentation(next)
         XCTAssertTrue(next.showChat); XCTAssertNil(next.sessionID)
@@ -288,12 +288,12 @@ final class ChatDiscoveryTests: XCTestCase {
             session.host = "account@host"
             session.binding = .init(session: "", transcript: nil, pid: 10, start: [10, 0], executable: "/bin/codex")
         }
-        let old = chat.session(for: UUID()); remote(old)
+        let old = chat.session(for: System.uuid()); remote(old)
         chat.chooseChat(true, session: old)
         old.drafts.edit(text: "Retained draft")
         let scope = old.drafts.scope
         chat.close(old.id)
-        let next = chat.session(for: UUID()); remote(next)
+        let next = chat.session(for: System.uuid()); remote(next)
         defer { chat.close(next.id) }
         next.drafts.edit(text: "Replacement draft"); next.drafts.keep()
         let selected = try XCTUnwrap(next.drafts.saved.first).id
@@ -315,7 +315,7 @@ final class ChatDiscoveryTests: XCTestCase {
         var passed = false
         defer { fixture.stop(removeState: passed) }
         try await fixture.start(timeout: .seconds(15))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: state.appendingPathComponent("codex-home/hooks.json").path))
+        XCTAssertFalse(System.exists(state.appendingPathComponent("codex-home/hooks.json")))
         let runtime = TerminalRuntime.shared, controller = AppDelegate()
         let previousChat = runtime.chat
         runtime.chat = ChatCoordinator(enabled: true); runtime.workspace = controller.workspace
@@ -364,7 +364,7 @@ final class ChatDiscoveryTests: XCTestCase {
         XCTAssertNotEqual(savedID, b.sessionID)
         XCTAssertEqual(a.turns.flatMap(\.items).filter { $0.kind == .user }.count, 1)
         runtime.chat.chooseChat(false, session: a)
-        try await Task.sleep(for: .milliseconds(600))
+        try await TestSupport.pause(for: .milliseconds(600))
         XCTAssertFalse(a.showChat, "Discovery polling must remember manual view choices")
         a.draft = "/quit"; runtime.chat.submit(a)
         try await eventually { !a.active && !oldProcess.alive }
@@ -398,7 +398,7 @@ final class ChatDiscoveryTests: XCTestCase {
         resumed.draft = "tool check"; runtime.chat.submit(resumed)
         try await eventually { !resumed.busy && resumed.turns.flatMap(\.items).contains { $0.kind == .tool && $0.output.contains("DISPATCH_LOCAL_TOOL_OK") } }
         XCTAssertEqual(resumed.sessionID, savedID)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: state.appendingPathComponent("hooks.jsonl").path))
+        XCTAssertFalse(System.exists(state.appendingPathComponent("hooks.jsonl")))
         passed = testRun?.failureCount == 0
     }
 

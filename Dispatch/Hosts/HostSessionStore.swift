@@ -116,11 +116,14 @@ struct HostSessionStore {
             spaces.append(clean)
         }
         var history: [UUID: String] = [:], historyBytes = 0
-        // A tab whose process has not started since the last launch keeps its restored text.
-        for id in historyTabs where includeHistory {
-            let text = TerminalHistoryStore.tail(runtime.restoredHistory[id] ?? runtime.views[id]?.surface?.readHistory() ?? "")
-            if !text.isEmpty, historyBytes + text.utf8.count <= TerminalHistoryStore.totalLimit {
-                history[id] = text; historyBytes += text.utf8.count
+        if includeHistory {
+            let limits = TerminalHistoryStore.limits
+            // A tab whose process has not started since the last launch keeps its restored text.
+            for id in historyTabs {
+                let text = TerminalHistoryStore.tail(runtime.restoredHistory[id] ?? runtime.views[id]?.surface?.readHistory() ?? "", limit: limits.tab)
+                if !text.isEmpty, historyBytes + text.utf8.count <= limits.total {
+                    history[id] = text; historyBytes += text.utf8.count
+                }
             }
         }
         let snapshot = Snapshot(hosts: workspace.liveHosts.filter { $0.id != .local }, spaces: spaces,

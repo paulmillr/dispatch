@@ -13,8 +13,7 @@ import XCTest
         try await smoke(options: server.options, destination: server.destination, profile: .full, platform: "macos")
     }
     func testLinuxProcessRowsAndTerminalTraffic() async throws {
-        let url = SSHLinuxTestProfile.configurationURL()
-        let target = try JSONDecoder().decode(SSHLinuxTestProfile.self, from: Data(contentsOf: url))
+        let target = try SSHLinuxTestProfile.load()
         for profile in [SSHIntegrationProfile.statistics, .full] {
             try await smoke(options: target.options, destination: target.destination, profile: profile, platform: "linux")
         }

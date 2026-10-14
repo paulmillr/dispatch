@@ -144,7 +144,7 @@ final class NewSpacePresentationTests: XCTestCase {
     }
 
     func testRemoteBackendProbeLoadsZshInteractiveLoginPath() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("backend probe '" + UUID().uuidString)
+        let directory = System.temporary.appendingPathComponent("backend probe '" + System.uuid().uuidString)
         let bin = directory.appendingPathComponent("bin")
         try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -177,7 +177,7 @@ final class NewSpacePresentationTests: XCTestCase {
         var space = Space(name: name, directory: "/tmp")
         let shell = SSHShell(destination: name, executable: "/usr/bin/false")
         space.panes[0].tabs[0].machine = .ssh(shell)
-        let terminal = space.tabs[0].id, generation = UUID()
+        let terminal = space.tabs[0].id, generation = System.uuid()
         workspace.hosts.begin(terminal, generation: generation, destination: name)
         workspace.hosts.update(terminal, generation: generation, destination: name,
             greeting: SSHGreeting(version: 1, host: name, boot: "test", uid: 501, home: "/tmp", capabilities: []), state: .connected)
@@ -287,7 +287,7 @@ final class NewSpacePresentationTests: XCTestCase {
     }
 
     func testInstalledBackendProbeHidesMissingCommandsAndHandlesFailure() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let directory = System.temporary.appendingPathComponent(System.uuid().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let executable = directory.appendingPathComponent("ssh")
@@ -301,8 +301,13 @@ final class NewSpacePresentationTests: XCTestCase {
             ("dispatch-backend:tmux", 0, nil),
             ("dispatch-backend:tmux\\ndispatch-backend:complete", 1, nil)
         ] {
-            try "#!/bin/sh\nprintf '\(output)\\n'\nexit \(status)\n".write(to: executable, atomically: true, encoding: .utf8)
-            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+            // The probe observes the machine: replay answers each probe from where this case's write left the
+            // recording, so the write is recorded (an unrecorded one would leave all cases at one point).
+            _ = try TestSupport.fixture("backends.script", input: [output, String(status)]) { () throws -> Bool in
+                try "#!/bin/sh\nprintf '\(output)\\n'\nexit \(status)\n".write(to: executable, atomically: true, encoding: .utf8)
+                try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+                return true
+            }
             let installed = await SpaceBackend.installed(on: machine)
             XCTAssertEqual(installed, expected)
         }
@@ -319,7 +324,7 @@ final class NewSpacePresentationTests: XCTestCase {
             var space = Space(name: name, directory: "/tmp")
             let shell = SSHShell(destination: "admin@" + name, options: [])
             space.panes[0].tabs[0].machine = .ssh(shell)
-            let terminal = space.tabs[0].id, generation = UUID()
+            let terminal = space.tabs[0].id, generation = System.uuid()
             workspace.hosts.begin(terminal, generation: generation, destination: shell.destination)
             var greeting = SSHGreeting(version: 1, host: name, boot: "test", uid: 501, home: "/tmp", capabilities: [])
             greeting.os = os; greeting.distribution = distribution
@@ -361,7 +366,7 @@ final class NewSpacePresentationTests: XCTestCase {
         var remote = Space(name: "remote-work", directory: "/tmp")
         let shell = SSHShell(destination: "admin@fixture", options: ["-p", "2222"])
         remote.panes[0].tabs[0].machine = .ssh(shell)
-        let terminal = remote.tabs[0].id, generation = UUID()
+        let terminal = remote.tabs[0].id, generation = System.uuid()
         workspace.hosts.begin(terminal, generation: generation, destination: shell.destination)
         let greeting = SSHGreeting(version: 1, host: "fixture", boot: "test", uid: 501, home: "/tmp", capabilities: [])
         workspace.hosts.update(terminal, generation: generation, destination: shell.destination, greeting: greeting, state: .connected)

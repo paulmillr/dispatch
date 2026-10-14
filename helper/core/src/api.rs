@@ -66,11 +66,49 @@ pub struct OpenFile {
     pub path: PathBuf,
     pub identity: FileIdentity,
 }
-impl OpenFile {
-    /// Native process/foreground files use the old producer's path/device/inode shape.
-    pub fn parse(value: crate::json::Value<'_>) -> Option<Self> {
+/// The native `process` / `foreground` jobs' process value: written and read only here.
+impl Process {
+    pub fn value(&self) -> crate::json::Data<'_> {
+        use crate::json::Data;
+        Data::Object(vec![
+            ("pid", Data::Unsigned(self.pid.into())),
+            ("parent", Data::Unsigned(self.parent.into())),
+            ("group", Data::Signed(self.group.into())),
+            ("foreground", Data::Signed(self.foreground.into())),
+            ("tty", Data::Unsigned(self.tty)),
+            ("start", Data::Array(self.start.iter().map(|v| Data::Unsigned(*v)).collect())),
+            ("executable", Data::from(self.executable.as_path())),
+            ("arguments", Data::Array(self.arguments.iter().map(|v| Data::String(v)).collect())),
+            ("files", Data::Array(self.files.iter().map(OpenFile::value).collect())),
+        ])
+    }
+    pub fn read(value: &crate::json::Data<'_>) -> Option<Self> {
+        let mut start = value.get("start")?.array()?;
         Some(Self {
-            path: value.get("path")?.string()?.into(),
+            pid: value.get("pid")?.unsigned()?.try_into().ok()?,
+            parent: value.get("parent")?.unsigned()?.try_into().ok()?,
+            group: value.get("group")?.signed()?.try_into().ok()?,
+            foreground: value.get("foreground")?.signed()?.try_into().ok()?,
+            tty: value.get("tty")?.unsigned()?,
+            start: [start.next()?.unsigned()?, start.next()?.unsigned()?],
+            executable: value.get("executable")?.path()?.into(),
+            arguments: value.get("arguments")?.array()?.map(|v| v.string().map(str::to_owned)).collect::<Option<_>>()?,
+            files: value.get("files")?.array()?.map(OpenFile::read).collect::<Option<_>>()?,
+        })
+    }
+}
+impl OpenFile {
+    pub fn value(&self) -> crate::json::Data<'_> {
+        use crate::json::Data;
+        Data::Object(vec![
+            ("path", Data::from(self.path.as_path())),
+            ("device", Data::Unsigned(self.identity.device)),
+            ("inode", Data::Unsigned(self.identity.inode)),
+        ])
+    }
+    pub fn read(value: &crate::json::Data<'_>) -> Option<Self> {
+        Some(Self {
+            path: value.get("path")?.path()?.into(),
             identity: FileIdentity {
                 device: value.get("device")?.unsigned()?,
                 inode: value.get("inode")?.unsigned()?,
@@ -163,19 +201,21 @@ pub enum Job {
         input: Vec<u8>,
         deadline: Instant,
     },
-    /// Native input/output are UTF-8 JSON; success returns Output::Bytes. All calls run on
-    /// the fixed workers and are captured/replayed. Names below are reserved; an unavailable
-    /// platform operation returns Unsupported, never invented facts.
-    /// - "file.private": {path,limit} -> {before,after,data:string}; no-follow regular file,
+    /// A helper-internal OS query: `value` and the answer (Output::Value) are encoded plain
+    /// values (wire::body::encode_plain: typed, bytes stay bytes). All calls run on the fixed
+    /// workers and are captured/replayed. Names below are reserved; an unavailable
+    /// platform operation returns Unsupported, never invented facts. Paths, environment values
+    /// and file contents are bytes (Data::from(&Path), Data::path, Data::bytes).
+    /// - "file.private": {path,limit} -> {before,after,data:bytes}; no-follow regular file,
     ///   pinned fd, metadata includes uid/mode/links/kind/size/device/inode/mtime_ns/ctime_ns.
     /// - "file.lstat": {path} -> same metadata (also socket/character-device kinds, tty).
     /// - "file.realpath": {path} -> {path}; canonical absolute path, symlinks resolved.
     /// - "peer": {fd} -> {uid,pid?:u32}; native Unix peer credentials.
-    /// - "environment": {pid,names:[string],start?:[u64;2],executable?} -> {name:value}; only
+    /// - "environment": {pid,names:[string],start?:[u64;2],executable?} -> {name:bytes}; only
     ///   requested native values; a given start/executable must still be the pid's.
     /// - "foreground": {tty:u64} -> {group:i32,processes:[Process]}; terminal foreground group.
     /// - "process": {pid:u32} -> {pid,uid,parent,group,foreground,tty,start:[u64;2],
-    ///   started_at:f64,executable,arguments,files}; started_at is Unix epoch seconds,
+    ///   started_at:f64,executable,arguments,files,cwd}; Process::value/read; started_at is Unix epoch seconds,
     ///   start is the platform's exact process identity (Darwin sec/usec, Linux ticks).
     /// - "process.terminate": {pid,start,executable,tty,foreground} -> bool; false if the
     ///   foreground identity changed, true after its graceful SIGTERM exit. Use Isolated
@@ -189,7 +229,7 @@ pub enum Job {
     ///   identity is the native signed fsid pair, "word:word". No fabricated identity.
     Native {
         name: &'static str,
-        input: Vec<u8>,
+        value: Vec<u8>,
     },
     /// A Native job run in its own helper process (`dispatch-helper native <name>`), killed
     /// with its process group at `deadline` (TimedOut). For calls that can block in the
@@ -197,7 +237,7 @@ pub enum Job {
     /// broker.rs:66-82 ran collectors as worker processes with 1 s / 5 s (disks) limits.
     Isolated {
         name: &'static str,
-        input: Vec<u8>,
+        value: Vec<u8>,
         deadline: Instant,
     },
     /// Exclusive advisory lock on `path` (file created 0600 when missing), retried until
@@ -227,6 +267,8 @@ pub enum Output {
         stdout: Vec<u8>,
     },
     Bytes(Vec<u8>),
+    /// A native job's answer: an encoded plain value (wire::body::decode_plain reads it).
+    Value(Vec<u8>),
     /// Job::Lock holds its lock; release with Io::unlock(work).
     Locked,
 }
@@ -313,6 +355,19 @@ pub enum Event {
 }
 
 pub trait Io {
+    /// The platform the helper's logic decides for: the capture's when replaying (a capture
+    /// replays on any OS), else this one.
+    fn os(&self) -> &str {
+        std::env::consts::OS
+    }
+    fn arch(&self) -> &str {
+        std::env::consts::ARCH
+    }
+    /// The prefix app commands run through (c1654cc TermApple/Launch.swift:248-259): the
+    /// capture's when replaying, else this host's (macOS: a login shell of the account).
+    fn execution(&self) -> Vec<std::ffi::OsString> {
+        crate::system::System::prefix()
+    }
     /// Native entropy only; capture/replay preserves the returned bytes.
     fn random(&mut self, _bytes: &mut [u8]) -> io::Result<()> {
         Err(io::ErrorKind::Unsupported.into())
@@ -695,9 +750,10 @@ pub struct State {
     /// the model id. c1654cc ChatModelPicker.swift:74-115.
     pub model_label: Option<String>,
     pub effort: Option<String>,
-    /// c1654cc ChatUsage JSON: {info:{total_token_usage:{input_tokens,output_tokens},last_token_usage:{total_tokens},model_context_window,total_cost_usd}}; missing counters remain absent.
-    pub usage: Option<String>,
-    pub goal: Option<String>,
+    /// c1654cc ChatUsage: {info:{total_token_usage:{input_tokens,output_tokens},last_token_usage:{total_tokens},model_context_window,total_cost_usd}}; missing counters remain absent.
+    pub usage: Option<crate::wire::body::Encoded>,
+    /// The harness's goal {objective, status, tokensUsed, timeUsedSeconds, tokenBudget?}; None: no goal.
+    pub goal: Option<crate::wire::body::Encoded>,
     pub draft: Option<String>,
     pub attention: Option<String>,
     /// Selected native transcript entry; c1654cc ChatCoordinator.swift:846.

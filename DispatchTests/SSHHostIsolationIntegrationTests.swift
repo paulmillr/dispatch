@@ -6,9 +6,8 @@ import XCTest
 @MainActor
 final class SSHHostIsolationIntegrationTests: XCTestCase {
     func testDistinctAuthenticatedHostsIsolateCollidingHerdrAndCodexIdentities() async throws {
-        let profile = try JSONDecoder().decode(SSHLinuxTestProfile.self, from: Data(contentsOf:
-            SSHLinuxTestProfile.configurationURL()))
-        let root = URL(fileURLWithPath: "/private/tmp/hhi-" + UUID().uuidString.prefix(8)), state = root.appendingPathComponent("state")
+        let profile = try SSHLinuxTestProfile.load()
+        let root = URL(fileURLWithPath: "/private/tmp/hhi-" + System.uuid().uuidString.prefix(8)), state = root.appendingPathComponent("state")
         let fixture = try CodexEndpointFixture(prefix: "unused", delay: 0.01, hooks: false, state: state)
         var passed = false
         defer {
@@ -102,7 +101,7 @@ final class SSHHostIsolationIntegrationTests: XCTestCase {
             let packed = try await SSHCommand.run(executable: "/usr/bin/tar", arguments: ["-cf", archive.path, "-C", state.path, "."])
             XCTAssertEqual(packed.status, 0)
             stage = "copy seed conversation to Linux"
-            try await remote(["/bin/tar", "-xf", "-", "-C", state.path], input: Data(contentsOf: archive))
+            try await remote(["/bin/tar", "-xf", "-", "-C", state.path], input: System.read(archive))
             stage = "copy and start Linux model fixture"
             let script = root.appendingPathComponent("codex_fixture.py").path
             for name in CodexTestSupport.scripts {
@@ -138,7 +137,7 @@ final class SSHHostIsolationIntegrationTests: XCTestCase {
             XCTAssertEqual(linuxSession.transcriptPath, transcript, "Identical paths must still resolve through each host's connection")
             XCTAssertNotEqual(macSession.remoteAgent?.key, linuxSession.remoteAgent?.key)
             stage = "verify independent histories and source previews"
-            let macMarker = "MAC_ONLY_" + UUID().uuidString, linuxMarker = "LINUX_ONLY_" + UUID().uuidString
+            let macMarker = "MAC_ONLY_" + System.uuid().uuidString, linuxMarker = "LINUX_ONLY_" + System.uuid().uuidString
             for (session, prompt) in [(macSession, macMarker), (linuxSession, linuxMarker)] {
                 app.workspace.selectSurface(session.id); runtime.chat.chooseChat(true, session: session)
                 session.draft = prompt; runtime.chat.submit(session)
@@ -150,7 +149,7 @@ final class SSHHostIsolationIntegrationTests: XCTestCase {
             XCTAssertFalse(linuxSession.turns.flatMap(\.items).contains { $0.text.contains(macMarker) })
             let macHelper = try XCTUnwrap(macSession.helper), linuxHelper = try XCTUnwrap(linuxSession.helper)
             let source = state.appendingPathComponent("work/collision.txt")
-            try macMarker.write(to: source, atomically: true, encoding: .utf8)
+            try System.write(Data(macMarker.utf8), to: source)
             try await remote(["/usr/bin/tee", source.path], input: Data(linuxMarker.utf8))
             let preview = ToolDocument(path: "collision.txt", diff: ""), directory = source.deletingLastPathComponent().path
             let localPreview = try await preview.source(in: directory, endpoint: macHelper.endpoint)

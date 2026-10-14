@@ -90,7 +90,7 @@ struct SpaceHoverDetails: Equatable {
         let multiplexer = space.structured
         var directory = !remote && !multiplexer ? tab?.directory : nil
         if !remote, let path = directory {
-            let home = NSHomeDirectory()
+            let home = System.home.path
             if path == home { directory = "~" }
             else if path.hasPrefix(home + "/") { directory = "~" + path.dropFirst(home.count) }
         }

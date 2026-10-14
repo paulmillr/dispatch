@@ -8,7 +8,7 @@ extension PresentationTestSupport {
         // Command results and editor dismissal resize the composer on the next
         // SwiftUI update. Let that layout settle before deriving click coordinates.
         try await Task.sleep(for: .milliseconds(250))
-        let captureID = UUID().uuidString
+        let captureID = System.uuid().uuidString
         let snapshot = try await capture(window, named: "goal-before-opening-" + captureID, in: "chat-command-validation")
         let observations = try snapshot.recognizedText()
         if !observations.contains(where: { $0.topCandidates(1).first?.string.contains("goal") == true }) {

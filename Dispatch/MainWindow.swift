@@ -4,6 +4,8 @@ import Observation
 /// Apply title-bar positioning before a frame is drawn, rather than correcting
 /// native button positions after the window has already displayed an update.
 final class MainWindow: NSWindow {
+    /// Its controller's state (AppDelegate.window sets it): the window's delegate is not always that controller.
+    weak var state: WindowState?
     var titleBarHeight: CGFloat = 38 {
         didSet { if titleBarHeight != oldValue { alignWindowControls() } }
     }

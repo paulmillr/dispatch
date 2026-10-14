@@ -6,7 +6,7 @@ import XCTest
 @MainActor
 final class SSHConnectionStateTests: XCTestCase {
     func testRecoveryEndsWhenItsTerminalClosesBeforeTheAppReplies() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = System.temporary.appendingPathComponent(System.uuid().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         for parked in [false, true] {
@@ -15,7 +15,7 @@ final class SSHConnectionStateTests: XCTestCase {
             guard master >= 0, slave >= 0 else { return }
             defer { Darwin.close(slave) }
             Darwin.close(master)
-            let id = SSHConnectionID(), credential = UUID().uuidString
+            let id = SSHConnectionID(), credential = System.uuid().uuidString
             let reply = root.appendingPathComponent(id.rawValue.uuidString + ".sshresume")
             if parked {
                 try JSONEncoder().encode(SSHResumeDecision(credential: credential, waiting: true)).write(to: reply, options: .atomic)
@@ -37,11 +37,11 @@ final class SSHConnectionStateTests: XCTestCase {
     }
 
     func testRetirementCancelsOnlyItsOwnWorkAndKeepsCleanupAwaitable() async throws {
-        let origin = UUID()
+        let origin = System.uuid()
         func owner() -> SSHConnectionState {
             let id = SSHConnectionID()
             return SSHConnectionState(request: .init(tabID: origin, token: "fixture", connectionID: id,
-                credential: UUID().uuidString,
+                credential: System.uuid().uuidString,
                 master: .init(executable: "/usr/bin/ssh", controlPath: "/unused/" + id.rawValue.uuidString, destination: "fixture"),
                 shell: .init(destination: "fixture")))
         }
@@ -115,7 +115,7 @@ final class SSHConnectionLifetimeTests: XCTestCase {
         let processFile = server.root.appendingPathComponent("native-pid")
         TerminalTestSupport.send("printf '%s\\n' $$ > " + HerdrLaunch.quote(processFile.path) + "; printf 'NATIVE_%s\\n' BEFORE", to: native)
         try await app.wait { TerminalTestSupport.screen(terminal: native).contains("NATIVE_BEFORE") }
-        let pid = try XCTUnwrap(Int32(try String(contentsOf: processFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)))
+        let pid = try XCTUnwrap(Int32(try String(decoding: try System.read(processFile), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)))
         let process = try XCTUnwrap(AgentProcess.capture(pid))
 
         if closeOrigin {
@@ -138,7 +138,7 @@ final class SSHConnectionLifetimeTests: XCTestCase {
                       "Origin exit and reuse must preserve the retained connection's exact renderer surface")
         XCTAssertEqual(app.runtime.link(of: nativeID)?.launch.connectionID, connection.launch.connectionID)
         XCTAssertNotNil(app.runtime.ssh.links[connection.launch.connectionID])
-        XCTAssertTrue(FileManager.default.fileExists(atPath: connection.launch.master.controlPath))
+        XCTAssertTrue(System.exists(URL(fileURLWithPath: connection.launch.master.controlPath)))
         XCTAssertEqual(app.workspace.current?.remote, endpoint)
         TerminalTestSupport.send("printf 'NATIVE_%s\\n' AFTER", to: native)
         try await TestSupport.eventually(timeout: .seconds(10), diagnostic: TerminalTestSupport.screen(terminal: native)) {
@@ -204,8 +204,8 @@ final class SSHConnectionLifetimeTests: XCTestCase {
         let folder = URL(fileURLWithPath: connection.launch.master.controlPath).deletingLastPathComponent().path
         try await TestSupport.eventually(timeout: .seconds(15)) {
             app.runtime.ssh.links[connection.launch.connectionID] == nil &&
-                !FileManager.default.fileExists(atPath: connection.launch.master.controlPath) &&
-                !FileManager.default.fileExists(atPath: folder)
+                !System.exists(URL(fileURLWithPath: connection.launch.master.controlPath)) &&
+                !System.exists(URL(fileURLWithPath: folder))
         }
     }
 }

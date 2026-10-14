@@ -4,7 +4,7 @@ import XCTest
 final class SSHIntegrationPolicyTests: XCTestCase {
     @MainActor
     func testAgentSetupChoicesPersistBothAnswersWithoutTreatingAbsenceAsRefusal() async throws {
-        let name = "SSHAgentSetupTests." + UUID().uuidString
+        let name = "SSHAgentSetupTests." + System.uuid().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
         defer { defaults.removePersistentDomain(forName: name) }
         let store = SSHIntegrationPermissions(defaults: defaults), target = scope()
@@ -128,7 +128,7 @@ final class SSHIntegrationPolicyTests: XCTestCase {
 
     @MainActor
     func testNativeSSHClonesReusePersistedConsentWithoutDuplicatingForwarding() async throws {
-        let suite = "SSHCloneConsentTests." + UUID().uuidString
+        let suite = "SSHCloneConsentTests." + System.uuid().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         for forwarding in [[], ["-L", "19001:localhost:22", "-R", "19002:localhost:22", "-D", "19003"]] {
@@ -173,15 +173,15 @@ final class SSHIntegrationPolicyTests: XCTestCase {
 
     func testConfigurationReplayDoesNotLaunchSSH() throws {
         let configuration = "hostname example.invalid\nuser dispatch-test\n"
-        let bytes = try AppReplay.query(kind: "fixture.ssh.configuration", input: Data()) {
-            let directory = Home.url.appendingPathComponent("ssh-configuration-" + UUID().uuidString)
+        let bytes = try AppReplay.query(kind: "fixture.ssh.configuration", input: .null) {
+            let directory = System.home.appendingPathComponent("ssh-configuration-" + System.uuid().uuidString)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             let executable = directory.appendingPathComponent("ssh")
             try Data(("#!/bin/sh\nprintf '%s\\n' 'hostname example.invalid' 'user dispatch-test'\n").utf8).write(to: executable)
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
-            return try JSONEncoder().encode(directory.path)
+            return .string(directory.path)
         }
-        let directory = URL(fileURLWithPath: try JSONDecoder().decode(String.self, from: bytes))
+        let directory = URL(fileURLWithPath: try AppReplay.decode(String.self, bytes))
         defer { if !AppReplay.replaying { try? FileManager.default.removeItem(at: directory) } }
         let executable = directory.appendingPathComponent("ssh")
         if AppReplay.replaying { XCTAssertFalse(FileManager.default.fileExists(atPath: executable.path)) }
@@ -344,7 +344,7 @@ final class SSHIntegrationPolicyTests: XCTestCase {
 
     @MainActor
     func testPersistenceIsSeparateFromHostRegistry() {
-        let name = "SSHIntegrationPolicyTests." + UUID().uuidString
+        let name = "SSHIntegrationPolicyTests." + System.uuid().uuidString
         let defaults = UserDefaults(suiteName: name)!
         defer { defaults.removePersistentDomain(forName: name) }
         let store = SSHIntegrationPermissions(defaults: defaults)
@@ -355,7 +355,7 @@ final class SSHIntegrationPolicyTests: XCTestCase {
 
     @MainActor
     func testResetForgetsOnlyTheSelectedScopeAndPublishesRevocation() throws {
-        let name = "SSHResetTests." + UUID().uuidString
+        let name = "SSHResetTests." + System.uuid().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
         defer { defaults.removePersistentDomain(forName: name) }
         let store = SSHIntegrationPermissions(defaults: defaults), target = scope(), other = scope(user: "bob")
@@ -392,7 +392,7 @@ final class SSHIntegrationPolicyTests: XCTestCase {
 
     @MainActor
     func testResetAllClearsEveryHostAndAccountPersistsAndRevokesLiveGrants() throws {
-        let name = "SSHResetAllTests." + UUID().uuidString
+        let name = "SSHResetAllTests." + System.uuid().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
         defer { defaults.removePersistentDomain(forName: name) }
         let store = SSHIntegrationPermissions(defaults: defaults)

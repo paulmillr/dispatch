@@ -120,22 +120,23 @@ impl Config {
     /// and resolves socket aliases through System before registering the endpoint.
     pub fn client(
         process: &Process,
-        facts: &Json,
-        environment: &Json,
+        facts: &Encoded,
+        environment: &Encoded,
         account: (u32, &Path),
     ) -> Result<Option<Self>, Error> {
         Self::context(process, facts, environment, account, false)
     }
 
-    pub(super) fn context(process: &Process, facts: &Json, environment: &Json, account: (u32, &Path), typed: bool) -> Result<Option<Self>, Error> {
-        let observed = process::read(facts.root())?;
+    pub(super) fn context(process: &Process, facts: &Encoded, environment: &Encoded, account: (u32, &Path), typed: bool) -> Result<Option<Self>, Error> {
+        let facts = facts.root();
+        let observed = Process::read(&facts).ok_or_else(|| error("Invalid process field."))?;
         if !process::same(process, &observed)
             || process.tty == 0
             || process.tty != observed.tty
             || process.group != observed.group
             || process.foreground != observed.foreground
             || process.arguments != observed.arguments
-            || facts.root().get("uid").and_then(Value::unsigned) != Some(account.0.into())
+            || facts.get("uid").and_then(D::unsigned) != Some(account.0.into())
         {
             return Err(error("The herdr client changed."));
         }
@@ -146,9 +147,11 @@ impl Config {
             .root()
             .object()
             .ok_or_else(|| error("Herdr launch context is missing."))?
+            // Environment values are bytes; a herdr launch needs UTF-8 ones.
             .map(|(key, value)| {
                 value
-                    .string()
+                    .bytes()
+                    .and_then(|value| std::str::from_utf8(value).ok())
                     .map(|value| (key.to_owned(), value.to_owned()))
                     .ok_or_else(|| error("Herdr launch context is missing."))
             })
@@ -178,7 +181,7 @@ impl Config {
         {
             return Err(error("Invalid herdr session name."));
         }
-        let directory = PathBuf::from(text(facts.root(), "cwd")?);
+        let directory = facts.get("cwd").and_then(D::path).map(PathBuf::from).ok_or_else(|| error("Invalid herdr field cwd."))?;
         if !directory.is_absolute() {
             return Err(error("Herdr launch context is missing."));
         }

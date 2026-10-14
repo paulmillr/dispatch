@@ -101,7 +101,7 @@ final class TmuxEdgeCaseTests: XCTestCase {
 
     func testRestoreAllKeepsOtherServersPendingEntryWithSamePaneNumber() async throws {
         let app = try TmuxWalkthrough(); defer { app.close() }
-        let other = "dispatch-other-\(UUID().uuidString)"
+        let other = "dispatch-other-\(System.uuid().uuidString)"
         defer { _ = try? app.server(["-L", other, "kill-server"]) }
         _ = try app.server(["new-window", "-d", "/bin/sh"])
         try await app.attach(); try await app.ready()
@@ -116,17 +116,17 @@ final class TmuxEdgeCaseTests: XCTestCase {
         // The other server's control client goes away (a lost connection).
         let client = try XCTUnwrap(try app.server(["-L", other, "list-clients", "-F", "#{client_control_mode} #{client_pid}"])
             .split(separator: "\n").first { $0.hasPrefix("1 ") }.flatMap { pid_t($0.dropFirst(2)) })
-        XCTAssertEqual(kill(client, SIGKILL), 0)
+        XCTAssertEqual(System.signal(client, SIGKILL), 0)
         // Its server answers the reopen only after the first restore: that work stays pending meanwhile.
         let server = try XCTUnwrap(pid_t(try app.server(["-L", other, "display-message", "-p", "#{pid}"]).trimmingCharacters(in: .whitespacesAndNewlines)))
-        XCTAssertEqual(kill(server, SIGSTOP), 0)
-        defer { kill(server, SIGCONT) }
+        XCTAssertEqual(System.signal(server, SIGSTOP), 0)
+        defer { _ = System.signal(server, SIGCONT) }
         app.workspace.restoreDetached([first.id, second.id])
         XCTAssertTrue(app.workspace.isRestoringDetached(second.id))
         try await app.wait { !app.workspace.detached.contains { $0.id == first.id } }
         XCTAssertTrue(app.workspace.detached.contains { $0.id == second.id }, "Restoring a different server's same-numbered pane must not remove pending work")
         XCTAssertTrue(app.workspace.isRestoringDetached(second.id))
-        XCTAssertEqual(kill(server, SIGCONT), 0)
+        XCTAssertEqual(System.signal(server, SIGCONT), 0)
         // The lost control client's server reopens and shows its work again.
         try await app.wait { !app.workspace.isRestoringDetached(second.id) && app.workspace.spaces.filter(\.structured).count == 2 }
         XCTAssertFalse(app.workspace.detached.contains { $0.id == second.id })
@@ -293,11 +293,11 @@ final class TmuxEdgeCaseTests: XCTestCase {
         let requested = try XCTUnwrap(entries.first), forgotten = try XCTUnwrap(entries.last)
         let unavailableSocket = socket + ".restore-test"
         defer {
-            if FileManager.default.fileExists(atPath: unavailableSocket) {
-                try? FileManager.default.moveItem(atPath: unavailableSocket, toPath: socket)
+            if System.exists(URL(fileURLWithPath: unavailableSocket)) {
+                try? System.move(URL(fileURLWithPath: unavailableSocket), to: URL(fileURLWithPath: socket))
             }
         }
-        if failAndRetry { try FileManager.default.moveItem(atPath: socket, toPath: unavailableSocket) }
+        if failAndRetry { try System.move(URL(fileURLWithPath: socket), to: URL(fileURLWithPath: unavailableSocket)) }
         app.workspace.restoreDetached([requested.entry.id])
         // Both actions occur before the new control client can attach.
         if restoreSecond {
@@ -319,7 +319,7 @@ final class TmuxEdgeCaseTests: XCTestCase {
             let launcher = try XCTUnwrap(app.workspace.current?.id)
             try await app.wait { !app.workspace.isRestoringDetached(requested.entry.id) && app.error != nil }
             XCTAssertTrue(app.workspace.detached.contains { $0.id == requested.entry.id })
-            try FileManager.default.moveItem(atPath: unavailableSocket, toPath: socket)
+            try System.move(URL(fileURLWithPath: unavailableSocket), to: URL(fileURLWithPath: socket))
             app.controller.closeSpace(launcher)
             app.workspace.restoreDetached([requested.entry.id])
         }
@@ -662,7 +662,7 @@ final class TmuxEdgeCaseTests: XCTestCase {
         XCTAssertEqual(restored.windows.map { app.target($0) }, ["@2", "@1"])
         XCTAssertEqual(restored.windows.first?.name, "Window | 雪")
         XCTAssertEqual(try app.server(["list-panes", "-a", "-F", "#{pane_id}|#{pane_pid}|#{window_id}"]), processes)
-        let external = TmuxSpaceAffinity(group: UUID(), name: "External grouping", order: 0, usesDirectoryName: false)
+        let external = TmuxSpaceAffinity(group: System.uuid(), name: "External grouping", order: 0, usesDirectoryName: false)
         _ = try app.server(["set-option", "-w", "-t", "@2", TmuxSpaceAffinity.option, external.encoded])
         try await app.wait { app.workspace.spaces.contains { $0.name == external.name && $0.windows.map { app.target($0) } == ["@2"] } }
         _ = try app.server(["kill-window", "-t", "@1"])
@@ -859,7 +859,7 @@ struct TmuxSpaceAffinity: Codable {
     var order: Int
     var usesDirectoryName: Bool? = true
 
-    var encoded: String { (try? JSONEncoder().encode(self).base64EncodedString()) ?? "" }
+    var encoded: String { String(decoding: (try? JSONEncoder().encode(self)) ?? Data(), as: UTF8.self) }
 }
 
 /// A real PTY/control client and native window, isolated from the user's server.
@@ -877,7 +877,7 @@ final class TmuxWalkthrough {
     /// `liquidGlass` defaults to the app's own default. Walkthroughs that read the window through offscreen
     /// captures turn it off: those captures cannot draw Liquid Glass.
     init(autoClose: Bool = false, server: Bool = true, liquidGlass: Bool = Preferences().liquidGlass) throws {
-        socket = try TestSupport.fixture("tmux.socket", input: Data()) { "dispatch-edge-test-\(UUID().uuidString)" }
+        socket = try TestSupport.fixture("tmux.socket", input: Data()) { "dispatch-edge-test-\(System.uuid().uuidString)" }
         try DesktopTestSupport.requireUnlocked()
         guard FileManager.default.isExecutableFile(atPath: TestSupport.tool("tmux")) else { throw XCTSkip("Requires tmux") }
         window = MainWindow(contentRect: NSRect(x: 0, y: 0, width: 1120, height: 740),
@@ -914,18 +914,16 @@ final class TmuxWalkthrough {
         process.executableURL = URL(fileURLWithPath: TestSupport.tool("tmux"))
         process.arguments = ["-u", "-L", socket] + arguments
         process.standardOutput = output; process.standardError = error
-        var environment = ProcessInfo.processInfo.environment
+        var environment = System.inherited
         environment.removeValue(forKey: "TMUX"); process.environment = environment
-        return String(decoding: try AppReplay.query(kind: "fixture.tmux.command", input: JSONEncoder().encode(AppReplay.Launch(process))) {
-            try process.run()
-            let data = output.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-            guard process.terminationStatus == 0 else {
-                throw NSError(domain: "TmuxWalkthrough", code: Int(process.terminationStatus), userInfo: [NSLocalizedDescriptionKey:
+        return String(decoding: AppReplay.bytes(try AppReplay.query(kind: "fixture.tmux.command", input: AppReplay.value(AppReplay.Launch(process))) {
+            let exit = try TestSupport.live(process)
+            guard exit.status == 0 else {
+                throw NSError(domain: "TmuxWalkthrough", code: Int(exit.status), userInfo: [NSLocalizedDescriptionKey:
                     arguments.joined(separator: " ") + ": " + String(decoding: error.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)])
             }
-            return data
-        }, as: UTF8.self)
+            return .bytes(exit.output)
+        }), as: UTF8.self)
     }
 
     /// From now on, whether any turn that changed the sidebar ended with it shown: the state the window draws next.
@@ -966,29 +964,27 @@ final class TmuxWalkthrough {
         let client = try XCTUnwrap(try self.server(["list-clients", "-F", "#{client_control_mode} #{client_pid}"])
             .split(separator: "\n").first { $0.hasPrefix("1 ") }.flatMap { pid_t($0.dropFirst(2)) })
         stalled = (server, client)
-        XCTAssertEqual(kill(server, SIGSTOP), 0)
+        XCTAssertEqual(System.signal(server, SIGSTOP), 0)
     }
 
     func resume() {
-        if let stalled { kill(stalled.server, SIGCONT) }
+        if let stalled { System.signal(stalled.server, SIGCONT) }
     }
 
     /// A lost connection: the SSH client when attached over SSH (the connection that can go offline
     /// and come back), otherwise the control client itself.
     func disconnect() throws {
         guard ssh != nil else {
-            XCTAssertEqual(kill(try XCTUnwrap(stalled).client, SIGKILL), 0)
+            XCTAssertEqual(System.signal(try XCTUnwrap(stalled).client, SIGKILL), 0)
             return
         }
-        let pgrep = Process(), output = Pipe()
+        let pgrep = Process()
         pgrep.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
         pgrep.arguments = ["-f", "^/usr/bin/ssh .*" + socket]
-        pgrep.standardOutput = output
-        try pgrep.run(); pgrep.waitUntilExit()
-        let pids = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        let pids = String(decoding: try System.run(pgrep).output, as: UTF8.self)
             .split(separator: "\n").compactMap { pid_t($0) }
         XCTAssertFalse(pids.isEmpty, "No SSH client for this test's tmux")
-        for pid in pids { kill(pid, SIGKILL) }
+        for pid in pids { System.signal(pid, SIGKILL) }
     }
 
     private var ssh: SSHTestServer?
@@ -1004,8 +1000,8 @@ final class TmuxWalkthrough {
 
     func crash() throws {
         let stalled = try XCTUnwrap(stalled)
-        XCTAssertEqual(kill(stalled.server, SIGKILL), 0)
-        kill(stalled.server, SIGCONT)
+        XCTAssertEqual(System.signal(stalled.server, SIGKILL), 0)
+        System.signal(stalled.server, SIGCONT)
         self.stalled = nil
     }
 
@@ -1080,9 +1076,22 @@ final class TmuxWalkthrough {
         return surface.readText(.viewport)
     }
 
+    /// Ending tmux control mode over SSH ends that SSH session and closes its origin terminal through the helper (the
+    /// launcher is retired with its tmux): a test that ends it waits until that close was answered, never stopping the
+    /// app while the app's reaction is in flight (whether it ran before the stop would depend on timing).
+    func settleControlExit(file: StaticString = #filePath, line: UInt = #line) async throws {
+        try await TestSupport.eventually(timeout: .seconds(15), file: file, line: line) {
+            runtime.ssh.links.isEmpty && runtime.helpers.values.allSatisfy { $0.operations == 0 }
+        }
+    }
+
     func wait(file: StaticString = #filePath, line: UInt = #line, _ condition: () async -> Bool) async throws {
         try await TestSupport.eventually(timeout: .seconds(5), interval: .milliseconds(25), file: file, line: line,
-            diagnostic: "tmux walkthrough: \(runtime.helpers[.local]?.error ?? "No helper error")", condition)
+            diagnostic: "tmux walkthrough: \(runtime.helpers[.local]?.error ?? "No helper error"); active \(workspace.activeSurfaceID.map { String($0.uuidString.prefix(8)) } ?? "none"); views "
+                + runtime.views.map { "\($0.key.uuidString.prefix(8)) surface=\($0.value.surface != nil) text=\($0.value.surface?.readText(.active).count ?? 0)" }
+                    .sorted().joined(separator: ", ")
+                + "; layout \(workspace.current.map { "\(String(describing: $0.preset)) \($0.layout.paneIDs.count) panes: " + $0.panes.map { pane in pane.activeTab.map { tab in "\(tab.id.uuidString.prefix(8)) in window=\(runtime.views[tab.id]?.window === window)" } ?? "no tab" }.joined(separator: ", ") } ?? "none")",
+            condition)
     }
 
     @discardableResult

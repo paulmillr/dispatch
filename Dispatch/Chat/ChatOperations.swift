@@ -12,7 +12,7 @@ final class ChatOperations {
 
     @discardableResult
     func run(for session: UUID? = nil, _ body: @escaping @MainActor () async -> Void) -> Task<Void, Never> {
-        let id = UUID()
+        let id = System.uuid()
         let task = Task<Void, Never> { [weak self] in
             await body()
             self?.operations.removeValue(forKey: id)

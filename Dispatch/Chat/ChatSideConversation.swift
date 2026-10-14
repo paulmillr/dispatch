@@ -29,7 +29,7 @@ final class ChatSideConversation: Identifiable {
         let user: Bool
         var text: String
     }
-    let id = UUID()
+    let id = System.uuid()
     let mode: ChatSideMode
     let parentID: String
     let agentID: String
@@ -117,7 +117,7 @@ final class ChatSideConversation: Identifiable {
 extension ChatSideConversation {
     func start(helper parent: HelperChat, question: String) {
         self.parent = parent
-        messages.append(.init(id: "pending-" + UUID().uuidString, user: true, text: question))
+        messages.append(.init(id: "pending-" + System.uuid().uuidString, user: true, text: question))
         busy = true
         task = Task { [weak self] in
             guard let self else { return }
@@ -182,7 +182,7 @@ extension ChatSideConversation {
         guard ready, !busy, !hasQuestions, !closed, let helper else { return }
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, text.utf8.count <= 1_048_576 else { return }
-        messages.append(.init(id: "pending-" + UUID().uuidString, user: true, text: text))
+        messages.append(.init(id: "pending-" + System.uuid().uuidString, user: true, text: text))
         draft = ""; draftMultiline = false; draftSelection = NSRange(location: 0, length: 0)
         busy = true; failure = nil
         var input = HelperChat.Input(helper.route)
@@ -200,7 +200,7 @@ extension ChatSideConversation {
         input.interaction = question.id
         input.answers = skip ? Dictionary(uniqueKeysWithValues: question.questions.map { ($0.id, .skip) }) : question.answers
         question.submitted = true
-        messages.append(.init(id: UUID().uuidString, user: true, text: question.summary(skip: skip)))
+        messages.append(.init(id: System.uuid().uuidString, user: true, text: question.summary(skip: skip)))
         question.clearAnswers()
         call("interactions.answer", input)
     }
@@ -239,6 +239,6 @@ extension ChatCoordinator {
 
     func closeSideConversation(_ session: ChatSession) {
         session.sideConversation?.close(); session.sideConversation = nil
-        session.focusRequest = UUID()
+        session.focusRequest = System.uuid()
     }
 }

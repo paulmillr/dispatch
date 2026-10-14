@@ -65,7 +65,7 @@ enum NativeSSHEnvironment {
     static func variables(directory: URL, inheriting environment: [String: String],
                           functions: [ShellCommandWrapper] = [.ssh]) -> [String: String] {
         let root = directory.appendingPathComponent("native").path
-        let original = environment["DISPATCH_NATIVE_ZDOTDIR"] ?? environment["GHOSTTY_ZSH_ZDOTDIR"] ?? environment["ZDOTDIR"] ?? environment["HOME"] ?? NSHomeDirectory()
+        let original = environment["DISPATCH_NATIVE_ZDOTDIR"] ?? environment["GHOSTTY_ZSH_ZDOTDIR"] ?? environment["ZDOTDIR"] ?? environment["HOME"] ?? System.home.path
         var variables = ["DISPATCH_NATIVE_STARTUP": root, "DISPATCH_NATIVE_ZDOTDIR": original,
                 "ZDOTDIR": root + "/zsh",
                 "XDG_DATA_DIRS": root + "/share:" + (environment["XDG_DATA_DIRS"] ?? "/usr/local/share:/usr/share")]

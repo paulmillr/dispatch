@@ -9,7 +9,7 @@ final class ChatPresentationTests: XCTestCase {
         try DesktopTestSupport.requireUnlocked(); AppFont.register()
         let coordinator = ChatCoordinator(enabled: false, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
         defer { coordinator.stop() }
-        let session = coordinator.session(for: UUID())
+        let session = coordinator.session(for: System.uuid())
         session.sessionID = "legacy-tmux"; session.active = true; session.showChat = true
         session.helper = HelperChat(terminal: 0); session.draft = "Preserved draft"
         coordinator.receiveHelper(.records([.init(id: "compatibility", turn: "connection", kind: "notice",
@@ -126,9 +126,9 @@ final class ChatPresentationTests: XCTestCase {
         try DesktopTestSupport.requireUnlocked(); AppFont.register()
         let coordinator = ChatCoordinator(enabled: false, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
         defer { coordinator.stop() }
-        let session = coordinator.session(for: UUID())
+        let session = coordinator.session(for: System.uuid())
         session.sessionID = "new-messages-pill"; session.showChat = true; session.active = true
-        session.setPresented(true, by: UUID())
+        session.setPresented(true, by: System.uuid())
         session.turns = (0..<30).map { index in
             ChatTurn(id: "turn-\(index)", items: [.init(id: "answer-\(index)", kind: .assistant,
                 text: "Earlier answer \(index)\n\n" + String(repeating: "Transcript content stays in place.\n\n", count: 3))])
@@ -212,7 +212,7 @@ final class ChatPresentationTests: XCTestCase {
         ChatThemeStore.shared.current = .standard
         let coordinator = ChatCoordinator(enabled: false, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
         defer { coordinator.stop() }
-        let session = coordinator.session(for: UUID())
+        let session = coordinator.session(for: System.uuid())
         session.sessionID = "compact-composer"; session.active = true; session.showChat = true
         session.agentID = "codex"; session.model = "gpt-6-astra"; session.effort = "high"
         session.draft = "Ready to send"
@@ -302,14 +302,14 @@ final class ChatPresentationTests: XCTestCase {
 
     func testComposerFooterStatesShortcutsAndFirstQueueTip() async throws {
         try DesktopTestSupport.requireUnlocked(); AppFont.register()
-        let domain = "dispatch-queue-tip-" + UUID().uuidString, tips = try XCTUnwrap(UserDefaults(suiteName: domain))
+        let domain = "dispatch-queue-tip-" + System.uuid().uuidString, tips = try XCTUnwrap(UserDefaults(suiteName: domain))
         defer { tips.removePersistentDomain(forName: domain) }
         let coordinator = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()), defaults: tips)
         defer { coordinator.stop() }
-        let session = coordinator.session(for: UUID())
+        let session = coordinator.session(for: System.uuid())
         session.sessionID = "footer-states"; session.active = true; session.showChat = true
         session.model = "gpt-6-astra"; session.effort = "high"
-        session.process = try XCTUnwrap(AgentProcess.capture(getpid()))
+        session.process = try XCTUnwrap(AgentProcess.capture(System.pid))
         // Queueing belongs to a helper chat; terminal 0 is no helper terminal (only the app's queue state is shown).
         session.helper = HelperChat(terminal: 0)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 400),
@@ -388,7 +388,7 @@ final class ChatPresentationTests: XCTestCase {
     func testLiveDiffLineArrivalsKeepScrollPositionAndSourceStable() async throws {
         try DesktopTestSupport.requireUnlocked(); AppFont.register()
         let state = CodeDocumentState()
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let directory = System.temporary.appendingPathComponent(System.uuid().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         try "let source = true\n".write(to: directory.appendingPathComponent("fixture.swift"), atomically: true, encoding: .utf8)
@@ -447,7 +447,7 @@ final class ChatPresentationTests: XCTestCase {
         defer { ChatThemeStore.shared.current = previousTheme }
         let chat = ChatCoordinator(enabled: false, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
         defer { chat.stop() }
-        let session = chat.session(for: UUID())
+        let session = chat.session(for: System.uuid())
         session.sessionID = "large-font"; session.active = true; session.showChat = true
         session.draft = "A large draft wraps across this narrow pane"
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 220),
@@ -522,7 +522,7 @@ final class ChatPresentationTests: XCTestCase {
         try DesktopTestSupport.requireUnlocked(); AppFont.register()
         let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
         defer { chat.stop() }
-        let session = chat.session(for: UUID())
+        let session = chat.session(for: System.uuid())
         session.sessionID = "attention-ui"; session.active = true
         chat.chooseChat(true, session: session)
         session.draft = "My unfinished thought"
@@ -558,7 +558,7 @@ final class ChatPresentationTests: XCTestCase {
         theme.keyword = Color(red: 1, green: 0, blue: 1)
         ChatThemeStore.shared.current = theme
         let chat = ChatCoordinator(enabled: false, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
-        let session = chat.session(for: UUID())
+        let session = chat.session(for: System.uuid())
         session.sessionID = "user-markdown"; session.active = true; session.showChat = true
         session.insert(ChatItem(id: "user-markdown", kind: .user,
             text: "# Message heading\n\n**Important** and `inline`.\n\n```swift\nlet amount = 42\n```\n\n- First entry"), turnID: "turn")
@@ -595,7 +595,7 @@ final class ChatPresentationTests: XCTestCase {
         defer { ChatThemeStore.shared.current = previous }
         ChatThemeStore.shared.current = .standard
         let chat = ChatCoordinator(enabled: false, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
-        let session = chat.session(for: UUID())
+        let session = chat.session(for: System.uuid())
         session.sessionID = "switch-font"; session.active = true
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 240, height: 48), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -627,7 +627,7 @@ final class ChatPresentationTests: XCTestCase {
         XCTAssertNil(runtime.error)
         let coordinator = ChatCoordinator(enabled: false)
         defer { coordinator.stop() }
-        let session = coordinator.session(for: UUID())
+        let session = coordinator.session(for: System.uuid())
         session.sessionID = "theme-test"; session.active = true; session.showChat = true
         session.draft = "A draft survives theme changes"
         session.turns = [.init(id: "turn", items: [
@@ -698,7 +698,7 @@ final class ChatPresentationTests: XCTestCase {
         try DesktopTestSupport.requireUnlocked()
         AppFont.register()
         let coordinator = ChatCoordinator(enabled: false)
-        let session = coordinator.session(for: UUID())
+        let session = coordinator.session(for: System.uuid())
         session.sessionID = "mockup-layout"; session.active = true; session.atBottom = false
         session.model = "gpt-6-astra"; session.effort = "high"
         session.insert(ChatItem(id: "user", kind: .user, text: String(repeating: "User message content ", count: 20)), turnID: "turn")
@@ -736,7 +736,7 @@ final class ChatPresentationTests: XCTestCase {
         SidebarThemeStore.shared.current = .dark
         let coordinator = ChatCoordinator(enabled: false)
         defer { coordinator.stop() }
-        let session = coordinator.session(for: UUID())
+        let session = coordinator.session(for: System.uuid())
         session.sessionID = "live-patch"; session.active = true; session.showChat = true
         session.busy = true; session.activeTurnID = "turn"; session.atBottom = false
         session.turns = [.init(id: "turn", items: [
@@ -823,8 +823,8 @@ final class ChatPresentationTests: XCTestCase {
     func testSixNativeChatStatesAndKeyboardComposer() async throws {
         try DesktopTestSupport.requireUnlocked()
         let coordinator = ChatCoordinator(enabled: true)
-        let session = coordinator.session(for: UUID())
-        session.sessionID = UUID().uuidString; session.version = "0.153.2"
+        let session = coordinator.session(for: System.uuid())
+        session.sessionID = System.uuid().uuidString; session.version = "0.153.2"
         session.active = true; session.showChat = true; session.model = "test-model"
         let date = Date().addingTimeInterval(-86)
         session.insert(ChatItem(id: "user", kind: .user, text: "Make billing webhook retries idempotent."), turnID: "turn", at: date)
@@ -884,7 +884,7 @@ final class ChatPresentationTests: XCTestCase {
         let unavailable = try await capture("1e-unavailable")
         // The blinking caret sits on the placeholder's first letter; match past it.
         XCTAssertTrue(try unavailable.text().contains(coordinator.agents + " in this terminal"), "Without an agent the opened composer says how to start one")
-        session.sessionID = UUID().uuidString; session.turns = retainedTurns; session.active = true
+        session.sessionID = System.uuid().uuidString; session.turns = retainedTurns; session.active = true
         mount(true); try await capture("1f-reduced-chrome")
         XCTAssertNotNil(composer.accessibilityLabel())
     }

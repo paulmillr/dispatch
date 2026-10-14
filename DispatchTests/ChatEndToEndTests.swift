@@ -18,12 +18,9 @@ final class ChatEndToEndTests: XCTestCase {
         seed.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
         seed.arguments = [CodexTestSupport.root.appendingPathComponent("scripts/seed-codex-history.py").path,
                           "--state", fixture.state.path, "--turns", "3", "--paragraphs", "2", "--codex", fixture.binary]
-        seed.standardOutput = FileHandle.nullDevice; seed.standardError = FileHandle.nullDevice
-        try seed.run()
-        defer { if seed.isRunning { seed.terminate() } }
-        try await TestSupport.eventually(timeout: .seconds(30)) { !seed.isRunning }
-        XCTAssertEqual(seed.terminationStatus, 0)
-        let metadata = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: fixture.state.appendingPathComponent("history.json"))) as? [String: Any])
+        seed.standardError = FileHandle.nullDevice
+        XCTAssertEqual(try System.run(seed).status, 0)
+        let metadata = try XCTUnwrap(JSONSerialization.jsonObject(with: System.read(fixture.state.appendingPathComponent("history.json"))) as? [String: Any])
         let conversation = try XCTUnwrap(metadata["session_id"] as? String)
         try await fixture.start(timeout: .seconds(10))
         let runtime = TerminalRuntime.shared, previous = runtime.chat
@@ -76,11 +73,11 @@ final class ChatEndToEndTests: XCTestCase {
                 "display_name": "Dispatch fixture", "supported_reasoning_levels": [["effort": "medium", "description": "Fixture"]],
                 "shell_type": "unified_exec", "visibility": "list", "supported_in_api": true, "priority": 1,
                 "support_verbosity": false, "truncation_policy": ["mode": "bytes", "limit": 10000], "experimental_supported_tools": []]
-            try JSONSerialization.data(withJSONObject: ["models": [model]]).write(to: catalog)
+            try System.write(JSONSerialization.data(withJSONObject: ["models": [model]]), to: catalog)
             let config = state.appendingPathComponent("codex-home/config.toml")
             let encoder = JSONEncoder(); encoder.outputFormatting = .withoutEscapingSlashes
             let setting = String(decoding: try encoder.encode(catalog.path), as: UTF8.self)
-            try ("model_catalog_json = " + setting + "\n" + String(contentsOf: config, encoding: .utf8)).write(to: config, atomically: true, encoding: .utf8)
+            try System.write(Data(("model_catalog_json = " + setting + "\n" + String(decoding: try System.read(config), as: UTF8.self)).utf8), to: config)
         }
         let runtime = TerminalRuntime.shared, controller = AppDelegate()
         let previousChat = runtime.chat
@@ -111,7 +108,7 @@ final class ChatEndToEndTests: XCTestCase {
         key(17, "t", terminal)
         try await eventually { ["Press enter to view hooks", "enter details"].contains { self.screen(terminal).contains($0) } }
         try await eventually {
-            let config = try? String(contentsOf: state.appendingPathComponent("codex-home/config.toml"), encoding: .utf8)
+            let config = try? String(decoding: try System.read(state.appendingPathComponent("codex-home/config.toml")), as: UTF8.self)
             return (config?.components(separatedBy: "trusted_hash").count ?? 0) == 11
         }
         key(53, "\u{1b}", terminal)
@@ -180,7 +177,7 @@ final class ChatEndToEndTests: XCTestCase {
             }
             try await eventually { !session.busy }
             XCTAssertTrue(session.approvals.allSatisfy { $0.decision == .allow })
-            let hooks = try String(contentsOf: state.appendingPathComponent("hooks.jsonl"), encoding: .utf8)
+            let hooks = try String(decoding: try System.read(state.appendingPathComponent("hooks.jsonl")), as: UTF8.self)
                 .split(separator: "\n").compactMap { try JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }
             XCTAssertEqual(hooks.filter { $0["hook_event_name"] as? String == "PermissionRequest" }.count, 2)
             passed = true

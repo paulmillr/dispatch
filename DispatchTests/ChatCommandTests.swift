@@ -46,18 +46,20 @@ final class ChatCommandTests: XCTestCase {
     /// (which thread a transcript event belongs to is the codex harness's history reader).
     func testSettingsAndGoalEventsAreBoundToTheirConversation() throws {
         let coordinator = ChatCoordinator(enabled: true)
-        let session = coordinator.session(for: UUID())
+        let session = coordinator.session(for: System.uuid())
         session.helper = HelperChat(terminal: 0)
-        func state(_ fields: [String: Any]) throws {
-            let data = try JSONSerialization.data(withJSONObject: ["busy": false, "pending": false, "compacting": false].merging(fields) { $1 })
-            coordinator.receiveHelper(.state(try JSONDecoder().decode(HelperChat.State.self, from: data)), session: session)
+        // The helper sends the harness's goal as a value (binary), not as its JSON text.
+        func state(_ fields: [String: HelperBinary.Value]) throws {
+            let value = HelperBinary.Value.object(["busy": .bool(false), "compacting": .bool(false)].merging(fields) { $1 })
+            coordinator.receiveHelper(.state(try HelperBinary.decode(HelperChat.State.self, from: value)), session: session)
         }
-        let goal = #"{"objective":"Finish tests","status":"paused","tokensUsed":15,"timeUsedSeconds":0}"#
-        try state(["model": "test-model", "effort": "high", "goal": goal])
+        let goal = HelperBinary.Value.object(["objective": .string("Finish tests"), "status": .string("paused"),
+                                              "tokensUsed": .unsigned(15), "timeUsedSeconds": .unsigned(0)])
+        try state(["model": .string("test-model"), "effort": .string("high"), "goal": goal])
         XCTAssertEqual(session.model, "test-model"); XCTAssertEqual(session.effort, "high")
         XCTAssertEqual(session.goal?.objective, "Finish tests")
         XCTAssertEqual(session.goal?.status, "paused")
-        try state(["model": "test-model", "effort": "high"])
+        try state(["model": .string("test-model"), "effort": .string("high")])
         XCTAssertNil(session.goal); XCTAssertEqual(session.goalRevision, 2)
     }
 
@@ -65,7 +67,7 @@ final class ChatCommandTests: XCTestCase {
     /// editable, but blocks sending until the terminal is handled.
     func testUnrecognizedConfirmationKeepsChatAndEditableDraft() throws {
         let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
-        let session = chat.session(for: UUID())
+        let session = chat.session(for: System.uuid())
         defer { chat.close(session.id) }
         session.helper = HelperChat(terminal: 0)
         session.active = true
@@ -84,7 +86,7 @@ final class ChatCommandTests: XCTestCase {
 
     func testTransientDialogPreservesPendingCommandOutput() throws {
         let chat = ChatCoordinator(enabled: true)
-        let session = chat.session(for: UUID())
+        let session = chat.session(for: System.uuid())
         defer { chat.close(session.id) }
         session.observedCommand = (title: "/mcp", output: nil)
         session.awaitingPromptAck = true
@@ -106,16 +108,16 @@ final class ChatCommandTests: XCTestCase {
     /// kept for it, the new one starts empty, and messages queued for the old one wait for review.
     func testClearPreservesTargetAndPreviousConversationDraftButPausesOldQueue() throws {
         let coordinator = ChatCoordinator(enabled: true)
-        let session = coordinator.session(for: UUID())
+        let session = coordinator.session(for: System.uuid())
         session.helper = HelperChat(terminal: 0)
-        let process = try XCTUnwrap(AgentProcess.capture(getpid()))
+        let process = try XCTUnwrap(AgentProcess.capture(System.pid))
         session.process = process
-        session.active = true; session.sessionID = UUID().uuidString
+        session.active = true; session.sessionID = System.uuid().uuidString
         session.draft = "next draft"; session.showChat = true
         let previousScope = session.drafts.scope
         session.queuedMessages = [.init(text: "old queued message", process: process)]
         session.insert(.init(id: "old", kind: .assistant, text: "Old response"), turnID: "old")
-        let newID = UUID().uuidString
+        let newID = System.uuid().uuidString
         let binding: [String: Any] = ["session": newID, "transcript": NSNull(), "pid": process.pid,
                                       "start": [process.startedSeconds, process.startedMicroseconds], "executable": process.executable]
         let history: [String: Any] = ["terminal": 0, "binding": binding, "session": newID, "key": "codex", "label": "Codex",
@@ -130,13 +132,13 @@ final class ChatCommandTests: XCTestCase {
         XCTAssertFalse(session.busy); XCTAssertFalse(session.awaitingPromptAck)
     }
     func testReviewChildActivityCompletesWithTheParent() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let directory = System.temporary.appendingPathComponent(System.uuid().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let path = directory.appendingPathComponent("review.jsonl")
         let helper = HelperChat(archive: .init(key: "codex", path: path.path, session: "session"))
         let coordinator = ChatCoordinator(enabled: false)
-        let session = coordinator.session(for: UUID())
+        let session = coordinator.session(for: System.uuid())
         defer { coordinator.close(session.id) }
         session.active = true
         let payloads: [[String: Any]] = [
@@ -272,7 +274,7 @@ extension ChatModelPickerTests {
         session.draft = "DISPATCH_BACKGROUND_TOOL"; coordinator.sendFromComposer(session)
         try await wait { !session.busy && session.turns.flatMap(\.items).contains { $0.text.contains("Local fixture reply: DISPATCH_BACKGROUND_TOOL") } }
         let pidFile = state.appendingPathComponent("work/dispatch-background.pid")
-        let backgroundPID = try XCTUnwrap(Int32(try String(contentsOf: pidFile, encoding: .utf8)))
+        let backgroundPID = try XCTUnwrap(Int32(try String(decoding: try System.read(pidFile), as: UTF8.self)))
         XCTAssertTrue(AgentProcess.capture(backgroundPID)?.alive == true)
         try await command("/ps")
         XCTAssertEqual(session.commandResult?.title, "Background terminals")
@@ -284,7 +286,11 @@ extension ChatModelPickerTests {
         try await command("/plan")
         XCTAssertEqual(session.collaborationMode, "plan")
         try await command("/plan DISPATCH_PLAN_QUESTION")
-        try await wait { menu() != nil }
+        // Codex can ask this question twice: natively (request_user_input) and on screen, read as a prompt menu, which
+        // every backend shows. The native one may come first, and answering the newest menu then depends on timing
+        // (which of the two the app handled before this line). Waiting for the screen's menu keeps the test
+        // deterministic: capture and replay answer the same one.
+        try await wait { menu()?.interaction?.hasPrefix("prompt:") == true }
         XCTAssertTrue(showing("Which approach"))
         phase = "plan question selection"
         choose(2)

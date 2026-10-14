@@ -22,7 +22,7 @@ extension EnvironmentValues {
 final class CodeDocumentState {
     var sourceMode = false
     var source: String?
-    var reload = UUID()
+    var reload = System.uuid()
     @ObservationIgnored let diffLines = DiffLinePresentation()
 }
 
@@ -126,7 +126,7 @@ struct CodeDocumentControls: View {
             if !document.diff.isEmpty {
                 Button("Diff") { state.sourceMode = false }.foregroundStyle(state.sourceMode ? theme.muted : theme.ink)
             }
-            Button("Source") { state.sourceMode = true; state.reload = UUID() }.foregroundStyle(state.sourceMode ? theme.ink : theme.muted)
+            Button("Source") { state.sourceMode = true; state.reload = System.uuid() }.foregroundStyle(state.sourceMode ? theme.ink : theme.muted)
             Button { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(displayed, forType: .string) } label: {
                 Image(systemName: "doc.on.doc")
             }.help("Copy displayed code").accessibilityLabel("Copy displayed code").disabled(displayed.isEmpty)

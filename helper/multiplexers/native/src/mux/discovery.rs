@@ -87,7 +87,7 @@ impl Native {
                         if !directory
                             && shell.foreground == shell.group
                             && self.terminal(id).is_ok_and(|t| t.node.agent.is_none())
-                            && let Ok(input) = json::write(&Data::Object(vec![(
+                            && let Ok(input) = body::encode_plain(&Data::Object(vec![(
                                 "pid",
                                 Data::Unsigned(shell.pid.into()),
                             )]))
@@ -96,7 +96,7 @@ impl Native {
                                 io,
                                 Job::Native {
                                     name: "process",
-                                    input,
+                                    value: input,
                                 },
                                 Pending::Directory {
                                     terminal: id,
@@ -135,13 +135,13 @@ impl Native {
                             }
                         }
                         let input =
-                            json::write(&Data::Object(vec![("tty", Data::Unsigned(shell.tty))]));
+                            body::encode_plain(&Data::Object(vec![("tty", Data::Unsigned(shell.tty))]));
                         if let Ok(input) = input {
                             self.submit(
                                 io,
                                 Job::Native {
                                     name: "foreground",
-                                    input,
+                                    value: input,
                                 },
                                 Pending::Discover {
                                     terminal: id,
@@ -152,7 +152,7 @@ impl Native {
                         }
                     }
                 }
-                (Some(shell), Ok(Output::Bytes(bytes))) => {
+                (Some(shell), Ok(Output::Value(bytes))) => {
                     if let Ok(members) = foreground(&bytes, &shell) {
                         if let Ok(t) = self.terminal(id) {
                             t.group = Some(shell.foreground);

@@ -60,7 +60,7 @@ final class ChatModelPicker: Identifiable {
     @ObservationIgnored private var interaction: HelperChat.Interaction?
     @ObservationIgnored private var answerTask: Task<Void, Never>?
 
-    init(id: UUID = UUID(), agentID: String = "codex", model: String, effort: String?, column: Column, cache: ChatModelChoicesCache = ChatModelChoicesCache(), screen: @escaping () -> String,
+    init(id: UUID = System.uuid(), agentID: String = "codex", model: String, effort: String?, column: Column, cache: ChatModelChoicesCache = ChatModelChoicesCache(), screen: @escaping () -> String,
          send: @escaping (AgentMenuKey?) async throws -> Void,
          confirmed: @escaping (String, String?) -> Void, finished: @escaping (Bool) -> Void, structured: StructuredOperations? = nil) {
         self.id = id

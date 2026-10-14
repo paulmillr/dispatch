@@ -10,7 +10,7 @@ final class ChatToolGroupingTests: XCTestCase {
     }
 
     func testReplyTimesFollowRecordedMessagesWithAndWithoutSteps() {
-        let session = ChatSession(id: UUID())
+        let session = ChatSession(id: System.uuid())
         let date = Date(timeIntervalSince1970: 1_750_000_000)
         session.insert(ChatItem(id: "prompt", kind: .user, text: "Hello"), turnID: "turn", at: date)
         let reply = ChatItem(id: "reply", kind: .assistant, text: "Checking")
@@ -28,7 +28,7 @@ final class ChatToolGroupingTests: XCTestCase {
     }
 
     func testReplyTimesDoNotCollideAcrossDelimitedTurnAndItemIDs() {
-        let session = ChatSession(id: UUID())
+        let session = ChatSession(id: System.uuid())
         let date = Date(timeIntervalSince1970: 1_750_000_000)
         session.insert(ChatItem(id: "reply", kind: .assistant, text: "First reply"), turnID: "turn:part", at: date)
         session.insert(ChatItem(id: "prompt", kind: .user, text: "Next question"), turnID: "turn", at: date.addingTimeInterval(90))
@@ -45,7 +45,7 @@ final class ChatToolGroupingTests: XCTestCase {
             HelperChat.Record(id: id, turn: "turn", kind: kind, text: text, title: "", output: "", blocks: [],
                               completed: true, exit_code: nil, patch: nil, time_ms: time, documents: [], tool: nil, inline_reasoning: false)
         }
-        let session = ChatSession(id: UUID())
+        let session = ChatSession(id: System.uuid())
         let date = Date(timeIntervalSince1970: 1_750_000_000)
         let ms = Int64(date.timeIntervalSince1970 * 1000)
         session.mergeHistorical([record("prompt", "user", "Hello", at: ms), record("reply", "assistant", "Hi", at: ms + 60_000)]
@@ -93,7 +93,7 @@ final class ChatToolGroupingTests: XCTestCase {
     }
 
     func testConsecutiveToolsGroupWithinTurnsAndKeepApprovalsVisible() {
-        let session = ChatSession(id: UUID())
+        let session = ChatSession(id: System.uuid())
         session.turns = [ChatTurn(id: "first", items: [tool("one"), tool("two"),
             ChatItem(id: "message", kind: .assistant, text: "An explanation"), tool("three")]),
             ChatTurn(id: "second", items: [tool("four"), tool("five")])]
@@ -116,7 +116,7 @@ final class ChatToolGroupingTests: XCTestCase {
     }
 
     func testGroupIdentityAndExpansionSurviveNewToolsAndOutput() {
-        let session = ChatSession(id: UUID())
+        let session = ChatSession(id: System.uuid())
         session.turns = [ChatTurn(id: "turn", items: [tool("one"), tool("two")])]
         let groupID = session.transcriptRows[0].id
         let presentationID = session.transcriptRows[0].group!.presentationID
@@ -144,7 +144,7 @@ final class ChatToolGroupingTests: XCTestCase {
 
     func testHistoricalMessageSplitsToolGroupsWithoutSharingDisclosureState() throws {
         for reordered in [false, true] {
-            let session = ChatSession(id: UUID())
+            let session = ChatSession(id: System.uuid())
             let tools = (1...4).map { tool(String($0)) }
             session.turns = [ChatTurn(id: "turn", items: tools)]
             let original = try XCTUnwrap(session.transcriptRows.first?.group)
@@ -161,7 +161,7 @@ final class ChatToolGroupingTests: XCTestCase {
     }
 
     func testMergingToolGroupsKeepsPreviouslyVisibleToolsExpanded() throws {
-        let session = ChatSession(id: UUID())
+        let session = ChatSession(id: System.uuid())
         let tools = (1...4).map { tool(String($0)) }
         session.turns = [ChatTurn(id: "turn", items: Array(tools.prefix(2))
             + [ChatItem(id: "explanation", kind: .assistant, text: "Temporary message")]
@@ -179,7 +179,7 @@ final class ChatToolGroupingTests: XCTestCase {
     }
 
     func testMergingLiveToolGroupsPreservesManualCollapse() throws {
-        let session = ChatSession(id: UUID())
+        let session = ChatSession(id: System.uuid())
         session.activeTurnID = "turn"; session.busy = true
         let tools = (1...4).map { tool(String($0)) }
         session.turns = [ChatTurn(id: "turn", items: Array(tools.prefix(2))
@@ -199,7 +199,7 @@ final class ChatToolGroupingTests: XCTestCase {
 
     func testMergedGroupDisclosureSurvivesPresentationRestore() throws {
         for (expanded, historyLoaded) in [(false, false), (false, true), (true, false), (true, true)] {
-            let session = ChatSession(id: UUID())
+            let session = ChatSession(id: System.uuid())
             session.activeTurnID = "turn"; session.busy = !expanded
             let tools = (1...4).map { tool(String($0)) }
             session.turns = [ChatTurn(id: "turn", items: Array(tools.prefix(2))
@@ -209,7 +209,7 @@ final class ChatToolGroupingTests: XCTestCase {
             session.turns[0].items = tools
             let merged = try XCTUnwrap(session.transcriptRows.first?.group)
             XCTAssertEqual(session.groupIsExpanded(merged, turnID: "turn"), expanded)
-            let restored = ChatSession(id: UUID())
+            let restored = ChatSession(id: System.uuid())
             restored.activeTurnID = "turn"; restored.busy = !expanded
             if historyLoaded {
                 restored.turns = session.turns
@@ -230,7 +230,7 @@ final class ChatToolGroupingTests: XCTestCase {
     }
 
     func testCollapsedHugeGroupDoesNotFormatHiddenTools() async throws {
-        let session = ChatSession(id: UUID())
+        let session = ChatSession(id: System.uuid())
         session.sessionID = "large-group"
         let output = String(repeating: "large output\n", count: 2_000)
         session.turns = [ChatTurn(id: "turn", items: (0..<10_000).map {
@@ -255,7 +255,7 @@ final class ChatToolGroupingTests: XCTestCase {
 
     func testNativeGroupAndChildUnwrapIndependentlyAndRetainState() async throws {
         AppFont.register()
-        let session = ChatSession(id: UUID())
+        let session = ChatSession(id: System.uuid())
         session.sessionID = "grouped-tools"; session.atBottom = false
         session.turns = [ChatTurn(id: "turn", items: [tool("one"), tool("two"), tool("three")])]
         let groupID = session.transcriptRows[0].id
@@ -305,7 +305,7 @@ final class ChatToolGroupingTests: XCTestCase {
 
     func testReplyTimeStaysBesideStepsAcrossExpansionAndNarrowLayout() async throws {
         try DesktopTestSupport.requireUnlocked(); AppFont.register()
-        let session = ChatSession(id: UUID())
+        let session = ChatSession(id: System.uuid())
         session.sessionID = "reply-time-layout"; session.atBottom = false
         let date = try XCTUnwrap(Calendar.current.date(from: DateComponents(year: 2026, month: 9, day: 15, hour: 13, minute: 24)))
         session.insert(ChatItem(id: "reply", kind: .assistant, text: "Checking the handler."), turnID: "turn", at: date)
@@ -340,7 +340,7 @@ final class ChatToolGroupingTests: XCTestCase {
     }
 
     func testLiveMessageStepsCollapseAtCompletionAndRespectManualChoice() throws {
-        let session = ChatSession(id: UUID())
+        let session = ChatSession(id: System.uuid())
         session.activeTurnID = "turn"; session.busy = true
         session.turns = [ChatTurn(id: "turn", items: [
             ChatItem(id: "message", kind: .assistant, text: "Updating the handler."), tool("one"), tool("two")])]
@@ -358,7 +358,7 @@ final class ChatToolGroupingTests: XCTestCase {
         session.setGroupExpanded(group, true)
         session.busy = false
         XCTAssertEqual(session.visibleTranscriptRows.count, 4, "Manual expansion survives completion")
-        let restored = ChatSession(id: UUID())
+        let restored = ChatSession(id: System.uuid())
         restored.restorePresentation(session.presentation)
         XCTAssertEqual(restored.expandedToolGroups, session.expandedToolGroups)
         session.expandedToolGroups = []

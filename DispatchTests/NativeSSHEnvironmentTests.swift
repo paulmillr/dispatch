@@ -4,7 +4,7 @@ import XCTest
 @MainActor
 final class NativeSSHEnvironmentTests: XCTestCase {
     func testNativeZshRetainsUserStartupAndWrapsSSH() async throws {
-        let root = URL(fileURLWithPath: "/tmp/native-ssh-\(UUID())")
+        let root = URL(fileURLWithPath: "/tmp/native-ssh-\(System.uuid())")
         let first = root.appendingPathComponent("home"), second = root.appendingPathComponent("user-config")
         try FileManager.default.createDirectory(at: first, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: second, withIntermediateDirectories: true)
@@ -14,7 +14,7 @@ final class NativeSSHEnvironmentTests: XCTestCase {
         try "export DISPATCH_TEST_RC=rc\n".write(to: second.appendingPathComponent(".zshrc"), atomically: true, encoding: .utf8)
         try "export DISPATCH_TEST_LOGIN=login\n".write(to: second.appendingPathComponent(".zlogin"), atomically: true, encoding: .utf8)
         try NativeSSHEnvironment.install(in: root)
-        var environment = ProcessInfo.processInfo.environment
+        var environment = System.inherited
         environment.merge(NativeSSHEnvironment.variables(directory: root, inheriting: ["ZDOTDIR": first.path]), uniquingKeysWith: { _, new in new })
         environment["DISPATCH_TEST_CONFIG"] = second.path
         let output = try await command("/bin/zsh", ["-l", "-i", "-c", "print -r -- $DISPATCH_TEST_PROFILE/$DISPATCH_TEST_RC/$DISPATCH_TEST_LOGIN; print -r -- $ZDOTDIR; functions ssh"], environment)
@@ -24,20 +24,20 @@ final class NativeSSHEnvironmentTests: XCTestCase {
     }
 
     func testNativeBashImportsPrivateSSHFunction() async throws {
-        let environment = ProcessInfo.processInfo.environment.merging(NativeSSHEnvironment.variables(directory: URL(fileURLWithPath: "/tmp/native-test"), inheriting: [:]), uniquingKeysWith: { _, new in new })
+        let environment = System.inherited.merging(NativeSSHEnvironment.variables(directory: URL(fileURLWithPath: "/tmp/native-test"), inheriting: [:]), uniquingKeysWith: { _, new in new })
         let output = try await command("/bin/bash", ["--noprofile", "--norc", "-i", "-c", "type ssh"], environment)
         XCTAssertTrue(output.contains("--ssh-launch"), output)
     }
 
     func testCommandWrappersPreserveArgumentsInShimsAndInteractiveFunctions() async throws {
-        let root = URL(fileURLWithPath: "/tmp/wrappers-\(UUID())")
+        let root = URL(fileURLWithPath: "/tmp/wrappers-\(System.uuid())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let executable = root.appendingPathComponent("capture ' arguments")
         try "#!/bin/sh\nprintf '%s\\000' \"$@\"\n".write(to: executable, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
         let arguments = ["", "two words", "single'quote", "$HOME", "$(printf unexpected)", "`printf unexpected`", "line\nbreak", ";"]
-        let environment = ProcessInfo.processInfo.environment.merging(["DISPATCH_EXECUTABLE": executable.path], uniquingKeysWith: { _, new in new })
+        let environment = System.inherited.merging(["DISPATCH_EXECUTABLE": executable.path], uniquingKeysWith: { _, new in new })
         for wrapper in ShellCommandWrapper.allCases {
             let expected = (["--\(wrapper.rawValue)-launch"] + arguments).joined(separator: "\0") + "\0"
             let shim = root.appendingPathComponent(wrapper.rawValue)
@@ -60,7 +60,7 @@ final class NativeSSHEnvironmentTests: XCTestCase {
                               "alias \(name)='printf custom'"] {
                     let script = (shell == "/bin/bash" ? "shopt -s expand_aliases\n" : "")
                         + setup + "\n" + definition + "\neval " + name + "\n"
-                    let output = try await command(shell, ["-c", script], ProcessInfo.processInfo.environment)
+                    let output = try await command(shell, ["-c", script], System.inherited)
                     XCTAssertEqual(output, "custom", "\(shell) \(setup)")
                 }
             }
@@ -68,14 +68,14 @@ final class NativeSSHEnvironmentTests: XCTestCase {
     }
 
     func testNativeBashRetainsExportedUserFunctionsThroughTmux() async throws {
-        let root = URL(fileURLWithPath: "/tmp/exported-functions-\(UUID())")
+        let root = URL(fileURLWithPath: "/tmp/exported-functions-\(System.uuid())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         // A fake tmux observes exactly the environment a new server receives.
         let tmux = root.appendingPathComponent("tmux")
         try "#!/bin/bash\nssh; codex\n".write(to: tmux, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: tmux.path)
-        var inherited = ProcessInfo.processInfo.environment
+        var inherited = System.inherited
         inherited["BASH_FUNC_ssh%%"] = "() { printf custom-ssh; }"
         inherited["BASH_FUNC_codex%%"] = "() { printf custom-codex; }"
         inherited["PATH"] = root.path + ":/usr/bin:/bin"
@@ -88,7 +88,7 @@ final class NativeSSHEnvironmentTests: XCTestCase {
     }
 
     func testExecutableLookupHonorsPATHAndSkipsCurrentAndRetiredShims() throws {
-        let root = URL(fileURLWithPath: "/tmp/executable-lookup-\(UUID())")
+        let root = URL(fileURLWithPath: "/tmp/executable-lookup-\(System.uuid())")
         defer { try? FileManager.default.removeItem(at: root) }
         for name in ["current/bin", "retired/bin", "user/bin", "last/bin"] {
             try FileManager.default.createDirectory(at: root.appendingPathComponent(name), withIntermediateDirectories: true)
@@ -119,17 +119,17 @@ final class NativeSSHEnvironmentTests: XCTestCase {
     }
 
     func testSSHLauncherUsesPATHAndRetainsExplicitExecutable() async throws {
-        let root = URL(fileURLWithPath: "/tmp/ssh-path-\(UUID())")
+        let root = URL(fileURLWithPath: "/tmp/ssh-path-\(System.uuid())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let ssh = root.appendingPathComponent("ssh"), override = root.appendingPathComponent("other-ssh")
         try "#!/bin/sh\nprintf '%s\\000' \"$@\"\n".write(to: ssh, atomically: true, encoding: .utf8)
         try "#!/bin/sh\nprintf override\n".write(to: override, atomically: true, encoding: .utf8)
         for file in [ssh, override] { try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: file.path) }
-        var environment = ProcessInfo.processInfo.environment
+        var environment = System.inherited
         environment.removeValue(forKey: "DISPATCH_SSH_EXECUTABLE")
         environment["PATH"] = root.path + ":/usr/bin:/bin"
-        let executable = try XCTUnwrap(Bundle.main.executablePath)
+        let executable = System.executable.path
         let arguments = ["-V", "two words", "$HOME", ""]
         let output = try await command(executable, ["--ssh-launch"] + arguments, environment)
         XCTAssertEqual(output, arguments.joined(separator: "\0") + "\0")
@@ -138,15 +138,15 @@ final class NativeSSHEnvironmentTests: XCTestCase {
         XCTAssertEqual(explicit, "override")
     }
 
+    /// Real shells, in replay too (TestSupport.live).
     private func command(_ executable: String, _ arguments: [String], _ environment: [String: String]) async throws -> String {
         try await Task.detached {
             let process = Process(), pipe = Pipe()
             process.executableURL = URL(fileURLWithPath: executable); process.arguments = arguments; process.environment = environment
             process.standardInput = FileHandle.nullDevice; process.standardOutput = pipe; process.standardError = pipe
-            try process.run(); pipe.fileHandleForWriting.closeFile()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile(); process.waitUntilExit()
-            guard process.terminationStatus == 0 else { throw HerdrFailure(String(decoding: data, as: UTF8.self)) }
-            return String(decoding: data, as: UTF8.self)
+            let exit = try TestSupport.live(process), text = String(decoding: exit.output, as: UTF8.self)
+            guard exit.status == 0 else { throw HerdrFailure(text) }
+            return text
         }.value
     }
 }

@@ -118,8 +118,7 @@ struct SettingsView: View {
             draft = store.values
             error = store.error
             fonts = Self.monospacedFontFamilies
-            let path = Bundle.main.resourceURL?.appendingPathComponent("ghostty/themes")
-            let bundled = path.flatMap { try? FileManager.default.contentsOfDirectory(atPath: $0.path) } ?? []
+            let bundled = (try? FileManager.default.contentsOfDirectory(atPath: System.resources.appendingPathComponent("ghostty/themes").path)) ?? []
             themes = ["Default"] + Array(Set(bundled.filter { !$0.hasPrefix(".") } + [draft.theme, draft.lightTheme]).subtracting(["Default"])).sorted()
             loaded = true
         }
@@ -273,7 +272,7 @@ struct SettingsView: View {
             settingsGroup("Startup") {
                 row("Starting folder", detail: "New spaces start here; new tabs follow the current folder") {
                     HStack(spacing: 8) {
-                        Text(draft.startingDirectory.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
+                        Text(draft.startingDirectory.replacingOccurrences(of: System.home.path, with: "~"))
                             .lineLimit(1).truncationMode(.middle).frame(maxWidth: 150)
                             .foregroundStyle(Chrome.muted).help(draft.startingDirectory)
                         Button("Choose…", action: chooseFolder)

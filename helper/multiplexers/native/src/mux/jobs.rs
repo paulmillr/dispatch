@@ -9,15 +9,15 @@ impl Native {
     ) {
         match pending {
             Pending::Directory { terminal, shell } => {
-                if let Ok(Output::Bytes(bytes)) = result
-                    && let Ok(document) = Json::parse(&bytes)
-                    && let Ok(current) = crate::process::process(document.root())
+                if let Ok(Output::Value(bytes)) = result
+                    && let Ok(value) = body::decode_plain(&bytes)
+                    && let Some(current) = Process::read(&value)
                     && same(&shell, &current)
                     && self.observe(terminal, &current)
-                    && let Some(cwd) = document.root().get("cwd").and_then(Value::string)
+                    && let Some(cwd) = value.get("cwd").and_then(Data::path)
                     && let Ok(t) = self.terminal(terminal)
                 {
-                    let cwd = PathBuf::from(cwd);
+                    let cwd = cwd.to_path_buf();
                     if t.node.cwd.as_ref() != Some(&cwd) {
                         t.node.cwd = Some(cwd);
                         self.changed(io);
@@ -136,12 +136,12 @@ impl Native {
                     });
                 match result {
                     Ok(shell) => {
-                        match json::write(&Data::Object(vec![("tty", Data::Unsigned(shell.tty))])) {
+                        match body::encode_plain(&Data::Object(vec![("tty", Data::Unsigned(shell.tty))])) {
                             Ok(input) => self.submit(
                                 io,
                                 Job::Native {
                                     name: "foreground",
-                                    input,
+                                    value: input,
                                 },
                                 Pending::Foreground {
                                     terminal,
@@ -179,7 +179,7 @@ impl Native {
                             .ok_or_else(|| error("agent_changed", ""))?
                             .clone();
                         let control = owner.control.clone();
-                        let Output::Bytes(bytes) = output else {
+                        let Output::Value(bytes) = output else {
                             return Err(error("foreground_missing", ""));
                         };
                         let members = foreground(&bytes, &shell)?;

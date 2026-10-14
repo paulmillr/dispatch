@@ -20,7 +20,7 @@ final class WorkspaceFooterLayout {
 struct WorkspaceFooter: ViewModifier {
     let workspace: Workspace?
     var surface: UUID?
-    @State private var measurementID = UUID()
+    @State private var measurementID = System.uuid()
 
     func body(content: Content) -> some View {
         content

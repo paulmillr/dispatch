@@ -27,9 +27,10 @@ pub mod native;
 
 use dispatch_helper_core::{
     api::{
-        Disk, Done, Error, Event, Io, Job, Json, Output, Plugin, Row, Sample, Ui, Work, deferred,
+        Disk, Done, Error, Event, Io, Job, Output, Plugin, Row, Sample, Ui, Work, deferred,
     },
-    json::{self, Data},
+    json::Data,
+    wire::body::{self, Encoded},
 };
 use std::{io, path::PathBuf, time::Duration};
 
@@ -53,13 +54,13 @@ impl Call {
         local: bool,
         reset: bool,
         fixture: bool,
-        result: Result<Json, Error>,
+        result: Result<Encoded, Error>,
     ) {
         let slot = self.index();
         match self {
             Self::Sample(done) => {
                 let result = result.and_then(|v| {
-                    let value = v.root();
+                    let value = &v.root();
                     if fixture && let Some(time) = clock(value) {
                         rates.host_at(value, local, time)
                     } else {
@@ -73,7 +74,7 @@ impl Call {
             }
             Self::Processes(done) => {
                 let result = result.and_then(|v| {
-                    let value = v.root();
+                    let value = &v.root();
                     if fixture
                         && !local
                         && let Some(time) = clock(value)
@@ -88,7 +89,7 @@ impl Call {
                 }
                 done(io, result);
             }
-            Self::Disks(done) => done(io, result.and_then(|v| native::disks(v.root()))),
+            Self::Disks(done) => done(io, result.and_then(|v| native::disks(&v.root()))),
         }
     }
 }
@@ -133,14 +134,15 @@ impl Stats {
         } else {
             let job = match &self.fixture {
                 Some(directory) => Ok(Job::Read {
-                    path: directory.join(format!("{slot}.json")),
+                    // A fixture holds the native job's answer as recorded (an encoded plain value).
+                    path: directory.join(format!("{slot}.value")),
                     offset: 0,
                     length: u64::from(dispatch_helper_core::wire::LIMIT),
                 }),
-                None => json::write(&Data::Object(vec![("local", Data::Bool(self.local))])).map(
+                None => body::encode_plain(&Data::Object(vec![("local", Data::Bool(self.local))])).map(
                     |input| Job::Isolated {
                         name,
-                        input,
+                        value: input,
                         deadline: io.now() + Duration::from_secs(if slot == 2 { 5 } else { 1 }),
                     },
                 ),
@@ -180,7 +182,7 @@ impl Stats {
     }
 }
 
-fn clock(value: json::Value<'_>) -> Option<f64> {
+fn clock(value: &Data<'_>) -> Option<f64> {
     value.get("monotonic")?.string()?.parse().ok()
 }
 
@@ -257,8 +259,8 @@ impl Plugin for Stats {
             .as_ref()
             .is_err_and(|e| e.kind() == io::ErrorKind::Interrupted);
         let result = result.map_err(failure).and_then(|out| match out {
-            Output::Bytes(bytes) => Json::parse(&bytes),
-            Output::Read { bytes, .. } if self.fixture.is_some() => Json::parse(&bytes),
+            Output::Value(bytes) => Encoded::plain(&bytes),
+            Output::Read { bytes, .. } if self.fixture.is_some() => Encoded::plain(&bytes),
             _ => Err(Error {
                 code: "stats_output",
                 message: String::new(),

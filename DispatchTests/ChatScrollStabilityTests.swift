@@ -19,7 +19,7 @@ final class ChatScrollStabilityTests: XCTestCase {
         for privateValue in ["private-user", "private-host", "private-transcript", "surface", "uptime"] {
             XCTAssertFalse(text.contains(privateValue), privateValue)
         }
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = System.temporary.appendingPathComponent(System.uuid().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let recorder = ChatViewportTrace(writer: ChatViewportTraceWriter(directory: root))
         XCTAssertFalse(recorder.isEnabled)
@@ -53,7 +53,7 @@ final class ChatScrollStabilityTests: XCTestCase {
     }
 
     func testDiagnosticsWriteFailureStaysVisibleWithoutExposingSystemError() async throws {
-        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let file = System.temporary.appendingPathComponent(System.uuid().uuidString)
         try Data().write(to: file)
         defer { try? FileManager.default.removeItem(at: file) }
         let recorder = ChatViewportTrace(writer: ChatViewportTraceWriter(directory: file))
@@ -132,7 +132,7 @@ final class ChatScrollStabilityTests: XCTestCase {
         fixture.position.diagnosticSink = { sample = $0 }
         fixture.position.recordDiagnostic(.watchdog, force: true)
         let value = try XCTUnwrap(sample)
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = System.temporary.appendingPathComponent(System.uuid().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let writer = ChatViewportTraceWriter(directory: root, maximumBytes: 8192)
         try await writer.append(Array(repeating: value, count: 30))
@@ -218,7 +218,7 @@ final class ChatScrollStabilityTests: XCTestCase {
         try DesktopTestSupport.requireUnlocked(); AppFont.register()
         let coordinator = ChatCoordinator(enabled: false)
         defer { coordinator.stop() }
-        let session = coordinator.session(for: UUID())
+        let session = coordinator.session(for: System.uuid())
         session.sessionID = "viewport-trace-rows"; session.showChat = true
         session.turns = (0..<12).map { index in
             ChatTurn(id: "turn-\(index)", items: [
@@ -337,7 +337,7 @@ final class ChatScrollStabilityTests: XCTestCase {
         try DesktopTestSupport.requireUnlocked(); AppFont.register()
         let coordinator = ChatCoordinator(enabled: false)
         defer { coordinator.stop() }
-        let session = coordinator.session(for: UUID())
+        let session = coordinator.session(for: System.uuid())
         session.sessionID = "viewport-recovery"; session.showChat = true; session.active = true; session.busy = true
         session.draft = "Keep my unfinished reply"
         session.turns = (0..<30).map { index in
@@ -584,8 +584,8 @@ final class ChatScrollStabilityTests: XCTestCase {
     }
 
     func testPassiveHistoryKeepsBottomUnlessUserMovesWhileReadIsPending() async throws {
-        let sessionID = UUID().uuidString
-        let path = FileManager.default.temporaryDirectory.appendingPathComponent("dispatch-opening-history-\(sessionID).jsonl")
+        let sessionID = System.uuid().uuidString
+        let path = System.temporary.appendingPathComponent("dispatch-opening-history-\(sessionID).jsonl")
         defer { try? FileManager.default.removeItem(at: path) }
         func line(_ type: String, _ payload: [String: Any]) throws -> Data {
             try JSONSerialization.data(withJSONObject: ["type": type, "payload": payload]) + Data([10])
@@ -594,7 +594,7 @@ final class ChatScrollStabilityTests: XCTestCase {
         for index in 0..<600 {
             data += try line("event_msg", ["type": "agent_message", "turn_id": "turn", "message": "Reply \(index)"])
         }
-        let root = path.deletingLastPathComponent().appendingPathComponent("dispatch-opening-" + UUID().uuidString)
+        let root = path.deletingLastPathComponent().appendingPathComponent("dispatch-opening-" + System.uuid().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let lines = String(decoding: data, as: UTF8.self).split(separator: "\n").map(String.init)
@@ -653,7 +653,7 @@ final class ChatScrollStabilityTests: XCTestCase {
         try DesktopTestSupport.requireUnlocked(); AppFont.register()
         let coordinator = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
         defer { coordinator.stop() }
-        let session = coordinator.session(for: UUID())
+        let session = coordinator.session(for: System.uuid())
         session.sessionID = "streamed-follow"; session.showChat = true
         session.turns = (0..<20).map { index in
             ChatTurn(id: "turn-\(index)", items: [.init(id: "answer-\(index)", kind: .assistant,
@@ -729,7 +729,7 @@ final class ChatScrollStabilityTests: XCTestCase {
         try XCTSkipIf(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, "Reduce Motion keeps the item scroll")
         let coordinator = ChatCoordinator(enabled: false)
         defer { coordinator.stop() }
-        let session = coordinator.session(for: UUID())
+        let session = coordinator.session(for: System.uuid())
         session.sessionID = "burst-follow"; session.showChat = true
         session.turns = (0..<20).map { index in
             ChatTurn(id: "turn-\(index)", items: [.init(id: "answer-\(index)", kind: .assistant,
@@ -767,7 +767,7 @@ final class ChatScrollStabilityTests: XCTestCase {
         try DesktopTestSupport.requireUnlocked(); AppFont.register()
         let coordinator = ChatCoordinator(enabled: false)
         defer { coordinator.stop() }
-        let session = coordinator.session(for: UUID())
+        let session = coordinator.session(for: System.uuid())
         session.sessionID = "bottom-follow"; session.showChat = true
         session.turns = (0..<20).map { index in
             ChatTurn(id: "turn-\(index)", items: [.init(id: "answer-\(index)", kind: .assistant,
@@ -914,7 +914,7 @@ final class ChatScrollStabilityTests: XCTestCase {
         try DesktopTestSupport.requireUnlocked(); AppFont.register()
         let coordinator = ChatCoordinator(enabled: false)
         defer { coordinator.stop() }
-        let session = coordinator.session(for: UUID())
+        let session = coordinator.session(for: System.uuid())
         session.sessionID = "scroll-stability"; session.showChat = true; session.atBottom = false
         session.turns = (0..<80).map { index in
             ChatTurn(id: "turn-\(index)", items: [
@@ -1002,7 +1002,7 @@ final class ChatScrollStabilityTests: XCTestCase {
         try DesktopTestSupport.requireUnlocked(); AppFont.register()
         let coordinator = ChatCoordinator(enabled: false)
         defer { coordinator.stop() }
-        let session = coordinator.session(for: UUID())
+        let session = coordinator.session(for: System.uuid())
         session.sessionID = "prepend-continuity"; session.showChat = true
         func turns(_ range: Range<Int>) -> [ChatTurn] {
             range.map { index in

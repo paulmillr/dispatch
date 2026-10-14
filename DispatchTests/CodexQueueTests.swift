@@ -17,8 +17,8 @@ final class CodexQueueTests: XCTestCase {
     }
 
     private func helperSession(_ chat: ChatCoordinator) throws -> ChatSession {
-        let session = chat.session(for: UUID()); session.active = true; session.busy = true
-        session.process = try XCTUnwrap(AgentProcess.capture(getpid()))
+        let session = chat.session(for: System.uuid()); session.active = true; session.busy = true
+        session.process = try XCTUnwrap(AgentProcess.capture(System.pid))
         // Terminal 0 belongs to no helper terminal: these cases only reach the app's own queue state.
         session.helper = HelperChat(terminal: 0)
         return session
@@ -155,7 +155,7 @@ final class CodexQueueTests: XCTestCase {
         let session = runtime.chat.session(for: id)
         try await TestSupport.eventually(timeout: .seconds(15)) { session.active && AgentModelMenu.containsModel(TerminalTestSupport.screen(terminal: terminal), slug: "dispatch-fixture", name: "Dispatch fixture") }
         runtime.chat.chooseChat(true, session: session)
-        session.draft = "FIXTURE_BARRIER_" + UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased() + " hold queue test"; runtime.chat.submit(session)
+        session.draft = "FIXTURE_BARRIER_" + System.uuid().uuidString.replacingOccurrences(of: "-", with: "").lowercased() + " hold queue test"; runtime.chat.submit(session)
         try await TestSupport.eventually(timeout: .seconds(20), diagnostic: "Queue error: \(session.queueError ?? "none"); native=\(session.helperNativeQueue) busy=\(session.busy) thread=\(session.sessionID ?? "none") turn=\(session.activeTurnID ?? "none") blocked=\(session.inputBlocked) submitting=\(session.submissionID != nil) ack=\(session.awaitingPromptAck)") { session.helperNativeQueue && runtime.chat.canInterrupt(session) }
         let helper = try XCTUnwrap(session.helper)
         let external = HelperChat(terminal: helper.route.terminal, session: helper.route.session, endpoint: helper.endpoint)
@@ -202,10 +202,10 @@ final class CodexQueueTests: XCTestCase {
         XCTAssertEqual(requests.filter { prompt($0) == "external queued message" }.count, 1)
         XCTAssertEqual(requests.compactMap(prompt).filter { ["external queued message", "edited second"].contains($0) }, ["external queued message", "edited second"])
 
-        let barrier = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        let barrier = System.uuid().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
         session.draft = "FIXTURE_BARRIER_" + barrier + " hold for steer"; runtime.chat.submit(session)
         try await TestSupport.eventually(timeout: .seconds(10)) {
-            runtime.chat.canInterrupt(session) && FileManager.default.fileExists(atPath: fixture.state.appendingPathComponent("barriers/\(barrier)/accepted.json").path)
+            runtime.chat.canInterrupt(session) && System.exists(fixture.state.appendingPathComponent("barriers/\(barrier)/accepted.json"))
         }
         try await enqueue("steer from native queue")
         try await TestSupport.eventually(timeout: .seconds(10)) { session.queuedMessages.count == 1 && (session.queuedMessages[0].native != nil) == native && !session.queueBusy }
@@ -214,18 +214,18 @@ final class CodexQueueTests: XCTestCase {
             session.queuedMessages.isEmpty && !session.queueBusy
         }
         XCTAssertNil(session.submissionFailure)
-        try Data().write(to: fixture.state.appendingPathComponent("barriers/\(barrier)/release"))
+        try System.write(Data(), to: fixture.state.appendingPathComponent("barriers/\(barrier)/release"))
         try await TestSupport.eventually(timeout: .seconds(15)) {
             !session.busy && session.turns.flatMap(\.items).contains { $0.kind == .user && $0.text == "steer from native queue" }
         }
         XCTAssertEqual(session.turns.flatMap(\.items).filter { $0.kind == .user && $0.text == "steer from native queue" }.count, 1)
 
         // Stop keeps the entry with its producer, paused, and preserves the unfinished draft.
-        let stopBarrier = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        let stopBarrier = System.uuid().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
         session.draft = "FIXTURE_BARRIER_" + stopBarrier + " hold for terminal stop"; runtime.chat.submit(session)
         try await TestSupport.eventually(timeout: .seconds(10)) {
             session.busy && !session.awaitingPromptAck && session.submissionID == nil
-                && FileManager.default.fileExists(atPath: fixture.state.appendingPathComponent("barriers/\(stopBarrier)/accepted.json").path)
+                && System.exists(fixture.state.appendingPathComponent("barriers/\(stopBarrier)/accepted.json"))
         }
         try await enqueue("keep queued after terminal stop")
         try await TestSupport.eventually(timeout: .seconds(10)) { session.queuedMessages.count == 1 && (session.queuedMessages[0].native != nil) == native && !session.queueBusy }

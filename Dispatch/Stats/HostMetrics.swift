@@ -14,12 +14,7 @@ struct HostVolume: Codable, Sendable {
     let free: UInt64
 }
 struct HostSample: Codable, Sendable {
-    static var hostName: String {
-        var buffer = [CChar](repeating: 0, count: 256)
-        guard gethostname(&buffer, buffer.count) == 0 else { return "this Mac" }
-        return String(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
-    }
-    var date = Date()
+    var date = System.date()
     var cpuAvailable = true
     var networkAvailable = true
     var memoryAvailable = true
@@ -71,7 +66,7 @@ final class HostStats {
     @ObservationIgnored private var retired: Task<Void, Never>?
     @ObservationIgnored private var retiredDisks: Task<Void, Never>?
     @ObservationIgnored private var subscriptions: Set<UUID> = []
-    @ObservationIgnored private var generation = UUID()
+    @ObservationIgnored private var generation = System.uuid()
     @ObservationIgnored private var tracksHistoryInBackground = false
     @ObservationIgnored private let worker = HostSamplingWorker()
     @ObservationIgnored private let diskWorker = HostDiskSamplingWorker()
@@ -82,7 +77,7 @@ final class HostStats {
         self.historyRetention = historyRetention.isFinite ? min(3600, max(0.001, historyRetention)) : 3600
     }
     private func trimHistory() {
-        let cutoff = Date().addingTimeInterval(-historyRetention)
+        let cutoff = System.date().addingTimeInterval(-historyRetention)
         history.removeAll { $0.date <= cutoff }
         if history.isEmpty { history = [] }
         if history.count > 1801 { history.removeFirst(history.count - 1801) }
@@ -90,7 +85,7 @@ final class HostStats {
     }
 
     func subscribe() -> UUID {
-        let token = UUID(); subscriptions.insert(token); start(); startDisks(); return token
+        let token = System.uuid(); subscriptions.insert(token); start(); startDisks(); return token
     }
     func unsubscribe(_ token: UUID) {
         subscriptions.remove(token)
@@ -135,7 +130,7 @@ final class HostStats {
                 }
                 guard let self else { return }
                 let interval: Duration = subscriptions.isEmpty ? .seconds(5) : .seconds(2)
-                do { try await Task.sleep(for: interval) } catch { return }
+                do { try await System.sleep(for: interval, "sample") } catch { return }
             }
         }
         if !subscriptions.isEmpty { startDisks() }
@@ -156,13 +151,13 @@ final class HostStats {
                     guard let self, !Task.isCancelled, self.generation == generation else { return }
                     disksStale = true
                 }
-                do { try await Task.sleep(for: .seconds(15)) } catch { return }
+                do { try await System.sleep(for: .seconds(15), "disks") } catch { return }
             }
         }
     }
     func stop() {
         tracksHistoryInBackground = false
-        generation = UUID()
+        generation = System.uuid()
         task?.cancel(); retired = task ?? retired; task = nil
         disksTask?.cancel(); retiredDisks = disksTask ?? retiredDisks; disksTask = nil
         if state == .ready { state = .stale }
@@ -183,7 +178,7 @@ final class StatisticsHistoryExpiry {
         task?.cancel(); task = nil; deadline = date
         guard let date else { return }
         task = Task { [weak self] in
-            do { try await Task.sleep(for: .seconds(max(0, date.timeIntervalSinceNow))) }
+            do { try await System.sleep(for: .seconds(max(0, date.timeIntervalSinceNow)), "schedule") }
             catch { return }
             guard !Task.isCancelled, let self else { return }
             deadline = nil; task = nil

@@ -9,7 +9,7 @@ final class UISettingsBenchmarkTests: XCTestCase {
     /// Run this class alone in a fresh test process to retain the cold-open sample.
     func testRepeatedSettingsLifecycle() async throws {
         try DesktopTestSupport.requireUnlocked(); AppFont.register()
-        let root = URL(fileURLWithPath: "/tmp/ui-settings-lifecycle-\(UUID())")
+        let root = URL(fileURLWithPath: "/tmp/ui-settings-lifecycle-\(System.uuid())")
         defer { try? FileManager.default.removeItem(at: root) }
         let store = SettingsStore(file: root.appendingPathComponent("settings.json"))
         let workspace = Workspace()
@@ -35,10 +35,9 @@ final class UISettingsBenchmarkTests: XCTestCase {
                             "residentBefore": before, "residentOpened": opened, "residentClosed": closed])
             print("UI SETTINGS \(index): open=\(seconds)s RSS=\(before)→\(opened)→\(closed)")
         }
-        let output = ProcessInfo.processInfo.environment["DISPATCH_BENCHMARK_OUTPUT"].map {
+        let output = System.environment("DISPATCH_BENCHMARK_OUTPUT").map {
             URL(fileURLWithPath: $0).appendingPathComponent("settings")
-        } ?? URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("build/ui-settings-validation")
+        } ?? System.checkout.appendingPathComponent("build/ui-settings-validation")
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
         try JSONSerialization.data(withJSONObject: reports, options: [.prettyPrinted, .sortedKeys])
             .write(to: output.appendingPathComponent("settings-lifecycle.json"))

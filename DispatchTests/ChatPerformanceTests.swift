@@ -27,7 +27,7 @@ final class ChatPerformanceTests: XCTestCase {
     }
 
     func testRowsRemainStableAndRefreshWhenConversationChanges() {
-        let session = ChatSession(id: UUID())
+        let session = ChatSession(id: System.uuid())
         session.turns = [ChatTurn(id: "one", items: [ChatItem(id: "same", kind: .tool, text: "a")]),
                          ChatTurn(id: "two", items: [ChatItem(id: "same", kind: .tool, text: "b")])]
         let before = session.transcriptRows
@@ -42,7 +42,7 @@ final class ChatPerformanceTests: XCTestCase {
     }
 
     func testToolGeometrySurvivesPayloadEvictionAndExpiresWithItsTranscript() async {
-        let cache = ToolPresentationCache(), session = ChatSession(id: UUID())
+        let cache = ToolPresentationCache(), session = ChatSession(id: System.uuid())
         let item = ChatItem(id: "tool", kind: .tool, text: "echo hello", title: "Shell", output: "hello")
         session.turns = [ChatTurn(id: "turn", items: [item])]
         _ = session.transcriptRows
@@ -63,7 +63,7 @@ final class ChatPerformanceTests: XCTestCase {
     func testTenThousandToolRowsOnlyFormatVisibleRowsWhileScrolling() async throws {
         AppFont.register()
         let coordinator = ChatCoordinator(enabled: true)
-        let session = coordinator.session(for: UUID())
+        let session = coordinator.session(for: System.uuid())
         session.sessionID = "large-chat"; session.showChat = true; session.atBottom = false
         let output = String(repeating: "Large tool output stays collapsed.\n", count: 2_000)
         // One very long turn reproduces the former eager inner VStack path.
@@ -142,7 +142,7 @@ final class ChatPerformanceTests: XCTestCase {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 400), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.close(); window.contentView = nil }
-        let session = ChatSession(id: UUID())
+        let session = ChatSession(id: System.uuid())
         let item = ChatItem(id: "click", kind: .tool, text: #"{"cmd":"echo hello"}"#, title: "exec_command", output: "hello", completed: true, exitCode: 0)
         let binding = Binding(get: { session.expanded.contains(item.id) }, set: { if $0 { session.expanded.insert(item.id) } else { session.expanded.remove(item.id) } })
         window.contentView = NSHostingView(rootView: ChatToolCard(item: item, expanded: binding, directory: "/tmp")

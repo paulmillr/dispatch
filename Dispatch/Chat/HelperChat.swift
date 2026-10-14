@@ -242,6 +242,7 @@ final class HelperChat {
     _ endpoint: HelperWorkspace.Endpoint, key: String, enabled: Bool?, terminal: UInt64?
   ) async throws -> Installation? {
     let client = HelperClient(try await HelperApp.shared.connection(endpoint))
+    await TerminalRuntime.shared.helpers[endpoint]?.discovering()
     guard let launch = try await client.launches().first(where: { $0.key == key }) else { return nil }
     return try await client.connection.request(
       enabled == nil ? "installation.audit" : "installation.install",
@@ -272,8 +273,9 @@ final class HelperChat {
     let model: String?
     let model_label: String?
     let effort: String?
-    let usage: String?
-    let goal: String?
+    /// The harness's ChatUsage and goal objects, as values.
+    let usage: HelperBinary.Value?
+    let goal: HelperBinary.Value?
     let draft: String?
     let attention: String?
     var dialog: String? = nil
@@ -475,8 +477,8 @@ final class HelperChat {
   private var observation: UInt64?
   private var pending: (stream: UUID, id: UInt64?)?
   private var opening = false
-  private var generation = UUID()
-  private var stream = UUID()
+  private var generation = System.uuid()
+  private var stream = System.uuid()
   var receive: ((Event) -> Void)?
   var failed: ((any Error) -> Void)?
 
@@ -522,7 +524,7 @@ final class HelperChat {
   func open(connection: HelperConnection, refresh: Bool = false) async throws {
     guard !opening, pending == nil, observation == nil || refresh else { return }
     self.connection = connection
-    let next = UUID()
+    let next = System.uuid()
     pending = (next, nil)
     opening = true
     defer { opening = false }
@@ -551,7 +553,7 @@ final class HelperChat {
         DispatchQueue.main.async {
           guard let self, self.stream == next || self.pending?.stream == next else { return }
           if self.pending?.stream == next { self.pending = nil }
-          else { self.observation = nil; self.stream = UUID() }
+          else { self.observation = nil; self.stream = System.uuid() }
           if case .failure(let error) = result, !(error is CancellationError) {
             self.failed?(error)
           }
@@ -571,6 +573,8 @@ final class HelperChat {
 
   func call<R: Decodable>(_ method: String, input: Input) async throws -> R {
     let generation = generation
+    // The helper acts on the native screen as the app shows it now, not on an older (throttled) publication.
+    await TerminalRuntime.shared.helpers[endpoint]?.current(route.terminal)
     let connection = try await client()
     try Task.checkCancellation()
     guard self.generation == generation else { throw CancellationError() }
@@ -587,8 +591,8 @@ final class HelperChat {
   }
 
   func close() {
-    generation = UUID()
-    stream = UUID()
+    generation = System.uuid()
+    stream = System.uuid()
     opening = false
     if let observation { connection?.cancel(observation) }
     if let id = pending?.id { connection?.cancel(id) }
@@ -620,21 +624,20 @@ final class HelperChat {
     return true
   }
 
-  private func notify(_ method: String, data: Data) {
+  private func notify(_ method: String, data: HelperBinary.Value) {
     do {
-      let decoder = JSONDecoder()
       switch method {
       case "chat.history":
-        let value = try decoder.decode(History.self, from: data)
+        let value = try HelperBinary.decode(History.self, from: data)
         if selector == nil, value.terminal == route.terminal, route.session != value.session {
-          if route.session?.isEmpty == false { generation = UUID() }
+          if route.session?.isEmpty == false { generation = System.uuid() }
           route.session = value.session
         }
         if accepts(value.terminal, session: value.session) { receive?(.history(value)) }
       case "chat.archive":
-        receive?(.archive(try decoder.decode(Page.self, from: data)))
+        receive?(.archive(try HelperBinary.decode(Page.self, from: data)))
       case "chat.records":
-        let value = try decoder.decode(Records.self, from: data)
+        let value = try HelperBinary.decode(Records.self, from: data)
         if accepts(value.terminal, session: value.session) {
           receive?(
             value.replace == true
@@ -642,18 +645,18 @@ final class HelperChat {
               : .records(value.records))
         }
       case "chat.queue":
-        let value = try decoder.decode(Items.self, from: data)
+        let value = try HelperBinary.decode(Items.self, from: data)
         if accepts(value.terminal, session: value.session) { receive?(.queue(value.items, value.error)) }
       case "chat.state":
-        let value = try decoder.decode(Status.self, from: data)
+        let value = try HelperBinary.decode(Status.self, from: data)
         if accepts(value.terminal, session: value.session) { receive?(.state(value.state)) }
       case "interaction.opened":
-        let value = try decoder.decode(Opened.self, from: data)
+        let value = try HelperBinary.decode(Opened.self, from: data)
         if accepts(value.terminal, session: value.session) {
           receive?(.interaction(value.interaction))
         }
       case "terminal.exit":
-        let value = try decoder.decode(HelperClient.Exit.self, from: data)
+        let value = try HelperBinary.decode(HelperClient.Exit.self, from: data)
         if value.terminal == route.terminal { receive?(.exit) }
       default: break
       }

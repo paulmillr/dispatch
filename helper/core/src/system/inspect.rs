@@ -1,7 +1,7 @@
 //! c1654cc process.rs and helper2 system::process, on the fixed workers only.
 use crate::{
     api::{FileIdentity, OpenFile, Process},
-    json::{self, Data, Json},
+    json::Data,
 };
 use std::{
     collections::BTreeSet,
@@ -380,46 +380,11 @@ fn jobs(shell: &Process) -> io::Result<bool> {
     Ok(false)
 }
 
-fn value(p: &Process) -> Data<'_> {
-    Data::Object(vec![
-        ("pid", Data::Unsigned(p.pid.into())),
-        ("parent", Data::Unsigned(p.parent.into())),
-        ("group", Data::Signed(p.group.into())),
-        ("foreground", Data::Signed(p.foreground.into())),
-        ("tty", Data::Unsigned(p.tty)),
-        (
-            "start",
-            Data::Array(p.start.iter().map(|v| Data::Unsigned(*v)).collect()),
-        ),
-        (
-            "executable",
-            Data::String(p.executable.to_str().unwrap_or("")),
-        ),
-        (
-            "arguments",
-            Data::Array(p.arguments.iter().map(|v| Data::String(v)).collect()),
-        ),
-        (
-            "files",
-            Data::Array(
-                p.files
-                    .iter()
-                    .map(|v| {
-                        Data::Object(vec![
-                            ("path", Data::String(v.path.to_str().unwrap_or(""))),
-                            ("device", Data::Unsigned(v.identity.device)),
-                            ("inode", Data::Unsigned(v.identity.inode)),
-                        ])
-                    })
-                    .collect(),
-            ),
-        ),
-    ])
-}
-
+/// One native job: its request and answer are encoded plain values (wire::body).
 pub fn native(name: &str, input: &[u8]) -> io::Result<Vec<u8>> {
-    let json = Json::parse(input).map_err(|_| invalid())?;
-    let root = json.root();
+    let root = crate::wire::body::decode_plain(input).map_err(|_| invalid())?;
+    let root = &root;
+    let write = |value: &Data<'_>| crate::wire::body::encode_plain(value).map_err(|_| invalid());
     match name {
         // Run as an Isolated job: the caller bounds graceful client shutdown.
         "process.terminate" => {
@@ -429,12 +394,12 @@ pub fn native(name: &str, input: &[u8]) -> io::Result<Vec<u8>> {
             let start = root.get("start").and_then(|v| v.array()).ok_or_else(invalid)?
                 .map(|v| v.unsigned().ok_or_else(invalid)).collect::<io::Result<Vec<_>>>()?;
             if start != captured.start
-                || root.get("executable").and_then(|v| v.string()) != captured.executable.to_str()
+                || root.get("executable").and_then(Data::path) != Some(captured.executable.as_path())
                 || root.get("tty").and_then(|v| v.unsigned()) != Some(captured.tty)
                 || root.get("foreground").and_then(|v| v.signed()) != Some(captured.foreground.into())
                 || captured.tty == 0 || captured.group <= 1 || captured.group != captured.foreground
             {
-                return Ok(b"false".to_vec());
+                return write(&Data::Bool(false));
             }
             unsafe extern "C" { fn kill(pid: i32, signal: i32) -> i32; }
             // Same-account process identity and foreground ownership were just checked.
@@ -443,8 +408,8 @@ pub fn native(name: &str, input: &[u8]) -> io::Result<Vec<u8>> {
             for _ in std::iter::repeat(()) {
                 match process(pid) {
                     Ok(current) if current.start == captured.start => {}
-                    Ok(_) => return Ok(b"true".to_vec()),
-                    Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(b"true".to_vec()),
+                    Ok(_) => return write(&Data::Bool(true)),
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => return write(&Data::Bool(true)),
                     Err(error) => return Err(error),
                 }
                 std::thread::sleep(std::time::Duration::from_millis(10));
@@ -476,16 +441,15 @@ pub fn native(name: &str, input: &[u8]) -> io::Result<Vec<u8>> {
             };
             #[cfg(target_os = "macos")]
             let start = [seconds, nanos / 1000];
-            json::write(&Data::Object(vec![(
+            write(&Data::Object(vec![(
                 "start",
                 Data::Array(start.into_iter().map(Data::Unsigned).collect()),
             )]))
-            .map_err(|_| invalid())
         }
         "host.identity" => identity::collect(),
         "process.listeners" => listeners::collect(root),
         "process.same_image" => {
-            json::write(&Data::Bool(image::compare(root)?)).map_err(|_| invalid())
+            write(&Data::Bool(image::compare(root)?))
         }
         "stats.host" | "stats.processes" | "stats.disks" => {
             let local = root
@@ -513,7 +477,7 @@ pub fn native(name: &str, input: &[u8]) -> io::Result<Vec<u8>> {
                 }
             }
             if let Some(executable) = root.get("executable") {
-                if Path::new(executable.string().ok_or_else(invalid)?) != before.executable {
+                if executable.path().ok_or_else(invalid)? != before.executable {
                     return Err(io::ErrorKind::PermissionDenied.into());
                 }
             }
@@ -547,9 +511,9 @@ pub fn native(name: &str, input: &[u8]) -> io::Result<Vec<u8>> {
                 let Ok(key) = std::str::from_utf8(key) else {
                     continue;
                 };
+                // Values are bytes: an environment need not be UTF-8.
                 if name == "process.environment" || names.contains(key) {
-                    let value = std::str::from_utf8(value).map_err(|_| invalid())?;
-                    if selected.insert(key, Data::String(value)).is_some() {
+                    if selected.insert(key, Data::Bytes(value)).is_some() {
                         return Err(invalid());
                     }
                 }
@@ -557,15 +521,15 @@ pub fn native(name: &str, input: &[u8]) -> io::Result<Vec<u8>> {
             if before != snapshot(pid)? {
                 return Err(io::ErrorKind::PermissionDenied.into());
             }
-            json::write(&Data::Object(selected.into_iter().collect())).map_err(|_| invalid())
+            write(&Data::Object(selected.into_iter().collect()))
         }
         "file.program" => {
             let program = root.get("program").and_then(|v| v.string()).ok_or_else(invalid)?;
             if program.is_empty() || program.contains('/') { return Err(invalid()); }
-            let cwd = Path::new(root.get("cwd").and_then(|v| v.string()).ok_or_else(invalid)?);
+            let cwd = root.get("cwd").and_then(Data::path).ok_or_else(invalid)?;
             if !cwd.is_absolute() { return Err(invalid()); }
             let path = root.get("path").and_then(|v| v.string()).ok_or_else(invalid)?;
-            let skip = fs::metadata(root.get("skip").and_then(|v| v.string()).ok_or_else(invalid)?)?;
+            let skip = fs::metadata(root.get("skip").and_then(Data::path).ok_or_else(invalid)?)?;
             for directory in path.split(':') {
                 let candidate = cwd.join(directory).join(program);
                 let Ok(metadata) = fs::metadata(&candidate) else { continue; };
@@ -581,37 +545,25 @@ pub fn native(name: &str, input: &[u8]) -> io::Result<Vec<u8>> {
                     let prefix = String::from_utf8_lossy(&prefix);
                     if prefix.contains(&format!("launch {program}")) || prefix.contains(&format!("'launch' '{program}'")) || prefix.contains(&format!("--{program}-launch")) { continue; }
                 }
-                return json::write(&Data::Object(vec![("path", Data::String(candidate.to_str().ok_or_else(invalid)?))]))
-                    .map_err(|_| invalid());
+                return write(&Data::Object(vec![("path", Data::from(candidate.as_path()))]));
             }
             Err(io::ErrorKind::NotFound.into())
         }
         "file.realpath" => {
-            let path = root
-                .get("path")
-                .and_then(|v| v.string())
-                .ok_or_else(invalid)?;
-            let path = fs::canonicalize(path)?;
-            let path = path.to_str().ok_or_else(invalid)?;
-            json::write(&Data::Object(vec![("path", Data::String(path))])).map_err(|_| invalid())
+            let path = fs::canonicalize(root.get("path").and_then(Data::path).ok_or_else(invalid)?)?;
+            write(&Data::Object(vec![("path", Data::from(path.as_path()))]))
         }
         "file.lstat" => {
-            let path = root
-                .get("path")
-                .and_then(|v| v.string())
-                .ok_or_else(invalid)?;
-            json::write(&metadata(&fs::symlink_metadata(path)?)).map_err(|_| invalid())
+            let path = root.get("path").and_then(Data::path).ok_or_else(invalid)?;
+            write(&metadata(&fs::symlink_metadata(path)?))
         }
         "file.private" => {
-            let path = root
-                .get("path")
-                .and_then(|v| v.string())
-                .ok_or_else(invalid)?;
+            let path = root.get("path").and_then(Data::path).ok_or_else(invalid)?;
             let limit = root
                 .get("limit")
                 .and_then(|v| v.unsigned())
                 .ok_or_else(invalid)?;
-            let file = os::private(Path::new(path))?;
+            let file = os::private(path)?;
             let before = file.metadata()?;
             if !before.is_file() {
                 return Err(io::ErrorKind::InvalidInput.into());
@@ -624,13 +576,12 @@ pub fn native(name: &str, input: &[u8]) -> io::Result<Vec<u8>> {
                 return Err(invalid());
             }
             let after = file.metadata()?;
-            let text = std::str::from_utf8(&source).map_err(|_| invalid())?;
-            json::write(&Data::Object(vec![
+            // Bytes: a file can be anything (an image, a binary config).
+            write(&Data::Object(vec![
                 ("before", metadata(&before)),
                 ("after", metadata(&after)),
-                ("data", Data::String(text)),
+                ("data", Data::Bytes(&source)),
             ]))
-            .map_err(|_| invalid())
         }
         "peer" => {
             let fd = root
@@ -639,11 +590,10 @@ pub fn native(name: &str, input: &[u8]) -> io::Result<Vec<u8>> {
                 .and_then(|v| v.try_into().ok())
                 .ok_or_else(invalid)?;
             let (uid, pid) = os::peer(fd)?;
-            json::write(&Data::Object(vec![
+            write(&Data::Object(vec![
                 ("uid", Data::Unsigned(uid.into())),
                 ("pid", Data::Unsigned(pid.into())),
             ]))
-            .map_err(|_| invalid())
         }
         "process" => {
             let pid = root
@@ -704,23 +654,18 @@ pub fn native(name: &str, input: &[u8]) -> io::Result<Vec<u8>> {
             if current.start != p.start || current.executable != p.executable {
                 return Err(io::ErrorKind::PermissionDenied.into());
             }
-            let Data::Object(mut fields) = value(&p) else {
+            let Data::Object(mut fields) = p.value() else {
                 unreachable!()
             };
             // SAFETY: process() has already verified ownership against this account.
             fields.extend([
                 ("uid", Data::Unsigned(unsafe { getuid() }.into())),
                 ("started_at", Data::Real(epoch)),
-                (
-                    "cwd",
-                    cwd.as_ref()
-                        .and_then(|path| path.to_str())
-                        .map_or(Data::Null, Data::String),
-                ),
+                ("cwd", cwd.as_deref().map_or(Data::Null, Data::from)),
                 ("pid_domain", Data::String(&domain)),
                 ("proc_start", Data::String(&label)),
             ]);
-            json::write(&Data::Object(fields)).map_err(|_| invalid())
+            write(&Data::Object(fields))
         }
         // {pid,start:[u64;2]} -> {idle:bool}; unchanged close policy, bound to exact birth.
         "idle" => {
@@ -750,7 +695,7 @@ pub fn native(name: &str, input: &[u8]) -> io::Result<Vec<u8>> {
             {
                 return Err(io::ErrorKind::PermissionDenied.into());
             }
-            json::write(&Data::Object(vec![("idle", Data::Bool(idle))])).map_err(|_| invalid())
+            write(&Data::Object(vec![("idle", Data::Bool(idle))]))
         }
         "foreground" => {
             let tty = root
@@ -763,10 +708,10 @@ pub fn native(name: &str, input: &[u8]) -> io::Result<Vec<u8>> {
                 ("group", Data::Signed(group.into())),
                 (
                     "processes",
-                    Data::Array(members.iter().map(value).collect()),
+                    Data::Array(members.iter().map(Process::value).collect()),
                 ),
             ]);
-            json::write(&data).map_err(|_| invalid())
+            write(&data)
         }
         _ => Err(io::ErrorKind::Unsupported.into()),
     }

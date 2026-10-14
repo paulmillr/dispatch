@@ -20,13 +20,32 @@ public struct Launch {
 
     public struct Failure: Error {}
 
+    /// What a surface reads of the machine (Ghostty: the passwd entry, whether login is quiet, its own executable, the
+    /// machine's name OSC 7 accepts file URLs for): the embedder hands it in and decides where it comes from; `current`
+    /// reads this machine.
+    public struct Machine: Sendable {
+        public let name: String?, home: String?, shell: String?, quiet: Bool, executable: String?, host: String
+        public init(name: String?, home: String?, shell: String?, quiet: Bool, executable: String?, host: String) {
+            (self.name, self.home, self.shell, self.quiet, self.executable, self.host) = (name, home, shell, quiet, executable, host)
+        }
+        /// The passwd entry (os/passwd.zig), ~/.hushlogin, std.process.executablePath, gethostname.
+        public static var current: Self {
+            let pw = Launch.user()
+            let quiet = pw.home.map { Launch.opens($0, directory: true) && access($0 + "/.hushlogin", F_OK) == 0 } ?? false
+            var name = [CChar](repeating: 0, count: 256)
+            gethostname(&name, 255)
+            return .init(name: pw.name, home: pw.home, shell: pw.shell, quiet: quiet, executable: Launch.executable(),
+                         host: String(cString: name))
+        }
+    }
+
     /// `command`, `directory`, `overrides`: the surface's options (nil or empty: the config's);
-    /// `environment`: the process's; `resources`: Ghostty's resources directory
-    /// (GHOSTTY_RESOURCES_DIR); `id`: GHOSTTY_SURFACE_ID.
+    /// `environment`: the process's; `machine`: what it reads of the machine; `resources`: Ghostty's resources
+    /// directory (GHOSTTY_RESOURCES_DIR); `id`: GHOSTTY_SURFACE_ID.
     /// Throws where Ghostty fails the surface (bash's injected flags past their 32 bytes).
     public init(command: String?, directory: String?, overrides: [(String, String)], config: Config, environment: [String: String],
-                resources: String?, id: UInt64) throws {
-        let pw = Self.user(), desktop = Self.desktop(environment)
+                machine: Machine, resources: String?, id: UInt64) throws {
+        let pw = machine, desktop = Self.desktop(environment)
         // Config.finalize: SHELL only when started from a terminal, else the passwd shell; the
         // working directory: inherited from a terminal, else home.
         let cli = !desktop && (environment["TERM_PROGRAM"].map { !$0.isEmpty } == true || CommandLine.arguments.count > 1)
@@ -58,7 +77,7 @@ public struct Launch {
         } else {
             (env["TERM"], env["COLORTERM"]) = ("xterm-256color", "truecolor")
         }
-        if let exe = Self.executable(), let bin = Self.dirname(exe) {
+        if let exe = machine.executable, let bin = Self.dirname(exe) {
             env["GHOSTTY_BIN_DIR"] = bin
             if let path = env["PATH"] {
                 if !path.split(separator: ":").contains(where: { $0 == bin }) { env["PATH"] = path.isEmpty ? bin : path + ":" + bin }
@@ -192,7 +211,7 @@ public struct Launch {
             guard opens(script, directory: false) else { env["GHOSTTY_BASH_ENV"] = nil; return nil }
             (env["ENV"], env["GHOSTTY_BASH_INJECT"]) = (script, inject)
             if let rcfile { env["GHOSTTY_BASH_RCFILE"] = rcfile }
-            if env["HISTFILE"] == nil, let home = Config.home(ProcessInfo.processInfo.environment) {
+            if env["HISTFILE"] == nil, let home = Config.home(env) {
                 (env["HISTFILE"], env["GHOSTTY_BASH_UNEXPORT_HISTFILE"]) = (home + "/.bash_history", "1")
             }
             return join(out)
@@ -249,12 +268,11 @@ public struct Launch {
     // MARK: Exec.zig execCommand
 
     /// macOS: login(1) runs the command in a login shell (quietly with ~/.hushlogin); else /bin/sh -c.
-    static func exec(_ command: String, _ pw: (name: String?, home: String?, shell: String?), home: String?) -> [String] {
+    static func exec(_ command: String, _ pw: Machine, home: String?) -> [String] {
         #if os(macOS)
         if let name = pw.name {
-            let hush = pw.home.map { opens($0, directory: true) && access($0 + "/.hushlogin", F_OK) == 0 } ?? false
             // login resets HOME even with -p; restore explicit overrides before the shell starts.
-            return ["/usr/bin/login"] + (hush ? ["-q"] : []) + ["-flp", name]
+            return ["/usr/bin/login"] + (pw.quiet ? ["-q"] : []) + ["-flp", name]
                 + (home.map { ["/usr/bin/env", "HOME=" + $0] } ?? [])
                 + ["/bin/bash", "--noprofile", "--norc", "-c", "exec -l " + command]
         }

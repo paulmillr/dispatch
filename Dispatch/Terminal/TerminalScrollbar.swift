@@ -9,7 +9,7 @@ final class TerminalHistory {
     private var active = false
     private var pending: UInt64?
     private var task: Task<Void, Never>?
-    private var generation = UUID()
+    private var generation = System.uuid()
 
     init(seek: @escaping (UInt64) async throws -> Void, changed: @escaping (TerminalScrollState) -> Void) {
         self.seek = seek; self.changed = changed
@@ -19,7 +19,7 @@ final class TerminalHistory {
         guard value != active else { return }
         active = value
         if !value {
-            generation = UUID()
+            generation = System.uuid()
             task?.cancel(); task = nil; pending = nil
             changed(state)
         }

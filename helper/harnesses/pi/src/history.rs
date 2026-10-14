@@ -7,6 +7,7 @@ use crate::{
 use dispatch_helper_core::{
     api::*,
     json::{self, Data, Json, Value},
+    wire::body::Encoded,
     rpc::Reverse,
 };
 use std::{cell::RefCell, rc::Rc};
@@ -154,12 +155,10 @@ pub fn archive(runtime: &Shared, io: &mut dyn Io, source: &Transcript, done: Don
     let key = (source.path.clone(), source.session.clone());
     let previous = match source
         .later
-        .as_deref()
-        .filter(|cursor| !cursor.is_empty())
+        .as_ref()
         .map(|cursor| {
-            let document = Json::parse(cursor.as_bytes())?;
-            let value = document.root();
-            let optional = |name| value.get(name).and_then(Value::string).map(str::to_owned);
+            let value = cursor.root();
+            let optional = |name| value.get(name).and_then(Data::string).map(str::to_owned);
             let key = digest(format!("{:?}", (&source.path, &source.session)).as_bytes());
             let decoded = (|| {
                 Some(Saved {
@@ -185,7 +184,7 @@ pub fn archive(runtime: &Shared, io: &mut dyn Io, source: &Transcript, done: Don
                 })
             })();
             decoded
-                .filter(|_| text(value, "key") == key)
+                .filter(|_| value.get("key").and_then(Data::string) == Some(key.as_str()))
                 .ok_or_else(|| bridge::fail("history", "Invalid Pi transcript cursor."))
         })
         .transpose()
@@ -213,7 +212,7 @@ pub fn archive(runtime: &Shared, io: &mut dyn Io, source: &Transcript, done: Don
                             page: Page::default(),
                             state: State::default(),
                             snapshot: Snapshot {
-                                later: String::new(),
+                                later: None,
                                 session: None,
                                 version: None,
                                 generation: String::new(),
@@ -294,8 +293,7 @@ pub fn archive(runtime: &Shared, io: &mut dyn Io, source: &Transcript, done: Don
                 ] {
                     fields.push((name, value.map(Data::String).unwrap_or(Data::Null)));
                 }
-                String::from_utf8(json::write(&Data::Object(fields)).expect("Pi cursor encoding"))
-                    .expect("JSON is UTF-8")
+                Some(Encoded::value(&Data::Object(fields)).expect("Pi cursor encoding"))
             };
             done(
                 io,

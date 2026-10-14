@@ -366,6 +366,7 @@ impl Tmux {
                 remote: false,
                 identity: None,
                 pending: BTreeMap::new(),
+                order: Default::default(),
             },
         );
         let mut command = self.native(key);

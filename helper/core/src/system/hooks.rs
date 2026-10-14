@@ -7,7 +7,7 @@ use super::{
 };
 use crate::{
     api::Event,
-    json::{self, Data, Json},
+    json::{Data, Json},
     wire,
 };
 use std::{
@@ -29,13 +29,8 @@ use std::{
 pub(super) const LIMIT: u32 = 1_048_576;
 
 pub(super) fn endpoint(input: &[u8]) -> io::Result<Vec<u8>> {
-    let doc = Json::parse(input).map_err(|_| io::ErrorKind::InvalidInput)?;
-    let path = doc
-        .root()
-        .get("path")
-        .and_then(|v| v.string())
-        .ok_or(io::ErrorKind::InvalidInput)?;
-    let path = Path::new(path);
+    let input = crate::wire::body::decode_plain(input).map_err(|_| io::ErrorKind::InvalidInput)?;
+    let path = input.get("path").and_then(Data::path).ok_or(io::ErrorKind::InvalidInput)?;
     if !path.is_absolute() {
         return Err(io::ErrorKind::InvalidInput.into());
     }
@@ -84,7 +79,7 @@ pub(super) fn endpoint(input: &[u8]) -> io::Result<Vec<u8>> {
             Data::Unsigned(value.mode().into()),
         ]);
     }
-    json::write(&Data::Object(vec![
+    crate::wire::body::encode_plain(&Data::Object(vec![
         ("uid", Data::Unsigned(uid.into())),
         ("stamp", Data::Array(stamp)),
     ]))
@@ -132,6 +127,23 @@ pub(super) struct Hooks {
 /// Running helpers hold `lock` in their run, session and build folders; `collect` removes the
 /// folders nobody holds.
 pub(super) const ROOT: &str = ".dispatch";
+
+/// The section of hook senders' ownership questions (question 1, B4): the helper answers them like any hook, recorded.
+pub(crate) const OWNER: &str = "hook.owner";
+
+/// A question 1 body: the asking process's chain (pid, tty), nearest first.
+pub(crate) fn chain(body: &[u8]) -> Option<Vec<(u32, u64)>> {
+    let input = crate::wire::body::decode_plain(body).ok()?;
+    input
+        .get("chain")?
+        .array()?
+        .map(|link| {
+            let mut link = link.array()?;
+            let pid = u32::try_from(link.next()?.unsigned()?).ok()?;
+            Some((pid, link.next()?.unsigned()?))
+        })
+        .collect()
+}
 
 /// The account's Dispatch directory under `home`.
 pub(super) fn base_in(home: &Path) -> PathBuf {
@@ -232,7 +244,7 @@ impl Hooks {
             }
         }
         // The full nonce already identifies this run; a PID only consumes socket path space.
-        let directory = runs.join(super::capture::hex(random));
+        let directory = runs.join(random.iter().map(|byte| format!("{byte:02x}")).collect::<String>());
         fs::DirBuilder::new().mode(0o700).create(&directory)?;
         let flags = native::O_DIRECTORY | native::O_NOFOLLOW | native::O_CLOEXEC;
         let anchor = File::options()
@@ -372,10 +384,12 @@ impl Hooks {
     fn remove(&mut self, fd: RawFd) -> Option<(String, Event)> {
         let peer = self.peers.remove(&fd)?;
         (peer.delivered && !peer.answered).then(|| {
-            (
-                if peer.header.is_some_and(|header| header.id == 3) { "launch".into() } else { self.routes[&peer.route].section.clone() },
-                Event::Closed { reply: peer.token },
-            )
+            let section = match peer.header.map(|header| header.id) {
+                Some(1) => OWNER.into(),
+                Some(3) => "launch".into(),
+                _ => self.routes[&peer.route].section.clone(),
+            };
+            (section, Event::Closed { reply: peer.token })
         })
     }
     pub fn hold(&mut self, token: u64, until: Instant) -> io::Result<()> {
@@ -393,9 +407,6 @@ impl Hooks {
             .iter_mut()
             .find(|(_, p)| p.token == token && p.delivered && !p.answered)
             .ok_or(io::ErrorKind::NotFound)?;
-        if !bytes.is_empty() {
-            Json::parse(bytes).map_err(|_| io::ErrorKind::InvalidInput)?;
-        }
         let frame = wire::packet(
             wire::Kind::Response,
             peer.header.map_or(0, |header| header.id),
@@ -412,7 +423,6 @@ impl Hooks {
         &mut self,
         ready: Ready,
         reactor: &mut Reactor,
-        owner: Option<&super::Owner>,
     ) -> io::Result<Vec<(String, Event)>> {
         let mut events = Vec::new();
         for (&token, route) in &self.routes {
@@ -507,34 +517,21 @@ impl Hooks {
                         }
                         if ended {
                             let header = peer.header.ok_or(io::ErrorKind::InvalidData)?;
-                            // Question 1 (B4): does this helper own the asking process
-                            // (`chain`: its pid/tty and its ancestors')? Answered here.
+                            // Question 1 (B4): does this helper own the asking process (`chain`: its
+                            // pid/tty and its ancestors')? The helper answers it (reply), recorded.
                             if header.id == 1 && header.kind == wire::Kind::Request {
-                                let input = Json::parse(&peer.input)
-                                    .map_err(|_| io::ErrorKind::InvalidData)?;
-                                let chain = input
-                                    .root()
-                                    .get("chain")
-                                    .and_then(|chain| chain.array())
-                                    .ok_or(io::ErrorKind::InvalidData)?
-                                    .map(|link| {
-                                        let mut link = link.array()?;
-                                        let pid = u32::try_from(link.next()?.unsigned()?).ok()?;
-                                        Some((pid, link.next()?.unsigned()?))
-                                    })
-                                    .collect::<Option<Vec<_>>>()
-                                    .ok_or(io::ErrorKind::InvalidData)?;
-                                let bound = owner.and_then(|owner| owner(&chain));
-                                let answer = json::write(&Data::Object(vec![
-                                    ("owned", Data::Bool(bound.is_some())),
-                                    ("bound", Data::Bool(bound == Some(true))),
-                                ]))
-                                .map_err(|_| io::ErrorKind::InvalidData)?;
-                                peer.output
-                                    .push(wire::packet(wire::Kind::Response, 1, &answer).unwrap())
-                                    .unwrap();
-                                (peer.delivered, peer.answered) = (true, true);
-                                reactor.interest(ready.fd, true, true)?;
+                                chain(&peer.input).ok_or(io::ErrorKind::InvalidData)?;
+                                peer.deadline = Some(Instant::now() + Duration::from_secs(45));
+                                peer.delivered = true;
+                                events.push((
+                                    OWNER.into(),
+                                    Event::Hook {
+                                        peer: peer.pid,
+                                        route: peer.route,
+                                        message: std::mem::take(&mut peer.input),
+                                        reply: Some(peer.token),
+                                    },
+                                ));
                                 return Ok(false);
                             }
                             let setup = header.id == 2 && header.kind == wire::Kind::Request;
@@ -544,14 +541,15 @@ impl Hooks {
                             {
                                 return Ok(true);
                             }
-                            // A hook message is one JSON document.
-                            let message =
-                                Json::parse(&peer.input).map_err(|_| io::ErrorKind::InvalidData)?;
-                            if header.kind == wire::Kind::Notify
-                                && message.root().get("event").and_then(|v| v.string())
-                                    == Some("request.closed")
-                            {
-                                return Ok(true);
+                            // An agent's hook message is its own JSON document; setup and launch
+                            // requests are our values.
+                            if !setup && !launch {
+                                let message = Json::parse(&peer.input).map_err(|_| io::ErrorKind::InvalidData)?;
+                                if header.kind == wire::Kind::Notify
+                                    && message.root().get("event").and_then(|v| v.string()) == Some("request.closed")
+                                {
+                                    return Ok(true);
+                                }
                             }
                             // Shared 45 s; a producer extends its own waits with Io::hold.
                             peer.deadline = (!launch).then(|| Instant::now() + Duration::from_secs(45));
@@ -559,10 +557,11 @@ impl Hooks {
                             let section = if launch {
                                 "launch".into()
                             } else if setup {
-                                let section = message
-                                    .root()
+                                let request = crate::wire::body::decode_plain(&peer.input)
+                                    .map_err(|_| io::ErrorKind::InvalidData)?;
+                                let section = request
                                     .get("section")
-                                    .and_then(|v| v.string())
+                                    .and_then(Data::string)
                                     .filter(|s| {
                                         s.strip_prefix("harness/")
                                             .is_some_and(|n| n.parse::<usize>().is_ok())
@@ -584,7 +583,7 @@ impl Hooks {
                             ));
                             if header.kind == wire::Kind::Notify {
                                 peer.output
-                                    .push(wire::packet(wire::Kind::Response, 0, b"{}").unwrap())
+                                    .push(wire::packet(wire::Kind::Response, 0, &[]).unwrap())
                                     .unwrap();
                                 peer.answered = true;
                                 reactor.interest(ready.fd, true, true)?;

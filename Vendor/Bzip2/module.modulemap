@@ -1,0 +1,6 @@
+// The bzip2 library that ships with macOS (no package): the app journal's capture files (AppReplay).
+module CBzip2 [system] {
+    header "shim.h"
+    link "bz2"
+    export *
+}

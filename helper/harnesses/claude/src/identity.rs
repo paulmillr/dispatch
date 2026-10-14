@@ -5,7 +5,8 @@ use crate::{
 };
 use dispatch_helper_core::{
     api::*,
-    json::{self, Data, Json, Kind, Value},
+    json::{Data, Json, Kind, Value},
+    wire::body::{self, Encoded},
 };
 use std::{
     collections::BTreeSet,
@@ -65,15 +66,18 @@ pub(crate) struct Probe {
     pub remote: bool,
     pub hook: Option<String>,
     stage: u8,
-    facts: Option<Json>,
+    /// The native `process` answer of the first stage.
+    facts: Option<Encoded>,
 }
 
 /// Claude's configuration directory for a process environment: e076fd7 ClaudeAgent.swift:129-131
 /// `CLAUDE_CONFIG_DIR ?? (HOME ?? app home) + "/.claude"`; the account home is only the fallback.
-pub(crate) fn home(environment: Value<'_>, account: Option<PathBuf>) -> Option<PathBuf> {
-    text(environment, "CLAUDE_CONFIG_DIR")
+/// From a native environment answer (values are bytes, as paths).
+pub(crate) fn home(environment: &Data<'_>, account: Option<PathBuf>) -> Option<PathBuf> {
+    let path = |name| environment.get(name).and_then(Data::path);
+    path("CLAUDE_CONFIG_DIR")
         .map(PathBuf::from)
-        .or_else(|| text(environment, "HOME").map(|s| PathBuf::from(s).join(".claude")))
+        .or_else(|| path("HOME").map(|home| home.join(".claude")))
         .or_else(|| account.map(|s| s.join(".claude")))
 }
 pub(crate) fn same(left: &Process, right: &Process) -> bool {
@@ -87,7 +91,7 @@ pub(crate) fn same(left: &Process, right: &Process) -> bool {
 fn native(name: &'static str, fields: Vec<(&str, Data<'_>)>) -> Result<Job, Error> {
     Ok(Job::Native {
         name,
-        input: json::write(&Data::Object(fields))?,
+        value: body::encode_plain(&Data::Object(fields))?,
     })
 }
 
@@ -124,26 +128,26 @@ impl Probe {
             }
             return Ok(None);
         }
-        let Output::Bytes(bytes) = output else {
+        let Output::Value(bytes) = output else {
             return Err(error("identity", "Missing Claude identity facts"));
         };
-        let doc = Json::parse(&bytes)?;
-        let root = doc.root();
+        let doc = Encoded::plain(&bytes)?;
+        let root = &doc.root();
         let job = match self.stage {
             0 => {
                 let start = root
                     .get("start")
-                    .and_then(Value::array)
-                    .map(|v| v.map(Value::unsigned).collect::<Option<Vec<_>>>())
+                    .and_then(Data::array)
+                    .map(|v| v.map(Data::unsigned).collect::<Option<Vec<_>>>())
                     .flatten();
-                if root.get("pid").and_then(Value::unsigned) != Some(self.process.pid.into())
+                if root.get("pid").and_then(Data::unsigned) != Some(self.process.pid.into())
                     || start.as_deref() != Some(self.process.start.as_slice())
-                    || text(root, "executable").map(Path::new)
+                    || root.get("executable").and_then(Data::path)
                         != Some(self.process.executable.as_path())
                 {
                     return Err(error("changed", "Claude process changed"));
                 }
-                self.facts = Some(doc);
+                self.facts = Some(doc.clone());
                 native(
                     "environment",
                     vec![
@@ -173,37 +177,34 @@ impl Probe {
                 native(
                     "file.private",
                     vec![
-                        (
-                            "path",
-                            Data::String(
-                                path.to_str()
-                                    .ok_or_else(|| error("identity", "Invalid Claude path"))?,
-                            ),
-                        ),
+                        ("path", Data::from(path.as_path())),
                         ("limit", Data::Unsigned(65_536)),
                     ],
                 )?
             }
             2 => {
-                let facts = self.facts.as_ref().unwrap().root();
+                let facts = &self.facts.as_ref().unwrap().root();
                 let before = root
                     .get("before")
                     .ok_or_else(|| error("identity", "Missing registration metadata"))?;
                 let after = root
                     .get("after")
                     .ok_or_else(|| error("identity", "Missing registration metadata"))?;
-                let data =
-                    text(root, "data").ok_or_else(|| error("identity", "Missing registration"))?;
-                if before.write()? != after.write()?
-                    || text(before, "kind") != Some("file")
-                    || before.get("uid").and_then(Value::unsigned)
-                        != facts.get("uid").and_then(Value::unsigned)
-                    || before.get("size").and_then(Value::unsigned) != Some(data.len() as u64)
+                // The registration file is Claude's own JSON; read as the bytes it is.
+                let data = root
+                    .get("data")
+                    .and_then(Data::bytes)
+                    .ok_or_else(|| error("identity", "Missing registration"))?;
+                if body::encode_plain(before)? != body::encode_plain(after)?
+                    || before.get("kind").and_then(Data::string) != Some("file")
+                    || before.get("uid").and_then(Data::unsigned)
+                        != facts.get("uid").and_then(Data::unsigned)
+                    || before.get("size").and_then(Data::unsigned) != Some(data.len() as u64)
                 {
                     return Err(error("identity", "Claude registration changed"));
                 }
                 let session = decode(
-                    data.as_bytes(),
+                    data,
                     facts,
                     &self.process,
                     self.home.as_ref().unwrap(),
@@ -230,7 +231,7 @@ impl Probe {
 
 pub fn decode(
     bytes: &[u8],
-    facts: Value<'_>,
+    facts: &Data<'_>,
     process: &Process,
     home: &Path,
     remote: bool,
@@ -241,7 +242,7 @@ pub fn decode(
     }
     let doc = Json::parse(bytes)?;
     let root = doc.root();
-    let domain = text(facts, "pid_domain").ok_or_else(invalid)?;
+    let domain = facts.get("pid_domain").and_then(Data::string).ok_or_else(invalid)?;
     let local = !remote && domain == "darwin";
     if !local {
         let known = [
@@ -285,7 +286,7 @@ pub fn decode(
     let cwd = text(root, "cwd")
         .filter(|s| s.starts_with('/') && (local || s.len() <= 4096))
         .ok_or_else(invalid)?;
-    let label = text(facts, "proc_start").ok_or_else(invalid)?;
+    let label = facts.get("proc_start").and_then(Data::string).ok_or_else(invalid)?;
     let started = root
         .get("startedAt")
         .and_then(Value::number)
@@ -296,7 +297,7 @@ pub fn decode(
     } else {
         facts
             .get("started_at")
-            .and_then(Value::number)
+            .and_then(Data::number)
             .ok_or_else(invalid)?
     };
     let tolerance = if domain.starts_with("linux:") {

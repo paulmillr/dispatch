@@ -6,7 +6,7 @@ import XCTest
 @MainActor
 enum CodexTestSupport {
     static let scripts = ["codex_fixture.py", "fixture_barriers.py", "codex_pty.py"]
-    static let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+    static let root = System.checkout
 
     static func requireBinary() throws -> String {
         let path = TestSupport.tool("codex")
@@ -45,12 +45,10 @@ enum CodexTestSupport {
         guard FileManager.default.fileExists(atPath: directory.path) else { return "" }
         let lsof = Process(), output = Pipe()
         lsof.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
-        lsof.arguments = options + ["+D", directory.resolvingSymlinksInPath().path]
+        lsof.arguments = options + ["+D", System.resolve(directory).path]
         lsof.standardOutput = output; lsof.standardError = FileHandle.nullDevice
-        guard (try? lsof.run()) != nil else { return "" }
-        let report = output.fileHandleForReading.readDataToEndOfFile()
-        lsof.waitUntilExit()
-        return String(decoding: report, as: UTF8.self)
+        guard let exit = try? TestSupport.live(lsof) else { return "" }
+        return String(decoding: exit.output, as: UTF8.self)
     }
 
     static func process(_ terminal: TerminalView) -> CodexProcess? {
@@ -67,7 +65,7 @@ enum CodexTestSupport {
     }
 
     static func conversationRequests(in state: URL) throws -> [[String: Any]] {
-        try String(contentsOf: state.appendingPathComponent("requests.jsonl"), encoding: .utf8)
+        try String(decoding: System.read(state.appendingPathComponent("requests.jsonl")), as: UTF8.self)
             .split(separator: "\n").map {
                 try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any])
             }.filter { $0["kind"] as? String == "conversation" }
@@ -124,11 +122,11 @@ final class CodexEndpointFixture {
     }
 
     func start(timeout: Duration, file: StaticString = #filePath, line: UInt = #line) async throws {
-        let socket = state.appendingPathComponent("codex-home/app-server-control/app-server-control.sock").resolvingSymlinksInPath().path
+        let socket = System.resolve(state.appendingPathComponent("codex-home/app-server-control/app-server-control.sock")).path
         XCTAssertLessThan(socket.utf8.count, MemoryLayout.size(ofValue: sockaddr_un().sun_path),
                           "Codex's control socket exceeds the native path limit: " + socket, file: file, line: line)
-        _ = try await AppReplay.run(kind: "fixture.codex.start", input: JSONEncoder().encode(AppReplay.Launch(process))) {
-            try self.process.run()
+        _ = try await AppReplay.run(kind: "fixture.codex.start", input: AppReplay.value(AppReplay.Launch(process))) {
+            try TestSupport.start(self.process)
             try await TestSupport.eventually(timeout: timeout, file: file, line: line,
                                              diagnostic: "Local Codex endpoint did not start: " + self.state.path) {
                 guard self.process.isRunning else {
@@ -142,19 +140,19 @@ final class CodexEndpointFixture {
                 // removes hooks when requested. File existence alone is not readiness.
                 return self.hooks || !FileManager.default.fileExists(atPath: self.state.appendingPathComponent("codex-home/hooks.json").path)
             }
-            return Data()
+            return .null
         }
     }
 
     /// Loopback SSH agents share this disposable fixture filesystem. Reading
     /// it here observes CLI consumption independently of the revoked app reader.
     func waitForTurnCompletion(path: String, sessionID: String, turn: String) async throws {
-        let root = state.resolvingSymlinksInPath().standardizedFileURL.path
-        let transcript = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
+        let root = System.resolve(state).standardizedFileURL.path
+        let transcript = System.resolve(URL(fileURLWithPath: path)).standardizedFileURL.path
         _ = try XCTUnwrap(transcript.hasPrefix(root + "/") ? true : nil,
                           "Transcript is outside this fixture: " + transcript)
-        let completed = try JSONDecoder().decode(Bool.self, from: await AppReplay.run(kind: "fixture.codex.completed",
-            input: JSONEncoder().encode([path, sessionID, turn])) {
+        let completed = try AppReplay.decode(Bool.self, await AppReplay.run(kind: "fixture.codex.completed",
+            input: AppReplay.value([path, sessionID, turn])) {
             // Codex's rollout: an event_msg task_complete or turn_aborted carrying the turn's id ends it.
             func ended(_ line: Substring) -> Bool {
                 guard let record = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
@@ -165,17 +163,17 @@ final class CodexEndpointFixture {
             let deadline = ContinuousClock.now.advanced(by: .seconds(20))
             while ContinuousClock.now < deadline {
                 let text = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
-                if text.split(separator: "\n").contains(where: ended) { return try JSONEncoder().encode(true) }
+                if text.split(separator: "\n").contains(where: ended) { return .bool(true) }
                 try await Task.sleep(for: .milliseconds(25))
             }
-            return try JSONEncoder().encode(false)
+            return .bool(false)
         })
         if !completed { XCTFail("The real agent did not record completion for turn " + turn) }
     }
 
     /// Send a synthetic native hook from a real child of the selected fixture TUI.
     func hook(pid: pid_t, payload: Data) async throws -> Data {
-        try await AppReplay.run(kind: "fixture.codex.hook", input: JSONEncoder().encode([String(pid), String(decoding: payload, as: UTF8.self)])) {
+        AppReplay.bytes(try await AppReplay.run(kind: "fixture.codex.hook", input: .array([.string(String(pid)), .bytes(payload)])) {
             let directory = self.state.appendingPathComponent("hook-\(pid)")
             try await TestSupport.eventually { FileManager.default.fileExists(atPath: directory.path) }
             let request = directory.appendingPathComponent("request.json")
@@ -184,14 +182,14 @@ final class CodexEndpointFixture {
             try await TestSupport.eventually(timeout: .seconds(60)) { FileManager.default.fileExists(atPath: reply.path) }
             let value = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: reply)) as? [String: Any])
             XCTAssertEqual(value["status"] as? Int, 0, "Hook fixture failed: \(value)")
-            return Data((try XCTUnwrap(value["output"] as? String)).utf8)
-        }
+            return .bytes(Data((try XCTUnwrap(value["output"] as? String)).utf8))
+        })
     }
 
     func stop(removeState: Bool) {
         do {
             let failed = try TestSupport.fixture("codex.stop", input: [state.path, String(removeState)]) {
-                if process.isRunning { process.terminate(); process.waitUntilExit() }
+                if process.isRunning { process.terminate(); process.wait() }
                 let failed = process.processIdentifier > 0 && process.terminationStatus != 0
                 if removeState && !failed { CodexTestSupport.removeFixture(state) }
                 else { print("Codex fixture retained at " + state.path) }

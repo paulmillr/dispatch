@@ -86,7 +86,7 @@ final class HelperSession: @unchecked Sendable {
   fileprivate var pid: Int32 { identifier.lock.withLock { identifier.value } }
 
   init(process: Process) async throws {
-    let ticket = try AppReplay.open(kind: "helper", input: JSONEncoder().encode(AppReplay.Launch(process)))
+    let ticket = try AppReplay.open(kind: "helper", input: AppReplay.value(AppReplay.Launch(process)))
     let identifier = Identifier()
     self.identifier = identifier
     let input = Pipe()
@@ -96,7 +96,7 @@ final class HelperSession: @unchecked Sendable {
     let (exited, continuation) = AsyncStream<Int32>.makeStream(
       bufferingPolicy: .bufferingNewest(1))
     process.terminationHandler = { process in
-      try? ticket?.emit(kind: "exit", data: JSONEncoder().encode(process.terminationStatus))
+      try? ticket?.emit(kind: "exit", value: AppReplay.value(process.terminationStatus))
       continuation.yield(process.terminationStatus)
       continuation.finish()
     }
@@ -104,9 +104,9 @@ final class HelperSession: @unchecked Sendable {
       do {
         try process.run()
         identifier.lock.withLock { identifier.value = process.processIdentifier }
-        try ticket?.emit(kind: "started", data: JSONEncoder().encode(process.processIdentifier))
+        try ticket?.emit(kind: "started", value: AppReplay.value(process.processIdentifier))
       } catch {
-        try ticket?.emit(kind: "error", data: JSONEncoder().encode(AppReplay.Failure(error)))
+        try ticket?.emit(kind: "error", value: AppReplay.value(AppReplay.Failure(error)))
         throw error
       }
     }
@@ -117,7 +117,7 @@ final class HelperSession: @unchecked Sendable {
       exited: { result in
         do {
           let event = try result.get()
-          let value = try JSONDecoder().decode(Int32.self, from: event.data)
+          let value = try AppReplay.decode(Int32.self, event.value)
           if event.kind == "in.started" { identifier.lock.withLock { identifier.value = value } }
           else { continuation.yield(value); continuation.finish() }
         } catch {
@@ -143,8 +143,7 @@ final class HelperSession: @unchecked Sendable {
       try await connection.configure(
         limit: limit, chunkKind: chunkKind, chunkLimit: chunkLimit, ops: info.ops)
     } catch {
-      connection.close()
-      if process.isRunning { process.terminate() }
+      Self.close(connection, process)
       throw error
     }
   }
@@ -153,11 +152,13 @@ final class HelperSession: @unchecked Sendable {
     close()
   }
 
+  func close() { Self.close(connection, process) }
+
   /// EOF on its stdin is the helper's orderly shutdown (replies and capture flushed; SIGTERM would
-  /// lose the capture's last rows); one still running a second later is terminated.
-  func close() {
+  /// lose the capture's last rows, all of them while it starts); one still running a second later
+  /// is terminated. Also when its hello failed.
+  private static func close(_ connection: HelperConnection, _ process: Process) {
     connection.close()
-    let process = process
     DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + .seconds(1)) {
       if process.isRunning { process.terminate() }
     }
@@ -193,11 +194,11 @@ actor HelperApp {
   /// terminal's helper, and an app launched from there must not adopt it.
   static var executable: URL? {
     #if DEBUG
-    if Home.testing, let path = ProcessInfo.processInfo.environment["DISPATCH_HELPER_EXECUTABLE"] {
+    if System.testing, let path = System.environment("DISPATCH_HELPER_EXECUTABLE") {
       return URL(fileURLWithPath: path)
     }
     #endif
-    return Bundle.main.url(forResource: "dispatch-helper", withExtension: nil)
+    return System.resources.appendingPathComponent("dispatch-helper")
   }
 
 
@@ -210,7 +211,7 @@ actor HelperApp {
     if pending == nil {
       closing = nil
       pending = (
-        UUID(),
+        System.uuid(),
         Task {
           let process = Process()
           process.executableURL = Self.executable

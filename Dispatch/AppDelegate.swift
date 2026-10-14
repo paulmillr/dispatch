@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     var window: NSWindow! {
         // Read the traffic lights once, outside SwiftUI rendering: querying AppKit frames from a body forces reentrant layout.
         didSet {
+            (window as? MainWindow)?.state = windowState
             guard let button = window?.standardWindowButton(.zoomButton) else { return }
             windowState.nativeControlsInset = button.convert(button.bounds, to: nil).maxX + 16
         }
@@ -60,7 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
 
     init(settings: SettingsStore = SettingsStore(),
-         hostSessionStore: HostSessionStore? = ProcessInfo.processInfo.environment["DISPATCH_TESTING"] == "1" ? nil : .standard) {
+         hostSessionStore: HostSessionStore? = System.testing ? nil : .standard) {
         self.settings = settings
         self.hostSessionStore = hostSessionStore
         super.init()
@@ -126,7 +127,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     @objc func focusSpaceSearch() {
         windowState.sidebarVisibilityOverride = true
-        windowState.spaceSearchFocusRequest = UUID()
+        windowState.spaceSearchFocusRequest = System.uuid()
     }
 
     lazy var attention = AttentionCoordinator(controller: self)
@@ -135,7 +136,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     @objc func previousAttention() { attention.navigate(-1) }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        guard ProcessInfo.processInfo.environment["DISPATCH_TESTING"] != "1" else { return }
+        guard !System.testing else { return }
         HostStats.shared.startBackgroundHistory()
         let runtime = TerminalRuntime.shared
         runtime.workspace = workspace

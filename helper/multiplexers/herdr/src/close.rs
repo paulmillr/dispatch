@@ -136,7 +136,7 @@ impl Herdr {
                                         return;
                                     }
                                 };
-                                let input = json::write(&D::Object(vec![
+                                let input = body::encode_plain(&D::Object(vec![
                                     ("pid", D::Unsigned(shell.pid.into())),
                                     (
                                         "start",
@@ -156,14 +156,14 @@ impl Herdr {
                                     io,
                                     Job::Native {
                                         name: "idle",
-                                        input,
+                                        value: input,
                                     },
                                     Box::new(move |mux, io, result| {
                                         let idle = result.ok().and_then(|output| {
-                                            let Output::Bytes(bytes) = output else {
+                                            let Output::Value(bytes) = output else {
                                                 return None;
                                             };
-                                            Json::parse(&bytes).ok()?.root().get("idle")?.boolean()
+                                            body::decode_plain(&bytes).ok()?.get("idle")?.boolean()
                                         });
                                         if idle == Some(true) {
                                             mux.panes(io, node, panes, expected, done);

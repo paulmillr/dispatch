@@ -126,7 +126,7 @@ struct ChatQueueView: View {
         .opacity(sending ? 0.55 : 1)
         .contentShape(Rectangle())
         .onHover { session.hoveredQueuedID = $0 ? message.id : (session.hoveredQueuedID == message.id ? nil : session.hoveredQueuedID) }
-        .onTapGesture { session.selectedQueuedID = message.id; session.focusRequest = UUID() }
+        .onTapGesture { session.selectedQueuedID = message.id; session.focusRequest = System.uuid() }
         // Drop target only (no item): clicks and hover pass through to the row.
         .overlay { reorder(item: nil, target: message.id) }
         .contextMenu { moveButtons(message, index: index) }
@@ -219,7 +219,7 @@ struct ChatQueueView: View {
     private func reorder(item: ReorderItem?, target: UUID) -> some View {
         LocalReorder(item: item, edge: .vertical,
                      dragLabel: session.queuedMessages.first { $0.id == target }.map { String($0.text.prefix(40)) },
-                     select: { session.selectedQueuedID = target; session.focusRequest = UUID() },
+                     select: { session.selectedQueuedID = target; session.focusRequest = System.uuid() },
                      accepts: { item in
             guard case .queued(let id) = item else { return false }
             return id != target && coordinator.canReorderQueue(session)

@@ -12,7 +12,7 @@ final class ShellFixtureBarrier {
     private var released = false
 
     init(in root: URL) throws {
-        directory = root.appendingPathComponent("shell-barrier-" + UUID().uuidString)
+        directory = root.appendingPathComponent("shell-barrier-" + System.uuid().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         guard mkfifo(directory.appendingPathComponent("release").path, 0o600) == 0 else {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
@@ -27,9 +27,9 @@ final class ShellFixtureBarrier {
     func ready() async throws {
         let path = directory.appendingPathComponent("ready.json")
         try await TestSupport.eventually(timeout: .seconds(20), diagnostic: "Shell barrier did not start: " + directory.path) {
-            FileManager.default.fileExists(atPath: path.path)
+            System.exists(path)
         }
-        let record = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Int32])
+        let record = try XCTUnwrap(JSONSerialization.jsonObject(with: System.read(path)) as? [String: Int32])
         process = try XCTUnwrap(AgentProcess.capture(XCTUnwrap(record["pid"])))
         parent = try XCTUnwrap(AgentProcess.capture(XCTUnwrap(record["parent"])))
     }
@@ -42,24 +42,28 @@ final class ShellFixtureBarrier {
         // makes a missing reader an expected cancellation instead of a FIFO error.
         func failed(_ code: Int32) throws {
             if code == ENXIO || code == EPIPE,
-               let data = try? Data(contentsOf: directory.appendingPathComponent("completed.json")),
+               let data = try? System.read(directory.appendingPathComponent("completed.json")),
                let record = try? JSONSerialization.jsonObject(with: data) as? [String: String],
                record["outcome"] == "cancelled" { released = true; return }
             throw POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO)
         }
-        let fd = open(directory.appendingPathComponent("release").path, O_WRONLY | O_NONBLOCK | O_CLOEXEC)
-        guard fd >= 0 else { return try failed(errno) }
-        defer { Darwin.close(fd) }
-        _ = fcntl(fd, F_SETNOSIGPIPE, 1)
-        var byte: UInt8 = 49
-        guard Darwin.write(fd, &byte, 1) == 1 else { return try failed(errno) }
+        // The write reaches the fixture's live shell: a recorded action (replay has no reader); its outcome is errno.
+        let code = try System.act("barrier.release", directory.path) { () -> Int32 in
+            let fd = open(directory.appendingPathComponent("release").path, O_WRONLY | O_NONBLOCK | O_CLOEXEC)
+            guard fd >= 0 else { return errno }
+            defer { Darwin.close(fd) }
+            _ = fcntl(fd, F_SETNOSIGPIPE, 1)
+            var byte: UInt8 = 49
+            return Darwin.write(fd, &byte, 1) == 1 ? 0 : errno
+        }
+        guard code == 0 else { return try failed(code) }
         released = true
     }
 
     func completed() async throws {
         let path = directory.appendingPathComponent("completed.json")
-        try await TestSupport.eventually(timeout: .seconds(20)) { FileManager.default.fileExists(atPath: path.path) }
-        let record = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: String])
+        try await TestSupport.eventually(timeout: .seconds(20)) { System.exists(path) }
+        let record = try XCTUnwrap(JSONSerialization.jsonObject(with: System.read(path)) as? [String: String])
         XCTAssertEqual(record["outcome"], "released")
     }
 }

@@ -114,7 +114,7 @@ struct ChatCommandResult: Equatable {
 
 @MainActor @Observable
 final class ChatCommandRequest {
-    let id = UUID()
+    let id = System.uuid()
     /// The composer text the harness runs; `command` when the app knows its form (goal controls).
     let text: String
     let command: ChatCommand?
@@ -388,7 +388,7 @@ extension ChatCoordinator {
     func submitCommand(_ command: ChatCommand, text: String, session: ChatSession) {
         guard enabled, sessions[session.id] === session, let helper = session.helper, session.active,
               !session.inputBlocked, session.submissionID == nil else { return }
-        let id = UUID()
+        let id = System.uuid()
         session.submissionID = id; session.submissionFailure = nil
         var input = HelperChat.Input(helper.route)
         input.text = text

@@ -160,7 +160,7 @@ final class HostDisconnectTests: XCTestCase {
         let processFile = server.root.appendingPathComponent("native-pid")
         TerminalTestSupport.send("printf '%s\\n' $$ > " + HerdrLaunch.quote(processFile.path) + "; printf 'NATIVE_%s\\n' READY", to: native)
         try await app.wait { TerminalTestSupport.screen(terminal: native).contains("NATIVE_READY") }
-        let pid = try XCTUnwrap(Int32(try String(contentsOf: processFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)))
+        let pid = try XCTUnwrap(Int32(String(decoding: System.read(processFile), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)))
         let process = try XCTUnwrap(AgentProcess.capture(pid))
         app.workspace.selectSurface(source)
         TerminalTestSupport.send("exit", to: origin)
@@ -428,11 +428,11 @@ final class HostDisconnectTests: XCTestCase {
 
     private func released(_ sessions: [SSHCoordinator.Link], in app: TmuxWalkthrough) async throws {
         try await TestSupport.eventually(timeout: .seconds(15), diagnostic: sessions.map { session in
-            "session=\(app.runtime.ssh.links[session.launch.connectionID] != nil) control=\(FileManager.default.fileExists(atPath: session.launch.master.controlPath))"
+            "session=\(app.runtime.ssh.links[session.launch.connectionID] != nil) control=\(System.exists(URL(fileURLWithPath: session.launch.master.controlPath)))"
         }.joined(separator: ", ")) {
             sessions.allSatisfy { session in
                 app.runtime.ssh.links[session.launch.connectionID] == nil &&
-                !FileManager.default.fileExists(atPath: session.launch.master.controlPath)
+                !System.exists(URL(fileURLWithPath: session.launch.master.controlPath))
             }
         }
     }

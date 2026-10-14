@@ -10,17 +10,17 @@ final class HostNativeIntegrationTests: XCTestCase {
         child.arguments = ["60"]
         child.standardInput = FileHandle.nullDevice
         child.standardOutput = FileHandle.nullDevice; child.standardError = FileHandle.nullDevice
-        defer { if !AppReplay.replaying, child.isRunning { child.terminate(); child.waitUntilExit() } }
-        let bytes = try AppReplay.query(kind: "test.host.spawn", input: JSONEncoder().encode(AppReplay.Launch(child))) {
-            try child.run()
-            return try JSONEncoder().encode(XCTUnwrap(AgentProcess.capture(child.processIdentifier)))
+        defer { if !AppReplay.replaying, child.isRunning { child.terminate(); child.wait() } }
+        let bytes = try AppReplay.query(kind: "test.host.spawn", input: AppReplay.value(AppReplay.Launch(child))) {
+            try TestSupport.start(child)
+            return try AppReplay.value(XCTUnwrap(AgentProcess.capture(child.processIdentifier)))
         }
-        let process = try JSONDecoder().decode(AgentProcess.self, from: bytes)
+        let process = try AppReplay.decode(AgentProcess.self, bytes)
         let before = HostProcessWatcher.alive(process)
         HostProcessWatcher.terminate(process)
-        _ = try AppReplay.query(kind: "test.host.wait", input: JSONEncoder().encode(process)) {
-            child.waitUntilExit()
-            return Data()
+        _ = try AppReplay.query(kind: "test.host.wait", input: AppReplay.value(process)) {
+            child.wait()
+            return .null
         }
         XCTAssertEqual([before, HostProcessWatcher.alive(process)], [true, false])
         if AppReplay.replaying { XCTAssertEqual(child.processIdentifier, 0) }
@@ -54,7 +54,7 @@ final class HostNativeIntegrationTests: XCTestCase {
             let processes = panes(app)
             // The server stops answering mid-move (the old test discarded the move's tmux command).
             try app.stall()
-            let generation = UUID()
+            let generation = System.uuid()
             app.workspace.hosts.begin(terminal, generation: generation, destination: "test-remote")
             app.workspace.placeHostTerminal(terminal)
             if queuedReturn { app.workspace.restoreHostTerminal(terminal, generation: generation) }
@@ -87,7 +87,7 @@ final class HostNativeIntegrationTests: XCTestCase {
             try await app.attach(); try await app.ready()
             let original = try XCTUnwrap(app.workspace.current), terminal = try XCTUnwrap(app.workspace.activeSurfaceID)
             let window = try XCTUnwrap(original.activeWindow), target = try XCTUnwrap(app.target(window))
-            app.workspace.hosts.begin(terminal, generation: UUID(), destination: "test-remote")
+            app.workspace.hosts.begin(terminal, generation: System.uuid(), destination: "test-remote")
             app.workspace.placeHostTerminal(terminal)
             if action == 2 {
                 // Closing the moving terminal's window ends it on the server (the old closeWindow).
@@ -230,7 +230,7 @@ final class HostNativeIntegrationTests: XCTestCase {
         // Deliberately inherit the gateway capability. Attribution must replace
         // that ID with the native pane whose real shell owns the new process.
         let environment = app.runtime.herdrLaunch.environment(for: app.origin!.id)
-        let command = (["env"] + environment.map { $0.key + "=" + $0.value } + [Bundle.main.executablePath!, "--ssh-launch"]
+        let command = (["env"] + environment.map { $0.key + "=" + $0.value } + [System.executable.path, "--ssh-launch"]
                        + server.options + [server.destination]).map(HerdrLaunch.quote).joined(separator: " ")
         TerminalTestSupport.send(command, to: view)
         app.workspace.newLocalSpace()
@@ -347,7 +347,7 @@ final class HostNativeIntegrationTests: XCTestCase {
         let closing = try XCTUnwrap(app.workspace.spaces.first { $0.id == original.id })
         let closingIDs = Set(closing.tabs.flatMap(\.surfaceIDs))
         let closingTerminal = try XCTUnwrap(closingIDs.first)
-        app.workspace.hosts.begin(closingTerminal, generation: UUID(), destination: "test-remote")
+        app.workspace.hosts.begin(closingTerminal, generation: System.uuid(), destination: "test-remote")
         app.workspace.placeHostTerminal(closingTerminal)
         app.workspace.closeSpace(closing.id)
         try await TestSupport.eventually(timeout: .seconds(12)) { closingIDs.isDisjoint(with: app.workspace.allSurfaceIDs) }

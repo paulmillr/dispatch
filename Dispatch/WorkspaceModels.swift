@@ -13,11 +13,12 @@ struct TerminalTab: Identifiable, Equatable, Codable {
     var surfaceIDs: [UUID] { [id] }
     var focusedSurfaceID: UUID { id }
 
-    init(id: UUID = UUID(), directory: String) {
-        self.id = id
+    /// A new tab's id follows its caller's own sequence (a placeholder made elsewhere does not shift it).
+    init(id: UUID? = nil, directory: String, _ file: String = #fileID, _ function: String = #function) {
+        self.id = id ?? System.uuid(for: "", file, function)
         self.directory = directory
         let folder = URL(fileURLWithPath: (directory as NSString).expandingTildeInPath).standardizedFileURL
-        title = folder.path == NSHomeDirectory() ? "~" : (folder.path == "/" ? "/" : folder.lastPathComponent)
+        title = folder.path == System.home.path ? "~" : (folder.path == "/" ? "/" : folder.lastPathComponent)
     }
 
     /// Automatic names follow the agent's conversation, then a running program's
@@ -36,7 +37,7 @@ struct TerminalTab: Identifiable, Equatable, Codable {
     // Remote paths are display data; don't resolve them against the Mac filesystem.
     private var directoryName: String {
         if directory == "/" { return "/" }
-        if machine == .local, directory == NSHomeDirectory() { return "~" }
+        if machine == .local, directory == System.home.path { return "~" }
         let name = (directory as NSString).lastPathComponent
         return name.isEmpty ? title : name
     }
@@ -64,7 +65,7 @@ struct Pane: Identifiable, Equatable, Codable {
     var tabs: [TerminalTab]
     var selected: UUID
 
-    init(id: UUID = UUID(), tabs: [TerminalTab], selected: UUID? = nil) {
+    init(id: UUID = System.uuid(), tabs: [TerminalTab], selected: UUID? = nil) {
         precondition(!tabs.isEmpty)
         self.id = id; self.tabs = tabs
         self.selected = selected.flatMap { id in tabs.contains { $0.id == id } ? id : nil } ?? tabs[0].id
@@ -147,7 +148,7 @@ extension LayoutPreset {
             }
         }
         let oldFrames = frames(oldLayout)
-        let slots = (0..<count).map { _ in UUID() }
+        let slots = (0..<count).map { _ in System.uuid() }
         let newFrames = frames(layout(slots))
         func overlap(_ group: TabGroup, _ index: Int) -> CGFloat {
             let intersection = oldFrames[group.id]!.intersection(newFrames[slots[index]]!)
@@ -255,7 +256,7 @@ indirect enum PaneLayout: Equatable, Codable {
     func splitting(_ id: UUID, with newID: UUID, axis: SplitAxis, before: Bool = false) -> PaneLayout {
         switch self {
         case .pane(let current):
-            current == id ? .split(UUID(), axis, before ? .pane(newID) : self, before ? self : .pane(newID)) : self
+            current == id ? .split(System.uuid(), axis, before ? .pane(newID) : self, before ? self : .pane(newID)) : self
         case .split(let key, let direction, let first, let second):
             .split(key, direction, first.splitting(id, with: newID, axis: axis, before: before), second.splitting(id, with: newID, axis: axis, before: before))
         }
@@ -303,7 +304,7 @@ struct PaneArrangement: Equatable, Codable {
 }
 
 struct Space: Identifiable, Equatable, Codable {
-    var id = UUID()
+    var id = System.uuid()
     private var storedName: String
     var usesDirectoryName = false
     var name: String {
@@ -360,8 +361,8 @@ struct Space: Identifiable, Equatable, Codable {
     var preset: LayoutPreset? { get { arrangement.preset } set { arrangement.preset = newValue } }
     var splitFractions: [UUID: CGFloat] { get { arrangement.splitFractions } set { arrangement.splitFractions = newValue } }
 
-    init(name: String, directory: String, usesDirectoryName: Bool = false) {
-        self.init(name: name, tab: TerminalTab(directory: directory), usesDirectoryName: usesDirectoryName)
+    init(name: String, directory: String, usesDirectoryName: Bool = false, _ file: String = #fileID, _ function: String = #function) {
+        self.init(name: name, tab: TerminalTab(directory: directory, file, function), usesDirectoryName: usesDirectoryName)
     }
 
     init(name: String, tab: TerminalTab, usesDirectoryName: Bool = false) {
@@ -553,7 +554,7 @@ struct TabPresentation: Equatable, Codable {
         precondition(windows.count >= preset.count)
         groups = (0..<preset.count).map { index in
             let members = index == 0 ? [windows[0]] + windows.dropFirst(preset.count) : [windows[index]]
-            return Group(id: UUID(), windows: members, selected: members.contains(selected) ? selected : members[0])
+            return Group(id: System.uuid(), windows: members, selected: members.contains(selected) ? selected : members[0])
         }
         layout = preset.layout(groups.map(\.id)); self.preset = preset
     }
@@ -615,7 +616,7 @@ struct TabPresentation: Equatable, Codable {
         groups[source].windows.removeAll { $0 == window }
         if groups[source].selected == window, let first = groups[source].windows.first { groups[source].selected = first }
         if let edge {
-            let added = Group(id: UUID(), windows: [window], selected: window)
+            let added = Group(id: System.uuid(), windows: [window], selected: window)
             layout = layout.splitting(targetGroup, with: added.id, axis: edge.axis, before: edge.before)
             groups.append(added)
         } else {
@@ -636,13 +637,13 @@ extension LayoutPreset {
     func layout(_ ids: [UUID]) -> PaneLayout {
         switch self {
         case .single: .pane(ids[0])
-        case .columns: .split(UUID(), .columns, .pane(ids[0]), .pane(ids[1]))
-        case .rows: .split(UUID(), .rows, .pane(ids[0]), .pane(ids[1]))
-        case .twoAbove: .split(UUID(), .rows,
-            .split(UUID(), .columns, .pane(ids[0]), .pane(ids[1])), .pane(ids[2]))
-        case .grid: .split(UUID(), .rows,
-            .split(UUID(), .columns, .pane(ids[0]), .pane(ids[1])),
-            .split(UUID(), .columns, .pane(ids[2]), .pane(ids[3])))
+        case .columns: .split(System.uuid(), .columns, .pane(ids[0]), .pane(ids[1]))
+        case .rows: .split(System.uuid(), .rows, .pane(ids[0]), .pane(ids[1]))
+        case .twoAbove: .split(System.uuid(), .rows,
+            .split(System.uuid(), .columns, .pane(ids[0]), .pane(ids[1])), .pane(ids[2]))
+        case .grid: .split(System.uuid(), .rows,
+            .split(System.uuid(), .columns, .pane(ids[0]), .pane(ids[1])),
+            .split(System.uuid(), .columns, .pane(ids[2]), .pane(ids[3])))
         }
     }
 }

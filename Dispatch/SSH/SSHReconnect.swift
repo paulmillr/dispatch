@@ -74,6 +74,8 @@ final class SSHReconnectController {
     @ObservationIgnored private var failures: [HostID: Int] = [:]
     @ObservationIgnored private var dropped: [HostID: Date] = [:]
     @ObservationIgnored private var network: NWPathMonitor?
+    /// Whether the network monitor reported the path it started on: that first report is no change.
+    @ObservationIgnored private var reported = false
     @ObservationIgnored private var wake: (any NSObjectProtocol)?
 
     init(runtime: TerminalRuntime) { self.runtime = runtime }
@@ -108,7 +110,7 @@ final class SSHReconnectController {
         runtime.hosts.restore(recipe)
         states[recipe.connection]?.error = "SSH did not connect. Retry to log in again."
         states[recipe.connection]?.attempted = true
-        runtime.workspace?.focusRequest = UUID()
+        runtime.workspace?.focusRequest = System.uuid()
         return true
     }
     func awaitingRestore(_ surface: UUID) -> Bool {
@@ -137,7 +139,7 @@ final class SSHReconnectController {
         var ids = recipes.values.filter { $0.host == hostID && (scope == nil || $0.scope == scope) }.map(\.connection)
         if automatic { ids = ids.filter(losses.contains) } else { stopRetrying(hostID) }
         guard !ids.isEmpty else { return }
-        let epoch = UUID(); epochs[hostID] = epoch
+        let epoch = System.uuid(); epochs[hostID] = epoch
         for id in ids {
             var state = states[id] ?? State(disconnectedAt: Date())
             state.reconnecting = true; state.attempted = true; state.attempts += 1; state.retryAt = nil
@@ -171,7 +173,7 @@ final class SSHReconnectController {
                               return context.generation != id.rawValue && context.state == .connected
                           }) else { continue }
                     recipes[id] = nil; states[id] = nil; losses.remove(id)
-                    let token = UUID()
+                    let token = System.uuid()
                     for surface in recipe.surfaces {
                         completed[surface] = token
                         runtime?.views[surface]?.updateFocus()
@@ -224,7 +226,7 @@ final class SSHReconnectController {
         let at = Date().addingTimeInterval(TimeInterval(delay.components.seconds))
         for id in ids { states[id]?.retryAt = at }
         retries[host] = Task { [weak self] in
-            do { try await Task.sleep(for: delay) } catch { return }
+            do { try await System.sleep(for: delay, "retry") } catch { return }
             guard let self, automatic else { return }
             retries[host] = nil
             // A login sheet or earlier attempt still running settles first; yours ends the retries.
@@ -244,9 +246,16 @@ final class SSHReconnectController {
     }
     private func watch() {
         let network = NWPathMonitor()
+        reported = false
         network.pathUpdateHandler = { [weak self] path in
-            guard path.status == .satisfied else { return }
-            DispatchQueue.main.async { MainActor.assumeIsolated { self?.retryNow() } }
+            let satisfied = path.status == .satisfied
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    if satisfied, self.reported { self.retryNow() }
+                    self.reported = true
+                }
+            }
         }
         network.start(queue: .global(qos: .utility))
         self.network = network
@@ -332,7 +341,7 @@ enum SSHReconnectLogin {
         guard let executable = process.executableURL else { throw HerdrFailure("The bundled helper is missing.") }
         process.arguments = ["--stdio"]
         // Authentication starts from the account home, independently of the active workspace.
-        process.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+        process.currentDirectoryURL = System.home
         let session = try await HelperSession(process: process)
         defer { session.close() }
         let client = HelperClient(session.connection)
@@ -349,9 +358,8 @@ enum SSHReconnectLogin {
         }
         var iterator = opened.makeAsyncIterator()
         guard let parent = try await iterator.next() else { throw HerdrFailure("The native terminal backend closed.") }
-        let testing = ProcessInfo.processInfo.environment["DISPATCH_TESTING"] == "1"
-        let environment = testing ? ["HOME=" + Home.url.path, "GHOSTTY_ZSH_ZDOTDIR=/var/empty", "DISPATCH_TESTING=1"] : []
-        let node = try await client.create(.init(parent: parent, beside: nil, cwd: NSHomeDirectory(), launch: nil,
+        let environment = System.testing ? ["HOME=" + System.home.path, "GHOSTTY_ZSH_ZDOTDIR=/var/empty", "DISPATCH_TESTING=1"] : []
+        let node = try await client.create(.init(parent: parent, beside: nil, cwd: System.home.path, launch: nil,
                                                  command: command, environment: environment))
         let id = try AppReplay.identity(kind: "ssh.authentication", value: UUID())
         let directory = TerminalRuntime.shared.herdrLaunch.directory.appendingPathComponent("auth-" + id.uuidString.prefix(8))
@@ -408,7 +416,7 @@ enum SSHReconnectLogin {
         panel.isReleasedWhenClosed = false
         // Authentication lives outside the workspace and must accept focus
         // without selecting a tab or passing the workspace visibility check.
-        let terminal = TerminalView(id: id, directory: NSHomeDirectory(),
+        let terminal = TerminalView(id: id, directory: System.home.path,
                                     presentation: .standalone, allowHostMedia: false, helper: renderer)
         terminal.frame = NSRect(x: 12, y: 48, width: 596, height: 260)
         panel.contentView?.addSubview(terminal)
@@ -430,15 +438,15 @@ enum SSHReconnectLogin {
             try Task.checkCancellation()
             if cancellation.cancelled { throw CancellationError() }
             if let error = cancellation.error { throw error }
-            let ready = try AppReplay.query(kind: "ssh.master.ready", input: JSONEncoder().encode(master.controlPath)) {
-                try JSONEncoder().encode(FileManager.default.fileExists(atPath: master.controlPath))
+            let ready = try AppReplay.query(kind: "observe.ssh.master.ready", input: .string(master.controlPath)) {
+                .bool(FileManager.default.fileExists(atPath: master.controlPath))
             }
-            if try JSONDecoder().decode(Bool.self, from: ready) {
+            if try AppReplay.decode(Bool.self, ready) {
                 let result = try await SSHCommand.run(executable: master.executable, arguments: master.controlArguments("check"), timeout: 3)
                 if result.status == 0 { return }
             }
             if cancellation.finished { throw HerdrFailure("SSH authentication failed. Retry to log in again.") }
-            try await Task.sleep(for: .milliseconds(100))
+            try await System.sleep(for: .milliseconds(100), "authentication")
         }
         throw HerdrFailure("SSH authentication timed out. Retry to authenticate again.")
     }
@@ -467,7 +475,7 @@ enum SSHReconnectLogin {
         // The backgrounded master answers on its control socket once it is ready.
         for _ in 0..<30 {
             if try await SSHCommand.run(executable: master.executable, arguments: master.controlArguments("check"), timeout: 3).status == 0 { return }
-            try await Task.sleep(for: .milliseconds(100))
+            try await System.sleep(for: .milliseconds(100), "master")
         }
         throw SSHAutomaticFailure.unreachable("SSH logged in, but its connection did not become ready.")
     }

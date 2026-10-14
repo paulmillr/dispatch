@@ -106,7 +106,7 @@ operations! {
         mux split(
         local(number(p, "node")?),
         p.get("ratio")
-            .and_then(Value::number)
+            .and_then(Data::number)
             .ok_or_else(|| invalid("ratio"))?
     ) value;
     "layouts.zoom" => Object(&[
@@ -273,7 +273,7 @@ operations! {
         ("model", Text),
         ("effort", Nullable(&Text)),
     ]),
-        harness select(text(p, "model")?, p.get("effort").and_then(Value::string)) select;
+        harness select(text(p, "model")?, p.get("effort").and_then(Data::string)) select;
     "chat.tools" => Object(&[
         ("terminal", Unsigned),
         ("session", Nullable(&Text)),

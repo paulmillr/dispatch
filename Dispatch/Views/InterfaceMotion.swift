@@ -179,7 +179,7 @@ final class MotionContentView: NSView {
     private var hostID: HostID
     private var selectedTabID: UUID?
     private var outgoing: [NSImageView] = []
-    private var generation = UUID()
+    private var generation = System.uuid()
     override var isFlipped: Bool { true }
     init(content: AnyView, identity: String, spaceID: UUID, layout: PaneLayout, hostID: HostID = .local, selectedTabID: UUID? = nil) {
         self.identity = identity; self.spaceID = spaceID; self.paneLayout = layout
@@ -205,7 +205,7 @@ final class MotionContentView: NSView {
         let morph = !navigation && paneLayout != layout
         var snapshots: [(UUID?, NSImageView)] = []
         if changed || !animated {
-            generation = UUID()
+            generation = System.uuid()
             outgoing.forEach { $0.removeFromSuperview() }; outgoing = []
             layer?.removeAnimation(forKey: kCATransition)
         }
@@ -293,7 +293,7 @@ final class HostMoveMotion {
     }
     @ObservationIgnored private var markers: [Item: [WeakMarker]] = [:]
     @ObservationIgnored private var departures: [UUID: HostID] = [:]
-    @ObservationIgnored private var departureGeneration = UUID()
+    @ObservationIgnored private var departureGeneration = System.uuid()
     @ObservationIgnored weak var canvas: Marker?
     @ObservationIgnored private var tasks: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var tokens: [UUID: UUID] = [:]
@@ -341,7 +341,7 @@ final class HostMoveMotion {
             for tab in space.tabs where !remainingTabs.contains(tab.id) { departures[tab.id] = space.hostID }
         }
         if !departures.isEmpty {
-            let generation = UUID(); departureGeneration = generation
+            let generation = System.uuid(); departureGeneration = generation
             Task { [weak self] in
                 await Task.yield()
                 guard let self, self.departureGeneration == generation else { return }
@@ -365,7 +365,7 @@ final class HostMoveMotion {
 
     private func move(_ id: UUID) {
         moving.insert(id)
-        let token = UUID(); movingTokens[id] = token
+        let token = System.uuid(); movingTokens[id] = token
         Task { [weak self] in
             do { try await Task.sleep(for: .seconds(InterfaceMotion.viewDuration)) } catch { return }
             guard let self, self.movingTokens[id] == token else { return }
@@ -407,7 +407,7 @@ final class HostMoveMotion {
             overlay.layer?.shadowOffset = CGSize(width: 0, height: -5)
         }
         root.addSubview(overlay)
-        let token = UUID(); tokens[destination] = token
+        let token = System.uuid(); tokens[destination] = token
         hidden.insert(destination)
         if pull { pulling.insert(destination) }
         arrivals[destination] = host

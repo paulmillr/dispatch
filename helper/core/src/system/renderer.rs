@@ -2,7 +2,7 @@
 pub(crate) mod native;
 
 use super::{reactor, socket};
-use crate::api::Address;
+use crate::{api::Address, json::Data};
 use std::{
     fs::File,
     io,
@@ -214,25 +214,17 @@ pub fn run() -> io::Result<()> {
 
 impl super::System {
     pub(crate) fn signals(&mut self, numbers: &[i32], inherit: bool) -> io::Result<RawFd> {
-        let args = format!("{numbers:?}");
-        if let Some(result) = self.replay("signals", &args) {
-            return result.and_then(|bytes| {
-                bytes
-                    .try_into()
-                    .map(i32::from_le_bytes)
-                    .map_err(|_| super::file::invalid())
-            });
+        let args = || Data::Array(numbers.iter().map(|&number| Data::Signed(number.into())).collect());
+        if let Some(result) = self.replay("signals", args(), |v| v.signed()?.try_into().ok()) {
+            return result;
         }
         let result = Signals::new(numbers, inherit).map(|signals| {
             let fd = signals.read.as_raw_fd();
             self.signals.insert(fd, signals);
             fd
         });
-        let bytes = result
-            .as_ref()
-            .map(|fd| fd.to_le_bytes().to_vec())
-            .unwrap_or_default();
-        self.record("signals", &args, &result, &bytes)?;
+        let output = result.as_ref().map_or(Data::Null, |&fd| Data::Signed(fd.into()));
+        self.record("signals", args(), &result, output)?;
         result
     }
 }

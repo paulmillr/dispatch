@@ -191,7 +191,7 @@ final class ProgramStatusTests: XCTestCase {
     }
 
     func testFinishedRecordsShowUntilTheUserTypes() {
-        let store = ProgramStatusStore(), tab = UUID()
+        let store = ProgramStatusStore(), tab = System.uuid()
         store.update(tab, [ProgramStatus(state: .done, app: "brew", serial: 1), ProgramStatus(id: "x", state: .working, serial: 2)])
         XCTAssertEqual(PaneUrgency(session: nil, programs: store.visible(tab)), .running)
         XCTAssertEqual(store.visible(tab).count, 2)

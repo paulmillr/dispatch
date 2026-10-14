@@ -61,14 +61,15 @@ final class HelperTransport: @unchecked Sendable {
       guard !self.stopped, self.receive == nil else { return }
       self.receive = handlers.receive
       self.closed = handlers.closed
+      self.ticket?.through(self.queue)
       if let ticket = self.ticket, ticket.replaying {
         do {
           try ticket.listen({ event in
             self.queue.async {
               do {
                 switch event.kind {
-                case "in.read": self.receive?(event.data)
-                case "in.end", "in.error": self.stop(try JSONDecoder().decode(AppReplay.Failure.self, from: event.data).error)
+                case "in.read": self.receive?(AppReplay.bytes(event.value))
+                case "in.end", "in.error": self.stop(try AppReplay.decode(AppReplay.Failure.self, event.value).error)
                 case "in.started", "in.exit": self.exited?(.success(event))
                 default: throw HelperFailure(code: "replay", message: "Unexpected helper journal event: " + event.kind)
                 }
@@ -93,7 +94,7 @@ final class HelperTransport: @unchecked Sendable {
       [weak self] done, bytes, error in
       guard let self, !self.stopped, !self.finishing else { return }
       if let bytes, !bytes.isEmpty {
-        do { try self.ticket?.emit(kind: "read", data: Data(bytes)) }
+        do { try self.ticket?.emit(kind: "read", value: .bytes(Data(bytes))) }
         catch { self.stop(error); return }
         self.receive?(Data(bytes))
       }
@@ -108,10 +109,11 @@ final class HelperTransport: @unchecked Sendable {
     }
   }
 
-  func send(_ bytes: Data) {
+  /// `asking`: a waiting test's check sent it (AppReplay.asking, carried past the queue hop to its record).
+  func send(_ bytes: Data, asking: Bool = false) {
     queue.async {
       guard !self.stopped, !self.finishing else { return }
-      do { try self.ticket?.action(kind: "wire", data: bytes) }
+      do { try AppReplay.$asking.withValue(asking) { try self.ticket?.action(kind: "wire", value: .bytes(bytes)) } }
       catch { self.stop(error); return }
       if self.ticket?.replaying == true { return }
       guard bytes.count <= self.capacity - self.queued else {
@@ -127,7 +129,7 @@ final class HelperTransport: @unchecked Sendable {
   func close() {
     queue.async {
       guard !self.stopped, !self.finishing || self.ticket?.replaying != true else { return }
-      do { try self.ticket?.action(kind: "close") }
+      do { if !self.finishing { try self.ticket?.action(kind: "close") } }
       catch { self.stop(error); return }
       if self.ticket?.replaying == true { self.finishing = true; return }
       self.stop(
@@ -146,7 +148,8 @@ final class HelperTransport: @unchecked Sendable {
 
   func finish() {
     queue.async {
-      do { try self.ticket?.action(kind: "finish") }
+      // The journal records where the app ended its side, not how: a finish has nothing left to flush in replay.
+      do { try self.ticket?.action(kind: "close") }
       catch { self.stop(error); return }
       if self.ticket?.replaying == true { self.finishing = true; return }
       self.finishing = true
@@ -181,7 +184,7 @@ final class HelperTransport: @unchecked Sendable {
     guard !stopped else { return }
     stopped = true
     if ticket?.replaying != true {
-      do { try ticket?.emit(kind: "end", data: JSONEncoder().encode(AppReplay.Failure(error))) }
+      do { try ticket?.emit(kind: "end", value: AppReplay.value(AppReplay.Failure(error))) }
       catch { AppReplay.fail(error) }
     }
     reader?.close(flags: .stop)

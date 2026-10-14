@@ -7,7 +7,7 @@ import XCTest
 @MainActor
 final class InterfaceMotionTests: XCTestCase {
     func testChatArrivalsExcludeHistoryStreamingAndAcknowledgedPrompts() throws {
-        let session = ChatSession(id: UUID())
+        let session = ChatSession(id: System.uuid())
         session.showChat = true
         // Every row here arrives at once; the burst rule has its own test.
         session.transcriptArrivals.burstInterval = 0
@@ -61,7 +61,7 @@ final class InterfaceMotionTests: XCTestCase {
     }
 
     func testChatArrivalBurstsMoveOnlyTheirFirstRow() throws {
-        let session = ChatSession(id: UUID())
+        let session = ChatSession(id: System.uuid())
         session.showChat = true
         func receipt(_ id: String) -> ChatTranscriptArrivals.Receipt? {
             session.visibleTranscriptRows.first { $0.item?.id == id }.flatMap { session.transcriptArrivals.receipt(for: $0.id) }
@@ -145,7 +145,7 @@ final class InterfaceMotionTests: XCTestCase {
 
     func testSpaceNavigationDoesNotRetainAnOutgoingBitmap() async throws {
         try DesktopTestSupport.requireUnlocked()
-        let first = UUID(), second = UUID(), pane = UUID()
+        let first = System.uuid(), second = System.uuid(), pane = System.uuid()
         let view = MotionContentView(content: AnyView(Text("Outgoing chat")), identity: "first", spaceID: first, layout: .pane(pane))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 400),
             styleMask: [.titled], backing: .buffered, defer: false)
@@ -157,7 +157,7 @@ final class InterfaceMotionTests: XCTestCase {
         view.update(AnyView(Text("Destination")), identity: "second", spaceID: second, layout: .pane(pane), animated: true)
         XCTAssertTrue(view.host === host)
         XCTAssertFalse(view.subviews.contains { $0 is NSImageView }, "Space selection must mount immediately without capturing or fading the outgoing chat")
-        let split = PaneLayout.split(UUID(), .columns, .pane(pane), .pane(UUID()))
+        let split = PaneLayout.split(System.uuid(), .columns, .pane(pane), .pane(System.uuid()))
         view.update(AnyView(Text("Split layout")), identity: "split", spaceID: second, layout: split, animated: true)
         XCTAssertTrue(view.subviews.contains { $0 is NSImageView }, "Layout changes within the same space retain their transition")
     }
@@ -174,7 +174,7 @@ final class InterfaceMotionTests: XCTestCase {
         let red = Color(.sRGB, red: 1, green: 0, blue: 0, opacity: 1)
         let blue = Color(.sRGB, red: 0, green: 0, blue: 1, opacity: 1)
         let green = Color(.sRGB, red: 0, green: 1, blue: 0, opacity: 1)
-        let first = UUID(), second = UUID(), pane = UUID()
+        let first = System.uuid(), second = System.uuid(), pane = System.uuid()
         let firstHost = HostID.authenticated("fade-first"), secondHost = HostID.authenticated("fade-second")
         let view = MotionContentView(content: grid(red), identity: "first", spaceID: first,
                                      layout: .pane(pane), hostID: firstHost)
@@ -223,7 +223,7 @@ final class InterfaceMotionTests: XCTestCase {
         view.update(grid(blue), identity: "second", spaceID: second, layout: .pane(pane), animated: false, hostID: secondHost)
         XCTAssertNil(view.layer?.animation(forKey: kCATransition), "Reduce Motion cancels an in-flight fade")
         view.update(grid(red), identity: "first", spaceID: first, layout: .pane(pane), animated: true, hostID: firstHost)
-        view.update(grid(green), identity: "same-host", spaceID: UUID(), layout: .pane(pane), animated: true, hostID: firstHost)
+        view.update(grid(green), identity: "same-host", spaceID: System.uuid(), layout: .pane(pane), animated: true, hostID: firstHost)
         XCTAssertNil(view.layer?.animation(forKey: kCATransition), "Same-host navigation cancels an old fade without starting another")
         try await Task.sleep(for: .milliseconds(150))
         let final = try await capture()
@@ -232,7 +232,7 @@ final class InterfaceMotionTests: XCTestCase {
 
     func testTabNavigationSkipsSnapshotsWithSharedPanesAndCancelsLayoutAnimation() async throws {
         try DesktopTestSupport.requireUnlocked()
-        let space = UUID(), firstTab = UUID(), secondTab = UUID(), pane = UUID(), shared = UUID(), splitID = UUID()
+        let space = System.uuid(), firstTab = System.uuid(), secondTab = System.uuid(), pane = System.uuid(), shared = System.uuid(), splitID = System.uuid()
         let initial = PaneLayout.split(splitID, .columns, .pane(pane), .pane(shared))
         let view = MotionContentView(content: AnyView(Text("First tab")), identity: "first", spaceID: space,
                                      layout: initial, selectedTabID: firstTab)
@@ -242,7 +242,7 @@ final class InterfaceMotionTests: XCTestCase {
         window.contentView = view; window.makeKeyAndOrderFront(nil)
         defer { window.orderOut(nil); window.contentView = nil; window.close() }
         view.layoutSubtreeIfNeeded()
-        let replacement = PaneLayout.split(splitID, .columns, .pane(UUID()), .pane(shared))
+        let replacement = PaneLayout.split(splitID, .columns, .pane(System.uuid()), .pane(shared))
         view.update(AnyView(Text("Second tab")), identity: "second", spaceID: space,
                     layout: replacement, animated: true, selectedTabID: secondTab)
         XCTAssertFalse(view.subviews.contains { $0 is NSImageView }, "A shared pane does not turn tab navigation into a layout edit")
@@ -341,7 +341,7 @@ final class InterfaceMotionTests: XCTestCase {
         workspace.newLocalSpace(); workspace.renameSpace(workspace.selectedSpace!, to: "api-refactor")
         workspace.newLocalSpace(); workspace.renameSpace(workspace.selectedSpace!, to: "deploy")
         let remote = try XCTUnwrap(workspace.activeTab).id
-        workspace.hosts.begin(remote, generation: UUID(), destination: "homelab")
+        workspace.hosts.begin(remote, generation: System.uuid(), destination: "homelab")
         workspace.placeHostTerminal(remote)
         workspace.selectTab(terminal)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 650), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
@@ -353,7 +353,7 @@ final class InterfaceMotionTests: XCTestCase {
             controller.settings.values.spaceOrder = mode
             try await Task.sleep(for: .milliseconds(350))
             let surfaces = Set(workspace.allSurfaceIDs)
-            let generation = UUID()
+            let generation = System.uuid()
             workspace.hosts.begin(terminal, generation: generation, destination: mode == .flat ? "build" : "homelab",
                                   seed: mode == .tree ? workspace.hosts.terminals[remote]?.host : nil)
             workspace.placeHostTerminal(terminal)
@@ -380,7 +380,7 @@ final class InterfaceMotionTests: XCTestCase {
         let pulled = try XCTUnwrap(workspace.activeTab).id
         try await Task.sleep(for: .milliseconds(350))
         let surfaces = Set(workspace.allSurfaceIDs)
-        workspace.hosts.begin(pulled, generation: UUID(), destination: "homelab", seed: workspace.hosts.terminals[remote]?.host)
+        workspace.hosts.begin(pulled, generation: System.uuid(), destination: "homelab", seed: workspace.hosts.terminals[remote]?.host)
         workspace.placeHostTerminal(pulled)
         let destination = try XCTUnwrap(workspace.selectedSpace)
         XCTAssertNotEqual(destination, scratch.id)
@@ -529,7 +529,7 @@ final class InterfaceMotionTests: XCTestCase {
         try DesktopTestSupport.requireUnlocked()
         AppFont.register()
         let coordinator = ChatCoordinator(enabled: true)
-        let session = coordinator.session(for: UUID())
+        let session = coordinator.session(for: System.uuid())
         session.active = true; session.sessionID = "motion-test"; session.version = "0.153.2"
         session.draft = "Retain this draft"
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 240), styleMask: [.titled], backing: .buffered, defer: false)

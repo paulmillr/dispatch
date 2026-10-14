@@ -1,46 +1,45 @@
-//! Each IO section consumes its own recorded sequence, including UI IO.
+//! Each IO section consumes its own recorded sequence, including UI IO. The capture is read
+//! once into memory (capture/trace.rs); each section queues indices into its records.
 use super::*;
+use crate::system::capture::trace::{self, Record};
 use std::cell::{Cell, RefCell};
 pub(crate) struct Replay {
-    reader: RefCell<io::BufReader<File>>,
-    pub(crate) rows: RefCell<BTreeMap<String, VecDeque<(u64, String)>>>,
+    records: Vec<Record>,
+    pub(crate) rows: RefCell<BTreeMap<String, VecDeque<usize>>>,
     pub(crate) streams: RefCell<BTreeMap<(String, RawFd, String), VecDeque<u8>>>,
     pub(crate) origin: Instant,
     pub(crate) clock: Cell<Instant>,
-    pub(crate) timed: bool,
     pub(crate) output: Option<PathBuf>,
     pub(crate) diagnostics: Option<PathBuf>,
 }
 impl Replay {
     pub(crate) fn new(path: PathBuf, _capacity: usize) -> io::Result<Self> {
-        let mut reader = io::BufReader::new(open(&path)?);
-        let mut rows: BTreeMap<String, VecDeque<(u64, String)>> = BTreeMap::new();
-        let mut timed = false;
-        loop {
-            let offset = reader.stream_position()?;
-            let Some(json) = line(&mut reader)? else {
-                break;
-            };
-            let row = json.root();
-            rows.entry(field(row, "section", Value::string)?.into())
-                .or_default()
-                .push_back((offset, field(row, "op", Value::string)?.into()));
-            timed |= row.get("clock").is_some();
+        // The expanded capture is bounded like the file that recorded it (capture.rs).
+        let (_, records) = trace::read(open(&path)?, 4 * 1024 * 1024 * 1024)?;
+        let mut rows: BTreeMap<String, VecDeque<usize>> = BTreeMap::new();
+        for (index, record) in records.iter().enumerate() {
+            rows.entry(record.section.clone()).or_default().push_back(index);
         }
         let origin = Instant::now();
         Ok(Self {
-            reader: RefCell::new(reader),
+            records,
             rows: RefCell::new(rows),
             streams: RefCell::new(BTreeMap::new()),
             origin,
             clock: Cell::new(origin),
-            timed,
             output: std::env::var_os("DISPATCH_REPLAY_OUTPUT").map(PathBuf::from),
             diagnostics: std::env::var_os("DISPATCH_REPLAY_DIAGNOSTICS").map(PathBuf::from),
         })
     }
-    pub(crate) fn take(&self, section: &str) -> io::Result<Row> {
-        let (offset, op) = self
+    /// The operation `section` replays next, without taking it.
+    pub(crate) fn peek(&self, section: &str) -> Option<&str> {
+        let rows = self.rows.borrow();
+        rows.get(section)
+            .and_then(|rows| rows.front())
+            .map(|&index| self.records[index].op.as_str())
+    }
+    pub(crate) fn take(&self, section: &str) -> io::Result<&Record> {
+        let index = self
             .rows
             .borrow_mut()
             .get_mut(section)
@@ -49,52 +48,49 @@ impl Replay {
                 eprintln!("replay exhausted section: {section}");
                 invalid()
             })?;
-        let mut reader = self.reader.borrow_mut();
-        reader.seek(SeekFrom::Start(offset))?;
-        let document = line(&mut reader)?.ok_or_else(invalid)?;
-        let value = document.root();
-        if let Some(clock) = value.get("clock").and_then(Value::unsigned) {
-            let at = self
-                .origin
-                .checked_add(Duration::from_nanos(clock))
-                .ok_or_else(invalid)?;
-            self.clock.set(self.clock.get().max(at));
-        }
-        Ok(Row {
-            op,
-            args: field(value, "args", Value::string)?.into(),
-            data: capture::unhex(field(value, "data", Value::string)?)?,
-        })
+        let record = &self.records[index];
+        let at = self
+            .origin
+            .checked_add(Duration::from_nanos(record.clock))
+            .ok_or_else(invalid)?;
+        self.clock.set(self.clock.get().max(at));
+        Ok(record)
     }
-    pub(crate) fn call(&self, section: &str, op: &str, args: &str) -> io::Result<Completion> {
-        let offset = self.rows.borrow().get(section).and_then(|rows| rows.front()).map(|row| row.0);
-        let row = self.take(section)?;
-        if row.op != op || row.args != args {
+    /// The recorded output value of the next `op` of `section`, whose args must equal `args`.
+    pub(crate) fn value(&self, section: &str, op: &str, args: &Data<'_>) -> io::Result<&Record> {
+        let index = self.rows.borrow().get(section).and_then(|rows| rows.front()).copied();
+        let args = capture::value(args)?;
+        let record = self.take(section)?;
+        if record.op != op || record.args != args {
+            let expected = crate::wire::body::decode_plain(&record.args).map_err(|_| invalid())?;
+            let actual = crate::wire::body::decode_plain(&args).map_err(|_| invalid())?;
             self.mismatch(Data::Object(vec![
                 ("section", Data::String(section)),
-                ("offset", offset.map_or(Data::Null, Data::Unsigned)),
-                ("expected", Data::Object(vec![("op", Data::String(&row.op)), ("args", Data::String(&row.args))])),
-                ("actual", Data::Object(vec![("op", Data::String(op)), ("args", Data::String(args))])),
+                ("record", index.map_or(Data::Null, |i| Data::Unsigned(i as u64))),
+                ("expected", Data::Object(vec![("op", Data::String(&record.op)), ("args", expected)])),
+                ("actual", Data::Object(vec![("op", Data::String(op)), ("args", actual)])),
             ]));
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!(
                     "invalid file capture: capture {section}: expected {}, got {op}; arguments match: {}",
-                    row.op,
-                    row.args == args
+                    record.op,
+                    record.args == args
                 ),
             ));
         }
-        decode(&row.data)
+        Ok(record)
     }
+    /// Diagnostics beside the replay (a binary capture value cannot be shown as JSON: its
+    /// args are rendered as the inspect tool shows them).
     pub(crate) fn mismatch(&self, value: Data<'_>) {
         let Some(root) = self.diagnostics.as_ref().or(self.output.as_ref()) else { return };
         let saved = (|| -> io::Result<()> {
             use std::os::unix::fs::DirBuilderExt;
-            let data = json::write(&value).map_err(|_| invalid())?;
+            let data = capture::value(&value)?;
             std::fs::DirBuilder::new().recursive(true).mode(0o700).create(root)?;
             File::options().write(true).create_new(true).mode(0o600)
-                .open(root.join("mismatch.json"))?.write_all(&data)
+                .open(root.join("mismatch.value"))?.write_all(&data)
         })();
         if let Err(error) = saved {
             if error.kind() != io::ErrorKind::AlreadyExists {
@@ -102,15 +98,18 @@ impl Replay {
             }
         }
     }
-    pub(crate) fn next(&self) -> io::Result<Option<(String, Row)>> {
+    /// The earliest asynchronous record (event, job completion, next error) heading a section.
+    pub(crate) fn next(&self) -> io::Result<Option<(String, &Record)>> {
         let section = self
             .rows
             .borrow()
             .iter()
             .filter_map(|(section, rows)| {
                 rows.front()
-                    .filter(|(_, op)| matches!(op.as_str(), "event" | "file.done" | "next.error"))
-                    .map(|(offset, _)| (*offset, section.clone()))
+                    .filter(|&&index| {
+                        matches!(self.records[index].op.as_str(), "event" | "file.done" | "next.error")
+                    })
+                    .map(|&index| (index, section.clone()))
             })
             .min()
             .map(|(_, section)| section);
@@ -120,15 +119,16 @@ impl Replay {
     }
     pub(crate) fn finish(&self) -> io::Result<()> {
         for (section, rows) in self.rows.borrow().iter() {
-            if let Some((offset, op)) = rows.front() {
+            if let Some(&index) = rows.front() {
                 let remaining = rows.len() as u64;
+                let op = &self.records[index].op;
                 self.mismatch(Data::Object(vec![
                     ("section", Data::String(section)), ("op", Data::String(op)),
-                    ("offset", Data::Unsigned(*offset)), ("remaining", Data::Unsigned(remaining)),
+                    ("record", Data::Unsigned(index as u64)), ("remaining", Data::Unsigned(remaining)),
                 ]));
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
-                    format!("unconsumed: {section} {op} offset={offset} remaining={remaining}"),
+                    format!("unconsumed: {section} {op} record={index} remaining={remaining}"),
                 ));
             }
         }

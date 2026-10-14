@@ -49,11 +49,12 @@ impl Scope {
         }
     }
 }
-type Verified = Box<dyn FnOnce(&mut Herdr, &mut dyn Io, Result<(Endpoint, Json), Error>)>;
+type Verified = Box<dyn FnOnce(&mut Herdr, &mut dyn Io, Result<(Endpoint, Encoded), Error>)>;
 
-pub(super) fn document(result: io::Result<Output>) -> Result<Json, Error> {
+/// A native job's answer.
+pub(super) fn document(result: io::Result<Output>) -> Result<Encoded, Error> {
     match result {
-        Ok(Output::Bytes(bytes)) => Json::parse(&bytes),
+        Ok(Output::Value(bytes)) => Encoded::plain(&bytes),
         Ok(_) => Err(error("Herdr endpoint identity is unavailable.")),
         Err(e) => {
             let mut reason = error(e.to_string());
@@ -67,19 +68,14 @@ pub(super) fn document(result: io::Result<Output>) -> Result<Json, Error> {
     }
 }
 
-pub(super) fn socket(value: Value<'_>, uid: u32) -> Result<(u64, u64), Error> {
-    if value.get("kind").and_then(Value::string) != Some("socket")
-        || value.get("uid").and_then(Value::unsigned) != Some(uid.into())
+pub(super) fn socket(value: &D<'_>, uid: u32) -> Result<(u64, u64), Error> {
+    if value.get("kind").and_then(D::string) != Some("socket")
+        || value.get("uid").and_then(D::unsigned) != Some(uid.into())
     {
         return Err(error("Herdr socket identity changed."));
     }
-    let device = field(value, "device")?
-        .unsigned()
-        .ok_or_else(|| error("Herdr socket identity is unavailable."))?;
-    let inode = field(value, "inode")?
-        .unsigned()
-        .ok_or_else(|| error("Herdr socket identity is unavailable."))?;
-    Ok((device, inode))
+    let number = |key| value.get(key).and_then(D::unsigned).ok_or_else(|| error("Herdr socket identity is unavailable."));
+    Ok((number("device")?, number("inode")?))
 }
 
 impl Herdr {
@@ -96,7 +92,6 @@ impl Herdr {
             stream.close(io);
         }
         self.snapshot = Snapshot::default();
-        self.selection = [None, None, None];
         self.agents.clear();
         self.origins.clear();
         self.ttys.clear();
@@ -109,29 +104,25 @@ impl Herdr {
         &mut self,
         io: &mut dyn Io,
         mut paths: VecDeque<PathBuf>,
-        done: Action,
+        done: Action<()>,
     ) {
         let Some(path) = paths.pop_front() else {
-            done(self, io, Json::parse(b"{}"));
+            done(self, io, Ok(()));
             return;
         };
-        let input = json::write(&D::Object(vec![(
-            "path",
-            D::String(&path.to_string_lossy()),
-        )]))
-        .unwrap();
+        let input = body::encode_plain(&D::Object(vec![("path", D::from(path.as_path()))])).unwrap();
         self.job(
             io,
             Job::Native {
                 name: "file.lstat",
-                input,
+                value: input,
             },
             Box::new(move |mux, io, result| {
                 if matches!(result, Err(ref e) if e.kind() == io::ErrorKind::NotFound) {
                     mux.recoverable(io, paths, done);
                     return;
                 }
-                let before = document(result).and_then(|json| socket(json.root(), mux.config.uid));
+                let before = document(result).and_then(|value| socket(&value.root(), mux.config.uid));
                 let before = match before {
                     Ok(value) => value,
                     Err(reason) => {
@@ -151,19 +142,15 @@ impl Herdr {
                         return;
                     }
                 }
-                let input = json::write(&D::Object(vec![(
-                    "path",
-                    D::String(&path.to_string_lossy()),
-                )]))
-                .unwrap();
+                let input = body::encode_plain(&D::Object(vec![("path", D::from(path.as_path()))])).unwrap();
                 mux.job(
                     io,
                     Job::Native {
                         name: "file.lstat",
-                        input,
+                        value: input,
                     },
                     Box::new(move |mux, io, result| {
-                        match document(result).and_then(|json| socket(json.root(), mux.config.uid))
+                        match document(result).and_then(|value| socket(&value.root(), mux.config.uid))
                         {
                             Ok(after) if after == before => mux.recoverable(io, paths, done),
                             _ => done(mux, io, Err(error("Herdr socket changed during startup."))),
@@ -175,7 +162,7 @@ impl Herdr {
     }
     /// Native jobs supply no-follow metadata and process birth; no socket bytes
     /// are sent until the observed endpoint matches this registration.
-    pub(super) fn authenticate(&mut self, io: &mut dyn Io, fd: Option<i32>, done: Action) {
+    pub(super) fn authenticate(&mut self, io: &mut dyn Io, fd: Option<i32>, done: Action<Encoded>) {
         let generation = self.generation;
         let scope = Scope::new(&self.config, self.owner.clone());
         self.verify(
@@ -201,16 +188,15 @@ impl Herdr {
         scope: Scope,
         done: Verified,
     ) {
-        let path = scope.path.to_string_lossy().into_owned();
-        let input = json::write(&D::Object(vec![("path", D::String(&path))])).unwrap();
+        let input = body::encode_plain(&D::Object(vec![("path", D::from(scope.path.as_path()))])).unwrap();
         self.job(
             io,
             Job::Native {
                 name: "file.lstat",
-                input,
+                value: input,
             },
             Box::new(move |mux, io, result| {
-                let before = document(result).and_then(|json| socket(json.root(), scope.uid));
+                let before = document(result).and_then(|value| socket(&value.root(), scope.uid));
                 let before = match before {
                     Ok(value) => value,
                     Err(reason) => {
@@ -229,15 +215,15 @@ impl Herdr {
                 }
                 let fallback = scope.owner.clone();
                 let uid = scope.uid;
-                let verify: Action = Box::new(move |mux, io, result| {
-                    let pid = result.and_then(|json| {
-                        if json.root().get("uid").and_then(Value::unsigned)
-                            != Some(scope.uid.into())
-                        {
+                let verify: Action<Encoded> = Box::new(move |mux, io, result| {
+                    let pid = result.and_then(|value| {
+                        let value = value.root();
+                        if value.get("uid").and_then(D::unsigned) != Some(scope.uid.into()) {
                             return Err(error("Herdr socket belongs to another user."));
                         }
-                        field(json.root(), "pid")?
-                            .unsigned()
+                        value
+                            .get("pid")
+                            .and_then(D::unsigned)
                             .and_then(|pid| u32::try_from(pid).ok())
                             .ok_or_else(|| error("Herdr server identity is unavailable."))
                     });
@@ -249,20 +235,20 @@ impl Herdr {
                         }
                     };
                     let input =
-                        json::write(&D::Object(vec![("pid", D::Unsigned(pid.into()))])).unwrap();
+                        body::encode_plain(&D::Object(vec![("pid", D::Unsigned(pid.into()))])).unwrap();
                     mux.job(
                         io,
                         Job::Native {
                             name: "process",
-                            input,
+                            value: input,
                         },
                         Box::new(move |mux, io, result| {
                             let result = document(result).and_then(|json| {
-                                let server = process::read(json.root())?;
+                                let server = Process::read(&json.root()).ok_or_else(|| error("Invalid process field."))?;
                                 let named = server.executable.file_name()
                                     == Some(std::ffi::OsStr::new("herdr"))
                                     || server.executable == scope.executable;
-                                if json.root().get("uid").and_then(Value::unsigned)
+                                if json.root().get("uid").and_then(D::unsigned)
                                     != Some(scope.uid.into())
                                     || !named
                                     || server.pid != pid
@@ -284,18 +270,16 @@ impl Herdr {
                                     return;
                                 }
                             };
-                            let path = scope.path.to_string_lossy().into_owned();
-                            let input =
-                                json::write(&D::Object(vec![("path", D::String(&path))])).unwrap();
+                            let input = body::encode_plain(&D::Object(vec![("path", D::from(scope.path.as_path()))])).unwrap();
                             mux.job(
                                 io,
                                 Job::Native {
                                     name: "file.lstat",
-                                    input,
+                                    value: input,
                                 },
                                 Box::new(move |mux, io, result| {
                                     let result = document(result).and_then(|json| {
-                                        if socket(json.root(), scope.uid)? != before {
+                                        if socket(&json.root(), scope.uid)? != before {
                                             return Err(error("Herdr socket changed."));
                                         }
                                         let owner = Endpoint {
@@ -314,20 +298,20 @@ impl Herdr {
                 });
                 if let Some(fd) = fd {
                     let input =
-                        json::write(&D::Object(vec![("fd", D::Signed(fd.into()))])).unwrap();
+                        body::encode_plain(&D::Object(vec![("fd", D::Signed(fd.into()))])).unwrap();
                     mux.job(
                         io,
                         Job::Native {
                             name: "peer",
-                            input,
+                            value: input,
                         },
                         Box::new(move |mux, io, result| {
                             verify(mux, io, document(result));
                         }),
                     );
                 } else if let Some(owner) = &fallback {
-                    let result = Json::parse(
-                        &json::write(&D::Object(vec![
+                    let result = Encoded::plain(
+                        &body::encode_plain(&D::Object(vec![
                             ("uid", D::Unsigned(uid.into())),
                             ("pid", D::Unsigned(owner.server.pid.into())),
                         ]))

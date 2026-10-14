@@ -2,9 +2,9 @@
 use super::{System, hooks::LIMIT};
 use crate::{
     api::*,
-    json::{self, Data},
+    json::Data,
     rpc::transport::{Raw, Stream},
-    wire,
+    wire::{self, body},
 };
 use std::{
     io,
@@ -68,7 +68,7 @@ pub fn run(io: &mut System, harness: Shared<dyn Harness>, section: &str, endpoin
                 const SIZE: i32 = 90;
                 #[cfg(target_os = "macos")]
                 const SIZE: i32 = 40;
-                if e.raw_os_error() != Some(SIZE) && e.kind() != io::ErrorKind::WouldBlock {
+                if super::errno(&e) != Some(SIZE) && e.kind() != io::ErrorKind::WouldBlock {
                     return Err(e);
                 }
             }
@@ -83,7 +83,7 @@ pub fn run(io: &mut System, harness: Shared<dyn Harness>, section: &str, endpoin
         wire::Kind::Notify
     };
     let body = exchange(io, &route, kind, 0, &original, deadline)?;
-    if !interactive && body != b"{}" {
+    if !interactive && !body.is_empty() {
         return Err(io::ErrorKind::InvalidData.into());
     }
     let result = (|| {
@@ -126,15 +126,14 @@ pub fn setup(io: &mut System, section: &str, endpoint: Option<&Path>) -> io::Res
     let Some(route) = owner(io, &registries(section)?, endpoint, deadline)? else {
         return Ok(());
     };
-    let request = json::write(&Data::Object(vec![("section", Data::String(section))]))
+    let request = body::encode_plain(&Data::Object(vec![("section", Data::String(section))]))
         .map_err(|_| io::ErrorKind::InvalidData)?;
     let response = exchange(io, &route, wire::Kind::Request, 2, &request, deadline)?;
-    let response = Json::parse(&response).map_err(|_| io::ErrorKind::InvalidData)?;
-    if let Some(error) = response.root().get("error").and_then(|v| v.string()) {
+    let response = body::decode_plain(&response).map_err(|_| io::ErrorKind::InvalidData)?;
+    if let Some(error) = response.get("error").and_then(Data::string) {
         return Err(io::Error::other(error));
     }
     response
-        .root()
         .get("enabled")
         .and_then(|v| v.boolean())
         .map(|_| ())
@@ -147,8 +146,7 @@ pub fn launch(io: &mut System, program: &str, arguments: &[String], endpoint: Op
     io.section("launch.sender");
     // Earlier captures have no signal subscription. Replay their exact IO unchanged.
     if io.capture.replay.as_ref().map_or(io.capture.enabled(), |replay| {
-        replay.rows.borrow().get("launch.sender").and_then(|rows| rows.front())
-            .is_some_and(|(_, op)| op == "signals")
+        replay.peek("launch.sender") == Some("signals")
     }) {
         let fd = io.signals(&[1, 2, 3, 15], true)?;
         io.termination = Some(fd);
@@ -162,14 +160,14 @@ pub fn launch(io: &mut System, program: &str, arguments: &[String], endpoint: Op
         }
     }
     if let Some(route) = owner(io, &sections, endpoint, deadline)? {
-        let request = json::write(&Data::Object(vec![("program", Data::String(program))]))
+        let request = body::encode_plain(&Data::Object(vec![("program", Data::String(program))]))
             .map_err(|_| io::ErrorKind::InvalidData)?;
         let response = exchange(io, &route, wire::Kind::Request, 3, &request, deadline)?;
-        let response = Json::parse(&response).map_err(|_| io::ErrorKind::InvalidData)?;
-        if let Some(error) = response.root().get("error").and_then(|value| value.string()) {
+        let response = body::decode_plain(&response).map_err(|_| io::ErrorKind::InvalidData)?;
+        if let Some(error) = response.get("error").and_then(Data::string) {
             return Err(io::Error::other(error));
         }
-        match response.root().get("enabled").and_then(|value| value.boolean()) {
+        match response.get("enabled").and_then(Data::boolean) {
             Some(true) => return Ok(()),
             Some(false) => {},
             None => return Err(io::ErrorKind::InvalidData.into()),
@@ -178,16 +176,16 @@ pub fn launch(io: &mut System, program: &str, arguments: &[String], endpoint: Op
     let directory = System::cwd()?;
     let image = System::image()?;
     let path = std::env::var("PATH").unwrap_or_default();
-    let input = json::write(&Data::Object(vec![
+    let input = body::encode_plain(&Data::Object(vec![
         ("program", Data::String(program)),
-        ("cwd", Data::String(directory.to_str().ok_or(io::ErrorKind::InvalidInput)?)),
+        ("cwd", Data::from(directory.as_path())),
         ("path", Data::String(&path)),
-        ("skip", Data::String(image.to_str().ok_or(io::ErrorKind::InvalidInput)?)),
+        ("skip", Data::from(image.as_path())),
     ])).map_err(|_| io::ErrorKind::InvalidData)?;
     let deadline = io.now() + Duration::from_secs(2);
     let bytes = observe(io, "file.program", input, deadline)?;
-    let value = Json::parse(&bytes).map_err(|_| io::ErrorKind::InvalidData)?;
-    let path = value.root().get("path").and_then(|value| value.string()).ok_or(io::ErrorKind::InvalidData)?;
+    let value = body::decode_plain(&bytes).map_err(|_| io::ErrorKind::InvalidData)?;
+    let path = value.get("path").and_then(Data::path).ok_or(io::ErrorKind::InvalidData)?;
     {
         let mut command = std::process::Command::new(path);
         command.args(arguments);
@@ -235,7 +233,7 @@ fn owner(
         }
         pid = process.parent;
     }
-    let question = json::write(&Data::Object(vec![("chain", Data::Array(chain))]))
+    let question = body::encode_plain(&Data::Object(vec![("chain", Data::Array(chain))]))
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.message))?;
     let candidates = endpoint.map(|path| (path.to_owned(), true)).into_iter();
     let candidates = candidates.chain(
@@ -255,8 +253,8 @@ fn owner(
         let Ok(answer) = exchange(io, &route, wire::Kind::Request, 1, &question, deadline) else {
             continue;
         };
-        let answer = Json::parse(&answer).map_err(|_| io::ErrorKind::InvalidData)?;
-        let fact = |name| answer.root().get(name).and_then(|v| v.boolean()) == Some(true);
+        let answer = body::decode_plain(&answer).map_err(|_| io::ErrorKind::InvalidData)?;
+        let fact = |name| answer.get(name).and_then(Data::boolean) == Some(true);
         if fact("owned") {
             owners.push(((!fact("bound"), !named), route));
         }
@@ -266,8 +264,8 @@ fn owner(
         return Ok(None);
     };
     if owners.get(1).is_some_and(|(next, _)| next == rank) {
-        let routes: Vec<_> = owners.iter().map(|(_, r)| r.to_string_lossy()).collect();
-        io.record("hook.ambiguous", &routes.join(" "), &Ok(()), &[])?;
+        let routes = Data::Array(owners.iter().map(|(_, route)| Data::from(route.as_path())).collect());
+        io.record("hook.ambiguous", routes, &Ok(()), Data::Null)?;
     }
     Ok(Some(route.clone()))
 }
@@ -290,14 +288,15 @@ fn routes(io: &mut System, registries: &[PathBuf], deadline: Instant) -> Vec<Pat
                 .into_iter()
                 .filter(|(name, _)| !name.starts_with('.'))
                 .filter_map(|(name, _)| {
-                    let input = json::write(&Data::Object(vec![
-                        ("path", Data::String(registry.join(name).to_str()?)),
+                    let path = registry.join(name);
+                    let input = body::encode_plain(&Data::Object(vec![
+                        ("path", Data::from(path.as_path())),
                         ("limit", Data::Unsigned(4096)),
                     ]))
                     .ok()?;
                     let file = observe(io, "file.private", input, deadline).ok()?;
-                    let file = Json::parse(&file).ok()?;
-                    Some(PathBuf::from(file.root().get("data")?.string()?))
+                    let file = body::decode_plain(&file).ok()?;
+                    Some(file.get("data")?.path()?.to_path_buf())
                 })
                 .collect::<Vec<_>>()
         })
@@ -306,18 +305,15 @@ fn routes(io: &mut System, registries: &[PathBuf], deadline: Instant) -> Vec<Pat
 
 /// The private route's ownership facts (hook.endpoint).
 fn check(io: &mut System, route: &Path, deadline: Instant) -> io::Result<Vec<u8>> {
-    let observation = json::write(&Data::Object(vec![(
-        "path",
-        Data::String(route.to_str().ok_or(io::ErrorKind::InvalidInput)?),
-    )]))
-    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.message))?;
+    let observation = body::encode_plain(&Data::Object(vec![("path", Data::from(route))]))
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.message))?;
     observe(io, "hook.endpoint", observation, deadline)
 }
 
 /// The helper (its run directory's device and inode) named by hook.endpoint facts.
 fn folder(facts: &[u8]) -> Option<(u64, u64)> {
-    let facts = Json::parse(facts).ok()?;
-    let mut stamp = facts.root().get("stamp")?.array()?;
+    let facts = body::decode_plain(facts).ok()?;
+    let mut stamp = facts.get("stamp")?.array()?;
     Some((stamp.next()?.unsigned()?, stamp.next()?.unsigned()?))
 }
 
@@ -353,16 +349,12 @@ fn exchange(
                 break;
             }
         }
-        let params = json::write(&Data::Object(vec![(
-            "fd",
-            Data::Signed(stream.input.into()),
-        )]))
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.message))?;
+        let params = body::encode_plain(&Data::Object(vec![("fd", Data::Signed(stream.input.into()))]))
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.message))?;
         let peer = observe(io, "peer", params, deadline)?;
-        let peer = Json::parse(&peer).map_err(|_| io::ErrorKind::InvalidData)?;
-        let expected = Json::parse(&before).map_err(|_| io::ErrorKind::InvalidData)?;
-        if peer.root().get("uid").and_then(|v| v.unsigned())
-            != expected.root().get("uid").and_then(|v| v.unsigned())
+        let peer = body::decode_plain(&peer).map_err(|_| io::ErrorKind::InvalidData)?;
+        let expected = body::decode_plain(&before).map_err(|_| io::ErrorKind::InvalidData)?;
+        if peer.get("uid").and_then(Data::unsigned) != expected.get("uid").and_then(Data::unsigned)
             || before != check(io, route, deadline)?
         {
             return Err(io::ErrorKind::PermissionDenied.into());
@@ -410,7 +402,8 @@ fn exchange(
                 {
                     return Err(io::ErrorKind::InvalidData.into());
                 }
-                Json::parse(&body).map_err(|_| io::ErrorKind::InvalidData)?;
+                // Each caller reads its own kind of answer: our values (ids 1-3) or the
+                // agent's own reply bytes (id 0).
                 return Ok(body);
             }
         }
@@ -443,8 +436,8 @@ fn observe(
     input: Vec<u8>,
     deadline: Instant,
 ) -> io::Result<Vec<u8>> {
-    match job(io, Job::Native { name, input }, deadline)? {
-        Output::Bytes(bytes) => Ok(bytes),
+    match job(io, Job::Native { name, value: input }, deadline)? {
+        Output::Value(value) => Ok(value),
         _ => Err(io::ErrorKind::InvalidData.into()),
     }
 }

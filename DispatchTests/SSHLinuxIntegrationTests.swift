@@ -16,8 +16,7 @@ final class SSHLinuxIntegrationTests: XCTestCase {
     }
 
     private func checkDetachedTmuxRestore(grant: SSHIntegrationGrant) async throws {
-        let profile = try JSONDecoder().decode(SSHLinuxTestProfile.self, from: Data(contentsOf:
-            SSHLinuxTestProfile.configurationURL()))
+        let profile = try SSHLinuxTestProfile.load()
         let app = try TmuxWalkthrough(autoClose: true); defer { app.close() }
         @discardableResult
         func remote(_ arguments: [String]) async throws -> String {
@@ -82,8 +81,7 @@ final class SSHLinuxIntegrationTests: XCTestCase {
     }
 
     func testLinuxExit255ReturnsToEditableLocalShell() async throws {
-        let profile = try JSONDecoder().decode(SSHLinuxTestProfile.self, from: Data(contentsOf:
-            SSHLinuxTestProfile.configurationURL()))
+        let profile = try SSHLinuxTestProfile.load()
         let app = try TmuxWalkthrough(); defer { app.close() }
         let source = try XCTUnwrap(app.workspace.activeSurfaceID)
         try await app.wait { app.runtime.views[source].map { !TerminalTestSupport.screen(terminal: $0).isEmpty } == true }
@@ -140,8 +138,7 @@ final class SSHLinuxIntegrationTests: XCTestCase {
     }
 
     private func walkthrough(_ backend: String, hooks: Bool = false, supportedTmux: Bool = false, twoChats: Bool = false) async throws {
-        let profileURL = SSHLinuxTestProfile.configurationURL()
-        let profile = try JSONDecoder().decode(SSHLinuxTestProfile.self, from: Data(contentsOf: profileURL))
+        let profile = try SSHLinuxTestProfile.load()
         let runtime = TerminalRuntime.shared, previousChat = runtime.chat
         runtime.chat = ChatCoordinator(enabled: true)
         defer { runtime.chat = previousChat }
@@ -157,7 +154,7 @@ final class SSHLinuxIntegrationTests: XCTestCase {
         }
         let ssh = try XCTUnwrap(runtime.ssh.links.values.first { $0.launch.tabID == origin })
         let greeting = ssh.greeting, master = ssh.launch.master
-        let root = greeting.home + "/.cache/dispatch-tests/linux-" + UUID().uuidString
+        let root = greeting.home + "/.cache/dispatch-tests/linux-" + System.uuid().uuidString
         let state = root + "/state", script = root + "/codex_fixture.py"
         let tmuxSocket = root + "/tmux.sock", herdrSocket = root + "/herdr.sock"
         let tmuxBinary = supportedTmux ? profile.supportedTmuxPath : "/usr/bin/tmux"
@@ -448,7 +445,7 @@ final class SSHLinuxIntegrationTests: XCTestCase {
             try await remote(["/usr/bin/tee", state + "/work/preview.txt"], input: Data(text.utf8))
             let preview = try await ToolDocument(path: "preview.txt", diff: "").source(in: state + "/work", endpoint: try XCTUnwrap(session.helper).endpoint)
             XCTAssertEqual(preview, text)
-            XCTAssertFalse(FileManager.default.fileExists(atPath: state + "/work/preview.txt"), "Remote source previews must not depend on a shared filesystem")
+            XCTAssertFalse(System.exists(URL(fileURLWithPath: state + "/work/preview.txt")), "Remote source previews must not depend on a shared filesystem")
             _ = try await PresentationTestSupport.capture(app.window, named: "linux-" + backend + (hooks ? "-hooks" : supportedTmux ? "-checked" : ""), in: "ssh-linux-validation")
             session.draft = "Keep the Linux draft"
             runtime.chat.chooseChat(false, session: session)

@@ -23,6 +23,8 @@ pub(crate) struct Backend {
     pub identity: Option<String>,
     /// Creation intent survives transport loss and dismissal of its logical parent.
     pub pending: BTreeMap<String, crate::create::Pending>,
+    /// Its kills and creations never overlap (`Tmux::ordered`).
+    pub order: crate::close::Order,
 }
 impl Backend {
     pub(crate) fn namespace(&self) -> String {
@@ -122,6 +124,7 @@ impl Tmux {
                 remote,
                 identity: None,
                 pending: BTreeMap::new(),
+                order: Default::default(),
             },
         );
         ControlTarget { key, id }

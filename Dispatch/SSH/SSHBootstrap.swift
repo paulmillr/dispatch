@@ -21,32 +21,39 @@ enum SSHBootstrap {
         case "DISPATCH_PLATFORM=Linux:x86_64": name = "linux-x86_64"
         default: throw HerdrFailure("SSH integration requires Linux or macOS on ARM64 or x86-64.")
         }
-        let binary = try Data(contentsOf: resources.appendingPathComponent(resource + "/" + name))
-        guard !binary.isEmpty, binary.count <= 32 * 1024 * 1024 else { throw HerdrFailure("SSH helper is missing or invalid.") }
-        let digest = SHA256.hash(data: binary).map { String(format: "%02x", $0) }.joined()
+        // The bundled file is read like any other: its identity is observed (a replay answers the recorded one, whatever
+        // the build bundles now), its bytes are read only to upload them.
+        struct Payload: Codable { let digest: String, size: Int }
+        let url = resources.appendingPathComponent(resource + "/" + name)
+        let payload = try System.observe("payload", url.path) {
+            let binary = try Data(contentsOf: url)
+            return Payload(digest: SHA256.hash(data: binary).map { String(format: "%02x", $0) }.joined(), size: binary.count)
+        }
+        guard payload.size > 0, payload.size <= 32 * 1024 * 1024 else { throw HerdrFailure("SSH helper is missing or invalid.") }
+        let digest = payload.digest
         let relativePath = ".dispatch/bin/versions/" + digest + "/dispatch-helper"
         let preamble = cachePreamble(digest: digest)
-        let verify = "safe_file dispatch-helper && test -x dispatch-helper && test \"$(wc -c < dispatch-helper | tr -d ' ')\" = '\(binary.count)' && test \"$(checksum dispatch-helper)\" = '\(digest)'"
+        let verify = "safe_file dispatch-helper && test -x dispatch-helper && test \"$(wc -c < dispatch-helper | tr -d ' ')\" = '\(payload.size)' && test \"$(checksum dispatch-helper)\" = '\(digest)'"
         let existing = try await run(preamble + "\n" + verify, Data())
         if existing.status != 0 {
             // The exclusive private staging directory prevents following a
             // planted temporary link. Concurrent uploads publish whole files.
             // Existing cache permissions are verified, never repaired by chmod.
-            let staging = "upload-" + UUID().uuidString.lowercased()
+            let staging = "upload-" + System.uuid().uuidString.lowercased()
             let upload = """
             \(preamble)
             test ! -e dispatch-helper && test ! -L dispatch-helper || safe_file dispatch-helper || exit 1
             mkdir '\(staging)' || exit 1
             trap 'rm -f \(staging)/dispatch-helper; rmdir \(staging) 2>/dev/null' EXIT HUP INT TERM
             (set -C; cat > '\(staging)/dispatch-helper') || exit 1
-            test "$(wc -c < '\(staging)/dispatch-helper' | tr -d ' ')" = '\(binary.count)' || exit 1
+            test "$(wc -c < '\(staging)/dispatch-helper' | tr -d ' ')" = '\(payload.size)' || exit 1
             test "$(checksum '\(staging)/dispatch-helper')" = '\(digest)' || exit 1
             chmod 700 '\(staging)/dispatch-helper' || exit 1
             test ! -e dispatch-helper && test ! -L dispatch-helper || safe_file dispatch-helper || exit 1
             mv -f '\(staging)/dispatch-helper' dispatch-helper || exit 1
             \(verify)
             """
-            let installed = try await run(upload, binary)
+            let installed = try await run(upload, try System.read(url))
             guard installed.status == 0 else { throw HerdrFailure("Could not install the SSH helper in the remote cache.") }
         }
         return (relativePath, preamble, verify)
@@ -78,7 +85,7 @@ enum SSHBootstrap {
             process.arguments = master.arguments(command: preamble + "\n" + verify + " || exit 1\n" + captureExport + "exec ./dispatch-helper --remote --capabilities '' --stdio")
             let remaining = ContinuousClock.now.duration(to: deadline)
             guard remaining > .zero else { throw HerdrFailure("SSH integration setup timed out.") }
-            let probe = try await SSHTimeout.run(remaining) { try await HelperSession(process: process) }
+            let probe = try await SSHTimeout.run(remaining, "probe") { try await HelperSession(process: process) }
             defer { probe.close() }
             try Task.checkCancellation()
             try await prepare?(relativePath, probe.info)
@@ -93,20 +100,26 @@ enum SSHBootstrap {
         process.arguments = master.arguments(command: preamble + "\n" + verify + " || exit 1\n" + captureExport + "exec ./dispatch-helper connect --session '" + sessionID + "'")
         let remaining = ContinuousClock.now.duration(to: deadline)
         guard remaining > .zero else { throw HerdrFailure("SSH integration setup timed out.") }
-        let session = try await SSHTimeout.run(remaining) { try await HelperSession(process: process) }
+        let session = try await SSHTimeout.run(remaining, "session") { try await HelperSession(process: process) }
         return (relativePath, session)
     }
 
     /// Test runs (DISPATCH_CAPTURE set for this app) trace remote helpers too: the remote login and
-    /// `connect` export DISPATCH_CAPTURE=$HOME/<captureDirectory>/helper-%p.jsonl (every remote helper,
+    /// `connect` export DISPATCH_CAPTURE=$HOME/<captureDirectory>/helper-%p.rpl.bz2 (every remote helper,
     /// nested ones included, writes its own file); the tests collect that directory after each case.
     /// The directory is per run (a digest of this run's capture path), so shared hosts keep runs apart.
-    static let captureDirectory = ProcessInfo.processInfo.environment["DISPATCH_CAPTURE"].map { path in
-        let directory = URL(fileURLWithPath: path).deletingLastPathComponent().path
-        return ".cache/dispatch-capture/" + SHA256.hash(data: Data(directory.utf8)).prefix(6).map { String(format: "%02x", $0) }.joined()
+    /// Set in capture runs only: replay keeps the recorded value.
+    static var captureDirectory: String? {
+        let path: String?
+        do { path = try System.observe("environment", "DISPATCH_CAPTURE") { System.environment("DISPATCH_CAPTURE") } }
+        catch { AppReplay.fail(error); path = nil }
+        return path.map { path in
+            let directory = URL(fileURLWithPath: path).deletingLastPathComponent().path
+            return ".cache/dispatch-capture/" + SHA256.hash(data: Data(directory.utf8)).prefix(6).map { String(format: "%02x", $0) }.joined()
+        }
     }
     static var captureExport: String {
-        captureDirectory.map { "mkdir -p \"$HOME/\($0)\" && export DISPATCH_CAPTURE=\"$HOME/\($0)/helper-%p.jsonl\"\n" } ?? ""
+        captureDirectory.map { "mkdir -p \"$HOME/\($0)\" && export DISPATCH_CAPTURE=\"$HOME/\($0)/helper-%p.rpl.bz2\"\n" } ?? ""
     }
 
     static func validSessionID(_ id: String) -> Bool {
@@ -200,14 +213,14 @@ enum SSHCommand {
                     errors: Bool = false) async throws -> Result {
         struct Input: Codable { let executable: String; let arguments: [String]; let input: Data; var errors: Bool? }
         let request = Input(executable: executable, arguments: arguments, input: input, errors: errors ? true : nil)
-        let data = try await AppReplay.run(kind: "command", input: JSONEncoder().encode(request)) {
+        let data = try await AppReplay.run(kind: "command", input: AppReplay.value(request)) {
             let lifetime = Lifetime()
             let result = try await withTaskCancellationHandler {
                 try Task.checkCancellation()
                 return try await withCheckedThrowingContinuation { continuation in
                     DispatchQueue.global(qos: .utility).async {
                         let process = Process(), stdin = Pipe(), stdout = Pipe()
-                        let log = errors ? FileManager.default.temporaryDirectory.appendingPathComponent("ssh-errors-" + UUID().uuidString) : nil
+                        let log = errors ? System.temporary.appendingPathComponent("ssh-errors-" + System.uuid().uuidString) : nil
                         defer { if let log { try? FileManager.default.removeItem(at: log) } }
                         process.executableURL = URL(fileURLWithPath: executable); process.arguments = arguments
                         process.standardInput = stdin; process.standardOutput = stdout; process.standardError = FileHandle.nullDevice
@@ -260,9 +273,9 @@ enum SSHCommand {
                     }
                 }
             } onCancel: { lifetime.cancel() }
-            return try JSONEncoder().encode(result)
+            return try AppReplay.value(result)
         }
-        return try JSONDecoder().decode(Result.self, from: data)
+        return try AppReplay.decode(Result.self, data)
     }
 }
 
@@ -298,11 +311,13 @@ struct SSHGreeting: Codable, Sendable {
 /// Time limits cancel the owned stream, including a remote process blocked on
 /// stdin or a control socket that has stopped replying.
 enum SSHTimeout {
-    static func run<Value: Sendable>(_ duration: Duration, operation: @escaping @Sendable () async throws -> Value) async throws -> Value {
+    /// The timer is the recording's (System.sleep): a replay times out where its capture did, never on its own clock.
+    static func run<Value: Sendable>(_ duration: Duration, _ name: String, _ file: String = #fileID,
+                                     operation: @escaping @Sendable () async throws -> Value) async throws -> Value {
         try await withThrowingTaskGroup(of: Value.self) { group in
             group.addTask { try await operation() }
             group.addTask {
-                try await Task.sleep(for: duration)
+                try await System.sleep(for: duration, name, file)
                 throw HerdrFailure("The remote operation timed out. Its outcome may be uncertain; it was not retried.")
             }
             defer { group.cancelAll() }

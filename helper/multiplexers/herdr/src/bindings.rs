@@ -147,7 +147,7 @@ impl Herdr {
                             return;
                         }
                         let input =
-                            match json::write(&D::Object(vec![("tty", D::Unsigned(shell.tty))])) {
+                            match body::encode_plain(&D::Object(vec![("tty", D::Unsigned(shell.tty))])) {
                                 Ok(v) => v,
                                 Err(_) => {
                                     mux.probes.remove(&id);
@@ -158,7 +158,7 @@ impl Herdr {
                             io,
                             Job::Native {
                                 name: "foreground",
-                                input,
+                                value: input,
                             },
                             Box::new(move |mux, io, result| {
                                 let processes = match crate::process::foreground(result, &shell) {

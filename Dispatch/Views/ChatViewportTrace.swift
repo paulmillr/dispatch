@@ -108,10 +108,9 @@ final class ChatViewportTrace {
     }
 
     static let shared = ChatViewportTrace(writer: ChatViewportTraceWriter(directory:
-        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Dispatch/Diagnostics")))
+        System.home.appendingPathComponent("Library/Logs/Dispatch/Diagnostics")))
     private static let samplingAllowed: Bool = {
-        let environment = ProcessInfo.processInfo.environment
-        return environment["DISPATCH_CHAT_VIEWPORT_TRACE"] != "0" && environment["DISPATCH_TESTING"] != "1"
+        System.environment("DISPATCH_CHAT_VIEWPORT_TRACE") != "0" && !System.testing
     }()
     static var enabled: Bool { shared.isEnabled && samplingAllowed }
     private static let log = Logger(subsystem: "com.dispatch.app", category: "ChatViewport")
@@ -126,7 +125,7 @@ final class ChatViewportTrace {
     private var flushTask: Task<Void, Never>?
     @ObservationIgnored
     private(set) var dropped = 0
-    @ObservationIgnored private var generation = UUID()
+    @ObservationIgnored private var generation = System.uuid()
     /// The launch applies the saved setting and keeps logs across restarts;
     /// any later opt-in starts a new log rather than appending to an old one.
     @ObservationIgnored private var configured = false
@@ -141,7 +140,7 @@ final class ChatViewportTrace {
         configured = true
         guard enabled != isEnabled else { return }
         isEnabled = enabled; error = nil
-        generation = UUID()
+        generation = System.uuid()
         flushTask?.cancel(); flushTask = nil
         pending.removeAll(); dropped = 0
         if enabled { scheduleFlush(prepare: true, clearing: restart) }

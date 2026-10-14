@@ -6,7 +6,7 @@ import XCTest
 @MainActor
 final class SpaceBranchTests: XCTestCase {
     private func fixture() throws -> URL {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("dispatch-branch-\(UUID())")
+        let root = System.temporary.appendingPathComponent("dispatch-branch-\(System.uuid())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
         return root
@@ -98,6 +98,41 @@ final class SpaceBranchTests: XCTestCase {
             return values
         }
         XCTAssertEqual(Set(results), Set((0..<12).map { "topic-\($0)" }))
+    }
+
+    func testEachReadThatEndsStartsOneWaitingSpace() async throws {
+        // 4 reads run at once and 8 spaces wait. Whichever read ends, its slot goes to the next waiting space: exactly one
+        // read starts per read that ends, and no slot sits idle while a space waits.
+        final class Reads: @unchecked Sendable {
+            let lock = NSLock(); var running: [String: CheckedContinuation<String?, Never>] = [:]; var started = 0
+        }
+        let reads = Reads()
+        let reader = SpaceBranchReader(read: { source in
+            await withCheckedContinuation { continuation in
+                reads.lock.withLock { reads.running[source.key.directory] = continuation; reads.started += 1 }
+            }
+        })
+        let spaces = (0..<12).map { SpaceBranchSource(key: .init(directory: "/space-\($0)", connection: nil)) }
+        let results = Task {
+            await withTaskGroup(of: String?.self, returning: [String].self) { group in
+                for space in spaces { group.addTask { await reader.branch(space) } }
+                var values: [String] = []
+                for await value in group { if let value { values.append(value) } }
+                return values
+            }
+        }
+        func running() -> [String] { reads.lock.withLock { reads.running.keys.sorted() } }
+        try await TestSupport.eventually { running().count == 4 }
+        var started: [Int] = []
+        for ended in 1...12 {
+            let last = try XCTUnwrap(running().last)
+            reads.lock.withLock { reads.running.removeValue(forKey: last) }?.resume(returning: "topic")
+            try await TestSupport.eventually { running().count == min(4, 12 - ended) }
+            started.append(reads.lock.withLock { reads.started })
+        }
+        XCTAssertEqual(started, [5, 6, 7, 8, 9, 10, 11, 12, 12, 12, 12, 12])
+        let values = await results.value
+        XCTAssertEqual(values, Array(repeating: "topic", count: 12))
     }
 
     func testSidebarModesRefreshAndClearUnavailableBranches() async throws {

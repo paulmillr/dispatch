@@ -17,7 +17,7 @@ final class HostPerformanceTests: XCTestCase {
             for label in labels {
                 var space = Space(name: label, directory: "/tmp")
                 if host > 0 {
-                    let terminal = space.tabs[0].id, generation = UUID(), name = names[host - 1]
+                    let terminal = space.tabs[0].id, generation = System.uuid(), name = names[host - 1]
                     workspace.hosts.begin(terminal, generation: generation, destination: "admin@" + name)
                     var greeting = SSHGreeting(version: 1, host: name, boot: "test", uid: 501, home: "/tmp", capabilities: [])
                     if !systems[host - 1].isEmpty { greeting.os = systems[host - 1]; greeting.distribution = distributions[host - 1] }
@@ -87,7 +87,7 @@ final class HostPerformanceTests: XCTestCase {
 
     func testBackgroundWatcherBatchCost() async {
         let watcher = HostProcessWatcher()
-        let targets = (0..<16).map { _ in HostProcessTarget(terminal: UUID(), source: .terminal(UInt64(getpgrp()))) }
+        let targets = (0..<16).map { _ in HostProcessTarget(terminal: System.uuid(), source: .terminal(UInt64(System.process("pgrp", "self") { getpgrp() }))) }
         let start = ContinuousClock.now
         for _ in 0..<100 { _ = await watcher.probe(targets) }
         print("HOST PROFILE 100 batches of 16 foreground groups:", start.duration(to: .now))

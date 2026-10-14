@@ -23,10 +23,10 @@ impl Multiplexer for Herdr {
             self.defer(io, done, Err(expired("The Herdr launcher changed.")));
             return;
         }
-        let input = json::write(&D::Object(vec![
+        let input = body::encode_plain(&D::Object(vec![
             ("pid", D::Unsigned(client.pid.into())),
             ("start", D::Array(client.start.into_iter().map(D::Unsigned).collect())),
-            ("executable", D::String(&client.executable.to_string_lossy())),
+            ("executable", D::from(client.executable.as_path())),
             ("tty", D::Unsigned(client.tty)),
             ("foreground", D::Signed(client.foreground.into())),
         ]));
@@ -36,11 +36,15 @@ impl Multiplexer for Herdr {
         };
         let deadline = io.now() + Duration::from_secs(3);
         self.job(io, Job::Isolated {
-            name: "process.terminate", input, deadline,
+            name: "process.terminate", value: input, deadline,
         }, Box::new(move |mux, io, result| {
-            let result = match result {
-                Ok(Output::Bytes(bytes)) if bytes == b"true" => Ok(()),
-                Ok(Output::Bytes(bytes)) if bytes == b"false" => Err(expired("The Herdr launcher changed.")),
+            let ended = match &result {
+                Ok(Output::Value(bytes)) => body::decode_plain(bytes).ok().and_then(|value| value.boolean()),
+                _ => None,
+            };
+            let result = match ended {
+                Some(true) => Ok(()),
+                Some(false) => Err(expired("The Herdr launcher changed.")),
                 _ => Err(Error { code: "uncertain", message: "Herdr launcher release was not confirmed.".into() }),
             };
             mux.defer(io, done, result);

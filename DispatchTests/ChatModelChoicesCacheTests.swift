@@ -47,7 +47,7 @@ final class ChatModelChoicesCacheTests: XCTestCase {
     }
 
     func testCacheBelongsToChatAndResetsWithAgentIdentity() {
-        let session = ChatSession(id: UUID()), other = ChatSession(id: UUID()), agent = MenuFixture()
+        let session = ChatSession(id: System.uuid()), other = ChatSession(id: System.uuid()), agent = MenuFixture()
         let cache = session.modelChoices
         cache.prepare(for: session)
         cache.store(models: agent.models, quickModels: [])

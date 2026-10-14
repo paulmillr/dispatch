@@ -85,6 +85,10 @@ final class TerminalSplitView: NSSplitView, NSSplitViewDelegate {
     var secondMinimumSize = PaneLayout.minimumPaneSize
     var fractionChanged: ((Double) -> Void)?
     private var positioned = false
+    /// A pane divider's share of the length as placed from outside a resize (a drag, the layout, a test): each resize
+    /// places it from this share, so where it ends never depends on the resizes in between (each would round it anew).
+    private var share: CGFloat?
+    private var resizing = false
     private(set) var sidebarHidden = false
     private var sidebarWidth: CGFloat = 264
     private var sidebarAnimation: Task<Void, Never>?
@@ -105,11 +109,18 @@ final class TerminalSplitView: NSSplitView, NSSplitViewDelegate {
                 DispatchQueue.main.async { onSidebarResize(width) }
             }
         }
-        guard !sidebar, positioned, arrangedSubviews.count == 2, let fractionChanged else { return }
+    }
+
+    /// Only a placement from outside a resize (a drag, a test) moves a pane divider's share: AppKit's own layout passes
+    /// (each frame of a sidebar slide) would round it anew each time, so where it ends would depend on the frames.
+    override func setPosition(_ position: CGFloat, ofDividerAt index: Int) {
+        super.setPosition(position, ofDividerAt: index)
+        guard !sidebar, !resizing, positioned, arrangedSubviews.count == 2 else { return }
         let length = (isVertical ? bounds.width : bounds.height) - dividerThickness
         guard length > 0 else { return }
         let fraction = (isVertical ? arrangedSubviews[0].frame.width : arrangedSubviews[0].frame.height) / length
-        DispatchQueue.main.async { fractionChanged(fraction) }
+        share = fraction
+        if let fractionChanged { DispatchQueue.main.async { fractionChanged(fraction) } }
     }
 
     /// Takes the sidebar width chosen elsewhere (the floating panel's); a shown column moves to it at once.
@@ -124,8 +135,11 @@ final class TerminalSplitView: NSSplitView, NSSplitViewDelegate {
         guard !draggingDivider, let fraction, fraction != controlledFraction else { return }
         controlledFraction = fraction
         initialFraction = fraction
+        share = fraction
         let length = (isVertical ? bounds.width : bounds.height) - dividerThickness
-        if length > 0, arrangedSubviews.count == 2 { setPosition(clamped(length * fraction, length: length), ofDividerAt: 0) }
+        guard length > 0, arrangedSubviews.count == 2 else { return }
+        resizing = true; defer { resizing = false }
+        setPosition(clamped(length * fraction, length: length), ofDividerAt: 0)
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -247,12 +261,11 @@ final class TerminalSplitView: NSSplitView, NSSplitViewDelegate {
             arrangedSubviews[1].frame = bounds
             return
         }
-        let oldLength = (isVertical ? oldSize.width : oldSize.height) - dividerThickness
         let oldFirst = isVertical ? arrangedSubviews[0].frame.width : arrangedSubviews[0].frame.height
         let length = (isVertical ? bounds.width : bounds.height) - dividerThickness
         guard length > 0 else { return }
-        let fraction = positioned && oldLength > 0 ? oldFirst / oldLength : initialFraction
-        let position = sidebar ? (positioned && oldFirst > 0 ? oldFirst : sidebarWidth) : length * fraction
+        let position = sidebar ? (positioned && oldFirst > 0 ? oldFirst : sidebarWidth) : length * (share ?? initialFraction)
+        resizing = true; defer { resizing = false }
         super.resizeSubviews(withOldSize: oldSize)
         setPosition(clamped(position, length: length), ofDividerAt: 0)
         positioned = true

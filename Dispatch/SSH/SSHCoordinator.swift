@@ -82,9 +82,9 @@ final class SSHCoordinator {
     private func publish<Value: Encodable>(_ value: Value, to file: URL) {
         do {
             let data = try JSONEncoder().encode(value)
-            _ = try AppReplay.query(kind: "host.reply", input: JSONEncoder().encode(Write(path: file.path, value: value))) {
+            _ = try AppReplay.query(kind: "host.reply", input: AppReplay.value(Write(path: file.path, value: value))) {
                 try data.write(to: file, options: .atomic)
-                return Data()
+                return .null
             }
         } catch { AppReplay.fail(error) }
     }
@@ -207,7 +207,7 @@ final class SSHCoordinator {
                     guard let self, let state, !Task.isCancelled, connections[id] === state,
                           state.helper === helper else { return }
                     do {
-                        let _: HelperClient.Empty = try await SSHTimeout.run(.seconds(5)) {
+                        let _: HelperClient.Empty = try await SSHTimeout.run(.seconds(5), "permissions") {
                             try await helper.connection.request(
                                 "permissions.reduce", params: ["capabilities": reduced.capabilities.sorted()])
                         }
@@ -264,7 +264,8 @@ final class SSHCoordinator {
     func launch(_ request: SSHLaunchRequest, recovering: Bool = false, startShell: Bool = true,
                 prepare: (@MainActor (String, HelperSession.Info) throws -> Void)? = nil) {
         guard !TerminalRuntime.shared.isResettingSSH else { return }
-        guard connections[request.connectionID] == nil, let resources = Bundle.main.resourceURL else { return }
+        guard connections[request.connectionID] == nil else { return }
+        let resources = System.resources
         let state = SSHConnectionState(request: request)
         connections[request.connectionID] = state
         if !recovering { TerminalRuntime.shared.hosts.began(request) }
@@ -401,8 +402,7 @@ final class SSHCoordinator {
                 state.cleanupTask = nil
                 if self?.connections[id] === state { self?.connections[id] = nil }
             }
-            _ = try? await SSHCommand.run(executable: request.master.executable,
-                arguments: request.master.controlArguments("exit"), timeout: 3)
+            await request.master.exit().value
             try? FileManager.default.removeItem(at: URL(fileURLWithPath: request.master.controlPath).deletingLastPathComponent())
         }
     }
@@ -555,11 +555,11 @@ final class SSHCoordinator {
         for tab in workspace.spaces.filter({ $0.remote == nil }).flatMap(\.tabs)
             where (recipe.surfaces.contains(tab.id) || tab.id == recipe.origin) && (recipe.backends.isEmpty || tab.id == recipe.origin) {
             runtime.hosts.reconnect.launchingRestoredShell(tab.id, recipe: recipe)
-            workspace.hosts.associate(tab.id, context: .init(host: recipe.host, generation: UUID(), state: .connecting, authenticated: false))
+            workspace.hosts.associate(tab.id, context: .init(host: recipe.host, generation: System.uuid(), state: .connecting, authenticated: false))
             workspace.helper(containing: tab.id)?.prepare(tab)
             runtime.views[tab.id]?.resumeRestoredSession()
         }
-        workspace.focusRequest = UUID()
+        workspace.focusRequest = System.uuid()
     }
 
     /// Detached server work keeps a recipe, not an SSH master. A fresh launcher authenticates
@@ -569,7 +569,7 @@ final class SSHCoordinator {
         guard let workspace = runtime.workspace else { throw CancellationError() }
         var previous = runtime.hosts.reconnect.recipes[saved.connection]
         previous?.backends = entries
-        var tab = TerminalTab(directory: Home.url.path); tab.machine = .ssh(saved.shell)
+        var tab = TerminalTab(directory: System.home.path); tab.machine = .ssh(saved.shell)
         var login = Space(name: "Reconnect", tab: tab); login.hostID = saved.host
         let recipe = SSHReconnectController.Recipe(connection: saved.connection, host: saved.host, shell: saved.shell, scope: saved.scope,
             accountUID: saved.accountUID, boot: saved.boot, origin: tab.id,
@@ -619,7 +619,7 @@ final class SSHCoordinator {
             $0.structured && $0.tabs.flatMap(\.surfaceIDs).contains(where: recipe.surfaces.contains)
         }.map(\.id) ?? [])
         let old = activeRequest(recipe.connection)
-        guard old != nil || recipe.restored, Bundle.main.resourceURL != nil else { throw HerdrFailure("The original connection is no longer available.") }
+        guard old != nil || recipe.restored else { throw HerdrFailure("The original connection is no longer available.") }
         // Without its launcher, recovery logs in through a new tab, which an automatic attempt never opens.
         if automatic, recipe.restored || connections[recipe.connection]?.originClosed == true || recipe.launcher == nil {
             throw SSHAutomaticFailure.refused("Its SSH login tab is closed. Reconnect to log in again.")
@@ -693,12 +693,15 @@ final class SSHCoordinator {
         // this recipe's private master so its launcher can consume the resume.
         if let old {
             connections[recipe.connection]?.intentionalDisconnect = true
-            _ = try? await SSHCommand.run(executable: old.master.executable, arguments: old.master.controlArguments("exit"), timeout: 3)
+            await old.master.exit().value
         }
         try Task.checkCancellation()
-        let id = SSHConnectionID()
+        let id = SSHConnectionID(try AppReplay.identity(kind: "ssh.connection", value: UUID()))
         let folder = runtime.herdrLaunch.directory.appendingPathComponent("s-" + id.rawValue.uuidString.prefix(12))
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        _ = try AppReplay.query(kind: "ssh.folder", input: .string(folder.path)) {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+            return .null
+        }
         let master = SSHMaster(executable: recipe.shell.executable, controlPath: folder.appendingPathComponent("master").path, destination: recipe.shell.destination)
         var committed = false
         var replacement: SSHConnectionState?
@@ -709,7 +712,7 @@ final class SSHCoordinator {
                 } else {
                     // Authentication failed before an owner could be installed.
                     Task {
-                        _ = try? await SSHCommand.run(executable: master.executable, arguments: master.controlArguments("exit"), timeout: 3)
+                        await master.exit().value
                         try? FileManager.default.removeItem(at: folder)
                     }
                 }
@@ -718,7 +721,7 @@ final class SSHCoordinator {
         if automatic { try await SSHReconnectLogin.authenticateSilently(shell: recipe.shell, master: master) }
         else { try await SSHReconnectLogin.authenticate(shell: recipe.shell, master: master, window: window) }
         try Task.checkCancellation()
-        let request = SSHLaunchRequest(tabID: recipe.origin, token: old?.token ?? "", connectionID: id, credential: UUID().uuidString,
+        let request = SSHLaunchRequest(tabID: recipe.origin, token: old?.token ?? "", connectionID: id, credential: System.uuid().uuidString,
             master: master, shell: recipe.shell, integrationScope: scope, integrationGrant: grant, origin: recipe.launcher)
         launch(request, recovering: true) { [self] path, info in
             try Task.checkCancellation()
@@ -801,7 +804,7 @@ final class SSHCoordinator {
             retain(id)
             helperDisconnected(id)
             if let request = activeRequest(id) {
-                Task { _ = try? await SSHCommand.run(executable: request.master.executable, arguments: request.master.controlArguments("exit"), timeout: 3) }
+                request.master.exit()
             }
         }
     }
@@ -820,7 +823,7 @@ final class SSHCoordinator {
         permissions.resetAll()
         return Task {
             for request in unowned {
-                _ = try? await SSHCommand.run(executable: request.master.executable, arguments: request.master.controlArguments("exit"), timeout: 3)
+                await request.master.exit().value
                 try? FileManager.default.removeItem(at: URL(fileURLWithPath: request.master.controlPath).deletingLastPathComponent())
             }
             await cleanup.value
@@ -837,7 +840,7 @@ final class SSHCoordinator {
         for request in unowned {
             decision(request, .init(credential: request.credential, exitStatus: 130))
             Task {
-                _ = try? await SSHCommand.run(executable: request.master.executable, arguments: request.master.controlArguments("exit"), timeout: 3)
+                await request.master.exit().value
                 try? FileManager.default.removeItem(at: URL(fileURLWithPath: request.master.controlPath).deletingLastPathComponent())
             }
         }

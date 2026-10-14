@@ -16,17 +16,17 @@ final class SSHPiIntegrationTests: XCTestCase {
         try DesktopTestSupport.requireUnlocked()
         let fm = FileManager.default
         let pi = try XCTUnwrap([TestSupport.tool("pi")].first { fm.isExecutableFile(atPath: $0) })
-        let state = URL(fileURLWithPath: "/tmp/dispatch-ssh-pi-setup-" + UUID().uuidString)
+        let state = URL(fileURLWithPath: "/tmp/dispatch-ssh-pi-setup-" + System.uuid().uuidString)
         let fixture = Process(); fixture.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
         fixture.arguments = [CodexTestSupport.root.appendingPathComponent("scripts/claude_fixture.py").path,
                              "serve", "--state", state.path, "--delay", "0.015"]
         fixture.standardOutput = FileHandle.nullDevice; fixture.standardError = FileHandle.nullDevice
-        try fixture.run()
+        let child = try System.Child(fixture)
         defer {
-            if fixture.isRunning { fixture.terminate(); fixture.waitUntilExit() }
+            child.stop()
             print("SSH Pi managed extension fixture: " + state.path)
         }
-        try await TestSupport.eventually { fm.fileExists(atPath: state.appendingPathComponent("endpoint.json").path) }
+        try await TestSupport.eventually { System.exists(state.appendingPathComponent("endpoint.json")) }
         // The remote helper installs into its sessions' Pi directory (the server's own); the fixture's Pi uses it.
         let ssh = try await SSHTestServer(grant: .init(profile: .full, hooks: true)); defer { ssh.stop() }
         let home = ssh.agents.appendingPathComponent("pi"), extensions = home.appendingPathComponent("extensions")
@@ -59,24 +59,24 @@ final class SSHPiIntegrationTests: XCTestCase {
         TerminalTestSupport.send(["python3", CodexTestSupport.root.appendingPathComponent("scripts/pi_fixture.py").path,
             "--state", state.path, "--pi", pi, "--integration", "--home", home.path].map(HerdrLaunch.quote).joined(separator: " "), to: terminal)
         try await TestSupport.eventually(timeout: .seconds(20), diagnostic: "Pi setup discovery: \(session.status ?? "none")\n\(terminal.agentMenuScreen)") {
-            let saved = (try? Data(contentsOf: settings)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            let saved = (try? System.read(settings)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
             return session.discoveryBlocked && session.status == "Pi Chat hooks are not enabled for this SSH configuration."
                 && terminal.agentMenuScreen.contains("dispatch-fixture")
                 && (saved?["lastChangelogVersion"] as? String)?.isEmpty == false
         }
-        XCTAssertFalse(fm.fileExists(atPath: managed.path), "Remote discovery must respect this SSH configuration's Pi opt-out")
+        XCTAssertFalse(System.exists(managed), "Remote discovery must respect this SSH configuration's Pi opt-out")
         // Seed the theme to avoid asynchronous terminal-theme detection, then
         // wait for Pi's changelog receipt before saving its startup baseline.
         let models = home.appendingPathComponent("models.json")
-        let savedModels = try Data(contentsOf: models), savedSettings = try Data(contentsOf: settings)
+        let savedModels = try System.read(models), savedSettings = try System.read(settings)
         try await TestSupport.integrations(["pi"], enabled: true, chat: runtime.chat)
         try await TestSupport.eventually(timeout: .seconds(20), diagnostic: "Pi setup: \(runtime.chat.error ?? "none") / \(session.status ?? "none")") {
-            (try? Data(contentsOf: managed)) == source && session.status?.contains("/reload") == true
+            (try? System.read(managed)) == source && session.status?.contains("/reload") == true
         }
         XCTAssertFalse(session.active, "Installing on disk must wait for Pi's native reload")
-        XCTAssertEqual(try Data(contentsOf: models), savedModels)
-        XCTAssertEqual(try Data(contentsOf: settings), savedSettings)
-        XCTAssertEqual(try Data(contentsOf: other), otherBytes)
+        XCTAssertEqual(try System.read(models), savedModels)
+        XCTAssertEqual(try System.read(settings), savedSettings)
+        XCTAssertEqual(try System.read(other), otherBytes)
         TerminalTestSupport.send("/reload", to: terminal)
         try await TestSupport.eventually(timeout: .seconds(25), diagnostic: "Pi reload: \(session.status ?? "none")\n\(terminal.agentMenuScreen)") {
             session.active && session.agentID == "pi" && session.remoteAgent != nil && session.sessionID != nil && !session.loadingHistory && !session.busy
@@ -85,11 +85,11 @@ final class SSHPiIntegrationTests: XCTestCase {
         let conversation = try XCTUnwrap(session.sessionID)
         let process = try XCTUnwrap(AgentProcess.capture(identity.pid))
         let registration = home.appendingPathComponent("dispatch/sessions/\(identity.pid).json")
-        XCTAssertTrue(fm.fileExists(atPath: registration.path))
+        XCTAssertTrue(System.exists(registration))
         runtime.chat.chooseChat(true, session: session)
         session.draft = "managed SSH Pi ready"; runtime.chat.submit(session)
         try await TestSupport.eventually(timeout: .seconds(20)) { !session.busy && Self.reply("Local Claude fixture reply: managed SSH Pi ready", in: session) }
-        let requests = try Data(contentsOf: state.appendingPathComponent("requests.jsonl"))
+        let requests = try System.read(state.appendingPathComponent("requests.jsonl"))
         session.draft = "preserve disabled remote Pi draft λ"
         runtime.chat.setHelperIntegration("pi", enabled: false)
         XCTAssertFalse(session.active); XCTAssertEqual(runtime.chat.hookStatus("pi"), .off)
@@ -97,18 +97,18 @@ final class SSHPiIntegrationTests: XCTestCase {
         XCTAssertEqual(session.draft, "preserve disabled remote Pi draft λ")
         XCTAssertNotNil(session.submissionFailure)
         try await TestSupport.eventually(timeout: .seconds(15), diagnostic: "Pi disable: \(runtime.chat.error ?? "none")") {
-            !fm.fileExists(atPath: managed.path)
+            !System.exists(managed)
         }
         let revoked = await helper.refuses("revoked Pi input must not run", conversation: conversation)
         XCTAssertTrue(revoked, "Remote Pi disable must revoke the loaded bridge before native reload")
         XCTAssertTrue(process.alive, "Disabling Chat must preserve the native Pi process")
         runtime.chat.chooseChat(false, session: session)
         TerminalTestSupport.send("/reload", to: terminal)
-        try await TestSupport.eventually(timeout: .seconds(15)) { !fm.fileExists(atPath: registration.path) }
-        XCTAssertEqual(try Data(contentsOf: models), savedModels)
-        XCTAssertEqual(try Data(contentsOf: settings), savedSettings)
-        XCTAssertEqual(try Data(contentsOf: other), otherBytes)
-        XCTAssertEqual(try Data(contentsOf: state.appendingPathComponent("requests.jsonl")), requests, "Disable and reload must not send or replay prompts")
+        try await TestSupport.eventually(timeout: .seconds(15)) { !System.exists(registration) }
+        XCTAssertEqual(try System.read(models), savedModels)
+        XCTAssertEqual(try System.read(settings), savedSettings)
+        XCTAssertEqual(try System.read(other), otherBytes)
+        XCTAssertEqual(try System.read(state.appendingPathComponent("requests.jsonl")), requests, "Disable and reload must not send or replay prompts")
         TerminalTestSupport.send("/quit", to: terminal)
         try await TestSupport.eventually(timeout: .seconds(15)) { !process.alive }
     }
@@ -120,17 +120,17 @@ final class SSHPiIntegrationTests: XCTestCase {
         defer { phaseTimings.save(passed: passed && testRun?.failureCount == 0) }
         let fm = FileManager.default
         let pi = try XCTUnwrap([TestSupport.tool("pi")].first { fm.isExecutableFile(atPath: $0) })
-        let state = URL(fileURLWithPath: "/tmp/dispatch-ssh-pi-" + UUID().uuidString)
+        let state = URL(fileURLWithPath: "/tmp/dispatch-ssh-pi-" + System.uuid().uuidString)
         let fixture = Process(); fixture.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
         fixture.arguments = [CodexTestSupport.root.appendingPathComponent("scripts/claude_fixture.py").path,
                              "serve", "--state", state.path, "--delay", transportOnly ? "0" : "0.035"]
         fixture.standardOutput = FileHandle.nullDevice; fixture.standardError = FileHandle.nullDevice
-        try fixture.run()
+        let child = try System.Child(fixture)
         defer {
-            if fixture.isRunning { fixture.terminate(); fixture.waitUntilExit() }
+            child.stop()
             print("SSH Pi \(backend) fixture: " + state.path)
         }
-        try await TestSupport.eventually { fm.fileExists(atPath: state.appendingPathComponent("endpoint.json").path) }
+        try await TestSupport.eventually { System.exists(state.appendingPathComponent("endpoint.json")) }
         phaseTimings.begin("SSH_setup")
         let runtime = TerminalRuntime.shared, previous = runtime.chat
         runtime.chat = ChatCoordinator(enabled: true)
@@ -345,7 +345,7 @@ final class SSHPiIntegrationTests: XCTestCase {
         XCTAssertFalse(Self.reply("recovered SSH Pi", in: session), "The selected earlier branch must omit later transcript entries")
         let turns = session.turns.map(\.id)
         let draft = "Keep the branch reconnect draft λ\nsecond line"; session.draft = draft
-        let requests = try Data(contentsOf: state.appendingPathComponent("requests.jsonl"))
+        let requests = try System.read(state.appendingPathComponent("requests.jsonl"))
         let connection = try XCTUnwrap(runtime.ssh.links.values.first { $0.launch.tabID == origin })
         let closed = try await SSHCommand.run(executable: connection.launch.master.executable,
                                               arguments: connection.launch.master.controlArguments("exit"))
@@ -374,7 +374,7 @@ final class SSHPiIntegrationTests: XCTestCase {
         XCTAssertEqual(restored.draft, draft); XCTAssertEqual(restored.turns.map(\.id), turns)
         XCTAssertEqual(restored.turns.flatMap(\.items).filter { $0.kind == .user }.count, 1)
         XCTAssertFalse(Self.reply("recovered SSH Pi", in: restored))
-        XCTAssertEqual(try Data(contentsOf: state.appendingPathComponent("requests.jsonl")), requests, "Reconnect must not send or replay input")
+        XCTAssertEqual(try System.read(state.appendingPathComponent("requests.jsonl")), requests, "Reconnect must not send or replay input")
         return restored
     }
 }

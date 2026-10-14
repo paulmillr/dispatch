@@ -7,13 +7,13 @@ final class ContentSearch {
     var total: Int?
     var selected: Int?
     var status: String?
-    var focusRequest = UUID()
-    var navigation = UUID()
+    var focusRequest = System.uuid()
+    var navigation = System.uuid()
     var direction = 1
 
-    func open() { visible = true; focusRequest = UUID() }
+    func open() { visible = true; focusRequest = System.uuid() }
     func close() { visible = false; total = nil; selected = nil; status = nil }
-    func move(_ direction: Int) { self.direction = direction; navigation = UUID() }
+    func move(_ direction: Int) { self.direction = direction; navigation = System.uuid() }
 }
 
 struct ContentSearchBar: View {
@@ -94,7 +94,7 @@ struct TerminalContentView: View {
     /// A glass strip over the pane's top: the terminal always sits below it, so switching to chat never resizes
     /// the PTY; chat scrolls under it.
     @Environment(\.glassStripInset) private var glassInset
-    @State private var presentationID = UUID()
+    @State private var presentationID = System.uuid()
 
     var body: some View {
         let chat = TerminalRuntime.shared.chat

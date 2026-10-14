@@ -18,7 +18,7 @@ public final class TerminalView: NSView, NSTextInputClient, SurfaceHost {
     /// the screen's scale. Host file/shared-memory graphics are opt-in because `shell` may run SSH.
     public init(frame: NSRect, config: Config = Config(), allowHostMedia: Bool = false) {
         scale = NSScreen.main?.backingScaleFactor ?? 2
-        session = try! Session(config: config, scale: Double(scale), allowHostMedia: allowHostMedia)
+        session = try! Session(config: config, scale: Double(scale), machine: .current, allowHostMedia: allowHostMedia)
         super.init(frame: frame)
         session.host(in: self)
         session.surface.host = self
@@ -46,7 +46,7 @@ public final class TerminalView: NSView, NSTextInputClient, SurfaceHost {
     public func start(shell: String? = nil) {
         let env = ProcessInfo.processInfo.environment
         session.onExit = { [weak self] _ in self?.window?.close() }
-        try? session.start(Launch(command: shell, directory: NSHomeDirectory(), overrides: [], config: locked { session.config }, environment: env,
+        try? session.start(Launch(command: shell, directory: NSHomeDirectory(), overrides: [], config: locked { session.config }, environment: env, machine: .current,
                                   resources: env["GHOSTTY_RESOURCES_DIR"].flatMap { $0.isEmpty ? nil : $0 }, id: UInt64.random(in: 1 ... .max)))
     }
 

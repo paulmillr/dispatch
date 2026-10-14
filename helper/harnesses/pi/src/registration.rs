@@ -61,33 +61,33 @@ pub fn decode(value: Value<'_>, pid: u32, birth: f64, tolerance: f64) -> Result<
             .map(str::to_owned),
     })
 }
-pub fn owned(value: Value<'_>, uid: u64) -> Result<Vec<u8>, Error> {
+pub fn owned(value: &Data<'_>, uid: u64) -> Result<Vec<u8>, Error> {
     let before = value
         .get("before")
         .ok_or_else(|| fail("not_sent", "Pi registration metadata is unavailable"))?;
     let after = value
         .get("after")
         .ok_or_else(|| fail("not_sent", "Pi registration metadata is unavailable"))?;
-    let data = text(value, "data");
-    if ["size", "mtime_ns", "device", "inode"].iter().any(|key| {
-        before.get(key).and_then(|v| v.write().ok()) != after.get(key).and_then(|v| v.write().ok())
-    }) || before
+    let data = value.get("data").and_then(Data::bytes).unwrap_or_default();
+    let field = |value: &Data<'_>, key| value.get(key).and_then(|v| dispatch_helper_core::wire::body::encode_plain(v).ok());
+    if ["size", "mtime_ns", "device", "inode"].iter().any(|key| field(before, key) != field(after, key))
+        || before
         .get("links")
-        .and_then(Value::unsigned)
+        .and_then(Data::unsigned)
         .is_none_or(|links| links > 1)
-        || before.get("size").and_then(Value::unsigned) != Some(data.len() as u64)
+        || before.get("size").and_then(Data::unsigned) != Some(data.len() as u64)
     {
         return Err(fail("not_sent", "Pi registration changed while reading"));
     }
-    if before.get("uid").and_then(Value::unsigned) != Some(uid)
+    if before.get("uid").and_then(Data::unsigned) != Some(uid)
         || before
             .get("mode")
-            .and_then(Value::unsigned)
+            .and_then(Data::unsigned)
             .is_none_or(|mode| mode & 0o077 != 0)
     {
         return Err(fail("not_sent", "Pi registration is not private"));
     }
-    Ok(data.into_bytes())
+    Ok(data.to_vec())
 }
 pub fn same(runtime: &Shared, process: &Process, record: &Registration) -> bool {
     runtime
@@ -115,7 +115,7 @@ pub fn registration(
         Data::Object(vec![("pid", Data::Unsigned(process.pid.into()))]),
         Box::new(move |io, result| {
             let facts = match result {
-                Ok(facts) if current(facts.root(), &process) => facts,
+                Ok(facts) if current(&facts.root(), &process) => facts,
                 Ok(_) => {
                     done(
                         io,
@@ -131,8 +131,9 @@ pub fn registration(
                     return;
                 }
             };
-            let uid = facts.root().get("uid").and_then(Value::unsigned);
-            let birth = facts.root().get("started_at").and_then(Value::number);
+            let facts = facts.root();
+            let uid = facts.get("uid").and_then(Data::unsigned);
+            let birth = facts.get("started_at").and_then(Data::number);
             let (Some(uid), Some(birth)) = (uid, birth) else {
                 done(
                     io,
@@ -151,10 +152,7 @@ pub fn registration(
                         "start",
                         Data::Array(process.start.iter().copied().map(Data::Unsigned).collect()),
                     ),
-                    (
-                        "executable",
-                        Data::String(process.executable.to_str().unwrap_or("")),
-                    ),
+                    ("executable", Data::from(process.executable.as_path())),
                     (
                         "names",
                         Data::Array(vec![
@@ -171,7 +169,7 @@ pub fn registration(
                             return;
                         }
                     };
-                    let home = match home(&saved, environment.root()) {
+                    let home = match home(&saved, &environment.root()) {
                         Ok(home) => home,
                         Err(error) => {
                             done(io, Err(error));
@@ -196,16 +194,17 @@ pub fn registration(
                                 io,
                                 "file.private",
                                 Data::Object(vec![
-                                    ("path", Data::String(&path)),
+                                    ("path", Data::from(std::path::Path::new(&path))),
                                     ("limit", Data::Unsigned(65536)),
                                 ]),
                                 Box::new(move |io, result| {
-                                    let result = result.and_then(|document| {
-                                        let data = owned(document.root(), uid)?;
+                                    let result = result.and_then(|file| {
+                                        // The registration is JSON written by the Pi extension.
+                                        let data = owned(&file.root(), uid)?;
                                         let record = Json::parse(&data)?;
                                         let value = record.root();
                                         let tolerance =
-                                            if cfg!(target_os = "linux") { 1.0 } else { 0.0 };
+                                            if io.os() == "linux" { 1.0 } else { 0.0 };
                                         let decoded = decode(value, process.pid, birth, tolerance)?;
                                         let session = decoded.session;
                                         let token = decoded.token;
@@ -291,16 +290,12 @@ fn private(io: &mut dyn Io, runtime: &Shared, path: PathBuf, uid: u64, done: Don
         runtime,
         io,
         "file.lstat",
-        Data::Object(vec![("path", Data::String(path.to_str().unwrap()))]),
-        Box::new(move |io, result| match result {
-            Ok(value)
-                if text(value.root(), "kind") == "directory"
-                    && value.root().get("uid").and_then(Value::unsigned) == Some(uid)
-                    && value
-                        .root()
-                        .get("mode")
-                        .and_then(Value::unsigned)
-                        .is_some_and(|v| v & 0o077 == 0) =>
+        Data::Object(vec![("path", Data::from(path.as_path()))]),
+        Box::new(move |io, result| match result.map(|value| value.root().get("kind").and_then(Data::string) == Some("directory")
+            && value.root().get("uid").and_then(Data::unsigned) == Some(uid)
+            && value.root().get("mode").and_then(Data::unsigned).is_some_and(|v| v & 0o077 == 0))
+        {
+            Ok(true) =>
             {
                 done(io, Ok(()))
             }

@@ -12,7 +12,7 @@ final class SettingsSynchronizationTests: XCTestCase {
         let decoded = try JSONDecoder().decode(Preferences.self, from: Data(#"{"fontSize":14,"hostColors":{"a":"blue","b":"chartreuse"}}"#.utf8))
         XCTAssertEqual(decoded.hostColors, ["a": .blue], "An unknown color drops only that choice")
         XCTAssertEqual(decoded.fontSize, 14)
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let directory = System.temporary.appendingPathComponent(System.uuid().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let file = directory.appendingPathComponent("settings.json")
         let store = SettingsStore(file: file), colors = HostColorStore.shared, themes = SidebarThemeStore.shared
@@ -70,7 +70,7 @@ final class SettingsSynchronizationTests: XCTestCase {
         let clashing = try JSONDecoder().decode(Preferences.self, from: Data(#"{"fontSize":14,"keyGroups":{"spaces":["command"],"tabs":["command"]}}"#.utf8))
         XCTAssertEqual(clashing.keyGroups, KeyGroups())
         XCTAssertEqual(clashing.fontSize, 14)
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let directory = System.temporary.appendingPathComponent(System.uuid().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let file = directory.appendingPathComponent("settings.json")
         let store = SettingsStore(file: file)
@@ -228,7 +228,7 @@ final class SettingsSynchronizationTests: XCTestCase {
         let legacy = try JSONDecoder().decode(Preferences.self, from: Data("{\"fontSize\":16}".utf8))
         XCTAssertEqual(legacy.sidebarStyle, .icons, "The host picker's rows are the default")
         XCTAssertEqual(legacy.sidebarFontSize, 15.5, "Icons names follow the content font, half a point smaller")
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let directory = System.temporary.appendingPathComponent(System.uuid().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let file = directory.appendingPathComponent("settings.json")
         let store = SettingsStore(file: file)
@@ -307,7 +307,7 @@ final class SettingsSynchronizationTests: XCTestCase {
         try XCTSkipUnless(LiquidGlassStore.supported, "Liquid Glass needs macOS 26")
         try DesktopTestSupport.requireUnlocked()
         AppFont.register()
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let directory = System.temporary.appendingPathComponent(System.uuid().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let controller = AppDelegate(settings: SettingsStore(file: directory.appendingPathComponent("settings.json")))
         let workspace = controller.workspace
@@ -347,7 +347,7 @@ final class SettingsSynchronizationTests: XCTestCase {
     func testIconsSidebarMatchesHostPickerRows() async throws {
         try DesktopTestSupport.requireUnlocked()
         AppFont.register()
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let directory = System.temporary.appendingPathComponent(System.uuid().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let controller = AppDelegate(settings: SettingsStore(file: directory.appendingPathComponent("settings.json")))
         let workspace = controller.workspace
@@ -358,7 +358,7 @@ final class SettingsSynchronizationTests: XCTestCase {
         var remote = Space(name: "remote", directory: "/tmp")
         let shell = SSHShell(destination: "admin@fixture")
         remote.panes[0].tabs[0].machine = .ssh(shell)
-        let terminal = remote.tabs[0].id, generation = UUID()
+        let terminal = remote.tabs[0].id, generation = System.uuid()
         workspace.hosts.begin(terminal, generation: generation, destination: shell.destination)
         let greeting = SSHGreeting(version: 1, host: "fixture", boot: "test", uid: 501, home: "/tmp", capabilities: [])
         workspace.hosts.update(terminal, generation: generation, destination: shell.destination, greeting: greeting, state: .connected)
@@ -429,7 +429,7 @@ final class SettingsSynchronizationTests: XCTestCase {
     func testLargeSidebarRowsResizeLiveInBothLayouts() async throws {
         try DesktopTestSupport.requireUnlocked()
         AppFont.register()
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let directory = System.temporary.appendingPathComponent(System.uuid().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let controller = AppDelegate(settings: SettingsStore(file: directory.appendingPathComponent("settings.json")))
         let workspace = controller.workspace
@@ -438,7 +438,7 @@ final class SettingsSynchronizationTests: XCTestCase {
         var remote = Space(name: "remote", directory: "/tmp")
         let shell = SSHShell(destination: "admin@fixture")
         remote.panes[0].tabs[0].machine = .ssh(shell)
-        let terminal = remote.tabs[0].id, generation = UUID()
+        let terminal = remote.tabs[0].id, generation = System.uuid()
         workspace.hosts.begin(terminal, generation: generation, destination: shell.destination)
         let greeting = SSHGreeting(version: 1, host: "fixture", boot: "test", uid: 501, home: "/tmp", capabilities: [])
         workspace.hosts.update(terminal, generation: generation, destination: shell.destination, greeting: greeting, state: .connected)
@@ -548,7 +548,7 @@ final class SettingsSynchronizationTests: XCTestCase {
     func testDiagnosticsDefaultOffAndPersistExplicitChoice() throws {
         XCTAssertFalse(Preferences().enableDiagnostics)
         XCTAssertFalse(try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8)).enableDiagnostics)
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = System.temporary.appendingPathComponent(System.uuid().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let file = root.appendingPathComponent("settings.json"), store = SettingsStore(file: root.appendingPathComponent("settings.json"))
         var preferences = Preferences()
@@ -813,7 +813,7 @@ final class SettingsSynchronizationTests: XCTestCase {
         let original = runtime.preferences, originalSidebar = SidebarThemeStore.shared.current
         runtime.start(preferences: original)
         defer { runtime.stop(); SidebarThemeStore.shared.current = originalSidebar }
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let directory = System.temporary.appendingPathComponent(System.uuid().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = SettingsStore(file: directory.appendingPathComponent("settings.json"))
         var defaults = original
@@ -898,7 +898,7 @@ final class SettingsSynchronizationTests: XCTestCase {
             runtime.stop()
             SidebarThemeStore.shared.current = originalSidebar
         }
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let directory = System.temporary.appendingPathComponent(System.uuid().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = SettingsStore(file: directory.appendingPathComponent("settings.json"))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 550),
@@ -974,7 +974,7 @@ final class SettingsSynchronizationTests: XCTestCase {
         let restoreRuntime = TestSupport.preserveRuntime()
         defer { restoreRuntime() }
         try DesktopTestSupport.requireUnlocked()
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dispatch-font-shortcuts-\(UUID())")
+        let directory = System.temporary.appendingPathComponent("dispatch-font-shortcuts-\(System.uuid())")
         defer { try? FileManager.default.removeItem(at: directory) }
         let file = directory.appendingPathComponent("settings.json")
         let store = SettingsStore(file: file)
@@ -1024,7 +1024,7 @@ final class SettingsSynchronizationTests: XCTestCase {
         let restoreRuntime = TestSupport.preserveRuntime()
         defer { restoreRuntime() }
         try DesktopTestSupport.requireUnlocked()
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dispatch-settings-\(UUID())")
+        let directory = System.temporary.appendingPathComponent("dispatch-settings-\(System.uuid())")
         defer { try? FileManager.default.removeItem(at: directory) }
         let file = directory.appendingPathComponent("settings.json")
         let store = SettingsStore(file: file)

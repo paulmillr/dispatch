@@ -57,7 +57,7 @@ enum SSHLauncherCommand {
     nonisolated(unsafe) private static var child: pid_t = 0
 
     static func run(_ args: [String]) -> Int32 {
-        let environment = ProcessInfo.processInfo.environment
+        let environment = System.inherited
         guard let executable = environment["DISPATCH_SSH_EXECUTABLE"] ?? ShellCommandWrapper.ssh.executable(in: environment) else {
             try? FileHandle.standardError.write(contentsOf: Data("ssh is not installed or is missing from PATH.\n".utf8)); return 127
         }
@@ -67,7 +67,7 @@ enum SSHLauncherCommand {
               let invocation = SSHInvocation.parse(args, isTerminal: isatty(STDIN_FILENO) == 1),
               let configuration = resolvedConfiguration(invocation, executable: executable),
               let scope = SSHIntegrationScope(executable: executable, destination: invocation.destination, configuration: configuration),
-              let origin = AgentProcess.capture(getpid()) else { return replace(executable, args) }
+              let origin = AgentProcess.capture(System.pid) else { return replace(executable, args) }
         guard let grant = permission(scope: scope, directory: directory, tab: tab, token: token, origin: origin) else { return 130 }
         guard grant.isCurrent, grant.profile != .ordinary else { return replace(executable, args) }
         // A configuration edited while the consent sheet was open cannot carry
@@ -76,7 +76,7 @@ enum SSHLauncherCommand {
               SSHIntegrationScope(executable: executable, destination: invocation.destination, configuration: current) == scope else {
             return replace(executable, args)
         }
-        let id = SSHConnectionID(), credential = UUID().uuidString
+        let id = SSHConnectionID(), credential = System.uuid().uuidString
         let sessionID = String(id.rawValue.uuidString.replacingOccurrences(of: "-", with: "").lowercased().prefix(24))
         let folder = URL(fileURLWithPath: directory).appendingPathComponent("s-" + id.rawValue.uuidString.prefix(12))
         do { try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700]) }
@@ -115,7 +115,7 @@ enum SSHLauncherCommand {
             if (!connectingAnnounced || ready) && !announced {
                 let request = SSHLaunchRequest(tabID: tab, token: token, connectionID: id, credential: credential,
                     master: master, shell: SSHShell(destination: invocation.destination, options: invocation.options, executable: executable),
-                    integrationScope: scope, integrationGrant: grant, origin: origin, sshProcess: AgentProcess.capture(pid), terminalDevice: AgentProcess.info(getpid())?.e_tdev)
+                    integrationScope: scope, integrationGrant: grant, origin: origin, sshProcess: AgentProcess.capture(pid), terminalDevice: AgentProcess.info(System.pid)?.tty)
                 // Publish progress while OpenSSH is still connecting/authenticating.
                 // Only the ready request permits the app to open helper channels.
                 let file = URL(fileURLWithPath: directory).appendingPathComponent(id.rawValue.uuidString + (ready ? ".sshrequest" : ".sshconnecting"))
@@ -179,7 +179,7 @@ enum SSHLauncherCommand {
             var arguments = request.master.arguments(command: remoteCommand(sessionID: request.sessionID, grant: grant, command: nil))
             if let index = arguments.firstIndex(of: "-T") { arguments[index] = "-tt" }
             var pointers = ([request.master.executable] + arguments).map { strdup($0) }; pointers.append(nil)
-            var environment = ProcessInfo.processInfo.environment.map { strdup($0.key + "=" + $0.value) }; environment.append(nil)
+            var environment = System.inherited.map { strdup($0.key + "=" + $0.value) }; environment.append(nil)
             var pid: pid_t = 0
             let launched = request.master.executable.withCString { executable in
                 pointers.withUnsafeMutableBufferPointer { arguments in
@@ -201,7 +201,7 @@ enum SSHLauncherCommand {
         struct Input: Codable { let executable: String; let arguments: [String] }
         let arguments = ["-G", "-o", "ClearAllForwardings=no"] + invocation.options + ["--", invocation.destination] + (invocation.command.map { [$0] } ?? [])
         do {
-            let data = try AppReplay.query(kind: "ssh.configuration", input: JSONEncoder().encode(Input(executable: executable, arguments: arguments))) {
+            let data = try AppReplay.query(kind: "ssh.configuration", input: AppReplay.value(Input(executable: executable, arguments: arguments))) {
                 let process = Process(), pipe = Pipe()
                 process.executableURL = URL(fileURLWithPath: executable)
                 // Native clones suppress duplicate forwarded listeners. Resolve the
@@ -218,22 +218,22 @@ enum SSHLauncherCommand {
                     var data = Data()
                     while let bytes = try pipe.fileHandleForReading.read(upToCount: 65_536), !bytes.isEmpty {
                         guard bytes.count <= 1_048_576 - data.count else {
-                            if process.isRunning { process.terminate() }; process.waitUntilExit(); return try JSONEncoder().encode(Optional<String>.none)
+                            if process.isRunning { process.terminate() }; process.waitUntilExit(); return .null
                         }
                         data.append(bytes)
                     }
                     process.waitUntilExit()
                     let configuration = String(decoding: data, as: UTF8.self)
-                    return try JSONEncoder().encode(process.terminationStatus == 0 && invocation.supports(configuration: configuration) ? configuration : nil)
-                } catch { if process.isRunning { process.terminate(); process.waitUntilExit() }; return try JSONEncoder().encode(Optional<String>.none) }
+                    return try AppReplay.value(process.terminationStatus == 0 && invocation.supports(configuration: configuration) ? configuration : nil)
+                } catch { if process.isRunning { process.terminate(); process.waitUntilExit() }; return .null }
             }
-            return try JSONDecoder().decode(String?.self, from: data)
+            return try AppReplay.decode(String?.self, data)
         } catch { AppReplay.fail(error); return nil }
     }
 
     private static func permission(scope: SSHIntegrationScope, directory: String, tab: UUID, token: String,
                                    origin: AgentProcess) -> SSHIntegrationGrant? {
-        let id = UUID(), root = URL(fileURLWithPath: directory)
+        let id = System.uuid(), root = URL(fileURLWithPath: directory)
         let request = root.appendingPathComponent(id.uuidString + ".sshconsent")
         let reply = root.appendingPathComponent(id.uuidString + ".sshchoice")
         defer { try? FileManager.default.removeItem(at: request); try? FileManager.default.removeItem(at: reply) }

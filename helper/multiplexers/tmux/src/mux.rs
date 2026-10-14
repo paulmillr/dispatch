@@ -166,7 +166,7 @@ impl Tmux {
                 let client =
                     &mut mux.backends.get_mut(&location.backend).unwrap().clients[location.client];
                 let parsed = result.and_then(|rows| {
-                    let snapshot = crate::snapshot::Snapshot::parse(&rows[0], &rows[1], &rows[2])?;
+                    let snapshot = crate::snapshot::Snapshot::parse(&rows[0], &rows[1], &rows[2], &rows[4])?;
                     if client.expected.as_ref().is_some_and(|expected| {
                         (snapshot.session, snapshot.server, snapshot.socket.clone()) != *expected
                     }) {

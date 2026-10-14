@@ -341,7 +341,7 @@ final class WorkspaceTests: XCTestCase {
     }
 
     func testInitialTabTitleUsesInheritedDirectoryBeforeShellStarts() {
-        XCTAssertEqual(TerminalTab(directory: NSHomeDirectory()).label, "~")
+        XCTAssertEqual(TerminalTab(directory: System.home.path).label, "~")
         XCTAssertEqual(TerminalTab(directory: "/").label, "/")
         XCTAssertEqual(TerminalTab(directory: "/tmp/example/").label, "example")
         let workspace = Workspace()
@@ -371,7 +371,7 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertEqual(workspace.spaces.map(\.id), ids)
         XCTAssertEqual(workspace.selectedSpace, ids[0])
         XCTAssertFalse(workspace.reorderSpace(ids[0], relativeTo: ids[0], after: true))
-        XCTAssertFalse(workspace.reorderSpace(ids[0], relativeTo: UUID(), after: true))
+        XCTAssertFalse(workspace.reorderSpace(ids[0], relativeTo: System.uuid(), after: true))
         XCTAssertEqual(workspace.spaces.map(\.id), ids)
         XCTAssertEqual(workspace.allTabIDs, tabs)
     }
@@ -394,7 +394,7 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertEqual(workspace.activeTab?.id, ids[0])
         let before = workspace.spaces
         XCTAssertFalse(workspace.moveTab(ids[0], to: pane, relativeTo: ids[0]))
-        XCTAssertFalse(workspace.moveTab(ids[0], to: pane, relativeTo: UUID()))
+        XCTAssertFalse(workspace.moveTab(ids[0], to: pane, relativeTo: System.uuid()))
         XCTAssertEqual(workspace.spaces, before)
         workspace.newTab()
         workspace.split(.columns)
@@ -511,9 +511,9 @@ final class WorkspaceTests: XCTestCase {
         let panes = (0..<4).map { _ in Pane(tabs: [TerminalTab(directory: "/tmp")]) }
         var space = Space(name: "Grid", tab: panes[0].tabs[0])
         space.panes = [panes[3], panes[1], panes[0], panes[2]]
-        space.layout = .split(UUID(), .columns,
-            .split(UUID(), .rows, .pane(panes[0].id), .pane(panes[2].id)),
-            .split(UUID(), .rows, .pane(panes[1].id), .pane(panes[3].id)))
+        space.layout = .split(System.uuid(), .columns,
+            .split(System.uuid(), .rows, .pane(panes[0].id), .pane(panes[2].id)),
+            .split(System.uuid(), .rows, .pane(panes[1].id), .pane(panes[3].id)))
         space.focusedPane = panes[3].id
         workspace.spaces = [space]
         workspace.selectSpace(space.id)
@@ -774,9 +774,9 @@ final class WorkspaceTests: XCTestCase {
         for _ in 0..<8 { workspace.newTab(); workspace.split(.columns) }
         XCTAssertEqual(workspace.current?.panes.count, 4)
         let before = workspace.spaces
-        workspace.moveTab(UUID(), to: UUID())
-        workspace.closeTab(UUID())
-        workspace.selectSpace(UUID())
+        workspace.moveTab(System.uuid(), to: System.uuid())
+        workspace.closeTab(System.uuid())
+        workspace.selectSpace(System.uuid())
         XCTAssertEqual(workspace.spaces, before)
     }
 
@@ -855,7 +855,7 @@ final class WorkspaceTests: XCTestCase {
     }
 
     func testSettingsRoundTripAndInvalidInputDoesNotReplaceSavedValues() throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let directory = System.temporary.appendingPathComponent(System.uuid().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let file = directory.appendingPathComponent("settings.json")
         let settings = SettingsStore(file: file)
@@ -866,7 +866,7 @@ final class WorkspaceTests: XCTestCase {
         try settings.save(values)
         XCTAssertEqual(SettingsStore(file: file).values, values)
         var invalid = values
-        invalid.startingDirectory = "/nonexistent-\(UUID())"
+        invalid.startingDirectory = "/nonexistent-\(System.uuid())"
         XCTAssertThrowsError(try settings.save(invalid))
         XCTAssertEqual(SettingsStore(file: file).values, values)
         invalid = values
@@ -905,7 +905,7 @@ final class WorkspaceTests: XCTestCase {
         let content = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 200))
         window.contentView = content
         window.makeKeyAndOrderFront(nil)
-        let ids = (0..<3).map { _ in UUID() }
+        let ids = (0..<3).map { _ in System.uuid() }
         var drops: [(UUID, Bool)] = []
         let blank = ReorderTrackingView(configuration: LocalReorder(edge: .pane, accepts: { _ in true }) { _, _ in
             XCTFail("The gap between spaces must not fall through to move-to-end")
@@ -1061,7 +1061,7 @@ final class WorkspaceTransactionTests: XCTestCase {
         let tab = try XCTUnwrap(workspace.activeTab?.id)
         let pane = try XCTUnwrap(workspace.current?.focusedPane)
         let revision = workspace.layoutRevision
-        for target in [UUID(), pane] {
+        for target in [System.uuid(), pane] {
             let result = workspace.updateLayout { $0.splitTab(tab, beside: target, edge: .right) }
             XCTAssertNil(result)
             XCTAssertEqual(workspace.spaces, original)

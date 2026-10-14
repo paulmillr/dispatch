@@ -85,7 +85,7 @@ final class SSHRecoveryIntegrationTests: XCTestCase {
             try await app.wait { app.workspace.current?.structured == true }
             return connection
         }
-        func requests() -> Data { (try? Data(contentsOf: fixture.state.appendingPathComponent("requests.jsonl"))) ?? Data() }
+        func requests() -> Data { (try? System.read(fixture.state.appendingPathComponent("requests.jsonl"))) ?? Data() }
         let connection = try await connect()
         let originalID = try XCTUnwrap(app.workspace.activeSurfaceID)
         try await app.wait { runtime.views[originalID]?.surface != nil }
@@ -96,7 +96,7 @@ final class SSHRecoveryIntegrationTests: XCTestCase {
         XCTAssertTrue(requests().isEmpty, "Discovery must precede the first model request")
         let identity = try XCTUnwrap(session.remoteAgent), process = try XCTUnwrap(CodexProcess.capture(identity.pid))
         runtime.chat.chooseChat(true, session: session)
-        let draft = "Unsent first prompt \(UUID().uuidString)\nSecond line"
+        let draft = "Unsent first prompt \(System.uuid().uuidString)\nSecond line"
         session.draft = draft
         try await interruptMaster(connection)
         try await TestSupport.eventually(timeout: .seconds(15)) {
@@ -140,11 +140,13 @@ final class SSHRecoveryIntegrationTests: XCTestCase {
         // ControlPersist rewrites the background process's argv. Its private
         // socket reports the actual owner PID even while a foreground client
         // has the original command line and shares the same control path.
-        let attributes = try FileManager.default.attributesOfItem(atPath: control.controlPath)
-        XCTAssertEqual(attributes[.type] as? FileAttributeType, .typeSocket)
-        XCTAssertEqual((attributes[.ownerAccountID] as? NSNumber)?.uint32Value, getuid())
+        let attributes = try System.observe("file.attributes", control.controlPath) { () -> [String] in
+            let attributes = try FileManager.default.attributesOfItem(atPath: control.controlPath)
+            return [(attributes[.type] as? FileAttributeType)?.rawValue ?? "", "\((attributes[.ownerAccountID] as? NSNumber)?.uint32Value ?? 0)"]
+        }
+        XCTAssertEqual(attributes, [FileAttributeType.typeSocket.rawValue, "\(getuid())"])
         XCTAssertTrue(master.alive)
-        XCTAssertEqual(kill(master.pid, SIGKILL), 0)
+        XCTAssertEqual(System.signal(master.pid, SIGKILL), 0)
     }
 
     private func recovery(_ backend: String) async throws {
@@ -225,10 +227,10 @@ final class SSHRecoveryIntegrationTests: XCTestCase {
             session.approvals.contains(where: \.pending)
         }
         let approval = try XCTUnwrap(session.approvals.first(where: \.pending))
-        let draft = "UNSENT_\(backend)_\(UUID().uuidString)"
+        let draft = "UNSENT_\(backend)_\(System.uuid().uuidString)"
         session.draft = draft
-        let requests = try Data(contentsOf: fixture.state.appendingPathComponent("requests.jsonl"))
-        let before = try Data(contentsOf: URL(fileURLWithPath: try XCTUnwrap(session.transcriptPath)))
+        let requests = try System.read(fixture.state.appendingPathComponent("requests.jsonl"))
+        let before = try System.read(URL(fileURLWithPath: try XCTUnwrap(session.transcriptPath)))
         try await interruptMaster(connection)
         try await TestSupport.eventually(timeout: .seconds(15)) {
             !runtime.ssh.links.keys.contains(connection.launch.connectionID) && !session.active && !approval.pending
@@ -243,8 +245,8 @@ final class SSHRecoveryIntegrationTests: XCTestCase {
             XCTFail("The disconnected generation accepted an operation")
         } catch { }
         XCTAssertTrue(process.alive)
-        XCTAssertEqual(try Data(contentsOf: fixture.state.appendingPathComponent("requests.jsonl")), requests)
-        XCTAssertFalse(String(decoding: try Data(contentsOf: URL(fileURLWithPath: try XCTUnwrap(session.transcriptPath))), as: UTF8.self).contains(draft))
+        XCTAssertEqual(try System.read(fixture.state.appendingPathComponent("requests.jsonl")), requests)
+        XCTAssertFalse(String(decoding: try System.read(URL(fileURLWithPath: try XCTUnwrap(session.transcriptPath))), as: UTF8.self).contains(draft))
         if backend == "herdr" {
             XCTAssertEqual(app.workspace.spaces.first(where: { $0.id == originalSpace.id })?.layout, layout)
             XCTAssertNotEqual(originalSpace.hostID, .local)
@@ -282,8 +284,8 @@ final class SSHRecoveryIntegrationTests: XCTestCase {
         XCTAssertEqual(app.workspace.current?.layout.paneIDs.count, 2)
         XCTAssertFalse(restored.approvals.contains(where: \.pending))
         XCTAssertTrue(restored.turns.flatMap(\.items).contains { $0.text == "Local fixture reply: history before \(backend) interruption" })
-        XCTAssertEqual(try Data(contentsOf: fixture.state.appendingPathComponent("requests.jsonl")), requests, "Reattachment never replays a prompt or permission")
-        let after = try Data(contentsOf: URL(fileURLWithPath: try XCTUnwrap(restored.transcriptPath)))
+        XCTAssertEqual(try System.read(fixture.state.appendingPathComponent("requests.jsonl")), requests, "Reattachment never replays a prompt or permission")
+        let after = try System.read(URL(fileURLWithPath: try XCTUnwrap(restored.transcriptPath)))
         XCTAssertTrue(after.starts(with: before), "Recovery must retain the existing transcript")
         XCTAssertFalse(String(decoding: after, as: UTF8.self).contains(draft))
         XCTAssertFalse(restored.turns.flatMap(\.items).contains { $0.kind == .tool && $0.output.contains("DISPATCH_LOCAL_TOOL_OK") })
@@ -302,7 +304,7 @@ enum SSHChatTestSupport {
 
     static func launch(_ command: String, session: ChatSession, terminal: TerminalView,
                        replacing previousIdentity: String? = nil) async throws {
-        let generation = UUID().uuidString
+        let generation = System.uuid().uuidString
         let marker = "DISPATCH_AGENT_LAUNCH_" + generation
         // The command's echo cannot contain the complete marker. Observing it
         // proves the old editor and scrollback were cleared before this launch.
@@ -350,7 +352,7 @@ enum SSHChatTestSupport {
         func contents(_ relative: String) async throws -> String {
             let path = state.appendingPathComponent(relative).path
             if let read { return try await read(path) }
-            return try String(contentsOfFile: path, encoding: .utf8)
+            return String(decoding: try System.read(URL(fileURLWithPath: path)), as: UTF8.self)
         }
         try await TestSupport.eventually(timeout: .seconds(15), diagnostic: session.status ?? "No remote recovery agent") {
             session.active && session.remoteAgent != nil
@@ -389,11 +391,7 @@ enum SSHChatTestSupport {
 
     static func eventually(timeout: Duration = .seconds(15), file: StaticString = #filePath, line: UInt = #line,
                            _ condition: () async throws -> Bool) async throws {
-        let deadline = ContinuousClock.now.advanced(by: timeout)
-        while ContinuousClock.now < deadline {
-            if try await condition() { return }
-            try await Task.sleep(for: .milliseconds(50))
-        }
-        _ = try XCTUnwrap(nil as Bool?, "Remote condition timed out", file: file, line: line)
+        try await TestSupport.eventually(timeout: timeout, interval: .milliseconds(50), file: file, line: line,
+                                         diagnostic: "Remote condition timed out", condition)
     }
 }

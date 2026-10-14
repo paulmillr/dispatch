@@ -4,7 +4,7 @@ import XCTest
 @MainActor
 final class ChatHistoricalMergeTests: XCTestCase {
     private func session() -> ChatSession {
-        ChatSession(id: UUID(), draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
+        ChatSession(id: System.uuid(), draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
     }
 
     private func record(_ key: String, turn: String = "turn", time: Double, offset: UInt64? = nil,

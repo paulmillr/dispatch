@@ -17,12 +17,14 @@ struct TerminalHistoryStore {
     }
 
     static let maxAge: TimeInterval = 7 * 24 * 60 * 60
-    /// Per tab, a terminal's whole scrollback: its text is always smaller, so nothing a tab
-    /// still shows is cut.
-    static let tabLimit = TerminalRuntime.scrollbackLimit
-    /// In total, 1/32 of this Mac's memory (256 MB with 8 GB), held while quitting and until
-    /// each restored tab is shown.
-    static let totalLimit = Int(clamping: ProcessInfo.processInfo.physicalMemory / 32)
+    /// What saved output may hold, from this Mac's memory (read once per save or restore): per tab, a terminal's whole
+    /// scrollback (its text is always smaller, so nothing a tab still shows is cut); in total, 1/32 of the memory (256 MB
+    /// with 8 GB), held while quitting and until each restored tab is shown.
+    struct Limits {
+        let tab: Int, total: Int
+        init(memory: UInt64) { (tab, total) = (TerminalRuntime.scrollbackLimit(memory), Int(clamping: memory / 32)) }
+    }
+    static var limits: Limits { Limits(memory: System.machine.memory) }
 
     /// Replaces the saved output; nothing to save removes it.
     func save(_ tabs: [UUID: String]) throws {
@@ -40,13 +42,14 @@ struct TerminalHistoryStore {
     func take() -> [UUID: String] {
         let data = try? Data(contentsOf: url, options: .alwaysMapped)
         try? remove()
-        guard let data, data.count <= Self.totalLimit + 1024 * 1024, let newline = data.firstIndex(of: 0x0A),
+        let limits = Self.limits
+        guard let data, data.count <= limits.total + 1024 * 1024, let newline = data.firstIndex(of: 0x0A),
               let header = try? JSONDecoder().decode(Header.self, from: data[..<newline]), header.version == 1,
               abs(header.saved.timeIntervalSinceNow) <= Self.maxAge,
               header.tabs.allSatisfy({ (0...data.count).contains($0.bytes) }), header.tabs.reduce(0, { $0 + $1.bytes }) == data.count - newline - 1 else { return [:] }
         var tabs: [UUID: String] = [:], offset = newline + 1
         for tab in header.tabs {
-            let text = Self.tail(String(decoding: data[offset..<offset + tab.bytes], as: UTF8.self))
+            let text = Self.tail(String(decoding: data[offset..<offset + tab.bytes], as: UTF8.self), limit: limits.tab)
             offset += tab.bytes
             if !text.isEmpty { tabs[tab.id] = text }
         }
@@ -60,7 +63,7 @@ struct TerminalHistoryStore {
     }
 
     /// The end of `text` within `limit` UTF-8 bytes, starting at a line.
-    static func tail(_ text: String, limit: Int = tabLimit) -> String {
+    static func tail(_ text: String, limit: Int) -> String {
         let utf8 = text.utf8
         guard utf8.count > limit else { return text }
         let start = utf8.index(utf8.endIndex, offsetBy: -limit)
@@ -102,7 +105,7 @@ enum PrivateFile {
     static func write(to url: URL, excludedFromBackup: Bool = false, _ body: (FileHandle) throws -> Void) throws {
         let directory = url.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        var temporary = directory.appendingPathComponent(prefix(url) + UUID().uuidString)
+        var temporary = directory.appendingPathComponent(prefix(url) + System.uuid().uuidString)
         let descriptor = open(temporary.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
         guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)

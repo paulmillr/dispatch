@@ -22,20 +22,20 @@ struct ChatItem: Identifiable, Equatable, Sendable {
     var id: String
     var kind: Kind
     var rowID: String?
-    var text: String { didSet { presentationID = UUID() } }
-    var title: String = "" { didSet { presentationID = UUID() } }
-    var output: String = "" { didSet { presentationID = UUID() } }
-    var completed = false { didSet { presentationID = UUID() } }
-    var exitCode: Int? { didSet { presentationID = UUID() } }
-    var patch: ChatPatch? { didSet { presentationID = UUID() } }
-    var processID: String? { didSet { presentationID = UUID() } }
-    var shellCommand: String? { didSet { presentationID = UUID() } }
-    var commandSource: String? { didSet { presentationID = UUID() } }
-    var source: HelperChat.Record? { didSet { presentationID = UUID() } }
+    var text: String { didSet { presentationID = System.uuid() } }
+    var title: String = "" { didSet { presentationID = System.uuid() } }
+    var output: String = "" { didSet { presentationID = System.uuid() } }
+    var completed = false { didSet { presentationID = System.uuid() } }
+    var exitCode: Int? { didSet { presentationID = System.uuid() } }
+    var patch: ChatPatch? { didSet { presentationID = System.uuid() } }
+    var processID: String? { didSet { presentationID = System.uuid() } }
+    var shellCommand: String? { didSet { presentationID = System.uuid() } }
+    var commandSource: String? { didSet { presentationID = System.uuid() } }
+    var source: HelperChat.Record? { didSet { presentationID = System.uuid() } }
     /// The directory the agent recorded for this tool call, when its input omits one.
-    var directory: String? { didSet { presentationID = UUID() } }
-    var hiddenPatchRequests: Set<String> = [] { didSet { presentationID = UUID() } }
-    private(set) var presentationID = UUID()
+    var directory: String? { didSet { presentationID = System.uuid() } }
+    var hiddenPatchRequests: Set<String> = [] { didSet { presentationID = System.uuid() } }
+    private(set) var presentationID = System.uuid()
     /// Claude's summarized thinking reads as short progress notes, so it is
     /// shown inline like a message instead of behind a disclosure.
     var isNarration: Bool { kind == .reasoning && (source?.inline_reasoning ?? id.hasPrefix("claude-")) }
@@ -105,11 +105,11 @@ struct ChatTurn: Identifiable, Sendable {
     var started = Date() { didSet { invalidatePresentation() } }
     var ended: Date? { didSet { invalidatePresentation() } }
     var fileOffset: UInt64? { didSet { invalidatePresentation() } }
-    var items: [ChatItem] = [] { didSet { itemsRevision = UUID(); invalidatePresentation() } }
-    private(set) var itemsRevision = UUID()
-    private(set) var presentationRevision = UUID()
+    var items: [ChatItem] = [] { didSet { itemsRevision = System.uuid(); invalidatePresentation() } }
+    private(set) var itemsRevision = System.uuid()
+    private(set) var presentationRevision = System.uuid()
 
-    mutating func invalidatePresentation() { presentationRevision = UUID() }
+    mutating func invalidatePresentation() { presentationRevision = System.uuid() }
 }
 
 @MainActor @Observable
@@ -117,7 +117,7 @@ struct ChatTurn: Identifiable, Sendable {
 /// decision and any answers.
 final class PendingApproval: Identifiable {
     enum Decision: String { case allow, deny, terminal, expired }
-    let id = UUID()
+    let id = System.uuid()
     let key: String
     let interaction: String?
     let operation: String
@@ -164,7 +164,7 @@ struct ChatToolGroup: Identifiable {
     let children: [ChatTranscriptRow]
     // Separate from the stable disclosure identity. A rebuilt cached group
     // refreshes its summary without hashing every child's revision during draw.
-    let presentationID = UUID()
+    let presentationID = System.uuid()
 }
 
 struct ChatTranscriptRow: Identifiable {
@@ -181,7 +181,7 @@ struct ChatTranscriptRow: Identifiable {
 }
 
 struct ChatQueuedMessage: Identifiable {
-    let id = UUID()
+    let id = System.uuid()
     var text: String
     var process: AgentProcess?
     var binding: HelperTopology.Binding? = nil
@@ -365,7 +365,7 @@ final class ChatSession: Identifiable {
             return fields.filter { !$0.2.isEmpty }.map { .init(id: row.id + ":" + $0.0, row: row.id, label: $0.1, text: $0.2) }
         }
     }
-    let token = UUID().uuidString
+    let token = System.uuid().uuidString
     var sessionID: String? {
         didSet { if sessionID == nil, oldValue != nil { draftCollection.beginProvisional() } }
     }
@@ -645,7 +645,7 @@ final class ChatSession: Identifiable {
                 if collapsed == nil, collapsedToolGroups.contains(id) { collapsed = id }
             }
             let proposed = expanded ?? collapsed ?? first ?? ("tool-group:" + tools[0].id)
-            let id = usedGroupIDs.contains(proposed) ? "tool-group:" + UUID().uuidString : proposed
+            let id = usedGroupIDs.contains(proposed) ? "tool-group:" + System.uuid().uuidString : proposed
             usedGroupIDs.insert(id); groupIDs.insert(id)
             // A message row already shows its group; a new header row is new presentation.
             if first == nil, !hasMessage { transcriptArrivals.recordGroup(id, forming: tools.map(\.id)) }
@@ -688,7 +688,7 @@ final class ChatSession: Identifiable {
     private(set) var hasOpenedChat = false
     func setView(_ chat: Bool, reason: String) {
         if chat { hasOpenedChat = true }
-        focusRequest = UUID()
+        focusRequest = System.uuid()
         guard showChat != chat else { return }
         Self.viewLog.info("Chat view changed: chat=\(chat) reason=\(reason, privacy: .public) surface=\(self.id.uuidString, privacy: .public)")
         viewTransitions.append(.init(date: .now, chat: chat, reason: reason))
@@ -728,6 +728,9 @@ final class ChatSession: Identifiable {
     /// An unresolved interaction from a disconnected helper cannot regain authority as a native card.
     var retiredInteraction = false
     var awaitingPromptAck = false
+    /// A helper chat's prompt started its turn and the helper has not reported its state since: the last state (often
+    /// still idle) says nothing about that turn, so the chat counts as busy until the next state or the turn's end.
+    var starting = false
     /// A Claude or Pi slash command awaiting its turn, output, or menu.
     /// A native command sent to the agent whose printed output has not arrived yet (its result's title).
     @ObservationIgnored var observedCommand: (title: String, output: String?)?
@@ -759,7 +762,7 @@ final class ChatSession: Identifiable {
     var helperQueueSnapshot: [HelperChat.Queued]?
     /// The producer's own queue (chat.open native_queue); otherwise core holds and drains it.
     var helperNativeQueue = false
-    var queueGeneration = UUID()
+    var queueGeneration = System.uuid()
     var queueWaiting: String?
     var queueRetryAfter: Date?
     var queuePaused: String? { queuedMessages.first?.pause?.description }
@@ -776,7 +779,7 @@ final class ChatSession: Identifiable {
         // authenticated snapshot arrives. Unsynchronized drafts remain recoverable.
         if replacing { queuedMessages.removeAll { !$0.held } }
         queueBusy = false; queueError = nil; helperQueueSnapshot = nil
-        queueGeneration = UUID(); queueWaiting = nil; queueRetryAfter = nil
+        queueGeneration = System.uuid(); queueWaiting = nil; queueRetryAfter = nil
         for index in queuedMessages.indices where queuedMessages[index].pause != .uncertain {
             queuedMessages[index].pause = .destinationChanged
         }
@@ -797,7 +800,7 @@ final class ChatSession: Identifiable {
     func completeCommand() {
         guard !matchingCommands.isEmpty else { return }
         draft = matchingCommands[min(commandSelection, matchingCommands.count - 1)] + " "
-        commandSelection = 0; focusRequest = UUID()
+        commandSelection = 0; focusRequest = System.uuid()
     }
     // Transcript polling and activity hooks may replace their own status, but
     // a failed send must remain visible until the user acts or identity ends.
@@ -829,7 +832,7 @@ final class ChatSession: Identifiable {
     }
     func clearQuestions() {
         questions.forEach { $0.clearAnswers() }
-        if !questions.isEmpty { focusRequest = UUID() }
+        if !questions.isEmpty { focusRequest = System.uuid() }
         questions = []
     }
     var nativePrompt: ChatNativePrompt?
@@ -848,13 +851,13 @@ final class ChatSession: Identifiable {
     var goalRevision = 0
     @ObservationIgnored var modelChoices = ChatModelChoicesCache()
     @ObservationIgnored var configurationRequest: UUID?
-    @ObservationIgnored private(set) var configurationRevision = UUID()
+    @ObservationIgnored private(set) var configurationRevision = System.uuid()
     var version: String?
     var expanded: Set<String> = []
     var scrollAnchor: String?
     var atBottom = true { didSet { acknowledgeVisibleOutput() } }
-    var scrollToLatestRequest = UUID()
-    var focusRequest = UUID()
+    var scrollToLatestRequest = System.uuid()
+    var focusRequest = System.uuid()
     var revision = 0
     @ObservationIgnored var followRevision: Int?
     var transcriptAvailable = false
@@ -905,7 +908,7 @@ final class ChatSession: Identifiable {
         atBottom = true
         followRevision = revision
         scrollPosition.jumpToLatest()
-        scrollToLatestRequest = UUID()
+        scrollToLatestRequest = System.uuid()
     }
 
     func finishPatches(in turnID: String) {
@@ -942,11 +945,11 @@ final class ChatSession: Identifiable {
         loadingHistory = false; promptBoundary = nil
         hasEarlier = false; loadingEarlier = false; earlierError = nil; historyGeneration = nil
         hasNewMessages = false; scrollPosition.clear(); toolGroupIdentities = [:]; patchPairs = [:]; displayedTurns = [:]
-        busy = false; subagents = []; nativeActivity = nil; submissionID = nil; interruptionID = nil; activityCheck = nil; activeTurnID = nil; awaitingPromptAck = false; observedCommand = nil; stoppedTurnID = nil
+        busy = false; subagents = []; nativeActivity = nil; submissionID = nil; interruptionID = nil; activityCheck = nil; activeTurnID = nil; awaitingPromptAck = false; starting = false; observedCommand = nil; stoppedTurnID = nil
         activityNeedsRefresh = false; activityRetryAfter = nil
         submissionFailure = nil; status = nil; title = nil; transcriptTitle = nil; configurationRequest = nil
         if !keepingConfiguration { reportedModel = nil; effort = nil }
-        configurationRevision = UUID()
+        configurationRevision = System.uuid()
         terminalAttention = nil
         expanded = []; expandedToolGroups = []; collapsedToolGroups = []; collapsedLiveTools = []; scrollAnchor = nil; atBottom = true
         followRevision = nil
@@ -954,7 +957,7 @@ final class ChatSession: Identifiable {
     }
 
     func confirmConfiguration(model: String, effort: String?) {
-        configurationRevision = UUID()
+        configurationRevision = System.uuid()
         applyConfiguration(model: model, effort: effort)
     }
 
@@ -1228,7 +1231,7 @@ final class ChatSession: Identifiable {
         optimisticPromptDelivered = false
         optimisticPromptRetained = false
         submittedThinkingAt = date
-        optimisticPrompt = ChatItem(id: "pending-" + UUID().uuidString, kind: .user, text: text)
+        optimisticPrompt = ChatItem(id: "pending-" + System.uuid().uuidString, kind: .user, text: text)
         optimisticPromptBoundary = .local(date)
         followRevision = atBottom ? revision + 1 : nil
         revision += 1

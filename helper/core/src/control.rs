@@ -16,6 +16,8 @@ pub(crate) struct Routes {
 }
 struct Entry {
     serial: u64,
+    /// The client that started it: its data comes from there alone.
+    client: i32,
     producer: Option<(usize, Id)>,
     events: VecDeque<Control>,
     bytes: usize,
@@ -28,7 +30,7 @@ fn unavailable() -> Error {
     }
 }
 impl Routes {
-    pub fn begin(&mut self, terminal: Id) -> Result<u64, Error> {
+    pub fn begin(&mut self, terminal: Id, client: i32) -> Result<u64, Error> {
         if self.entries.contains_key(&terminal) {
             return Err(Error {
                 code: "busy",
@@ -40,6 +42,7 @@ impl Routes {
             terminal,
             Entry {
                 serial: self.serial,
+                client,
                 producer: None,
                 events: VecDeque::new(),
                 bytes: 0,
@@ -116,13 +119,16 @@ impl Routes {
         }
     }
     pub fn retain(&mut self, module: usize, nodes: &dispatch::Nodes) {
-        let removed: Vec<_> = self
-            .entries
-            .keys()
-            .copied()
-            .filter(|id| (*id >> 48) as usize == module && !nodes.borrow().contains_key(id))
-            .collect();
-        for terminal in removed {
+        self.end(|id, _| (id >> 48) as usize == module && !nodes.borrow().contains_key(&id));
+    }
+    /// A client whose input ended feeds its streams no more: each ends as its terminal's exit would, so what waits
+    /// on it (a tmux command's reply) fails instead of holding the helper open.
+    pub fn leave(&mut self, client: i32) {
+        self.end(|_, entry| entry.client == client);
+    }
+    fn end(&mut self, ended: impl Fn(Id, &Entry) -> bool) {
+        let ended: Vec<_> = self.entries.iter().filter(|(id, entry)| ended(**id, entry)).map(|(id, _)| *id).collect();
+        for terminal in ended {
             self.close(terminal, None);
         }
     }
@@ -227,7 +233,7 @@ impl Attempt {
 impl dispatch::Request<'_> {
     /// Protocol result: ControlTarget when claimed; null on data/end
     /// Protocol producers: Multiplexer.control, Multiplexer.claim, Multiplexer.stream
-    pub(super) fn control(&mut self, p: crate::json::Value<'_>) -> Result<(), Error> {
+    pub(super) fn control(&mut self, p: &crate::json::Data<'_>) -> Result<(), Error> {
         let terminal = dispatch::number(p, "terminal")?;
         if !self.helper.nodes.borrow().contains_key(&terminal) {
             return Err(unavailable());
@@ -267,7 +273,7 @@ impl dispatch::Request<'_> {
             .get(source)
             .cloned()
             .ok_or_else(unavailable)?;
-        let serial = routes.borrow_mut().begin(terminal)?;
+        let serial = routes.borrow_mut().begin(terminal, self.fd)?;
         routes.borrow_mut().push(terminal, Control::Start)?;
         let parts = self.helper.multiplexers.clone();
         let skip = self.helper.unclaimed.clone();

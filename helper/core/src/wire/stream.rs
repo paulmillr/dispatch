@@ -1,6 +1,9 @@
 //! A response cursor produces bounded frames only when the UI writer has room.
 use super::{Error, Header, Kind, body, packet};
-use crate::json::Json;
+use crate::{
+    encode::{Encode, Fields, Raw, value},
+    json::Data,
+};
 
 pub const CHUNK: usize = 65_536;
 
@@ -26,18 +29,18 @@ impl Message {
             .unwrap_or(0)
     }
 
-    pub fn json(kind: Kind, id: u64, bytes: Vec<u8>) -> Self {
-        let bulk = kind == Kind::Chunk || (kind == Kind::Notify
-            && Json::parse(&bytes).ok().is_some_and(|json| matches!(
-                json.root().get("method").and_then(|value| value.string()),
-                Some("terminal.output" | "terminal.stderr")
-            )));
+    /// A message from an Encode value body (a chunk: its raw bytes).
+    pub fn value(kind: Kind, id: u64, bytes: Vec<u8>) -> Self {
+        let bulk = kind == Kind::Chunk
+            || (kind == Kind::Notify
+                && matches!(
+                    body::method(&bytes),
+                    Some("terminal.output" | "terminal.stderr")
+                ));
         let bytes = if kind == Kind::Chunk {
             bytes
         } else {
-            body::from_json(&bytes).unwrap_or_else(|error| {
-                body::from_json(&super::problem(&error)).expect("bounded protocol error")
-            })
+            [&body::SCHEMA[..], &bytes].concat()
         };
         let mut message = Self::new(kind, id, bytes, None);
         message.bulk = bulk;
@@ -60,7 +63,6 @@ impl Message {
     }
 
     pub fn binary(kind: Kind, id: u64, bytes: Vec<u8>, metadata: Vec<u8>) -> Result<Self, Error> {
-        Json::parse(&metadata).map_err(|_| Error::Kind)?;
         let message = Self::new(kind, id, bytes, Some(metadata));
         if message.end().len() > CHUNK {
             return Err(Error::Limit);
@@ -92,7 +94,7 @@ impl Message {
             bytes: self.bytes.len() as u64,
         }
         .finish(encoding, Ok(self.metadata.as_deref()));
-        body::from_json(&value).expect("bounded stream metadata")
+        [&body::SCHEMA[..], &value].concat()
     }
 }
 
@@ -121,7 +123,7 @@ impl Iterator for Message {
     }
 }
 
-/// Plain counters for an incremental response, using the same frames as Message.
+/// Encoded counters for an incremental response, using the same frames as Message.
 #[derive(Clone, Copy, Default)]
 pub struct Progress {
     pub chunks: u64,
@@ -148,35 +150,27 @@ impl Progress {
         encoding: &str,
         result: Result<Option<&[u8]>, &crate::api::Error>,
     ) -> Vec<u8> {
-        use crate::encode::Encode;
-        let mut body = b"{\"stream\":".to_vec();
-        crate::encode::object(
-            &mut body,
-            &[
-                ("chunks", &self.chunks),
-                ("bytes", &self.bytes),
-                ("encoding", &encoding),
-            ],
-        );
-        match result {
-            Ok(Some(metadata)) => {
-                body.extend_from_slice(b",\"result\":");
-                body.extend_from_slice(metadata);
-            }
-            Err(error) => {
-                body.extend_from_slice(b",\"error\":");
-                error.encode(&mut body);
-            }
+        let stream = Data::Object(vec![
+            ("chunks", Data::Unsigned(self.chunks)),
+            ("bytes", Data::Unsigned(self.bytes)),
+            ("encoding", Data::String(encoding)),
+        ]);
+        let metadata = result.map(|metadata| metadata.map(Raw));
+        let mut fields: Vec<(&str, &dyn Encode)> = vec![("stream", &stream)];
+        match &metadata {
+            Ok(Some(metadata)) => fields.push(("result", metadata)),
+            Err(error) => fields.push(("error", *error)),
             Ok(None) => {}
         }
-        body.push(b'}');
-        body
+        value(&Fields(&fields))
     }
 }
 
 pub enum Received {
-    Json(Vec<u8>),
-    Binary { bytes: Vec<u8>, metadata: Json },
+    /// A whole response or notification: its wire body.
+    Value(body::Encoded),
+    /// A binary stream's bytes and the frame that ended it (its `result` names them).
+    Binary { bytes: Vec<u8>, frame: body::Encoded },
 }
 
 /// One request's collector. The caller supplies its admitted result-byte budget.
@@ -219,17 +213,16 @@ impl Collector {
         if !matches!(header.kind, Kind::Response | Kind::Notify) {
             return Err(Error::Kind);
         }
-        let document = body::decode(body).map_err(|_| Error::Kind)?;
-        let Some(stream) = document.root().get("stream") else {
+        let frame = body::Encoded::wire(body.to_vec()).map_err(|_| Error::Kind)?;
+        let root = frame.root();
+        let Some(stream) = root.get("stream") else {
             if self.sequence != 0 {
                 return Err(Error::Truncated);
             }
             if body.len() > self.limit {
                 return Err(Error::Limit);
             }
-            return Ok(Some(Received::Json(
-                document.root().write().map_err(|_| Error::Kind)?,
-            )));
+            return Ok(Some(Received::Value(frame)));
         };
         if stream.get("chunks").and_then(|v| v.unsigned()) != Some(self.sequence) {
             return Err(Error::Sequence);
@@ -237,29 +230,19 @@ impl Collector {
         if stream.get("bytes").and_then(|v| v.unsigned()) != Some(self.bytes.len() as u64) {
             return Err(Error::Length);
         }
-        if document.root().get("error").is_some() {
+        if root.get("error").is_some() {
             self.sequence = 0;
             self.bytes.clear();
-            return Ok(Some(Received::Json(
-                document.root().write().map_err(|_| Error::Kind)?,
-            )));
+            return Ok(Some(Received::Value(frame)));
         }
         let received = match stream.get("encoding").and_then(|v| v.string()) {
-            Some("value") => Received::Json(
-                body::decode(&std::mem::take(&mut self.bytes))
-                    .map_err(|_| Error::Kind)?
-                    .root()
-                    .write()
-                    .map_err(|_| Error::Kind)?,
+            Some("value") => Received::Value(
+                body::Encoded::wire(std::mem::take(&mut self.bytes)).map_err(|_| Error::Kind)?,
             ),
-            Some("binary") => {
-                let metadata = document.root().get("result").ok_or(Error::Kind)?;
-                Received::Binary {
-                    bytes: std::mem::take(&mut self.bytes),
-                    metadata: Json::parse(&metadata.write().map_err(|_| Error::Kind)?)
-                        .map_err(|_| Error::Kind)?,
-                }
-            }
+            Some("binary") if root.get("result").is_some() => Received::Binary {
+                bytes: std::mem::take(&mut self.bytes),
+                frame: frame.clone(),
+            },
             _ => return Err(Error::Kind),
         };
         self.sequence = 0;

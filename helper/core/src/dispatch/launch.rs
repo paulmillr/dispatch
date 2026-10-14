@@ -15,7 +15,7 @@ impl Request<'_> {
     /// With a size the terminal is observed before its IO can be missed, like c1654cc
     /// Dispatch/Terminal/SwiftTerminal.swift:72-82 installing callbacks before launch.
     /// Protocol result: Id; with size, terminal.created then the terminals.attach stream
-    pub(super) fn create(&mut self, p: Value<'_>) -> Result<(), Error> {
+    pub(super) fn create(&mut self, p: &Data<'_>) -> Result<(), Error> {
         let (index, mux) = self.mux(p)?;
         let observed = p.get("size").is_some() || p.get("rows").is_some();
         let grid = observed.then(|| size(p)).transpose()?;
@@ -156,7 +156,7 @@ impl Request<'_> {
                     .env("DISPATCH_HELPER_ENDPOINT", route);
                 if let Some(cwd) = p
                     .get("cwd")
-                    .and_then(Value::string)
+                    .and_then(Data::string)
                     .filter(|s| !s.is_empty())
                 {
                     command.current_dir(cwd);
@@ -181,7 +181,7 @@ impl Request<'_> {
     /// directory under Io::directory before the mux gets the Command; every mux gets one.
     fn shell(
         &mut self,
-        p: Value<'_>,
+        p: &Data<'_>,
         create: Done<Option<std::process::Command>>,
     ) -> Result<(), Error> {
         let failure = |error: std::io::Error| Error {
@@ -269,7 +269,7 @@ pub(crate) fn write(
 impl Request<'_> {
     /// Protocol result: Install with status off, restart or ready
     /// Core derives status like c1654cc ChatCoordinator.swift:216-227.
-    pub(super) fn install(&mut self, p: Value<'_>, audit: bool) -> Result<(), Error> {
+    pub(super) fn install(&mut self, p: &Data<'_>, audit: bool) -> Result<(), Error> {
         let index = number(p, "launch")? as usize;
         let harness = self
             .helper
@@ -297,7 +297,7 @@ impl Request<'_> {
         let enabled = if audit {
             None
         } else {
-            p.get("enabled").and_then(Value::boolean)
+            p.get("enabled").and_then(Data::boolean)
         };
         let (nodes, installs, done) = (
             self.helper.nodes.clone(),
@@ -371,10 +371,18 @@ impl Request<'_> {
 struct Installation(Install, &'static str);
 impl crate::encode::Encode for Installation {
     fn encode(&self, out: &mut Vec<u8>) {
-        self.0.encode(out);
-        out.pop();
-        out.extend(b",\"status\":");
-        self.1.encode(out);
-        out.push(b'}');
+        let Self(install, status) = self;
+        crate::encode::object(
+            out,
+            &[
+                ("edits", &install.edits),
+                ("restart", &install.restart),
+                ("installed", &install.installed),
+                ("optional", &install.optional),
+                ("reload", &install.reload),
+                ("trust", &install.trust),
+                ("status", status),
+            ],
+        );
     }
 }

@@ -1,16 +1,38 @@
-//! One JSON encoder for common API values, independent of operation names.
+//! One encoder for common API values, independent of operation names. It writes the wire's
+//! binary value grammar (wire/body.rs) directly: no JSON text between an API value and its frame.
 use crate::{
     api::*,
-    json::{self, Data},
+    json::Data,
+    wire::body,
 };
 use std::path::PathBuf;
 
 pub(crate) trait Encode {
+    /// Append this value in the wire value grammar, without the schema prefix.
     fn encode(&self, out: &mut Vec<u8>);
+}
+impl Encode for crate::wire::body::Encoded {
+    fn encode(&self, out: &mut Vec<u8>) {
+        self.root().encode(out)
+    }
 }
 impl Encode for Data<'_> {
     fn encode(&self, out: &mut Vec<u8>) {
-        out.extend(json::write(self).expect("typed JSON value"));
+        body::put(out, self).expect("typed wire value");
+    }
+}
+/// Raw bytes: the wire carries them as bytes (tag 11), never as text.
+pub(crate) struct Bytes<'a>(pub &'a [u8]);
+impl Encode for Bytes<'_> {
+    fn encode(&self, out: &mut Vec<u8>) {
+        Data::Bytes(self.0).encode(out);
+    }
+}
+/// A value already encoded by Encode (a result built ahead of its envelope).
+pub(crate) struct Raw<'a>(pub &'a [u8]);
+impl Encode for Raw<'_> {
+    fn encode(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(self.0);
     }
 }
 macro_rules! scalar {
@@ -18,7 +40,7 @@ macro_rules! scalar {
         $(
             impl Encode for $t {
                 fn encode(&self, out: &mut Vec<u8>) {
-                    out.extend(json::write(&Data::$v((*self).into())).unwrap());
+                    Data::$v((*self).into()).encode(out);
                 }
             }
         )*
@@ -33,7 +55,7 @@ impl Encode for i128 {
 scalar!(u64 => Unsigned, u32 => Unsigned, u16 => Unsigned, i64 => Signed, i32 => Signed, f64 => Real, bool => Bool);
 impl Encode for str {
     fn encode(&self, out: &mut Vec<u8>) {
-        out.extend(json::write(&Data::String(self)).unwrap());
+        Data::String(self).encode(out);
     }
 }
 impl Encode for String {
@@ -48,7 +70,7 @@ impl Encode for PathBuf {
 }
 impl Encode for () {
     fn encode(&self, out: &mut Vec<u8>) {
-        out.extend(b"null");
+        Data::Null.encode(out);
     }
 }
 impl<T: Encode> Encode for Option<T> {
@@ -61,23 +83,17 @@ impl<T: Encode> Encode for Option<T> {
 }
 impl<T: Encode> Encode for Vec<T> {
     fn encode(&self, out: &mut Vec<u8>) {
-        out.push(b'[');
-        for (i, v) in self.iter().enumerate() {
-            if i > 0 {
-                out.push(b',');
-            }
+        body::array(out, self.len());
+        for v in self {
             v.encode(out);
         }
-        out.push(b']');
     }
 }
 impl<A: Encode, B: Encode> Encode for (A, B) {
     fn encode(&self, out: &mut Vec<u8>) {
-        out.push(b'[');
+        body::array(out, 2);
         self.0.encode(out);
-        out.push(b',');
         self.1.encode(out);
-        out.push(b']');
     }
 }
 macro_rules! records {
@@ -414,16 +430,13 @@ impl Encode for &str {
     }
 }
 pub(crate) fn object(out: &mut Vec<u8>, fields: &[(&str, &dyn Encode)]) {
-    out.push(b'{');
-    for (i, (key, value)) in fields.iter().enumerate() {
-        if i > 0 {
-            out.push(b',');
+    let named = body::object(out, fields.iter().map(|(key, _)| *key), fields.len());
+    for (key, value) in fields {
+        if named {
+            body::name(out, key);
         }
-        key.encode(out);
-        out.push(b':');
         value.encode(out);
     }
-    out.push(b'}');
 }
 impl Encode for Split {
     fn encode(&self, out: &mut Vec<u8>) {
@@ -501,8 +514,8 @@ impl Encode for Outcome {
 }
 impl Encode for Edit {
     fn encode(&self, out: &mut Vec<u8>) {
-        let before = self.before.as_ref().map(|v| base64(v));
-        let after = self.after.as_ref().map(|v| base64(v));
+        let before = self.before.as_deref().map(Bytes);
+        let after = self.after.as_deref().map(Bytes);
         object(
             out,
             &[
@@ -514,36 +527,18 @@ impl Encode for Edit {
         );
     }
 }
-pub fn base64(bytes: &[u8]) -> String {
-    const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::new();
-    for chunk in bytes.chunks(3) {
-        let a = chunk[0] as usize;
-        let b = *chunk.get(1).unwrap_or(&0) as usize;
-        let c = *chunk.get(2).unwrap_or(&0) as usize;
-        for index in [
-            a >> 2,
-            ((a & 3) << 4) | (b >> 4),
-            ((b & 15) << 2) | (c >> 6),
-            c & 63,
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            out.push(if index.0 > chunk.len() {
-                '='
-            } else {
-                TABLE[index.1] as char
-            });
-        }
-    }
+/// A value encoded on its own (a message body without the schema prefix).
+pub(crate) fn value(item: &dyn Encode) -> Vec<u8> {
+    let mut out = Vec::new();
+    item.encode(&mut out);
     out
 }
+pub(crate) struct Fields<'a>(pub &'a [(&'a str, &'a dyn Encode)]);
+impl Encode for Fields<'_> {
+    fn encode(&self, out: &mut Vec<u8>) {
+        object(out, self.0);
+    }
+}
 pub(crate) fn notify(method: &str, fields: &[(&str, &dyn Encode)]) -> Vec<u8> {
-    let mut out = b"{\"method\":".to_vec();
-    method.encode(&mut out);
-    out.extend(b",\"params\":");
-    object(&mut out, fields);
-    out.push(b'}');
-    out
+    value(&Fields(&[("method", &method), ("params", &Fields(fields))]))
 }

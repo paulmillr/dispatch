@@ -26,46 +26,39 @@ struct HostProcessObservation: Codable, Sendable {
 /// submits small rotating batches; inactive native panes are included equally.
 actor HostProcessWatcher {
     private var arguments: [Int32: (AgentProcess, SSHShell?, SSHIntegrationScope?)] = [:]
-    private var epoch = UUID()
+    private var epoch = System.uuid()
 
     static func alive(_ process: AgentProcess?) -> Bool {
         guard let process else { return false }
-        do {
-            return try JSONDecoder().decode(Bool.self, from: AppReplay.query(kind: "process.alive", input: JSONEncoder().encode(process)) {
-                try JSONEncoder().encode(process.alive)
-            })
-        } catch { AppReplay.fail(error); return false }
+        return System.process("alive", process) { process.alive }
     }
 
     static func terminate(_ process: AgentProcess?) {
         guard let process else { return }
         do {
-            _ = try AppReplay.query(kind: "process.terminate", input: JSONEncoder().encode(process)) {
+            _ = try AppReplay.query(kind: "process.terminate", input: AppReplay.value(process)) {
                 if process.alive { kill(process.pid, SIGTERM) }
-                return Data()
+                return .null
             }
         } catch { AppReplay.fail(error) }
     }
 
-    func reset() { epoch = UUID(); arguments.removeAll() }
+    func reset() { epoch = System.uuid(); arguments.removeAll() }
 
     func locate(_ process: AgentProcess, in targets: [HostProcessTarget]) -> UUID? {
-        guard !AppReplay.replaying, process.alive, let info = AgentProcess.info(process.pid),
-              info.e_tdev != UInt32.max, info.e_tpgid > 1,
-              process.owns(foreground: UInt64(info.e_tpgid)) else { return nil }
+        guard process.alive, let info = AgentProcess.info(process.pid),
+              info.tty != UInt32.max, info.foreground > 1,
+              process.owns(foreground: UInt64(info.foreground)) else { return nil }
         let matches = targets.filter { target in
             switch target.source {
-            case .device(let device): return device == info.e_tdev
-            case .terminal(let group): return group == UInt64(info.e_tpgid)
+            case .device(let device): return device == info.tty
+            case .terminal(let group): return group == UInt64(info.foreground)
             }
         }
         return matches.count == 1 ? matches.first?.terminal : nil
     }
 
     func probe(_ targets: [HostProcessTarget]) async -> [HostProcessObservation] {
-        guard !AppReplay.replaying else {
-            AppReplay.fail(HelperFailure(code: "replay", message: "Live host process polling during replay")); return []
-        }
         let epoch = epoch
         var results: [HostProcessObservation] = []
         for target in targets {
@@ -79,24 +72,30 @@ actor HostProcessWatcher {
             if let group, group > 1, group <= Int32.max {
                 // No whole-system scan; at most one owned foreground group.
                 let members = AgentProcess.members(of: Int32(group), maximum: 64)
-                device = members.first.flatMap { AgentProcess.info($0.pid)?.e_tdev }
-                for process in members.prefix(64) where URL(fileURLWithPath: process.executable).lastPathComponent == "ssh" {
+                let ssh = members.prefix(64).filter { URL(fileURLWithPath: $0.executable).lastPathComponent == "ssh" }
+                for process in ssh {
+                    // ssh with ControlPersist forks its master into the same group (until it detaches): the user's ssh
+                    // is the one whose parent is no other ssh of the group.
+                    let parent = AgentProcess.info(process.pid)?.parent
+                    if ssh.contains(where: { $0.pid == parent }) { continue }
                     let parsed: SSHShell?
                     if let cached = arguments[process.pid], cached.0 == process { parsed = cached.1; scope = cached.2 }
                     else {
                         let argv = process.arguments
                         parsed = argv.flatMap { SSHShell.parse(executable: process.executable, arguments: $0) }
-                        if let parsed, let argv,
-                           let result = try? await SSHCommand.run(executable: parsed.executable,
-                               arguments: ["-G"] + Array(argv.dropFirst()), timeout: 2), result.status == 0 {
+                        if let parsed, let argv, let configuration = Self.configuration(parsed.executable, ["-G"] + Array(argv.dropFirst())) {
                             scope = HostRegistry.loginScope(executable: parsed.executable, destination: parsed.destination,
-                                configuration: String(decoding: result.output, as: UTF8.self))
+                                configuration: configuration)
                         }
                         guard self.epoch == epoch else { return [] }
                         arguments[process.pid] = (process, parsed, scope)
                     }
                     if let parsed { found = process; shell = parsed; break }
                 }
+                // The terminal is its ssh's: another member can be leaving it (ssh's ControlPersist master
+                // detaching), with no info left or no terminal any more.
+                device = ([found].compactMap { $0 } + members).lazy
+                    .compactMap { AgentProcess.info($0.pid)?.tty }.first { $0 != UInt32.max }
             }
             results.append(.init(terminal: target.terminal, foreground: group, device: device, process: found,
                                  shell: shell, scope: scope, trackedAlive: target.tracking?.alive == true))
@@ -105,15 +104,27 @@ actor HostProcessWatcher {
         return results
     }
 
+    /// What `ssh -G` resolves only reads configuration: an observation, asked whenever and as often as a probe asks, so
+    /// how often a run's probes see an ssh changes nothing recorded. Nil when it fails or takes longer than 2 s.
+    private static func configuration(_ executable: String, _ arguments: [String]) -> String? {
+        (try? System.observe("ssh.config", [executable] + arguments) { () -> String? in
+            let process = Process(), output = Pipe(), done = DispatchSemaphore(value: 0)
+            process.executableURL = URL(fileURLWithPath: executable); process.arguments = arguments
+            process.standardInput = FileHandle.nullDevice; process.standardOutput = output; process.standardError = FileHandle.nullDevice
+            process.terminationHandler = { _ in done.signal() }
+            try process.run()
+            guard done.wait(timeout: .now() + 2) == .success else { process.terminate(); return nil }
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            return process.terminationStatus == 0 ? String(decoding: data, as: UTF8.self) : nil
+        }) ?? nil
+    }
+
     func validate(_ request: SSHLaunchRequest) -> Bool {
-        guard !AppReplay.replaying else {
-            AppReplay.fail(HelperFailure(code: "replay", message: "Live host process validation during replay")); return false
-        }
         guard let origin = request.origin, let child = request.sshProcess, let device = request.terminalDevice,
               origin.alive, child.alive, let a = AgentProcess.info(origin.pid), let b = AgentProcess.info(child.pid),
-              a.e_tdev == device, b.e_tdev == device, device != UInt32.max,
-              b.pbi_ppid == UInt32(origin.pid), a.e_tpgid == b.e_tpgid,
-              origin.owns(foreground: UInt64(a.e_tpgid)),
+              a.tty == device, b.tty == device, device != UInt32.max,
+              b.parent == origin.pid, a.foreground == b.foreground,
+              origin.owns(foreground: UInt64(a.foreground)),
               URL(fileURLWithPath: child.executable).lastPathComponent == "ssh" else { return false }
         return true
     }

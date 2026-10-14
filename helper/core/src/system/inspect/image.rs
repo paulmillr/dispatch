@@ -1,6 +1,6 @@
 //! helper2 system.rs:561-646: compare pinned live images on a fixed IO worker.
 use super::{invalid, snapshot};
-use crate::json::Value;
+use crate::json::Data;
 use std::{
     fs,
     io::{self, Read},
@@ -9,33 +9,28 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(super) fn compare(root: Value<'_>) -> io::Result<bool> {
+pub(super) fn compare(root: &Data<'_>) -> io::Result<bool> {
     let limit = root
         .get("timeout_ms")
-        .and_then(Value::unsigned)
+        .and_then(Data::unsigned)
         .ok_or_else(invalid)?;
     let deadline = Instant::now()
         .checked_add(Duration::from_millis(limit))
         .ok_or_else(invalid)?;
-    let parse = |value: Value<'_>| -> io::Result<_> {
+    let parse = |value: &Data<'_>| -> io::Result<_> {
         let pid = value
             .get("pid")
-            .and_then(Value::unsigned)
+            .and_then(Data::unsigned)
             .and_then(|v| u32::try_from(v).ok())
             .ok_or_else(invalid)?;
         let start: Vec<_> = value
             .get("start")
-            .and_then(Value::array)
+            .and_then(Data::array)
             .ok_or_else(invalid)?
             .map(|v| v.unsigned().ok_or_else(invalid))
             .collect::<io::Result<_>>()?;
         let start: [u64; 2] = start.try_into().map_err(|_| invalid())?;
-        let path = PathBuf::from(
-            value
-                .get("executable")
-                .and_then(Value::string)
-                .ok_or_else(invalid)?,
-        );
+        let path = PathBuf::from(value.get("executable").and_then(Data::path).ok_or_else(invalid)?);
         Ok((pid, start, path))
     };
     let identities = [

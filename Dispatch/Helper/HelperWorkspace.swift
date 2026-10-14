@@ -35,7 +35,7 @@
     private var restoringWindows: Set<UUID> = []
     private var restoreRequests: [UUID: (route: HelperBackend.Route, node: UInt64, task: Task<Void, Never>)] = [:]
     private var restoreSpaces: [HelperBackend.Route: UUID] = [:]
-    @ObservationIgnored private var restoration = UUID()
+    @ObservationIgnored private var restoration = System.uuid()
     private var restoring: [HelperBackend.Route: Detached] = [:]
     private(set) var backends: [HelperBackend] = []
     private(set) var error: String?
@@ -45,7 +45,7 @@
     @ObservationIgnored private let renderer: HelperRenderer?
     let endpoint: Endpoint
     /// Native shells inherit this scope after their launcher closes. The launch manager retires it.
-    @ObservationIgnored private let scope = UUID()
+    @ObservationIgnored private let scope = System.uuid()
     /// Multiplexer names the user let this helper open as spaces (an SSH link's consent); nil on this Mac.
     private(set) var granted: Set<String>?
     /// The machine its backends run on, for the spaces they open.
@@ -75,6 +75,8 @@
     @ObservationIgnored private var opening: [HelperBackend.Route: Task<UInt64, any Error>] =
       [:]
     @ObservationIgnored private var pending: [UUID: Task<UInt64, any Error>] = [:]
+    /// Tabs the layout has shown (`present`): each starts its terminal then, once.
+    @ObservationIgnored private var presented: Set<UUID> = []
     @ObservationIgnored private var assigned: [UInt64: UUID] = [:]
     @ObservationIgnored private(set) var snapshots: [HelperBackend.Route: HelperTopology] = [:]
     /// Tabs whose terminal started a claimed client, closed once it opens when the user wants that.
@@ -403,10 +405,23 @@
       self.workspace = workspace
     }
 
+    /// Returns once the terminals being created for tabs (`prepare`) are bound to their tabs.
+    func created() async { for task in Array(pending.values) { _ = try? await task.value } }
+
+    /// A tab the layout shows starts its terminal now, not when a render mounts its view (a failed start is retried by
+    /// the mount, as before, not by every later layout change). Only once a window shows the workspace (one of its
+    /// terminals is in a window): one no window shows mounts nothing, so it starts nothing (as before).
+    func present(_ tab: TerminalTab) {
+      guard let workspace, workspace.allTabIDs.contains(where: { TerminalRuntime.shared.views[$0]?.window != nil }),
+        presented.insert(tab.id).inserted else { return }
+      prepare(tab)
+    }
+
     func prepare(_ tab: TerminalTab) {
       // A connecting placeholder has no terminal of its own: the helper's reply brings it.
       guard tab.terminal == nil, !tab.isConnecting, pending[tab.id] == nil,
         !TerminalRuntime.shared.hosts.reconnect.awaitingRestore(tab.id) else { return }
+      let surface = surfaceID()
       pending[tab.id] = Task {
         defer { pending.removeValue(forKey: tab.id) }
         do {
@@ -429,10 +444,12 @@
           // A remote helper gets nothing of this Mac: no environment (tokens, mailbox paths, PATH) and
           // no Mac path to start in; its terminal starts where its parent is.
           let local = endpoint == .local
+          // The tab as it is now: its command or directory can have changed since it was shown.
+          let latest = owned.flatMap(\.tabs).first { $0.id == tab.id } ?? tab
           let terminal = try await client.create(
             .init(
-              parent: parent, beside: nil, cwd: local ? (tab.machine == .local ? tab.directory : Home.url.path) : nil, launch: nil,
-              command: tab.launchCommand ?? tab.machine.command(), environment: local ? environment() : []))
+              parent: parent, beside: nil, cwd: local ? (latest.machine == .local ? latest.directory : System.home.path) : nil, launch: nil,
+              command: latest.launchCommand ?? latest.machine.command(), environment: local ? environment(surface) : []))
           guard !stopped, owned.flatMap(\.tabs).contains(where: { $0.id == tab.id }) else {
             _ = try await client.close(.init(node: terminal, policy: .terminate))
             throw CancellationError()
@@ -484,7 +501,8 @@
 
     private func id(_ key: Key) -> UUID {
       if let id = identity[key] { return id }
-      let id = UUID()
+      // Its fields, not "\(key)": a private type's description names its address.
+      let id = System.uuid(for: "\(key.route.mux) \(key.route.key) \(key.entity)")
       identity[key] = id
       return id
     }
@@ -496,7 +514,7 @@
     private func open(_ route: HelperBackend.Route) {
       // A claim can arrive on several subscriptions at once (backend and attach streams): one open.
       guard !stopped, observations[route] == nil, subscribing[route] == nil else { return }
-      let generation = UUID()
+      let generation = System.uuid()
       operations += 1
       let task = Task {
         defer { operations -= 1; retire() }
@@ -713,6 +731,15 @@
       }
     }
 
+    /// Returns once this helper's catalog requests went out (not their answers). A setup's own launches.list waits for
+    /// that, so the connection's identical requests always go out in one order: replay binds them by their order.
+    /// Not while the runtime stops: a helper made meanwhile discovers only after that stop, which waits for the setups
+    /// turning integrations off (a test's next case starting during the previous one's stop deadlocked there).
+    func discovering() async {
+      guard TerminalRuntime.shared.stopping == nil else { return }
+      _ = try? await discovery.value
+    }
+
     func detachSpace(_ space: Space) {
       guard let node = space.node, !space.containers.isEmpty else { return }
       close(node, policy: .detach)
@@ -898,32 +925,32 @@
     /// What an app-spawned shell gets, for a helper shell: the app's integration (ssh/launch wrappers,
     /// launch mailbox) and Ghostty's shell integration (prompt marks, title, cursor) as the terminal
     /// engine would launch it (Term Launch). Only variables that differ from this process are sent.
-    func environment() -> [String] {
-      let process = ProcessInfo.processInfo.environment
+    func environment(_ identifier: UInt64?) -> [String] {
+      let process = System.inherited
       var environment = process.merging(TerminalRuntime.shared.herdrLaunch.nativeEnvironment(for: scope)) { _, new in new }
       // Tests isolate shells from the account's startup files like app-spawned ones (TerminalView);
       // here the user layer sits behind the native wrapper files, so it is that layer that goes empty.
       let testing: [(String, String)] =
-        process["DISPATCH_TESTING"] == "1"
-        ? [("HOME", Home.url.path), ("DISPATCH_NATIVE_ZDOTDIR", "/var/empty"), ("DISPATCH_TESTING", "1")] : []
-      let identifier: UInt64?
-      do {
-        identifier = try TerminalRuntime.shared.config.map { _ in
-          try JSONDecoder().decode(UInt64.self, from: AppReplay.query(kind: "terminal.launch", input: Data()) {
-            try JSONEncoder().encode(UInt64.random(in: 1 ... .max))
-          })
-        }
-      } catch { AppReplay.fail(error); return [] }
+        System.testing
+        ? [("HOME", System.home.path), ("DISPATCH_NATIVE_ZDOTDIR", "/var/empty"), ("DISPATCH_TESTING", "1")] : []
       if let config = TerminalRuntime.shared.config, let identifier,
         let launch = try? Launch(
           command: nil, directory: nil, overrides: testing, config: config, environment: environment,
-          resources: process["GHOSTTY_RESOURCES_DIR"].flatMap { $0.isEmpty ? nil : $0 },
+          machine: System.machine.launch, resources: process["GHOSTTY_RESOURCES_DIR"].flatMap { $0.isEmpty ? nil : $0 },
           id: identifier)
       {
         environment = launch.env
       }
       return environment.filter { process[$0.key] != $0.value }
         .sorted { $0.key < $1.key }.map { $0.key + "=" + $0.value }
+    }
+
+    /// A local terminal's Ghostty surface id, made when its creation is asked for: concurrent creations
+    /// reach the journal in the order they were asked for, not in the order their tasks resume.
+    func surfaceID() -> UInt64? {
+      guard endpoint == .local else { return nil }
+      // A value the app makes, like its ids (nonzero).
+      return TerminalRuntime.shared.config.map { _ in withUnsafeBytes(of: System.uuid().uuid) { $0.load(as: UInt64.self) } | 1 }
     }
 
     func create(
@@ -942,8 +969,9 @@
       creating[route, default: 0] += 1
       // A creation focuses what it creates: that is this app's focus, not another client's.
       focusing[route, default: 0] += 1
-      let operation = UUID()
+      let operation = System.uuid()
       operations += 1
+      let surface = surfaceID()
       let task = Task {
         defer {
           creations[route]?.removeValue(forKey: operation)
@@ -973,7 +1001,7 @@
             .init(
               // A multiplexer server knows its focused pane's directory (old app: tmux -c #{pane_current_path}).
               parent: parent, beside: nil, cwd: external(backend) ? nil : space.activeTab?.directory,
-              launch: nil, environment: endpoint == .local ? environment() : []))
+              launch: nil, environment: endpoint == .local ? environment(surface) : []))
           await published()
           print("Helper creation reply: terminal=\(terminal), placeholder=\(String(describing: placeholder)), selected=\(String(describing: workspace?.activeTab?.id)), server=\(String(describing: snapshots[route]?.focus))")
           // A window dismissed while pending: the server's window is detached (kept running, listed), never shown.
@@ -1031,7 +1059,7 @@
       arrangement.panes = [Pane(id: tab.id, tabs: [tab])]
       arrangement.layout = .pane(tab.id)
       arrangement.focusedPane = tab.id
-      let container = ContainerTab(id: UUID(), node: 0, name: "", arrangement: arrangement)
+      let container = ContainerTab(id: System.uuid(), node: 0, name: "", arrangement: arrangement)
       placeholders.insert(container.id)
       workspace?.updateLayout { next in
         guard let s = next.spaces.firstIndex(where: { $0.id == space.id }) else { return }
@@ -1212,12 +1240,12 @@
           focusTargets[node, default: 1] -= 1
           if focusTargets[node] == 0 { focusTargets.removeValue(forKey: node) }
         }
-        if let route { settled(route, unchanged: previous) }
+        if let route { settled(route, unchanged: previous, leaf: leaf) }
       }
     }
 
     /// Focus updates held during our requests become authoritative when the requests settle.
-    private func settled(_ route: HelperBackend.Route, unchanged: HelperTopology? = nil) {
+    private func settled(_ route: HelperBackend.Route, unchanged: HelperTopology? = nil, leaf: Bool = false) {
       focusing[route, default: 1] -= 1
       print("Helper focus settled: route=\(route), pending=\(focusing[route, default: 0]), creating=\(creating[route, default: 0]), selected=\(String(describing: workspace?.activeTab?.terminal)), server=\(String(describing: snapshots[route]?.focus))")
       guard !stopped, focusing[route, default: 0] == 0, creating[route, default: 0] == 0,
@@ -1231,7 +1259,10 @@
         restoring.isEmpty, restoreRequests.isEmpty, pendingSpaces.isEmpty, placing.isEmpty,
         imports[route] == nil, !dismissals.values.contains(where: { $0.route == route })
       { return }
-      lastFocus[route] = workspace?.activeTab?.terminal
+      // A server focus that did not move since this app asked for a terminal (a refused or failed focus moves nothing) is
+      // the focus from before the app's selection, however late its topology was read: no other client's change, so it
+      // must not take the selection back. (A space or window focus leaves the terminal to the server: follow it.)
+      lastFocus[route] = leaf && unchanged?.focus == topology.focus ? topology.focus : workspace?.activeTab?.terminal
       do { try apply(topology, route: route) } catch { fail(error) }
     }
 
@@ -1454,6 +1485,11 @@
           }
         }.map(\.id)
       }
+      // Their output stops now, before the close request: an attach still in flight cancels itself on return (the tab
+      // is no longer bound), one that returned is cancelled here. Either way the helper sees the cancel first.
+      for tab in terminals { attachments.removeValue(forKey: tab).map { connection?.cancel($0) } }
+      // Replay: a closing tab's view gets no more layout, so what its renderer recorded next waits for none (no-op live).
+      if policy != .detach { for tab in terminals { System.terminal(tab)?.ticket.closing() } }
       let continuing = route.map { route in
         owned.contains { space in
           space.backend.flatMap { routes[$0] } == route
@@ -1564,6 +1600,7 @@
           if let route, let topology = self.snapshots[route] {
             do { try self.apply(topology, route: route) } catch { self.fail(error) }
           }
+          self.retire()
         }
         dismissals[node] = (route, dismissal)
         return dismissal
@@ -1585,9 +1622,12 @@
     }
 
     func rename(_ id: UUID, name: String) {
-      guard let space = owned.first(where: { $0.id == id || $0.containers.contains { $0.id == id } || $0.tabs.contains { $0.id == id } }),
-        space.backend.map(lost.contains) != true else { return }
+      guard let space = owned.first(where: { $0.id == id || $0.containers.contains { $0.id == id } || $0.tabs.contains { $0.id == id } })
+      else { return }
       let node = Self.target(id, in: owned)
+      // Offline (its multiplexer's transport lost) only what the server never confirmed takes a name (a space made
+      // offline: no node yet); it goes out once a topology shows it. What the server confirmed keeps the server's name.
+      guard node == nil || !offline(space) else { return }
       renaming[id] = (name, node, false)
       workspace?.updateLayout { next in Self.name(id, name, in: &next.spaces) }
       guard let node else { return }
@@ -1666,6 +1706,15 @@
       }
     }
 
+    /// What `terminal`'s tab shows now, as this helper has it: published at once and awaited. The helper judges some
+    /// requests against the native screen (a send into Claude's composer) and publications are throttled: without this a
+    /// request right after a change (the composer just cleared) meets the screen from before it.
+    func current(_ terminal: UInt64) async {
+      guard let tab = tab(of: terminal) else { return }
+      TerminalRuntime.shared.views[tab]?.publishScreen()
+      if let task = publishing[terminal] { await task.value }
+    }
+
     func detach(_ tab: UUID) {
       guard !retains(tab) else { return }
       gateways.removeValue(forKey: tab)
@@ -1677,7 +1726,7 @@
       renderer?.revoke(tab)
     }
 
-    func cancelRestores() { restoration = UUID() }
+    func cancelRestores() { restoration = System.uuid() }
 
     func stop(retaining: Bool = false) {
       if !retaining { cancelRestores() }
@@ -1762,7 +1811,9 @@
     }
 
     private func retire() {
-      guard operations == 0, let workspace else { return }
+      // A detach still settling publishes its dismissal first (its apply retires after it): retiring the launcher
+      // before that would change what the dismissal leaves, by which of the two ran first.
+      guard operations == 0, dismissals.isEmpty, let workspace else { return }
       let ended = gateways.compactMap { tab, gateway -> UUID? in
         guard TerminalRuntime.shared.views[tab] != nil,
           let topology = snapshots.values.first(where: { $0.backend == gateway.backend }),
@@ -1812,7 +1863,7 @@
     }
 
     func suspend(_ tab: UUID) -> () -> Void {
-      let token = UUID()
+      let token = System.uuid()
       suspensions[tab, default: []].insert(token)
       terminals[tab]?.suspend(token, true)
       print("Helper output suspended: endpoint=\(endpoint), tab=\(tab), token=\(token)")
@@ -1831,7 +1882,7 @@
         return
       }
       assigned[terminal] = tab
-      let generation = UUID()
+      let generation = System.uuid()
       sized.removeValue(forKey: terminal)
       TerminalRuntime.shared.views[tab]?.onProcessExit = nil
       // Bytes and sizes go to the terminal the tab still shows: after the terminal closed (handoff,
@@ -1888,12 +1939,12 @@
         }
         self?.terminals.removeValue(forKey: tab)
       }
-      NSLog("[HelperOrder] attach schedule terminal=%llu tab=%@", terminal, tab.uuidString)
       perform { client in
-        guard bound() else { confirm.finish(); return }
+        // Whether the tab still shows this terminal when its turn comes races the topology that may move it: the
+        // answer is recorded, so a replay attaches exactly when its capture did.
+        guard (try? System.observe("bound", terminal) { bound() }) ?? bound() else { confirm.finish(); return }
         let request: UInt64
         do {
-          NSLog("[HelperOrder] attach submit terminal=%llu tab=%@", terminal, tab.uuidString)
           let size = self.available[terminal] ?? channel.grid
           request = try await client.attach(
             .init(terminal: terminal, size: size, takeover: false)
@@ -2038,7 +2089,6 @@
             terminals[tab]?.finish()
           }
         case .agent(let agent):
-          NSLog("[ChatHelperTrace] agent.changed terminal=%llu tab=%@", agent.terminal, tab(of: agent.terminal)?.uuidString ?? "none")  // TEMP diagnostics (todo cleanup)
           if let tab = tab(of: agent.terminal) { TerminalRuntime.shared.chat.helperChanged(tab) }
         case .backend(let event):
           if let error = event.error {
@@ -2192,6 +2242,8 @@
       routes[topology.backend] = route
       let herdr = multiplexer(of: topology.backend) == "herdr"
       let nodes = Dictionary(uniqueKeysWithValues: topology.nodes.map { ($0.id, $0) })
+      // Looked up once per snapshot, not scanned per space: a large session spent most of a snapshot here.
+      let below = Dictionary(grouping: topology.nodes, by: \.parent)
       if let restored = restoring[route] {
         let requested = Set(restored.presentation.flatMap(\.tabs).filter { $0.terminal != nil }.map(\.id))
         let terminals = topology.nodes.filter { $0.kind == .terminal }
@@ -2278,7 +2330,7 @@
         {
           continue
         }
-        let children = topology.nodes.filter { $0.parent == root.id }
+        let children = below[root.id] ?? []
         let containers = children.filter { $0.kind == .tab && !$0.detached }
         // Every window of this space is detached: the space leaves until one is restored.
         if containers.isEmpty, children.contains(where: { $0.kind == .tab }) || hidden.contains(where: { $0.parent == root.id }) { continue }
@@ -2364,7 +2416,8 @@
             // this app has an explicit inner-pane selection in flight; container selection
             // must not pin the old pane when that container gains a split.
             if commanding[route, default: 0] == 0,
-              let prior = priorContainers[id(Key(route: route, entity: .node(source.key)))]?.arrangement,
+              // id() makes the window's id: only when there is a window to compare, as the scan did.
+              let prior = (priorContainers.isEmpty ? nil : priorContainers[id(Key(route: route, entity: .node(source.key)))])?.arrangement,
               let kept = prior.panes.first(where: { $0.id == prior.focusedPane }),
               prior.panes.contains(where: { $0.id == arrangement.focusedPane })
                 || kept.activeTab?.terminal.map({ focusTargets[$0, default: 0] > 0 }) == true,

@@ -194,8 +194,9 @@ impl Claude {
                         tail: tail[..tail.len().saturating_sub(held)].to_vec(),
                     }
                     .write()
+                    .into()
                 } else {
-                    String::new()
+                    None
                 };
                 let snapshot = Snapshot {
                     later,
@@ -279,36 +280,25 @@ pub(super) struct Cursor {
     pub(super) tail: Vec<u8>,
 }
 impl Cursor {
-    pub(super) fn write(&self) -> String {
-        use dispatch_helper_core::json::{self, Data};
-        let tail = self
-            .tail
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<String>();
-        let data = Data::Object(vec![
+    pub(super) fn write(&self) -> Encoded {
+        Encoded::value(&Data::Object(vec![
             ("generation", Data::String(&self.generation)),
             ("offset", Data::Unsigned(self.offset)),
             ("device", Data::Unsigned(self.device)),
             ("inode", Data::Unsigned(self.inode)),
-            ("tail", Data::String(&tail)),
-        ]);
-        String::from_utf8(json::write(&data).unwrap()).unwrap()
+            ("tail", Data::Bytes(&self.tail)),
+        ]))
+        .expect("cursor value")
     }
-    pub(super) fn read(text: &str) -> Option<Self> {
-        let doc = dispatch_helper_core::json::Json::parse(text.as_bytes()).ok()?;
-        let root = doc.root();
+    pub(super) fn read(cursor: &Encoded) -> Option<Self> {
+        let root = cursor.root();
         let number = |name| root.get(name)?.unsigned();
-        let tail = root.get("tail")?.string()?;
         Some(Self {
             generation: root.get("generation")?.string()?.to_owned(),
             offset: number("offset")?,
             device: number("device")?,
             inode: number("inode")?,
-            tail: (0..tail.len())
-                .step_by(2)
-                .map(|i| u8::from_str_radix(tail.get(i..i + 2)?, 16).ok())
-                .collect::<Option<_>>()?,
+            tail: root.get("tail")?.bytes()?.to_vec(),
         })
     }
     /// The cache was left exactly at this cursor (fast path).

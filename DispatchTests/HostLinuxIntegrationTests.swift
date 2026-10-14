@@ -8,9 +8,8 @@ final class HostLinuxIntegrationTests: XCTestCase {
     func testLinuxIdentityAndCreationInRemoteHerdr() async throws { try await walkthrough("herdr") }
 
     private func walkthrough(_ backend: String) async throws {
-        let profileURL = SSHLinuxTestProfile.configurationURL(hostOnly: true)
-        guard FileManager.default.fileExists(atPath: profileURL.path) else { throw XCTSkip("Run test/host-linux.py for the isolated Linux host tests") }
-        let profile = try JSONDecoder().decode(SSHLinuxTestProfile.self, from: Data(contentsOf: profileURL))
+        guard System.exists(SSHLinuxTestProfile.url(hostOnly: true)) else { throw XCTSkip("Run test/host-linux.py for the isolated Linux host tests") }
+        let profile = try SSHLinuxTestProfile.load(hostOnly: true)
         let app = try TmuxWalkthrough(autoClose: true); defer { app.close() }
         let sidebar = app.sidebarShown()
         let source = try XCTUnwrap(app.workspace.activeTab).id
@@ -30,11 +29,22 @@ final class HostLinuxIntegrationTests: XCTestCase {
         XCTAssertEqual(record.name, profile.destination.split(separator: "@").last.map(String.init))
         XCTAssertNotNil(record.hostname)
         XCTAssertEqual(app.workspace.current?.hostID, host)
-        let path = "/tmp/dispatch-host-" + UUID().uuidString.prefix(8)
+        let path = "/tmp/dispatch-host-" + System.uuid().uuidString.prefix(8)
         var herdr = false
         func cleanup() async {
             if backend == "tmux" {
-                _ = try? await SSHTestCommand.run(master: session.launch.master, argv: ["tmux", "-S", path, "kill-server"])
+                // The login shell started its tmux; ssh's plain shell may find another tmux that cannot talk
+                // to that server. Say why, and stop the server by its socket path ([/] keeps pkill's own
+                // shell from matching) so no run leaves one behind.
+                let master = session.launch.master, command = HerdrLaunch.quote
+                let stop = try? await SSHCommand.run(executable: master.executable,
+                    arguments: master.arguments(command: ["tmux", "-S", path, "kill-server"].map(command).joined(separator: " ")), errors: true)
+                if stop?.status != 0 {
+                    print("HostLinux tmux kill-server failed (status \(stop?.status ?? -1)): \(String(decoding: stop?.errors ?? Data(), as: UTF8.self))")
+                    // pkill: 0 stopped it, 1 nothing left to stop.
+                    let killed = try? await SSHTestCommand.run(master: master, argv: ["pkill", "-f", "--", "[/]" + path.dropFirst()])
+                    if ![0, 1].contains(killed?.status) { XCTFail("Cannot stop the remote tmux server at \(path) (pkill status \(killed?.status ?? -1))") }
+                }
             }
             if herdr {
                 do { try await SSHTestCommand.stopHerdr(master: session.launch.master, socket: path) }

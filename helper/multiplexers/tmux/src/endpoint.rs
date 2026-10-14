@@ -3,12 +3,13 @@ use crate::mux::{Continue, Tmux, allocate, error};
 use dispatch_helper_core::{
     api::*,
     json::{self, Data, Value},
+    wire::body,
 };
 use std::{
     collections::VecDeque,
     io,
     os::fd::RawFd,
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 
@@ -65,6 +66,7 @@ impl Endpoint {
                 .and_then(Value::string)
                 .ok_or(io::ErrorKind::InvalidData)
         };
+        let number = |key| root.get(key).and_then(Value::unsigned).ok_or(io::ErrorKind::InvalidData);
         let pair = |key| -> io::Result<[u64; 2]> {
             root.get(key)
                 .and_then(Value::array)
@@ -83,10 +85,10 @@ impl Endpoint {
                     .get("private")
                     .and_then(Value::boolean)
                     .ok_or(io::ErrorKind::InvalidData)?,
-                uid: number(root, "uid")?,
+                uid: number("uid")?,
                 directory: pair("directory")?,
                 socket: pair("socket")?,
-                pid: number(root, "pid")?
+                pid: number("pid")?
                     .try_into()
                     .map_err(|_| io::ErrorKind::InvalidData)?,
                 start: pair("start")?,
@@ -123,13 +125,13 @@ pub(crate) struct Check {
     done: Continue<Result<Endpoint, Error>>,
 }
 
-fn number(value: Value<'_>, key: &str) -> io::Result<u64> {
+fn number(value: &Data<'_>, key: &str) -> io::Result<u64> {
     value
         .get(key)
-        .and_then(Value::unsigned)
+        .and_then(Data::unsigned)
         .ok_or_else(|| io::ErrorKind::InvalidData.into())
 }
-fn identity(value: Value<'_>) -> io::Result<[u64; 2]> {
+fn identity(value: &Data<'_>) -> io::Result<[u64; 2]> {
     Ok([number(value, "device")?, number(value, "inode")?])
 }
 
@@ -145,11 +147,11 @@ impl Check {
             }
             return self.directory([metadata.device, metadata.inode]);
         }
-        let Output::Bytes(bytes) = output else {
+        let Output::Value(bytes) = output else {
             return Err(io::ErrorKind::InvalidData.into());
         };
-        let json = Json::parse(&bytes).map_err(|error| io::Error::other(error.message))?;
-        let root = json.root();
+        let root = body::decode_plain(&bytes).map_err(|error| io::Error::other(error.message))?;
+        let root = &root;
         match step {
             Step::Account => {
                 self.endpoint.uid = number(root, "uid")?;
@@ -164,21 +166,17 @@ impl Check {
                     self.endpoint.path = if path.is_absolute() {
                         path
                     } else {
-                        PathBuf::from(
-                            root.get("cwd")
-                                .and_then(Value::string)
-                                .ok_or(io::ErrorKind::InvalidData)?,
-                        )
-                        .join(path)
+                        root.get("cwd").and_then(Data::path).ok_or(io::ErrorKind::InvalidData)?.join(path)
                     };
                 }
             }
             Step::Environment => {
-                let root = root
+                // Environment values are bytes; a directory is a path.
+                let path = root
                     .get("TMUX_TMPDIR")
-                    .and_then(Value::string)
-                    .unwrap_or("/tmp");
-                let path = PathBuf::from(root);
+                    .and_then(Data::path)
+                    .unwrap_or(Path::new("/tmp"))
+                    .to_path_buf();
                 if !path.is_absolute() {
                     return Err(io::ErrorKind::InvalidInput.into());
                 }
@@ -189,7 +187,7 @@ impl Check {
             Step::Parent => {
                 let kind = root
                     .get("kind")
-                    .and_then(Value::string)
+                    .and_then(Data::string)
                     .ok_or(io::ErrorKind::InvalidData)?;
                 if kind == "symlink" && !self.endpoint.private {
                     self.steps.push_front(Step::Follow);
@@ -205,7 +203,7 @@ impl Check {
                 self.directory(identity(root)?)?;
             }
             Step::Socket => {
-                if root.get("kind").and_then(Value::string) != Some("socket")
+                if root.get("kind").and_then(Data::string) != Some("socket")
                     || number(root, "uid")? != self.endpoint.uid
                 {
                     return Err(io::ErrorKind::PermissionDenied.into());
@@ -238,11 +236,7 @@ impl Check {
                 {
                     return Err(io::ErrorKind::PermissionDenied.into());
                 }
-                let executable = PathBuf::from(
-                    root.get("executable")
-                        .and_then(Value::string)
-                        .ok_or(io::ErrorKind::InvalidData)?,
-                );
+                let executable = root.get("executable").and_then(Data::path).ok_or(io::ErrorKind::InvalidData)?.to_path_buf();
                 if !executable.is_absolute()
                     || executable.file_name() != Some(std::ffi::OsStr::new("tmux"))
                 {
@@ -250,9 +244,9 @@ impl Check {
                 }
                 let start: [u64; 2] = root
                     .get("start")
-                    .and_then(Value::array)
+                    .and_then(Data::array)
                     .ok_or(io::ErrorKind::InvalidData)?
-                    .map(Value::unsigned)
+                    .map(Data::unsigned)
                     .collect::<Option<Vec<_>>>()
                     .ok_or(io::ErrorKind::InvalidData)?
                     .try_into()
@@ -324,22 +318,11 @@ impl Check {
                     ),
                     Step::Parent => (
                         "file.lstat",
-                        Data::Object(vec![(
-                            "path",
-                            Data::String(parent.to_str().ok_or(io::ErrorKind::InvalidInput)?),
-                        )]),
+                        Data::Object(vec![("path", Data::from(parent.as_path()))]),
                     ),
                     Step::Socket => (
                         "file.lstat",
-                        Data::Object(vec![(
-                            "path",
-                            Data::String(
-                                self.endpoint
-                                    .path
-                                    .to_str()
-                                    .ok_or(io::ErrorKind::InvalidInput)?,
-                            ),
-                        )]),
+                        Data::Object(vec![("path", Data::from(self.endpoint.path.as_path()))]),
                     ),
                     Step::Peer => (
                         "peer",
@@ -353,7 +336,7 @@ impl Check {
                 };
                 Job::Native {
                     name,
-                    input: json::write(&input).map_err(|error| io::Error::other(error.message))?,
+                    value: body::encode_plain(&input).map_err(|error| io::Error::other(error.message))?,
                 }
             }
         };

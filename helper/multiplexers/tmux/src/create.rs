@@ -13,7 +13,26 @@ pub(crate) struct Pending {
     pub done: Option<Done<Id>>,
 }
 impl Tmux {
+    /// A creation waits for its server's kills in flight (`ordered`).
     pub(crate) fn create(
+        &mut self,
+        io: &mut dyn Io,
+        parent: Id,
+        beside: Option<Id>,
+        command: Option<Command>,
+        done: Done<Id>,
+    ) {
+        let backend = Some(parent)
+            .filter(|parent| self.backends.contains_key(parent))
+            .or_else(|| self.target(parent).ok().map(|(loc, _)| loc.backend));
+        self.ordered(
+            io,
+            backend,
+            false,
+            Box::new(move |mux, io, ()| mux.start(io, parent, beside, command, done)),
+        );
+    }
+    fn start(
         &mut self,
         io: &mut dyn Io,
         parent: Id,
@@ -411,7 +430,7 @@ impl Tmux {
     ) {
         if !self.backends[&loc.backend].remote && offset < panes.len() {
             if panes[offset].2.is_empty() {
-                let input = dispatch_helper_core::json::write(
+                let input = dispatch_helper_core::wire::body::encode_plain(
                     &dispatch_helper_core::json::Data::Object(vec![
                         (
                             "pid",
@@ -430,15 +449,16 @@ impl Tmux {
                     io,
                     Job::Native {
                         name: "environment",
-                        input,
+                        value: input,
                     },
                     Box::new(move |mux, io, result| {
-                        if let Ok(Output::Bytes(bytes)) = result {
-                            if let Ok(value) = dispatch_helper_core::json::Json::parse(&bytes) {
+                        if let Ok(Output::Value(bytes)) = result {
+                            if let Ok(value) = dispatch_helper_core::wire::body::decode_plain(&bytes) {
+                                // Environment values are bytes; a creation id is text.
                                 if let Some(id) = value
-                                    .root()
                                     .get("DISPATCH_TMUX_CREATION")
-                                    .and_then(|value| value.string())
+                                    .and_then(|value| value.bytes())
+                                    .and_then(|value| std::str::from_utf8(value).ok())
                                 {
                                     panes[offset].2 = id.to_owned();
                                 }
@@ -507,6 +527,8 @@ impl Tmux {
 pub(crate) struct Window {
     pub(crate) child: Spawned,
     bytes: Vec<u8>,
+    /// What tmux said on stderr: a failed command's reason (no pane line comes then).
+    errors: Vec<u8>,
     pub(crate) done: Option<crate::mux::NativeDone>,
 }
 impl Tmux {
@@ -685,6 +707,7 @@ impl Tmux {
             Window {
                 child,
                 bytes: Vec::new(),
+                errors: Vec::new(),
                 done: Some(complete),
             },
         );
@@ -709,17 +732,30 @@ impl Tmux {
                 io.close(*fd);
                 if window.child.output == Some(*fd) {
                     window.child.output = None;
-                    if let Some(done) = window.done.take() {
-                        replies.push((
-                            done,
-                            Err(Error {
-                                code: "uncertain",
-                                message: "Tmux creation reply was lost".into(),
-                            }),
-                        ));
-                    }
                 } else {
                     window.child.stderr = None;
+                }
+                // Both pipes ended without a pane line: tmux's reason, if it gave one.
+                if window.child.output.is_none()
+                    && window.child.stderr.is_none()
+                    && let Some(done) = window.done.take()
+                {
+                    let reason = String::from_utf8_lossy(&window.errors).trim().to_string();
+                    replies.push((
+                        done,
+                        Err(Error {
+                            code: "uncertain",
+                            message: if reason.is_empty() {
+                                "Tmux creation reply was lost".into()
+                            } else {
+                                format!("Tmux creation failed: {reason}")
+                            },
+                        }),
+                    ));
+                }
+            } else if window.child.stderr == Some(*fd) {
+                if window.done.is_some() && window.errors.len() < crate::control::MAXIMUM {
+                    window.errors.extend_from_slice(&bytes[..count]);
                 }
             } else if window.child.output == Some(*fd) && window.done.is_some() {
                 window.bytes.extend_from_slice(&bytes[..count]);

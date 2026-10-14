@@ -15,7 +15,7 @@ final class ChatFormattingTests: XCTestCase {
         let lines = String(decoding: data, as: UTF8.self).split(separator: "\n").map(String.init)
         let meta = lines.lazy.compactMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }
             .first { $0["type"] as? String == "session_meta" }?["payload"] as? [String: Any]
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("dispatch-formatting-" + UUID().uuidString)
+        let root = System.temporary.appendingPathComponent("dispatch-formatting-" + System.uuid().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
         opened.append((chat, root))
@@ -237,7 +237,7 @@ final class ChatFormattingTests: XCTestCase {
     }
 
     private func contentItemFixture() async throws -> ChatItem {
-        let path = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/codex-content-items.jsonl")
+        let path = System.checkout.appendingPathComponent("DispatchTests/Fixtures/codex-content-items.jsonl")
         let session = try await archived(try Data(contentsOf: path))
         return try XCTUnwrap(session.turns.flatMap(\.items).first)
     }
@@ -321,7 +321,7 @@ final class ChatFormattingTests: XCTestCase {
         try await assertObservedFormatting(version: "0.154.0")
     }
     private func assertObservedFormatting(version: String) async throws {
-        let path = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/codex-formatting-\(version).jsonl")
+        let path = System.checkout.appendingPathComponent("DispatchTests/Fixtures/codex-formatting-\(version).jsonl")
         let bytes = try Data(contentsOf: path)
         let session = try await archived(bytes)
         let items = session.turns.flatMap(\.items)
@@ -340,7 +340,7 @@ final class ChatFormattingTests: XCTestCase {
         XCTAssertEqual(future.turns.flatMap(\.items).map(\.text), items.map(\.text), "Recognized record shapes remain readable across CLI versions")
     }
     func testObservedCodexCommandBecomesReadableShellCard() async throws {
-        let path = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/codex-observed-0.153.2.jsonl")
+        let path = System.checkout.appendingPathComponent("DispatchTests/Fixtures/codex-observed-0.153.2.jsonl")
         let session = try await archived(try Data(contentsOf: path))
         let items = session.turns.flatMap(\.items)
         XCTAssertEqual(items.filter { $0.kind == .user }.map(\.text), ["tool check"])
@@ -568,7 +568,7 @@ final class ChatFormattingTests: XCTestCase {
 
     func testSourceCitationPreviewShowsCitedLineBeyondNormalPreviewLimit() async throws {
         AppFont.register()
-        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".swift")
+        let file = System.temporary.appendingPathComponent(System.uuid().uuidString + ".swift")
         try (1...1500).map { "let line\($0) = \"source citation preview fixture\"" }.joined(separator: "\n").write(to: file, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: file) }
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 820, height: 560), styleMask: [.titled], backing: .buffered, defer: false)
@@ -595,7 +595,7 @@ final class ChatFormattingTests: XCTestCase {
         XCTAssertTrue(["Current file on disk", "current file on disk"].contains { header.contains($0) }, header)
     }
     func testCompletionSurvivesOverlappingTranscriptAndHooks() {
-        let session = ChatSession(id: UUID())
+        let session = ChatSession(id: System.uuid())
         session.insert(ChatItem(id: "tool", kind: .tool, text: "false", title: "Shell", completed: true, exitCode: 1), turnID: "turn")
         session.insert(ChatItem(id: "tool", kind: .tool, text: "", output: ""), turnID: "turn")
         let tool = ToolPresentation(session.turns[0].items[0])

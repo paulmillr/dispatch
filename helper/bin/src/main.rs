@@ -1,6 +1,8 @@
 use dispatch_helper_core::{DispatchHelper, api::Grid, system::System};
 use std::{collections::BTreeMap, path::PathBuf};
 
+#[cfg(feature = "capture")]
+mod capture;
 mod uninstall;
 
 /// Programs typed in a helper shell run through `launch <key>`, and the helper invoked under
@@ -9,9 +11,12 @@ mod uninstall;
 const TYPED: [(&str, &str); 3] = [("codex", "codex"), ("pi", "pi"), ("herdr", "herdr")];
 
 fn main() -> std::io::Result<()> {
-    if let Some(mut command) = System::restore()? {
-        use std::os::unix::process::CommandExt;
-        return Err(command.exec());
+    // Replay is a test instrument (the `capture` feature). Without it DISPATCH_REPLAY is ignored
+    // (system/capture.rs): the helper would run live, on this machine's files and processes.
+    if !cfg!(feature = "capture") && std::env::var_os("DISPATCH_REPLAY").is_some() {
+        return Err(std::io::Error::other(
+            "DISPATCH_REPLAY is set, but this helper is built without the capture feature and cannot replay",
+        ));
     }
     let name = std::env::args_os().next().map(PathBuf::from);
     let alias = name
@@ -32,6 +37,17 @@ fn main() -> std::io::Result<()> {
         argv.truncate(argv.len() - 2);
     }
     let first = |value: &str| argv.first().is_some_and(|arg| arg == value);
+    // The capture tool (docs/replay.md); its replays run this same executable. It comes before
+    // restore, so a DISPATCH_REPLAY left in the shell never turns the tool into a replay.
+    #[cfg(feature = "capture")]
+    if first("capture") {
+        return capture::run(&argv[1..]);
+    }
+    // Restore re-execs with the recorded arguments; the new process parses them again.
+    if let Some(mut command) = System::restore()? {
+        use std::os::unix::process::CommandExt;
+        return Err(command.exec());
+    }
     if first("--stats-fixture") {
         let directory = argv
             .get(1)

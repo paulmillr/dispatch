@@ -10,7 +10,7 @@ final class ThinkingAnimationTests: XCTestCase {
         try DesktopTestSupport.requireUnlocked(); AppFont.register()
         let coordinator = ChatCoordinator(enabled: false)
         defer { coordinator.stop() }
-        let session = coordinator.session(for: UUID())
+        let session = coordinator.session(for: System.uuid())
         session.sessionID = "persistent-activity"; session.active = true; session.busy = true
         session.showChat = true; session.atBottom = false; session.activeTurnID = "live"
         session.turns = (0..<30).map { index in
@@ -21,10 +21,6 @@ final class ThinkingAnimationTests: XCTestCase {
         defer { window.orderOut(nil); window.contentView = nil; window.close() }
         window.contentView = NSHostingView(rootView: ChatView(session: session, coordinator: coordinator, focused: false, floatingSwitch: false))
         window.makeKeyAndOrderFront(nil)
-        try await Task.sleep(for: .milliseconds(150))
-        let first = try await PresentationTestSupport.capture(window, named: "activity-docked-history", in: "thinking-animation-validation")
-        XCTAssertFalse(try first.text().contains("Inspecting every queued operation"), "Reasoning stays hidden while reading history")
-        let firstRow = try XCTUnwrap(first.recognizedText().first { $0.topCandidates(1).first?.string.contains("thinking") == true })
         func composerTop() throws -> CGFloat {
             let content = try XCTUnwrap(window.contentView)
             let editor = try XCTUnwrap(PresentationTestSupport.views(of: ChatComposer.ComposerTextView.self, in: content).first)
@@ -32,13 +28,32 @@ final class ThinkingAnimationTests: XCTestCase {
             let frame = scroll.convert(scroll.bounds, to: content)
             return (content.isFlipped ? content.bounds.height - frame.minY : frame.maxY) / content.bounds.height
         }
-        let firstGap = firstRow.boundingBox.midY - (try composerTop())
+        /// The "thinking" row's gap to the composer's top; nil while no row reads "thinking".
+        func gap(_ shot: PresentationTestSupport.Snapshot) throws -> CGFloat? {
+            guard let row = try shot.recognizedText().first(where: { $0.topCandidates(1).first?.string.contains("thinking") == true }) else { return nil }
+            return row.boundingBox.midY - (try composerTop())
+        }
+        // Measure on settled layout: two offscreen renders in a row put the row at the same gap (a fixed sleep guessed
+        // how long layout takes). Renders are no test steps (captures are), so the recording keeps its steps.
+        func settle() async throws {
+            var last: CGFloat?
+            for _ in 0..<100 {
+                let next = try gap(PresentationTestSupport.render(XCTUnwrap(window.contentView)))
+                if next != nil, next == last { return }
+                last = next
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            XCTFail("The thinking row never settled: last gap \(String(describing: last))")
+        }
+        try await settle()
+        let first = try await PresentationTestSupport.capture(window, named: "activity-docked-history", in: "thinking-animation-validation")
+        XCTAssertFalse(try first.text().contains("Inspecting every queued operation"), "Reasoning stays hidden while reading history")
+        let firstGap = try XCTUnwrap(gap(first))
         session.turns[30].items.append(.init(id: "tool", kind: .tool, text: "git status", title: "Shell", completed: true))
-        try await Task.sleep(for: .milliseconds(100))
+        try await settle()
         let recent = try await PresentationTestSupport.capture(window)
         XCTAssertFalse(try recent.text().contains("Last:"))
-        let recentRow = try XCTUnwrap(recent.recognizedText().first { $0.topCandidates(1).first?.string.contains("thinking") == true })
-        XCTAssertEqual(recentRow.boundingBox.midY - (try composerTop()), firstGap, accuracy: 0.01)
+        XCTAssertEqual(try XCTUnwrap(gap(recent)), firstGap, accuracy: 0.01)
         session.turns[30].ended = .now; session.busy = false
         try await Task.sleep(for: .milliseconds(500))
         let done = try await PresentationTestSupport.capture(window, named: "activity-docked-finished", in: "thinking-animation-validation")
@@ -48,7 +63,7 @@ final class ThinkingAnimationTests: XCTestCase {
     }
 
     func testCompletedActivityKeepsDetailsWithoutLastFragment() {
-        let session = ChatSession(id: UUID())
+        let session = ChatSession(id: System.uuid())
         session.active = true; session.busy = true; session.activeTurnID = "turn"
         session.turns = [.init(id: "turn", items: [.init(id: "tool", kind: .tool, text: "git status", title: "Shell", completed: true)])]
         let state = AgentWorkingState(session)
@@ -65,7 +80,7 @@ final class ThinkingAnimationTests: XCTestCase {
     }
 
     func testLastActivityStaysHiddenRegardlessOfRowExpansion() throws {
-        let session = ChatSession(id: UUID())
+        let session = ChatSession(id: System.uuid())
         session.active = true; session.busy = true; session.activeTurnID = "turn"
         session.turns = [.init(id: "turn", items: [
             .init(id: "assistant", kind: .assistant, text: "Checking the changes."),
@@ -88,7 +103,7 @@ final class ThinkingAnimationTests: XCTestCase {
     }
 
     func testClockSurvivesRebuiltViewAfterTurnEndsWhileAgentsRun() throws {
-        let session = ChatSession(id: UUID())
+        let session = ChatSession(id: System.uuid())
         session.active = true; session.busy = true; session.activeTurnID = "turn"
         let since = try XCTUnwrap(session.workingSince)
         session.turns = [.init(id: "turn", started: since, ended: since.addingTimeInterval(5))]
@@ -104,7 +119,7 @@ final class ThinkingAnimationTests: XCTestCase {
     }
 
     func testRunningSubagentsNameTheActivity() {
-        let session = ChatSession(id: UUID())
+        let session = ChatSession(id: System.uuid())
         session.active = true; session.busy = true; session.activeTurnID = "turn"
         session.turns = [.init(id: "turn", items: [.init(id: "agent", kind: .tool, text: #"{"description":"Find the timer"}"#, title: "Agent")])]
         session.subagents = ["Explore", "general-purpose", "Explore"]
@@ -126,7 +141,7 @@ final class ThinkingAnimationTests: XCTestCase {
     }
 
     func testReduceMotionClockStepsEveryFiveSecondsAfterTen() throws {
-        let session = ChatSession(id: UUID())
+        let session = ChatSession(id: System.uuid())
         session.active = true; session.busy = true; session.activeTurnID = "turn"
         let start = Date(timeIntervalSinceReferenceDate: 0)
         session.turns = [.init(id: "turn", started: start)]
@@ -144,7 +159,7 @@ final class ThinkingAnimationTests: XCTestCase {
     }
 
     func testFinishedDurationSwitchesToCompletionTimeAfterFiveMinutes() throws {
-        let session = ChatSession(id: UUID())
+        let session = ChatSession(id: System.uuid())
         session.active = true; session.busy = true; session.activeTurnID = "turn"
         let finish = try XCTUnwrap(ISO8601DateFormatter().date(from: "2000-01-01T20:15:00Z"))
         let start = finish.addingTimeInterval(-313)
@@ -160,7 +175,7 @@ final class ThinkingAnimationTests: XCTestCase {
     }
 
     func testAdaptiveActivityUsesCurrentEventsAndKeepsRecentDetails() {
-        let session = ChatSession(id: UUID())
+        let session = ChatSession(id: System.uuid())
         session.active = true; session.busy = true; session.activeTurnID = "turn"
         session.turns = [.init(id: "turn", items: [.init(id: "summary", kind: .reasoning, text: "Checking references")])]
         XCTAssertEqual(AgentWorkingState(session).label, "thinking")
@@ -185,7 +200,7 @@ final class ThinkingAnimationTests: XCTestCase {
     }
 
     func testActivityFormatsShellArgumentsLikeToolCards() {
-        let session = ChatSession(id: UUID())
+        let session = ChatSession(id: System.uuid())
         session.active = true; session.busy = true; session.activeTurnID = "turn"
         let cases: [(String, String, String)] = [
             (#"["\/bin\/zsh", "-lc", "cp index.js \/tmp\/index.js"]"#, "cp index.js /tmp/index.js", "running"),
@@ -207,7 +222,7 @@ final class ThinkingAnimationTests: XCTestCase {
 
     func testToolActivityFooterExpandsStopAndStatistics() async throws {
         try DesktopTestSupport.requireUnlocked(); AppFont.register()
-        let session = ChatSession(id: UUID())
+        let session = ChatSession(id: System.uuid())
         session.active = true; session.busy = true; session.showChat = true; session.activeTurnID = "turn"
         session.turns = [.init(id: "turn", items: [
             .init(id: "summary", kind: .reasoning, text: "Checking the workspace before committing."),
@@ -224,29 +239,34 @@ final class ThinkingAnimationTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(600))
         let collapsed = try await PresentationTestSupport.capture(window, named: "activity-collapsed", in: "thinking-animation-validation")
         XCTAssertFalse(try collapsed.text().contains("Checking the workspace"))
-        let row = try XCTUnwrap(collapsed.recognizedText().first { $0.topCandidates(1).first?.string.contains("running") == true })
-        let content = try XCTUnwrap(window.contentView), box = row.boundingBox
+        let content = try XCTUnwrap(window.contentView), box = try XCTUnwrap(collapsed.box(of: "running"))
         let point = NSPoint(x: box.midX * content.bounds.width, y: (content.isFlipped ? 1 - box.midY : box.midY) * content.bounds.height)
         try PresentationTestSupport.click(window, at: content.convert(point, to: nil))
-        try await Task.sleep(for: .milliseconds(150))
-        let expanded = try await PresentationTestSupport.capture(window, named: "activity-expanded", in: "thinking-animation-validation")
-        let text = try expanded.text()
+        // The expanded footer, once drawn (its stats can land a frame after the stop control).
+        var expanded = try await PresentationTestSupport.capture(window, named: "activity-expanded", in: "thinking-animation-validation")
+        var text = ""
+        try await TestSupport.eventually(diagnostic: text) {
+            expanded = try await PresentationTestSupport.capture(window, named: "activity-expanded", in: "thinking-animation-validation")
+            text = try expanded.text()
+            return try expanded.reads(["Stop thinking"]) && expanded.reads(["75%"])
+        }
         XCTAssertFalse(text.contains("Checking the workspace"), text)
         XCTAssertFalse(text.contains("Reported summary"), text)
-        XCTAssertTrue(text.contains("Stop thinking"), text)
+        try PresentationTestSupport.assertText("Stop thinking", in: expanded)
         XCTAssertFalse(text.contains("Elapsed"), text)
         XCTAssertFalse(text.contains("Tools:"), text)
         XCTAssertFalse(text.contains("1 running"), text)
-        XCTAssertTrue(text.contains("75%"), text)
-        XCTAssertTrue(text.contains("1.2K in"), text)
-        XCTAssertTrue(text.contains("340 out"), text)
+        try PresentationTestSupport.assertText("75%", in: expanded)
+        // OCR reads the drawn "K" as "k" now and then; the drawn text itself must say "1.2K".
+        try PresentationTestSupport.assertText("1.2K in", ["1.2k in"], in: expanded, rendered: window.contentView)
+        try PresentationTestSupport.assertText("340 out", in: expanded)
         XCTAssertFalse(text.contains("context remaining"), "Expanded activity uses the same compact stats as the composer")
-        let stop = try XCTUnwrap(expanded.recognizedText().first { $0.topCandidates(1).first?.string.contains("Stop thinking") == true })
-        let stopPoint = NSPoint(x: stop.boundingBox.midX * content.bounds.width,
-            y: (content.isFlipped ? 1 - stop.boundingBox.midY : stop.boundingBox.midY) * content.bounds.height)
+        let stop = try XCTUnwrap(expanded.box(of: "Stop thinking"))
+        let stopPoint = NSPoint(x: stop.midX * content.bounds.width,
+            y: (content.isFlipped ? 1 - stop.midY : stop.midY) * content.bounds.height)
         try PresentationTestSupport.click(window, at: content.convert(stopPoint, to: nil))
         try await TestSupport.eventually { stopCount == 1 }
-        session.interruptionID = UUID()
+        session.interruptionID = System.uuid()
         try await Task.sleep(for: .milliseconds(100))
         let visible = try await PresentationTestSupport.capture(window).text()
         XCTAssertTrue(visible.contains("Stopping"))
@@ -263,16 +283,19 @@ final class ThinkingAnimationTests: XCTestCase {
         let thinkingPoint = NSPoint(x: thinking.boundingBox.midX * content.bounds.width,
             y: (content.isFlipped ? 1 - thinking.boundingBox.midY : thinking.boundingBox.midY) * content.bounds.height)
         try PresentationTestSupport.click(window, at: content.convert(thinkingPoint, to: nil))
-        try await Task.sleep(for: .milliseconds(100))
-        let emptyTurn = try await PresentationTestSupport.capture(window).text()
-        XCTAssertTrue(emptyTurn.contains("Stop thinking"), "An initial turn can expand before any summary or tool arrives")
+        // An initial turn can expand before any summary or tool arrives.
+        var emptyTurn = ""
+        try await TestSupport.eventually(diagnostic: emptyTurn) {
+            emptyTurn = try await PresentationTestSupport.capture(window).text()
+            return emptyTurn.contains("Stop thinking") && emptyTurn.contains("75%")
+        }
         XCTAssertFalse(emptyTurn.contains("Elapsed"), emptyTurn)
         XCTAssertFalse(emptyTurn.contains("Tools:"), emptyTurn)
         XCTAssertTrue(emptyTurn.contains("75%"), emptyTurn)
     }
 
     func testHistoryLoadingUsesActivityWithoutHistoricalReasoning() {
-        let session = ChatSession(id: UUID())
+        let session = ChatSession(id: System.uuid())
         session.loadingHistory = true
         session.activeTurnID = "restored"
         session.turns = [.init(id: "restored", items: [.init(id: "reason", kind: .reasoning, text: "Historical summary")])]
@@ -298,7 +321,7 @@ final class ThinkingAnimationTests: XCTestCase {
     }
 
     func testReasoningStaysInHistoryButHiddenFromActivityStates() throws {
-        let session = ChatSession(id: UUID())
+        let session = ChatSession(id: System.uuid())
         session.active = true; session.busy = true; session.activeTurnID = "current"
         session.turns = [ChatTurn(id: "old", ended: .now, items: [.init(id: "reason", kind: .reasoning, text: "Old summary")]),
                          ChatTurn(id: "current", items: [.init(id: "reason", kind: .reasoning, text: "Current\nsummary")])]
@@ -347,7 +370,7 @@ final class ThinkingAnimationTests: XCTestCase {
             #"{"type":"event_msg","payload":{"type":"agent_reasoning_raw_content","text":"DO_NOT_DISPLAY"}}"#,
             #"{"type":"response_item","payload":{"id":"reason","type":"reasoning","summary":[{"type":"summary_text","text":"Reported summary"}],"content":[{"type":"reasoning_text","text":"DO_NOT_DISPLAY"}],"encrypted_content":"DO_NOT_DISPLAY"}}"#
         ]
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("dispatch-thinking-" + UUID().uuidString)
+        let root = System.temporary.appendingPathComponent("dispatch-thinking-" + System.uuid().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
@@ -358,7 +381,7 @@ final class ThinkingAnimationTests: XCTestCase {
 
     func testThinkingSweepsForTenSecondsBeforeTracesAndDuringToolWork() async throws {
         try DesktopTestSupport.requireUnlocked(); AppFont.register()
-        let session = ChatSession(id: UUID())
+        let session = ChatSession(id: System.uuid())
         session.active = true; session.busy = true; session.showChat = true
         session.awaitingPromptAck = true
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 100), styleMask: [.titled], backing: .buffered, defer: false)
@@ -479,7 +502,7 @@ final class ThinkingAnimationTests: XCTestCase {
         try DesktopTestSupport.requireUnlocked(); AppFont.register()
         let coordinator = ChatCoordinator(enabled: false)
         defer { coordinator.stop() }
-        let session = coordinator.session(for: UUID())
+        let session = coordinator.session(for: System.uuid())
         session.sessionID = "thinking-animation"; session.showChat = true
         session.active = true; session.busy = true; session.activeTurnID = "turn"
         let summary = "Checking the supplied summary before updating the workspace."
@@ -552,21 +575,32 @@ final class ThinkingAnimationTests: XCTestCase {
 
     func testHiddenThinkingStopsAndReducedMotionKeepsReasoningHidden() async throws {
         try DesktopTestSupport.requireUnlocked(); AppFont.register()
-        let session = ChatSession(id: UUID())
+        let session = ChatSession(id: System.uuid())
         session.active = true; session.busy = true; session.showChat = true
         session.turns = [.init(id: "turn", items: [.init(id: "reason", kind: .reasoning, text: "Supplied thought fragment")])]
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 80), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.orderOut(nil); window.contentView = nil; window.close() }
         window.contentView = NSHostingView(rootView: AgentWorkingIndicator(session: session).padding(12).background(Chrome.terminal))
+        // Shown at once: AppKit's opening animation moves the window's pixels for a moment (a frame that is not the indicator's).
+        window.animationBehavior = .none
         window.makeKeyAndOrderFront(nil)
         try await Task.sleep(for: .milliseconds(150))
         session.showChat = false
-        try await Task.sleep(for: .milliseconds(100))
-        let first = try await PresentationTestSupport.capture(window)
+        // Hiding takes a frame to reach the screen, and a running shimmer changes every frame: wait (at most a second)
+        // until two screen captures 50 ms apart agree, then the frame must stay as it is. Those captures skip the
+        // window publication wait (the window was captured before), so the test's recorded steps stay the same.
+        let png = { (snapshot: PresentationTestSupport.Snapshot) in snapshot.bitmap.representation(using: .png, properties: [:]) }
+        var first = try await PresentationTestSupport.capture(window)
+        for _ in 0..<20 {
+            try await Task.sleep(for: .milliseconds(50))
+            let next = try await PresentationTestSupport.capture(window, published: true)
+            if png(next) == png(first) { break }
+            first = next
+        }
         try await Task.sleep(for: .milliseconds(250))
         let second = try await PresentationTestSupport.capture(window)
-        XCTAssertEqual(first.bitmap.representation(using: .png, properties: [:]), second.bitmap.representation(using: .png, properties: [:]), "Hidden chat must stop its animation timeline")
+        XCTAssertEqual(png(first), png(second), "Hidden chat must stop its animation timeline")
         session.showChat = true
         window.contentView = NSHostingView(rootView: AgentWorkingAnimation(session: session, reduceMotion: true)
             .padding(12).background(Chrome.terminal))

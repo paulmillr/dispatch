@@ -207,14 +207,14 @@ impl Herdr {
                             }
                         };
                         mux.shell(terminal, &shell);
-                        let input = match json::write(&D::Object(vec![("tty", D::Unsigned(shell.tty))])) {
+                        let input = match body::encode_plain(&D::Object(vec![("tty", D::Unsigned(shell.tty))])) {
                             Ok(input) => input,
                             Err(reason) => {
                             done(mux, io, Err(reason));
                             return;
                         }
                         };
-                        mux.job(io, Job::Native { name: "foreground", input }, Box::new(move |mux, io, result| {
+                        mux.job(io, Job::Native { name: "foreground", value: input }, Box::new(move |mux, io, result| {
                             let valid = crate::process::foreground(result, &shell).ok()
                                 .and_then(|processes| mux.candidate(&processes))
                                 .is_some_and(|(_, current)| crate::process::owns(&shell, &current, &agent));

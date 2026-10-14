@@ -20,8 +20,7 @@ final class SSHLinuxClaudeIntegrationTests: XCTestCase {
         phaseTimings.begin("SSH_setup")
         var passed = false
         defer { phaseTimings.save(passed: passed && testRun?.failureCount == 0) }
-        let profile = try JSONDecoder().decode(SSHLinuxTestProfile.self,
-            from: Data(contentsOf: SSHLinuxTestProfile.configurationURL()))
+        let profile = try SSHLinuxTestProfile.load()
         let claude = try XCTUnwrap(profile.claude, "Pair the Linux runner with --agent claude --claude PATH")
         let runtime = TerminalRuntime.shared, previous = runtime.chat
         runtime.chat = ChatCoordinator(enabled: true)
@@ -36,7 +35,7 @@ final class SSHLinuxClaudeIntegrationTests: XCTestCase {
             runtime.ssh.links.values.contains { $0.launch.tabID == origin && $0.shellPID != nil }
         }
         let ssh = try XCTUnwrap(runtime.ssh.links.values.first { $0.launch.tabID == origin })
-        let root = "/tmp/dispatch-claude-linux-" + UUID().uuidString
+        let root = "/tmp/dispatch-claude-linux-" + System.uuid().uuidString
         let script = root + "/claude_fixture.py", state = root + "/state"
         let socket = root + "/" + backend + ".sock"
         @discardableResult
@@ -89,6 +88,7 @@ final class SSHLinuxClaudeIntegrationTests: XCTestCase {
             }, requests: { try await remote(["/bin/cat", state + "/requests.jsonl"]) }) }
             phaseTimings.begin("teardown")
             await cleanup()
+            if backend == "tmux" { try await app.settleControlExit() }
             await app.close().value
             passed = testRun?.failureCount == 0
         } catch {

@@ -16,7 +16,7 @@ final class SSHCompatibilityTests: XCTestCase {
             Host \(name)
               HostName 127.0.0.1
               Port \(server.port)
-              User \(NSUserName())
+              User \(System.machine.name)
               IdentityFile \(server.root.appendingPathComponent("key").path)
               UserKnownHostsFile \(server.root.appendingPathComponent("known_hosts").path)
               StrictHostKeyChecking yes
@@ -27,16 +27,16 @@ final class SSHCompatibilityTests: XCTestCase {
             """
         }
         let proxy = "printf reached > \"$1\"; exec /usr/bin/nc \"$2\" \"$3\""
-        try (host("dispatch-test-jump", jump) + "  ProxyCommand /bin/sh -c " + HerdrLaunch.quote(proxy) +
+        try System.write(Data((host("dispatch-test-jump", jump) + "  ProxyCommand /bin/sh -c " + HerdrLaunch.quote(proxy) +
              " jump-proxy " + marker.path + " %h %p\n" + host("dispatch-test-target", target) +
-             "  ProxyJump dispatch-test-jump\n").write(to: configuration, atomically: true, encoding: .utf8)
+             "  ProxyJump dispatch-test-jump\n").utf8), to: configuration)
         let source = try XCTUnwrap(app.workspace.activeTab?.id)
         let terminal = try await origin(app, id: source)
         let arguments = ["-F", configuration.path, "dispatch-test-target"]
         try await target.authorize(arguments: arguments)
         TerminalTestSupport.send("ssh " + arguments.map(HerdrLaunch.quote).joined(separator: " "), to: terminal)
         try await connected(app, source: source)
-        XCTAssertEqual(try String(contentsOf: marker, encoding: .utf8), "reached", "The authenticated connection must actually traverse its configured jump host")
+        XCTAssertEqual(String(decoding: try System.read(marker), as: UTF8.self), "reached", "The authenticated connection must actually traverse its configured jump host")
         TerminalTestSupport.send("printf 'JUMP_INTEGRATION_%s\\n' \"${DISPATCH_SSH_HELPER:+yes}\"", to: terminal)
         try await app.wait { TerminalTestSupport.screen(terminal: terminal).contains("JUMP_INTEGRATION_yes") }
         TerminalTestSupport.send("exit", to: terminal)
@@ -77,7 +77,7 @@ final class SSHCompatibilityTests: XCTestCase {
             TerminalTestSupport.screen(terminal: terminal).contains("dispatch-fixture default")
         }
         // The foreground nested ssh client suppresses discovery on the outer host: no chat binds there.
-        try await Task.sleep(for: .milliseconds(1200))
+        try await TestSupport.pause(for: .milliseconds(1200))
         XCTAssertEqual(runtime.ssh.links.count, 1, "Nested SSH must not create a second enhanced connection")
         XCTAssertFalse(runtime.chat.session(for: source).active)
         try await sendAgent("/quit", to: terminal)
@@ -143,8 +143,7 @@ final class SSHCompatibilityTests: XCTestCase {
         let server = try await SSHTestServer(); defer { server.stop() }
         let stub = server.root.appendingPathComponent("herdr"), socket = server.root.appendingPathComponent("herdr.sock").path
         defer { _ = try? HerdrSocket(path: socket).request("server.stop") }
-        try "#!/bin/sh\nprintf 'REMOTE_HERDR_%s\\n' PASSTHROUGH\nexit 17\n".write(to: stub, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: stub.path)
+        try System.write(Data("#!/bin/sh\nprintf 'REMOTE_HERDR_%s\\n' PASSTHROUGH\nexit 17\n".utf8), to: stub, permissions: 0o700)
         let source = try XCTUnwrap(app.workspace.activeTab?.id)
         let terminal = try await origin(app, id: source)
         TerminalTestSupport.send(ssh(server), to: terminal)

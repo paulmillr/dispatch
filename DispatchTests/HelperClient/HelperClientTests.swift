@@ -55,7 +55,7 @@ final class HelperClientTests: XCTestCase {
 
     /// A frame body decoded into a Codable type the way HelperConnection does.
     static func decode<T: Decodable>(_ type: T.Type, _ body: Data) throws -> T {
-        try JSONDecoder().decode(type, from: JSONSerialization.data(withJSONObject: object(body), options: [.fragmentsAllowed]))
+        try HelperBinary.decode(type, from: HelperBinary.decode(body))
     }
 
     /// Fixtures hold decoded messages (provenance.md); the frames are encoded here with the current
@@ -66,8 +66,7 @@ final class HelperClientTests: XCTestCase {
             let url = Bundle.module.url(
                 forResource: name, withExtension: "json", subdirectory: "Fixtures")!
         #else
-            let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-                .appendingPathComponent("Fixtures/\(name).json")
+            let url = System.checkout.appendingPathComponent("DispatchTests/HelperClient/Fixtures/\(name).json")
         #endif
         let root = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
         let messages = root["frames"] as! [String: [[String: Any]]]
@@ -133,7 +132,7 @@ final class HelperClientTests: XCTestCase {
             limit: info.limit!, chunkKind: info.chunkKind!, chunkLimit: info.chunkLimit!)
         let large = try Self.decode(Request.self, inputs[1].body).params
         let small = try Self.decode(Request.self, inputs[2].body).params
-        let (results, continuation) = AsyncThrowingStream<Data, any Error>.makeStream()
+        let (results, continuation) = AsyncThrowingStream<HelperBinary.Value, any Error>.makeStream()
         _ = try await client.subscribe(
             "echo", params: large,
             notify: { _, _ in
@@ -149,8 +148,8 @@ final class HelperClientTests: XCTestCase {
             })
         let reply: Echo = try await client.request("echo", params: small)
         var actual = [reply]
-        for try await data in results {
-            actual.insert(try JSONDecoder().decode(Echo.self, from: data), at: 0)
+        for try await value in results {
+            actual.insert(try HelperBinary.decode(Echo.self, from: value), at: 0)
         }
         XCTAssertEqual(actual, [large, small])
     }
@@ -356,15 +355,11 @@ final class HelperClientTests: XCTestCase {
         for name in ["notifications"] {
             for frame in try Self.fixture(name).frames["write"]!
             where frame.kind == HelperWire.Kind.notify.rawValue {
-                let object = try Self.object(frame.body) as! [String: Any]
-                let method = object["method"] as! String
-                let params = try JSONSerialization.data(
-                    withJSONObject: object["params"]!, options: [.fragmentsAllowed])
+                guard case .object(let object) = try HelperBinary.decode(frame.body),
+                      case .string(let method)? = object["method"], let params = object["params"]
+                else { return XCTFail("Invalid notification frame") }
                 if let update = try HelperClient.Update.decode(method, params) {
-                    XCTAssertEqual(
-                        try JSONSerialization.jsonObject(
-                            with: update.encode(), options: [.fragmentsAllowed]) as! NSObject,
-                        object["params"] as! NSObject)
+                    XCTAssertEqual(try update.encode(), params)
                 } else {
                     XCTFail("Missing common notification \(method)")
                 }
@@ -428,7 +423,7 @@ final class HelperClientTests: XCTestCase {
         struct Response<R: Decodable>: Decodable { let result: R }
         struct Notification: Equatable, Sendable {
             let method: String
-            let params: Data
+            let params: HelperBinary.Value
         }
         let frames = try Self.fixture("live-tmux").frames
         let inputs = frames["read"]!
@@ -437,12 +432,10 @@ final class HelperClientTests: XCTestCase {
         let echo = try Self.decode(Request<Nonce>.self, inputs[2].body)
         let expected = try outputs.filter { $0.kind == HelperWire.Kind.notify.rawValue }.map {
             frame in
-            let object = try Self.object(frame.body) as! [String: Any]
-            return Notification(
-                method: object["method"] as! String,
-                params: try JSONSerialization.data(
-                    withJSONObject: object["params"]!,
-                    options: [.sortedKeys, .withoutEscapingSlashes, .fragmentsAllowed]))
+            guard case .object(let object) = try HelperBinary.decode(frame.body),
+                  case .string(let method)? = object["method"], let params = object["params"]
+            else { throw HelperBinary.Failure.invalid }
+            return Notification(method: method, params: params)
         }
         let incoming = Pipe()
         let outgoing = Pipe()

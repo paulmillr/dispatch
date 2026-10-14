@@ -312,14 +312,14 @@ fn send(
 impl Request<'_> {
     /// Protocol result: list Vec<Queued>; add Queued; start Sent; others null
     /// Protocol producers: Harness.queue, Harness.queue_add, Harness.queue_edit, Harness.queue_send, Harness.queue_order
-    pub(super) fn queue(&mut self, p: Value<'_>, op: &str) -> Result<(), Error> {
+    pub(super) fn queue(&mut self, p: &Data<'_>, op: &str) -> Result<(), Error> {
         let (_, _, harness, binding) = self.agent(p)?;
         if op == "reorder" && strings(p, "items")?.is_empty() {
             return Err(invalid("items"));
         }
         if harness.borrow().native_queue() {
             if matches!(op, "add" | "update") {
-                if let Some(body) = p.get("text").and_then(Value::string) {
+                if let Some(body) = p.get("text").and_then(Data::string) {
                     if let Some(error) = invalid_text(body, flag(p, "command")) {
                         return Err(error);
                     }
@@ -381,7 +381,7 @@ impl Request<'_> {
                 }
                 "update" => {
                     let index = line.find(text(p, "item")?, number(p, "revision")?)?;
-                    match p.get("text").and_then(Value::string) {
+                    match p.get("text").and_then(Data::string) {
                         None => {
                             line.items.remove(index);
                         }
@@ -390,7 +390,7 @@ impl Request<'_> {
                             // c1654cc ChatCoordinator.swift:1624,1630.
                             let command = p
                                 .get("command")
-                                .and_then(Value::boolean)
+                                .and_then(Data::boolean)
                                 .unwrap_or(line.items[index].command);
                             if let Some(error) = invalid_text(body, command) {
                                 return Err(error);
@@ -453,7 +453,7 @@ impl Request<'_> {
 
     /// Old stopQueue: Stop pauses every held item that is not already paused.
     /// Protocol result: Sent
-    pub(super) fn stop(&mut self, p: Value<'_>) -> Result<(), Error> {
+    pub(super) fn stop(&mut self, p: &Data<'_>) -> Result<(), Error> {
         let (_, _, harness, binding) = self.agent(p)?;
         let terminal = number(p, "terminal")?;
         if let Some(line) = self
@@ -474,7 +474,7 @@ impl Request<'_> {
 
     fn native(
         &mut self,
-        p: Value<'_>,
+        p: &Data<'_>,
         op: &str,
         harness: Shared<dyn Harness>,
         binding: Binding,
@@ -484,9 +484,9 @@ impl Request<'_> {
         }
         let mut native = harness.borrow_mut();
         let (item, revision) = (
-            p.get("item").and_then(Value::string).unwrap_or_default(),
+            p.get("item").and_then(Data::string).unwrap_or_default(),
             p.get("revision")
-                .and_then(Value::unsigned)
+                .and_then(Data::unsigned)
                 .unwrap_or_default(),
         );
         match op {
@@ -496,7 +496,7 @@ impl Request<'_> {
             }
             "update" | "remove" => {
                 let done = self.queue_done(p, self.done(None))?;
-                let body = (op == "update").then(|| p.get("text").and_then(Value::string));
+                let body = (op == "update").then(|| p.get("text").and_then(Data::string));
                 native.queue_edit(self.io, &binding, item, revision, body.flatten(), done)
             }
             "start" => {
@@ -536,7 +536,7 @@ impl Request<'_> {
 
     pub(super) fn queue_done<T: 'static>(
         &self,
-        p: Value<'_>,
+        p: &Data<'_>,
         done: Done<T>,
     ) -> Result<Done<T>, Error> {
         let (_, _, harness, binding) = self.agent(p)?;

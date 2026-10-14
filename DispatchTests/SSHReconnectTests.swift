@@ -29,8 +29,8 @@ final class SSHReconnectTests: XCTestCase {
             window.orderOut(nil); window.close(); runtime.stop(); runtime.workspace = previous
         }
 
-        let fixture = try AppReplay.query(kind: "fixture.ssh.login", input: Data()) {
-            let root = FileManager.default.temporaryDirectory.appendingPathComponent("reconnect-login-" + UUID().uuidString)
+        let fixture = try AppReplay.query(kind: "fixture.ssh.login", input: .null) {
+            let root = System.temporary.appendingPathComponent("reconnect-login-" + System.uuid().uuidString)
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             let executable = root.appendingPathComponent("ssh-fixture"), control = root.appendingPathComponent("control")
             // Exercise the production sheet and PTY with an echo-disabled password
@@ -50,9 +50,9 @@ final class SSHReconnectTests: XCTestCase {
             """
             try script.write(to: executable, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
-            return try JSONEncoder().encode(root.path)
+            return .string(root.path)
         }
-        let root = URL(fileURLWithPath: try JSONDecoder().decode(String.self, from: fixture))
+        let root = URL(fileURLWithPath: try AppReplay.decode(String.self, fixture))
         defer { if !AppReplay.replaying { try? FileManager.default.removeItem(at: root) } }
         let executable = root.appendingPathComponent("ssh-fixture"), control = root.appendingPathComponent("control")
         if AppReplay.replaying { XCTAssertFalse(FileManager.default.fileExists(atPath: executable.path)) }
@@ -241,7 +241,7 @@ final class SSHReconnectTests: XCTestCase {
         defer { controller.stop() }
         let recipe = recipes[0]
         controller.attempt = { recipe in
-            workspace.hosts.associate(recipe.origin, context: .init(host: recipe.host, generation: UUID(), state: .connected, authenticated: true))
+            workspace.hosts.associate(recipe.origin, context: .init(host: recipe.host, generation: System.uuid(), state: .connected, authenticated: true))
             // Production recovery retires the old recipe before returning.
             controller.forget(recipe.connection)
         }
@@ -296,8 +296,8 @@ final class SSHReconnectTests: XCTestCase {
     /// An automatic login never prompts: BatchMode holds over the connection's own options, and only
     /// OpenSSH refusing the login, not an unreachable host, stops the retries.
     func testSilentLoginNeverPromptsAndTellsRefusalFromUnreachable() async throws {
-        let fixture = try AppReplay.query(kind: "fixture.ssh.silent", input: Data()) {
-            let root = FileManager.default.temporaryDirectory.appendingPathComponent("reconnect-silent-" + UUID().uuidString)
+        let fixture = try AppReplay.query(kind: "fixture.ssh.silent", input: .null) {
+            let root = System.temporary.appendingPathComponent("reconnect-silent-" + System.uuid().uuidString)
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             let executable = root.appendingPathComponent("ssh-fixture")
             // OpenSSH's exits per destination; a login that could prompt (BatchMode not yes first) fails instead.
@@ -321,9 +321,9 @@ final class SSHReconnectTests: XCTestCase {
             """
             try script.write(to: executable, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
-            return try JSONEncoder().encode(root.path)
+            return .string(root.path)
         }
-        let root = URL(fileURLWithPath: try JSONDecoder().decode(String.self, from: fixture))
+        let root = URL(fileURLWithPath: try AppReplay.decode(String.self, fixture))
         defer { if !AppReplay.replaying { try? FileManager.default.removeItem(at: root) } }
         let executable = root.appendingPathComponent("ssh-fixture").path
         func login(_ destination: String) async -> (any Error)? {
@@ -421,7 +421,7 @@ final class SSHReconnectTests: XCTestCase {
             defer { window.orderOut(nil); window.contentView = nil; window.close() }
             let coordinator = ChatCoordinator(enabled: false)
             defer { coordinator.stop() }
-            let session = coordinator.session(for: UUID())
+            let session = coordinator.session(for: System.uuid())
             session.sessionID = "overlay"; session.showChat = true
             session.draft = "Editable offline draft"
             session.turns = (0..<40).map { .init(id: "turn-\($0)", items: [.init(id: "reply-\($0)", kind: .assistant, text: String(repeating: "Loaded history stays in place.\n", count: 8))]) }

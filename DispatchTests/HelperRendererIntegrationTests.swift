@@ -10,8 +10,7 @@ final class HelperRendererIntegrationTests: XCTestCase {
         let restore = TestSupport.preserveRuntime()
         defer { restore() }
         try DesktopTestSupport.requireUnlocked()
-        let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-            .appendingPathComponent("HelperClient/Fixtures/renderer.vt")
+        let fixture = System.checkout.appendingPathComponent("DispatchTests/HelperClient/Fixtures/renderer.vt")
         let vt = try Data(contentsOf: fixture)
         // Typed text (UTF-8, as a keyboard produces): it reaches the helper's channel byte for byte.
         let input = Data(#"{"method":"hello","params":{}} typed through the renderer λ"#.utf8)
@@ -22,9 +21,9 @@ final class HelperRendererIntegrationTests: XCTestCase {
             runtime.start(preferences: Preferences())
             runtime.chat.stop()
             XCTAssertNil(runtime.error)
-            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
-                "r-\(UUID().uuidString.prefix(8))")
-            let executable = try XCTUnwrap(Bundle.main.resourceURL).appendingPathComponent(
+            let directory = System.temporary.appendingPathComponent(
+                "r-\(System.uuid().uuidString.prefix(8))")
+            let executable = System.resources.appendingPathComponent(
                 "dispatch-helper")
             let bridge = try HelperRenderer(directory: directory, executable: executable)
             defer { bridge.stop() }
@@ -33,7 +32,7 @@ final class HelperRendererIntegrationTests: XCTestCase {
             let command = ["/usr/bin/python3", "-c", code, fixture.path].map(HelperRenderer.quote)
                 .joined(separator: " ")
             let baseline = TerminalView(
-                id: UUID(), directory: Home.url.path, launchCommand: command,
+                id: System.uuid(), directory: System.home.path, launchCommand: command,
                 presentation: .standalone)
             let window = NSWindow(
                 contentRect: NSRect(x: 100, y: 100, width: 900, height: 650),
@@ -55,7 +54,7 @@ final class HelperRendererIntegrationTests: XCTestCase {
             let expected = TerminalTestSupport.screen(terminal: baseline)
             baseline.destroy()
 
-            let id = UUID()
+            let id = System.uuid()
             var channel: HelperTerminal?
             var typed = Data()
             var resized: HelperTopology.Grid?
@@ -73,7 +72,7 @@ final class HelperRendererIntegrationTests: XCTestCase {
                 connection.write(vt)
             }
             let terminal = TerminalView(
-                id: id, directory: Home.url.path, presentation: .standalone, helper: bridge)
+                id: id, directory: System.home.path, presentation: .standalone, helper: bridge)
             terminal.onProcessExit = { exited += 1 }
             window.contentView = terminal
             try await TestSupport.eventually(diagnostic: "connected=\(channel != nil), expected=\(String(reflecting: expected)), actual=\(String(reflecting: TerminalTestSupport.screen(terminal: terminal)))") {
@@ -90,14 +89,14 @@ final class HelperRendererIntegrationTests: XCTestCase {
             }
             weak var released = channel
             let descriptors = try XCTUnwrap(channel).files.map { $0.fileDescriptor }
-            func identities() -> [Int32: String] {
+            func identities() -> [Int32: String] { System.process("descriptors", "renderer") {
                 Dictionary(
                     uniqueKeysWithValues: descriptors.compactMap { fd in
                         var value = stat()
                         guard fstat(fd, &value) == 0 else { return nil }
                         return (fd, "\(value.st_dev):\(value.st_ino):\(value.st_rdev)")
                     })
-            }
+            } }
             let before = identities()
             XCTAssertEqual(before.count, 2)
             channel?.finish()
@@ -119,8 +118,8 @@ final class HelperRendererIntegrationTests: XCTestCase {
             await runtime.stop().value
         }
         let path =
-            ProcessInfo.processInfo.environment["DISPATCH_RENDERER_CAPTURE"]
-            ?? Home.url.appendingPathComponent("renderer-capture.json").path
+            System.environment("DISPATCH_RENDERER_CAPTURE")
+            ?? System.home.appendingPathComponent("renderer-capture.json").path
         try JSONSerialization.data(
             withJSONObject: captures, options: [.prettyPrinted, .sortedKeys]
         )
@@ -135,14 +134,14 @@ final class HelperRendererIntegrationTests: XCTestCase {
         runtime.start(preferences: Preferences())
         runtime.chat.stop()
         defer { runtime.stop() }
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
-            "r-\(UUID().uuidString.prefix(8))")
-        let executable = try XCTUnwrap(Bundle.main.resourceURL).appendingPathComponent(
+        let directory = System.temporary.appendingPathComponent(
+            "r-\(System.uuid().uuidString.prefix(8))")
+        let executable = System.resources.appendingPathComponent(
             "dispatch-helper")
         let bridge = try HelperRenderer(directory: directory, executable: executable)
         defer { bridge.stop() }
-        let id = UUID()
-        let environment = try bridge.environment(id: id)
+        let id = System.uuid()
+        let environment = bridge.environment(id: id)
         bridge.revoke(id)
         let assignments = stride(from: 0, to: environment.count, by: 2).map {
             environment[$0] + "=" + environment[$0 + 1]
@@ -155,7 +154,7 @@ final class HelperRendererIntegrationTests: XCTestCase {
         var exited = 0
         bridge.onConnect = { _, _ in attached += 1 }
         let terminal = TerminalView(
-            id: UUID(), directory: Home.url.path, launchCommand: command, presentation: .standalone)
+            id: System.uuid(), directory: System.home.path, launchCommand: command, presentation: .standalone)
         terminal.onProcessExit = { exited += 1 }
         let window = NSWindow(
             contentRect: NSRect(x: 100, y: 100, width: 800, height: 600),
@@ -177,7 +176,7 @@ final class HelperRendererIntegrationTests: XCTestCase {
     /// goes to the tab that attached the terminal (its renderer had the snapshot), not the first
     /// tab with that id; a tab that moved on to another terminal falls back to the tab showing it.
     func testOutputGoesToTheTabThatAttachedTheTerminal() {
-        let stale = UUID(), attaching = UUID()
+        let stale = System.uuid(), attaching = System.uuid()
         var showing: [UUID: UInt64] = [stale: 5, attaching: 5]
         func receiver(_ connected: Set<UUID>) -> UUID? {
             HelperWorkspace.receiver(of: 5, attached: [5: attaching], connected: connected, shown: stale) { showing[$0] }

@@ -13,7 +13,7 @@ final class NativeChatCommandTests: XCTestCase {
     func testStructuredShellCompletionPreservesOutputAndMatchesPendingCommand() throws {
         let output = "first  \n  second\n"
         let chat = ChatCoordinator(enabled: true)
-        let session = chat.session(for: UUID())
+        let session = chat.session(for: System.uuid())
         defer { chat.close(session.id) }
         session.observedCommand = (title: "!ls", output: nil)
         let record = HelperChat.Record(id: "execution", turn: "turn", kind: "output", text: output,
@@ -41,9 +41,9 @@ final class NativeChatCommandTests: XCTestCase {
 
     func testShellCommandsAreNativeAndCannotBeQueued() throws {
         let chat = ChatCoordinator(enabled: true)
-        let session = chat.session(for: UUID())
+        let session = chat.session(for: System.uuid())
         session.active = true
-        session.process = try XCTUnwrap(AgentProcess.capture(getpid()))
+        session.process = try XCTUnwrap(AgentProcess.capture(System.pid))
         defer { chat.close(session.id) }
         for text in ["!echo hello", "!!pwd", "  !pwd"] {
             XCTAssertTrue(AgentInput.isCommand(text))

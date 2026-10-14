@@ -47,8 +47,9 @@ final class TerminalScrollbarTests: XCTestCase {
         XCTAssertEqual(huge.row(at: 1), UInt64.max - 1)
         XCTAssertLessThan(huge.row(at: Double(1).nextDown), huge.maximum)
         let history = HelperClient.History(terminal: 1, offset: .max, max: .max, viewport: 20)
-        let bytes = Data(#"{"terminal":1,"offset":18446744073709551615,"max":18446744073709551615,"viewport":20}"#.utf8)
-        let update = try XCTUnwrap(HelperClient.Update.decode("terminal.scroll", bytes))
+        let params = HelperBinary.Value.object([
+            "terminal": .unsigned(1), "offset": .unsigned(.max), "max": .unsigned(.max), "viewport": .unsigned(20)])
+        let update = try XCTUnwrap(HelperClient.Update.decode("terminal.scroll", params))
         XCTAssertEqual(update, .history(history))
         XCTAssertEqual(try HelperClient.Update.decode("terminal.scroll", update.encode()), update)
         XCTAssertEqual(history.state, TerminalScrollState(total: .max, offset: 0, visible: 20))

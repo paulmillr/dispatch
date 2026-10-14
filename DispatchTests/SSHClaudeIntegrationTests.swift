@@ -35,7 +35,7 @@ final class SSHClaudeIntegrationTests: XCTestCase {
         // A fresh SSH login with hooks already opted in also installs the
         // account-default handler. Restore that VM account file after this
         // reconnect fixture; conversations remain in the private profile.
-        let accountSettings = URL(fileURLWithPath: NSHomeDirectory() + "/.claude/settings.json")
+        let accountSettings = System.machine.home.appendingPathComponent(".claude/settings.json")
         let savedAccountSettings = reattach ? try? Data(contentsOf: accountSettings) : nil
         let savedMode = reattach ? (try? fm.attributesOfItem(atPath: accountSettings.path)[.posixPermissions]) : nil
         defer {
@@ -49,19 +49,19 @@ final class SSHClaudeIntegrationTests: XCTestCase {
             }
         }
         let claude = try XCTUnwrap([TestSupport.tool("claude")].first { fm.isExecutableFile(atPath: $0) })
-        let state = URL(fileURLWithPath: "/tmp/dispatch-ssh-claude-" + UUID().uuidString)
+        let state = URL(fileURLWithPath: "/tmp/dispatch-ssh-claude-" + System.uuid().uuidString)
         let script = CodexTestSupport.root.appendingPathComponent("scripts/claude_fixture.py").path
         let fixture = Process(); fixture.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
         // Approval/question cases assert completed messages and hook decisions;
         // only the detailed walkthrough needs paced streaming for interruption.
         fixture.arguments = [script, "serve", "--state", state.path, "--delay", (transportOnly || approvals) ? "0" : "0.025"]
         fixture.standardOutput = FileHandle.nullDevice; fixture.standardError = FileHandle.nullDevice
-        try fixture.run()
+        let child = try System.Child(fixture)
         defer {
-            if fixture.isRunning { fixture.terminate(); fixture.waitUntilExit() }
+            child.stop()
             print("SSH Claude \(backend) fixture: " + state.path)
         }
-        try await TestSupport.eventually { fm.fileExists(atPath: state.appendingPathComponent("endpoint.json").path) }
+        try await TestSupport.eventually { System.exists(state.appendingPathComponent("endpoint.json")) }
         phaseTimings.begin("SSH_setup")
         let runtime = TerminalRuntime.shared, previous = runtime.chat
         runtime.chat = ChatCoordinator(enabled: true)
@@ -118,9 +118,9 @@ final class SSHClaudeIntegrationTests: XCTestCase {
                 let settings = ssh.agents.appendingPathComponent("claude/settings.json")
                 try await TestSupport.eventually(timeout: .seconds(20)) {
                     session.active && session.agentID == "claude" && terminal.agentMenuScreen.contains("for shortcuts") &&
-                        (try? String(contentsOf: settings, encoding: .utf8))?.contains("PermissionRequest") == true
+                        (try? String(decoding: try System.read(settings), as: UTF8.self))?.contains("PermissionRequest") == true
                 }
-                let installed = try Data(contentsOf: settings)
+                let installed = try System.read(settings)
                 XCTAssertTrue(String(decoding: installed, as: UTF8.self).contains("PermissionRequest"))
                 // Hook settings are explicitly loaded when the fixture restarts.
                 // The real application's installer also supports subsequent logins.
@@ -134,7 +134,7 @@ final class SSHClaudeIntegrationTests: XCTestCase {
                 runtime.chat.chooseChat(true, session: session)
                 if reattach {
                     try await exerciseReattachment(backend, app: app, server: ssh, origin: origin, session: session, state: state, socket: socket)
-                    XCTAssertEqual(try Data(contentsOf: settings), installed)
+                    XCTAssertEqual(try System.read(settings), installed)
                     await finish()
                     return
                 }
@@ -172,7 +172,7 @@ final class SSHClaudeIntegrationTests: XCTestCase {
                     revoked.answer(["How much detail should the reply include?": "Compact"])
                     XCTAssertNil(revoked.answers)
                     try await TestSupport.eventually(timeout: .seconds(10)) { ClaudeScreen.question(terminal.agentMenuScreen) }
-                    XCTAssertEqual(try Data(contentsOf: settings), installed)
+                    XCTAssertEqual(try System.read(settings), installed)
                     await finish()
                     return
                 }
@@ -189,22 +189,22 @@ final class SSHClaudeIntegrationTests: XCTestCase {
                         if let turn = approval.turnID {
                             XCTAssertEqual(turn, session.turns.last(where: { $0.items.contains { $0.kind == .user && $0.text == "permission tool " + decision.rawValue } })?.id)
                         }
-                        XCTAssertFalse(fm.fileExists(atPath: marker.path))
+                        XCTAssertFalse(System.exists(marker))
                         approval.resolve(decision)
                         let expected = decision == .allow ? "completed." : "denied or failed."
                         try await TestSupport.eventually(timeout: .seconds(20)) {
                             !session.busy && session.turns.flatMap(\.items).contains { $0.kind == .assistant && $0.text.contains("Tool result received: " + expected) }
                         }
-                        XCTAssertEqual(fm.fileExists(atPath: marker.path), decision == .allow)
+                        XCTAssertEqual(System.exists(marker), decision == .allow)
                     }
-                    try fm.removeItem(at: marker)
+                    try System.remove(marker)
                 }
                 session.draft = "permission tool revoke"; runtime.chat.submit(session)
                 try await TestSupport.eventually(timeout: .seconds(20)) { session.approvals.contains(where: \.pending) }
                 let revoked = try XCTUnwrap(session.approvals.last(where: \.pending))
                 if integrationRevocation {
                     let connection = try XCTUnwrap(runtime.ssh.links.values.first { $0.launch.tabID == origin })
-                    let before = try Data(contentsOf: state.appendingPathComponent("requests.jsonl"))
+                    let before = try System.read(state.appendingPathComponent("requests.jsonl"))
                     session.draft = "Keep draft while permission is revoked"
                     let feature: SSHIntegrationFeature = backend == "plain" ? .chat : (backend == "tmux" ? .tmux : .herdr)
                     runtime.ssh.permissions.save(.init(helperEnabled: true,
@@ -213,26 +213,26 @@ final class SSHClaudeIntegrationTests: XCTestCase {
                     XCTAssertFalse(revoked.pending)
                     revoked.resolve(.allow)
                     XCTAssertNotEqual(revoked.decision, .allow)
-                    try await Task.sleep(for: .seconds(1))
-                    XCTAssertFalse(fm.fileExists(atPath: marker.path))
+                    try await TestSupport.pause(for: .seconds(1))
+                    XCTAssertFalse(System.exists(marker))
                     XCTAssertEqual(session.draft, "Keep draft while permission is revoked")
-                    XCTAssertEqual(try Data(contentsOf: state.appendingPathComponent("requests.jsonl")), before)
+                    XCTAssertEqual(try System.read(state.appendingPathComponent("requests.jsonl")), before)
                     await finish()
                     return
                 }
                 runtime.chat.setHelperIntegration("claude", enabled: false)
                 XCTAssertFalse(revoked.pending); revoked.resolve(.allow)
-                XCTAssertFalse(fm.fileExists(atPath: marker.path))
+                XCTAssertFalse(System.exists(marker))
                 try await TestSupport.eventually(timeout: .seconds(10)) {
                     session.terminalAttention != nil && ClaudeScreen.permission(terminal.agentMenuScreen)
                 }
-                XCTAssertEqual(try Data(contentsOf: settings), installed)
+                XCTAssertEqual(try System.read(settings), installed)
                 await finish()
                 return
             }
             try await Self.exercise(backend, app: app, launch: launch, transportOnly: transportOnly, timings: phaseTimings,
-                settings: { try? Data(contentsOf: ssh.agents.appendingPathComponent("claude/settings.json")) },
-                requests: { try Data(contentsOf: state.appendingPathComponent("requests.jsonl")) })
+                settings: { try? System.read(ssh.agents.appendingPathComponent("claude/settings.json")) },
+                requests: { try System.read(state.appendingPathComponent("requests.jsonl")) })
             await finish()
         } catch {
             phaseTimings.begin("teardown")
@@ -290,7 +290,7 @@ final class SSHClaudeIntegrationTests: XCTestCase {
         let process = try XCTUnwrap(AgentProcess.capture(identity.pid))
         let draft = "Keep the unsent reconnect draft λ\nsecond line"
         session.draft = draft
-        let requests = try Data(contentsOf: state.appendingPathComponent("requests.jsonl"))
+        let requests = try System.read(state.appendingPathComponent("requests.jsonl"))
         let marker = state.appendingPathComponent("work/dispatch-approval-marker")
         let control = connection.launch.master
         let closed = try await SSHCommand.run(executable: control.executable, arguments: control.controlArguments("exit"))
@@ -302,8 +302,8 @@ final class SSHClaudeIntegrationTests: XCTestCase {
         XCTAssertNotEqual(oldApproval.decision, .allow)
         XCTAssertEqual(session.draft, draft)
         XCTAssertTrue(process.alive, "Persistent Claude must survive the SSH connection")
-        XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path))
-        XCTAssertEqual(try Data(contentsOf: state.appendingPathComponent("requests.jsonl")), requests)
+        XCTAssertFalse(System.exists(marker))
+        XCTAssertEqual(try System.read(state.appendingPathComponent("requests.jsonl")), requests)
 
         app.workspace.newLocalSpace()
         let source = try XCTUnwrap(app.workspace.activeSurfaceID)
@@ -336,8 +336,8 @@ final class SSHClaudeIntegrationTests: XCTestCase {
         defer { print("Claude \(backend) reconnect: \(restored.status ?? "none")\n\(view.agentMenuScreen)") }
         XCTAssertEqual(restored.draft, draft)
         XCTAssertFalse(restored.approvals.contains(where: \.pending), "Old connection approvals must never become answerable again")
-        XCTAssertEqual(try Data(contentsOf: state.appendingPathComponent("requests.jsonl")), requests, "Reattachment must not replay input or tool decisions")
-        XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path))
+        XCTAssertEqual(try System.read(state.appendingPathComponent("requests.jsonl")), requests, "Reattachment must not replay input or tool decisions")
+        XCTAssertFalse(System.exists(marker))
         try await TestSupport.eventually(timeout: .seconds(15)) {
             restored.terminalAttention != nil && ClaudeScreen.permission(view.agentMenuScreen)
         }
@@ -361,8 +361,8 @@ final class SSHClaudeIntegrationTests: XCTestCase {
         }
         // Native Escape interrupts the turn without another model request;
         // a hook Deny instead returns a tool error for the model to discuss.
-        XCTAssertEqual(try Data(contentsOf: state.appendingPathComponent("requests.jsonl")), requests)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path))
+        XCTAssertEqual(try System.read(state.appendingPathComponent("requests.jsonl")), requests)
+        XCTAssertFalse(System.exists(marker))
         XCTAssertEqual(restored.draft, draft)
         runtime.chat.chooseChat(true, session: restored)
         restored.draft = "permission tool after reconnect"; runtime.chat.sendFromComposer(restored)
@@ -371,9 +371,9 @@ final class SSHClaudeIntegrationTests: XCTestCase {
         approval.resolve(.allow)
         try await TestSupport.eventually(timeout: .seconds(20)) {
             !restored.busy && !restored.awaitingPromptAck && restored.submissionID == nil &&
-                ClaudeModelMenu.isEmptyComposer(view.agentMenuScreen) && FileManager.default.fileExists(atPath: marker.path)
+                ClaudeModelMenu.isEmptyComposer(view.agentMenuScreen) && System.exists(marker)
         }
-        XCTAssertEqual(try String(contentsOf: marker, encoding: .utf8), "approved")
+        XCTAssertEqual(try String(decoding: try System.read(marker), as: UTF8.self), "approved")
         restored.draft = "question after reconnect"; runtime.chat.sendFromComposer(restored)
         try await TestSupport.eventually(timeout: .seconds(20)) { restored.approvals.contains { $0.pending && $0.questions != nil } }
         let question = try XCTUnwrap(restored.approvals.last(where: \.pending))
@@ -541,7 +541,7 @@ final class SSHClaudeIntegrationTests: XCTestCase {
                 !session.busy && session.turns.flatMap(\.items).contains { $0.text == "Local Claude fixture reply: recovered after SSH stop " + backend }
             }
         }
-        let foreign = await helper.refuses("foreign conversation", conversation: UUID().uuidString)
+        let foreign = await helper.refuses("foreign conversation", conversation: System.uuid().uuidString)
         XCTAssertTrue(foreign, "A different conversation must not authorize remote input")
         try await waitForInputReady()
         session.draft = "/exit"; runtime.chat.submit(session)

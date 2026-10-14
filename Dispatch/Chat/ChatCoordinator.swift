@@ -196,7 +196,7 @@ final class ChatCoordinator {
         session.terminalAttention = nil
         // Retry readiness. Messages with uncertain delivery retain their own pause.
         drainQueue(session)
-        session.focusRequest = UUID()
+        session.focusRequest = System.uuid()
     }
     private func presentationKey(_ session: ChatSession) -> RemotePresentationKey? {
         guard let host = session.host else { return nil }
@@ -251,7 +251,7 @@ final class ChatCoordinator {
         if !preservingPresentation { session.setView(false, reason: "integration-disabled") }
         session.status = "\(session.agentTitle) exited. This transcript is read-only."
         if !preservingPresentation {
-            session.focusRequest = UUID()
+            session.focusRequest = System.uuid()
             DispatchQueue.main.async { TerminalRuntime.shared.focusActive() }
         }
     }
@@ -305,12 +305,12 @@ final class ChatCoordinator {
                 if !earlier && session.promptBoundary?.accepts(record) != false {
                     session.activityCheck = nil
                     session.activityNeedsRefresh = false; session.activityRetryAfter = nil
-                    if session.helper == nil { session.busy = session.active }
+                    if session.helper == nil { session.busy = session.active } else if session.awaitingPromptAck { session.starting = true }
                     session.awaitingPromptAck = false; session.promptBoundary = nil
                 }
             case .ended:
                 if !earlier {
-                    session.activityCheck = nil
+                    session.activityCheck = nil; session.starting = false
                     session.activityNeedsRefresh = false; session.activityRetryAfter = nil
                 }
                 if historical { historicalRecords.append(record) }
@@ -383,7 +383,7 @@ final class ChatCoordinator {
         sessions[session.id] === session && enabled
             && !(helperInstalls[session.agentID]?.optional == true && disabledIntegrations.contains(session.agentID))
             && session.active && session.helper != nil
-            && (immediately || !session.busy) && !session.awaitingPromptAck && session.sideConversation == nil
+            && (immediately || !session.busy && !session.starting) && !session.awaitingPromptAck && session.sideConversation == nil
             && session.command == nil && !session.nativeInputInFlight && session.nativePrompt == nil
             && !session.waitingForAnswer && session.commandEditor == nil && !session.loadingHistory
             && session.activityCheck == nil && !session.inputBlocked && session.submissionID == nil
@@ -489,14 +489,14 @@ final class ChatCoordinator {
         session.drafts.restore(message.delivery?.draft ?? ChatDraft(text: message.text, multiline: message.text.contains("\n")))
         session.editingQueuedID = id; session.selectedQueuedID = nil
         session.editingQueuedDraftID = session.drafts.current.id
-        session.focusRequest = UUID()
+        session.focusRequest = System.uuid()
     }
 
     func cancelQueuedEdit(_ session: ChatSession) {
         guard session.editingQueuedID != nil else { return }
         if session.drafts.current.id == session.editingQueuedDraftID { session.clearDraft() }
         session.editingQueuedID = nil; session.editingQueuedDraftID = nil; session.selectedQueuedID = nil
-        session.focusRequest = UUID()
+        session.focusRequest = System.uuid()
     }
 
     func resumeQueue(_ session: ChatSession) {

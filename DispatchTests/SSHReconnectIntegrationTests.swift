@@ -87,7 +87,7 @@ final class SSHReconnectIntegrationTests: XCTestCase {
         // The fixture server predates Dispatch; explicitly supply the gateway
         // capability just as the native shell integration does for new servers.
         let environment = app.runtime.herdrLaunch.environment(for: try XCTUnwrap(app.origin?.id))
-        let command = (["env"] + environment.map { $0.key + "=" + $0.value } + [Bundle.main.executablePath!, "--ssh-launch"]
+        let command = (["env"] + environment.map { $0.key + "=" + $0.value } + [System.executable.path, "--ssh-launch"]
             + server.options + [server.destination]).map(HerdrLaunch.quote).joined(separator: " ")
         TerminalTestSupport.send(command + "; printf 'LOCAL_EXIT_%s\\n' \"$?\"", to: terminal)
         try await TestSupport.eventually(timeout: .seconds(20)) {
@@ -100,7 +100,8 @@ final class SSHReconnectIntegrationTests: XCTestCase {
         try await app.wait { TerminalTestSupport.screen(terminal: terminal).contains("LOCAL_EXIT_130") }
         TerminalTestSupport.send("printf 'RESET_TMUX_%s\\n' LOCAL", to: terminal)
         try await app.wait { TerminalTestSupport.screen(terminal: terminal).contains("RESET_TMUX_LOCAL") }
-        XCTAssertFalse(app.runtime.hasActiveSSHConnections)
+        // The reset's connection teardown finishes on its own: the shell may print first.
+        try await app.wait { !app.runtime.hasActiveSSHConnections }
     }
 
     func testResetAllDisconnectsSSHAndForgetsTmuxWithoutKillingRemoteJobs() async throws {
@@ -123,7 +124,7 @@ final class SSHReconnectIntegrationTests: XCTestCase {
         XCTAssertTrue(app.workspace.spaces.allSatisfy { $0.hostID == .local && !$0.structured })
         XCTAssertEqual(app.runtime.preferences, preferences)
         XCTAssertEqual(try app.server(["list-panes", "-a", "-F", "#{pane_id}:#{pane_pid}"]), processes)
-        try await Task.sleep(for: .seconds(1))
+        try await TestSupport.pause(for: .seconds(1))
         XCTAssertEqual(Set(app.workspace.hosts.records.keys), [.local], "Late discovery must not restore reset hosts")
     }
 
@@ -395,7 +396,7 @@ final class SSHReconnectIntegrationTests: XCTestCase {
             if let processes {
                 XCTAssertEqual(try app.server(["list-panes", "-a", "-F", "#{pane_id}:#{pane_pid}"]), processes)
             } else {
-                XCTAssertFalse(FileManager.default.fileExists(atPath: socket), "Restore must never start a replacement server")
+                XCTAssertFalse(System.exists(URL(fileURLWithPath: socket)), "Restore must never start a replacement server")
             }
         }
     }
@@ -662,8 +663,8 @@ final class SSHReconnectIntegrationTests: XCTestCase {
         app.runtime.hosts.disconnect(host)
         try await app.wait { app.runtime.hosts.reconnect.state(for: surface) != nil }
         let disconnectedAt = app.runtime.hosts.reconnect.state(for: surface)?.disconnectedAt
-        XCTAssertEqual(kill(launcher.pid, SIGSTOP), 0)
-        defer { if launcher.alive { kill(launcher.pid, SIGCONT) } }
+        XCTAssertEqual(System.signal(launcher.pid, SIGSTOP), 0)
+        defer { if launcher.alive { System.signal(launcher.pid, SIGCONT) } }
         app.runtime.hosts.reconnect.reconnect(hostID: host, sourceSurfaceID: surface)
         try await TestSupport.eventually(timeout: .seconds(30)) {
             app.workspace.hosts.terminals[surface]?.generation != initial.launch.connectionID.rawValue
@@ -701,7 +702,7 @@ final class SSHReconnectIntegrationTests: XCTestCase {
         TerminalTestSupport.send("printf ready > " + HerdrLaunch.quote(receipt.path), to: recovered)
         try await TestSupport.eventually(diagnostic:
             "Input after startup retry: parked=\(recovered.inputParked) foreground=\(recovered.foregroundPID) currentView=\(app.runtime.views[surface] === recovered) reconnect=\(String(describing: app.runtime.hosts.reconnect.state(for: surface))) shells=\(app.runtime.ssh.links.values.map { "\($0.launch.tabID):\(String(describing: $0.shellPID))" })\n\(TerminalTestSupport.screen(terminal: recovered))") {
-            (try? String(contentsOf: receipt, encoding: .utf8)) == "ready"
+            (try? String(decoding: System.read(receipt), as: UTF8.self)) == "ready"
         }
     }
 
@@ -724,7 +725,7 @@ final class SSHReconnectIntegrationTests: XCTestCase {
             let receipt = server.root.appendingPathComponent("immediate-recovery-\(attempt)")
             TerminalTestSupport.send("printf ready > " + HerdrLaunch.quote(receipt.path), to: terminal)
             try await TestSupport.eventually(timeout: .seconds(5), diagnostic: "Input after reconnect was lost on attempt \(attempt)") {
-                (try? String(contentsOf: receipt, encoding: .utf8)) == "ready"
+                (try? String(decoding: System.read(receipt), as: UTF8.self)) == "ready"
             }
         }
     }

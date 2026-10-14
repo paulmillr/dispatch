@@ -30,16 +30,16 @@ impl Native {
             match (step, output) {
                 (Step::Root, Output::Process(shell)) if self.observe(terminal, &shell) => {
                     let input =
-                        json::write(&Data::Object(vec![("tty", Data::Unsigned(shell.tty))]))?;
+                        body::encode_plain(&Data::Object(vec![("tty", Data::Unsigned(shell.tty))]))?;
                     Ok(Next::Job(
                         Box::new(Job::Native {
                             name: "foreground",
-                            input,
+                            value: input,
                         }),
                         Step::Foreground(shell),
                     ))
                 }
-                (Step::Foreground(shell), Output::Bytes(bytes)) => {
+                (Step::Foreground(shell), Output::Value(bytes)) => {
                     let members = foreground(&bytes, &shell)?;
                     let [process] = members.as_slice() else {
                         return Err(error("control_process_unavailable", ""));

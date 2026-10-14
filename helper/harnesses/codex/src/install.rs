@@ -8,7 +8,7 @@ use crate::{
 use dispatch_helper_core::{
     api::*,
     json::{self, Data, Json, Kind, Value},
-    wire::LIMIT,
+    wire::{LIMIT, body::Encoded},
 };
 use std::{collections::BTreeMap, path::PathBuf};
 
@@ -267,8 +267,8 @@ fn running(
             Err(error) => return then(io, Err(error)),
         };
         let input = Data::Object(vec![("pid", Data::Unsigned(pid.into()))]);
-        let check = Box::new(move |io: &mut dyn Io, result: Result<Json, Error>| {
-            let current = result.and_then(|value| jobs::process(value.root()));
+        let check = Box::new(move |io: &mut dyn Io, result: Result<Encoded, Error>| {
+            let current = result.and_then(|value| jobs::process(&value.root()));
             then(
                 io,
                 current.and_then(|process| {
@@ -295,13 +295,14 @@ fn variables(
 ) {
     let names = Data::Array(names.iter().copied().map(Data::String).collect());
     let input = Data::Object(vec![("pid", Data::Unsigned(pid.into())), ("names", names)]);
-    let read = Box::new(move |io: &mut dyn Io, result: Result<Json, Error>| {
+    let read = Box::new(move |io: &mut dyn Io, result: Result<Encoded, Error>| {
         let values = result.map(|value| {
-            let values = value.root().object().into_iter().flatten();
+            let value = value.root();
+            let values = value.object().into_iter().flatten();
             values
                 .filter_map(|(name, value)| {
-                    let text = value.string().filter(|text| !text.is_empty())?;
-                    Some((name.to_owned(), PathBuf::from(text)))
+                    let path = value.path().filter(|path| !path.as_os_str().is_empty())?;
+                    Some((name.to_owned(), path.to_path_buf()))
                 })
                 .collect()
         });
@@ -314,9 +315,9 @@ fn variables(
 /// every other request reports.
 fn inspect(io: &mut dyn Io, setup: Setup) {
     let path = setup.directory.join("hooks.json");
-    let text = path.to_string_lossy().into_owned();
+    let asked = path.clone();
     let input = Data::Object(vec![
-        ("path", Data::String(&text)),
+        ("path", Data::from(asked.as_path())),
         ("limit", Data::Unsigned(LIMIT.into())),
     ]);
     let jobs = setup.jobs.clone();
@@ -332,7 +333,7 @@ fn inspect(io: &mut dyn Io, setup: Setup) {
                 Err(error) if error.code == "not_found" => Ok(None),
                 result => result.and_then(|value| {
                     let root = value.root();
-                    let metadata = |value: Value<'_>| {
+                    let metadata = |value: &Data<'_>| {
                         Some(Guard::from(Metadata {
                             kind: FileKind::File,
                             size: value.get("size")?.unsigned()?,
@@ -348,10 +349,10 @@ fn inspect(io: &mut dyn Io, setup: Setup) {
                         .filter(|guard| root.get("after").and_then(metadata) == Some(*guard));
                     let mode = before
                         .and_then(|before| before.get("mode"))
-                        .and_then(Value::unsigned);
-                    match (root.get("data").and_then(Value::string), mode, guard) {
+                        .and_then(Data::unsigned);
+                    match (root.get("data").and_then(Data::bytes), mode, guard) {
                         (Some(data), Some(mode), Some(guard)) => {
-                            Ok(Some((data.as_bytes().to_vec(), mode as u32 & 0o777, guard)))
+                            Ok(Some((data.to_vec(), mode as u32 & 0o777, guard)))
                         }
                         _ => Err(failure(
                             "changed",

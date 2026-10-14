@@ -27,12 +27,12 @@ impl Launch {
 }
 
 pub(crate) fn answer(io: &mut dyn Io, reply: u64, result: Result<bool, Error>) -> std::io::Result<()> {
-    use crate::json::{self, Data};
+    use crate::json::Data;
     let value = match &result {
         Ok(enabled) => Data::Object(vec![("enabled", Data::Bool(*enabled))]),
         Err(error) => Data::Object(vec![("error", Data::String(&error.message))]),
     };
-    io.reply(reply, &json::write(&value).map_err(|error| std::io::Error::other(error.message))?)
+    io.reply(reply, &crate::wire::body::encode_plain(&value).map_err(|error| std::io::Error::other(error.message))?)
 }
 
 pub(crate) struct Attempt {

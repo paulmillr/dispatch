@@ -16,8 +16,7 @@ final class TerminalMachineTests: XCTestCase {
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
         process.arguments = ["-c", "printf '%s\\n' " + shell.arguments.map(HerdrLaunch.quote).joined(separator: " ")]
         process.standardOutput = output
-        try process.run()
-        let bytes = output.fileHandleForReading.readDataToEndOfFile(); process.waitUntilExit()
+        let bytes = try TestSupport.live(process).output
         XCTAssertEqual(String(decoding: bytes, as: UTF8.self).split(separator: "\n").map(String.init), shell.arguments)
     }
 

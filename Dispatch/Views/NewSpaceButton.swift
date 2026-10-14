@@ -47,7 +47,13 @@ enum SpaceBackend: String, CaseIterable, Codable, Sendable {
                          "-o", "RemoteCommand=none", "-o", "ClearAllForwardings=yes"]
                 + shell.options + ["-T", "--", shell.destination, remoteProbeCommand(probe)]
         }
-        guard let result = try? await SSHCommand.run(executable: executable, arguments: arguments, timeout: 5),
+        // Which programs a machine has is an observation, asked whenever a control mounts with its cache expired (render
+        // timing): capture asks the machine, replay answers what capture saw, whenever and however often the app asks.
+        struct Probe: Codable { let executable: String; let arguments: [String] }
+        let live: SSHCommand.Result?
+        if AppReplay.replaying { live = nil }
+        else { live = try? await AppReplay.unrecorded { try await SSHCommand.run(executable: executable, arguments: arguments, timeout: 5) } }
+        guard let result = try? System.observe("backends", Probe(executable: executable, arguments: arguments), { live }),
               result.status == 0 else { return nil }
         let lines = String(decoding: result.output, as: UTF8.self).split(whereSeparator: \.isNewline)
         guard lines.contains("dispatch-backend:complete") else { return nil }

@@ -79,9 +79,79 @@ pub enum Data<'a> {
     Signed(i64),
     Real(f64),
     String(&'a str),
+    /// Raw bytes: the wire and captures carry them as bytes; JSON (memory only) as an integer array.
+    Bytes(&'a [u8]),
     Array(Vec<Data<'a>>),
     Object(Vec<(&'a str, Data<'a>)>),
     Value(Value<'a>),
+}
+
+/// A path is its bytes (Unix paths need not be UTF-8); `Data::path` reads it back.
+impl<'a> From<&'a std::path::Path> for Data<'a> {
+    fn from(path: &'a std::path::Path) -> Self {
+        use std::os::unix::ffi::OsStrExt;
+        Data::Bytes(path.as_os_str().as_bytes())
+    }
+}
+
+impl<'a> From<&'a str> for Data<'a> {
+    fn from(value: &'a str) -> Self {
+        Data::String(value)
+    }
+}
+impl<'a> From<&'a String> for Data<'a> {
+    fn from(value: &'a String) -> Self {
+        Data::String(value)
+    }
+}
+
+/// Reading a decoded wire value (wire::body::decode_plain): integers have one form, so a
+/// non-negative signed value arrives unsigned.
+impl<'a> Data<'a> {
+    pub fn get(&self, name: &str) -> Option<&Data<'a>> {
+        match self {
+            Data::Object(fields) => fields.iter().find(|(key, _)| *key == name).map(|(_, v)| v),
+            _ => None,
+        }
+    }
+    pub fn string(&self) -> Option<&'a str> {
+        if let Data::String(v) = self { Some(v) } else { None }
+    }
+    pub fn bytes(&self) -> Option<&'a [u8]> {
+        if let Data::Bytes(v) = self { Some(v) } else { None }
+    }
+    pub fn path(&self) -> Option<&'a std::path::Path> {
+        use std::os::unix::ffi::OsStrExt;
+        self.bytes().map(|v| std::path::Path::new(std::ffi::OsStr::from_bytes(v)))
+    }
+    pub fn boolean(&self) -> Option<bool> {
+        if let Data::Bool(v) = self { Some(*v) } else { None }
+    }
+    pub fn unsigned(&self) -> Option<u64> {
+        if let Data::Unsigned(v) = self { Some(*v) } else { None }
+    }
+    pub fn signed(&self) -> Option<i64> {
+        match self {
+            Data::Signed(v) => Some(*v),
+            Data::Unsigned(v) => i64::try_from(*v).ok(),
+            _ => None,
+        }
+    }
+    pub fn array(&self) -> Option<std::slice::Iter<'_, Data<'a>>> {
+        if let Data::Array(v) = self { Some(v.iter()) } else { None }
+    }
+    pub fn object(&self) -> Option<impl Iterator<Item = (&'a str, &Data<'a>)>> {
+        if let Data::Object(v) = self { Some(v.iter().map(|(key, value)| (*key, value))) } else { None }
+    }
+    /// Any number as f64 (Value::number).
+    pub fn number(&self) -> Option<f64> {
+        match self {
+            Data::Real(v) => Some(*v),
+            Data::Unsigned(v) => Some(*v as f64),
+            Data::Signed(v) => Some(*v as f64),
+            _ => None,
+        }
+    }
 }
 
 impl Json {

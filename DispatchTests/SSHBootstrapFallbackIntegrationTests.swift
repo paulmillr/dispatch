@@ -38,8 +38,7 @@ final class SSHBootstrapFallbackIntegrationTests: XCTestCase {
         // Force the real bootstrap's cache probe to miss even on a warm VM.
         // Otherwise an already verified helper skips upload and this fixture
         // would exercise a successful connection instead of upload fallback.
-        try script.write(to: executable, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        try System.write(Data(script.utf8), to: executable, permissions: 0o700)
         let source = try XCTUnwrap(app.workspace.activeTab?.id)
         try await app.wait { app.runtime.views[source].map { !TerminalTestSupport.screen(terminal: $0).isEmpty } == true }
         let terminal = try XCTUnwrap(app.runtime.views[source])
@@ -53,7 +52,7 @@ final class SSHBootstrapFallbackIntegrationTests: XCTestCase {
         try await TestSupport.eventually(timeout: .seconds(20), diagnostic: TerminalTestSupport.screen(terminal: terminal)) {
             TerminalTestSupport.screen(terminal: terminal).contains("FALLBACK_STATUS_23")
         }
-        XCTAssertEqual(try String(contentsOf: reached, encoding: .utf8), "reached")
+        XCTAssertEqual(String(decoding: try System.read(reached), as: UTF8.self), "reached")
         XCTAssertTrue(TerminalTestSupport.screen(terminal: terminal).contains("FALLBACK_COMMAND_OK"))
         try await app.wait { app.runtime.ssh.machine(for: source) == nil }
         XCTAssertTrue(app.runtime.ssh.links.isEmpty)

@@ -11,7 +11,7 @@ final class HerdrIntegrationTests: XCTestCase {
         defer { restoreRuntime() }
         try DesktopTestSupport.requireUnlocked()
         guard FileManager.default.isExecutableFile(atPath: TestSupport.tool("herdr")) else { throw XCTSkip("Install herdr 0.9.3 to run local integration tests.") }
-        let root = URL(fileURLWithPath: "/tmp/he-\(UUID().uuidString.prefix(8))")
+        let root = URL(fileURLWithPath: "/tmp/he-\(System.uuid().uuidString.prefix(8))")
         let bin = root.appendingPathComponent("bin alias")
         try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
         try FileManager.default.createSymbolicLink(atPath: bin.appendingPathComponent("herdr").path, withDestinationPath: TestSupport.tool("herdr"))
@@ -52,7 +52,7 @@ final class HerdrIntegrationTests: XCTestCase {
         let ids = workspace.allSurfaceIDs
         workspace.newLocalSpace()
         let alias = try await localTerminal()
-        TerminalTestSupport.send("export HERDR_SESSION=alias; " + launch.replacingOccurrences(of: "HERDR_SOCKET_PATH=herdr.sock", with: "HERDR_SOCKET_PATH=\(HerdrLaunch.quote(root.resolvingSymlinksInPath().appendingPathComponent("herdr.sock").path))") + " client --help", to: alias)
+        TerminalTestSupport.send("export HERDR_SESSION=alias; " + launch.replacingOccurrences(of: "HERDR_SOCKET_PATH=herdr.sock", with: "HERDR_SOCKET_PATH=\(HerdrLaunch.quote(System.resolve(root).appendingPathComponent("herdr.sock").path))") + " client --help", to: alias)
         try await TestSupport.eventually(timeout: .seconds(10), diagnostic: TerminalTestSupport.screen(terminal: alias)) { !workspace.allTabIDs.contains(alias.id) }
         XCTAssertEqual(workspace.spaces.count, 1, "Aliases attach to the existing native server views: \(workspace.spaces.compactMap(\.key))")
         XCTAssertEqual(workspace.allSurfaceIDs, ids)
@@ -66,30 +66,25 @@ final class HerdrIntegrationTests: XCTestCase {
         let native = runtime.views[first.id]!
         TerminalTestSupport.send("printf 'OWNER_%s\\n' NATIVE", to: native)
         try await TestSupport.eventually { TerminalTestSupport.screen(terminal: native).contains("OWNER_NATIVE") }
-        let competitor = Process(), competitorInput = Pipe()
-        competitor.executableURL = URL(fileURLWithPath: TestSupport.tool("herdr"))
-        competitor.arguments = ["terminal", "session", "control", terminalID, "--takeover", "--cols", "80", "--rows", "24"]
-        competitor.environment = ProcessInfo.processInfo.environment.merging(["HERDR_SOCKET_PATH": socket]) { _, new in new }
-        competitor.standardInput = competitorInput
-        competitor.standardOutput = FileHandle.nullDevice; competitor.standardError = FileHandle.nullDevice
-        try competitor.run()
-        defer {
-            competitorInput.fileHandleForWriting.closeFile()
-            if competitor.isRunning { competitor.terminate() }
-            competitor.waitUntilExit()
-        }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: TestSupport.tool("herdr"))
+        process.arguments = ["terminal", "session", "control", terminalID, "--takeover", "--cols", "80", "--rows", "24"]
+        process.environment = System.inherited.merging(["HERDR_SOCKET_PATH": socket]) { _, new in new }
+        process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
+        let competitor = try System.Child(process)
+        defer { competitor.stop() }
         try await TestSupport.eventually { TerminalTestSupport.screen(terminal: native).contains("disconnected") }
-        XCTAssertTrue(competitor.isRunning, "Automatic reconnect must not take over another controller")
+        XCTAssertTrue(competitor.running, "Automatic reconnect must not take over another controller")
         TerminalTestSupport.send("printf 'SHOULD_%s\\n' NOT_RUN", to: native)
         var input = try JSONSerialization.data(withJSONObject: ["type": "terminal.input", "text": "printf 'OWNER_%s\\n' EXTERNAL\r"])
-        input.append(10); try competitorInput.fileHandleForWriting.write(contentsOf: input)
+        input.append(10); try competitor.write(input)
         try await TestSupport.eventually {
             let read = try self.api(socket, "pane.read", ["pane_id": paneID, "source": "visible", "format": "text"])
             return ((read["read"] as? [String: Any])?["text"] as? String)?.contains("OWNER_EXTERNAL") == true
         }
         _ = try await PresentationTestSupport.capture(window, named: "herdr-controller-busy", in: "herdr-audit")
-        try competitorInput.fileHandleForWriting.write(contentsOf: Data("{\"type\":\"terminal.release\"}\n".utf8))
-        try await TestSupport.eventually { !competitor.isRunning }
+        try competitor.write(Data("{\"type\":\"terminal.release\"}\n".utf8))
+        try await TestSupport.eventually { !competitor.running }
         try await TestSupport.eventually { TerminalTestSupport.screen(terminal: native).contains("OWNER_EXTERNAL") }
         TerminalTestSupport.send("printf 'RECLAIM_%s · caffè 漢字\\n' NATIVE", to: native)
         try await TestSupport.eventually { TerminalTestSupport.screen(terminal: native).contains("RECLAIM_NATIVE · caffè 漢字") }
@@ -117,6 +112,8 @@ final class HerdrIntegrationTests: XCTestCase {
         workspace.newTab()
         try await TestSupport.eventually { workspace.currentTabs.count == 2 && workspace.activeTab?.isConnecting == false }
         let closing = workspace.activeTab!
+        // Its surface first: the closure must release a shown terminal (else whether it ever showed depends on drawing).
+        try await TestSupport.eventually { runtime.views[closing.id]?.surface != nil }
         _ = try api(socket, "tab.close", ["tab_id": try XCTUnwrap(workspace.windowKey(of: closing))])
         try await TestSupport.eventually { workspace.currentTabs.count == 1 && workspace.activeTab?.id != closing.id }
         XCTAssertNil(runtime.views[closing.id])
@@ -145,8 +142,8 @@ final class HerdrIntegrationTests: XCTestCase {
         defer { restoreRuntime() }
         try DesktopTestSupport.requireUnlocked()
         guard FileManager.default.isExecutableFile(atPath: TestSupport.tool("herdr")) else { throw XCTSkip("Install herdr 0.9.3 to run local integration tests.") }
-        let root = URL(fileURLWithPath: "/tmp/hh-\(UUID().uuidString.prefix(8))")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        let root = URL(fileURLWithPath: "/tmp/hh-\(System.uuid().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let socket = root.appendingPathComponent("herdr.sock").path
         let namedSocket = root.appendingPathComponent("herdr/sessions/other.session/herdr.sock").path
         let runtime = TerminalRuntime.shared, controller = AppDelegate()
@@ -186,7 +183,7 @@ final class HerdrIntegrationTests: XCTestCase {
         let firstTab = try XCTUnwrap(workspace.activeTab)
         let firstPane = try XCTUnwrap(HerdrTestSupport.pane(of: firstTab.id, in: workspace, socket: socket))
         let firstWindow = try XCTUnwrap(workspace.windowKey(of: firstTab))
-        XCTAssertEqual(URL(fileURLWithPath: firstTab.directory).resolvingSymlinksInPath().path, root.resolvingSymlinksInPath().path)
+        XCTAssertEqual(System.resolve(URL(fileURLWithPath: firstTab.directory)).path, System.resolve(root).path)
         try await TestSupport.eventually(timeout: .seconds(10)) { runtime.views[firstTab.id]?.surface != nil }
         let terminal = try XCTUnwrap(runtime.views[firstTab.id])
         try await TestSupport.eventually(timeout: .seconds(10), diagnostic: TerminalTestSupport.screen(terminal: terminal)) {

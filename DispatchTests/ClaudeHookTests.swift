@@ -29,7 +29,7 @@ final class ClaudeHookTests: XCTestCase {
     }
 
     private func session(_ chat: ChatCoordinator, conversation: String) -> ChatSession {
-        let session = chat.session(for: UUID())
+        let session = chat.session(for: System.uuid())
         session.helper = HelperChat(terminal: 0); session.sessionID = conversation
         return session
     }
@@ -37,7 +37,7 @@ final class ClaudeHookTests: XCTestCase {
     func testLivePermissionDoesNotRequirePersistedToolButRejectsContradictions() throws {
         let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
         defer { chat.stop() }
-        let conversation = UUID().uuidString, input: [String: Any] = ["file_path": "/work/test.txt"]
+        let conversation = System.uuid().uuidString, input: [String: Any] = ["file_path": "/work/test.txt"]
         let arguments = TranscriptParser.printable(input)
         let interaction = permission(conversation, call: "call", tool: "Edit", input: input)
         let tool = ChatItem(id: "tool-call", kind: .tool, text: arguments, title: "Edit")
@@ -71,7 +71,7 @@ final class ClaudeHookTests: XCTestCase {
     func testLiveQuestionsAssociateOnlyWithTheAcknowledgedMatchingTool() throws {
         let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
         defer { chat.stop() }
-        let conversation = UUID().uuidString
+        let conversation = System.uuid().uuidString
         let input: [String: Any] = ["questions": [["question": "Which example?", "header": "Example",
             "options": [["label": "Swift"], ["label": "Rust"]]]]]
         let interaction: [String: Any] = ["id": conversation + ":call", "record": "tool-call", "approval": false, "blocking": true, "questions": [[
@@ -105,7 +105,7 @@ final class ClaudeHookTests: XCTestCase {
     func testPermissionEventValidationAndRequestWithoutToolID() throws {
         let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
         defer { chat.stop() }
-        let conversation = UUID().uuidString
+        let conversation = System.uuid().uuidString
         let session = session(chat, conversation: conversation)
         try deliver(permission(conversation, call: nil, tool: "Edit", input: ["file_path": "/work/test.txt"]), to: session, chat: chat)
         XCTAssertEqual(session.transcriptRows.compactMap(\.approval).map(\.turnID), [nil])
@@ -127,11 +127,11 @@ final class ClaudeHookTests: XCTestCase {
     // Installation (the old AgentHookSetup) is the claude harness's installation.install into the test home's
     // Claude settings; the app installs through HelperChat.setup, as setHelperIntegration does.
 
-    private var config: URL { Home.url.appendingPathComponent(".claude/settings.json") }
+    private var config: URL { System.home.appendingPathComponent(".claude/settings.json") }
 
     /// Runs `body` on the test home's Claude settings, restoring the previous file and installation after.
     private func settings(_ body: () async throws -> Void) async throws {
-        let fm = FileManager.default, previous = try? Data(contentsOf: config)
+        let fm = FileManager.default, previous = try? System.read(config)
         try fm.createDirectory(at: config.deletingLastPathComponent(), withIntermediateDirectories: true)
         defer { if let previous { try? previous.write(to: config) } else { try? fm.removeItem(at: config) } }
         try await body()
@@ -147,7 +147,7 @@ final class ClaudeHookTests: XCTestCase {
     private func command() async throws -> String {
         try? FileManager.default.removeItem(at: config)
         try await install(true)
-        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: config)) as? NSDictionary)
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: System.read(config)) as? NSDictionary)
         let command = try XCTUnwrap(root.value(forKeyPath: "hooks.PermissionRequest") as? [NSDictionary])
         return try XCTUnwrap((command.first?["hooks"] as? [NSDictionary])?.first?["command"] as? String)
     }
@@ -159,22 +159,22 @@ final class ClaudeHookTests: XCTestCase {
                 ["matcher": "Bash", "hooks": [["type": "command", "command": "other hook", "timeout": 7]]],
                 ["hooks": [["type": "command", "command": command, "timeout": 60]]]
             ]]]
-            try JSONSerialization.data(withJSONObject: original).write(to: config)
+            try System.write(JSONSerialization.data(withJSONObject: original), to: config)
             let audit = try await install(nil)
             XCTAssertEqual(audit.installed, true, "An earlier approval opt-in counts as installed")
             try await install(true)
-            let root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: config)) as? [String: Any])
+            let root = try XCTUnwrap(JSONSerialization.jsonObject(with: System.read(config)) as? [String: Any])
             let hooks = try XCTUnwrap(root["hooks"] as? [String: [[String: Any]]])
             XCTAssertEqual(Set(hooks.keys), ["PermissionRequest", "PreToolUse", "SessionStart", "SessionEnd",
                                            "UserPromptSubmit", "PostToolUse", "SubagentStart", "SubagentStop", "Stop"])
-            let once = try Data(contentsOf: config)
+            let once = try System.read(config)
             try await install(true)
-            XCTAssertEqual(try Data(contentsOf: config), once)
+            XCTAssertEqual(try System.read(config), once)
             try await install(false)
             let expected: [String: Any] = ["model": "custom", "hooks": ["PermissionRequest": [
                 ["matcher": "Bash", "hooks": [["type": "command", "command": "other hook", "timeout": 7]]]
             ]]]
-            XCTAssertEqual(try JSONSerialization.jsonObject(with: Data(contentsOf: config)) as? NSDictionary, expected as NSDictionary)
+            XCTAssertEqual(try JSONSerialization.jsonObject(with: System.read(config)) as? NSDictionary, expected as NSDictionary)
         }
     }
 
@@ -182,30 +182,30 @@ final class ClaudeHookTests: XCTestCase {
         try await settings {
             _ = try await command()
             let original = Data(#"{"model":"mine","permissions":{"deny":["Read(secret)"]},"hooks":{"PermissionRequest":[{"matcher":"Bash","hooks":[{"type":"command","command":"echo mine","timeout":7}]}]}}"#.utf8)
-            try original.write(to: config)
-            let trust = Home.url.appendingPathComponent(".claude.json"), previousTrust = try? Data(contentsOf: trust)
+            try System.write(original, to: config)
+            let trust = System.home.appendingPathComponent(".claude.json"), previousTrust = try? System.read(trust)
             defer { if let previousTrust { try? previousTrust.write(to: trust) } else { try? FileManager.default.removeItem(at: trust) } }
             let trustData = Data(#"{"projects":{"mine":{"hasTrustDialogAccepted":false}}}"#.utf8)
-            try trustData.write(to: trust)
+            try System.write(trustData, to: trust)
             try await install(true)
             let audit = try await install(nil)
             XCTAssertEqual(audit.installed, true)
-            let root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: config)) as? NSDictionary)
+            let root = try XCTUnwrap(JSONSerialization.jsonObject(with: System.read(config)) as? NSDictionary)
             let questions = try XCTUnwrap(root.value(forKeyPath: "hooks.PreToolUse") as? [NSDictionary])
             XCTAssertEqual(questions.first?["matcher"] as? String, "AskUserQuestion", "Questions are installed too")
-            let installed = try Data(contentsOf: config)
+            let installed = try System.read(config)
             try await install(true)
-            XCTAssertEqual(try Data(contentsOf: config), installed)
+            XCTAssertEqual(try System.read(config), installed)
             try await install(false)
             let removed = try await install(nil)
             XCTAssertEqual(removed.installed, false)
-            XCTAssertEqual(try JSONSerialization.jsonObject(with: Data(contentsOf: config)) as? NSDictionary,
+            XCTAssertEqual(try JSONSerialization.jsonObject(with: System.read(config)) as? NSDictionary,
                            try JSONSerialization.jsonObject(with: original) as? NSDictionary)
-            XCTAssertEqual(try Data(contentsOf: trust), trustData)
+            XCTAssertEqual(try System.read(trust), trustData)
             let malformed = Data(#"{"hooks":[]}"#.utf8)
-            try malformed.write(to: config)
+            try System.write(malformed, to: config)
             do { try await install(true); XCTFail("Malformed settings must not be repaired") } catch {}
-            XCTAssertEqual(try Data(contentsOf: config), malformed)
+            XCTAssertEqual(try System.read(config), malformed)
         }
     }
 
@@ -213,11 +213,11 @@ final class ClaudeHookTests: XCTestCase {
         try await settings {
             let command = try await command()
             let legacy: [String: Any] = ["hooks": ["PermissionRequest": [["hooks": [["type": "command", "command": command, "timeout": 60]]]]]]
-            try JSONSerialization.data(withJSONObject: legacy).write(to: config)
+            try System.write(JSONSerialization.data(withJSONObject: legacy), to: config)
             let audit = try await install(nil)
             XCTAssertEqual(audit.installed, true)
             try await install(true)
-            let root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: config)) as? [String: Any])
+            let root = try XCTUnwrap(JSONSerialization.jsonObject(with: System.read(config)) as? [String: Any])
             let hooks = try XCTUnwrap(root["hooks"] as? [String: [[String: Any]]])
             XCTAssertEqual(hooks["PreToolUse"]?.first?["matcher"] as? String, "AskUserQuestion")
         }
@@ -229,17 +229,17 @@ final class ClaudeHookTests: XCTestCase {
         try DesktopTestSupport.requireUnlocked()
         let fm = FileManager.default
         let claude = try XCTUnwrap([TestSupport.tool("claude")].first { fm.isExecutableFile(atPath: $0) })
-        let state = fm.temporaryDirectory.appendingPathComponent("dispatch-claude-approval-" + UUID().uuidString)
+        let state = System.temporary.appendingPathComponent("dispatch-claude-approval-" + System.uuid().uuidString)
         let script = CodexTestSupport.root.appendingPathComponent("scripts/claude_fixture.py").path
         let server = Process(); server.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
         server.arguments = [script, "serve", "--state", state.path, "--delay", "0.01"]
         server.standardOutput = FileHandle.nullDevice; server.standardError = FileHandle.nullDevice
-        try server.run()
+        let child = try System.Child(server)
         defer {
-            if server.isRunning { server.terminate(); server.waitUntilExit() }
+            child.stop()
             print("Claude approval fixture: " + state.path)
         }
-        try await TestSupport.eventually { fm.fileExists(atPath: state.appendingPathComponent("endpoint.json").path) }
+        try await TestSupport.eventually { System.exists(state.appendingPathComponent("endpoint.json")) }
         let runtime = TerminalRuntime.shared, controller = AppDelegate(), previousChat = runtime.chat
         runtime.chat = ChatCoordinator(enabled: true)
         try await TestSupport.integrations(["claude"], enabled: true, chat: runtime.chat)
@@ -263,9 +263,9 @@ final class ClaudeHookTests: XCTestCase {
         defer { print("Claude approval final state: \(session.status ?? "none") / \(session.submissionFailure ?? "none")\n\(terminal.agentMenuScreen)") }
         session.manualViewChoice = true
         // Claude reads the configuration the helper installed its integration into (the test home's).
-        try TestSupport.trustClaudeWorkspace(state.appendingPathComponent("work"), config: Home.url.appendingPathComponent(".claude"))
+        try TestSupport.trustClaudeWorkspace(state.appendingPathComponent("work"), config: System.home.appendingPathComponent(".claude"))
         TerminalTestSupport.send(["python3", script, "launch", "--state", state.path, "--claude", claude, "--integration", "--hooks",
-            "--config", Home.url.appendingPathComponent(".claude").path].map(HerdrLaunch.quote).joined(separator: " "), to: terminal)
+            "--config", System.home.appendingPathComponent(".claude").path].map(HerdrLaunch.quote).joined(separator: " "), to: terminal)
         try await TestSupport.eventually(timeout: .seconds(15), diagnostic: terminal.agentMenuScreen) {
             session.active && session.agentID == "claude" && !session.loadingHistory && !session.busy && terminal.agentMenuScreen.contains("for shortcuts")
         }
@@ -288,7 +288,7 @@ final class ClaudeHookTests: XCTestCase {
             if let turn = approval.turnID {
                 XCTAssertEqual(turn, session.turns.last(where: { $0.items.contains { $0.kind == .user && $0.text == "permission tool " + decision.rawValue } })?.id)
             }
-            XCTAssertFalse(fm.fileExists(atPath: marker.path))
+            XCTAssertFalse(System.exists(marker))
             if decision == .deny {
                 var visible = false
                 for _ in 0..<12 where !visible {
@@ -306,16 +306,16 @@ final class ClaudeHookTests: XCTestCase {
             try await TestSupport.eventually(timeout: .seconds(15), diagnostic: terminal.agentMenuScreen) {
                 !session.busy && session.turns.flatMap(\.items).contains { $0.kind == .assistant && $0.text.contains("Tool result received: " + expected) }
             }
-            XCTAssertEqual(fm.fileExists(atPath: marker.path), decision == .allow)
+            XCTAssertEqual(System.exists(marker), decision == .allow)
         }
         // Revoke an already-held request; its previous card cannot approve.
-        try fm.removeItem(at: marker)
+        try System.remove(marker)
         session.draft = "permission tool revoke"; runtime.chat.submit(session)
         try await TestSupport.eventually(timeout: .seconds(15), diagnostic: terminal.agentMenuScreen) { session.approvals.contains(where: \.pending) }
         let revoked = try XCTUnwrap(session.approvals.last(where: \.pending))
         runtime.chat.setHelperIntegration("claude", enabled: false)
         XCTAssertFalse(revoked.pending); revoked.resolve(.allow)
-        XCTAssertFalse(fm.fileExists(atPath: marker.path))
+        XCTAssertFalse(System.exists(marker))
         try await TestSupport.eventually { runtime.chat.hookStatus("claude") == .off }
         revokedIntegration = true
         // The unanswered request returns to Claude's native permission UI.

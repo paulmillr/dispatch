@@ -129,7 +129,7 @@ final class PlanOnePresentationTests: XCTestCase {
         AppFont.register()
         let workspace = Workspace(); workspace.newSpace()
         for _ in 0..<3 { workspace.newTab() }
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let directory = System.temporary.appendingPathComponent(System.uuid().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         try "let key = event.id\nawait remember(key)\n".write(to: directory.appendingPathComponent("billing.swift"), atomically: true, encoding: .utf8)
@@ -153,7 +153,7 @@ final class PlanOnePresentationTests: XCTestCase {
     }
     func testSourcePreviewRefreshesWhenDocumentChangesAndClearsFailedContent() async throws {
         AppFont.register()
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let directory = System.temporary.appendingPathComponent(System.uuid().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         try "Original source contents".write(to: directory.appendingPathComponent("first.txt"), atomically: true, encoding: .utf8)
@@ -184,8 +184,8 @@ final class PlanOnePresentationTests: XCTestCase {
     }
 
     func testChatKeepsEarlierTurnsInNativeRender() async throws {
-        let coordinator = ChatCoordinator(enabled: true); let session = coordinator.session(for: UUID())
-        session.active = true; session.sessionID = UUID().uuidString; session.showChat = true
+        let coordinator = ChatCoordinator(enabled: true); let session = coordinator.session(for: System.uuid())
+        session.active = true; session.sessionID = System.uuid().uuidString; session.showChat = true
         session.insert(ChatItem(id: "first", kind: .user, text: "Original visible message"), turnID: "first")
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 916, height: 702), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false

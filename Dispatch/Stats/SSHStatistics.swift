@@ -39,7 +39,7 @@ struct SSHStatisticsRates {
 
     mutating func reset() { previous = nil; generation = nil }
 
-    mutating func sample(_ counters: SSHStatisticsCounters, connection: SSHConnectionID, date: Date = Date()) -> SSHStatisticsSample {
+    mutating func sample(_ counters: SSHStatisticsCounters, connection: SSHConnectionID, date: Date = System.date()) -> SSHStatisticsSample {
         var sample = SSHStatisticsSample(date: date, counters: counters)
         defer { previous = counters; generation = connection }
         guard counters.monotonic.isFinite, let old = previous, generation == connection,

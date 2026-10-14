@@ -21,7 +21,7 @@ final class ChatRowCacheTests: XCTestCase {
     }
 
     func testPrependingBeyond256TurnsKeepsUnchangedGroupPresentations() {
-        let session = ChatSession(id: UUID())
+        let session = ChatSession(id: System.uuid())
         session.turns = (0..<300).map { turn("turn-\($0)") }
         let before = groupPresentations(session)
         session.turns.insert(turn("older"), at: 0)
@@ -41,7 +41,7 @@ final class ChatRowCacheTests: XCTestCase {
     }
 
     func testTimestampCorrectionRefreshesReplyWithoutRebuildingOtherTurns() {
-        let session = ChatSession(id: UUID()), start = Date(timeIntervalSince1970: 1_750_000_000)
+        let session = ChatSession(id: System.uuid()), start = Date(timeIntervalSince1970: 1_750_000_000)
         session.insert(ChatItem(id: "prompt", kind: .user, text: "Question"), turnID: "one", at: start)
         let reply = ChatItem(id: "reply", kind: .assistant, text: "Working")
         session.insert(reply, turnID: "one", at: start.addingTimeInterval(60))
@@ -58,7 +58,7 @@ final class ChatRowCacheTests: XCTestCase {
     }
 
     func testApprovalsAndOptimisticPromptKeepExistingGroupPresentations() {
-        let session = ChatSession(id: UUID())
+        let session = ChatSession(id: System.uuid())
         session.turns = [turn("one"), turn("two")]
         let before = groupPresentations(session)
         let approval = PendingApproval(key: "approval", operation: "echo hello", turnID: "one") { _ in }
@@ -76,7 +76,7 @@ final class ChatRowCacheTests: XCTestCase {
     }
 
     func testGeometryPruningRetainsRevisionsSharedBySurvivingTurns() {
-        let session = ChatSession(id: UUID()), shared = tool("shared"), typography = ChatTypography()
+        let session = ChatSession(id: System.uuid()), shared = tool("shared"), typography = ChatTypography()
         session.turns = [ChatTurn(id: "one", items: [shared]), ChatTurn(id: "two", items: [shared])]
         _ = session.transcriptRows
         session.toolLayouts.remember(CGSize(width: 500, height: 240), for: shared.presentationID, typography: typography)
@@ -106,7 +106,7 @@ final class ChatRowCacheTests: XCTestCase {
     }
 
     func testTimingOnlyUpdatesPreserveProjectedToolFormattingIdentity() throws {
-        let session = ChatSession(id: UUID()), start = Date(timeIntervalSince1970: 1_750_000_000)
+        let session = ChatSession(id: System.uuid()), start = Date(timeIntervalSince1970: 1_750_000_000)
         let wrapper = ChatItem(id: "wrapper", kind: .tool,
                                text: #"text(await tools.exec_command({cmd:"echo hello"}));"#,
                                title: "exec", output: "hello", completed: true)

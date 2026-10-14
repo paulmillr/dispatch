@@ -1,4 +1,4 @@
-use crate::{api::*, json::Json, system::System, wire};
+use crate::{api::*, system::System, wire};
 use std::{
     cell::{Cell, RefCell},
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -26,6 +26,8 @@ const OUTPUT: usize = 4 * FRAME;
 const DETACHED_IDLE: Duration = Duration::from_secs(24 * 60 * 60);
 /// Timer section of the detached login's idle deadline.
 const DETACHED: &str = "login.detached";
+/// A stdio helper's SIGTERM: the app's close after its grace (HelperSession.close).
+const TERMINATED: &str = "terminated";
 
 #[derive(Clone)]
 enum Scope {
@@ -47,7 +49,6 @@ pub struct DispatchHelper {
     pub(crate) admitted: BTreeMap<(RawFd, u64), (Vec<&'static str>, Rc<Cell<bool>>)>,
     /// Bound startup shell, also used when a terminal request supplies only cwd.
     pub shell: std::path::PathBuf,
-    pub(crate) execution: Vec<std::ffi::OsString>,
     pub(crate) default: Option<(usize, String)>,
     pub(crate) harnesses: Vec<Shared<dyn Harness>>,
     pub(crate) multiplexers: Vec<Shared<dyn Multiplexer>>,
@@ -69,13 +70,14 @@ pub struct DispatchHelper {
     pub(crate) typed: BTreeMap<usize, String>,
     /// host.identity facts of the machine this helper runs on (local Mac or a server the app
     /// reached over ssh), collected once; hello requests wait for them.
-    pub(crate) identity: Option<Json>,
+    /// Its encoded value (wire::body plain grammar), embedded in hello as is.
+    pub(crate) identity: Option<Vec<u8>>,
     pub(crate) identity_job: Option<Work>,
     /// Shell integration for default shells, where hooks are allowed (see `startup`).
     pub(crate) integration: Option<crate::system::startup::Integration>,
     /// Startup directories prepared so far; names them under Io::directory.
     pub(crate) startups: u64,
-    pub(crate) hellos: Vec<(RawFd, u64, Rc<Json>)>,
+    pub(crate) hellos: Vec<(RawFd, u64, Rc<wire::body::Encoded>)>,
     pub(crate) installs: crate::dispatch::Installs,
     pub(crate) archives: crate::dispatch::Archives,
     pub(crate) sides: crate::dispatch::Sides,
@@ -409,7 +411,7 @@ impl Ui for Updates<'_> {
                             "terminal",
                             &crate::dispatch::reference(self.module, terminal),
                         ),
-                        ("bytes", &crate::encode::base64(&bytes)),
+                        ("bytes", &crate::encode::Bytes(&bytes)),
                     ],
                 )
             }
@@ -486,7 +488,7 @@ impl Ui for Updates<'_> {
                 ],
             ),
             Update::Clipboard { bytes } => {
-                crate::encode::notify("clipboard", &[("bytes", &crate::encode::base64(&bytes))])
+                crate::encode::notify("clipboard", &[("bytes", &crate::encode::Bytes(&bytes))])
             }
             Update::Scroll {
                 terminal,
@@ -595,7 +597,6 @@ impl DispatchHelper {
             admitted: BTreeMap::new(),
             windows: Default::default(),
             shell: std::env::var_os("SHELL").unwrap_or("/bin/sh".into()).into(),
-            execution: System::command(),
             default: None,
             harnesses: Vec::new(),
             multiplexers: Vec::new(),
@@ -788,7 +789,7 @@ impl DispatchHelper {
         self.default = index.map(|index| (index, key.to_owned()));
     }
 
-    pub(crate) fn route(&self, params: crate::json::Value<'_>) -> usize {
+    pub(crate) fn route(&self, params: &crate::json::Data<'_>) -> usize {
         params
             .get("mux")
             .and_then(|v| v.unsigned())
@@ -1020,7 +1021,7 @@ impl DispatchHelper {
         // processes, or when the nearest tty among them is one of this helper's terminals; its
         // binding here ranks this helper first among owners.
         let (nodes, me) = (self.nodes.clone(), system.pid());
-        system.owner(Box::new(move |chain| {
+        let owner = move |chain: &[(u32, u64)]| -> Option<bool> {
             let nodes = nodes.borrow();
             let bound = chain.iter().any(|&(pid, _)| {
                 nodes.values().any(|(_, node)| {
@@ -1035,7 +1036,7 @@ impl DispatchHelper {
                     pid == me || nodes.values().any(|(_, node)| node.tty == Some(tty))
                 });
             owned.then_some(bound)
-        }));
+        };
         // Typed startup setup must be discoverable before Chat observes an agent.
         for index in 0..self.harnesses.len() {
             system.section(&format!("harness/{index}"));
@@ -1142,6 +1143,11 @@ impl DispatchHelper {
             let (read, write) = system.stdio()?;
             clients.insert(read, Client::new(write));
             system.interest(read, true, false)?;
+            // Ended in order, not killed: the capture keeps everything recorded up to the signal.
+            system.section(TERMINATED);
+            let signals = system.signals(&[15], false)?;
+            system.interest(signals, true, false)?;
+            system.section("startup");
         }
         let mut observers = Vec::new();
         let replies: Replies = Rc::new(RefCell::new(VecDeque::new()));
@@ -1210,6 +1216,7 @@ impl DispatchHelper {
             if !self.hellos.is_empty() && self.answerable() {
                 for (fd, id, document) in std::mem::take(&mut self.hellos) {
                     system.section("ui");
+                    let root = document.root();
                     let result = crate::dispatch::Request {
                         helper: &mut self,
                         io: &mut system,
@@ -1218,10 +1225,7 @@ impl DispatchHelper {
                         fd,
                         id,
                     }
-                    .dispatch(
-                        "hello",
-                        document.root().get("params").unwrap_or(document.root()),
-                    );
+                    .dispatch("hello", root.get("params").unwrap_or(&root));
                     if let Err(error) = result {
                         failure(&replies, fd, id, error);
                     }
@@ -1331,7 +1335,7 @@ impl DispatchHelper {
                 {
                     client
                         .messages
-                        .push_back(wire::Message::json(kind, id, body));
+                        .push_back(wire::Message::value(kind, id, body));
                 }
             }
             for (fd, id, done) in self.drains.borrow_mut().drain(..) {
@@ -1438,9 +1442,8 @@ impl DispatchHelper {
                         }
                     }
                 }
-                if let Some(status) = exited.filter(|_| clients.is_empty()) {
-                    system.finish_replay()?;
-                    return Ok(status);
+                if let Some((status, natural)) = exited.filter(|_| clients.is_empty()) {
+                    return Ok((system.finish(status)?, natural));
                 }
                 system.interest(
                     listener.unwrap(),
@@ -1464,11 +1467,27 @@ impl DispatchHelper {
                 result => result?,
             };
             system.section(&section);
+            if section == TERMINATED {
+                return Ok((system.finish(128 + 15)?, false));
+            }
+            if section == crate::system::hooks::OWNER {
+                if let Event::Hook { message, reply: Some(reply), .. } = event {
+                    // None: not this helper's; else whether the agent is bound here.
+                    let bound = crate::system::hooks::chain(&message).and_then(|chain| owner(&chain));
+                    let answer = wire::body::encode_plain(&crate::json::Data::Object(vec![
+                        ("owned", crate::json::Data::Bool(bound.is_some())),
+                        ("bound", crate::json::Data::Bool(bound == Some(true))),
+                    ]))
+                    .map_err(|error| io::Error::other(error.message))?;
+                    // A sender that left meanwhile has no reply to take.
+                    let _ = system.reply(reply, &answer);
+                }
+                continue;
+            }
             if section == DETACHED {
-                if let (Event::Timer { .. }, Some(last), Some(status)) = (&event, traffic, exited) {
+                if let (Event::Timer { .. }, Some(last), Some((status, natural))) = (&event, traffic, exited) {
                     if system.now() >= last + DETACHED_IDLE {
-                        system.finish_replay()?;
-                        return Ok(status);
+                        return Ok((system.finish(status)?, natural));
                     }
                     detached(&mut system, last + DETACHED_IDLE);
                 }
@@ -1478,7 +1497,7 @@ impl DispatchHelper {
             if section == "launch" {
                 match event {
                     Event::Hook { peer: Some(peer), message, reply: Some(reply), .. } => {
-                        let program = Json::parse(&message).ok().and_then(|doc| doc.root().get("program").and_then(|v| v.string()).map(str::to_owned));
+                        let program = wire::body::decode_plain(&message).ok().and_then(|value| value.get("program").and_then(|v| v.string()).map(str::to_owned));
                         if let Some(program) = program {
                             self.launch(&mut system, &program, peer, reply, replies.clone(), &observers);
                         } else {
@@ -1496,14 +1515,7 @@ impl DispatchHelper {
             }
             if let Some(index) = section.strip_prefix("setup/harness/").and_then(|n| n.parse::<usize>().ok()) {
                 if let Event::Hook { peer, reply: Some(reply), .. } = event {
-                    let done: Done<bool> = Box::new(move |io, result| {
-                        use crate::json::{self, Data};
-                        let body = match &result {
-                            Ok(enabled) => Data::Object(vec![("enabled", Data::Bool(*enabled))]),
-                            Err(error) => Data::Object(vec![("error", Data::String(&error.message))]),
-                        };
-                        if let Ok(bytes) = json::write(&body) { let _ = io.reply(reply, &bytes); }
-                    });
+                    let done: Done<bool> = Box::new(move |io, result| { let _ = crate::probe::answer(io, reply, result); });
                     match peer {
                         Some(peer) => self.setup(&mut system, index, peer, done),
                         None => done(&mut system, Err(Error { code: "setup", message: "Cannot verify launch socket peer".into() })),
@@ -1602,9 +1614,7 @@ impl DispatchHelper {
                 && Some(*work) == self.identity_job
             {
                 self.identity = Some(match result {
-                    Ok(Output::Bytes(bytes)) => {
-                        Json::parse(bytes).map_err(|error| io::Error::other(error.message))?
-                    }
+                    Ok(Output::Value(value)) => value.clone(),
                     Err(error) => return Err(io::Error::new(error.kind(), error.to_string())),
                     _ => return Err(io::ErrorKind::InvalidData.into()),
                 });
@@ -1649,6 +1659,12 @@ impl DispatchHelper {
                 match system.read(fd, &mut bytes) {
                     Ok(0) => {
                         self.cancel_creations(&mut system, fd, None);
+                        // A stdio helper ends with its only client: the control streams it fed end now, so a
+                        // command waiting on one fails instead of holding the helper open after EOF. A login
+                        // helper outlives its clients; their streams keep their reconnect behavior.
+                        if listener.is_none() {
+                            self.controls.borrow_mut().leave(fd);
+                        }
                         client.eof = true;
                         let ids: BTreeSet<_> = observers
                             .iter()
@@ -1704,12 +1720,12 @@ impl DispatchHelper {
                                 client.failed = true;
                                 break;
                             }
-                            match wire::body::decode(&body).and_then(|value| value.root().write()) {
+                            match wire::body::Encoded::wire(body) {
                                 Ok(body) => self.request(
                                     &mut system,
                                     fd,
                                     header.id,
-                                    &body,
+                                    Rc::new(body),
                                     &replies,
                                     &mut observers,
                                 ),
@@ -1785,8 +1801,7 @@ impl DispatchHelper {
                     system.close(write);
                 }
                 if listener.is_none() {
-                    system.finish_replay()?;
-                    return Ok((0, false));
+                    return Ok((system.finish(0)?, false));
                 }
             } else {
                 system.section("ui");
@@ -1849,15 +1864,14 @@ impl DispatchHelper {
         system: &mut System,
         fd: RawFd,
         id: u64,
-        body: &[u8],
+        document: Rc<wire::body::Encoded>,
         replies: &Replies,
         observers: &mut Vec<Observer>,
     ) {
         let result = (|| {
-            let document = Rc::new(Json::parse(body)?);
             let root = document.root();
             let (method, params) =
-                crate::dispatch::parameters(root, |method| self.allowed(method))?;
+                crate::dispatch::parameters(&root, |method| self.allowed(method))?;
             let mut grants = vec![login::required(method)];
             if ["mux", "terminal", "node", "parent"]
                 .iter()

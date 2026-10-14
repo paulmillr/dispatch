@@ -158,7 +158,7 @@ struct Preferences: Codable, Equatable {
     var attentionNotifications = true
     var attentionDockBadge = true
     var attentionSound = true
-    var startingDirectory = NSHomeDirectory()
+    var startingDirectory = System.home.path
 
     func resolvedTheme(systemIsDark: Bool) -> String {
         let selected = appTheme.isDark(systemIsDark: systemIsDark) ? theme : lightTheme
@@ -260,40 +260,36 @@ struct Preferences: Codable, Equatable {
     }
 }
 
-/// Where the app's files live: the user's home, or one fresh home per test run (DISPATCH_TESTING:
+/// Where the app's files live: the user's home, or one fresh home per test run (System.testing:
 /// the test host is the app itself), so tests never touch the user's files, Dispatch's own or the
 /// agent homes it installs hooks into.
 enum Home {
-    static let testing = ProcessInfo.processInfo.environment["DISPATCH_TESTING"] == "1"
-    static let url = testing ? URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("dispatch-home-" + UUID().uuidString)
-        : URL(fileURLWithPath: NSHomeDirectory())
-    /// The variables that move the agents' homes (CODEX_HOME...): the app's, none while testing.
-    static var environment: [String: String] { testing ? [:] : ProcessInfo.processInfo.environment }
     /// Dispatch's own files.
-    static var support: URL { url.appendingPathComponent("Library/Application Support/Dispatch") }
+    static var support: URL { System.home.appendingPathComponent("Library/Application Support/Dispatch") }
 
     /// Background agents must not inherit the application's working directory.
     static func agentDirectory(_ known: String?) throws -> URL {
         if let known, known.hasPrefix("/") { return URL(fileURLWithPath: known) }
-        let directory = support.appendingPathComponent("Agents/" + UUID().uuidString)
+        let directory = support.appendingPathComponent("Agents/" + System.uuid().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
                                                attributes: [.posixPermissions: 0o700])
         return directory
     }
 
-    /// While testing, this process's own environment moves to the test home (HOME there, no
+    /// While testing, this process's own environment moves to the test home (HOME there, the test PATH, no
     /// variables that move an agent's home): every process it starts, however, inherits it.
     static func isolate() {
-        guard testing else { return }
-        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        setenv("HOME", url.path, 1)
+        guard System.testing else { return }
+        try? FileManager.default.createDirectory(at: System.home, withIntermediateDirectories: true)
+        setenv("HOME", System.home.path, 1)
+        setenv("PATH", System.path, 1)
         for name in ["CODEX_HOME", "CLAUDE_CONFIG_DIR", "PI_CODING_AGENT_DIR"] { unsetenv(name) }
     }
 }
 
 extension UserDefaults {
     /// The app's defaults: none while testing, so its stores never persist into the user's own.
-    static var app: UserDefaults? { Home.testing ? nil : .standard }
+    static var app: UserDefaults? { System.testing ? nil : .standard }
 }
 
 @MainActor @Observable

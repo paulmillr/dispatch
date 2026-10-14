@@ -107,22 +107,18 @@ impl Herdr {
             );
             return;
         }
-        let input = json::write(&D::Object(vec![(
-            "path",
-            D::String(&self.config.socket.to_string_lossy()),
-        )]))
-        .unwrap();
+        let input = body::encode_plain(&D::Object(vec![("path", D::from(self.config.socket.as_path()))])).unwrap();
         self.checking = true;
         self.job(
             io,
             Job::Native {
                 name: "file.lstat",
-                input,
+                value: input,
             },
             Box::new(move |mux, io, result| {
                 mux.checking = false;
                 let result = auth::document(result)
-                    .and_then(|json| auth::socket(json.root(), mux.config.uid));
+                    .and_then(|value| auth::socket(&value.root(), mux.config.uid));
                 match result {
                     Ok(socket)
                         if !mux
@@ -367,8 +363,9 @@ impl Herdr {
     }
     pub(super) fn apply(&mut self, io: &mut dyn Io, json: &Json) -> Result<(), Error> {
         let value = field(json.root(), "snapshot")?;
-        // Events may arrive after an independent, newer snapshot reply. Publish events
-        // immediately, but never carry their cached selection over this native snapshot.
+        // Events lag the replies (herdr sends them in batches): a focus event can name a selection older than
+        // a snapshot already published. Focus is published from the snapshot each event batch refreshes, so the
+        // published focus never goes back to an earlier one.
         let snapshot = Snapshot::read(value)?;
         let (mut nodes, layouts) = self.graph.topology(self.backend, &snapshot)?;
         for node in &mut nodes {
@@ -570,51 +567,6 @@ impl Herdr {
         (modern, panes)
     }
     pub(super) fn received(&mut self, io: &mut dyn Io, lines: Vec<Vec<u8>>, eof: bool) {
-        let mut focused = false;
-        for line in &lines {
-            let Ok(json) = Json::parse(line) else {
-                continue;
-            };
-            let event = json.root();
-            let Some(level) = native::focus(event) else {
-                continue;
-            };
-            let Some(data) = event.get("data") else {
-                continue;
-            };
-            let mut selection = self.selection.clone();
-            for (index, key) in ["workspace_id", "tab_id", "pane_id"].iter().enumerate() {
-                if let Some(value) = data.get(key).and_then(Value::string) {
-                    selection[index] = Some(value.to_owned());
-                } else if index >= level {
-                    selection[index] = None;
-                }
-            }
-            if level == 2
-                && let Some(pane) = self
-                    .snapshot
-                    .panes
-                    .iter()
-                    .find(|pane| selection[2].as_ref() == Some(&pane.key))
-            {
-                selection[1] = Some(pane.parent.clone());
-            }
-            if level >= 1
-                && let Some(tab) = self
-                    .snapshot
-                    .tabs
-                    .iter()
-                    .find(|tab| selection[1].as_ref() == Some(&tab.key))
-            {
-                selection[0] = Some(tab.parent.clone());
-            }
-            self.selection = selection;
-            focused = true;
-        }
-        if focused {
-            self.snapshot.select(&self.selection);
-            self.topology();
-        }
         let lost = lines.iter().any(|line| {
             Json::parse(line).ok().is_some_and(|json| {
                 json.root()

@@ -37,7 +37,7 @@ final class TerminalFPSBenchmarkTests: XCTestCase {
             let producer = directory.appendingPathComponent("\(label)-\(mode)-producer.json")
             let command = [python, CodexTestSupport.root.appendingPathComponent("test/fixtures/terminal_fps.py").path,
                            mode, producer.path].map(HerdrLaunch.quote).joined(separator: " ")
-            let terminal = TerminalView(id: UUID(), directory: "/tmp", launchCommand: command, presentation: .standalone)
+            let terminal = TerminalView(id: System.uuid(), directory: "/tmp", launchCommand: command, presentation: .standalone)
             let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 1200, height: 800),
                                   styleMask: [.titled], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false

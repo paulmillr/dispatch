@@ -6,8 +6,9 @@ use crate::{
 };
 use dispatch_helper_core::{
     api::*,
-    json::{self, Data, Json, Kind},
+    json::{Data, Json},
     rpc::{Line, Reverse},
+    wire::body::Encoded,
 };
 use std::{cell::RefCell, collections::BTreeMap, path::PathBuf, rc::Rc};
 
@@ -570,9 +571,12 @@ struct Cursor {
 }
 
 impl Cursor {
-    fn write(&self) -> String {
+    fn write(&self) -> Option<Encoded> {
         fn text(value: &Option<String>) -> Data<'_> {
             value.as_deref().map_or(Data::Null, Data::String)
+        }
+        fn value(value: &Option<Encoded>) -> Data<'_> {
+            value.as_ref().map_or(Data::Null, Encoded::root)
         }
         let state = &self.state;
         let fields = vec![
@@ -586,20 +590,22 @@ impl Cursor {
             ("busy", Data::Bool(state.busy)),
             ("model", text(&state.model)),
             ("effort", text(&state.effort)),
-            ("usage", text(&state.usage)),
-            ("goal", text(&state.goal)),
+            ("usage", value(&state.usage)),
+            ("goal", value(&state.goal)),
         ];
-        String::from_utf8(json::write(&Data::Object(fields)).unwrap_or_default())
-            .unwrap_or_default()
+        Encoded::value(&Data::Object(fields)).ok()
     }
 
-    fn read(text: &str) -> Option<Self> {
-        let document = Json::parse(text.as_bytes()).ok()?;
-        let root = document.root();
+    fn read(cursor: &Encoded) -> Option<Self> {
+        let root = cursor.root();
         let number = |name| root.get(name)?.unsigned();
         let text = |name| match root.get(name)? {
-            value if value.kind() == Kind::Null => Some(None),
+            Data::Null => Some(None),
             value => Some(Some(value.string()?.to_owned())),
+        };
+        let value = |name| match root.get(name)? {
+            Data::Null => Some(None),
+            value => Some(Some(Encoded::value(value).ok()?)),
         };
         Some(Self {
             session: text("session")??,
@@ -612,8 +618,8 @@ impl Cursor {
                 busy: root.get("busy")?.boolean()?,
                 model: text("model")?,
                 effort: text("effort")?,
-                usage: text("usage")?,
-                goal: text("goal")?,
+                usage: value("usage")?,
+                goal: value("goal")?,
                 ..State::default()
             },
         })
@@ -628,7 +634,7 @@ pub fn later(
     io: &mut dyn Io,
     archives: Archives,
     source: Transcript,
-    cursor: &str,
+    cursor: &Encoded,
     done: Done<Archive>,
 ) {
     let Some(cursor) = Cursor::read(cursor) else {

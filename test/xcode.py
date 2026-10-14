@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -15,8 +16,6 @@ from profile import Profile
 from timings import cases_from_result, report, compare
 from selection import resolve, describe, add_arguments
 import shards
-import capture
-import replay
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / 'scripts'))
@@ -25,6 +24,39 @@ INPUTS = ("Dispatch", "DispatchTests", "helper", "Vendor", "ThirdPartyLicenses",
           "project.yml",
           "Dispatch.xcodeproj/project.pbxproj", "Dispatch.xcodeproj/xcshareddata")
 IGNORED = {"target", "__pycache__", "LocalToolAudit", ".git", "xcuserdata", ".DS_Store"}
+# The tests' private root: short (macOS sun_path), and fixed, since journals record its paths.
+JOURNAL = '/tmp/dt-journal'
+
+# Machine facts (home, temp dir, the bundle and checkout, the account, the machine's name and memory, variables) come
+# from System: read anywhere else they name this Mac in recorded requests, or meet recorded values with live ones, which
+# then replay nowhere else (docs/replay.md). The terminal engine gets them from the app; only its standalone parts (the
+# passwd entry, the HOME fallback, its own view) and its live Kitty media file access (the temp dir) read them itself.
+MACHINE = re.compile(r'ProcessInfo\.processInfo\.environment|NSHomeDirectory\(|homeDirectoryForCurrentUser|temporaryDirectory|resolvingSymlinksInPath'
+                     r'|NSTemporaryDirectory\(|NSUserName\(|Bundle\.main\.(?!object\(|bundleIdentifier)|fileURLWithPath: #filePath'
+                     r'|gethostname\(|physicalMemory|processInfo\.hostName|getpwuid|Machine\.current')
+SYSTEM = {'Dispatch/Helper/System.swift', 'Dispatch/Helper/AppReplay.swift', 'Vendor/Term/Sources/TermApple/Launch.swift',
+          'Vendor/Term/Sources/TermApple/Theme.swift', 'Vendor/Term/Sources/TermApple/TerminalView.swift',
+          'Vendor/Term/Sources/TermApple/KittyMedia.swift'}
+# A process a test runs or waits for itself: replay neither records it nor sees it run (its watchdog calls the app
+# idle meanwhile). Tests run processes through TestSupport.live (to its end) or start (beside the test).
+PROCESS = re.compile(r'\.run\(\)|\.waitUntilExit\(\)')
+
+
+def direct(root, pattern, folders, exempt):
+    """Lines of the folders' sources outside the exempt files that match the pattern, as file:line."""
+    return [f'{path.relative_to(root)}:{number}' for folder in folders
+            for path in sorted((root / folder).rglob('*.swift')) if str(path.relative_to(root)) not in exempt
+            for number, line in enumerate(path.read_text().splitlines(), 1) if pattern.search(line)]
+
+
+def machine(root):
+    """Lines of app and test sources outside System that read a machine fact, as file:line."""
+    return direct(root, MACHINE, ('Dispatch', 'DispatchTests', 'Vendor/Term/Sources'), SYSTEM)
+
+
+def processes(root):
+    """Lines of test sources outside TestSupport that run or wait for a process themselves, as file:line."""
+    return direct(root, PROCESS, ('DispatchTests',), {'DispatchTests/TestSupport.swift'})
 
 
 def files(path):
@@ -148,8 +180,34 @@ def validate_summary(summary):
     return total > 0 and passed == total and failed == 0 and skipped == 0
 
 
+def corpus(root, stage, replays, helper, failed=False):
+    """A run's passed tests into the replay corpus (the helper's capture tool: helper replays on that helper and
+    app<->helper checks first); `failed`: its failed tests too, as recorded (a run's own replay reproduces them).
+    Prints what it did not store. False: a passed test was not stored."""
+    stored = subprocess.run([str(helper), 'capture', 'store', str(stage), str(replays), '--tests', str(root / 'DispatchTests')]
+                            + (['--failed'] if failed else []), stdout=subprocess.PIPE, text=True)
+    for line in stored.stdout.splitlines():
+        if not line.startswith('pass\t'):
+            print(line, flush=True)
+    return stored.returncode == 0
+
+
+def corpus_missing(root):
+    """None, or why the corpus in replays/ (a git submodule) is absent: without it every test would run live, unnoticed."""
+    replays = root / 'replays'
+    if next(replays.rglob('*.rpl.bz2'), None):
+        return None
+    return ('The replay corpus is not checked out (' + str(replays) + ' has no recordings): run '
+            '`git submodule update --init replays`, or pass --live to run every test live')
+
+
 def execute(root, tests, skips=(), recheck=False, benchmarks=False, selection=None, capture_run=None,
-            replay_run=None, replay_index=None, output=None, replay_settings=None):
+            replays=None, required=False, live=False, output=None, replay_run=None):
+    if found := machine(root):
+        raise ValueError('Machine facts come from System (docs/replay.md); read directly at:\n  ' + '\n  '.join(found))
+    if found := processes(root):
+        raise ValueError('Test processes run through TestSupport.live or start (docs/replay.md); run directly at:\n  '
+                         + '\n  '.join(found))
     selection = selection or resolve(tests, skips, benchmarks=benchmarks, root=root)
     tests = selection["selected"]
     build = output or root / "build"
@@ -178,53 +236,52 @@ def execute(root, tests, skips=(), recheck=False, benchmarks=False, selection=No
     # 104-byte sun_path: the helper's hook sockets (in DISPATCH_TEST_ROOT, else the test HOME
     # there) and fixture sockets in TMPDIR. One short private root per run holds both; it also
     # keeps test hook senders out of the account's real helper registry.
-    test_root = tempfile.mkdtemp(prefix='dt-', dir='/tmp')
+    # Recorded inputs name this root's paths (fixture environments, the test home): every run records or replays.
+    # Tests see the checkout through its link there (System.checkout): paths in recordings are the same on every Mac.
+    test_root = JOURNAL
+    shutil.rmtree(test_root, ignore_errors=True)
+    os.mkdir(test_root, 0o700)
     os.mkdir(os.path.join(test_root, 'tmp'), 0o700)
+    checkout = Path(test_root) / 'checkout'
+    checkout.symlink_to(root.resolve())
+    linked = lambda path: str(checkout / Path(path).resolve().relative_to(root.resolve()))
     try:
         # The old SSH helper's portable preflight went with it; the helper builds in the Xcode phase.
         plan = ensure_build(root, profile, force=recheck)
-        if not replay_run and any((root / "captures").rglob("manifest.json")):
-            with profile.stage('helper_replay'):
-                subprocess.run([sys.executable, str(root / 'scripts/build-ssh-helper.py'),
-                                '--replay-tools', '--build-only'], cwd=root, check=True)
-                resources = root / 'build/Build/Products/Debug/Dispatch.app/Contents/Resources'
-                tools = root / 'build/helper-rust/bin/replay'
-                settings = {'helper': {'macos': resources / 'dispatch-helper',
-                                       'linux': resources / 'helper/linux-x86_64'},
-                            'tool': {'macos': tools / 'darwin-universal', 'linux': tools / 'linux-x86_64'},
-                            'ssh': {}}
-                if (root / 'build/linux-ssh.json').is_file():
-                    settings['ssh']['linux'] = root / 'build/linux-ssh.json'
-                for name, values in (replay_settings or {}).items():
-                    settings[name].update(replay.mappings(values))
-                arguments = [str(root / 'captures'), '--require-same']
-                for name, values in settings.items():
-                    for system, path in values.items():
-                        arguments += ['--' + name, system + '=' + str(path)]
-                if replay.main(arguments):
-                    raise RuntimeError('Helper replay preflight failed; live tests were not started.')
+        if replay_run:
+            # Replaying a run: its tests into a corpus of their own (failed ones too: they reproduce their failure),
+            # stored by the helper this build just bundled, then nothing but replay.
+            replays, required = root / 'build/app-replay' / str(uuid.uuid4()), True
+            replays.mkdir(parents=True)
+            if not corpus(root, root / 'build/captures' / replay_run, replays,
+                          root / 'build/Build/Products/Debug/Dispatch.app/Contents/Resources/dispatch-helper', failed=True):
+                print('Some passed tests of the run were not stored; they fail without a journal', file=sys.stderr)
+            print('App replay corpus: ' + str(replays), flush=True)
         environment = dict(os.environ)
         environment.setdefault('TEST_RUNNER_DISPATCH_TEST_ROOT', test_root)
         environment.setdefault('TEST_RUNNER_TMPDIR', os.path.join(test_root, 'tmp') + '/')
+        # Set and dictionary order is random per process; recorded app outputs must not depend on it.
+        environment['TEST_RUNNER_SWIFT_DETERMINISTIC_HASHING'] = '1'
+        # A test with a journal in the corpus replays it; one without runs live (recorded with --capture).
+        environment['TEST_RUNNER_DISPATCH_REPLAYS'] = linked(replays or root / 'replays')
+        # A diverging replay writes what it expected and got here, never into the corpus.
+        (build / 'replay-diagnostics').mkdir(exist_ok=True)
+        environment['TEST_RUNNER_DISPATCH_APP_DIAGNOSTICS'] = linked(build / 'replay-diagnostics')
+        if required:
+            environment['TEST_RUNNER_DISPATCH_REPLAY_REQUIRED'] = '1'
+        if live:
+            environment['TEST_RUNNER_DISPATCH_LIVE'] = '1'
         if capture_run:
-            resources = root / 'build/Build/Products/Debug/Dispatch.app/Contents/Resources'
-            paths = [(resources / 'dispatch-helper', 'macos')]
-            paths += [(resources / 'helper' / name, system) for name, system in
-                      [('darwin-universal','macos'),('linux-aarch64','linux'),('linux-x86_64','linux')]]
-            helpers = [{'path':str(path),'platform':system} for path,system in paths if path.is_file()]
-            if not helpers: raise RuntimeError('Capture requires the built original helper binaries')
-            recording = capture.begin(root, capture_run, helpers)
-            manifest = json.loads((recording/'manifest.json').read_text())
-            manifest['platform'] = 'macos'
-            manifest['source']['build_key'] = load_receipt(root/'build/test-tools/xcode-build.json').get('key')
-            capture.write(recording/'manifest.json',manifest)
+            if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', capture_run):
+                raise ValueError('--capture RUN must be a single directory name')
+            # The whole run stays in build/captures/RUN for debugging, failed tests included.
+            recording = root / 'build/captures' / capture_run
+            if recording.exists(): raise ValueError('Capture run already exists: ' + str(recording))
+            for directory in ('raw', 'app'):
+                (recording / directory).mkdir(parents=True, mode=0o700)
             environment.update(TEST_RUNNER_DISPATCH_TEST_CAPTURE='1',
-                               TEST_RUNNER_DISPATCH_CAPTURE=str(recording/'raw/helper-%p.jsonl'),
-                               TEST_RUNNER_DISPATCH_APP_CAPTURE=str(recording/'app'))
-        if replay_run:
-            environment.update(TEST_RUNNER_DISPATCH_TEST_REPLAY='1',
-                               TEST_RUNNER_DISPATCH_APP_REPLAY=str(replay_run/'app'),
-                               TEST_RUNNER_DISPATCH_APP_REPLAY_INDEX=str(replay_index))
+                               TEST_RUNNER_DISPATCH_CAPTURE=linked(recording / 'raw') + '/helper-%p.rpl.bz2',
+                               TEST_RUNNER_DISPATCH_APP_CAPTURE=linked(recording / 'app'))
         command = ["xcodebuild", "-xctestrun", str(plan), "-destination", "platform=macOS",
                    "-parallel-testing-enabled", "NO", "-resultBundlePath", str(result), "test-without-building"]
         command += ["-only-testing:" + test for test in tests]
@@ -233,7 +290,7 @@ def execute(root, tests, skips=(), recheck=False, benchmarks=False, selection=No
                 status = subprocess.run(command, cwd=root,
                     # SWIFTUI_VIEW_DEBUG makes SwiftUI record the view-debug tree that text assertions read;
                     # 3 = view types and values only. The loopback SSH fixture must match the helper build.
-                    env={**environment, 'TEST_RUNNER_DISPATCH_TEST_FIXTURES': str(fixtures),
+                    env={**environment, 'TEST_RUNNER_DISPATCH_TEST_FIXTURES': linked(fixtures),
                          'TEST_RUNNER_SWIFTUI_VIEW_DEBUG': '3',
                          'TEST_RUNNER_DISPATCH_UNPRIVILEGED_SSHD': os.environ.get('DISPATCH_UNPRIVILEGED_SSHD', '')}).returncode
             except KeyboardInterrupt:
@@ -273,17 +330,12 @@ def execute(root, tests, skips=(), recheck=False, benchmarks=False, selection=No
     except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as error:
         export_error = str(error)
     if recording:
-        try:
-            manifest = capture.index(recording, cases)
-            if manifest['collection_errors']:
-                raise ValueError('Capture collection is incomplete; see '+str(recording/'manifest.json'))
-            retained = capture.retain(recording, root / 'captures' / capture_run)
-            print('Retained successful captures: ' + json.dumps(retained['retained']), flush=True)
-        except (OSError, ValueError, KeyError) as error:
+        # The corpus keeps the run's passed tests (each replays on this helper, its ends agree).
+        if not corpus(root, recording, replays or root / 'replays', root / 'build/Build/Products/Debug/Dispatch.app/Contents/Resources/dispatch-helper'):
             status = status or 1
-            runner_error = (runner_error + '; ' if runner_error else '') + 'Capture indexing failed: ' + str(error)
+            runner_error = (runner_error + '; ' if runner_error else '') + 'Some passed tests were not stored in the corpus'
     # A secondary VM shard leaves the one release launch to the primary.
-    if (not replay_run and selection['suite'] in ('full', 'exhaustive') and runner_error is None
+    if (not required and selection['suite'] in ('full', 'exhaustive') and runner_error is None
             and os.environ.get('DISPATCH_TEST_SHARD_PRIMARY', '1') == '1'):
         with profile.stage('release_launch') as stage:
             launch = subprocess.run([sys.executable, str(root / 'test/release.py')], cwd=root).returncode
@@ -316,17 +368,20 @@ def execute(root, tests, skips=(), recheck=False, benchmarks=False, selection=No
     return status or (0 if valid and timing['complete'] and count_matches and outcomes_passed else 1)
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+def arguments(description=__doc__):
+    """The runner's arguments (test/leak.py takes the same)."""
+    parser = argparse.ArgumentParser(description=description)
     add_arguments(parser)
     mode = parser.add_mutually_exclusive_group()
-    mode.add_argument('--capture', metavar='RUN', help='Stage captures in build/captures/RUN and retain successful cases in captures/RUN')
-    mode.add_argument('--replay', metavar='RUN', help='Replay recorded app I/O from captures/RUN')
+    mode.add_argument('--capture', metavar='RUN', help='Record live tests in build/captures/RUN (failed ones too); store the passed ones in replays/')
+    mode.add_argument('--replay', metavar='RUN', help='Replay only: the tests of build/captures/RUN, each from its own journal, failed ones included (they reproduce their failure; a test without a journal fails)')
+    parser.add_argument('--live', action='store_true', help='Run every test live, ignoring the corpus in replays/')
     parser.add_argument('--tests-from', type=Path, help='Additional selectors from a non-empty JSON array')
-    for name in ('helper', 'tool', 'ssh'):
-        parser.add_argument('--replay-' + name, action='append', default=[], metavar='PLATFORM=PATH',
-                            help='Override a mandatory helper replay preflight ' + name)
-    args = parser.parse_args()
+    return parser
+
+
+def main():
+    args = arguments().parse_args()
     # Runs on a developer Mac need no sudo: the loopback SSH fixture starts sshd
     # as the current user, matched by a Debug helper built to accept it. The VM
     # guest (test/vm-guest.sh) sets 0 to keep testing the root sshd monitor.
@@ -338,13 +393,6 @@ def main():
             if not isinstance(selected,list) or not selected or any(not isinstance(x,str) or not x for x in selected):
                 raise ValueError('--tests-from requires a non-empty JSON array of test selectors')
             args.tests += selected
-        rounds = None
-        if args.replay:
-            corpus = Path(args.replay).resolve()
-            if not corpus.is_dir(): corpus = ROOT/'captures'/args.replay
-            rounds = capture.replay_rounds(corpus)
-            if not args.tests and not args.suite:
-                args.tests = list(dict.fromkeys(case for row in rounds for case in row))
         benchmarks = args.benchmarks or os.environ.get("DISPATCH_TEST_BENCHMARKS") == "1"
         selection = resolve(args.tests, args.skip, args.suite, benchmarks, ROOT)
         if os.environ.get("DISPATCH_TEST_SHARD"):
@@ -360,29 +408,12 @@ def main():
                       "plus launcher/helper terminals; other processes share this limit. "
                       "Recommended setting: 999. An administrator can raise it for this boot with: "
                       "sudo sysctl -w kern.tty.ptmx_max=999. No setting was changed.", file=sys.stderr, flush=True)
-        if rounds is not None:
-            selected = set(selection['selected'])
-            recorded = {case for row in rounds for case in row}
-            if selected-recorded: raise ValueError('Missing app journal for: '+', '.join(sorted(selected-recorded)))
-            output = ROOT/'build/app-replay'/str(uuid.uuid4())
-            status = 0
-            for number, row in enumerate(rounds):
-                entries = {case:path for case,path in row.items() if case in selected}
-                if not entries: continue
-                directory = output/str(number+1)
-                directory.mkdir(parents=True)
-                index = directory/'journals.json'
-                capture.write(index,entries)
-                result = execute(ROOT,list(entries),recheck=args.recheck and number==0,
-                                 benchmarks=benchmarks,selection=resolve(list(entries),(),benchmarks=benchmarks,root=ROOT),
-                                 replay_run=corpus,replay_index=index,output=directory)
-                status = status or result
-            print('App replay results: '+str(output),flush=True)
-            return status
+        if not args.live and not args.replay and (missing := corpus_missing(ROOT)):
+            raise ValueError(missing)
         return execute(ROOT, args.tests, args.skip,
                        recheck=args.recheck or os.environ.get("DISPATCH_TEST_RECHECK") == "1",
                        benchmarks=benchmarks, selection=selection, capture_run=args.capture, replay_run=args.replay,
-                       replay_settings={name: getattr(args, 'replay_' + name) for name in ('helper', 'tool', 'ssh')})
+                       live=args.live)
     except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as error:
         print("Test runner: " + str(error), file=sys.stderr)
         return 1

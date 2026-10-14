@@ -18,7 +18,7 @@ final class ChatSideQuestionTests: XCTestCase {
 
     func testMainQuestionsKeepDraftAndRespectBlockingAndResolution() throws {
         let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
-        let session = chat.session(for: UUID())
+        let session = chat.session(for: System.uuid())
         session.active = true; session.sessionID = "side"; session.busy = true
         session.draft = "keep my draft"
         session.questions = [try ChatSideQuestion.helper(interaction(), session: "side")]
@@ -52,7 +52,7 @@ final class ChatSideQuestionTests: XCTestCase {
             ["type": "response_item", "payload": ["type": "function_call", "call_id": "question", "name": "request_user_input", "arguments": json(["questions": questions])]],
             ["type": "response_item", "payload": ["type": "function_call_output", "call_id": "question", "output": json(answered)]]
         ].map { try json($0) }
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("dispatch-question-history-" + UUID().uuidString)
+        let root = System.temporary.appendingPathComponent("dispatch-question-history-" + System.uuid().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))

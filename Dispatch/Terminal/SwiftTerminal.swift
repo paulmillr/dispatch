@@ -45,7 +45,7 @@ final class SwiftEngine: TerminalEngine {
     static func parse(_ text: String, dark: Bool) -> Config {
         var config = Config()
         config.load(Array(text.utf8))
-        let environment = ProcessInfo.processInfo.environment
+        let environment = System.inherited
         config.finalize(dark: dark) {
             Config.theme($0, resources: environment["GHOSTTY_RESOURCES_DIR"].flatMap { $0.isEmpty ? nil : $0 }, environment: environment, diagnostics: &$1)
         }
@@ -75,7 +75,7 @@ final class SwiftBackend: TerminalBackend {
 
     /// A terminal showing `history` until `start` runs its process.
     init?(config: Config, view: TerminalView, renderer: NSView, scale: Double, allowHostMedia: Bool, history: [UInt8]? = nil) {
-        guard let session = try? Session(config: config, scale: scale, allowHostMedia: allowHostMedia) else { return nil }
+        guard let session = try? Session(config: config, scale: scale, machine: System.machine.launch, allowHostMedia: allowHostMedia) else { return nil }
         (self.session, self.renderer, host) = (session, renderer, SwiftHost(view: view, surface: session.surface))
         // Layer-hosting, like Ghostty's renderer view.
         session.host(in: renderer)
@@ -105,11 +105,11 @@ final class SwiftBackend: TerminalBackend {
     func start(config: Config, command: String?, environment: [String], directory: String) -> Bool {
         guard !started else { return false }
         started = true
-        let process = ProcessInfo.processInfo.environment
+        let process = System.inherited
         let overrides = stride(from: 0, to: environment.count, by: 2).map { (environment[$0], environment[$0 + 1]) }
         do {
             try session.start(Launch(command: command, directory: directory, overrides: overrides, config: config, environment: process,
-                                     resources: process["GHOSTTY_RESOURCES_DIR"].flatMap { $0.isEmpty ? nil : $0 }, id: UInt64.random(in: 1 ... .max)))
+                                     machine: System.machine.launch, resources: process["GHOSTTY_RESOURCES_DIR"].flatMap { $0.isEmpty ? nil : $0 }, id: UInt64.random(in: 1 ... .max)))
         } catch { return false }
         return true
     }

@@ -76,13 +76,14 @@ final class ClaudeQuestionTests: XCTestCase {
         defer { if let previousPointer { CGWarpMouseCursorPosition(previousPointer) } }
         let fm = FileManager.default
         let claude = try XCTUnwrap([TestSupport.tool("claude")].first { fm.isExecutableFile(atPath: $0) })
-        let state = fm.temporaryDirectory.appendingPathComponent("dispatch-claude-questions-" + UUID().uuidString)
+        let state = System.temporary.appendingPathComponent("dispatch-claude-questions-" + System.uuid().uuidString)
         let script = CodexTestSupport.root.appendingPathComponent("scripts/claude_fixture.py").path
         let server = Process(); server.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
         server.arguments = [script, "serve", "--state", state.path, "--delay", "0"]
-        server.standardOutput = FileHandle.nullDevice; server.standardError = FileHandle.nullDevice; try server.run()
-        defer { if server.isRunning { server.terminate(); server.waitUntilExit() }; print("Claude question fixture: " + state.path) }
-        try await TestSupport.eventually { fm.fileExists(atPath: state.appendingPathComponent("endpoint.json").path) }
+        server.standardOutput = FileHandle.nullDevice; server.standardError = FileHandle.nullDevice
+        let child = try System.Child(server)
+        defer { child.stop(); print("Claude question fixture: " + state.path) }
+        try await TestSupport.eventually { System.exists(state.appendingPathComponent("endpoint.json")) }
         let runtime = TerminalRuntime.shared, controller = AppDelegate(), previousChat = runtime.chat
         runtime.chat = ChatCoordinator(enabled: true)
         try await TestSupport.integrations(["claude"], enabled: true, chat: runtime.chat)
@@ -104,9 +105,9 @@ final class ClaudeQuestionTests: XCTestCase {
         defer { print("Claude question state: \(session.status ?? "none") / \(session.submissionFailure ?? "none")\n\(terminal.agentMenuScreen)") }
         session.manualViewChoice = true
         // Claude reads the configuration the helper installed its integration into (the test home's).
-        try TestSupport.trustClaudeWorkspace(state.appendingPathComponent("work"), config: Home.url.appendingPathComponent(".claude"))
+        try TestSupport.trustClaudeWorkspace(state.appendingPathComponent("work"), config: System.home.appendingPathComponent(".claude"))
         TerminalTestSupport.send(["python3", script, "launch", "--state", state.path, "--claude", claude, "--integration", "--hooks",
-            "--config", Home.url.appendingPathComponent(".claude").path].map(HerdrLaunch.quote).joined(separator: " "), to: terminal)
+            "--config", System.home.appendingPathComponent(".claude").path].map(HerdrLaunch.quote).joined(separator: " "), to: terminal)
         try await TestSupport.eventually(timeout: .seconds(15)) {
             session.active && session.agentID == "claude" && !session.loadingHistory && !session.busy && terminal.agentMenuScreen.contains("for shortcuts")
         }

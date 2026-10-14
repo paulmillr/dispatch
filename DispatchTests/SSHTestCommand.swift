@@ -52,20 +52,20 @@ final class SSHTestDaemon {
         process.executableURL = URL(fileURLWithPath: master.executable)
         process.arguments = master.arguments(command: (["/usr/bin/python3", "-c", launch, pidFile] + argv).map(HerdrLaunch.quote).joined(separator: " "))
         process.standardInput = FileHandle.nullDevice
-        _ = try AppReplay.query(kind: "fixture.launch", input: JSONEncoder().encode(AppReplay.Launch(process))) {
-            let output = FileManager.default.temporaryDirectory.appendingPathComponent("ssh-fixture-" + UUID().uuidString)
+        _ = try AppReplay.query(kind: "fixture.launch", input: AppReplay.value(AppReplay.Launch(process))) {
+            let output = System.temporary.appendingPathComponent("ssh-fixture-" + System.uuid().uuidString)
             guard FileManager.default.createFile(atPath: output.path, contents: nil, attributes: [.posixPermissions: 0o600]) else { throw POSIXError(.EIO) }
             let log = try FileHandle(forWritingTo: output)
             self.output = output; self.log = log
             process.standardOutput = log; process.standardError = log
-            do { try process.run() }
+            do { try TestSupport.start(process) }
             catch { try? log.close(); try? FileManager.default.removeItem(at: output); throw error }
-            return Data()
+            return .null
         }
     }
 
     func waitUntilReady(marker: String = "Local Codex endpoint:") async throws {
-        _ = try await AppReplay.run(kind: "fixture.ready", input: JSONEncoder().encode(["pidFile": pidFile, "marker": marker])) {
+        _ = try await AppReplay.run(kind: "fixture.ready", input: AppReplay.value(["pidFile": pidFile, "marker": marker])) {
             guard let output = self.output else { throw HerdrFailure("Fixture output is unavailable") }
             try await TestSupport.eventually(timeout: .seconds(10)) {
                 let attributes = try FileManager.default.attributesOfItem(atPath: output.path)
@@ -75,7 +75,7 @@ final class SSHTestDaemon {
                 guard self.process.isRunning else { throw HerdrFailure("Remote model fixture exited: " + text) }
                 return false
             }
-            return Data()
+            return .null
         }
     }
 
@@ -93,14 +93,14 @@ final class SSHTestDaemon {
         """
         _ = try? await SSHTestCommand.run(master: master, argv: ["/usr/bin/python3", "-c", terminate, pidFile])
         do {
-            _ = try await AppReplay.run(kind: "fixture.stop", input: JSONEncoder().encode(pidFile)) {
+            _ = try await AppReplay.run(kind: "fixture.stop", input: .string(pidFile)) {
                 if process.isRunning { process.terminate() }
                 let deadline = ContinuousClock.now.advanced(by: .seconds(2))
                 while process.isRunning && ContinuousClock.now < deadline { try? await Task.sleep(for: .milliseconds(20)) }
                 if process.isRunning { kill(process.processIdentifier, SIGKILL) }
-                process.waitUntilExit()
+                process.wait()
                 try? log?.close(); if let output { try? FileManager.default.removeItem(at: output) }
-                return Data()
+                return .null
             }
         } catch { AppReplay.fail(error) }
     }

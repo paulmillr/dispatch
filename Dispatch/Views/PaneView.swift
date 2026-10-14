@@ -269,14 +269,17 @@ struct TerminalHost: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> NSView {
-        let container = NSView()
-        if ownsPresentation { attach(to: container).isPresented = visible }
+        let container = Container()
+        container.coordinator = context.coordinator
+        (context.coordinator.host, context.coordinator.container) = (self, container)
+        Coordinator.live.append(context.coordinator)
         return container
     }
 
     func updateNSView(_ container: NSView, context: Context) {
         // Outgoing SwiftUI trees can update after the terminal's new host has
         // mounted. Only its current model owner may reparent the retained view.
+        context.coordinator.host = self
         guard ownsPresentation else {
             for case let terminal as TerminalView in container.subviews {
                 terminal.isPresented = false
@@ -284,6 +287,7 @@ struct TerminalHost: NSViewRepresentable {
             }
             return
         }
+        guard container.window != nil else { return }
         let terminal = attach(to: container)
         terminal.isPresented = visible
         let becameFocused = focused && !context.coordinator.focused
@@ -311,9 +315,40 @@ struct TerminalHost: NSViewRepresentable {
 
     static func dismantleNSView(_ container: NSView, coordinator: Coordinator) {
         // The registry retains the terminal; detaching only changes visibility.
+        let held = container.subviews.contains { $0 is TerminalView }
         container.subviews.forEach { $0.removeFromSuperview() }
+        Coordinator.live.removeAll { $0 === coordinator }
+        if held, let tab = coordinator.host?.tab.id { handOff(tab, from: coordinator) }
+    }
+
+    /// SwiftUI may mount a pane's next host before it dismantles this one and update them in any order: the terminal a
+    /// host gives up goes to a live, shown host that owns it now, not only on that host's next update.
+    @MainActor private static func handOff(_ tab: UUID, from coordinator: Coordinator) {
+        guard let next = Coordinator.live.first(where: { $0 !== coordinator && $0.host?.tab.id == tab
+                  && $0.host?.ownsPresentation == true && $0.container?.window != nil }),
+              let host = next.host, let target = next.container else { return }
+        host.attach(to: target).isPresented = host.visible
+    }
+
+    /// Takes the terminal only once it is in a window: SwiftUI can build a host in a tree it never shows (beside the
+    /// shown one, owning the same pane), and which of them the terminal ends in must not depend on their update order.
+    final class Container: NSView {
+        weak var coordinator: Coordinator?
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard let coordinator, let host = coordinator.host else { return }
+            if window == nil {
+                if subviews.contains(where: { $0 is TerminalView }) { TerminalHost.handOff(host.tab.id, from: coordinator) }
+            } else if host.ownsPresentation {
+                host.attach(to: self).isPresented = host.visible
+            }
+        }
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
-    final class Coordinator { var request: UUID?; var focused = false }
+    final class Coordinator {
+        var request: UUID?, focused = false, host: TerminalHost?
+        weak var container: NSView?
+        @MainActor static var live: [Coordinator] = []
+    }
 }

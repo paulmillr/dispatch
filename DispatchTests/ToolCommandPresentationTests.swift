@@ -42,7 +42,7 @@ final class ToolCommandPresentationTests: XCTestCase {
             "timestamp": "2000-01-01T10:00:00.000Z", "message": ["role": "assistant", "content": [
                 ["type": "tool_use", "id": "toolu_1", "name": "Bash", "input": ["command": command, "description": "Read"]]]]
         ]) + Data([10])
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("dispatch-tool-" + UUID().uuidString)
+        let root = System.temporary.appendingPathComponent("dispatch-tool-" + System.uuid().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
         defer { chat.stop(); try? FileManager.default.removeItem(at: root) }
@@ -64,7 +64,7 @@ final class ToolCommandPresentationTests: XCTestCase {
             ("cd /repo & make build", "/repo", "cd /repo & make build"),
             ("cd /repo;", "/repo", "cd /repo;"),
         ] {
-            let tool = ToolPresentation(ChatItem(id: UUID().uuidString, kind: .tool, text: json(["cmd": command, "workdir": directory]),
+            let tool = ToolPresentation(ChatItem(id: System.uuid().uuidString, kind: .tool, text: json(["cmd": command, "workdir": directory]),
                                                  title: "exec_command"))
             XCTAssertEqual(tool.displaySummary(in: directory), summary, command)
             XCTAssertEqual(tool.input, command)
@@ -214,7 +214,7 @@ final class ToolCommandPresentationTests: XCTestCase {
                               envelope: String? = nil, completed: Bool = false) -> ToolPresentation {
         var result: [String: Any] = ["output": output]
         if let exitCode { result["exit_code"] = exitCode }
-        return ToolPresentation(ChatItem(id: UUID().uuidString, kind: .tool, text: json(["cmd": command]), title: "exec_command",
+        return ToolPresentation(ChatItem(id: System.uuid().uuidString, kind: .tool, text: json(["cmd": command]), title: "exec_command",
                                          output: envelope ?? (exitCode != nil ? json(result) : output), completed: completed))
     }
     private func json(_ object: [String: Any]) -> String {

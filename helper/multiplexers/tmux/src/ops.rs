@@ -5,7 +5,8 @@ use crate::{
 };
 use dispatch_helper_core::{
     api::*,
-    json::{self, Data},
+    json::Data,
+    wire::body,
 };
 use std::{cell::Cell, rc::Rc};
 #[derive(Clone, Copy)]
@@ -884,9 +885,9 @@ impl Tmux {
                                         return;
                                     }
                                 };
-                                let input = match json::write(&Data::Object(vec![(
+                                let input = match body::encode_plain(&Data::Object(vec![(
                                     "path",
-                                    Data::String(&tty),
+                                    Data::from(std::path::Path::new(&tty)),
                                 )])) {
                                     Ok(v) => v,
                                     Err(e) => {
@@ -898,16 +899,16 @@ impl Tmux {
                                     io,
                                     Job::Native {
                                         name: "file.lstat",
-                                        input,
+                                        value: input,
                                     },
                                     Box::new(move |mux, io, result| {
-                                        let valid = matches!(result, Ok(Output::Bytes(ref bytes))
+                                        let valid = matches!(result, Ok(Output::Value(ref bytes))
                                             if crate::discovery::tty(bytes, shell.tty));
                                         if !valid {
                                             done(mux, io, Err(error("Tmux pane tty changed")));
                                             return;
                                         }
-                                        let input = match json::write(&Data::Object(vec![(
+                                        let input = match body::encode_plain(&Data::Object(vec![(
                                             "tty",
                                             Data::Unsigned(shell.tty),
                                         )])) {
@@ -921,11 +922,11 @@ impl Tmux {
                                             io,
                                             Job::Native {
                                                 name: "foreground",
-                                                input,
+                                                value: input,
                                             },
                                             Box::new(move |mux, io, result| {
                                                 let valid = (|| {
-                                                    let Output::Bytes(data) = result.ok()? else {
+                                                    let Output::Value(data) = result.ok()? else {
                                                         return None;
                                                     };
                                                     let members = crate::discovery::foreground(

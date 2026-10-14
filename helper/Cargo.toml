@@ -21,3 +21,7 @@ opt-level = 2
 # json is pure Rust now (yyjson used to be built -O2 even in dev); keeps json-heavy tests fast.
 [profile.dev.package.dispatch-helper-core]
 opt-level = 2
+
+# The capture tool (bin/src/capture.rs) scans whole corpora: unoptimized, grep took 6x as long.
+[profile.dev.package.dispatch-helper]
+opt-level = 2

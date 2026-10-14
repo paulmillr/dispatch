@@ -15,7 +15,7 @@ final class CodexMainThreadTests: XCTestCase {
 
     func testAsyncQuestionsUseUserMessagesAndSurviveTurnCompletion() throws {
         let chat = ChatCoordinator(enabled: false, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
-        let session = chat.session(for: UUID())
+        let session = chat.session(for: System.uuid())
         defer { chat.close(session.id) }
         session.sessionID = "main"; session.active = true
         session.helper = HelperChat(terminal: 0)
@@ -42,7 +42,7 @@ final class CodexMainThreadTests: XCTestCase {
 
     func testTranscriptRecoversMissedAsyncQuestionAndRecognizesTerminalAnswer() throws {
         let chat = ChatCoordinator(enabled: false, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
-        let session = chat.session(for: UUID())
+        let session = chat.session(for: System.uuid())
         defer { chat.close(session.id) }
         session.sessionID = "main"; session.active = true
         session.helper = HelperChat(terminal: 0)
@@ -79,7 +79,7 @@ final class CodexMainThreadTests: XCTestCase {
     }
 
     func testNativeLaunchUsesVersionCompatibleIsolation() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("dispatch-codex-cli-" + UUID().uuidString)
+        let root = System.temporary.appendingPathComponent("dispatch-codex-cli-" + System.uuid().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { CodexTestSupport.removeFixture(root) }
         let binary = root.appendingPathComponent("codex")
@@ -114,23 +114,23 @@ final class CodexMainThreadTests: XCTestCase {
             for (arguments, isolates) in invocations {
                 // One delayed TUI launch covers the timeout without delaying the whole matrix.
                 if probe == "/bin/sleep 3" && !arguments.isEmpty { continue }
-                let process = Process(), output = Pipe()
+                let process = Process()
                 // What typing `codex` in a Dispatch terminal runs: the helper's typed launch.
                 process.executableURL = try XCTUnwrap(HelperApp.executable)
                 process.arguments = ["launch", "codex"] + arguments
                 process.environment = ["PATH": root.path, "HOME": root.path]
-                process.standardInput = FileHandle.nullDevice; process.standardOutput = output; process.standardError = FileHandle.nullDevice
-                try process.run(); process.waitUntilExit()
+                process.standardInput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
+                let exit = try System.run(process)
                 let flag = supportsIsolation && isolates ? ["--no-daemon"] : []
-                XCTAssertEqual(process.terminationStatus, 17, "probe: \(probe), arguments: \(arguments)")
-                XCTAssertEqual(String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self),
+                XCTAssertEqual(exit.status, 17, "probe: \(probe), arguments: \(arguments)")
+                XCTAssertEqual(String(decoding: exit.output, as: UTF8.self),
                                (flag + arguments).map { "<\($0)>\n" }.joined(), "probe: \(probe), arguments: \(arguments)")
             }
         }
     }
 
     private func launch(_ arguments: [String]) throws -> (arguments: [String], server: [String]?, directory: String) {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("codex-arguments-" + UUID().uuidString)
+        let root = System.temporary.appendingPathComponent("codex-arguments-" + System.uuid().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { CodexTestSupport.removeFixture(root) }
         let binary = root.appendingPathComponent("codex")
@@ -156,26 +156,24 @@ final class CodexMainThreadTests: XCTestCase {
         """
         try script.write(to: binary, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: binary.path)
-        let process = Process(), output = Pipe()
+        let process = Process()
         process.executableURL = try XCTUnwrap(HelperApp.executable)
         process.arguments = ["launch", "codex"] + arguments
-        var environment = ProcessInfo.processInfo.environment
+        var environment = System.inherited
         environment["PATH"] = root.path + ":/usr/bin:/bin"
         environment["HOME"] = root.path
-        environment["DISPATCH_TEST_ROOT"] = environment["TEST_RUNNER_TMPDIR"] ?? environment["TMPDIR"] ?? FileManager.default.temporaryDirectory.path
+        environment["DISPATCH_TEST_ROOT"] = System.temporary.path
         let project = root.appendingPathComponent("project with spaces")
         try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
         let path = try XCTUnwrap(project.path.withCString { realpath($0, nil) })
         defer { free(path) }
         let directory = String(cString: path)
         process.environment = environment; process.currentDirectoryURL = URL(fileURLWithPath: directory)
-        process.standardInput = FileHandle.nullDevice; process.standardOutput = output; process.standardError = FileHandle.nullDevice
-        try process.run()
-        let bytes = output.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        XCTAssertEqual(process.terminationStatus, 0)
+        process.standardInput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
+        let exit = try System.run(process)
+        XCTAssertEqual(exit.status, 0)
         struct Result: Decodable { let arguments: [String]; let server: [String]? }
-        let result = try JSONDecoder().decode(Result.self, from: bytes)
+        let result = try JSONDecoder().decode(Result.self, from: exit.output)
         return (result.arguments, result.server, directory)
     }
 
@@ -384,19 +382,18 @@ final class CodexMainThreadTests: XCTestCase {
         defer { fixture.stop(removeState: passed) }
         try await fixture.start(timeout: .seconds(15))
         let config = fixture.state.appendingPathComponent("codex-home/config.toml")
-        let contents = try String(contentsOf: config, encoding: .utf8)
-        try contents.replacingOccurrences(of: "[features]\n", with: "[features]\ndefault_mode_request_user_input = true\n")
-            .write(to: config, atomically: true, encoding: .utf8)
+        let contents = String(decoding: try System.read(config), as: UTF8.self)
+        try System.write(Data(contents.replacingOccurrences(of: "[features]\n", with: "[features]\ndefault_mode_request_user_input = true\n").utf8), to: config)
         if asynchronous {
             let catalog = fixture.state.appendingPathComponent("models.json")
             let model: [String: Any] = ["slug": "dispatch-fixture", "tool_mode": "code_mode_only", "base_instructions": "You are an offline test fixture.",
                 "display_name": "Dispatch fixture", "supported_reasoning_levels": [["effort": "medium", "description": "Fixture"]],
                 "shell_type": "unified_exec", "visibility": "list", "supported_in_api": true, "priority": 1,
                 "support_verbosity": false, "truncation_policy": ["mode": "bytes", "limit": 10000], "experimental_supported_tools": ["send_user_message_async"]]
-            try JSONSerialization.data(withJSONObject: ["models": [model]]).write(to: catalog)
+            try System.write(JSONSerialization.data(withJSONObject: ["models": [model]]), to: catalog)
             let encoder = JSONEncoder(); encoder.outputFormatting = .withoutEscapingSlashes
             let setting = String(decoding: try encoder.encode(catalog.path), as: UTF8.self)
-            try ("model_catalog_json = " + setting + "\n" + String(contentsOf: config, encoding: .utf8)).write(to: config, atomically: true, encoding: .utf8)
+            try System.write(Data(("model_catalog_json = " + setting + "\n" + String(decoding: try System.read(config), as: UTF8.self)).utf8), to: config)
         }
         let runtime = TerminalRuntime.shared, previous = runtime.chat
         runtime.chat = ChatCoordinator(enabled: true)
@@ -418,7 +415,7 @@ final class CodexMainThreadTests: XCTestCase {
             let wrapper = fixture.state.appendingPathComponent("codex")
             let encoder = JSONEncoder(); encoder.outputFormatting = .withoutEscapingSlashes
             let native = String(decoding: try encoder.encode(fixture.binary), as: UTF8.self)
-            try """
+            try System.write(Data("""
             #!/usr/bin/python3
             import signal, subprocess, sys
             child = subprocess.Popen([\(native)] + sys.argv[1:])
@@ -426,8 +423,7 @@ final class CodexMainThreadTests: XCTestCase {
                 signal.signal(number, lambda number, frame: child.send_signal(number))
             sys.exit(child.wait())
 
-            """.write(to: wrapper, atomically: true, encoding: .utf8)
-            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: wrapper.path)
+            """.utf8), to: wrapper, permissions: 0o755)
             binary = wrapper.path
         }
         TerminalTestSupport.send(launchContext + CodexTestSupport.command(state: fixture.state, binary: binary) + " --dispatch", to: terminal)
@@ -437,9 +433,9 @@ final class CodexMainThreadTests: XCTestCase {
         let process = try XCTUnwrap(session.process)
         XCTAssertTrue(process.arguments?.contains("--remote") == true, "The helper's typed launch runs Codex against its control socket")
         if packageLauncher {
-            let parentID = try XCTUnwrap(AgentProcess.info(process.pid)?.pbi_ppid)
-            let parent = try XCTUnwrap(AgentProcess.capture(pid_t(parentID)))
-            XCTAssertNotEqual(parent.executable, HelperApp.executable?.resolvingSymlinksInPath().path)
+            let parentID = try XCTUnwrap(AgentProcess.info(process.pid)?.parent)
+            let parent = try XCTUnwrap(AgentProcess.capture(parentID))
+            XCTAssertNotEqual(parent.executable, HelperApp.executable.map { System.resolve($0).path })
         }
         try await TestSupport.eventually(timeout: .seconds(15)) { session.sessionID != nil }
         // A new conversation has no rollout to resume yet; it still shows its configured model before a turn.
@@ -473,7 +469,7 @@ final class CodexMainThreadTests: XCTestCase {
                 session.questions.isEmpty && session.turns.flatMap(\.items).contains { $0.kind == .user && $0.text.contains("Skipped") }
             }
             app.close()
-            try await TestSupport.eventually(timeout: .seconds(10)) { !process.alive && !FileManager.default.fileExists(atPath: socket) }
+            try await TestSupport.eventually(timeout: .seconds(10)) { !process.alive && !System.exists(URL(fileURLWithPath: socket)) }
             passed = testRun?.failureCount == 0
             return
         }
@@ -536,7 +532,7 @@ final class CodexMainThreadTests: XCTestCase {
         runtime.chat.chooseChat(true, session: session)
         try await TestSupport.eventually { app.window.firstResponder is ChatComposer.ComposerTextView }
         session.draft = "/quit"; runtime.chat.sendFromComposer(session)
-        try await TestSupport.eventually(timeout: .seconds(10)) { !process.alive && !FileManager.default.fileExists(atPath: socket) }
+        try await TestSupport.eventually(timeout: .seconds(10)) { !process.alive && !System.exists(URL(fileURLWithPath: socket)) }
         passed = true
     }
 }

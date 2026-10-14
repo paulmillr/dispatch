@@ -7,7 +7,7 @@ final class ChatTests: XCTestCase {
     func testDisabledOptionalIntegrationReportsUnsentDraftBeforeInstallationFinishes() {
         for optional in [false, true] {
             let chat = ChatCoordinator(enabled: true)
-            let session = chat.session(for: UUID())
+            let session = chat.session(for: System.uuid())
             defer { chat.close(session.id) }
             session.agentID = "fixture"
             session.draft = "Preserve this draft λ"
@@ -42,7 +42,7 @@ final class ChatTests: XCTestCase {
 
     func testTranscriptReplacementPreservesLiveApproval() {
         let chat = ChatCoordinator(enabled: true)
-        let session = chat.session(for: UUID())
+        let session = chat.session(for: System.uuid())
         defer { chat.close(session.id) }
         var decisions: [PendingApproval.Decision] = []
         let approval = PendingApproval(key: "permission", operation: "Run command") { decisions.append($0.decision!) }
@@ -55,7 +55,7 @@ final class ChatTests: XCTestCase {
 
     func testPiPollCannotReplacePickerConfirmationWithOlderConfiguration() async throws {
         let chat = ChatCoordinator(enabled: true)
-        let session = chat.session(for: UUID())
+        let session = chat.session(for: System.uuid())
         defer { chat.close(session.id) }
         session.agentID = "pi"
         session.model = "custom/fixture"; session.effort = "medium"
@@ -87,7 +87,7 @@ final class ChatTests: XCTestCase {
     }
 
     func testBranchSwitchClearsAcceptedBubbleWithoutRestoringItAsDraft() {
-        let session = ChatSession(id: UUID(), draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
+        let session = ChatSession(id: System.uuid(), draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
         session.draft = "Draft for later"
         session.showOptimisticPrompt("Accepted on old branch")
         session.optimisticPromptDelivered = true
@@ -102,7 +102,7 @@ final class ChatTests: XCTestCase {
     }
 
     func testAcceptedOptimisticPromptDoesNotRestoreButNextUnsentPromptDoes() {
-        let session = ChatSession(id: UUID(), draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
+        let session = ChatSession(id: System.uuid(), draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
         session.showOptimisticPrompt("Accepted message")
         session.optimisticPromptDelivered = true
         session.failOptimisticPrompt(restoreDraft: true)
@@ -152,9 +152,9 @@ final class ChatTests: XCTestCase {
         XCTAssertEqual(chat.hookStatus("pi"), .off)
         // Disabling leaves installed hooks in the file, so an earlier case's install would make
         // this one a no-op (ready). Start from a Codex home without them.
-        try? FileManager.default.removeItem(at: Home.url.appendingPathComponent(".codex/hooks.json"))
-        let base = ProcessInfo.processInfo.environment["TEST_RUNNER_TMPDIR"] ?? ProcessInfo.processInfo.environment["TMPDIR"] ?? FileManager.default.temporaryDirectory.path
-        let state = URL(fileURLWithPath: base).appendingPathComponent("h" + UUID().uuidString.prefix(8))
+        try? FileManager.default.removeItem(at: System.home.appendingPathComponent(".codex/hooks.json"))
+        let base = System.temporary.path
+        let state = URL(fileURLWithPath: base).appendingPathComponent("h" + System.uuid().uuidString.prefix(8))
         let fixture = try CodexEndpointFixture(prefix: "hooks", delay: 0.05, hooks: false, state: state)
         try await fixture.start(timeout: .seconds(10))
         defer { fixture.stop(removeState: true) }
@@ -180,14 +180,14 @@ final class ChatTests: XCTestCase {
         XCTAssertEqual(captured.pid, UInt64(process.pid))
         XCTAssertEqual(captured.executable, process.executable)
         XCTAssertEqual(captured.start, [process.startedSeconds, process.startedMicroseconds])
-        defer { if process.alive { kill(process.pid, SIGTERM) } }
+        defer { if process.alive { System.signal(process.pid, SIGTERM) } }
         chat.setEnabled(true)
         await chat.integrationChanges?.value
         XCTAssertNil(chat.error)
         XCTAssertEqual(chat.hookStatus("codex"), .restart)
         XCTAssertEqual(chat.hookStatus("pi"), .off, "Pi's extension stays opt-in")
         XCTAssertEqual(chat.hookStatus("claude"), .ready, "No Claude process predates its hooks")
-        XCTAssertEqual(kill(process.pid, SIGTERM), 0)
+        XCTAssertEqual(System.signal(process.pid, SIGTERM), 0)
         try await TestSupport.eventually(timeout: .seconds(10)) { !process.alive }
         var retired = false
         for _ in 0..<80 {
@@ -250,7 +250,7 @@ final class ChatTests: XCTestCase {
         for size in [8.0, 32.0] {
             for choice in ChatFont.allCases {
                 var preferences = Preferences()
-                preferences.fontFamily = "DispatchMissingFont-\(UUID().uuidString)"
+                preferences.fontFamily = "DispatchMissingFont-\(System.uuid().uuidString)"
                 preferences.fontSize = size
                 preferences.chatFont = choice
                 let decoded = try JSONDecoder().decode(Preferences.self, from: JSONEncoder().encode(preferences))
@@ -267,7 +267,7 @@ final class ChatTests: XCTestCase {
     }
 
     func testOptimisticPromptReconcilesWithoutDuplicateOrRowIdentityChange() {
-        let session = ChatSession(id: UUID()), chat = ChatCoordinator(enabled: true)
+        let session = ChatSession(id: System.uuid()), chat = ChatCoordinator(enabled: true)
         let now = Date()
         session.showOptimisticPrompt("repeat me")
         let rowID = session.visibleTranscriptRows.last?.id
@@ -294,7 +294,7 @@ final class ChatTests: XCTestCase {
                 "completed": true, "documents": [], "inline_reasoning": false]))
         }
         for records in [[try record("turn_started"), try record("user", "hello")], [try record("user", "hello"), try record("turn_started")]] {
-            let session = ChatSession(id: UUID()), chat = ChatCoordinator(enabled: true)
+            let session = ChatSession(id: System.uuid()), chat = ChatCoordinator(enabled: true)
             session.showOptimisticPrompt("hello")
             let row = session.visibleTranscriptRows.last?.id
             session.awaitingPromptAck = true; session.promptBoundary = .firstRemoteTurn
@@ -317,7 +317,7 @@ final class ChatTests: XCTestCase {
         let prompt = [try record("turn_started"), try record("user", "hello")]
         for delivered in [false, true] {
             for (first, later) in [(prompt, []), ([], prompt)] {
-                let session = ChatSession(id: UUID()), chat = ChatCoordinator(enabled: true)
+                let session = ChatSession(id: System.uuid()), chat = ChatCoordinator(enabled: true)
                 session.active = true
                 session.showOptimisticPrompt("hello")
                 session.busy = true; session.optimisticPromptDelivered = delivered
@@ -350,7 +350,7 @@ final class ChatTests: XCTestCase {
     }
 
     func testSubmittedThinkingClockSurvivesRemoteAcknowledgement() throws {
-        let session = ChatSession(id: UUID()), chat = ChatCoordinator(enabled: true)
+        let session = ChatSession(id: System.uuid()), chat = ChatCoordinator(enabled: true)
         session.active = true
         session.showOptimisticPrompt("hello")
         session.busy = true; session.awaitingPromptAck = true
@@ -378,7 +378,7 @@ final class ChatTests: XCTestCase {
     }
 
     func testOptimisticFailureResetAndCommands() {
-        let session = ChatSession(id: UUID())
+        let session = ChatSession(id: System.uuid())
         session.showOptimisticPrompt("hello")
         session.failOptimisticPrompt(restoreDraft: true)
         XCTAssertEqual(session.draft, "hello"); XCTAssertTrue(session.visibleTranscriptRows.isEmpty)
@@ -393,7 +393,7 @@ final class ChatTests: XCTestCase {
 
     func testFailedSendRemainsVisibleAcrossBackgroundStatusRefreshUntilExplicitAction() throws {
         let coordinator = ChatCoordinator(enabled: true)
-        let session = coordinator.session(for: UUID())
+        let session = coordinator.session(for: System.uuid())
         session.active = true; session.draft = "Keep my unsent message"
         coordinator.submit(session) // No verified process or terminal: refuse input.
         let failure = try XCTUnwrap(session.status)
@@ -413,7 +413,7 @@ final class ChatTests: XCTestCase {
 
     func testSubmissionFailureDoesNotFollowAClosedOrReplacementConversation() {
         let coordinator = ChatCoordinator(enabled: true)
-        let session = coordinator.session(for: UUID())
+        let session = coordinator.session(for: System.uuid())
         session.submissionFailure = "Old failed send"
         coordinator.close(session.id)
         XCTAssertNil(session.submissionFailure)
@@ -425,7 +425,7 @@ final class ChatTests: XCTestCase {
     }
 
     func testUnreadOutputTracksPresentationAcrossTerminalAndChatModes() {
-        let session = ChatSession(id: UUID()), view = UUID()
+        let session = ChatSession(id: System.uuid()), view = System.uuid()
         session.showChat = true
         session.insert(ChatItem(id: "background", kind: .assistant, text: "Finished in a hidden tab"), turnID: "turn")
         XCTAssertTrue(session.hasNewMessages, "A hidden tab needs an unread icon even when its saved chat position is at the bottom")
@@ -450,7 +450,7 @@ final class ChatTests: XCTestCase {
     }
 
     func testMovedPresentationDoesNotLetOutgoingViewHideTheNewOwner() {
-        let session = ChatSession(id: UUID()), outgoing = UUID(), incoming = UUID()
+        let session = ChatSession(id: System.uuid()), outgoing = System.uuid(), incoming = System.uuid()
         session.showChat = true
         session.setPresented(true, by: outgoing)
         session.setPresented(true, by: incoming)
@@ -463,7 +463,7 @@ final class ChatTests: XCTestCase {
     }
 
     func testHistoricalAndDuplicateOutputDoesNotCreateUnreadActivity() {
-        let session = ChatSession(id: UUID()), view = UUID()
+        let session = ChatSession(id: System.uuid()), view = System.uuid()
         session.showChat = true
         session.insert(ChatItem(id: "old", kind: .assistant, text: "Restored history"), turnID: "old", historical: true)
         XCTAssertFalse(session.hasNewMessages)
@@ -482,7 +482,7 @@ final class ChatTests: XCTestCase {
     }
 
     func testNewConversationPreservesSelectedViewWhileReadinessChanges() {
-        let session = ChatSession(id: UUID()), view = UUID()
+        let session = ChatSession(id: System.uuid()), view = System.uuid()
         session.showChat = true; session.manualViewChoice = true
         session.draft = "Unsent draft"
         session.setPresented(true, by: view)
@@ -497,7 +497,7 @@ final class ChatTests: XCTestCase {
     /// first; a state between them must not bring the chat back as a read-only transcript.
     func testRequestedExitReturnsToTerminalWhicheverSignalArrivesFirst() {
         let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
-        let session = chat.session(for: UUID())
+        let session = chat.session(for: System.uuid())
         defer { chat.close(session.id) }
         let idle = HelperChat.State(busy: false, activity: nil, model: nil, model_label: nil, effort: nil, usage: nil,
                                     goal: nil, draft: nil, attention: nil, title: nil, compacting: false, service_tier: nil)
@@ -526,8 +526,8 @@ final class ChatTests: XCTestCase {
 
     func testRetainedHistoryRemainsReadableAfterProcessLookupFails() {
         let coordinator = ChatCoordinator(enabled: true)
-        let session = coordinator.session(for: UUID())
-        session.sessionID = UUID().uuidString
+        let session = coordinator.session(for: System.uuid())
+        session.sessionID = System.uuid().uuidString
         session.discoveryBlocked = true
         session.status = "Herdr connection closed."
         XCTAssertTrue(coordinator.canEnterChat(session))
@@ -537,14 +537,14 @@ final class ChatTests: XCTestCase {
     }
 
     private var fixture: Data {
-        get throws { try Data(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/codex-0.153.2.jsonl")) }
+        get throws { try Data(contentsOf: System.checkout.appendingPathComponent("DispatchTests/Fixtures/codex-0.153.2.jsonl")) }
     }
     /// Chat on installs both approval integrations; an opt-out stays (the next start reads the installed
     /// state instead of reinstalling); a broken Codex config fails without hiding Claude or being rewritten.
     func testApprovalHooksDefaultToBothAndRememberOptOuts() async throws {
         let chat = ChatCoordinator(enabled: false, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
         try await TestSupport.integrations(["codex", "claude"], enabled: false, chat: chat)
-        let hooks = Home.url.appendingPathComponent(".codex/hooks.json")
+        let hooks = System.home.appendingPathComponent(".codex/hooks.json")
         defer { try? FileManager.default.removeItem(at: hooks); chat.setEnabled(false) }
         func later() async throws -> ChatCoordinator {
             let next = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
@@ -581,11 +581,11 @@ final class ChatTests: XCTestCase {
         try await TestSupport.eventually(timeout: .seconds(10)) { chat.hookStatus("claude") != .off && chat.error != nil }
         XCTAssertEqual(chat.hookStatus("codex"), .off)
         XCTAssertNotNil(chat.error, "Successful Claude setup must not hide a Codex setup failure")
-        XCTAssertEqual(try Data(contentsOf: hooks), invalid)
+        XCTAssertEqual(try System.read(hooks), invalid)
     }
 
     func testHistoricalTurnsArrivingAfterHooksRemainChronological() {
-        let session = ChatSession(id: UUID())
+        let session = ChatSession(id: System.uuid())
         session.insert(ChatItem(id: "final", kind: .assistant, text: "Last"), turnID: "new", at: Date(timeIntervalSince1970: 40))
         session.insert(ChatItem(id: "old", kind: .user, text: "Earlier"), turnID: "old", at: Date(timeIntervalSince1970: 10))
         session.insert(ChatItem(id: "user", kind: .user, text: "Question"), turnID: "new", at: Date(timeIntervalSince1970: 20))
@@ -594,7 +594,7 @@ final class ChatTests: XCTestCase {
     }
     /// A Codex transcript's tool call shows its input and output once (hook/live overlap is the helper's).
     /// The helper's Codex integration in the test home's hooks.json (what the app's Chat switch installs).
-    private var codexHooks: URL { Home.url.appendingPathComponent(".codex/hooks.json") }
+    private var codexHooks: URL { System.home.appendingPathComponent(".codex/hooks.json") }
     private func codex(_ enabled: Bool?) async throws -> HelperChat.Installation {
         let installation = try await HelperChat.setup(.local, key: "codex", enabled: enabled, terminal: nil)
         return try XCTUnwrap(installation)
@@ -605,7 +605,7 @@ final class ChatTests: XCTestCase {
     /// linked files or directories are refused, and unrelated extensions are left alone.
     func testPiExtensionNeverOverwritesForeignOrLinkedFiles() async throws {
         let fm = FileManager.default
-        let extensions = Home.url.appendingPathComponent(".pi/agent/extensions")
+        let extensions = System.home.appendingPathComponent(".pi/agent/extensions")
         let script = extensions.appendingPathComponent("dispatch-chat.js")
         func pi(_ enabled: Bool) async throws -> HelperChat.Installation {
             let installation = try await HelperChat.setup(.local, key: "pi", enabled: enabled, terminal: nil)
@@ -613,34 +613,34 @@ final class ChatTests: XCTestCase {
         }
         defer { try? fm.removeItem(at: extensions) }
         _ = try await pi(true)
-        XCTAssertTrue(fm.fileExists(atPath: script.path), "Installing writes the managed extension")
+        XCTAssertTrue(System.exists(script), "Installing writes the managed extension")
         let unrelated = extensions.appendingPathComponent("unrelated.js")
         let foreign = Data("// Dispatch's opt-in bridge for an existing interactive Pi session.\n// user modifications must survive\n".utf8)
-        try foreign.write(to: unrelated)
-        try foreign.write(to: script)
+        try System.write(foreign, to: unrelated)
+        try System.write(foreign, to: script)
         let refused = await Task { try await pi(true) }.result
         XCTAssertThrowsError(try refused.get(), "A modified extension is not overwritten")
-        XCTAssertEqual(try Data(contentsOf: script), foreign)
-        XCTAssertEqual(try Data(contentsOf: unrelated), foreign, "Unrelated extensions stay")
+        XCTAssertEqual(try System.read(script), foreign)
+        XCTAssertEqual(try System.read(unrelated), foreign, "Unrelated extensions stay")
         // A linked extension file (even one pointing at the user's copy) is foreign too.
-        let target = Home.url.appendingPathComponent("preserved-\(UUID()).js")
+        let target = System.home.appendingPathComponent("preserved-\(System.uuid()).js")
         defer { try? fm.removeItem(at: target) }
-        try fm.moveItem(at: script, to: target)
-        try fm.createSymbolicLink(at: script, withDestinationURL: target)
+        try System.move(script, to: target)
+        try System.link(script, to: target)
         let linked = await Task { try await pi(true) }.result
         XCTAssertThrowsError(try linked.get(), "A symlinked extension is refused")
-        XCTAssertEqual(try Data(contentsOf: target), foreign)
-        try fm.removeItem(at: script)
+        XCTAssertEqual(try System.read(target), foreign)
+        try System.remove(script)
         // A linked extensions directory is refused and stays empty.
-        let directory = Home.url.appendingPathComponent("linked-\(UUID())")
+        let directory = System.home.appendingPathComponent("linked-\(System.uuid())")
         defer { try? fm.removeItem(at: directory) }
-        try fm.removeItem(at: extensions)
+        try System.remove(extensions)
         try fm.createDirectory(at: directory, withIntermediateDirectories: true)
-        try fm.createSymbolicLink(at: extensions, withDestinationURL: directory)
+        try System.link(extensions, to: directory)
         let linkedDirectory = await Task { try await pi(true) }.result
         XCTAssertThrowsError(try linkedDirectory.get(), "A symlinked extensions directory is refused")
-        XCTAssertTrue(try fm.contentsOfDirectory(atPath: directory.path).isEmpty)
-        try fm.removeItem(at: extensions)
+        XCTAssertTrue(try System.list(directory).isEmpty)
+        try System.remove(extensions)
         _ = try await pi(false)
     }
 
@@ -654,14 +654,14 @@ final class ChatTests: XCTestCase {
         try Data(#"{"description":"Mine","future":true,"hooks":{"Stop":[{"matcher":".*","hooks":[{"type":"command","command":"echo mine","timeout":7}]}]}}"#.utf8)
             .write(to: codexHooks)
         _ = try await codex(true)
-        let first = try Data(contentsOf: codexHooks)
+        let first = try System.read(codexHooks)
         _ = try await codex(true)
-        XCTAssertEqual(try Data(contentsOf: codexHooks), first, "A second install changes nothing")
+        XCTAssertEqual(try System.read(codexHooks), first, "A second install changes nothing")
         _ = try await codex(false)
-        XCTAssertEqual(try Data(contentsOf: codexHooks), first, "Turning the integration off leaves the file as installed")
+        XCTAssertEqual(try System.read(codexHooks), first, "Turning the integration off leaves the file as installed")
         let audit = try await codex(nil)
         XCTAssertEqual(audit.status, "off")
-        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: codexHooks)) as? [String: Any])
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: System.read(codexHooks)) as? [String: Any])
         XCTAssertEqual(root["description"] as? String, "Mine")
         XCTAssertEqual(root["future"] as? Bool, true)
         let hooks = try XCTUnwrap(root["hooks"] as? [String: [[String: Any]]])
@@ -679,7 +679,7 @@ final class ChatTests: XCTestCase {
             try invalid.write(to: codexHooks)
             let result = await Task { try await codex(true) }.result
             XCTAssertThrowsError(try result.get(), value)
-            XCTAssertEqual(try Data(contentsOf: codexHooks), invalid, value)
+            XCTAssertEqual(try System.read(codexHooks), invalid, value)
         }
     }
 
@@ -698,7 +698,7 @@ final class ChatTests: XCTestCase {
     /// A Codex transcript opened from a file: the conversation's own records in their turn, hidden
     /// and unknown records never shown.
     private func archive(_ data: Data, opens: Bool = true) async throws -> ChatSession {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let directory = System.temporary.appendingPathComponent(System.uuid().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appendingPathComponent("rollout.jsonl")
@@ -746,7 +746,7 @@ final class ChatTests: XCTestCase {
     }
 
     func testHookAndTranscriptOverlapPreservesToolInput() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let directory = System.temporary.appendingPathComponent(System.uuid().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appendingPathComponent("rollout.jsonl")
@@ -755,7 +755,7 @@ final class ChatTests: XCTestCase {
         let page = try await helper.page(earlier: nil)
         let chat = ChatCoordinator(enabled: false, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
         defer { chat.stop() }
-        let session = chat.session(for: UUID())
+        let session = chat.session(for: System.uuid())
         session.insert(ChatItem(id: "hook-final", kind: .assistant, text: "The build passed."), turnID: "turn-1")
         chat.receiveHelper(.page(page), session: session)
         let items = try XCTUnwrap(session.turns.first).items
@@ -770,7 +770,7 @@ final class ChatTests: XCTestCase {
         let input = ChatItem(id: "tool-1", kind: .tool, text: "swift build", title: "Shell")
         let output = ChatItem(id: "tool-1", kind: .tool, text: "", output: "Build failed", completed: true, exitCode: 7)
         for updates in [[input, output], [output, input]] {
-            let session = ChatSession(id: UUID())
+            let session = ChatSession(id: System.uuid())
             for item in updates { session.insert(item, turnID: "turn") }
             let merged = try XCTUnwrap(session.turns.first?.items.first)
             XCTAssertEqual(merged.id, "tool-1")
@@ -787,7 +787,7 @@ final class ChatTests: XCTestCase {
         }
     }
     func testDuplicateMessagesKeepIdentityAndEarliestTranscriptPosition() throws {
-        let session = ChatSession(id: UUID())
+        let session = ChatSession(id: System.uuid())
         let date = Date(timeIntervalSince1970: 20)
         session.insert(ChatItem(id: "hook", kind: .assistant, text: "Done"), turnID: "turn", at: date.addingTimeInterval(10))
         let rowID = try XCTUnwrap(session.transcriptRows.first?.id)
@@ -801,7 +801,7 @@ final class ChatTests: XCTestCase {
     /// A transcript opens only for its own conversation; incremental rereads after replacement or
     /// truncation are the helper's reader.
     func testReaderHandlesReplacementTruncationAndWrongSession() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let directory = System.temporary.appendingPathComponent(System.uuid().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appendingPathComponent("rollout.jsonl")
@@ -815,7 +815,7 @@ final class ChatTests: XCTestCase {
 
     /// An oversized or malformed line hides only itself: the records after it still show.
     func testOversizedAndMalformedRecordsRecoverAtNewline() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let directory = System.temporary.appendingPathComponent(System.uuid().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let data = try fixture
@@ -853,7 +853,7 @@ final class ChatTests: XCTestCase {
 
     func testTabStateAndManualChoiceSurviveRepeatedAccess() {
         let coordinator = ChatCoordinator()
-        let id = UUID(), other = UUID()
+        let id = System.uuid(), other = System.uuid()
         let first = coordinator.session(for: id)
         let second = coordinator.session(for: other)
         XCTAssertNotEqual(first.token, second.token)
@@ -869,15 +869,18 @@ final class ChatTests: XCTestCase {
         XCTAssertNil(coordinator.sessions[id])
         XCTAssertTrue(coordinator.session(for: other) === second)
     }
-    /// The chat shows the harness's usage report (helper State.usage, the documented ChatUsage JSON) without inventing a cost.
+    /// The chat shows the harness's usage report (helper State.usage, the documented ChatUsage object, as a value) without
+    /// inventing a cost.
     func testSessionUsageParsesReportedCountersWithoutInventingCost() throws {
-        let report = #"{"info":{"total_token_usage":{"input_tokens":142000,"output_tokens":6940},"last_token_usage":{"total_tokens":19000},"model_context_window":100000}}"#
+        let report = HelperBinary.Value.object(["info": .object([
+            "total_token_usage": .object(["input_tokens": .unsigned(142000), "output_tokens": .unsigned(6940)]),
+            "last_token_usage": .object(["total_tokens": .unsigned(19000)]), "model_context_window": .unsigned(100000)])])
         let coordinator = ChatCoordinator(enabled: false)
         defer { coordinator.stop() }
-        let session = coordinator.session(for: UUID())
+        let session = coordinator.session(for: System.uuid())
         session.helper = HelperChat(terminal: 0)
-        let state = try JSONSerialization.data(withJSONObject: ["busy": false, "pending": false, "compacting": false, "usage": report])
-        coordinator.receiveHelper(.state(try JSONDecoder().decode(HelperChat.State.self, from: state)), session: session)
+        let state = HelperBinary.Value.object(["busy": .bool(false), "compacting": .bool(false), "usage": report])
+        coordinator.receiveHelper(.state(try HelperBinary.decode(HelperChat.State.self, from: state)), session: session)
         let usage = try XCTUnwrap(session.usage)
         XCTAssertEqual(usage.input, 142000)
         XCTAssertEqual(usage.output, 6940)

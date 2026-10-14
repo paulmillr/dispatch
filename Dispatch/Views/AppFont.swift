@@ -8,7 +8,8 @@ enum AppFont {
         guard !registered else { return }
         registered = true
         for ext in ["ttf", "otf"] {
-            for url in Bundle.main.urls(forResourcesWithExtension: ext, subdirectory: nil) ?? [] {
+            for url in (try? FileManager.default.contentsOfDirectory(at: System.resources, includingPropertiesForKeys: nil)) ?? []
+            where url.pathExtension == ext {
                 CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
             }
         }

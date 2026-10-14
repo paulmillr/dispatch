@@ -111,7 +111,7 @@ final class ToolReadCommandTests: XCTestCase {
     private func item(_ command: String, output: String = "", exitCode: Int = 0) -> ChatItem {
         let input = try! JSONSerialization.data(withJSONObject: ["cmd": command])
         let result = try! JSONSerialization.data(withJSONObject: ["output": output, "exit_code": exitCode])
-        return ChatItem(id: UUID().uuidString, kind: .tool, text: String(decoding: input, as: UTF8.self),
+        return ChatItem(id: System.uuid().uuidString, kind: .tool, text: String(decoding: input, as: UTF8.self),
                         title: "exec_command", output: String(decoding: result, as: UTF8.self), completed: true)
     }
     private func presentation(_ command: String, output: String = "", exitCode: Int = 0) -> ToolPresentation {

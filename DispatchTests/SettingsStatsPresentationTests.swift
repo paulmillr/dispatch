@@ -430,7 +430,7 @@ final class SettingsStatsPresentationTests: XCTestCase {
             func disks() async throws -> [SSHStatisticsDisk] { [] }
         }
         let provider = Provider(), store = SSHStatisticsStore.shared
-        let host = HostRecord(id: .authenticated(UUID().uuidString), name: "homelab", hostname: "homelab",
+        let host = HostRecord(id: .authenticated(System.uuid().uuidString), name: "homelab", hostname: "homelab",
                               system: .init(os: "Linux", distribution: "ubuntu", name: "Ubuntu 26.04"),
                               destinations: ["ops@homelab.test"], order: 0)
         let key = try XCTUnwrap(store.register(provider, grant: .init(profile: .statistics), hostID: host.id))
@@ -505,7 +505,7 @@ final class SettingsStatsPresentationTests: XCTestCase {
                 [.init(paths: ["/", "/home/bob"], identity: "disk", total: 100 * 1_073_741_824, free: 80 * 1_073_741_824)]
             }
         }
-        let host = HostRecord(id: .authenticated("stats-presentation-" + UUID().uuidString), name: "Orion",
+        let host = HostRecord(id: .authenticated("stats-presentation-" + System.uuid().uuidString), name: "Orion",
                               hostname: "remote-orion", system: .init(os: "Linux"), destinations: ["alice@orion", "bob@orion"], order: 0)
         let alice = Provider("alice"), bob = Provider("bob"), store = SSHStatisticsStore.shared
         let aliceKey = try XCTUnwrap(store.register(alice, grant: .init(profile: .statistics), hostID: host.id))
@@ -535,7 +535,7 @@ final class SettingsStatsPresentationTests: XCTestCase {
 
     func testDiagnosticsCheckboxShowsCopyableFullPathOnlyWhenEnabled() async throws {
         let app = try TmuxWalkthrough(); defer { app.close() }
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let directory = System.temporary.appendingPathComponent(System.uuid().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = SettingsStore(file: directory.appendingPathComponent("settings.json"))
         let diagnostics = ChatViewportTrace(writer: ChatViewportTraceWriter(directory: directory.appendingPathComponent("Diagnostics")))
@@ -616,7 +616,7 @@ final class SettingsStatsPresentationTests: XCTestCase {
             LiquidGlassStore.shared.enabled = glass
             ChatThemeStore.shared.current = chatTheme
         }
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let directory = System.temporary.appendingPathComponent(System.uuid().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = SettingsStore(file: directory.appendingPathComponent("settings.json"))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 550), styleMask: [.titled], backing: .buffered, defer: false)
@@ -667,7 +667,7 @@ final class SettingsStatsPresentationTests: XCTestCase {
     func testSettingsNativeControlsRemainVisibleWithImplementedOptions() async throws {
         try DesktopTestSupport.requireUnlocked()
         AppFont.register()
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let directory = System.temporary.appendingPathComponent(System.uuid().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = SettingsStore(file: directory.appendingPathComponent("settings.json"))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 550), styleMask: [.titled], backing: .buffered, defer: false)
@@ -725,7 +725,7 @@ final class SettingsStatsPresentationTests: XCTestCase {
     func testSettingsListsDisconnectedHostIntegrationsAndResetsAll() async throws {
         try DesktopTestSupport.requireUnlocked()
         AppFont.register()
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let directory = System.temporary.appendingPathComponent(System.uuid().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = SettingsStore(file: directory.appendingPathComponent("settings.json"))
         let permissions = SSHIntegrationPermissions(defaults: nil)
@@ -810,7 +810,7 @@ final class SettingsStatsPresentationTests: XCTestCase {
 
     func testSettingsFitsAppearancePageAndPreservesVerticalResizing() async throws {
         try DesktopTestSupport.requireUnlocked()
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let directory = System.temporary.appendingPathComponent(System.uuid().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let controller = AppDelegate(settings: SettingsStore(file: directory.appendingPathComponent("settings.json")))
         let existing = Set(NSApp.windows.map(\.windowNumber))
@@ -902,8 +902,8 @@ extension SettingsStatsPresentationTests {
 
     private final class RemoteProcessProvider: SSHStatisticsSampling {
         let id = SSHConnectionID()
-        let scope = SSHIntegrationScope(executable: "/usr/bin/ssh", destination: UUID().uuidString, configuration: "user fixture")!
-        let host = UUID().uuidString
+        let scope = SSHIntegrationScope(executable: "/usr/bin/ssh", destination: System.uuid().uuidString, configuration: "user fixture")!
+        let host = System.uuid().uuidString
         let uid: UInt32 = 1000
         let supportsStatistics = true
         func sample() async throws -> SSHStatisticsCounters {

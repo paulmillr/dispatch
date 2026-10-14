@@ -6,8 +6,15 @@ use crate::{
 use dispatch_helper_core::{
     api::{Address, Binding, Done, Error, Io, Process, Update, deferred},
     json::{Data, Json, Kind, Value},
+    wire::body::Encoded,
 };
-use std::{cell::RefCell, collections::BTreeMap, net::SocketAddr, path::PathBuf, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::BTreeMap,
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    rc::Rc,
+};
 
 type Ready = Done<Rc<RefCell<Channel>>>;
 pub type Fallback = Box<dyn FnOnce(&mut dyn Io, Done<Option<Binding>>)>;
@@ -420,6 +427,12 @@ struct Open {
     stage: Stage,
 }
 
+/// What a stage waits for: a native job's answer, or a codex reply.
+enum Answer {
+    Native(Encoded),
+    Rpc(Json),
+}
+
 impl Open {
     fn native(
         &mut self,
@@ -436,7 +449,7 @@ impl Open {
             io,
             name,
             params,
-            Box::new(move |io, result| Self::advance(open, io, result)),
+            Box::new(move |io, result: Result<Encoded, Error>| Self::advance(open, io, result.map(Answer::Native))),
         );
     }
 
@@ -456,7 +469,7 @@ impl Open {
             io,
             name,
             Data::Object(params),
-            Box::new(move |io, result| Self::advance(open, io, result)),
+            Box::new(move |io, result| Self::advance(open, io, result.map(Answer::Rpc))),
         );
     }
 
@@ -528,7 +541,7 @@ impl Open {
         }
     }
 
-    fn advance(open: Rc<RefCell<Self>>, io: &mut dyn Io, result: Result<Json, Error>) {
+    fn advance(open: Rc<RefCell<Self>>, io: &mut dyn Io, result: Result<Answer, Error>) {
         let mut current = open.borrow_mut();
         // No socket: this Codex runs without an app-server (`--no-daemon`, or its server ended).
         // The old app had no native connection then and kept the queue in the app.
@@ -572,7 +585,10 @@ impl Open {
                 _ => {}
             }
         }
-        let result = result.and_then(|value| current.step(&open, io, value));
+        let result = result.and_then(|answer| match answer {
+            Answer::Native(value) => current.facts(&open, io, &value.root()),
+            Answer::Rpc(document) => current.step(&open, io, document),
+        });
         if let Err(error) = result {
             current.finish(io, Err(error));
         }
@@ -597,19 +613,13 @@ impl Open {
                 ));
             }
             self.binding = self.candidates.pop().unwrap();
-            if let Some(path) = self
-                .binding
-                .transcript
-                .as_ref()
-                .and_then(|path| path.to_str())
-                .map(str::to_owned)
-            {
+            if let Some(path) = self.binding.transcript.clone() {
                 self.native(
                     open,
                     io,
                     Stage::Location,
                     "file.lstat",
-                    Data::Object(vec![("path", Data::String(&path))]),
+                    Data::Object(vec![("path", Data::from(path.as_path()))]),
                 );
             } else {
                 self.finish(io, Ok(()));
@@ -626,7 +636,7 @@ impl Open {
             io,
             "thread/loaded/list",
             Data::Object(vec![("limit", Data::Unsigned(100))]),
-            Box::new(move |io, result| Self::advance(next, io, result)),
+            Box::new(move |io, result| Self::advance(next, io, result.map(Answer::Rpc))),
         );
     }
 
@@ -729,7 +739,7 @@ impl Open {
             io,
             "dispatch-diff-view",
             Box::new(move |io, result| {
-                Self::advance(next, io, result.and_then(|_| Json::parse(b"{}")));
+                Self::advance(next, io, result.and_then(|_| Json::parse(b"{}")).map(Answer::Rpc));
             }),
         );
     }
@@ -741,11 +751,7 @@ impl Open {
         let Some(Address::Unix(path)) = &self.address else {
             return self.connect(open, io);
         };
-        let parent = path
-            .parent()
-            .and_then(|parent| parent.to_str())
-            .unwrap()
-            .to_owned();
+        let parent = path.parent().unwrap().to_path_buf();
         self.path(open, io, Stage::Directory, "file.realpath", &parent);
         Ok(())
     }
@@ -756,19 +762,19 @@ impl Open {
         io: &mut dyn Io,
         stage: Stage,
         name: &'static str,
-        path: &str,
+        path: &Path,
     ) {
-        let params = Data::Object(vec![("path", Data::String(path))]);
+        let params = Data::Object(vec![("path", Data::from(path))]);
         self.native(open, io, stage, name, params);
     }
 
-    fn step(
+    /// A native job's answer for the current stage (System facts, not codex replies).
+    fn facts(
         &mut self,
         open: &Rc<RefCell<Self>>,
         io: &mut dyn Io,
-        document: Json,
+        root: &Data<'_>,
     ) -> Result<(), Error> {
-        let root = document.root();
         match self.stage {
             Stage::Process => {
                 let process = jobs::process(root)?;
@@ -779,7 +785,7 @@ impl Open {
                 {
                     return Err(failure("process", "The Codex process changed"));
                 }
-                self.uid = root.get("uid").and_then(Value::unsigned);
+                self.uid = root.get("uid").and_then(Data::unsigned);
                 if self.uid.is_none() {
                     return Err(failure("process", "Codex account unavailable"));
                 }
@@ -831,15 +837,11 @@ impl Open {
                 }
             }
             Stage::Environment => {
-                let home = root
-                    .get("CODEX_HOME")
-                    .and_then(Value::string)
+                // Environment values are bytes; an endpoint URL needs UTF-8 ones.
+                let text = |name| root.get(name).and_then(Data::bytes).and_then(|v| std::str::from_utf8(v).ok());
+                let home = text("CODEX_HOME")
                     .map(str::to_owned)
-                    .or_else(|| {
-                        root.get("HOME")
-                            .and_then(Value::string)
-                            .map(|home| format!("{home}/.codex"))
-                    })
+                    .or_else(|| text("HOME").map(|home| format!("{home}/.codex")))
                     .ok_or_else(|| failure("endpoint", "Codex home unavailable"))?;
                 self.endpoint(&format!(
                     "unix://{home}/app-server-control/app-server-control.sock"
@@ -849,7 +851,7 @@ impl Open {
             Stage::Directory | Stage::Resolved => {
                 let real = root
                     .get("path")
-                    .and_then(Value::string)
+                    .and_then(Data::path)
                     .map(PathBuf::from)
                     .ok_or_else(|| failure("endpoint", "Codex socket path unavailable"))?;
                 let Some(Address::Unix(path)) = &self.address else {
@@ -868,18 +870,12 @@ impl Open {
                 } else {
                     &real
                 };
-                self.path(
-                    open,
-                    io,
-                    Stage::Private,
-                    "file.lstat",
-                    directory.to_str().unwrap(),
-                );
+                self.path(open, io, Stage::Private, "file.lstat", directory);
             }
             Stage::Private => {
-                let mode = root.get("mode").and_then(Value::unsigned).unwrap_or(0o777);
-                if root.get("uid").and_then(Value::unsigned) != self.uid
-                    || root.get("kind").and_then(Value::string) != Some("directory")
+                let mode = root.get("mode").and_then(Data::unsigned).unwrap_or(0o777);
+                if root.get("uid").and_then(Data::unsigned) != self.uid
+                    || root.get("kind").and_then(Data::string) != Some("directory")
                     || mode & 0o022 != 0
                 {
                     return Err(failure("endpoint", "Codex socket directory is not private"));
@@ -887,7 +883,7 @@ impl Open {
                 let Some(Address::Unix(path)) = &self.address else {
                     unreachable!()
                 };
-                let path = path.to_str().unwrap().to_owned();
+                let path = path.clone();
                 let (stage, name) = if self.resolved {
                     (Stage::Socket, "file.lstat")
                 } else {
@@ -896,20 +892,20 @@ impl Open {
                 self.path(open, io, stage, name, &path);
             }
             Stage::Socket => {
-                if root.get("uid").and_then(Value::unsigned) != self.uid
-                    || root.get("kind").and_then(Value::string) != Some("socket")
+                if root.get("uid").and_then(Data::unsigned) != self.uid
+                    || root.get("kind").and_then(Data::string) != Some("socket")
                 {
                     return Err(failure("endpoint", "Codex socket owner changed"));
                 }
                 self.connect(open, io)?;
             }
             Stage::Peer => {
-                if root.get("uid").and_then(Value::unsigned) != self.uid {
+                if root.get("uid").and_then(Data::unsigned) != self.uid {
                     return Err(failure("endpoint", "Codex socket owner changed"));
                 }
                 let pid = root
                     .get("pid")
-                    .and_then(Value::unsigned)
+                    .and_then(Data::unsigned)
                     .ok_or_else(|| failure("endpoint", "Codex peer unavailable"))?;
                 self.native(
                     open,
@@ -1005,6 +1001,30 @@ impl Open {
                     }),
                 );
             }
+            Stage::Location => {
+                if root.get("kind").and_then(Data::string) != Some("file") {
+                    self.binding.transcript = None;
+                }
+                self.subscribe(open, io);
+            }
+            _ => Err(failure("stage", "A native answer for a codex stage"))?,
+        }
+        Ok(())
+    }
+
+    fn step(
+        &mut self,
+        open: &Rc<RefCell<Self>>,
+        io: &mut dyn Io,
+        document: Json,
+    ) -> Result<(), Error> {
+        let root = document.root();
+        match self.stage {
+            // Answered by native jobs: Open::facts.
+            Stage::Process | Stage::Environment | Stage::Directory | Stage::Resolved | Stage::Private
+            | Stage::Socket | Stage::Peer | Stage::Server | Stage::Location => {
+                return Err(failure("stage", "A codex reply for a native stage"));
+            }
             Stage::Initialize => {
                 if self.discovery.is_some() {
                     // c1654cc CodexPatchConnection.swift:427-429: a main-thread connection's attach
@@ -1049,12 +1069,6 @@ impl Open {
                     self.read = Some(document);
                 }
                 self.candidate(open, io)?;
-            }
-            Stage::Location => {
-                if root.get("kind").and_then(Value::string) != Some("file") {
-                    self.binding.transcript = None;
-                }
-                self.subscribe(open, io);
             }
             Stage::Read => {
                 let thread = root
@@ -1151,7 +1165,7 @@ fn walk(
         "process",
         pid,
         Box::new(move |io, result| {
-            let Ok(parent) = result.and_then(|value| jobs::process(value.root())) else {
+            let Ok(parent) = result.and_then(|value| jobs::process(&value.root())) else {
                 return done(io, None);
             };
             if owns(&parent) {

@@ -1,4 +1,5 @@
 import XCTest
+import os
 @testable import DispatchApp
 
 @MainActor
@@ -40,11 +41,16 @@ final class SSHStatisticsStoreTests: XCTestCase {
         init(account: String = "alice") {
             scope = SSHIntegrationScope(executable: "/usr/bin/ssh", destination: "build", configuration: "hostname host\nuser \(account)\n")!
         }
+        // Outcomes are decided when called: a flag the test flips while a call is in flight changes only later calls.
+        // A call takes its time through System.sleep, as the helper round trip it stands in for is recorded: on wall time
+        // the providers' calls end in another order in replay, and identical timers take their recorded wakes in recorded
+        // order (one account's 20 ms metrics loop then got another's 15 s timer and never sampled again).
         func sample() async throws -> SSHStatisticsCounters {
             samples += 1; pending += 1; maximumPending = max(maximumPending, pending)
             defer { pending -= 1 }
-            try await Task.sleep(for: .milliseconds(5))
-            if failing { throw HerdrFailure("Disconnected") }
+            let fails = failing
+            try await System.sleep(for: .milliseconds(5), "sample")
+            if fails { throw HerdrFailure("Disconnected") }
             if !repeatsCounters { counter += 1 }
             return .init(boot: "boot", monotonic: Double(samples * 2),
                          cpu: [.init(name: "cpu", busy: UInt64(counter), total: UInt64(counter * 2))])
@@ -52,38 +58,39 @@ final class SSHStatisticsStoreTests: XCTestCase {
         func disks() async throws -> [SSHStatisticsDisk] {
             diskSamples += 1
             // Simulate a filesystem slower than the fast counter sampler.
-            try await Task.sleep(for: .milliseconds(150))
+            try await System.sleep(for: .milliseconds(150), "disks")
             return []
         }
         func ping() async throws {
             pingCalls += 1; pendingPings += 1
             maximumPendingPings = max(maximumPendingPings, pendingPings)
             defer { pendingPings -= 1 }
+            let fails = pingFails
             if blockPing { await withCheckedContinuation { finishPing = $0 } }
-            else { try await Task.sleep(for: .milliseconds(5)) }
-            if pingFails { throw HerdrFailure("Latency timeout") }
+            else { try await System.sleep(for: .milliseconds(5), "ping") }
+            if fails { throw HerdrFailure("Latency timeout") }
         }
     }
 
     func testBackgroundSamplingSlowsWithoutSubscribersAndOneSamplerServesMultipleViews() async throws {
         let store = SSHStatisticsStore(interval: .milliseconds(10), backgroundInterval: .milliseconds(40)), provider = Provider()
         let key = store.register(provider, grant: .init(profile: .statistics))!
-        try await Task.sleep(for: .milliseconds(30))
+        try await TestSupport.pause(for: .milliseconds(30))
         XCTAssertGreaterThan(provider.samples, 0)
         XCTAssertEqual(provider.diskSamples, 0)
         let background = provider.samples
         try await TestSupport.eventually { provider.samples > background }
         let first = store.subscribe(key)!, second = store.subscribe(key)!
-        try await Task.sleep(for: .milliseconds(80))
+        try await TestSupport.pause(for: .milliseconds(80))
         XCTAssertGreaterThan(provider.samples, 2)
         XCTAssertEqual(provider.maximumPending, 1)
         XCTAssertEqual(provider.diskSamples, 1)
         store.unsubscribe(first, from: key)
         let previous = provider.samples
-        try await Task.sleep(for: .milliseconds(30))
+        try await TestSupport.pause(for: .milliseconds(30))
         XCTAssertGreaterThan(provider.samples, previous)
         store.unsubscribe(second, from: key)
-        try await Task.sleep(for: .milliseconds(20))
+        try await TestSupport.pause(for: .milliseconds(20))
         let slowed = provider.samples
         try await TestSupport.eventually { provider.samples > slowed }
         try await TestSupport.eventually { provider.pending == 0 }
@@ -93,10 +100,10 @@ final class SSHStatisticsStoreTests: XCTestCase {
     /// (ported from SSHProtocolV2Tests' latency timeout).
     func testTimeoutEndsAnUnansweredOperationWithoutWaitingForIt() async throws {
         let started = ContinuousClock.now
-        let unanswered = await Task { try await SSHTimeout.run(.milliseconds(100)) { try await Task.sleep(for: .seconds(60)); return 0 } }.result
+        let unanswered = await Task { try await SSHTimeout.run(.milliseconds(100), "unanswered") { try await Task.sleep(for: .seconds(60)); return 0 } }.result
         XCTAssertThrowsError(try unanswered.get())
         XCTAssertLessThan(started.duration(to: .now), .seconds(5))
-        let answered = try await SSHTimeout.run(.seconds(5)) { 42 }
+        let answered = try await SSHTimeout.run(.seconds(5), "answered") { 42 }
         XCTAssertEqual(answered, 42)
     }
 
@@ -114,6 +121,7 @@ final class SSHStatisticsStoreTests: XCTestCase {
         let replay = HelperTransport(read: outgoing.fileHandleForReading, write: incoming.fileHandleForWriting)
         let canceled = expectation(description: "Only the unanswered probe was canceled")
         var decoder = HelperWire.Decoder(), requests: [UInt64] = [], cancellations: [UInt64] = []
+        let sent = OSAllocatedUnfairLock(initialState: 0)
         replay.start(receive: { bytes in
             do {
                 try decoder.feed(bytes) { message in
@@ -121,7 +129,7 @@ final class SSHStatisticsStoreTests: XCTestCase {
                         cancellations.append(message.id)
                         XCTAssertEqual(cancellations, [1]); canceled.fulfill()
                     } else {
-                        requests.append(message.id)
+                        requests.append(message.id); sent.withLock { $0 += 1 }
                         XCTAssertEqual(message.body, captured.body)
                         if requests.count == 2 {
                             replay.send(try HelperWire.encode(.init(kind: .response, id: message.id, body: response.body)))
@@ -132,8 +140,12 @@ final class SSHStatisticsStoreTests: XCTestCase {
         }, closed: { _ in })
         defer { client.close(); replay.close() }
         do {
-            let _: Nonce = try await SSHTimeout.run(.milliseconds(100)) {
-                try await client.request(echo.method, params: echo.params)
+            let _: Nonce = try await SSHTimeout.run(.milliseconds(100), "probe") {
+                async let reply: Nonce = client.request(echo.method, params: echo.params)
+                // The probe is out before its timeout ends it: replay ends the timer where capture did, and the pipe
+                // between them is not recorded.
+                try await TestSupport.eventually { sent.withLock { $0 } == 1 }
+                return try await reply
             }
             XCTFail("An unanswered latency probe must time out")
         } catch { }
@@ -160,7 +172,7 @@ final class SSHStatisticsStoreTests: XCTestCase {
         XCTAssertNil(entry.latency.milliseconds)
         XCTAssertNil(entry.latency.date)
         provider.finishPing?.resume(); provider.finishPing = nil
-        try await Task.sleep(for: .milliseconds(50))
+        try await TestSupport.pause(for: .milliseconds(50))
         XCTAssertNil(entry.latest)
         XCTAssertNil(entry.disks)
         XCTAssertNil(entry.latency.milliseconds)
@@ -206,7 +218,7 @@ final class SSHStatisticsStoreTests: XCTestCase {
         try await TestSupport.eventually { other.samples > 0 }
         let independentAccountSamples = other.samples
         let token = store.subscribe(key, preferred: first.id)!
-        try await Task.sleep(for: .milliseconds(80))
+        try await TestSupport.pause(for: .milliseconds(80))
         XCTAssertEqual(first.samples, 1)
         XCTAssertGreaterThan(second.samples, 0)
         XCTAssertEqual(other.samples, independentAccountSamples)
@@ -235,7 +247,7 @@ final class SSHStatisticsStoreTests: XCTestCase {
         try await TestSupport.eventually { latency.state == .ready }
         XCTAssertGreaterThan(latency.milliseconds ?? 0, 0)
         let initial = provider.pingCalls
-        try await Task.sleep(for: .milliseconds(80))
+        try await TestSupport.pause(for: .milliseconds(80))
         XCTAssertEqual(provider.pingCalls, initial, "Closed popups use the 60-second interval")
         let one = try XCTUnwrap(store.subscribeLatency(key)), two = try XCTUnwrap(store.subscribeLatency(key))
         try await TestSupport.eventually { provider.pingCalls >= initial + 3 }
@@ -246,7 +258,7 @@ final class SSHStatisticsStoreTests: XCTestCase {
         store.unsubscribeLatency(two, from: key)
         let closed = provider.pingCalls
         let metricSamples = provider.samples
-        try await Task.sleep(for: .milliseconds(80))
+        try await TestSupport.pause(for: .milliseconds(80))
         XCTAssertEqual(provider.pingCalls, closed)
         XCTAssertEqual(provider.samples, metricSamples, "Latency polling must not accelerate background metrics collection")
     }
@@ -260,7 +272,7 @@ final class SSHStatisticsStoreTests: XCTestCase {
         store.setSleeping(true)
         XCTAssertEqual(latency.state, .stale)
         let sleeping = provider.pingCalls
-        try await Task.sleep(for: .milliseconds(90))
+        try await TestSupport.pause(for: .milliseconds(90))
         XCTAssertEqual(provider.pingCalls, sleeping)
         store.setSleeping(false)
         try await TestSupport.eventually { provider.pingCalls > sleeping && latency.state == .ready }
@@ -268,7 +280,7 @@ final class SSHStatisticsStoreTests: XCTestCase {
         let disconnected = provider.pingCalls
         XCTAssertEqual(latency.state, .stale)
         XCTAssertNotNil(latency.date)
-        try await Task.sleep(for: .milliseconds(90))
+        try await TestSupport.pause(for: .milliseconds(90))
         XCTAssertEqual(provider.pingCalls, disconnected)
     }
 
@@ -344,7 +356,7 @@ extension SSHStatisticsStoreTests {
         func disks() async throws -> [SSHStatisticsDisk] { [] }
         func processes() async throws -> SSHProcessCounters {
             processCalls += 1
-            if slow { try await Task.sleep(for: .milliseconds(150)) }
+            if slow { try await System.sleep(for: .milliseconds(150), "processes") }
             if failing { throw HerdrFailure("Process permission denied") }
             return .init(boot: "boot", monotonic: Double(processCalls * 2), truncated: true,
                          processes: [.init(pid: 7, start: "1", name: invalid ? "bad\nname" : "worker", cpuNanos: UInt64(processCalls) * 4_000_000_000, rss: 100)])
@@ -376,7 +388,7 @@ extension SSHStatisticsStoreTests {
         store.unsubscribe(two, from: key)
         XCTAssertEqual(entry.state, .ready); XCTAssertNotNil(entry.processes)
         let stopped = provider.processCalls
-        try await Task.sleep(for: .milliseconds(60)); XCTAssertEqual(provider.processCalls, stopped)
+        try await TestSupport.pause(for: .milliseconds(60)); XCTAssertEqual(provider.processCalls, stopped)
         store.remove(provider.id); XCTAssertNotNil(entry.processes)
     }
     func testOlderHelperAndBlockedProcessesKeepAggregateSampling() async throws {

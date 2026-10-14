@@ -27,8 +27,8 @@ final class SSHProtocolV2Tests: XCTestCase {
     /// A connection cannot mutate another connection's backend nodes.
     @MainActor
     func testBackendHandlesCannotCrossConnections() async throws {
-        let root = URL(fileURLWithPath: ProcessInfo.processInfo.environment["TMPDIR"]!)
-            .appendingPathComponent("b" + UUID().uuidString.prefix(8))
+        let root = URL(fileURLWithPath: System.environment("TMPDIR")!)
+            .appendingPathComponent("b" + System.uuid().uuidString.prefix(8))
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false,
                                                attributes: [.posixPermissions: 0o700])
         defer { try? FileManager.default.removeItem(at: root) }
@@ -39,9 +39,9 @@ final class SSHProtocolV2Tests: XCTestCase {
             let process = Process()
             process.executableURL = executable
             process.arguments = ["--stdio"]
-            var environment = ProcessInfo.processInfo.environment
+            var environment = System.inherited
             if let capture = environment["DISPATCH_CAPTURE"] {
-                environment["DISPATCH_CAPTURE"] = capture + ".client-\(index)-%p.jsonl"
+                environment["DISPATCH_CAPTURE"] = capture + ".client-\(index)-%p.rpl.bz2"
             }
             process.environment = environment
             process.standardError = FileHandle.nullDevice
@@ -77,19 +77,25 @@ final class SSHProtocolV2Tests: XCTestCase {
     /// An actual pathname replacement must not satisfy a read guarded by its old inode.
     @MainActor
     func testFileReadRejectsMetadataIdentityMismatch() async throws {
-        struct Revision: Encodable { let inode: UInt64; let device: UInt64 }
+        struct Revision: Codable { let inode: UInt64; let device: UInt64 }
         struct Read: Encodable { let path: String; let offset: UInt64; let length: UInt64; let revision: Revision }
         struct Metadata: Decodable { let size: UInt64; let inode: UInt64; let device: UInt64 }
-        let root = URL(fileURLWithPath: ProcessInfo.processInfo.environment["TMPDIR"]!)
-            .appendingPathComponent("r" + UUID().uuidString.prefix(8))
+        let root = URL(fileURLWithPath: System.environment("TMPDIR")!)
+            .appendingPathComponent("r" + System.uuid().uuidString.prefix(8))
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: root) }
         let file = root.appendingPathComponent("rollout")
         let bytes = Data(repeating: 0x61, count: 64)
         try bytes.write(to: file)
-        let before = try FileManager.default.attributesOfItem(atPath: file.path)
-        let revision = Revision(inode: try XCTUnwrap(before[.systemFileNumber] as? NSNumber).uint64Value,
-                                device: try XCTUnwrap(before[.systemNumber] as? NSNumber).uint64Value)
+        // The file's identity is the OS's: observed, so replay sees the inode capture saw.
+        func identity() throws -> Revision {
+            try System.observe("file.revision", file.path) {
+                let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
+                return Revision(inode: try XCTUnwrap(attributes[.systemFileNumber] as? NSNumber).uint64Value,
+                                device: try XCTUnwrap(attributes[.systemNumber] as? NSNumber).uint64Value)
+            }
+        }
+        let revision = try identity()
         let process = Process()
         process.executableURL = try XCTUnwrap(HelperApp.executable)
         process.arguments = ["--stdio"]
@@ -102,8 +108,7 @@ final class SSHProtocolV2Tests: XCTestCase {
         XCTAssertEqual(original.result.inode, revision.inode)
         XCTAssertEqual(original.result.device, revision.device)
         try bytes.write(to: file, options: .atomic)
-        let after = try FileManager.default.attributesOfItem(atPath: file.path)
-        XCTAssertNotEqual(try XCTUnwrap(after[.systemFileNumber] as? NSNumber).uint64Value, revision.inode)
+        XCTAssertNotEqual(try identity().inode, revision.inode)
         do {
             let _: (result: Metadata, bytes: Data) = try await session.connection.requestBinary(
                 "files.read", params: Read(path: file.path, offset: 0, length: 64, revision: revision))

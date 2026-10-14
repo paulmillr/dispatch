@@ -27,6 +27,7 @@ mod transport;
 use dispatch_helper_core::{
     api::*,
     json::{self, Data as D, Value},
+    wire::body::{self, Encoded},
 };
 use native::{Decoder, Graph, Snapshot, error, expired, field, text};
 use std::{
@@ -107,7 +108,6 @@ pub struct Herdr {
     snapshot: Snapshot,
     origins: BTreeMap<String, actions::Origin>,
     placements: usize,
-    selection: [Option<String>; 3],
     harnesses: Vec<Shared<dyn Harness>>,
     agents: BTreeMap<Id, (usize, Binding)>,
     ttys: BTreeMap<Id, u64>,
@@ -169,7 +169,6 @@ impl Herdr {
             snapshot: Snapshot::default(),
             origins: BTreeMap::new(),
             placements: 0,
-            selection: [None, None, None],
             harnesses: Vec::new(),
             agents: BTreeMap::new(),
             ttys: BTreeMap::new(),

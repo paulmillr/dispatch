@@ -65,7 +65,11 @@ extension ChatCoordinator {
         loadLaunches()
         if let helper = session.helper, helper.route.terminal == terminal, helper.endpoint == endpoint {
             if refresh {
-                Task { do { try await helper.open(refresh: true) } catch { helper.failed?(error) } }
+                // A chat closed or replaced before this task runs (its permission withdrawn) is not reopened.
+                Task { [weak session] in
+                    guard session?.helper === helper else { return }
+                    do { try await helper.open(refresh: true) } catch { helper.failed?(error) }
+                }
             }
             return
         }
@@ -112,7 +116,8 @@ extension ChatCoordinator {
             // printing its exit hint, and rediscovery on that output reports it provisional. Keep the transcript
             // and draft for its exit; a conversation it names next is the change.
             if conversation == nil, session.sessionID != nil, sameProcess { return }
-            if let previous = session.sessionID, previous != conversation {
+            let shown = session.sessionID
+            if let previous = shown, previous != conversation {
                 rememberRemotePresentation(session)
                 session.helperTask?.cancel()
                 let result = session.command?.command?.replacementResult
@@ -132,8 +137,10 @@ extension ChatCoordinator {
             if agent, let helper = session.helper { installHelperIntegration(page.key, endpoint: helper.endpoint, terminal: helper.route.terminal) }
             restoreRemotePresentation(session)
             session.process = session.helper?.endpoint == .local ? page.binding.process : nil
-            // A verified process before its first conversation has no history to wait for.
-            session.loadingHistory = page.history_pending && conversation != nil
+            // A verified process before its first conversation has no history to wait for. A chat already showing this
+            // conversation (reopened as its binding changed: its transcript appeared) is not loading: what the reopen
+            // reads merges by record, and blocking it meanwhile blocked the picker and the composer after a turn.
+            session.loadingHistory = page.history_pending && conversation != nil && (shown != conversation || session.turns.isEmpty)
             session.transcriptAvailable = !page.history_pending && page.history_error == nil
             session.helperEarlier = page.earlier
             session.hasEarlier = page.earlier != nil
@@ -200,22 +207,22 @@ extension ChatCoordinator {
             // Before busy, so a turn ending while its agents run keeps one working clock.
             if session.subagents != state.agents ?? [] { session.subagents = state.agents ?? [] }
             session.busy = state.busy && !(session.agentID == "claude" && session.modelPicker != nil && state.activity == "waiting")
+            session.starting = false
             session.nativeActivity = state.activity
             if !state.busy, state.dialog == nil { session.retiredInteraction = false }
             session.activityCheck = nil
             if let model = state.model {
                 session.applyConfiguration(model: model, effort: state.effort)
             }
-            // Core's State.usage is the documented ChatUsage JSON (api.rs State.usage).
-            if let data = state.usage?.data(using: .utf8),
-               let payload = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+            // Core's State.usage is the documented ChatUsage object (api.rs State.usage).
+            if let usage = state.usage, let payload = HelperBinary.foundation(usage) as? [String: Any] {
                 session.usage = ChatUsage(payload)
             }
             if let attention = state.attention, session.modelPicker == nil {
                 requireTerminalAttention(session, status: attention)
             }
-            // State.goal: the harness's goal JSON (codex native.rs goal); nil means no goal.
-            let goal = state.goal.flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }.flatMap(ChatGoal.init)
+            // State.goal: the harness's goal object (codex native.rs goal); nil means no goal.
+            let goal = state.goal.flatMap { HelperBinary.foundation($0) as? [String: Any] }.flatMap(ChatGoal.init)
             if goal != session.goal {
                 session.goal = goal; session.goalUpdatedAt = .now; session.goalRevision += 1
                 if session.commandResult?.title == "Goal" { session.commandResult?.text = goal?.summary ?? "Goal cleared." }
@@ -423,7 +430,7 @@ extension ChatCoordinator {
             return
         }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        let id = UUID()
+        let id = System.uuid()
         let delivery = queued?.delivery ?? session.drafts.prepareDelivery(consume: !command)
         guard delivery != nil || queued != nil else { return }
         session.submissionID = id
@@ -574,14 +581,14 @@ extension ChatCoordinator {
             session.submissionID = nil
             session.queuedSubmissionID = nil
             session.helperTask = nil
-            session.focusRequest = UUID()
+            session.focusRequest = System.uuid()
             self.drainQueue(session)
         }
     }
 
     func interruptHelper(_ session: ChatSession) -> Bool {
         guard let helper = session.helper, canInterrupt(session) else { return false }
-        let id = UUID()
+        let id = System.uuid()
         session.interruptionID = id
         session.stopQueue()
         operations.run(for: session.id) { [weak session] in
@@ -690,7 +697,7 @@ extension ChatCoordinator {
             method = "interactions.dismiss"
         }
         let installation = method == "interactions.dismiss" ? integrationChanges : nil
-        let id = UUID()
+        let id = System.uuid()
         session.nativeInputs.insert(id)
         operations.run(for: session.id) { [weak session] in
             guard let session else { return }
@@ -716,7 +723,7 @@ extension ChatCoordinator {
         input.interaction = question.id
         input.answers = skip ? Dictionary(uniqueKeysWithValues: question.questions.map { ($0.id, .skip) }) : question.answers
         question.submitted = true
-        let id = UUID()
+        let id = System.uuid()
         session.nativeInputs.insert(id)
         operations.run(for: session.id) { [weak session] in
             guard let session else { return }
@@ -848,13 +855,11 @@ extension ChatCoordinator {
     }
 
     /// Loads the helper's launch labels once; failures leave the generic wording.
-    func loadLaunches(file: StaticString = #fileID, line: UInt = #line) {
+    func loadLaunches() {
         guard helperLaunches == nil else { return }
-        NSLog("[HelperOrder] launches schedule caller=%@:%lu", String(describing: file), line)
         helperLaunches = []
         // The first audit is installation work too: a toggle made meanwhile runs after it, never under it.
         integrationWork { chat in
-            NSLog("[HelperOrder] launches submit caller=%@:%lu", String(describing: file), line)
             let launches = (try? await HelperClient(HelperApp.shared.connection()).launches()) ?? []
             chat.helperLaunches = launches
             for launch in launches {

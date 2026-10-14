@@ -14,8 +14,8 @@ final class HerdrChatIntegrationTests: XCTestCase {
         var passed = false
         defer { fixture.stop(removeState: passed) }
         try await fixture.start(timeout: .seconds(15))
-        let root = URL(fileURLWithPath: "/tmp/hc-\(UUID().uuidString.prefix(8))")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        let root = URL(fileURLWithPath: "/tmp/hc-\(System.uuid().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let socket = root.appendingPathComponent("herdr.sock").path
         let runtime = TerminalRuntime.shared, controller = AppDelegate(), previousChat = runtime.chat
         let workspace = controller.workspace
@@ -117,7 +117,7 @@ final class HerdrChatIntegrationTests: XCTestCase {
         _ = try api(socket, "pane.split", ["target_pane_id": surfaceA.pane, "direction": "right", "cwd": root.path, "focus": true])
         try await TestSupport.eventually { try HerdrTestSupport.panes(workspace, socket: socket).count == 2 }
         let split = try XCTUnwrap(HerdrTestSupport.panes(workspace, socket: socket).first { $0.id != a.id })
-        XCTAssertEqual(workspace.directory(forSurface: split.id).map { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path }, root.resolvingSymlinksInPath().path)
+        XCTAssertEqual(workspace.directory(forSurface: split.id).map { System.resolve(URL(fileURLWithPath: $0)).path }, System.resolve(root).path)
         let (splitView, c) = try await start(split.id)
         let splitPTY = splitView.surface
         runtime.chat.chooseChat(true, session: c)

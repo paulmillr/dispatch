@@ -96,6 +96,19 @@ enum TerminalTestSupport {
             charactersIgnoringModifiers: ignoringModifiers ?? text, isARepeat: false, keyCode: code)!
     }
 
+    /// A wheel at the terminal's center. A wheel made from a CGEvent sits wherever the Mac's pointer is (AppKit reads it
+    /// back as `locationInWindow`: screen coordinates, as it has no window), and the cell under it goes to the helper
+    /// with the scroll: placed here, what the app asks no longer depends on where earlier tests or runs left the pointer.
+    static func wheel(_ amount: Int32, units: CGScrollEventUnit = .line, at terminal: TerminalView) throws {
+        let point = terminal.convert(NSPoint(x: terminal.bounds.midX, y: terminal.bounds.midY), to: nil)
+        let event = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: units, wheelCount: 1, wheel1: amount, wheel2: 0, wheel3: 0))
+        event.location = CGPoint(x: point.x, y: try XCTUnwrap(NSScreen.screens.first).frame.height - point.y)
+        let wheel = try XCTUnwrap(NSEvent(cgEvent: event))
+        XCTAssertLessThan(hypot(wheel.locationInWindow.x - point.x, wheel.locationInWindow.y - point.y), 1,
+                          "A windowless wheel reads its location as screen coordinates: \(wheel.locationInWindow) for \(point)")
+        terminal.scrollWheel(with: wheel)
+    }
+
     static func key(_ code: UInt16, _ text: String, _ terminal: TerminalView, modifiers: NSEvent.ModifierFlags = []) {
         terminal.keyDown(with: keyEvent(code, text, in: terminal.window, modifiers: modifiers))
     }

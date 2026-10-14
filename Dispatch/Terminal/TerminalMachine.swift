@@ -31,7 +31,7 @@ struct SSHShell: Equatable, Codable, Sendable {
     /// through the app's ssh launcher, so it is attributed like ssh typed in a terminal, with this
     /// exact ssh executable.
     func command(running remote: String? = nil) -> String {
-        (["/usr/bin/env", "DISPATCH_SSH_EXECUTABLE=" + executable, Bundle.main.executablePath ?? "", "--ssh-launch"]
+        (["/usr/bin/env", "DISPATCH_SSH_EXECUTABLE=" + executable, System.executable.path, "--ssh-launch"]
             + arguments + (remote.map { [$0] } ?? []))
             .map(HerdrLaunch.quote).joined(separator: " ")
     }

@@ -77,13 +77,13 @@ final class ClaudeHistoryTests: XCTestCase {
         XCTAssertTrue(empty.turns.isEmpty)
         let started = try await open(try turn(0))
         XCTAssertEqual(answers(started), ["Answer 0"])
-        let foreign = try row("user", "foreign", ["role": "user", "content": "wrong"], extra: ["sessionId": UUID().uuidString])
+        let foreign = try row("user", "foreign", ["role": "user", "content": "wrong"], extra: ["sessionId": System.uuid().uuidString])
         let rejected = try await open(try turn(0) + foreign, opens: false)
         XCTAssertTrue(rejected.turns.isEmpty)
     }
 
     func testForeignHistoryAndReplacedFileInvalidatePendingOlderPages() async throws {
-        var data = try row("user", "foreign", ["role": "user", "content": "wrong"], extra: ["sessionId": UUID().uuidString])
+        var data = try row("user", "foreign", ["role": "user", "content": "wrong"], extra: ["sessionId": System.uuid().uuidString])
         for index in 0..<100 { data += try turn(index) }
         let session = try await open(data)
         XCTAssertTrue(session.hasEarlier)
@@ -101,7 +101,7 @@ final class ClaudeHistoryTests: XCTestCase {
     private lazy var chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
 
     private func open(_ data: Data, opens: Bool = true) async throws -> ChatSession {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("dispatch-claude-history-\(UUID()).jsonl")
+        let url = System.temporary.appendingPathComponent("dispatch-claude-history-\(System.uuid()).jsonl")
         try data.write(to: url)
         addTeardownBlock { try? FileManager.default.removeItem(at: url) }
         return try await chat.archived(url, agent: "claude", session: sessionID, opens: opens)

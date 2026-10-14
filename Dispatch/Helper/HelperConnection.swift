@@ -16,9 +16,11 @@ final class HelperConnection: @unchecked Sendable {
   }
 
   private final class Pending: @unchecked Sendable {
+    /// Made inside a waiting test's check: its request is the check's own (replay answers it past the step's hold).
+    let asking = AppReplay.asking
     var id: UInt64?
     var canceled = false
-    var notify: (@Sendable (String, Data) -> Void)?
+    var notify: (@Sendable (String, HelperBinary.Value) -> Void)?
     var complete: ((Result<HelperWire.Content, any Error>) -> Void)?
   }
 
@@ -42,10 +44,10 @@ final class HelperConnection: @unchecked Sendable {
 
   /// One submitted request, consumed once. Dropping it cancels abandoned work.
   final class Call<R: Decodable & Sendable>: Sendable {
-    fileprivate let stream: AsyncThrowingStream<Data, any Error>
+    fileprivate let stream: AsyncThrowingStream<HelperBinary.Value, any Error>
     fileprivate let cancel: @Sendable () -> Void
 
-    fileprivate init(stream: AsyncThrowingStream<Data, any Error>, cancel: @escaping @Sendable () -> Void) {
+    fileprivate init(stream: AsyncThrowingStream<HelperBinary.Value, any Error>, cancel: @escaping @Sendable () -> Void) {
       self.stream = stream
       self.cancel = cancel
     }
@@ -57,8 +59,8 @@ final class HelperConnection: @unchecked Sendable {
         try await withTaskCancellationHandler {
           try Task.checkCancellation()
           var iterator = stream.makeAsyncIterator()
-          guard let bytes = try await iterator.next() else { throw CancellationError() }
-          return try JSONDecoder().decode(R.self, from: bytes)
+          guard let value = try await iterator.next() else { throw CancellationError() }
+          return try HelperBinary.decode(R.self, from: value)
         } onCancel: { cancel() }
       }
     }
@@ -69,13 +71,13 @@ final class HelperConnection: @unchecked Sendable {
     _ method: String, params: P
   ) async -> Call<R> {
     let item = Pending()
-    let (stream, continuation) = AsyncThrowingStream<Data, any Error>.makeStream()
+    let (stream, continuation) = AsyncThrowingStream<HelperBinary.Value, any Error>.makeStream()
     let call = Call<R>(stream: stream) { self.transport.queue.async { self.cancel(item) } }
     item.complete = { result in
       do {
         let content = try result.get()
         guard content.bytes == nil else { throw HelperWire.Failure.kind }
-        continuation.yield(content.json)
+        continuation.yield(content.value)
         continuation.finish()
       } catch { continuation.finish(throwing: error) }
     }
@@ -96,11 +98,11 @@ final class HelperConnection: @unchecked Sendable {
 
   nonisolated(nonsending) func request<P: Encodable, R: Decodable>(
     _ method: String, params: P,
-    notify: (@Sendable (String, Data) -> Void)? = nil
+    notify: (@Sendable (String, HelperBinary.Value) -> Void)? = nil
   ) async throws -> R {
     let content = try await perform(method, params: params, notify: notify)
     guard content.bytes == nil else { throw HelperWire.Failure.kind }
-    return try JSONDecoder().decode(R.self, from: content.json)
+    return try HelperBinary.decode(R.self, from: content.value)
   }
 
   nonisolated(nonsending) func requestBinary<P: Encodable, R: Decodable>(
@@ -108,11 +110,11 @@ final class HelperConnection: @unchecked Sendable {
   ) async throws -> (result: R, bytes: Data) {
     let content = try await perform(method, params: params, notify: nil)
     guard let bytes = content.bytes else { throw HelperWire.Failure.kind }
-    return (try JSONDecoder().decode(R.self, from: content.json), bytes)
+    return (try HelperBinary.decode(R.self, from: content.value), bytes)
   }
 
   private nonisolated(nonsending) func perform<P: Encodable>(
-    _ method: String, params: P, notify: (@Sendable (String, Data) -> Void)?
+    _ method: String, params: P, notify: (@Sendable (String, HelperBinary.Value) -> Void)?
   ) async throws -> HelperWire.Content {
     let body = try encode(Request(method: method, params: params))
     let item = Pending()
@@ -133,8 +135,8 @@ final class HelperConnection: @unchecked Sendable {
 
   nonisolated(nonsending) func subscribe<P: Encodable>(
     _ method: String, params: P,
-    notify: @escaping @Sendable (String, Data) -> Void,
-    ended: @escaping @Sendable (Result<Data, any Error>) -> Void
+    notify: @escaping @Sendable (String, HelperBinary.Value) -> Void,
+    ended: @escaping @Sendable (Result<HelperBinary.Value, any Error>) -> Void
   ) async throws -> UInt64 {
     let body = try encode(Request(method: method, params: params))
     let item = Pending()
@@ -143,7 +145,7 @@ final class HelperConnection: @unchecked Sendable {
       ended(
         result.flatMap { content in
           guard content.bytes == nil else { return .failure(HelperWire.Failure.kind) }
-          return .success(content.json)
+          return .success(content.value)
         })
     }
     return try await withCheckedThrowingContinuation { reply in
@@ -198,9 +200,7 @@ final class HelperConnection: @unchecked Sendable {
 
   /// Request bodies use the generated binary value codec; the DTOs stay Codable.
   private func encode<P: Encodable>(_ value: P) throws -> Data {
-    let json = try JSONEncoder().encode(value)
-    return try HelperBinary.encode(
-      HelperBinary.value(JSONSerialization.jsonObject(with: json, options: .fragmentsAllowed)))
+    try HelperBinary.encode(HelperBinary.value(encoding: value))
   }
 
   private func begin(_ item: Pending, method: String, body: Data) throws -> UInt64 {
@@ -217,7 +217,7 @@ final class HelperConnection: @unchecked Sendable {
     next += 1
     item.id = id
     pending[id] = item
-    transport.send(bytes)
+    transport.send(bytes, asking: item.asking)
     return id
   }
 
@@ -232,11 +232,10 @@ final class HelperConnection: @unchecked Sendable {
         // A binary stream completes with its result metadata itself (no envelope).
         if let bytes = reply.binary {
           guard frame.kind == .response else { throw HelperWire.Failure.kind }
-          finish(item, result: .success(
-            HelperWire.Content(json: try json(HelperBinary.foundation(reply.value)), bytes: bytes)))
+          finish(item, result: .success(HelperWire.Content(value: reply.value, bytes: bytes)))
           continue
         }
-        guard let object = HelperBinary.foundation(reply.value) as? [String: Any] else {
+        guard case .object(let object) = reply.value else {
           throw HelperFailure(
             code: "invalid_response", message: "Invalid helper message.")
         }
@@ -244,23 +243,22 @@ final class HelperConnection: @unchecked Sendable {
         case .response:
           let result: Result<HelperWire.Content, any Error>
           if let error = object["error"], object["result"] == nil {
-            result = .failure(
-              try JSONDecoder().decode(HelperFailure.self, from: json(error)))
+            result = .failure(try HelperBinary.decode(HelperFailure.self, from: error))
           } else if let value = object["result"], object["error"] == nil {
-            result = .success(HelperWire.Content(json: try json(value), bytes: nil))
+            result = .success(HelperWire.Content(value: value, bytes: nil))
           } else {
             throw HelperFailure(
               code: "invalid_response", message: "Invalid helper response.")
           }
           finish(item, result: result)
         case .notify:
-          guard let method = object["method"] as? String, let params = object["params"],
+          guard case .string(let method)? = object["method"], let params = object["params"],
             let notify = item.notify
           else {
             throw HelperFailure(
               code: "invalid_response", message: "Unexpected helper notification.")
           }
-          notify(method, try json(params))
+          notify(method, params)
         default:
           throw HelperFailure(
             code: "invalid_response", message: "Unexpected helper message kind.")
@@ -270,12 +268,6 @@ final class HelperConnection: @unchecked Sendable {
       end(error)
       transport.close()
     }
-  }
-
-  private func json(_ value: Any) throws -> Data {
-    try JSONSerialization.data(
-      withJSONObject: value,
-      options: [.fragmentsAllowed, .sortedKeys, .withoutEscapingSlashes])
   }
 
   private func cancel(_ item: Pending) {

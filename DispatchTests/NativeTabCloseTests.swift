@@ -92,7 +92,7 @@ final class NativeTabCloseTests: XCTestCase {
         let app = try TmuxWalkthrough(autoClose: true); defer { app.close() }
         let server = remote ? try await SSHTestServer() : nil
         defer { server?.stop() }
-        let root = server?.root ?? URL(fileURLWithPath: "/tmp/close-herdr-\(UUID().uuidString.prefix(8))")
+        let root = server?.root ?? URL(fileURLWithPath: "/tmp/close-herdr-\(System.uuid().uuidString.prefix(8))")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let socket = root.appendingPathComponent("herdr.sock").path
         defer {

@@ -22,12 +22,15 @@ final class SSHSpaceTests: XCTestCase {
             var address = sockaddr_in()
             address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
             address.sin_family = sa_family_t(AF_INET); address.sin_addr.s_addr = inet_addr("127.0.0.1")
-            let port = try withUnsafeMutablePointer(to: &address) { pointer in
-                try pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { address in
-                    var length = socklen_t(MemoryLayout<sockaddr_in>.size)
-                    guard Darwin.bind(listener, address, length) == 0, getsockname(listener, address, &length) == 0,
-                          listen(listener, 1) == 0 else { throw POSIXError(.EIO) }
-                    return UInt16(bigEndian: pointer.pointee.sin_port)
+            // The port is the OS's choice: recorded (replay's ssh never connects to it).
+            let port = try System.act("test.listener", "127.0.0.1") {
+                try withUnsafeMutablePointer(to: &address) { pointer in
+                    try pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { address in
+                        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+                        guard Darwin.bind(listener, address, length) == 0, getsockname(listener, address, &length) == 0,
+                              listen(listener, 1) == 0 else { throw POSIXError(.EIO) }
+                        return UInt16(bigEndian: pointer.pointee.sin_port)
+                    }
                 }
             }
             let arguments = ["-F", "/dev/null", "-o", "BatchMode=yes", "-o", "ConnectTimeout=20", "-p", String(port), "127.0.0.1"]
@@ -39,7 +42,7 @@ final class SSHSpaceTests: XCTestCase {
                 // progress must still be attributed to the actual pane PTY.
                 let environment = app.runtime.herdrLaunch.environment(for: try XCTUnwrap(app.origin).id)
                 command = (["env"] + environment.map { $0.key + "=" + $0.value }
-                    + [try XCTUnwrap(Bundle.main.executablePath), "--ssh-launch"] + arguments)
+                    + [System.executable.path, "--ssh-launch"] + arguments)
                     .map(HerdrLaunch.quote).joined(separator: " ")
             } else { command = "ssh " + arguments.map(HerdrLaunch.quote).joined(separator: " ") }
             TerminalTestSupport.send(command + "; printf 'SSH_SPINNER_%s\\n' FINISHED", to: terminal)
@@ -111,16 +114,15 @@ final class SSHSpaceTests: XCTestCase {
     func testRemoteTmuxPopupCreatesBackendAndLocalSpaces() async throws {
         let app = try TmuxWalkthrough(autoClose: true)
         defer { app.close() }
-        let root = URL(fileURLWithPath: "/tmp/hs-\(UUID().uuidString.prefix(8))")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        let root = URL(fileURLWithPath: "/tmp/hs-\(System.uuid().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let key = root.appendingPathComponent("key").path
         let generate = Process()
         generate.executableURL = URL(fileURLWithPath: "/usr/bin/ssh-keygen")
         generate.arguments = ["-q", "-t", "ed25519", "-N", "", "-f", key]
-        try generate.run(); generate.waitUntilExit()
-        XCTAssertEqual(generate.terminationStatus, 0)
-        let port = try availablePort()
+        XCTAssertEqual(try System.run(generate).status, 0)
+        let port = try System.observe("port.available", root.path) { try availablePort() }
         let config = root.appendingPathComponent("sshd_config")
         try """
         ListenAddress 127.0.0.1
@@ -139,14 +141,16 @@ final class SSHSpaceTests: XCTestCase {
         daemon.executableURL = URL(fileURLWithPath: "/usr/sbin/sshd")
         daemon.arguments = ["-D", "-e", "-f", config.path]
         daemon.standardOutput = FileHandle.nullDevice; daemon.standardError = FileHandle.nullDevice
-        try daemon.run()
-        defer { if daemon.isRunning { daemon.terminate() }; daemon.waitUntilExit() }
-        try await TestSupport.eventually(diagnostic: "Test SSH server did not start") { self.acceptingConnections(port) }
+        let child = try System.Child(daemon)
+        defer { child.stop() }
+        try await TestSupport.eventually(diagnostic: "Test SSH server did not start") {
+            System.process("port.accepting", port) { self.acceptingConnections(port) }
+        }
         let sourceID = try XCTUnwrap(app.workspace.activeTab?.id)
         try await app.wait { app.runtime.views[sourceID].map { !TerminalTestSupport.screen(terminal: $0).isEmpty } == true }
         let options = ["-F", "/dev/null", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
                        "-o", "LogLevel=ERROR", "-o", "IdentitiesOnly=yes", "-i", key, "-p", String(port)]
-        let host = NSUserName() + "@127.0.0.1"
+        let host = System.machine.name + "@127.0.0.1"
         let command = ["/usr/bin/ssh"] + options + ["-tt", host, "\(HerdrLaunch.quote(TestSupport.tool("tmux"))) -u -L \(app.socket) -CC attach -t edge"]
         try await app.attach(command: "TERM=xterm-256color " + command.map(HerdrLaunch.quote).joined(separator: " "))
         try await app.ready()

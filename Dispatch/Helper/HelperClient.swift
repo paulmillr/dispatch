@@ -99,36 +99,35 @@ final class HelperClient: Sendable {
     /// A program in a multiplexer copied text (tmux load-buffer -w): it belongs on this Mac's pasteboard.
     case clipboard(Clipboard)
 
-    static func decode(_ method: String, _ data: Data) throws -> Self? {
-      let decoder = JSONDecoder()
+    static func decode(_ method: String, _ value: HelperBinary.Value) throws -> Self? {
+      func read<T: Decodable>(_ type: T.Type) throws -> T { try HelperBinary.decode(type, from: value) }
       switch method {
-      case "backend.opened": return .opened(try decoder.decode(UInt64.self, from: data))
+      case "backend.opened": return .opened(try read(UInt64.self))
       case "terminal.attached":
-        _ = try decoder.decode(Empty.self, from: data)
+        _ = try read(Empty.self)
         return .attached
-      case "topology": return .topology(try decoder.decode(HelperTopology.self, from: data))
-      case "terminal.output": return .output(try decoder.decode(Output.self, from: data))
-      case "terminal.scroll": return .history(try decoder.decode(History.self, from: data))
-      case "terminal.exit": return .exit(try decoder.decode(Exit.self, from: data))
-      case "agent.changed": return .agent(try decoder.decode(Agent.self, from: data))
-      case "terminal.backend": return .backend(try decoder.decode(Backend.self, from: data))
-      case "clipboard": return .clipboard(try decoder.decode(Clipboard.self, from: data))
+      case "topology": return .topology(try read(HelperTopology.self))
+      case "terminal.output": return .output(try read(Output.self))
+      case "terminal.scroll": return .history(try read(History.self))
+      case "terminal.exit": return .exit(try read(Exit.self))
+      case "agent.changed": return .agent(try read(Agent.self))
+      case "terminal.backend": return .backend(try read(Backend.self))
+      case "clipboard": return .clipboard(try read(Clipboard.self))
       default: return nil
       }
     }
 
-    func encode() throws -> Data {
-      let encoder = JSONEncoder()
+    func encode() throws -> HelperBinary.Value {
       switch self {
-      case .opened(let id): return try encoder.encode(id)
-      case .attached: return try encoder.encode(Empty())
-      case .topology(let value): return try encoder.encode(value)
-      case .output(let value): return try encoder.encode(value)
-      case .history(let value): return try encoder.encode(value)
-      case .exit(let value): return try encoder.encode(value)
-      case .agent(let value): return try encoder.encode(value)
-      case .backend(let value): return try encoder.encode(value)
-      case .clipboard(let value): return try encoder.encode(value)
+      case .opened(let id): return try HelperBinary.value(encoding: id)
+      case .attached: return try HelperBinary.value(encoding: Empty())
+      case .topology(let value): return try HelperBinary.value(encoding: value)
+      case .output(let value): return try HelperBinary.value(encoding: value)
+      case .history(let value): return try HelperBinary.value(encoding: value)
+      case .exit(let value): return try HelperBinary.value(encoding: value)
+      case .agent(let value): return try HelperBinary.value(encoding: value)
+      case .backend(let value): return try HelperBinary.value(encoding: value)
+      case .clipboard(let value): return try HelperBinary.value(encoding: value)
       }
     }
   }
@@ -341,9 +340,9 @@ final class HelperClient: Sendable {
   ) async throws -> UInt64 {
     try await connection.subscribe(
       method, params: params,
-      notify: { method, data in
+      notify: { method, params in
         do {
-          if let value = try Update.decode(method, data) { update(.success(value)) }
+          if let value = try Update.decode(method, params) { update(.success(value)) }
         } catch { update(.failure(error)) }
       },
       ended: { result in

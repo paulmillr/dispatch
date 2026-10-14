@@ -236,7 +236,7 @@ pub(super) fn publish(
 }
 
 unsafe extern "C" {
-    fn flock(fd: i32, operation: i32) -> i32;
+    pub(super) fn flock(fd: i32, operation: i32) -> i32;
     pub(super) fn getuid() -> u32;
     fn getpwuid_r(
         uid: u32,
@@ -575,8 +575,10 @@ pub(super) fn lock(path: &Path, create: bool, uid: u32) -> io::Result<File> {
     Ok(file)
 }
 
-/// SIGTERM to an owned, unreaped child whose helper is ending.
-pub(super) fn end(child: u32) -> io::Result<()> {
+/// SIGTERM to an owned, unreaped child whose helper is ending; to its whole process group when it
+/// leads one, so what it started (a wrapper's real program) ends too instead of being orphaned.
+pub(super) fn end(child: u32, group: bool) -> io::Result<()> {
+    let target = if group { -(child as i32) } else { child as i32 };
     #[cfg(target_os = "linux")]
     let resume = 18;
     #[cfg(target_os = "macos")]
@@ -584,7 +586,7 @@ pub(super) fn end(child: u32) -> io::Result<()> {
     for signal in [15, resume] {
         // The unreaped owned child pins this PID. Resume permits a stopped child
         // to handle its pending SIGTERM; neither signal targets its parent.
-        if unsafe { kill(child as i32, signal) } < 0 {
+        if unsafe { kill(target, signal) } < 0 {
             let error = io::Error::last_os_error();
             if error.raw_os_error() != Some(3) {
                 return Err(error);

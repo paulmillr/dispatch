@@ -10,11 +10,10 @@ import XCTest
 @MainActor
 final class UIBenchmarkTests: XCTestCase {
     private var output: URL {
-        if let path = ProcessInfo.processInfo.environment["DISPATCH_BENCHMARK_OUTPUT"] {
+        if let path = System.environment("DISPATCH_BENCHMARK_OUTPUT") {
             return URL(fileURLWithPath: path).appendingPathComponent("ui")
         }
-        return URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("build/ui-benchmark-validation")
+        return System.checkout.appendingPathComponent("build/ui-benchmark-validation")
     }
 
     private struct Report: Codable {
@@ -61,7 +60,7 @@ final class UIBenchmarkTests: XCTestCase {
     }
 
     private var sustainedSeconds: Double {
-        min(3600, max(5, Double(ProcessInfo.processInfo.environment["DISPATCH_BENCHMARK_SECONDS"] ?? "5") ?? 5))
+        min(3600, max(5, Double(System.environment("DISPATCH_BENCHMARK_SECONDS") ?? "5") ?? 5))
     }
 
     /// Fixture/window readiness, not full application process launch or workspace restoration.
@@ -297,7 +296,7 @@ final class UIBenchmarkTests: XCTestCase {
     func testLiveTerminalInputAndScroll() async throws {
         // scripts/benchmark.py chooses the ssh server: a Lima VM profile, the
         // loopback fixture (a Release helper needs it behind root sshd), or none.
-        let environment = ProcessInfo.processInfo.environment
+        let environment = System.inherited
         let sshMode = environment["DISPATCH_BENCHMARK_SSH"] ?? "loopback"
         for backend in ["local", "ssh", "tmux", "herdr"] where backend != "ssh" || sshMode != "skipped" {
             let app = try TmuxWalkthrough()
@@ -306,7 +305,7 @@ final class UIBenchmarkTests: XCTestCase {
                 try JSONDecoder().decode(SSHLinuxTestProfile.self, from: Data(contentsOf: URL(fileURLWithPath: $0)))
             } : nil
             var limaScope: SSHIntegrationScope?
-            let directory = URL(fileURLWithPath: "/tmp/ui-herdr-\(UUID().uuidString.prefix(8))")
+            let directory = URL(fileURLWithPath: "/tmp/ui-herdr-\(System.uuid().uuidString.prefix(8))")
             let socket = directory.appendingPathComponent("herdr.sock").path
             defer {
                 if let limaScope { app.runtime.ssh.permissions.reset(limaScope) }
@@ -355,7 +354,7 @@ final class UIBenchmarkTests: XCTestCase {
 
     func testChatHistoryAndCodePreviews() async throws {
         let coordinator = ChatCoordinator(enabled: false)
-        let session = coordinator.session(for: UUID())
+        let session = coordinator.session(for: System.uuid())
         session.showChat = true; session.sessionID = "ui-benchmark"; session.atBottom = false
         let code = (0..<350).map { "let result\($0) = await client.request(\"workspace\", retry: false) // line \($0)" }.joined(separator: "\n")
         session.turns = (0..<150).map { index in
@@ -391,7 +390,7 @@ final class UIBenchmarkTests: XCTestCase {
             controller.settings.values.spaceOrder = .tree
             for index in 0..<count {
                 var space = Space(name: "Project \(index)", directory: "/tmp")
-                let generation = UUID(), host = "build-\(index % 8)"
+                let generation = System.uuid(), host = "build-\(index % 8)"
                 workspace.hosts.begin(space.tabs[0].id, generation: generation, destination: "dev@" + host)
                 workspace.hosts.update(space.tabs[0].id, generation: generation, destination: "dev@" + host,
                     greeting: SSHGreeting(version: 1, host: host, boot: "boot", uid: 501, home: "/home/dev", capabilities: []), state: .connected)
@@ -421,7 +420,7 @@ final class UIBenchmarkTests: XCTestCase {
     }
 
     func testSettings() async throws {
-        let root = URL(fileURLWithPath: "/tmp/ui-settings-\(UUID())")
+        let root = URL(fileURLWithPath: "/tmp/ui-settings-\(System.uuid())")
         defer { try? FileManager.default.removeItem(at: root) }
         let store = SettingsStore(file: root.appendingPathComponent("settings.json"))
         let window = try await mount(SettingsView(store: store, workspace: Workspace()), size: .init(width: 560, height: 550))

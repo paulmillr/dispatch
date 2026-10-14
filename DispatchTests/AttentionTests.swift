@@ -9,14 +9,14 @@ final class AttentionTests: XCTestCase {
         let runtime = TerminalRuntime.shared
         let preferences = runtime.preferences
         runtime.preferences.enableHostDetection = false
-        let reply = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let reply = System.temporary.appendingPathComponent(System.uuid().uuidString)
         defer { runtime.preferences = preferences; try? FileManager.default.removeItem(at: reply) }
         let scope = try XCTUnwrap(SSHIntegrationScope(executable: "/usr/bin/ssh", destination: "attention-test", configuration: "hostname attention-test\nuser test\n"))
         let coordinator = SSHCoordinator()
         let saved = coordinator.permissions.remembered(scope)
-        let request = SSHConsentRequest(id: UUID(), tabID: UUID(), token: "test", scope: scope, origin: try XCTUnwrap(AgentProcess.capture(getpid())))
+        let request = SSHConsentRequest(id: System.uuid(), tabID: System.uuid(), token: "test", scope: scope, origin: try XCTUnwrap(AgentProcess.capture(System.pid)))
         coordinator.consent(request, reply: reply)
-        let response = try JSONDecoder().decode(SSHConsentResponse.self, from: Data(contentsOf: reply))
+        let response = try JSONDecoder().decode(SSHConsentResponse.self, from: System.read(reply))
         XCTAssertEqual(response.grant?.profile, .ordinary)
         XCTAssertEqual(coordinator.permissions.remembered(scope), saved)
     }
@@ -25,17 +25,17 @@ final class AttentionTests: XCTestCase {
         let runtime = TerminalRuntime.shared
         let preferences = runtime.preferences
         runtime.preferences.newHostPolicy = .full
-        let reply = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let reply = System.temporary.appendingPathComponent(System.uuid().uuidString)
         defer { runtime.preferences = preferences; try? FileManager.default.removeItem(at: reply) }
-        let scope = try XCTUnwrap(SSHIntegrationScope(executable: "/usr/bin/ssh", destination: "full-\(UUID().uuidString)",
+        let scope = try XCTUnwrap(SSHIntegrationScope(executable: "/usr/bin/ssh", destination: "full-\(System.uuid().uuidString)",
                                                      configuration: "hostname full-policy\nuser test\n"))
         let coordinator = SSHCoordinator()
         defer { coordinator.permissions.reset(scope) }
         coordinator.presentIntegrationConsent = { _, _ in XCTFail("Full features must not show the sheet"); return nil }
-        let request = SSHConsentRequest(id: UUID(), tabID: UUID(), token: "test", scope: scope, origin: try XCTUnwrap(AgentProcess.capture(getpid())))
+        let request = SSHConsentRequest(id: System.uuid(), tabID: System.uuid(), token: "test", scope: scope, origin: try XCTUnwrap(AgentProcess.capture(System.pid)))
         coordinator.consent(request, reply: reply)
-        try await TestSupport.eventually { FileManager.default.fileExists(atPath: reply.path) }
-        let response = try JSONDecoder().decode(SSHConsentResponse.self, from: Data(contentsOf: reply))
+        try await TestSupport.eventually { (try? System.read(reply)) != nil }
+        let response = try JSONDecoder().decode(SSHConsentResponse.self, from: System.read(reply))
         XCTAssertEqual(response.grant?.selectedFeatures, Set(SSHIntegrationFeature.allCases))
         XCTAssertEqual(coordinator.permissions.remembered(scope), response.grant)
         XCTAssertEqual(coordinator.permissions.agentHooks(scope), [.codex: true, .claude: true, .pi: false], "Pi's remote extension stays opt-in")
@@ -173,7 +173,7 @@ final class AttentionTests: XCTestCase {
         session.loadingHistory = true
         XCTAssertTrue(attention.transitions(attention.entries).isEmpty)
         session.loadingHistory = false
-        session.activityCheck = UUID()
+        session.activityCheck = System.uuid()
         XCTAssertTrue(attention.transitions(attention.entries).isEmpty)
         session.activityCheck = nil
         session.awaitingPromptAck = true

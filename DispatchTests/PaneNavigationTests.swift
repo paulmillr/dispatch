@@ -116,15 +116,14 @@ final class PaneNavigationTests: XCTestCase {
             window.contentView?.layoutSubtreeIfNeeded(); window.displayIfNeeded()
         }
         let input = try XCTUnwrap(spaceSearch())
-        workspace.hosts.begin(try XCTUnwrap(workspace.activeTab).id, generation: UUID(), destination: "alice@build-server")
+        workspace.hosts.begin(try XCTUnwrap(workspace.activeTab).id, generation: System.uuid(), destination: "alice@build-server")
         for mode in [SpaceOrder.flat, .tree] {
             controller.settings.values.spaceOrder = mode
             for (query, noMatches) in [("API", false), ("BUILD-SERVER", false), ("alice@", false), ("nonexistent-space", true), ("", false)] {
                 input.stringValue = query
                 NotificationCenter.default.post(name: NSControl.textDidChangeNotification, object: input)
-                try await TestSupport.eventually {
-                    let text = try await PresentationTestSupport.capture(window).text()
-                    return text.contains("No matching spaces") == noMatches
+                try await TestSupport.eventually(diagnostic: "Space filter \(mode) \"\(query)\": expected \"No matching spaces\" \(noMatches ? "shown" : "hidden")") {
+                    try await PresentationTestSupport.capture(window).reads(["No matching spaces"]) == noMatches
                 }
                 XCTAssertEqual(workspace.selectedSpace, selected, "Filtering must not switch the active space")
             }

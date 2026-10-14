@@ -12,17 +12,17 @@ final class ClaudeTransportTests: XCTestCase {
         let fm = FileManager.default
         let claude = try XCTUnwrap([TestSupport.tool("claude")].first { fm.isExecutableFile(atPath: $0) })
         // herdr's Unix socket must fit sockaddr_un even on macOS's long TMPDIR.
-        let state = URL(fileURLWithPath: "/tmp/dispatch-claude-transport-" + UUID().uuidString)
+        let state = URL(fileURLWithPath: "/tmp/dispatch-claude-transport-" + System.uuid().uuidString)
         let script = CodexTestSupport.root.appendingPathComponent("scripts/claude_fixture.py").path
         let server = Process(); server.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
         server.arguments = [script, "serve", "--state", state.path, "--delay", "0.025"]
         server.standardOutput = FileHandle.nullDevice; server.standardError = FileHandle.nullDevice
-        try server.run()
+        let child = try System.Child(server)
         defer {
-            if server.isRunning { server.terminate(); server.waitUntilExit() }
+            child.stop()
             print("Claude \(backend) fixture: " + state.path)
         }
-        try await TestSupport.eventually { fm.fileExists(atPath: state.appendingPathComponent("endpoint.json").path) }
+        try await TestSupport.eventually { System.exists(state.appendingPathComponent("endpoint.json")) }
         let runtime = TerminalRuntime.shared, previous = runtime.chat
         runtime.chat = ChatCoordinator(enabled: true)
         defer { runtime.chat = previous }
@@ -54,7 +54,7 @@ final class ClaudeTransportTests: XCTestCase {
         let process = try XCTUnwrap(session.process), conversation = try XCTUnwrap(session.sessionID)
         let helper = try XCTUnwrap(session.helper)
         // Input addressed to another conversation is refused on every backend (the helper checks the binding).
-        let foreign = await helper.refuses("foreign conversation", conversation: UUID().uuidString)
+        let foreign = await helper.refuses("foreign conversation", conversation: System.uuid().uuidString)
         XCTAssertTrue(foreign, "A foreign conversation must not authorize \(backend) input")
         terminal.insertText("unsent native input", replacementRange: NSRange(location: NSNotFound, length: 0))
         try await TestSupport.eventually { terminal.agentMenuScreen.contains("unsent native input") }
@@ -100,7 +100,7 @@ final class ClaudeTransportTests: XCTestCase {
                 XCTAssertTrue(side.messages.contains { $0.user && $0.text.contains("Skipped") })
                 XCTAssertEqual(session.sessionID, conversation)
                 XCTAssertFalse(session.turns.flatMap(\.items).contains { $0.text.contains("multiple questions in Claude side") })
-                let requests = try String(contentsOf: state.appendingPathComponent("requests.jsonl"), encoding: .utf8)
+                let requests = String(decoding: try System.read(state.appendingPathComponent("requests.jsonl")), as: UTF8.self)
                 func strings(_ value: Any) -> [String] {
                     if let text = value as? String { return text.components(separatedBy: .newlines) }
                     if let array = value as? [Any] { return array.flatMap(strings) }
@@ -111,8 +111,8 @@ final class ClaudeTransportTests: XCTestCase {
                     let request = try JSONSerialization.jsonObject(with: Data(line.utf8))
                     return strings(request).filter { $0.hasPrefix(" - Primary working directory: ") }
                 }
-                let paths = directories.map { URL(fileURLWithPath: String($0.dropFirst(" - Primary working directory: ".count))).resolvingSymlinksInPath().path }
-                XCTAssertEqual(Set(paths), [state.appendingPathComponent("work").resolvingSymlinksInPath().path],
+                let paths = directories.map { System.resolve(URL(fileURLWithPath: String($0.dropFirst(" - Primary working directory: ".count)))).path }
+                XCTAssertEqual(Set(paths), [System.resolve(state.appendingPathComponent("work")).path],
                                "Side agents must keep the parent's cwd, not scan the terminal's initial directory")
                 runtime.chat.closeSideConversation(session)
             }
@@ -132,7 +132,7 @@ final class ClaudeTransportTests: XCTestCase {
             // Selection travels through tmux or herdr menu keys; it must apply to
             // this conversation only and leave Claude's saved settings untouched.
             let settingsPath = state.appendingPathComponent("claude-home/settings.json")
-            let settings = try? Data(contentsOf: settingsPath)
+            let settings = try? System.read(settingsPath)
             runtime.chat.openModelPicker(session, column: .model)
             let picker = try XCTUnwrap(session.modelPicker)
             try await TestSupport.eventually(timeout: .seconds(20)) { !picker.loading }
@@ -148,7 +148,7 @@ final class ClaudeTransportTests: XCTestCase {
             selectedModel = true
             XCTAssertEqual(session.model, ClaudeModelMenu.modelID(detail: model.detail) ?? model.name)
             XCTAssertEqual(session.effort, "low")
-            XCTAssertEqual(try? Data(contentsOf: settingsPath), settings)
+            XCTAssertEqual(try? System.read(settingsPath), settings)
             // Direct submission does not retry while Claude settles the confirmation.
             try await TestSupport.eventually(timeout: .seconds(15)) {
                 !session.awaitingPromptAck && runtime.chat.canPickModel(session) && ClaudeModelMenu.isEmptyComposer(terminal.agentMenuScreen)
@@ -191,7 +191,7 @@ final class ClaudeTransportTests: XCTestCase {
         try await TestSupport.eventually(timeout: .seconds(15)) { reply("Local Claude fixture reply: recovered after stop via " + backend) }
         XCTAssertEqual(session.sessionID, conversation)
         if selectedModel {
-            let requests = try String(contentsOf: state.appendingPathComponent("requests.jsonl"), encoding: .utf8).split(separator: "\n").map {
+            let requests = try String(decoding: System.read(state.appendingPathComponent("requests.jsonl")), as: UTF8.self).split(separator: "\n").map {
                 try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any])
             }.filter { ($0["path"] as? String)?.split(separator: "?").first == "/v1/messages" }
             let body = try XCTUnwrap(requests.last?["body"] as? [String: Any])

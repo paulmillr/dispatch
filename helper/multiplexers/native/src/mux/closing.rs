@@ -40,7 +40,7 @@ impl Native {
             self.submit(io, Job::Process { pid: *pid }, Pending::Close(check));
             return;
         };
-        let input = json::write(&Data::Object(vec![
+        let input = body::encode_plain(&Data::Object(vec![
             ("pid", Data::Unsigned(process.pid.into())),
             (
                 "start",
@@ -52,7 +52,7 @@ impl Native {
                 io,
                 Job::Native {
                     name: "idle",
-                    input,
+                    value: input,
                 },
                 Pending::Close(check),
             ),
@@ -85,8 +85,8 @@ impl Native {
             return;
         }
         let idle = match result {
-            Ok(Output::Bytes(bytes)) => Json::parse(&bytes)
-                .is_ok_and(|doc| doc.root().get("idle").and_then(Value::boolean) == Some(true)),
+            Ok(Output::Value(bytes)) => body::decode_plain(&bytes)
+                .is_ok_and(|value| value.get("idle").and_then(Data::boolean) == Some(true)),
             _ => false,
         };
         let current: Vec<_> = self

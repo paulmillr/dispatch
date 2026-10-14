@@ -11,7 +11,7 @@ final class ChatHistoryTests: XCTestCase {
         data.append(10); return data
     }
     private func transcript(turns: Int) throws -> (URL, Data) {
-        let path = FileManager.default.temporaryDirectory.appendingPathComponent("dispatch-history-" + UUID().uuidString + ".jsonl")
+        let path = System.temporary.appendingPathComponent("dispatch-history-" + System.uuid().uuidString + ".jsonl")
         var data = try line("session_meta", ["id": sessionID, "cli_version": "0.153.4"])
         for index in 0..<turns {
             data += try turn(index)
@@ -31,7 +31,7 @@ final class ChatHistoryTests: XCTestCase {
 
     /// A Codex transcript file opened as an archived chat, and every earlier page loaded.
     private func archived(_ data: Data) async throws -> (ChatCoordinator, ChatSession) {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("dispatch-history-" + UUID().uuidString + ".jsonl")
+        let url = System.temporary.appendingPathComponent("dispatch-history-" + System.uuid().uuidString + ".jsonl")
         try data.write(to: url)
         addTeardownBlock { try? FileManager.default.removeItem(at: url) }
         let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
@@ -113,7 +113,7 @@ final class ChatHistoryTests: XCTestCase {
 
     private func activity() -> (ChatCoordinator, ChatSession) {
         let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
-        let session = chat.session(for: UUID())
+        let session = chat.session(for: System.uuid())
         session.helper = HelperChat(terminal: 0); session.sessionID = sessionID
         addTeardownBlock { @MainActor in chat.stop() }
         chat.receiveHelper(.records([record("turn_started", "start")]), session: session)
@@ -126,7 +126,7 @@ final class ChatHistoryTests: XCTestCase {
     /// a live end gives no "worked for" duration measured from 1970.
     func testUntimedHistoryTurnIsNotTimedFromTheEpoch() throws {
         let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
-        let session = chat.session(for: UUID())
+        let session = chat.session(for: System.uuid())
         session.helper = HelperChat(terminal: 0); session.sessionID = sessionID
         addTeardownBlock { @MainActor in chat.stop() }
         chat.receiveHelper(.history(.init(terminal: 0,
@@ -218,9 +218,24 @@ final class ChatHistoryTests: XCTestCase {
         }
     }
 
+    func testReopenOfTheShownConversationKeepsItsInputReady() {
+        // A chat reopens when its binding changes (its transcript appeared with the first turn): the history it reads
+        // again merges by record into what it shows, so it is not loading meanwhile (its picker and composer stay usable).
+        // A conversation it switches to loads until that history came.
+        for (identity, loading) in [(sessionID, false), ("other-conversation", true)] {
+            let (chat, session) = activity()
+            chat.receiveHelper(.history(.init(terminal: 0,
+                binding: .init(session: identity, transcript: nil, pid: nil, start: nil, executable: nil),
+                session: identity, key: "codex", label: "Codex", commands: [], native_queue: false,
+                state: state(false), state_error: nil, records: [], earlier: nil, history_error: nil,
+                history_pending: true, capabilities: [])), session: session)
+            XCTAssertEqual([session.loadingHistory, chat.inputReady(session)], [loading, !loading], identity)
+        }
+    }
+
     func testModelNamesTheBoundAgentUntilItReportsOne() {
         let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
-        let session = chat.session(for: UUID())
+        let session = chat.session(for: System.uuid())
         session.helper = HelperChat(terminal: 0)
         addTeardownBlock { @MainActor in chat.stop() }
         func bind(_ key: String, _ label: String, _ conversation: String, model: String? = nil) {
@@ -306,17 +321,14 @@ final class ChatHistoryTests: XCTestCase {
     func testRecentPagingOfRealCodexResumeHistoryFromLocalEndpoint() async throws {
         let binary = try CodexTestSupport.requireBinary()
         let turnCount = 60
-        let state = FileManager.default.temporaryDirectory.appendingPathComponent("dispatch-real-history-" + UUID().uuidString)
+        let state = System.temporary.appendingPathComponent("dispatch-real-history-" + System.uuid().uuidString)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
         process.arguments = [CodexTestSupport.root.appendingPathComponent("scripts/seed-codex-history.py").path, "--state", state.path, "--turns", String(turnCount), "--codex", binary]
-        process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
-        try process.run()
-        defer { if process.isRunning { process.terminate() }; try? FileManager.default.removeItem(at: state) }
-        try await TestSupport.eventually(timeout: .seconds(60), interval: .milliseconds(50),
-                                         diagnostic: "Local Codex history generation timed out") { !process.isRunning }
-        XCTAssertEqual(process.terminationStatus, 0)
-        let info = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: state.appendingPathComponent("history.json"))) as? [String: Any])
+        process.standardError = FileHandle.nullDevice
+        defer { try? FileManager.default.removeItem(at: state) }
+        XCTAssertEqual(try System.run(process).status, 0, "Local Codex history generation failed")
+        let info = try XCTUnwrap(JSONSerialization.jsonObject(with: System.read(state.appendingPathComponent("history.json"))) as? [String: Any])
         let id = try XCTUnwrap(info["session_id"] as? String), path = try XCTUnwrap(info["transcript_path"] as? String)
         XCTAssertEqual(info["requests"] as? Int, turnCount)
         let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
@@ -328,7 +340,7 @@ final class ChatHistoryTests: XCTestCase {
         XCTAssertFalse(replies().contains("Local fixture reply: history message 0"))
         _ = try await loadAll(session, chat, pages: 10)
         XCTAssertEqual(replies().count, turnCount)
-        let requests = try String(contentsOf: state.appendingPathComponent("requests.jsonl"), encoding: .utf8).split(separator: "\n")
+        let requests = try String(decoding: try System.read(state.appendingPathComponent("requests.jsonl")), as: UTF8.self).split(separator: "\n")
         XCTAssertEqual(requests.count, turnCount, "Loading existing history must not request model responses")
     }
 
@@ -338,7 +350,7 @@ final class ChatHistoryTests: XCTestCase {
     }
 
     func testHistoricalInsertionAndMergeKeepStableOrder() {
-        let session = ChatSession(id: UUID()), date = Date(timeIntervalSince1970: 100)
+        let session = ChatSession(id: System.uuid()), date = Date(timeIntervalSince1970: 100)
         for (id, offset) in [("c", 30), ("a", 10), ("b", 20)] {
             session.insert(ChatItem(id: id, kind: .tool, text: id), turnID: "turn", at: date,
                            historical: true, fileOffset: UInt64(offset))
@@ -359,7 +371,7 @@ final class ChatHistoryTests: XCTestCase {
     }
 
     func testPagesThroughOneLargeLegacyTurnKeepToolContextAndOutputs() async throws {
-        let path = FileManager.default.temporaryDirectory.appendingPathComponent("dispatch-history-legacy-" + UUID().uuidString + ".jsonl")
+        let path = System.temporary.appendingPathComponent("dispatch-history-legacy-" + System.uuid().uuidString + ".jsonl")
         defer { try? FileManager.default.removeItem(at: path) }
         var data = try line("session_meta", ["id": sessionID, "cli_version": "0.153.2"])
         data += try line("event_msg", ["type": "task_started", "turn_id": "one-long-turn"])
@@ -369,7 +381,7 @@ final class ChatHistoryTests: XCTestCase {
         }
         // No trailing task_complete: the only turn ID is before the recent page.
         let lines = String(decoding: data, as: UTF8.self).split(separator: "\n").map(String.init)
-        let root = path.deletingLastPathComponent().appendingPathComponent("dispatch-history-" + UUID().uuidString)
+        let root = path.deletingLastPathComponent().appendingPathComponent("dispatch-history-" + System.uuid().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
@@ -387,7 +399,7 @@ final class ChatHistoryTests: XCTestCase {
     }
 
     func testPrependingToolsKeepsTheExistingGroupIdentity() {
-        let session = ChatSession(id: UUID())
+        let session = ChatSession(id: System.uuid())
         let a = ChatItem(id: "a", kind: .tool, text: "first"), b = ChatItem(id: "b", kind: .tool, text: "second")
         session.insert(a, turnID: "turn", at: Date(timeIntervalSince1970: 10))
         session.insert(b, turnID: "turn", at: Date(timeIntervalSince1970: 20))
@@ -399,7 +411,7 @@ final class ChatHistoryTests: XCTestCase {
     }
 
     func testPrependingToolsKeepsAnExpandedStandaloneToolVisible() async throws {
-        let path = FileManager.default.temporaryDirectory.appendingPathComponent("dispatch-history-group-" + UUID().uuidString + ".jsonl")
+        let path = System.temporary.appendingPathComponent("dispatch-history-group-" + System.uuid().uuidString + ".jsonl")
         defer { try? FileManager.default.removeItem(at: path) }
         var data = try line("session_meta", ["id": sessionID, "cli_version": "0.154.0"])
         data += try line("event_msg", ["type": "task_started", "turn_id": "long-turn"])
@@ -414,7 +426,7 @@ final class ChatHistoryTests: XCTestCase {
             data += try line("event_msg", ["type": "token_count"])
         }
         let lines = String(decoding: data, as: UTF8.self).split(separator: "\n").map(String.init)
-        let root = path.deletingLastPathComponent().appendingPathComponent("dispatch-history-" + UUID().uuidString)
+        let root = path.deletingLastPathComponent().appendingPathComponent("dispatch-history-" + System.uuid().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let coordinator = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
@@ -433,7 +445,7 @@ final class ChatHistoryTests: XCTestCase {
 
     func testOpeningTallChatAutomaticallyPreloadsCollapsedHistoryAndKeepsLatestReplyVisible() async throws {
         try DesktopTestSupport.requireUnlocked(); AppFont.register()
-        let path = FileManager.default.temporaryDirectory.appendingPathComponent("dispatch-opening-dense-" + UUID().uuidString + ".jsonl")
+        let path = System.temporary.appendingPathComponent("dispatch-opening-dense-" + System.uuid().uuidString + ".jsonl")
         defer { try? FileManager.default.removeItem(at: path) }
         let totalTurns = 40
         var data = try line("session_meta", ["id": sessionID])
@@ -450,7 +462,7 @@ final class ChatHistoryTests: XCTestCase {
             data += try line("event_msg", ["type": "agent_message", "turn_id": id, "message": "Answer \(turn)"])
             data += try line("event_msg", ["type": "task_complete", "turn_id": id])
         }
-        let root = path.deletingLastPathComponent().appendingPathComponent("dispatch-opening-" + UUID().uuidString)
+        let root = path.deletingLastPathComponent().appendingPathComponent("dispatch-opening-" + System.uuid().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let coordinator = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
@@ -515,7 +527,7 @@ final class ChatHistoryTests: XCTestCase {
         let (path, _) = try transcript(turns: 1_000)
         defer { try? FileManager.default.removeItem(at: path) }
         let coordinator = ChatCoordinator(enabled: false)
-        let session = coordinator.session(for: UUID())
+        let session = coordinator.session(for: System.uuid())
         session.sessionID = sessionID; session.transcriptPath = path.path; session.showChat = true
         coordinator.start(); defer { coordinator.stop() }
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 700),
@@ -560,7 +572,7 @@ final class ChatHistoryTests: XCTestCase {
         let (path, _) = try transcript(turns: 1_000)
         defer { try? FileManager.default.removeItem(at: path) }
         let coordinator = ChatCoordinator(enabled: false)
-        let session = coordinator.session(for: UUID())
+        let session = coordinator.session(for: System.uuid())
         session.sessionID = sessionID; session.transcriptPath = path.path; session.showChat = true
         coordinator.start(); defer { coordinator.stop() }
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 700), styleMask: [.titled, .resizable], backing: .buffered, defer: false)

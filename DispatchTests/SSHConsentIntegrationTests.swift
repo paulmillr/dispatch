@@ -45,7 +45,7 @@ final class SSHConsentIntegrationTests: XCTestCase {
     }
 
     private func cacheSnapshot() throws -> [String: String] {
-        let root = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".dispatch/bin/versions")
+        let root = System.machine.home.appendingPathComponent(".dispatch/bin/versions")
         guard let entries = FileManager.default.enumerator(at: root,
             includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey], options: [.skipsHiddenFiles]) else { return [:] }
         var result: [String: String] = [:]
@@ -68,9 +68,8 @@ final class SSHConsentIntegrationTests: XCTestCase {
         let app = try TmuxWalkthrough(); defer { dismiss(app.window); app.close() }
         let server = try await SSHTestServer(); defer { server.stop() }
         let spy = server.root.appendingPathComponent("ssh-spy"), invocations = server.root.appendingPathComponent("ssh-started")
-        try ("#!/bin/sh\nif [ \"$1\" != -G ]; then printf '%s\\n' started >> " + HerdrLaunch.quote(invocations.path) +
-             "; fi\nexec /usr/bin/ssh \"$@\"\n").write(to: spy, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: spy.path)
+        try System.write(Data(("#!/bin/sh\nif [ \"$1\" != -G ]; then printf '%s\\n' started >> " + HerdrLaunch.quote(invocations.path) +
+             "; fi\nexec /usr/bin/ssh \"$@\"\n").utf8), to: spy, permissions: 0o700)
         let previous = app.runtime.ssh.presentIntegrationConsent
         var scopes: [SSHIntegrationScope] = []
         app.runtime.ssh.presentIntegrationConsent = { scope, window in
@@ -86,8 +85,8 @@ final class SSHConsentIntegrationTests: XCTestCase {
         let secondID = try XCTUnwrap(app.workspace.activeSurfaceID)
         try await app.wait { app.runtime.views[secondID].map { !TerminalTestSupport.screen(terminal: $0).isEmpty } == true }
         let second = try XCTUnwrap(app.runtime.views[secondID])
-        let hooks = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex/hooks.json")
-        let hooksBefore = try? Data(contentsOf: hooks)
+        let hooks = System.machine.home.appendingPathComponent(".codex/hooks.json")
+        let hooksBefore = try? System.read(hooks)
         let cacheBefore = try cacheSnapshot()
         let command = "DISPATCH_SSH_EXECUTABLE=" + HerdrLaunch.quote(spy.path) + " ssh -tt " +
             (server.options + [server.destination, "printf 'CONSENT_%s\\n' ORDINARY; exit 23"]).map(HerdrLaunch.quote).joined(separator: " ")
@@ -107,10 +106,10 @@ final class SSHConsentIntegrationTests: XCTestCase {
             .first { $0.stringValue.hasPrefix("Connect to ") })
         XCTAssertEqual(heading.stringValue, "Connect to 127.0.0.1")
         XCTAssertEqual(scopes.count, 1)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: invocations.path), "Only ssh -G may run before a choice")
+        XCTAssertFalse(System.exists(invocations), "Only ssh -G may run before a choice")
         XCTAssertTrue(app.runtime.ssh.links.isEmpty)
         XCTAssertEqual(try cacheSnapshot(), cacheBefore, "No helper upload before consent")
-        XCTAssertTrue((try? Data(contentsOf: hooks)) == hooksBefore, "No hook mutation before consent")
+        XCTAssertTrue((try? System.read(hooks)) == hooksBefore, "No hook mutation before consent")
         let scope = try XCTUnwrap(scopes.first)
         XCTAssertNil(app.runtime.ssh.permissions.remembered(scope))
         if cancel { try key("\u{1b}", code: 53, in: app.window) }
@@ -124,18 +123,18 @@ final class SSHConsentIntegrationTests: XCTestCase {
         XCTAssertEqual(scopes.count, 1)
         if cancel {
             XCTAssertNil(app.runtime.ssh.permissions.remembered(scope), "Cancel must not persist a choice")
-            XCTAssertFalse(FileManager.default.fileExists(atPath: invocations.path), "Cancel must never start SSH")
+            XCTAssertFalse(System.exists(invocations), "Cancel must never start SSH")
             for terminal in [first, second] {
                 XCTAssertFalse(TerminalTestSupport.screen(terminal: terminal).contains("CONSENT_ORDINARY"))
             }
         } else {
             XCTAssertEqual(app.runtime.ssh.permissions.remembered(scope)?.profile, .ordinary)
-            XCTAssertEqual(try String(contentsOf: invocations, encoding: .utf8).split(separator: "\n").count, 2,
+            XCTAssertEqual(try String(decoding: try System.read(invocations), as: UTF8.self).split(separator: "\n").count, 2,
                            "Don't install runs each ordinary SSH command once, without a helper connection")
         }
         XCTAssertTrue(app.runtime.ssh.links.isEmpty)
         XCTAssertEqual(try cacheSnapshot(), cacheBefore)
-        XCTAssertTrue((try? Data(contentsOf: hooks)) == hooksBefore)
+        XCTAssertTrue((try? System.read(hooks)) == hooksBefore)
     }
 
     func testRememberedChoiceAndChangedConfigurationUseTheNativeSheet() async throws {
@@ -175,7 +174,7 @@ final class SSHConsentIntegrationTests: XCTestCase {
     func testCapabilityUpgradeRequiresAnotherExplicitNativeChoice() async throws {
         let app = try TmuxWalkthrough(); defer { dismiss(app.window); app.close() }
         let target = try XCTUnwrap(SSHIntegrationScope(executable: "/usr/bin/ssh", destination: "fixture", configuration: "user alice\nhostname fixture\n"))
-        let suite = "dispatch-consent-test-" + UUID().uuidString
+        let suite = "dispatch-consent-test-" + System.uuid().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let full = SSHIntegrationGrant(profile: .full)
@@ -256,7 +255,7 @@ final class SSHConsentIntegrationTests: XCTestCase {
         XCTAssertEqual(reconnects, 0)
         try await TestSupport.eventually { app.window.attachedSheet == nil }
         let finalReads = reads
-        try await Task.sleep(for: .milliseconds(600))
+        try await TestSupport.pause(for: .milliseconds(600))
         XCTAssertEqual(reads, finalReads, "Cancellation must stop the live-state polling task")
     }
 

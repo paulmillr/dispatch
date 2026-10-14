@@ -11,7 +11,7 @@ final class MainMockupPresentationTests: XCTestCase {
         defer { restoreRuntime() }
         try DesktopTestSupport.requireUnlocked()
         AppFont.register()
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let directory = System.temporary.appendingPathComponent(System.uuid().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let controller = AppDelegate(settings: SettingsStore(file: directory.appendingPathComponent("settings.json")))
         let runtime = TerminalRuntime.shared, workspace = controller.workspace
@@ -99,14 +99,14 @@ final class MainMockupPresentationTests: XCTestCase {
     }
 
     func testLayoutControlRemainsInGeometricTopRightForCustomSplits() {
-        let a = UUID(), b = UUID(), c = UUID(), d = UUID()
-        let rows = PaneLayout.split(UUID(), .rows, .pane(a), .pane(b))
+        let a = System.uuid(), b = System.uuid(), c = System.uuid(), d = System.uuid()
+        let rows = PaneLayout.split(System.uuid(), .rows, .pane(a), .pane(b))
         XCTAssertEqual(rows.topRightPaneID, a)
-        let grid = PaneLayout.split(UUID(), .rows,
-            .split(UUID(), .columns, .pane(a), .pane(b)),
-            .split(UUID(), .columns, .pane(c), .pane(d)))
+        let grid = PaneLayout.split(System.uuid(), .rows,
+            .split(System.uuid(), .columns, .pane(a), .pane(b)),
+            .split(System.uuid(), .columns, .pane(c), .pane(d)))
         XCTAssertEqual(grid.topRightPaneID, b, "Custom split placement cannot depend on a preset label")
-        let side = PaneLayout.split(UUID(), .columns, .pane(a), .split(UUID(), .rows, .pane(b), .pane(c)))
+        let side = PaneLayout.split(System.uuid(), .columns, .pane(a), .split(System.uuid(), .rows, .pane(b), .pane(c)))
         XCTAssertEqual(side.topRightPaneID, b)
     }
 

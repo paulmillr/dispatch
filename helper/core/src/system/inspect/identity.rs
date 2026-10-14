@@ -1,5 +1,5 @@
 //! The c1654cc os::identity/hostname facts used by host grouping and reconnect.
-use crate::json::{self, Data};
+use crate::json::Data;
 use std::io;
 
 pub(super) fn collect() -> io::Result<Vec<u8>> {
@@ -54,7 +54,7 @@ pub(super) fn collect() -> io::Result<Vec<u8>> {
     fn text(value: &Option<String>) -> Data<'_> {
         value.as_deref().map_or(Data::Null, Data::String)
     }
-    json::write(&Data::Object(vec![
+    crate::wire::body::encode_plain(&Data::Object(vec![
         ("host", Data::String(&host)),
         ("boot", Data::String(&boot)),
         ("hostname", Data::String(&name)),

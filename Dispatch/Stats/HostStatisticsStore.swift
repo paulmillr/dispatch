@@ -32,7 +32,7 @@ struct HostStatisticsSnapshot: Codable, Sendable {
     var history: [Point] = []
 
     var peakCPU: Double? {
-        let now = Date()
+        let now = System.date()
         let peak = history.filter { $0.date >= now.addingTimeInterval(-Self.historyWindow) && $0.date <= now }.compactMap(\.cpu).filter { $0.isFinite && (0...100).contains($0) }.max()
         if let peak { return peak }
         guard let cpu, cpu.isFinite, (0...100).contains(cpu) else { return nil }
@@ -135,7 +135,7 @@ final class HostStatisticsStore {
         switch source {
         case .local:
             let value = local.latest
-            var result = HostStatisticsSnapshot(host: HostSample.hostName, account: nil, remote: false,
+            var result = HostStatisticsSnapshot(host: System.machine.host, account: nil, remote: false,
                 state: Self.state(local.state), date: value.date)
             if local.state != .loading || !local.history.isEmpty {
                 result.cpu = value.cpuAvailable ? value.cpu : nil; result.cores = value.cpuAvailable ? value.cores : nil; result.load = value.load.isEmpty ? nil : value.load
@@ -145,15 +145,15 @@ final class HostStatisticsStore {
                 result.processes = value.processes
             }
             if value.diskTotal > 0 {
-                result.volumes = [HostVolume(path: NSHomeDirectory(), total: value.diskTotal, free: value.diskFree)] + value.volumes
+                result.volumes = [HostVolume(path: System.home.path, total: value.diskTotal, free: value.diskFree)] + value.volumes
             }
             result.disksStale = local.disksStale
             if includingHistory { result.history = local.history.map { .init(date: $0.date, cpu: $0.cpuAvailable ? $0.cpu : nil, memoryPercent: $0.memoryAvailable ? $0.memoryPercent : nil) } }
             return result
         case .ssh(let key):
-            guard let entry = remote.series[key] else { return .init(host: key.host, account: nil, remote: true, state: .unavailable, date: Date()) }
+            guard let entry = remote.series[key] else { return .init(host: key.host, account: nil, remote: true, state: .unavailable, date: System.date()) }
             var result = HostStatisticsSnapshot(host: entry.hostname ?? key.host, account: entry.scope.account, remote: true,
-                state: Self.state(entry.state), date: entry.latest?.date ?? Date())
+                state: Self.state(entry.state), date: entry.latest?.date ?? System.date())
             if let value = entry.latest {
                 result.cpu = value.cpu; result.cores = value.cores; result.load = value.counters.load
                 result.memoryUsed = value.counters.memoryUsed; result.memoryTotal = value.counters.memoryTotal
@@ -168,7 +168,7 @@ final class HostStatisticsStore {
             if includingHistory { result.history = entry.history.map { .init(date: $0.date, cpu: $0.cpu, memoryPercent: $0.memoryPercent) } }
             return result
         case .unavailable(let host):
-            return .init(host: host.rawValue, account: nil, remote: true, state: .unavailable, date: Date())
+            return .init(host: host.rawValue, account: nil, remote: true, state: .unavailable, date: System.date())
         }
     }
     private static func state(_ value: SSHStatisticsStore.State) -> HostStatisticsSnapshot.State {

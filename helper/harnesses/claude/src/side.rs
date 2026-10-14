@@ -400,13 +400,13 @@ impl Sides {
         .into_iter()
         .map(Data::String)
         .collect();
-        let input = json::write(&Data::Object(vec![
+        let input = dispatch_helper_core::wire::body::encode_plain(&Data::Object(vec![
             ("pid", Data::Unsigned(launch.parent.process.pid.into())),
             ("names", Data::Array(names)),
         ]));
-        let job = input.map(|input| Job::Native {
+        let job = input.map(|value| Job::Native {
             name: "environment",
-            input,
+            value,
         });
         match job
             .map_err(|e| error("json", format!("{e:?}")))
@@ -445,10 +445,12 @@ impl Sides {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .env_clear();
-        let environment = Json::parse(environment)?;
-        for (name, value) in environment.root().object().into_iter().flatten() {
-            if let Some(value) = value.string() {
-                command.env(name, value);
+        // The parent's environment as bytes: values pass on unchanged.
+        let environment = dispatch_helper_core::wire::body::decode_plain(environment)?;
+        for (name, value) in environment.object().into_iter().flatten() {
+            if let Some(value) = value.bytes() {
+                use std::os::unix::ffi::OsStrExt;
+                command.env(name, std::ffi::OsStr::from_bytes(value));
             }
         }
         let child = io.spawn(command, None).map_err(|e| error("io", e))?;
@@ -616,7 +618,7 @@ impl Sides {
                     ..launch
                 };
                 let result = match result {
-                    Ok(Output::Bytes(bytes)) => self.spawn(io, launch, &bytes),
+                    Ok(Output::Value(bytes)) => self.spawn(io, launch, &bytes),
                     Ok(_) => Err(error("side", "Unexpected parent environment")),
                     Err(e) => Err(error("io", e)),
                 };

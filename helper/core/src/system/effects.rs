@@ -4,13 +4,8 @@ use crate::json::Data;
 
 impl Io for System {
     fn observe(&mut self, pid: u32) -> io::Result<u64> {
-        let args = pid.to_string();
-        if let Some(result) = self.replay("process.observe", &args) {
-            return result.and_then(|v| {
-                v.try_into()
-                    .map(u64::from_le_bytes)
-                    .map_err(|_| file::invalid())
-            });
+        if let Some(result) = self.replay("process.observe", Data::Unsigned(pid.into()), |v| v.unsigned()) {
+            return result;
         }
         let id = self
             .serial
@@ -31,13 +26,13 @@ impl Io for System {
                 result => result,
             }
         })();
-        self.record("process.observe", &args, &result, &id.to_le_bytes())?;
+        self.record("process.observe", Data::Unsigned(pid.into()), &result, Data::Unsigned(id))?;
         result?;
         self.serial = id;
         Ok(id)
     }
     fn unobserve(&mut self, id: u64) {
-        if self.ignored("process.unobserve", &id.to_string()) {
+        if self.ignored("process.unobserve", Data::Unsigned(id)) {
             return;
         }
         if let Some(processes) = &mut self.processes {
@@ -45,18 +40,14 @@ impl Io for System {
         }
         self.ready
             .retain(|(_, event)| !matches!(event, Event::Process { watch, .. } if *watch == id));
-        if let Err(error) = self.record("process.unobserve", &id.to_string(), &Ok(()), &[]) {
+        if let Err(error) = self.record("process.unobserve", Data::Unsigned(id), &Ok(()), Data::Null) {
             self.failure.borrow_mut().get_or_insert(error);
         }
     }
     fn datagram(&mut self, path: &Path, bytes: &[u8]) -> io::Result<()> {
-        let args = if self.capture.tracing() {
-            format!("{} {}", path.display(), capture::hex(bytes))
-        } else {
-            String::new()
-        };
-        if let Some(result) = self.replay("datagram", &args) {
-            return result.map(|_| ());
+        let args = || Data::Object(vec![("path", Data::from(path)), ("bytes", Data::Bytes(bytes))]);
+        if let Some(result) = self.replay("datagram", args(), |_| Some(())) {
+            return result;
         }
         let result = (|| {
             let socket = std::os::unix::net::UnixDatagram::unbound()?;
@@ -67,11 +58,12 @@ impl Io for System {
             }
             Ok(())
         })();
-        self.record("datagram", &args, &result, &[])?;
+        self.record("datagram", args(), &result, Data::Null)?;
         result
     }
     fn random(&mut self, bytes: &mut [u8]) -> io::Result<()> {
-        if let Some(result) = self.replay("random", &bytes.len().to_string()) {
+        let length = Data::Unsigned(bytes.len() as u64);
+        if let Some(result) = self.replay("random", length, |v| v.bytes().map(<[u8]>::to_vec)) {
             let data = result?;
             if data.len() != bytes.len() {
                 return Err(file::invalid());
@@ -80,7 +72,7 @@ impl Io for System {
             return Ok(());
         }
         let result = random(bytes);
-        self.record("random", &bytes.len().to_string(), &result, bytes)?;
+        self.record("random", Data::Unsigned(bytes.len() as u64), &result, Data::Bytes(bytes))?;
         result
     }
     fn section(&mut self, name: &str) -> String {
@@ -98,7 +90,7 @@ impl Io for System {
     }
     fn read(&mut self, fd: RawFd, bytes: &mut [u8]) -> io::Result<usize> {
         self.consumed(fd);
-        let args = format!("{fd} {}", bytes.len());
+        let args = Data::Object(vec![("fd", Data::Signed(fd.into())), ("length", Data::Unsigned(bytes.len() as u64))]);
         if let Some(replay) = &self.capture.replay {
             let result = replay.stream(&self.section, "read", fd, bytes);
             if let Err(error) = &result {
@@ -124,7 +116,7 @@ impl Io for System {
                 .and_then(|file| file.read(bytes))
         };
         let data = result.as_ref().map_or(&[][..], |&count| &bytes[..count]);
-        self.record("read", &args, &result, data)?;
+        self.record("read", args, &result, Data::Bytes(data))?;
         if matches!(&result, Ok(0))
             || result
                 .as_ref()
@@ -137,11 +129,7 @@ impl Io for System {
     }
     fn write(&mut self, fd: RawFd, bytes: &[u8]) -> io::Result<usize> {
         self.consumed(fd);
-        let args = if self.capture.tracing() {
-            format!("{fd} len={}", bytes.len())
-        } else {
-            String::new()
-        };
+        let args = Data::Object(vec![("fd", Data::Signed(fd.into())), ("length", Data::Unsigned(bytes.len() as u64))]);
         if let Some(replay) = self.capture.replay.as_ref() {
             let result = replay.write(&self.section, fd, bytes);
             if let Err(error) = &result {
@@ -149,17 +137,7 @@ impl Io for System {
                     .borrow_mut()
                     .get_or_insert_with(|| io::Error::new(error.kind(), error.to_string()));
             }
-            return result.and_then(|done| done.result).and_then(|output| {
-                let Output::Bytes(bytes) = output else {
-                    return Err(file::invalid());
-                };
-                bytes
-                    .try_into()
-                    .map(u64::from_le_bytes)
-                    .map_err(|_| file::invalid())?
-                    .try_into()
-                    .map_err(|_| file::invalid())
-            });
+            return result?;
         }
         let result = self
             .descriptors
@@ -167,17 +145,13 @@ impl Io for System {
             .ok_or_else(|| io::ErrorKind::NotFound.into())
             .and_then(|file| file.write(bytes));
         let data = result.as_ref().map_or(&[][..], |&count| &bytes[..count]);
-        self.record("write", &args, &result, data)?;
+        self.record("write", args, &result, Data::Bytes(data))?;
         result
     }
     fn accept(&mut self, fd: RawFd) -> io::Result<RawFd> {
         self.consumed(fd);
-        if let Some(result) = self.replay("accept", &fd.to_string()) {
-            return result.and_then(|v| {
-                v.try_into()
-                    .map(i32::from_le_bytes)
-                    .map_err(|_| file::invalid())
-            });
+        if let Some(result) = self.replay("accept", Data::Signed(fd.into()), |v| v.signed().and_then(|v| v.try_into().ok())) {
+            return result;
         }
         let result = self
             .listeners
@@ -185,20 +159,17 @@ impl Io for System {
             .ok_or_else(|| io::ErrorKind::NotFound.into())
             .and_then(|listener| listener.listener.accept())
             .and_then(|(stream, _)| self.adopt(stream.into_raw_fd()));
-        let data = result
-            .as_ref()
-            .map(|fd| fd.to_le_bytes().to_vec())
-            .unwrap_or_default();
-        self.record("accept", &fd.to_string(), &result, &data)?;
+        let output = result.as_ref().map_or(Data::Null, |&fd| Data::Signed(fd.into()));
+        self.record("accept", Data::Signed(fd.into()), &result, output)?;
         result
     }
     fn close(&mut self, fd: RawFd) {
         self.consumed(fd);
-        if self.ignored("close", &fd.to_string()) {
+        if self.ignored("close", Data::Signed(fd.into())) {
             return;
         }
         let result = self.dispose(fd);
-        if let Err(error) = self.record("close", &fd.to_string(), &result, &[]) {
+        if let Err(error) = self.record("close", Data::Signed(fd.into()), &result, Data::Null) {
             self.failure.borrow_mut().get_or_insert(error);
         }
         if let Err(error) = result {
@@ -207,32 +178,34 @@ impl Io for System {
     }
     fn interest(&mut self, fd: RawFd, read: bool, write: bool) -> io::Result<()> {
         self.consumed(fd);
-        let args = format!("{fd} {read} {write}");
-        if let Some(result) = self.replay("interest", &args) {
-            return result.map(|_| ());
+        let args = || {
+            Data::Object(vec![("fd", Data::Signed(fd.into())), ("read", Data::Bool(read)), ("write", Data::Bool(write))])
+        };
+        if let Some(result) = self.replay("interest", args(), |_| Some(())) {
+            return result;
         }
         self.sections
             .entry(fd)
             .or_insert_with(|| self.section.clone());
         let result = self.reactor.interest(self.source(fd), read, write);
-        self.record("interest", &args, &result, &[])?;
+        self.record("interest", args(), &result, Data::Null)?;
         result
     }
     fn child(&mut self, pid: u32) -> io::Result<()> {
-        if let Some(result) = self.replay("child", &pid.to_string()) {
-            return result.map(|_| ());
+        if let Some(result) = self.replay("child", Data::Unsigned(pid.into()), |_| Some(())) {
+            return result;
         }
         let result = if self.children.contains_key(&pid) {
             Ok(())
         } else {
             Err(io::ErrorKind::NotFound.into())
         };
-        self.record("child", &pid.to_string(), &result, &[])?;
+        self.record("child", Data::Unsigned(pid.into()), &result, Data::Null)?;
         result
     }
     fn terminate(&mut self, pid: u32) -> io::Result<()> {
-        if let Some(result) = self.replay("terminate", &pid.to_string()) {
-            return result.map(|_| ());
+        if let Some(result) = self.replay("terminate", Data::Unsigned(pid.into()), |_| Some(())) {
+            return result;
         }
         let result = (|| {
             let child = self.children.get(&pid).ok_or(io::ErrorKind::NotFound)?;
@@ -243,16 +216,16 @@ impl Io for System {
             if child.status.is_some() {
                 return Ok(());
             }
-            native::end(pid)
+            native::end(pid, child.leader)
         })();
-        self.record("terminate", &pid.to_string(), &result, &[])?;
+        self.record("terminate", Data::Unsigned(pid.into()), &result, Data::Null)?;
         result
     }
 
     fn signal(&mut self, pid: u32, signal: i32) -> io::Result<()> {
-        let args = format!("{pid} {signal}");
-        if let Some(result) = self.replay("signal", &args) {
-            return result.map(|_| ());
+        let args = || Data::Object(vec![("pid", Data::Unsigned(pid.into())), ("signal", Data::Signed(signal.into()))]);
+        if let Some(result) = self.replay("signal", args(), |_| Some(())) {
+            return result;
         }
         let result = (|| {
             let child = self.children.get(&pid).ok_or(io::ErrorKind::NotFound)?;
@@ -262,30 +235,27 @@ impl Io for System {
             let fd = child.channels[0].ok_or(io::ErrorKind::NotFound)?;
             native::interrupt(self.source(fd), signal)
         })();
-        self.record("signal", &args, &result, &[])?;
+        self.record("signal", args(), &result, Data::Null)?;
         result
     }
 
     fn timer(&mut self, at: Instant) {
         let result = (|| {
             if let Some(replay) = &self.capture.replay {
-                // Old traces omitted expiry. Keep immediate wakeups, never invent a future action.
-                if !replay.timed {
-                    return Ok((at <= self.now()).then_some(at));
-                }
-                let Output::Bytes(bytes) = replay.call(&self.section, "timer", "")?.result? else {
-                    return Err(file::invalid());
-                };
-                let offset = u64::from_le_bytes(bytes.try_into().map_err(|_| file::invalid())?);
+                let record = replay.value(&self.section, "timer", &Data::Null)?;
+                let offset = crate::wire::body::decode_plain(&record.output)
+                    .ok()
+                    .and_then(|value| value.unsigned())
+                    .ok_or_else(file::invalid)?;
                 return replay
                     .origin
                     .checked_add(Duration::from_nanos(offset))
                     .map(Some)
                     .ok_or_else(file::invalid);
             }
-            let bytes = self.capture.offset(at)?.to_le_bytes().to_vec();
+            let offset = capture::value(&Data::Unsigned(self.capture.offset(at)?))?;
             self.capture
-                .result(&self.section, "timer", "", &Ok(Output::Bytes(bytes)))?;
+                .record(&self.section, "timer", &Data::Null, None, 0, offset)?;
             Ok(Some(at))
         })();
         match result {
@@ -298,18 +268,26 @@ impl Io for System {
             }
         }
     }
+    fn os(&self) -> &str {
+        &self.platform.0
+    }
+    fn arch(&self) -> &str {
+        &self.platform.1
+    }
+    fn execution(&self) -> Vec<std::ffi::OsString> {
+        self.platform.2.clone()
+    }
     fn pid(&self) -> u32 {
         self.pid
     }
     fn now(&self) -> Instant {
-        if let Some(replay) = &self.capture.replay
-            && replay.timed
-        {
+        if let Some(replay) = &self.capture.replay {
             let result = (|| {
-                let Output::Bytes(bytes) = replay.call(&self.section, "now", "")?.result? else {
-                    return Err(file::invalid());
-                };
-                let offset = u64::from_le_bytes(bytes.try_into().map_err(|_| file::invalid())?);
+                let record = replay.value(&self.section, "now", &Data::Null)?;
+                let offset = crate::wire::body::decode_plain(&record.output)
+                    .ok()
+                    .and_then(|value| value.unsigned())
+                    .ok_or_else(file::invalid)?;
                 replay
                     .origin
                     .checked_add(Duration::from_nanos(offset))
@@ -328,12 +306,9 @@ impl Io for System {
             && let Ok(offset) = self.capture.offset(at)
         {
             // Capture's writer marks overflow invalid; the native clock itself cannot fail.
-            let _ = self.capture.result(
-                &self.section,
-                "now",
-                "",
-                &Ok(Output::Bytes(offset.to_le_bytes().to_vec())),
-            );
+            if let Ok(offset) = capture::value(&Data::Unsigned(offset)) {
+                let _ = self.capture.record(&self.section, "now", &Data::Null, None, 0, offset);
+            }
         }
         at
     }
@@ -343,54 +318,56 @@ impl Io for System {
             .checked_add(1)
             .ok_or(io::ErrorKind::OutOfMemory)?;
         let order = self.files.order(&self.section);
-        let args = if !self.capture.tracing() {
-            String::new()
-        } else {
-            match &job {
-                Job::MakeDir { path, mode } => format!("mkdir {path:?} {mode}"),
-                Job::Remove {
-                    path,
-                    expected: Expected::Any,
-                } => format!("remove {path:?}"),
-                Job::Remove { path, expected } => format!("remove {path:?} {expected:?}"),
-                Job::List { path } => format!("list {path:?}"),
-                Job::Read {
-                    path,
-                    offset,
-                    length,
-                } => format!("read {path:?} {offset} {length}"),
-                Job::Stat { path, follow } => format!("stat {path:?} {follow}"),
-                // Unchecked jobs keep their old argument text, so older traces still replay.
-                Job::Write {
-                    path,
-                    bytes,
-                    mode,
-                    expected: Expected::Any,
-                } => format!("write {path:?} {mode} {}", capture::hex(bytes)),
-                Job::Write {
-                    path,
-                    bytes,
-                    mode,
-                    expected,
-                } => format!("write {path:?} {mode} {expected:?} {}", capture::hex(bytes)),
-                Job::Native { name, input } => format!("native {name} {}", capture::hex(input)),
-                Job::Isolated { name, input, .. } => {
-                    format!("isolated {name} {}", capture::hex(input))
-                }
-                Job::Process { pid } => format!("process {pid}"),
-                Job::Lock { path, .. } => format!("lock {path:?}"),
-                Job::Run { command, input, .. } => {
-                    format!("run {command:?} input={}", capture::hex(input))
-                }
+        // A job's args: what it asks for, as values (a native job's JSON input as its value
+        // tree). Encoded now: the job itself moves to its worker.
+        let encoded = {
+                        fn object<'a>(name: &'static str, fields: Vec<(&'static str, Data<'a>)>) -> Data<'a> {
+                Data::Object([("job", Data::String(name))].into_iter().chain(fields).collect())
             }
+            let args = match &job {
+                Job::MakeDir { path: at, mode } => {
+                    object("mkdir", vec![("path", Data::from(at.as_path())), ("mode", Data::Unsigned((*mode).into()))])
+                }
+                Job::Remove { path: at, expected } => {
+                    object("remove", vec![("path", Data::from(at.as_path())), ("expected", capture::expected(expected)?)])
+                }
+                Job::List { path: at } => object("list", vec![("path", Data::from(at.as_path()))]),
+                Job::Read { path: at, offset, length } => object(
+                    "read",
+                    vec![("path", Data::from(at.as_path())), ("offset", Data::Unsigned(*offset)), ("length", Data::Unsigned(*length))],
+                ),
+                Job::Stat { path: at, follow } => object("stat", vec![("path", Data::from(at.as_path())), ("follow", Data::Bool(*follow))]),
+                Job::Write { path: at, bytes, mode, expected } => object(
+                    "write",
+                    vec![
+                        ("path", Data::from(at.as_path())),
+                        ("bytes", Data::Bytes(bytes)),
+                        ("mode", Data::Unsigned((*mode).into())),
+                        ("expected", capture::expected(expected)?),
+                    ],
+                ),
+                Job::Native { name, value } | Job::Isolated { name, value, .. } => {
+                    let kind = if matches!(job, Job::Native { .. }) { "native" } else { "isolated" };
+                    let value = crate::wire::body::decode_plain(value).map_err(|_| io::ErrorKind::InvalidInput)?;
+                    object(kind, vec![("name", Data::String(name)), ("value", value)])
+                }
+                Job::Process { pid } => object("process", vec![("pid", Data::Unsigned((*pid).into()))]),
+                Job::Lock { path: at, .. } => object("lock", vec![("path", Data::from(at.as_path()))]),
+                Job::Run { command, input, .. } => {
+                    object("run", vec![("command", capture::command(command)), ("input", Data::Bytes(input))])
+                }
+            };
+            capture::value(&args)?
         };
+        let args = || crate::wire::body::decode_plain(&encoded).expect("encoded above");
         if let Some(replay) = &self.capture.replay {
-            let work = match replay.call(&self.section, "submit", &args) {
-                Ok(completion) => {
-                    let Output::Bytes(bytes) = completion.result? else {
-                        return Err(file::invalid());
-                    };
-                    u64::from_le_bytes(bytes.try_into().map_err(|_| file::invalid())?)
+            let work = match replay.value(&self.section, "submit", &args()) {
+                Ok(record) => {
+                    let value = crate::wire::body::decode_plain(&record.output).map_err(|_| file::invalid())?;
+                    if record.error.is_some() {
+                        return Err(file::failure(&value, &self.platform.0)?);
+                    }
+                    value.unsigned().ok_or_else(file::invalid)?
                 }
                 Err(error) => {
                     self.failure.borrow_mut().get_or_insert(error);
@@ -400,7 +377,7 @@ impl Io for System {
             self.serial = self.serial.max(work);
             self.files.admit(&self.section);
             self.jobs
-                .insert(work, (self.section.clone(), Some((order, args))));
+                .insert(work, (self.section.clone(), Some((order, encoded))));
             return Ok(work);
         }
         let result = (|| {
@@ -408,21 +385,18 @@ impl Io for System {
             // Capture args above retain the caller's fd, not the private duplicate.
             let pin = if let Job::Native {
                 name: "peer",
-                input,
+                value,
             } = &mut job
             {
-                use crate::json::{Data, Json};
-                let document = Json::parse(input).map_err(|_| io::ErrorKind::InvalidInput)?;
-                let fd = document
-                    .root()
-                    .get("fd")
-                    .and_then(|v| v.signed())
+                let fd = crate::wire::body::decode_plain(value)
+                    .ok()
+                    .and_then(|value| value.get("fd").and_then(Data::signed))
                     .and_then(|v| i32::try_from(v).ok())
                     .filter(|fd| *fd >= 0)
                     .ok_or(io::ErrorKind::InvalidInput)?;
                 // SAFETY: no intervening callback can close this descriptor on the reactor thread.
                 let pin = unsafe { BorrowedFd::borrow_raw(fd) }.try_clone_to_owned()?;
-                *input = crate::json::write(&Data::Object(vec![(
+                *value = crate::wire::body::encode_plain(&Data::Object(vec![(
                     "fd",
                     Data::Signed(pin.as_raw_fd().into()),
                 )]))
@@ -467,12 +441,12 @@ impl Io for System {
                     )
                 })
         })();
-        self.record("submit", &args, &result, &id.to_le_bytes())?;
+        self.record("submit", args(), &result, Data::Unsigned(id))?;
         result?;
         self.serial = id;
         self.files.admit(&self.section);
         self.jobs
-            .insert(id, (self.section.clone(), Some((order, args))));
+            .insert(id, (self.section.clone(), Some((order, encoded))));
         Ok(id)
     }
     fn then(&mut self, work: Work, callback: Box<dyn FnOnce(&mut dyn Io, io::Result<Output>)>) {
@@ -480,13 +454,9 @@ impl Io for System {
             .insert(work, (self.section.clone(), callback));
     }
     fn cancel(&mut self, work: Work) -> bool {
-        let cancelled = if let Some(result) = self.replay("cancel", &work.to_string()) {
+        let cancelled = if let Some(result) = self.replay("cancel", Data::Unsigned(work), |v| v.boolean()) {
             match result {
-                Ok(bytes) if bytes.len() == 1 => bytes[0] != 0,
-                Ok(_) => {
-                    self.failure.borrow_mut().get_or_insert_with(file::invalid);
-                    false
-                }
+                Ok(cancelled) => cancelled,
                 Err(error) => {
                     self.failure.borrow_mut().get_or_insert(error);
                     false
@@ -505,7 +475,7 @@ impl Io for System {
             }
             let cancelled = released || self.workers.cancel(work);
             if let Err(error) =
-                self.record("cancel", &work.to_string(), &Ok(()), &[u8::from(cancelled)])
+                self.record("cancel", Data::Unsigned(work), &Ok(()), Data::Bool(cancelled))
             {
                 self.failure.borrow_mut().get_or_insert(error);
             }
@@ -518,23 +488,22 @@ impl Io for System {
         cancelled
     }
     fn watch(&mut self, path: &Path, directory: bool) -> io::Result<u64> {
-        let args = format!("{} {directory}", path.display());
-        if let Some(result) = self.replay("watch", &args) {
-            return result.and_then(|v| {
-                v.try_into()
-                    .map(u64::from_le_bytes)
-                    .map_err(|_| file::invalid())
-            });
+        let args = || Data::Object(vec![("path", Data::from(path)), ("directory", Data::Bool(directory))]);
+        if let Some(result) = self.replay("watch", args(), |v| v.unsigned()) {
+            return result;
         }
         let id = self
             .serial
             .checked_add(1)
             .ok_or(io::ErrorKind::OutOfMemory)?;
-        if self.watches.is_none() {
-            self.watches = Some(watch::Watcher::new(&self.reactor, self.capacity)?);
-        }
-        let result = self.watches.as_mut().unwrap().set(id, path, directory);
-        self.record("watch", &args, &result, &id.to_le_bytes())?;
+        // Every live outcome is recorded, a watcher that cannot be made too (e.g. EMFILE).
+        let result = (|| {
+            if self.watches.is_none() {
+                self.watches = Some(watch::Watcher::new(&self.reactor, self.capacity)?);
+            }
+            self.watches.as_mut().unwrap().set(id, path, directory)
+        })();
+        self.record("watch", args(), &result, Data::Unsigned(id))?;
         let appeared = result?;
         self.serial = id;
         self.watched.insert(id, self.section.clone());
@@ -551,7 +520,7 @@ impl Io for System {
         Ok(id)
     }
     fn unwatch(&mut self, watch: u64) {
-        if self.ignored("unwatch", &watch.to_string()) {
+        if self.ignored("unwatch", Data::Unsigned(watch)) {
             return;
         }
         self.watched.remove(&watch);
@@ -559,7 +528,7 @@ impl Io for System {
             Some(watches) => watches.remove(watch),
             None => Err(io::ErrorKind::NotFound.into()),
         };
-        if let Err(error) = self.record("unwatch", &watch.to_string(), &result, &[]) {
+        if let Err(error) = self.record("unwatch", Data::Unsigned(watch), &result, Data::Null) {
             self.failure.borrow_mut().get_or_insert(error);
         }
         if let Err(error) = result {
@@ -574,64 +543,64 @@ impl Io for System {
     }
 
     fn resize(&mut self, master: RawFd, grid: Grid) -> io::Result<()> {
-        if let Some(result) = self.replay("resize", &format!("{master} {grid:?}")) {
-            return result.map(|_| ());
+        let args = || Data::Object(vec![("fd", Data::Signed(master.into())), ("grid", capture::grid(&grid))]);
+        if let Some(result) = self.replay("resize", args(), |_| Some(())) {
+            return result;
         }
         let result = if !self.descriptors.contains_key(&master) {
             Err(io::ErrorKind::NotFound.into())
         } else {
             native::resize(master, grid)
         };
-        self.record("resize", &format!("{master} {grid:?}"), &result, &[])?;
+        self.record("resize", args(), &result, Data::Null)?;
         result
     }
     fn hangup(&mut self, master: RawFd) -> io::Result<()> {
-        if let Some(result) = self.replay("hangup", &master.to_string()) {
-            return result.map(|_| ());
+        if let Some(result) = self.replay("hangup", Data::Signed(master.into()), |_| Some(())) {
+            return result;
         }
         let source = self.source(master);
-        if let Some(child) = self
-            .children
-            .values_mut()
-            .find(|child| child.pty && child.channels.contains(&Some(master)))
-        {
-            if child.status.is_none() {
-                if let Some(status) = child.process.try_wait()? {
-                    child.status = Some((
-                        status.code().unwrap_or(128 + status.signal().unwrap_or(0)),
-                        Instant::now(),
-                    ));
-                    child.exit.take();
-                } else {
-                    native::hangup(source, child.process.id());
+        let result = (|| {
+            if let Some(child) = self
+                .children
+                .values_mut()
+                .find(|child| child.pty && child.channels.contains(&Some(master)))
+            {
+                if child.status.is_none() {
+                    if let Some(status) = child.process.try_wait()? {
+                        child.status = Some((
+                            status.code().unwrap_or(128 + status.signal().unwrap_or(0)),
+                            Instant::now(),
+                        ));
+                        child.exit.take();
+                    } else {
+                        native::hangup(source, child.process.id());
+                    }
                 }
             }
-        }
+            Ok(())
+        })();
         if let Err(error) = self.dispose(master) {
             self.failure.borrow_mut().get_or_insert(error);
         }
-        let result = Ok(());
-        self.record("hangup", &master.to_string(), &result, &[])?;
+        self.record("hangup", Data::Signed(master.into()), &result, Data::Null)?;
         result
     }
     fn connect(&mut self, address: &Address) -> io::Result<RawFd> {
-        let args = match address {
-            Address::Unix(path) => format!("unix {path:?}"),
-            Address::Tcp(address) => format!("tcp {address}"),
+        let tcp = match address {
+            Address::Tcp(address) => address.to_string(),
+            Address::Unix(_) => String::new(),
         };
-        if let Some(result) = self.replay("connect", &args) {
-            return result.and_then(|v| {
-                v.try_into()
-                    .map(i32::from_le_bytes)
-                    .map_err(|_| file::invalid())
-            });
+        let args = || Data::Object(vec![match address {
+            Address::Unix(path) => ("unix", Data::from(path.as_path())),
+            Address::Tcp(_) => ("tcp", Data::String(&tcp)),
+        }]);
+        if let Some(result) = self.replay("connect", args(), |v| v.signed().and_then(|v| v.try_into().ok())) {
+            return result;
         }
         let result = socket::start(address);
-        let data = result
-            .as_ref()
-            .map(|file| file.as_raw_fd().to_le_bytes().to_vec())
-            .unwrap_or_default();
-        self.record("connect", &args, &result, &data)?;
+        let output = result.as_ref().map_or(Data::Null, |file| Data::Signed(file.as_raw_fd().into()));
+        self.record("connect", args(), &result, output)?;
         let file = result?;
         let fd = file.as_raw_fd();
         self.descriptors.insert(fd, file);
@@ -641,8 +610,12 @@ impl Io for System {
     fn verify_socket(&mut self, fd: RawFd, path: &Path, identity: crate::api::FileIdentity, peer: (u32, u32)) -> io::Result<()> {
         use std::os::unix::fs::FileTypeExt;
         self.consumed(fd);
-        let args = format!("{fd} {path:?} {} {} {} {}", identity.device, identity.inode, peer.0, peer.1);
-        if let Some(result) = self.replay("verify_socket", &args) { return result.map(|_| ()); }
+        let args = || Data::Object(vec![
+            ("fd", Data::Signed(fd.into())), ("path", Data::from(path)),
+            ("device", Data::Unsigned(identity.device)), ("inode", Data::Unsigned(identity.inode)),
+            ("peer", Data::Array(vec![Data::Unsigned(peer.0.into()), Data::Unsigned(peer.1.into())])),
+        ]);
+        if let Some(result) = self.replay("verify_socket", args(), |_| Some(())) { return result; }
         let result = (|| {
             if !self.descriptors.contains_key(&fd) { return Err(io::ErrorKind::NotFound.into()); }
             socket::complete(fd).map_err(|error| {
@@ -656,20 +629,20 @@ impl Io for System {
             }
             Ok(())
         })();
-        self.record("verify_socket", &args, &result, &[])?;
+        self.record("verify_socket", args(), &result, Data::Null)?;
         result
     }
     fn connected(&mut self, fd: RawFd) -> io::Result<()> {
         self.consumed(fd);
-        if let Some(result) = self.replay("connected", &fd.to_string()) {
-            return result.map(|_| ());
+        if let Some(result) = self.replay("connected", Data::Signed(fd.into()), |_| Some(())) {
+            return result;
         }
         let result = self
             .descriptors
             .get(&fd)
             .ok_or_else(|| io::ErrorKind::NotFound.into())
             .and_then(|_| socket::complete(fd));
-        self.record("connected", &fd.to_string(), &result, &[])?;
+        self.record("connected", Data::Signed(fd.into()), &result, Data::Null)?;
         result
     }
     fn route(&mut self) -> io::Result<(u64, PathBuf)> {
@@ -689,8 +662,7 @@ impl Io for System {
         self.open("open_route")
     }
     fn close_route(&mut self, route: u64) {
-        let args = route.to_string();
-        if self.ignored("close_route", &args) {
+        if self.ignored("close_route", Data::Unsigned(route)) {
             return;
         }
         let pending: Vec<_> = self
@@ -721,7 +693,7 @@ impl Io for System {
                 .and_then(|v| v.parse::<u64>().ok())
                 != Some(route)
         });
-        if let Err(error) = self.record("close_route", &args, &result, &[]).and(result) {
+        if let Err(error) = self.record("close_route", Data::Unsigned(route), &result, Data::Null).and(result) {
             self.failure.borrow_mut().get_or_insert(error);
         }
     }
@@ -730,9 +702,8 @@ impl Io for System {
     }
     fn shutdown(&mut self, fd: RawFd) -> io::Result<()> {
         self.consumed(fd);
-        let args = fd.to_string();
-        if let Some(result) = self.replay("shutdown", &args) {
-            return result.map(|_| ());
+        if let Some(result) = self.replay("shutdown", Data::Signed(fd.into()), |_| Some(())) {
+            return result;
         }
         let source = self.source(fd);
         let result = (|| {
@@ -767,35 +738,30 @@ impl Io for System {
                 }
             }
         })();
-        self.record("shutdown", &args, &result, &[])?;
+        self.record("shutdown", Data::Signed(fd.into()), &result, Data::Null)?;
         result
     }
     fn unlock(&mut self, work: Work) {
-        if self.ignored("unlock", &work.to_string()) {
+        if self.ignored("unlock", Data::Unsigned(work)) {
             return;
         }
         self.locks.remove(&work);
-        if let Err(error) = self.record("unlock", &work.to_string(), &Ok(()), &[]) {
+        if let Err(error) = self.record("unlock", Data::Unsigned(work), &Ok(()), Data::Null) {
             self.failure.borrow_mut().get_or_insert(error);
         }
     }
     fn executable(&mut self) -> io::Result<PathBuf> {
-        use std::os::unix::ffi::{OsStrExt, OsStringExt};
-        if let Some(result) = self.replay("executable", "") {
-            return Ok(std::ffi::OsString::from_vec(result?).into());
+        if let Some(result) = self.replay("executable", Data::Null, |v: &Data<'_>| v.path().map(PathBuf::from)) {
+            return result;
         }
         let result = file::stable();
-        let bytes = result
-            .as_ref()
-            .map(|p| p.as_os_str().as_bytes().to_vec())
-            .unwrap_or_default();
-        self.record("executable", "", &result, &bytes)?;
+        let output = result.as_ref().map_or(Data::Null, |p| Data::from(p.as_path()));
+        self.record("executable", Data::Null, &result, output)?;
         result
     }
     fn storage(&mut self) -> io::Result<PathBuf> {
-        use std::os::unix::ffi::{OsStrExt, OsStringExt};
-        if let Some(result) = self.replay("storage", "") {
-            return Ok(std::ffi::OsString::from_vec(result?).into());
+        if let Some(result) = self.replay("storage", Data::Null, |v: &Data<'_>| v.path().map(PathBuf::from)) {
+            return result;
         }
         let result = super::hooks::base()
             .map(|base| base.join("state"))
@@ -810,54 +776,42 @@ impl Io for System {
                     _ => Ok(path),
                 }
             });
-        let bytes = result
-            .as_ref()
-            .map(|p| p.as_os_str().as_bytes().to_vec())
-            .unwrap_or_default();
-        self.record("storage", "", &result, &bytes)?;
+        let output = result.as_ref().map_or(Data::Null, |p| Data::from(p.as_path()));
+        self.record("storage", Data::Null, &result, output)?;
         result
     }
     fn directory(&mut self) -> io::Result<PathBuf> {
-        use std::os::unix::ffi::{OsStrExt, OsStringExt};
-        if let Some(result) = self.replay("directory", "") {
-            return Ok(std::ffi::OsString::from_vec(result?).into());
+        if let Some(result) = self.replay("directory", Data::Null, |v: &Data<'_>| v.path().map(PathBuf::from)) {
+            return result;
         }
         let result = self
             .hooks
             .as_ref()
             .map(|hooks| hooks.directory().to_owned())
             .ok_or_else(|| io::ErrorKind::Unsupported.into());
-        let bytes = result
-            .as_ref()
-            .map(|p| p.as_os_str().as_bytes().to_vec())
-            .unwrap_or_default();
-        self.record("directory", "", &result, &bytes)?;
+        let output = result.as_ref().map_or(Data::Null, |p| Data::from(p.as_path()));
+        self.record("directory", Data::Null, &result, output)?;
         result
     }
     fn reply(&mut self, reply: u64, bytes: &[u8]) -> io::Result<()> {
-        let args = if self.capture.tracing() {
-            format!("{reply} {}", capture::hex(bytes))
-        } else {
-            String::new()
-        };
-        if let Some(result) = self.replay("reply", &args) {
-            return result.map(|_| ());
+        let args = || Data::Object(vec![("reply", Data::Unsigned(reply)), ("bytes", Data::Bytes(bytes))]);
+        if let Some(result) = self.replay("reply", args(), |_| Some(())) {
+            return result;
         }
         let result = self
             .hooks
             .as_mut()
             .unwrap()
             .reply(reply, bytes, &mut self.reactor);
-        self.record("reply", &args, &result, &[])?;
+        self.record("reply", args(), &result, Data::Null)?;
         result
     }
     fn hold(&mut self, reply: u64, until: Instant) -> io::Result<()> {
-        let args = reply.to_string();
-        if let Some(result) = self.replay("hold", &args) {
-            return result.map(|_| ());
+        if let Some(result) = self.replay("hold", Data::Unsigned(reply), |_| Some(())) {
+            return result;
         }
         let result = self.hooks.as_mut().unwrap().hold(reply, until);
-        self.record("hold", &args, &result, &[])?;
+        self.record("hold", Data::Unsigned(reply), &result, Data::Null)?;
         result
     }
 }
@@ -880,34 +834,28 @@ impl System {
         {
             command.env("DISPATCH_HELPER_ENDPOINT", path);
         }
-        let mut args = format!("{command:?} pty={pty:?}");
-        // Existing captures use private groups. A foreground launch changes the
-        // native effect and must not replay as though its policy were unchanged.
-        if group != Some(0) {
-            args.push_str(&format!(" group={group:?}"));
-        }
-        if let Some(result) = self.replay("spawn", &args) {
-            let bytes = result?;
-            // Traces from before the tty fact hold only the four descriptors.
-            let (descriptors, tty) = bytes.split_at_checked(16).ok_or_else(file::invalid)?;
-            let tty = match tty.len() {
-                0 => None,
-                8 => Some(u64::from_le_bytes(tty.try_into().unwrap())),
-                _ => return Err(file::invalid()),
+        // A foreground launch (group) changes the native effect: part of what was asked.
+        let encoded = capture::value(&Data::Object(vec![
+            ("command", capture::command(&command)),
+            ("pty", pty.as_ref().map_or(Data::Null, capture::grid)),
+            ("group", group.map_or(Data::Null, |group| Data::Signed(group.into()))),
+        ]))?;
+        let args = || crate::wire::body::decode_plain(&encoded).expect("encoded above");
+        if let Some(result) = self.replay("spawn", args(), |v| {
+            // An absent channel is null; Some(None) keeps it apart from an invalid value.
+            let fd = |name| match v.get(name)? {
+                Data::Null => Some(None),
+                fd => fd.signed()?.try_into().ok().map(Some),
             };
-            let values: Vec<_> = descriptors
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .map(|v| i32::from_le_bytes(*v))
-                .collect();
-            return Ok(Spawned {
-                pid: values[0] as u32,
-                input: (values[1] >= 0).then_some(values[1]),
-                output: (values[2] >= 0).then_some(values[2]),
-                stderr: (values[3] >= 0).then_some(values[3]),
-                tty,
-            });
+            Some(Spawned {
+                pid: v.get("pid")?.unsigned()?.try_into().ok()?,
+                input: fd("input")?,
+                output: fd("output")?,
+                stderr: fd("stderr")?,
+                tty: match v.get("tty")? { Data::Null => None, tty => Some(tty.unsigned()?) },
+            })
+        }) {
+            return result;
         }
         let result = (|| {
             #[cfg(target_os = "macos")]
@@ -1008,6 +956,7 @@ impl System {
                 ChildState {
                     pty: pty.is_some(),
                     owned,
+                    leader: pty.is_some() || group == Some(0),
                     process: child,
                     exit: Some(exit),
                     section: self.section.clone(),
@@ -1025,22 +974,15 @@ impl System {
                 tty,
             })
         })();
-        let data = result
-            .as_ref()
-            .map(|s| {
-                [
-                    s.pid as i32,
-                    s.input.unwrap_or(-1),
-                    s.output.unwrap_or(-1),
-                    s.stderr.unwrap_or(-1),
-                ]
-                .iter()
-                .flat_map(|v| v.to_le_bytes())
-                .chain(s.tty.iter().flat_map(|v| v.to_le_bytes()))
-                .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        self.record("spawn", &args, &result, &data)?;
+        let fd = |fd: Option<RawFd>| fd.map_or(Data::Null, |fd| Data::Signed(fd.into()));
+        let output = result.as_ref().map_or(Data::Null, |s| Data::Object(vec![
+            ("pid", Data::Unsigned(s.pid.into())),
+            ("input", fd(s.input)),
+            ("output", fd(s.output)),
+            ("stderr", fd(s.stderr)),
+            ("tty", s.tty.map_or(Data::Null, Data::Unsigned)),
+        ]));
+        self.record("spawn", args(), &result, output)?;
         result
     }
 }
@@ -1058,28 +1000,15 @@ impl file::Replay {
         let pending = streams.entry(key).or_default();
         if pending.is_empty() {
             let row = self.take(section)?;
-            let mut args = row.args.split_whitespace();
-            if row.op != op
-                || args.next().and_then(|value| value.parse::<RawFd>().ok()) != Some(fd)
-                || args
-                    .next()
-                    .and_then(|value| {
-                        value
-                            .strip_prefix("len=")
-                            .unwrap_or(value)
-                            .parse::<usize>()
-                            .ok()
-                    })
-                    .is_none()
-            {
+            let args = crate::wire::body::decode_plain(&row.args).map_err(|_| file::invalid())?;
+            if row.op != op || args.get("fd").and_then(|v| v.signed()) != Some(fd.into()) {
                 return Err(file::invalid());
             }
-            let data = match file::decode(&row.data)?.result {
-                Ok(Output::Bytes(data)) => data,
-                Ok(_) => return Err(file::invalid()),
-                Err(error) => return Ok(Err(error)),
-            };
-            pending.extend(data);
+            let output = crate::wire::body::decode_plain(&row.output).map_err(|_| file::invalid())?;
+            if row.error.is_some() {
+                return Ok(Err(file::failure(&output, &super::System::platform()?.0)?));
+            }
+            pending.extend(output.bytes().ok_or_else(file::invalid)?);
         }
         let count = bytes.len().min(pending.len());
         if op == "write" {
@@ -1088,14 +1017,14 @@ impl file::Replay {
             {
                 let offset = matched / crate::wire::CHUNK * crate::wire::CHUNK;
                 let end = offset + crate::wire::CHUNK;
-                let expected = capture::hex(&pending.iter().skip(offset).take(crate::wire::CHUNK).copied().collect::<Vec<_>>());
-                let actual = capture::hex(&bytes[offset..bytes.len().min(end)]);
+                let expected: Vec<u8> = pending.iter().skip(offset).take(crate::wire::CHUNK).copied().collect();
+                let actual = &bytes[offset..bytes.len().min(end)];
                 self.mismatch(Data::Object(vec![
                     ("section", Data::String(section)), ("op", Data::String(op)),
                     ("fd", Data::Signed(fd.into())), ("compared", Data::Unsigned(count as u64)),
                     ("matched", Data::Unsigned(matched as u64)), ("offset", Data::Unsigned(offset as u64)),
-                    ("expected", Data::Object(vec![("length", Data::Unsigned(pending.len() as u64)), ("bytes", Data::String(&expected))])),
-                    ("actual", Data::Object(vec![("length", Data::Unsigned(bytes.len() as u64)), ("bytes", Data::String(&actual))])),
+                    ("expected", Data::Object(vec![("length", Data::Unsigned(pending.len() as u64)), ("bytes", Data::Bytes(&expected))])),
+                    ("actual", Data::Object(vec![("length", Data::Unsigned(bytes.len() as u64)), ("bytes", Data::Bytes(actual))])),
                 ]));
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -1118,20 +1047,16 @@ impl file::Replay {
         section: &str,
         fd: RawFd,
         bytes: &[u8],
-    ) -> io::Result<file::Completion> {
+    ) -> io::Result<io::Result<usize>> {
         let count = self.stream(section, "write", fd, &mut bytes.to_vec())?;
         if let (Some(root), Ok(count)) = (&self.output, &count) {
             std::fs::create_dir_all(root)?;
             std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
-                .open(root.join(format!("{}.bin", capture::hex(section.as_bytes()))))?
+                .open(root.join(section.bytes().map(|byte| format!("{byte:02x}")).collect::<String>() + ".bin"))?
                 .write_all(&bytes[..*count])?;
         }
-        Ok(file::Completion {
-            sequence: Some(0),
-            held: None,
-            result: count.map(|count| Output::Bytes((count as u64).to_le_bytes().to_vec())),
-        })
+        Ok(count)
     }
 }

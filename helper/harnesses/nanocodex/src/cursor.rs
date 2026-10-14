@@ -1,16 +1,8 @@
 use super::*;
 
 impl Saved {
-    pub(super) fn cursor(&self, session: &str) -> Result<String, Error> {
+    pub(super) fn cursor(&self, session: &str) -> Result<Encoded, Error> {
         let metadata = self.grown.metadata;
-        let bytes = |values: &[u8]| {
-            Data::Array(
-                values
-                    .iter()
-                    .map(|byte| Data::Unsigned(u64::from(*byte)))
-                    .collect(),
-            )
-        };
         let modified = metadata.modified_ns.to_string();
         let changed = metadata.changed_ns.to_string();
         let path = digest(self.path.as_os_str().as_encoded_bytes());
@@ -22,26 +14,25 @@ impl Saved {
             ("size", Data::Unsigned(metadata.size)),
             ("modified", Data::String(&modified)),
             ("changed", Data::String(&changed)),
-            ("prefix", bytes(&self.grown.prefix)),
-            ("tail", bytes(&self.grown.tail)),
+            ("prefix", Data::Bytes(&self.grown.prefix)),
+            ("tail", Data::Bytes(&self.grown.tail)),
             ("generation", Data::String(&self.generation)),
             ("offset", Data::Unsigned(self.offset)),
             ("turn", Data::String(self.turn.as_deref().unwrap_or(""))),
             ("model", Data::String(self.model.as_deref().unwrap_or(""))),
             ("effort", Data::String(self.effort.as_deref().unwrap_or(""))),
         ]);
-        String::from_utf8(json::write(&data)?)
-            .map_err(|_| error("changed", "Invalid transcript cursor"))
+        Encoded::value(&data)
     }
 
     pub(super) fn resume(source: &Transcript) -> Result<Option<Self>, Error> {
-        let Some(cursor) = source.later.as_deref().filter(|cursor| !cursor.is_empty()) else {
+        let Some(cursor) = &source.later else {
             return Ok(None);
         };
-        let doc = Json::parse(cursor.as_bytes())?;
-        let root = doc.root();
-        if string(root, "session") != source.session
-            || string(root, "path") != digest(source.path.as_os_str().as_encoded_bytes())
+        let root = cursor.root();
+        let string = |key: &str| root.get(key).and_then(Data::string).unwrap_or("");
+        if string("session") != source.session
+            || string("path") != digest(source.path.as_os_str().as_encoded_bytes())
         {
             return Err(error(
                 "changed",
@@ -50,35 +41,24 @@ impl Saved {
         }
         let unsigned = |key: &str| {
             root.get(key)
-                .and_then(Value::unsigned)
+                .and_then(Data::unsigned)
                 .ok_or_else(|| error("changed", "Invalid transcript cursor"))
         };
         let time = |key: &str| {
-            string(root, key)
+            string(key)
                 .parse::<i128>()
                 .map_err(|_| error("changed", "Invalid transcript cursor"))
         };
         let bytes = |key: &str| -> Result<Vec<u8>, Error> {
-            let values = root
-                .get(key)
-                .and_then(Value::array)
-                .ok_or_else(|| error("changed", "Invalid transcript cursor"))?;
-            let bytes = values
-                .map(|value| {
-                    value
-                        .unsigned()
-                        .and_then(|n| u8::try_from(n).ok())
-                        .ok_or_else(|| error("changed", "Invalid transcript cursor"))
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            if bytes.len() > 256 {
-                return Err(error("changed", "Invalid transcript cursor"));
-            }
-            Ok(bytes)
+            root.get(key)
+                .and_then(Data::bytes)
+                .filter(|bytes| bytes.len() <= 256)
+                .map(<[u8]>::to_vec)
+                .ok_or_else(|| error("changed", "Invalid transcript cursor"))
         };
         let optional = |key: &str| {
             root.get(key)
-                .and_then(Value::string)
+                .and_then(Data::string)
                 .filter(|value| !value.is_empty())
                 .map(str::to_owned)
         };
@@ -102,7 +82,7 @@ impl Saved {
                 prefix: bytes("prefix")?,
                 tail,
             },
-            generation: string(root, "generation").to_owned(),
+            generation: string("generation").to_owned(),
             offset,
             turn: optional("turn"),
             model: optional("model"),

@@ -17,8 +17,8 @@ final class ChatScrollBenchmarkTests: XCTestCase {
     func testDenseAgenticHistoryPaging() async throws {
         try DesktopTestSupport.requireUnlocked(); AppFont.register()
         for steps in [10, 20] {
-            let id = UUID().uuidString
-            let path = FileManager.default.temporaryDirectory.appendingPathComponent("dense-scroll-\(id).jsonl")
+            let id = System.uuid().uuidString
+            let path = System.temporary.appendingPathComponent("dense-scroll-\(id).jsonl")
             defer { try? FileManager.default.removeItem(at: path) }
             var data = Data()
             func line(_ type: String, _ payload: [String: Any]) throws {
@@ -153,7 +153,7 @@ final class ChatScrollBenchmarkTests: XCTestCase {
                 "readP50Ms": sorted[sorted.count / 2], "readP95Ms": sorted[Int(Double(sorted.count - 1) * 0.95)],
                 "readMaxMs": sorted.last!, "recordsPerPage": records, "gestures": gestures,
                 "note": "Local synthetic file; collapsed tool groups; controlled live-scroll notifications and 40pt steps; release includes apply and synchronous layout, not physical display latency"]
-            let results = ProcessInfo.processInfo.environment["DISPATCH_BENCHMARK_OUTPUT"].map {
+            let results = System.environment("DISPATCH_BENCHMARK_OUTPUT").map {
                 URL(fileURLWithPath: $0).appendingPathComponent("dense")
             } ?? CodexTestSupport.root.appendingPathComponent("build/dense-scroll-validation")
             try FileManager.default.createDirectory(at: results, withIntermediateDirectories: true)
@@ -405,7 +405,7 @@ final class ChatScrollBenchmarkTests: XCTestCase {
                 "hasEarlier": session.hasEarlier, "modelRequests": requestCount(endpoint), "os": ProcessInfo.processInfo.operatingSystemVersionString,
                 "expandedTools": session.expanded.count,
                 "historyPagesPublished": session.historyRevision - historyRevision,
-                "runtimeCheckers": (ProcessInfo.processInfo.environment["DYLD_INSERT_LIBRARIES"] ?? "").split(separator: ":")
+                "runtimeCheckers": (System.environment("DYLD_INSERT_LIBRARIES") ?? "").split(separator: ":")
                     .filter { $0.contains("MainThreadChecker") || $0.contains("RPAC") }.map(String.init)]
             report.merge(result) { _, value in value }
             try JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]).write(to: directory.appendingPathComponent(name + ".json"))

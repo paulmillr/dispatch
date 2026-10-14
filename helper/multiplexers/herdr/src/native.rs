@@ -19,15 +19,6 @@ pub(super) fn expired(message: impl Into<String>) -> Error {
     }
 }
 
-pub(super) fn focus(event: Value<'_>) -> Option<usize> {
-    match event.get("event").and_then(Value::string) {
-        Some("workspace_focused" | "workspace.focused") => Some(0),
-        Some("tab_focused" | "tab.focused") => Some(1),
-        Some("pane_focused" | "pane.focused") => Some(2),
-        _ => None,
-    }
-}
-
 pub(super) fn mutation(method: &str) -> bool {
     !matches!(
         method,
@@ -161,45 +152,6 @@ pub struct Snapshot {
     pub layouts: Vec<View>,
 }
 impl Snapshot {
-    pub(super) fn select(&mut self, selection: &[Option<String>; 3]) {
-        let Some(workspace) = self
-            .workspaces
-            .iter_mut()
-            .find(|workspace| selection[0].as_ref() == Some(&workspace.key))
-        else {
-            return;
-        };
-        let tab = selection[1]
-            .as_ref()
-            .filter(|key| {
-                self.tabs
-                    .iter()
-                    .any(|tab| &tab.key == *key && tab.parent == workspace.key)
-            })
-            .cloned()
-            .unwrap_or_else(|| workspace.active.clone());
-        workspace.active = tab.clone();
-        let pane = selection[2]
-            .as_ref()
-            .filter(|key| {
-                self.panes
-                    .iter()
-                    .any(|pane| &pane.key == *key && pane.parent == tab)
-            })
-            .cloned()
-            .or_else(|| {
-                self.layouts
-                    .iter()
-                    .find(|view| view.key == tab)
-                    .map(|view| view.focus.clone())
-            });
-        if let Some(pane) = &pane
-            && let Some(view) = self.layouts.iter_mut().find(|view| view.key == tab)
-        {
-            view.focus = pane.clone();
-        }
-        self.focus = [Some(workspace.key.clone()), Some(tab), pane];
-    }
     pub fn read(v: Value<'_>) -> Result<Self, Error> {
         Ok(Self {
             focus: [

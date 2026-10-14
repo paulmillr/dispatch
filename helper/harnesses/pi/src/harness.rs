@@ -71,9 +71,9 @@ impl Pi {
         if let Some(script) = script {
             let path = script.clone();
             bridge::native(&self.runtime, io, "file.realpath",
-                Data::Object(vec![("path", Data::String(&path))]),
+                Data::Object(vec![("path", Data::from(std::path::Path::new(&path)))]),
                 Box::new(move |io, result| done(io, Ok(result.is_ok_and(|value| {
-                    value.root().get("path").and_then(Value::string)
+                    value.root().get("path").and_then(Data::path).and_then(|path| path.to_str())
                         .is_some_and(|path| script_path(&script, path))
                 })))));
         } else {
@@ -915,7 +915,7 @@ pub fn commands(value: Option<Value<'_>>) -> Vec<String> {
     names
 }
 
-pub fn usage(value: Option<Value<'_>>) -> Option<String> {
+pub fn usage(value: Option<Value<'_>>) -> Option<dispatch_helper_core::wire::body::Encoded> {
     let value = value.filter(|value| value.kind() == dispatch_helper_core::json::Kind::Object)?;
     let mut fields = Vec::new();
     if let Some(tokens) = value.get("tokens") {
@@ -930,8 +930,5 @@ pub fn usage(value: Option<Value<'_>>) -> Option<String> {
     if fields.is_empty() {
         return None;
     }
-    let bytes =
-        dispatch_helper_core::json::write(&Data::Object(vec![("info", Data::Object(fields))]))
-            .ok()?;
-    String::from_utf8(bytes).ok()
+    dispatch_helper_core::wire::body::Encoded::value(&Data::Object(vec![("info", Data::Object(fields))])).ok()
 }

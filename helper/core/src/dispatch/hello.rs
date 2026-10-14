@@ -2,12 +2,12 @@ use super::*;
 
 impl Request<'_> {
     /// Protocol result: Hello JSON object encoded by this handler
-    pub(super) fn hello(&mut self, _p: Value<'_>) -> Result<(), Error> {
+    pub(super) fn hello(&mut self, _p: &Data<'_>) -> Result<(), Error> {
         if !self.helper.answerable() {
             if self.helper.identity.is_none() && self.helper.identity_job.is_none() {
                 let job = self.io.submit(Job::Native {
                     name: "host.identity",
-                    input: b"{}".to_vec(),
+                    value: crate::wire::body::encode_plain(&crate::json::Data::Object(Vec::new()))?,
                 });
                 self.helper.identity_job = Some(job.map_err(|error| Error {
                     code: "io_failure",
@@ -63,7 +63,7 @@ impl Request<'_> {
             .helper
             .identity
             .as_ref()
-            .map(|json| crate::json::Data::Value(json.root()));
+            .map(|value| crate::encode::Raw(value));
         crate::encode::object(
             &mut out,
             &[
@@ -71,8 +71,8 @@ impl Request<'_> {
                 ("frame_limit", &wire::LIMIT),
                 ("chunk_kind", &(wire::Kind::Chunk as u64)),
                 ("chunk_limit", &(wire::CHUNK as u64)),
-                ("os", &std::env::consts::OS),
-                ("arch", &std::env::consts::ARCH),
+                ("os", &self.io.os()),
+                ("arch", &self.io.arch()),
                 ("account", &account),
                 ("terminal", &terminal),
                 ("process", &process),
@@ -93,7 +93,7 @@ impl Request<'_> {
             self.fd,
             wire::Kind::Response,
             self.id,
-            [b"{\"result\":".as_slice(), &out, b"}"].concat(),
+            crate::encode::value(&crate::encode::Fields(&[("result", &crate::encode::Raw(&out))])),
         ));
         Ok(())
     }

@@ -75,7 +75,7 @@ fn unix_listeners(pid: i32) -> io::Result<Vec<std::path::PathBuf>> {
     }
     Ok(paths.into_iter().collect())
 }
-pub(super) fn collect(input: crate::json::Value<'_>) -> io::Result<Vec<u8>> {
+pub(super) fn collect(input: &Data<'_>) -> io::Result<Vec<u8>> {
     let pid = input
         .get("pid")
         .and_then(|v| v.unsigned())
@@ -107,9 +107,6 @@ pub(super) fn collect(input: crate::json::Value<'_>) -> io::Result<Vec<u8>> {
             "Remote process exited or changed identity",
         ));
     }
-    let paths = paths
-        .iter()
-        .map(|p| p.to_str().ok_or_else(invalid))
-        .collect::<io::Result<Vec<_>>>()?;
-    json::write(&Data::Array(paths.into_iter().map(Data::String).collect())).map_err(|_| invalid())
+    crate::wire::body::encode_plain(&Data::Array(paths.iter().map(|path| Data::from(path.as_path())).collect()))
+        .map_err(|_| invalid())
 }
