@@ -37,6 +37,12 @@ IMAGE = ("ghcr.io/cirruslabs/macos-tahoe-xcode@sha256:"
          "e0721ddeae3c7c037b764c1aebd0b2d245495c16622413f5a567d7110d18d863")
 SOURCES = ["Dispatch", "DispatchTests", "helper", "Vendor", "ThirdPartyLicenses", "scripts", "test", "extras",
            "project.yml", "run.sh"]
+# The replay corpus (a git submodule, docs/replay.md): the guest's tests replay from it, and its Debug build
+# replays the helper captures. Synchronized whenever the host has it.
+CORPUS = "replays"
+# The desktop the recordings were made on (a 1920 × 1080 pt Retina host): windows and terminal grids follow the
+# screen, so on a smaller one replays wait for sizes the app never reaches.
+DISPLAY = "1920x1080pt"
 
 
 def run(*args, **kwargs):
@@ -57,11 +63,22 @@ def info(vm):
     return next((item for item in json.loads(result.stdout) if item["Name"] == vm), None)
 
 
-def start(vm):
+def display(vm):
+    result = run("tart", "get", vm, "--format", "json", capture_output=True, text=True)
+    return json.loads(result.stdout).get("Display")
+
+
+def start(vm, testing=False):
     state = info(vm)
     if state is None:
         raise RuntimeError("VM is missing. Run python3 test/vm.py setup first.")
     booted = not state["Running"]
+    configured = display(vm)
+    if booted and configured != DISPLAY:
+        run("tart", "set", vm, "--display", DISPLAY, "--no-display-refit")
+    elif testing and configured != DISPLAY:
+        raise RuntimeError(vm + " runs with a " + configured + " display; recordings need " + DISPLAY +
+                           ". Stop it (python3 test/vm.py --vm " + vm + " stop): its next start sets that display.")
     if booted:
         logs = ROOT / "build" / "vm-tests"
         logs.mkdir(parents=True, exist_ok=True)
@@ -105,7 +122,7 @@ def setup(vm, image):
         run("tart", "clone", image, vm, env={**os.environ, "TART_NO_AUTO_PRUNE": "1"})
     if not info(vm)["Running"]:
         run("tart", "set", vm, "--cpu", "4", "--memory", "8192",
-            "--display", "1280x832pt", "--no-display-refit")
+            "--display", DISPLAY, "--no-display-refit")
     start(vm)
     shell(vm, r'''
 set -euo pipefail
@@ -394,7 +411,7 @@ def synchronize(vm, sources, destination, relative=False):
     command = ["/usr/bin/rsync", "--archive", "--no-times", "--checksum", "--delete",
                "--delete-excluded", "--exclude=__pycache__", "--exclude=.DS_Store",
                "--exclude=LocalToolAudit/", "--exclude=rollout-*.jsonl", "--exclude=STEPS.md",
-               "--exclude=/helper/target/", "--stats", "--rsync-path=/usr/bin/rsync",
+               "--exclude=/helper/target/", "--exclude=/" + CORPUS + "/.git", "--stats", "--rsync-path=/usr/bin/rsync",
                "-e", shlex.join([sys.executable, str(ROOT / "scripts/tart-rsync.py")])]
     if relative:
         command.append("--relative")
@@ -439,7 +456,11 @@ def test(vm, tests, recheck=False, benchmarks=False, selection=None, **shard):
 def prepare_test_inputs(vm, profile, needs_codex=True):
     def sync_sources():
         with profile.stage("source_sync") as stage:
-            stage["statistics"] = synchronize(vm, SOURCES, GUEST + "/workspace/", relative=True)
+            corpus = (ROOT / CORPUS).is_dir()
+            stage["statistics"] = synchronize(vm, SOURCES + [CORPUS] * corpus, GUEST + "/workspace/", relative=True)
+            if not corpus:
+                # A corpus left from an earlier run would replay recordings this checkout does not have.
+                shell(vm, 'rm -rf "$1/workspace/' + CORPUS + '"', GUEST)
 
     def sync_cli():
         with profile.stage("codex_sync"):
@@ -493,7 +514,7 @@ def run_stamp():
 
 
 def test_guest(vm, tests, linux=False, recheck=False, benchmarks=False, selection=None, host_run=None,
-               stamp=None, shard_classes=None, primary=True, host_ready=False):
+               stamp=None, shard_classes=None, primary=True, host_ready=False, live=False):
     fast = selection is not None and selection['suite'] == 'fast'
     selected = selection['selected'] if selection else tests
     if not fast and not CODEX.is_file():
@@ -513,7 +534,7 @@ def test_guest(vm, tests, linux=False, recheck=False, benchmarks=False, selectio
             run("/bin/bash", "scripts/setup.sh", cwd=ROOT,
                 env={**os.environ, "DISPATCH_SETUP_OFFLINE": "1"})
     with profile.stage("guest_start"):
-        start(vm)
+        start(vm, testing=True)
     # One desktop can only run one UI suite. Keep this lock on interruption, since
     # a disconnected guest process may still be finishing. 'stop' clears it.
     try:
@@ -552,6 +573,8 @@ def test_guest(vm, tests, linux=False, recheck=False, benchmarks=False, selectio
                 for case, reason in selection['excluded'].items():
                     if reason == 'explicit skip':
                         arguments += ['--skip', case]
+        if live:
+            arguments = [*arguments, '--live']
         with (output / "test.log").open("wb") as log:
             log.write(version.encode())
             log.flush()
@@ -917,6 +940,7 @@ def test_sharded(vm, shard_vm, args, groups, loads):
             command += ["--skip", skip]
         command += ["--recheck"] if args.recheck else []
         command += ["--benchmarks"] if args.benchmarks else []
+        command += ["--live"] if args.live else []
         command += ["--shard-classes", ",".join(group), "--shard-role", "primary" if index == 0 else "secondary",
                     "--run-id", run_id, "--host-ready"]
         # Same process group: Ctrl-C reaches each runner exactly as it would unsharded.
@@ -988,6 +1012,7 @@ def main():
     tests = commands.add_parser("test", help="Run fast checks by default, a named suite, or explicit XCTest cases")
     add_arguments(tests)
     tests.add_argument("--failed", help="Rerun only failures from a run ID, directory, or TestSummary.json")
+    tests.add_argument("--live", action="store_true", help="Run every test live, ignoring the replay corpus (xcode.py --live)")
     tests.add_argument("--shards", choices=["auto", "1", "2"],
                        help="Split XCTest classes across this VM and --shard-vm (macOS allows two macOS guests). "
                             "Default auto: only when the shard VM exists, host memory and CPUs allow it, and it saves time")
@@ -1071,7 +1096,7 @@ def main():
                 if args.shard_classes:
                     shard.update(shard_classes=args.shard_classes.split(","), primary=args.shard_role == "primary")
                 return test(args.vm, args.tests, recheck=args.recheck, benchmarks=args.benchmarks,
-                            selection=args.selection, **shard)
+                            selection=args.selection, live=args.live, **shard)
     except (RuntimeError, OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
         print("VM runner: " + str(error), file=sys.stderr)
         return 1

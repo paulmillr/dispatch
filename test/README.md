@@ -50,10 +50,9 @@ build commands, and local executable links without changing files.
 
 Setup does not change permissions, sudo policy, or system settings. Desktop tests
 still require an unlocked desktop and Screen Recording permission; isolated SSH
-fixtures need no sudo by default: test runs on this Mac set `DISPATCH_UNPRIVILEGED_SSHD=1`,
-which builds the Debug helper without the root sshd monitor check (release helpers keep it)
-and runs the fixture's sshd as the current user. The VM runner sets `0` to keep testing that
-check behind a root sshd; set `0` here only with passwordless sudo. External Linux-host tests
+fixtures need no sudo by default: test runs set `DISPATCH_UNPRIVILEGED_SSHD=1`, the VM runner
+too, and run the fixture's sshd as the current user. Recordings name that fixture, so `0` (a root
+sshd through passwordless sudo) replays none of the SSH recordings. External Linux-host tests
 need the configured test host. Missing prerequisites are not a passing full suite.
 The test bundle pins the app's appearance to Dark, so the system appearance setting does not matter.
 Animation checks also require Reduce Motion to be disabled in macOS Accessibility settings;

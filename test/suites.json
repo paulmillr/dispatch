@@ -936,7 +936,7 @@
     "DispatchTests/SettingsSynchronizationTests/testLargeSidebarItemsPersistWithoutChangingContentFont": "fast",
     "DispatchTests/SettingsSynchronizationTests/testLargeSidebarRowsResizeLiveInBothLayouts": "full",
     "DispatchTests/SettingsSynchronizationTests/testIconsSidebarMatchesHostPickerRows": "full",
-    "DispatchTests/SettingsSynchronizationTests/testGlassSidebarIsOnePanelFromTopToBottom": "full",
+    "DispatchTests/SettingsSynchronizationTests/testGlassSidebarIsFlushWithTheWindowEdge": "full",
     "DispatchTests/SettingsSynchronizationTests/testSidebarStyleMigratesFromLargeItemsAndRoundTrips": "fast",
     "DispatchTests/SettingsSynchronizationTests/testHostColorsAreEvenAndReadableInEveryTheme": "fast",
     "DispatchTests/SettingsSynchronizationTests/testRetainedSettingsReflectExternalChangesAndPreserveThemWhenEditing": "full",

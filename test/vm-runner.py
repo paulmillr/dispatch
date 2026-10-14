@@ -734,7 +734,7 @@ class ShardTests(unittest.TestCase):
 
         selection = resolve([], [], 'full', False, vm.ROOT)
         args = type('Args', (), {'selection': selection, 'tests': [], 'suite': 'full', 'skip': ['DispatchTests/ChatTests'],
-                                 'recheck': True, 'benchmarks': False})()
+                                 'recheck': True, 'benchmarks': False, 'live': True})()
         with tempfile.TemporaryDirectory() as root, patch.object(vm, 'ROOT', Path(root)), \
                 patch.object(vm, 'run'), \
                 patch.object(vm, 'host_lock', side_effect=lambda *a, **k: contextmanager(lambda: (yield))()), \
@@ -748,6 +748,7 @@ class ShardTests(unittest.TestCase):
             self.assertEqual(command[command.index('--suite') + 1], 'full')
             self.assertEqual(command[command.index('--skip') + 1], 'DispatchTests/ChatTests')
             self.assertIn('--recheck', command)
+            self.assertIn('--live', command)
             self.assertIn('--host-ready', command)
         groups = [set(command[command.index('--shard-classes') + 1].split(',')) for command in commands]
         self.assertFalse(groups[0] & groups[1])

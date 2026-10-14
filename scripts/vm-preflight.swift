@@ -19,14 +19,16 @@ if (session["CGSSessionScreenIsLocked"] as? NSNumber)?.boolValue == true {
 let display = CGMainDisplayID()
 let modes = CGDisplayCopyAllDisplayModes(display, [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary) as? [CGDisplayMode] ?? []
 let current = CGDisplayCopyDisplayMode(display)
-// Support both the desktop baseline and a MacBook Air-sized Retina desktop.
-// Keep the active profile when it already matches either supported size.
+// Support both the desktop baseline and a MacBook Air-sized Retina desktop. The baseline comes first when the
+// guest offers it: recordings were made on it (test/vm.py boots the guest at it), and their windows and terminal
+// grids follow the screen. Keep the active profile when it is the chosen size.
 func supported(_ mode: CGDisplayMode) -> Bool {
     ((mode.width == 1920 && mode.height == 1080) || (mode.width == 1280 && mode.height == 832))
         && mode.pixelWidth == mode.width * 2 && mode.pixelHeight == mode.height * 2
 }
-guard let mode = current.flatMap({ supported($0) ? $0 : nil })
-    ?? modes.filter(supported).max(by: { $0.width < $1.width }) else {
+let largest = modes.filter(supported).max(by: { $0.width < $1.width })
+guard let mode = current.flatMap({ supported($0) && $0.width == largest?.width ? $0 : nil })
+    ?? largest ?? current.flatMap({ supported($0) ? $0 : nil }) else {
     // Tart derives a point-sized display's scale from the host's main screen
     // when the VM boots; a 1× main monitor yields a 1× guest with no such mode.
     fail("The guest needs a 1920 × 1080 or 1280 × 832 desktop at 2× Retina scale. Boot the VM while a Retina display is the host's main display.")

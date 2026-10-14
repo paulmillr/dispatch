@@ -46,7 +46,8 @@ Results are in `build/vm-tests/<run>/` (`test.log`, `TestSummary.json`, xcresult
 | Locked desktop / guest-agent timeout | `python3 test/vm.py stop; tart run dispatch-tests`, log in as `admin`/`admin`, enable auto-login, and disable idle lock. Agent log: guest `/tmp/tart-guest-agent.log`; restart it with `launchctl kickstart -k "gui/$(id -u)/org.cirruslabs.tart-guest-agent"`. Boot log: `build/vm-tests/dispatch-tests-boot.log`. |
 | Stale guest test lock | Confirm nothing is running, then stop the VM and retry. |
 | Missing Rust | `bash scripts/setup.sh`, then `python3 test/vm.py rust`. |
-| Wrong display | Stop the VM and set 1920×1080 or 1280×832 pt at 2×. |
+| Wrong display | `python3 test/vm.py stop`: the next test run boots the VM at 1920×1080 pt, the size the recordings were made at (a 1280×832 pt guest stalls every replay whose windows follow the screen). Boot it while a Retina display is the host's main display, for 2×. |
+| Replays stall or name unrecorded tool paths | The guest needs the corpus (`replays/`, synchronized when the host has it), the host's tool paths (`vm-guest.sh` links the VM's tools into `build/test-tools/bin`) and the unprivileged SSH fixture (`DISPATCH_UNPRIVILEGED_SSHD=1`, the default). `--live` runs everything live instead. |
 | Missing Claude/Pi | Install them, or select only suites whose dependencies are ready. |
 
 ## Linux SSH

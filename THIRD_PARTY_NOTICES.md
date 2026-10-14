@@ -44,7 +44,7 @@ and JetBrains Mono 2.304 (The JetBrains Mono Project Authors) are bundled
 unmodified under the SIL Open Font License 1.1. Their original notices are in
 `ThirdPartyLicenses/DepartureMono-OFL.txt`, `ThirdPartyLicenses/IoskeleyMono-OFL.txt`,
 and `ThirdPartyLicenses/JetBrainsMono-OFL.txt`. Ioskeley uses the normal-width,
-hinted terminal build. Sources:
+unhinted terminal build. Sources:
 https://github.com/rektdeckard/departure-mono/releases/tag/v1.500,
 https://github.com/ahatem/IoskeleyMono/releases/tag/v2.1.0, and
 https://github.com/JetBrains/JetBrainsMono/releases/tag/v2.304.
