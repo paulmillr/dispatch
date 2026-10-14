@@ -13,6 +13,9 @@ That’s it. No bloat!
 
 ## Quick start
 
+    brew install --cask paulmillr/tap/dispatch
+    brew audit --cask --online paulmillr/tap/dispatch
+
 Dispatch is a normal terminal. The goal is to improve user's workflow, not to change it.
 
 1. Locally it can be used as-is. For SSH: use standard command e.g. `ssh host`

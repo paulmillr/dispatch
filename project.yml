@@ -15,6 +15,10 @@ settings:
     OTHER_SWIFT_FLAGS: ["-Xcc", "-Wno-incomplete-umbrella"]
     # CBzip2: the system bzip2 library's module (the app journal's capture files).
     SWIFT_INCLUDE_PATHS: ["$(SRCROOT)/Vendor/Bzip2"]
+  configs:
+    # Xcode otherwise injects get-task-allow, which notarization rejects.
+    Release:
+      CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
 settingGroups:
   # The Swift terminal (Vendor/Term) is optimized with whole-module optimization in every
   # configuration: built like the app's Debug code (unoptimized, or file by file) it consumes
