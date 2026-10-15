@@ -9,12 +9,11 @@ A terminal app for macs, which supercharges your existing workflows.
 
 That’s it. No bloat!
 
-[![](https://github.com/user-attachments/assets/e937fe12-4eae-4a04-86f3-fb5d23118bcd)](https://github.com/user-attachments/assets/e937fe12-4eae-4a04-86f3-fb5d23118bcd)
+![](https://github.com/user-attachments/assets/270c821d-6db7-4cd1-8370-e6583ba41edf)
 
 ## Quick start
 
     brew install --cask paulmillr/tap/dispatch
-    brew audit --cask --online paulmillr/tap/dispatch
 
 Dispatch is a normal terminal. The goal is to improve user's workflow, not to change it.
 
