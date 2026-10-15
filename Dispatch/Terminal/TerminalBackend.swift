@@ -39,8 +39,9 @@ protocol TerminalBackend: AnyObject {
     func setSize(width: UInt32, height: UInt32)
     /// The display the view is on (its NSScreenNumber): frames follow it when it changes.
     func setDisplayID(_ display: UInt32)
-    /// The displays woke: frames attach to the view's display again, even an unchanged one.
-    func displaysWoke()
+    /// The displays woke, or the view joined a window again: frames attach to the view's display
+    /// again, even an unchanged one.
+    func relink()
     func refresh()
 
     func key(_ key: TerminalKey) -> Bool

@@ -151,7 +151,7 @@ final class SwiftBackend: TerminalBackend {
         defer { self.display = display }
         if let previous = self.display, previous != display { session.relink() }
     }
-    func displaysWoke() { session.relink() }
+    func relink() { session.relink() }
     func refresh() { session.refresh() }
 
     func key(_ key: TerminalKey) -> Bool {

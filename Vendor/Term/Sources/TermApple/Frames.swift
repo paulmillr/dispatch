@@ -22,6 +22,10 @@ final class Frames: NSObject {
         let started = DispatchSemaphore(value: 0)
         // The thread holds the Frames until its run loop stops: stop() never waits for it.
         let thread = Thread { [self] in
+            // Only stop() ends the run loop. AppKit invalidates a view's display links when the view
+            // leaves its window; with the link as its only source the loop would end at its next
+            // wakeup, and every later perform (request, relink) would wait on it forever.
+            RunLoop.current.add(NSMachPort(), forMode: .default)
             link.add(to: .current, forMode: .default)
             (self.loop, self.link) = (CFRunLoopGetCurrent(), link)
             started.signal()
@@ -54,10 +58,11 @@ final class Frames: NSObject {
         if visible { request() }
     }
 
-    /// The view's display changed or woke (main queue: the link is made there): a new link from the
-    /// view replaces the old one on the render thread. A link whose display went away (a monitor
-    /// disconnected, the displays slept) can stay silent while `paused` says it runs, and then no
-    /// request wakes it. The new link runs: its first refresh draws, or pauses it while hidden.
+    /// The view's display changed or woke, or the view joined a window again (main queue: the link
+    /// is made there): a new link from the view replaces the old one on the render thread. A link
+    /// whose display went away (a monitor disconnected, the displays slept) can stay silent while
+    /// `paused` says it runs, and one whose view left its window is invalidated; then no request
+    /// wakes it. The new link runs: its first refresh draws, or pauses it while hidden.
     func relink(_ view: NSView) {
         let next = view.displayLink(target: self, selector: #selector(refresh(_:)))
         perform { [self] in

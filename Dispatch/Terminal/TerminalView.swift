@@ -113,6 +113,9 @@ final class TerminalView: NSView {
             NotificationCenter.default.addObserver(self, selector: #selector(windowScreenDidChange(_:)),
                 name: NSWindow.didChangeScreenNotification, object: window)
         }
+        // Leaving the window invalidated the frames' display link (AppKit does), even back on the
+        // same display: a remounted tab draws again only from a new one.
+        if window != nil, let surface { surface.relink() }
         if window != nil { createIfNeeded() }
         updateVisibility()
         updateGeometry()
@@ -228,7 +231,7 @@ final class TerminalView: NSView {
     /// Another display (one went away, the window moved): geometry reports it, the frames follow.
     @objc private func windowScreenDidChange(_ notification: Notification) { updateGeometry() }
     /// The displays woke: the frames' display link can stay asleep, even on the same display.
-    @objc private func screensDidWake(_ notification: Notification) { surface?.displaysWoke() }
+    @objc private func screensDidWake(_ notification: Notification) { surface?.relink() }
 
     private func updateVisibility() {
         history?.setActive(isPresented && window?.occlusionState.contains(.visible) == true)

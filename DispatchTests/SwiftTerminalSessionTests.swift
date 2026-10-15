@@ -541,8 +541,48 @@ final class SwiftTerminalSessionTests: XCTestCase {
         XCTAssertEqual(backend.session.relinks, 0, "The first display, and the same one again, keep the link")
         backend.setDisplayID(2)
         XCTAssertEqual(backend.session.relinks, 1, "Another display relinks")
-        backend.displaysWoke()
+        backend.relink()
         XCTAssertEqual(backend.session.relinks, 2, "Woken displays relink, even on the same display")
+    }
+
+    /// A view leaving its window invalidates its display link (AppKit does). The render thread
+    /// outlives it: once the view is back in a window, relink() draws again.
+    func testFramesDrawAgainAfterTheViewRejoinsAWindow() async throws {
+        let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 400, height: 200), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 200))
+        let view = NSView(frame: content.bounds)
+        content.addSubview(view)
+        window.contentView = content
+        window.orderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil; window.close() }
+        let scale = window.backingScaleFactor
+        let session = try Session(config: SwiftEngine.parse("", dark: true), scale: scale, machine: System.machine.launch)
+        defer { session.close() }
+        session.host(in: view)
+        session.setSize(width: Int(400 * scale), height: Int(200 * scale))
+        func draws() async throws -> Bool {
+            let before = session.drawnFrames
+            session.refresh()
+            let deadline = ContinuousClock.now + .milliseconds(500)
+            while ContinuousClock.now < deadline {
+                if session.drawnFrames > before { return true }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            return false
+        }
+        guard try await draws() else { throw XCTSkip("No display link fires here (no awake display)") }
+        // Idle: a refresh with nothing to draw pauses the link, so the next request wakes the
+        // render thread, which then finds its link gone with the view.
+        try await Task.sleep(for: .milliseconds(100))
+        view.removeFromSuperview()
+        session.setVisible(false)
+        session.setVisible(true)
+        try await Task.sleep(for: .milliseconds(100))
+        content.addSubview(view)
+        session.relink()
+        let drew = try await draws()
+        XCTAssertTrue(drew, "The remounted view's frames draw again")
     }
 
     /// A display link that fell silent while its frames believed it ran (its display went away)

@@ -723,6 +723,42 @@ final class ChatScrollStabilityTests: XCTestCase {
         XCTAssertTrue(session.atBottom)
     }
 
+    /// A live row's glide ends on time even when its display link stops firing (the window ordered out, the display
+    /// asleep): a glide held open would stop following the bottom until the reader scrolled.
+    func testGlideEndsOnTimeWhenItsDisplayLinkStops() async throws {
+        try DesktopTestSupport.requireUnlocked(); AppFont.register()
+        try XCTSkipIf(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, "Reduce Motion keeps the item scroll")
+        let coordinator = ChatCoordinator(enabled: false)
+        defer { coordinator.stop() }
+        let session = coordinator.session(for: System.uuid())
+        session.sessionID = "glide-stall"; session.showChat = true
+        session.turns = (0..<20).map { index in
+            ChatTurn(id: "turn-\(index)", items: [.init(id: "answer-\(index)", kind: .assistant,
+                text: String(repeating: "An earlier answer with several lines of text.\n\n", count: 3))])
+        }
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 650), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.orderOut(nil); window.contentView = nil; window.close() }
+        window.contentView = NSHostingView(rootView: ChatView(session: session, coordinator: coordinator, focused: false, floatingSwitch: false))
+        window.makeKeyAndOrderFront(nil)
+        try await Task.sleep(for: .milliseconds(400))
+        XCTAssertTrue(session.atBottom)
+        session.active = true; session.busy = true; session.activeTurnID = "live"
+        session.insert(.init(id: "live-row", kind: .assistant, text: String(repeating: "A live row adds a few lines.\n\n", count: 3)), turnID: "live")
+        try await TestSupport.eventually(timeout: .seconds(1), interval: .milliseconds(5), diagnostic: "No glide started") { session.scrollPosition.isGliding }
+        // Off screen, the link stops firing: the glide stays open until something else ends it.
+        window.orderOut(nil)
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertTrue(session.scrollPosition.isGliding, "The glide's frames stopped with the window")
+        try await TestSupport.eventually(timeout: .seconds(1), diagnostic: "The glide did not end on time") {
+            !session.scrollPosition.isGliding && !session.scrollPosition.glidesToBottom
+        }
+        window.orderFront(nil)
+        try await TestSupport.eventually(timeout: .seconds(1), diagnostic: "Following did not reach the bottom") {
+            session.atBottom && (session.scrollPosition.isAtBottom(tolerance: 24) ?? false)
+        }
+    }
+
     /// A burst of live rows: the first enters, the rest appear in place, and layout keeps each at the bottom.
     func testBurstRowsFollowTheBottomWithoutEntrances() async throws {
         try DesktopTestSupport.requireUnlocked(); AppFont.register()
