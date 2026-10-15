@@ -20,8 +20,8 @@ enum SidebarTheme: String, Codable, CaseIterable, Sendable {
         // Light palettes take ANSI colors dark enough to read on them; dark palettes take the dispatch scheme's.
         // Nautical's deck matches its radio: a phosphor scheme, every hue pulled toward the radar's green-black.
         let colors = self == .nautical
-            ? [hex(palette.control), "#e0846e", "#8be28f", "#d9c46a", "#6fb3c9", "#b7d98a", "#7fd3b4", hex(palette.secondary),
-               hex(palette.detail), "#f0a08c", "#b4f0b6", "#ebd98f", "#9ccce0", "#d0ecaa", "#a7e6cc", hex(palette.ink)]
+            ? [hex(palette.control), "#e0846e", "#7fd3a1", "#d9c46a", "#6fb3c9", hex(palette.accent), "#7fd3b4", hex(palette.secondary),
+               hex(palette.detail), "#f0a08c", "#a3e3bd", "#ebd98f", "#9ccce0", hex(palette.accent), "#a7e6cc", hex(palette.ink)]
             : isDark
             ? [hex(palette.control), "#e07b7b", "#7fd3a1", "#d9b36a", "#7ea6c9", hex(palette.accent), "#6fb3aa", hex(palette.secondary),
                hex(palette.detail), "#ec9b9b", "#a3e3bd", "#e8cb8f", "#a3c4df", hex(palette.accent), "#9ad0c9", hex(palette.ink)]

@@ -870,6 +870,9 @@ final class SettingsStatsPresentationTests: XCTestCase {
     }
 
     func testTypingNauticalCodeInSettingsUnlocksAndAppliesNautical() async throws {
+        // Unlocking applies Nautical through Settings, which reaches the shared runtime and theme stores.
+        let restoreRuntime = TestSupport.preserveRuntime()
+        defer { restoreRuntime() }
         try DesktopTestSupport.requireUnlocked()
         let directory = System.temporary.appendingPathComponent(System.uuid().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

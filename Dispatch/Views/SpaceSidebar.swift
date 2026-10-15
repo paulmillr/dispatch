@@ -736,10 +736,16 @@ struct SpaceSidebar: View {
 
     // MARK: Nautical
 
+    /// The full title where the header has room, else just the service's name.
     private var harbourTitle: some View {
-        Text("VTS · DISPATCH HARBOUR").font(HarbourType.heading(typography.size(offset: -1))).tracking(2.4)
-            .foregroundStyle(Chrome.accent).lineLimit(1).padding(.trailing, 4)
-            .accessibilityIdentifier("harbour-title")
+        ViewThatFits(in: .horizontal) {
+            Text("VTS · DISPATCH HARBOUR").fixedSize()
+            Text("VTS · HARBOUR").fixedSize()
+            Text("VTS").fixedSize()
+        }
+        .font(HarbourType.heading(typography.size(offset: -1))).tracking(2.4)
+        .foregroundStyle(Chrome.accent).lineLimit(1).padding(.trailing, 4)
+        .accessibilityIdentifier("harbour-title")
     }
 
     /// The radar plot over the traffic list. The plot takes the sidebar's width, up to about half its height, so the
@@ -1259,14 +1265,18 @@ private struct HarbourTrafficList: View {
     let select: (UUID) -> Void
     let menu: (UUID) -> AnyView
 
-    private var font: Font { HarbourType.mono(typography.size(offset: -1.5)) }
-    private var statusWidth: CGFloat { typography.expanded(64) }
-    private var timeWidth: CGFloat { typography.expanded(52) }
-    private var keyWidth: CGFloat { typography.expanded(38) }
+    private var size: CGFloat { typography.size(offset: -1.5) }
+    private var font: Font { HarbourType.mono(size) }
+    /// Source Code Pro advances 0.6 em per character: columns fit their longest values, "under way", "59m 59s" and a
+    /// two-digit key.
+    private func columnWidth(_ characters: Int) -> CGFloat { ceil(size * 0.6 * CGFloat(characters)) + 2 }
+    private var statusWidth: CGFloat { columnWidth(9) }
+    private var timeWidth: CGFloat { columnWidth(7) }
+    private var keyWidth: CGFloat { columnWidth(2) }
 
     var body: some View {
         VStack(spacing: 0) {
-            columns(Text("TRAFFIC · \(vessels.count)"), Text("STATUS"), Text("TIME"), Text("KEY"))
+            columns(Text("TRAFFIC · \(vessels.count)").fixedSize(), Text("STATUS"), Text("TIME"), Text("KEY").fixedSize())
                 .font(HarbourType.heading(typography.size(offset: -2))).tracking(1.8)
                 .foregroundStyle(Chrome.palette.detail)
                 .padding(.vertical, 4)

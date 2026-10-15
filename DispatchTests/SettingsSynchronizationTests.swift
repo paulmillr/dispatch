@@ -865,7 +865,10 @@ final class SettingsSynchronizationTests: XCTestCase {
         for theme in SidebarTheme.allCases {
             preferences.appTheme = AppTheme(rawValue: theme.rawValue)!
             try runtime.apply(preferences)
-            XCTAssertEqual(ChatThemeStore.shared.current, chat)
+            // The scheme keeps the colors; Nautical's radio log is the app theme's layout, not a color.
+            var expected = chat
+            expected.radioLog = theme == .nautical
+            XCTAssertEqual(ChatThemeStore.shared.current, expected)
             XCTAssertFalse(preferences.usesDefaultColorScheme(systemIsDark: true))
             XCTAssertFalse(preferences.usesDefaultColorScheme(systemIsDark: false))
         }
