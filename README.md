@@ -42,7 +42,11 @@ There are two parts: Swift macos app and Rust helper. Rust helper parses tmux/he
 
 ## Run
 
-Requires Xcode 26+. Tested on macOS 26 & 27, but may run on macOS 14+.
+Homebrew contains notarized binary:
+
+    brew install --cask paulmillr/tap/dispatch
+
+To compile by yourself, you'll need Xcode 26+. The app is tested on macOS 26 & 27, but may run on macOS 14+.
 
 ```sh
 ./run.sh               # build Debug and launch
@@ -54,7 +58,8 @@ Requires Xcode 26+. Tested on macOS 26 & 27, but may run on macOS 14+.
 Easiest way to install xcode (needs apple id): `brew install xcodes; xcodes install 27.0`.
 
 All deps are downloaded into `build`.
-For signed, notarized macOS downloads, see [distribution](docs/distribution.md).
+
+Official website (redirects to GitHub): https://dispatch.yachts
 
 ## Architecture
 
@@ -62,13 +67,7 @@ Dispatch is two things: Swift macOS app and Rust helper.
 
 The Rust helper is optional. The helper talks to tmux, herdr, reads agent chats.
 
-## License
-
-The MIT License (MIT)
-
-Copyright (c) 2026 Paul Miller (https://paulmillr.com)
-
-## Release
+### Releasing
 
 ```sh
 scripts/release-prepare.sh                     # maintainer: build, keep reference in tmp/dispatch-release
@@ -77,3 +76,10 @@ scripts/release-prepare.sh --verify Dispatch-X.Y.Z.dmg --team TEAMID  # maintain
 ```
 
 See [distribution](docs/distribution.md).
+
+## License
+
+The MIT License (MIT)
+
+Copyright (c) 2026 Paul Miller (https://paulmillr.com)
+
