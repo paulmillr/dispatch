@@ -26,7 +26,7 @@ final class HelperTransport: @unchecked Sendable {
 
   init(read: FileHandle, write: FileHandle, capacity: Int = 4 * (HelperWire.maximum + 13),
        ticket: AppReplay.Ticket? = nil, exited: ((Result<AppReplay.Event, any Error>) -> Void)? = nil) {
-    queue = DispatchQueue(label: "dev.dispatch.helper")
+    queue = DispatchQueue(label: "yachts.dispatch.helper")
     self.capacity = capacity
     self.ticket = ticket
     self.exited = exited

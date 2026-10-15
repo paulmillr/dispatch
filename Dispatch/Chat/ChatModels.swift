@@ -178,6 +178,10 @@ struct ChatTranscriptRow: Identifiable {
     var bubbleEnd = true
     var workedFor: TimeInterval? = nil
     var replyTime: Date? = nil
+    /// When a message was sent or received, for the radio log's time column; nil when unknown.
+    var time: Date? = nil
+    /// The agent's last message in a finished turn: the radio log signs it off with "out".
+    var signsOff = false
 }
 
 struct ChatQueuedMessage: Identifiable {
@@ -657,12 +661,14 @@ final class ChatSession: Identifiable {
             tools.removeAll(keepingCapacity: true)
         }
         for item in items {
+            let time = item.kind == .tool ? nil : replyTime(item, turnID: turn.id)
             let row = ChatTranscriptRow(id: item.rowID ?? "\(turn.id.utf8.count):\(turn.id):\(item.id)", item: item, approval: nil,
-                                        turnID: turn.id, replyTime: item.kind == .assistant ? replyTime(item, turnID: turn.id) : nil)
+                                        turnID: turn.id, replyTime: item.kind == .assistant ? time : nil, time: time)
             if item.kind == .tool { tools.append(row); toolRevisions.insert(item.presentationID) }
             else { flushTools(); rows.append(row) }
         }
         flushTools()
+        if turn.ended != nil, let last = rows.lastIndex(where: { $0.item?.kind == .assistant }) { rows[last].signsOff = true }
         // A turn read without times starts and ends at the epoch; its duration is unknown.
         if let ended = turn.ended, turn.started.timeIntervalSince1970 > 0, ended.timeIntervalSince(turn.started) >= 120 {
             rows.append(ChatTranscriptRow(id: "worked-for:" + turn.id, item: nil, approval: nil,
@@ -683,7 +689,7 @@ final class ChatSession: Identifiable {
         let chat: Bool
         let reason: String
     }
-    private static let viewLog = Logger(subsystem: "com.dispatch.app", category: "ChatPresentation")
+    private static let viewLog = Logger(subsystem: "yachts.dispatch.app", category: "ChatPresentation")
     private(set) var viewTransitions: [ViewTransition] = []
     private(set) var hasOpenedChat = false
     func setView(_ chat: Bool, reason: String) {

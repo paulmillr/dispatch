@@ -227,7 +227,7 @@ struct MainView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Chrome.palette.isDark ? Chrome.terminal : Chrome.window)
+        .background(Chrome.palette.terminal)
         .overlay(alignment: .bottom) {
             // Over the panes' bottom edge, so the title row keeps the top edge.
             if let helper = workspace.helpers.values.first(where: { $0.error != nil }), let error = helper.error {

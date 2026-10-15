@@ -167,6 +167,7 @@ struct ChatMarkdown: View {
     @ViewBuilder private func inline(_ text: String, color: Color? = nil) -> some View {
         if #available(macOS 26, *) {
             ChatSelectableText(value: attributed(text, color: color), selection: selection, source: self.text)
+                .modifier(ChatSelectableBaseline())
         } else {
             Text(attributed(text, color: color)).textSelection(.enabled).lineSpacing(4).tint(theme.blue)
         }
@@ -199,6 +200,19 @@ struct ChatMarkdown: View {
     private static func isWebLink(_ url: URL) -> Bool {
         ["http", "https"].contains(url.scheme?.lowercased()) && url.host != nil
             && url.user == nil && url.password == nil
+    }
+}
+
+/// The native text view reports no text baselines, so baseline-aligned stacks (the radio log's columns) would fall back
+/// to its bottom edge. Its first line sits at the top with no inset, so TextKit 1 draws the first baseline at the font's
+/// ascent rounded to a whole point.
+@available(macOS 26, *)
+private struct ChatSelectableBaseline: ViewModifier {
+    @Environment(\.self) private var environment
+    func body(content: Content) -> some View {
+        let font = (environment.font ?? environment.chatTheme.typography.body).resolve(in: environment.fontResolutionContext).ctFont
+        let ascent = CTFontGetAscent(font).rounded()
+        content.alignmentGuide(.firstTextBaseline) { _ in ascent }
     }
 }
 

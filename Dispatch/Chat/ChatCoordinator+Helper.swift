@@ -876,6 +876,10 @@ extension ChatCoordinator {
 
     /// Inactive composer hint, named from the helper's launches rather than a fixed agent list.
     func placeholder(_ session: ChatSession) -> String {
+        if ChatThemeStore.shared.current.radioLog {
+            let channel = HarbourRadio.channel(for: session.id)
+            return session.active ? "Transmit on \(channel)…" : "Hail \(agents) on \(channel)…"
+        }
         if session.active { return "Reply…" }
         return "Start \(agents) in this terminal…"
     }

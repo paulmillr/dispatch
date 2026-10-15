@@ -11,12 +11,41 @@ struct ChatReplyButton: View {
     var identifier = "chat-send"
     let action: () -> Void
 
+    private var title: String { optionHeld ? "Steer" : editingQueued ? "Requeue" : busy ? "Queue" : "Send" }
+
     var body: some View {
+        if theme.radioLog { radioBody } else { standardBody }
+    }
+
+    /// Nautical's push-to-talk key: a microphone and the action in capitals, Send as TRANSMIT.
+    private var radioBody: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: "mic").font(.system(size: theme.typography.detailSize, weight: .medium))
+                    .foregroundStyle(canSubmit ? theme.accent : theme.muted)
+                ZStack {
+                    Text("TRANSMIT").hidden().accessibilityHidden(true)
+                    Text(title == "Send" ? "TRANSMIT" : title.uppercased())
+                }.font(HarbourType.heading(theme.typography.detailSize + 0.5)).tracking(1.8)
+                Text(optionHeld ? "⌥⏎" : multiline ? "⌘⏎" : "⏎")
+                    .font(AppFont.shortcut(size: theme.typography.codeDetailSize)).foregroundStyle(theme.muted)
+            }.padding(.horizontal, 10)
+                .frame(height: max(24, theme.typography.detailLineHeight + 10))
+                .foregroundStyle(canSubmit ? theme.ink : theme.muted)
+                .background(Chrome.palette.control, in: RoundedRectangle(cornerRadius: 6))
+                .overlay { RoundedRectangle(cornerRadius: 6).strokeBorder(canSubmit ? theme.accent.opacity(0.5) : Chrome.palette.controlBorder) }
+                .contentShape(RoundedRectangle(cornerRadius: 6))
+        }.buttonStyle(.plain).disabled(!canSubmit).fixedSize()
+            .accessibilityIdentifier(identifier)
+            .accessibilityLabel(optionHeld ? "Steer" : editingQueued ? "Requeue message" : busy ? "Queue message" : command ? "Send command" : "Send message")
+    }
+
+    private var standardBody: some View {
         Button(action: action) {
             HStack(spacing: 5) {
                 ZStack {
                     Text("Requeue").hidden().accessibilityHidden(true)
-                    Text(optionHeld ? "Steer" : editingQueued ? "Requeue" : busy ? "Queue" : "Send")
+                    Text(title)
                 }
                 ZStack {
                     Text("⌥⏎").hidden().accessibilityHidden(true)

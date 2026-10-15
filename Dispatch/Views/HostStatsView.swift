@@ -167,6 +167,10 @@ private struct HostStatsPresentation: View {
 
     private var statisticsContent: some View {
         VStack(alignment: .leading, spacing: 14) {
+            if SidebarThemeStore.shared.current == .nautical {
+                Text("ENGINE ROOM").font(HarbourType.heading(typography.size(offset: -1))).tracking(2.4)
+                    .foregroundStyle(Chrome.accent).accessibilityIdentifier("stats-engine-room")
+            }
             HStack(alignment: .top, spacing: 12) {
                 metricButton(memory: false, title: "cpu", value: sample.cpu,
                     detail: sample.load?.first.map { String(format: "%.2f load", $0) } ?? "load unavailable")
@@ -312,11 +316,18 @@ private struct HostMetricSummary: View {
                     .tracking(-0.52).foregroundStyle(valueColor)
                 Text("%").font(typography.font(offset: -1.5)).foregroundStyle(StatsStyle.muted)
             }.monospacedDigit().fixedSize()
-            GeometryReader { geometry in
-                RoundedRectangle(cornerRadius: 2).fill(warning ? StatsStyle.warning : selectionColor ?? StatsStyle.secondary)
-                    .frame(width: geometry.size.width * min(100, max(0, value ?? 0)) / 100)
-            }.frame(height: 3).background(StatsStyle.track, in: RoundedRectangle(cornerRadius: 2))
-                .accessibilityHidden(true)
+            if SidebarThemeStore.shared.current == .nautical {
+                // Nautical's engine room reads each metric off a dial.
+                HarbourGauge(fraction: min(100, max(0, value ?? 0)) / 100,
+                             tint: warning ? StatsStyle.warning : selectionColor ?? Chrome.accent)
+                    .frame(height: typography.expanded(26)).accessibilityHidden(true)
+            } else {
+                GeometryReader { geometry in
+                    RoundedRectangle(cornerRadius: 2).fill(warning ? StatsStyle.warning : selectionColor ?? StatsStyle.secondary)
+                        .frame(width: geometry.size.width * min(100, max(0, value ?? 0)) / 100)
+                }.frame(height: 3).background(StatsStyle.track, in: RoundedRectangle(cornerRadius: 2))
+                    .accessibilityHidden(true)
+            }
             detailText
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -335,20 +346,20 @@ private struct HostMetricSummary: View {
     static var glass: Bool { LiquidGlassStore.shared.active }
     static var muted: Color {
         if glass { return Color(nsColor: .tertiaryLabelColor) }
-        return Chrome.palette.isDark ? Color(red: 111/255, green: 111/255, blue: 120/255) : Chrome.muted
+        return Chrome.palette.theme == .dark ? Color(red: 111/255, green: 111/255, blue: 120/255) : Chrome.muted
     }
     static var secondary: Color {
         if glass { return Color(nsColor: .secondaryLabelColor) }
-        return Chrome.palette.isDark ? Color(red: 154/255, green: 154/255, blue: 162/255) : Chrome.palette.secondary
+        return Chrome.palette.theme == .dark ? Color(red: 154/255, green: 154/255, blue: 162/255) : Chrome.palette.secondary
     }
     static var faint: Color { Chrome.palette.faint }
     static var warning: Color { Chrome.palette.isDark ? Color(red: 224/255, green: 123/255, blue: 123/255) : .red }
     static var track: Color {
         if glass { return Color(nsColor: .quaternaryLabelColor) }
-        return Chrome.palette.isDark ? Color(red: 38/255, green: 38/255, blue: 43/255) : Chrome.palette.control
+        return Chrome.palette.theme == .dark ? Color(red: 38/255, green: 38/255, blue: 43/255) : Chrome.palette.control
     }
     static var rowBorder: Color { Chrome.palette.separator }
-    static var popover: Color { Chrome.palette.isDark ? Color(red: 26/255, green: 26/255, blue: 30/255) : Chrome.window }
+    static var popover: Color { Chrome.palette.theme == .dark ? Color(red: 26/255, green: 26/255, blue: 30/255) : Chrome.window }
     /// Badges and hover highlights inside the popovers; on glass the radius clamps to half the height, a capsule.
     static func chip(radius: CGFloat) -> RoundedRectangle {
         RoundedRectangle(cornerRadius: glass ? 999 : radius)
@@ -360,5 +371,42 @@ extension View {
     /// reads as one piece.
     @ViewBuilder func statsPopoverBackground() -> some View {
         if StatsStyle.glass { self } else { background(StatsStyle.popover) }
+    }
+}
+
+/// An engine-room dial: a half circle of ticks with the reading's arc and needle, in the radar's green.
+struct HarbourGauge: View {
+    let fraction: Double
+    let tint: Color
+
+    var body: some View {
+        Canvas { context, size in
+            let radius = min(size.width / 2, size.height) - 2
+            guard radius > 4 else { return }
+            let center = CGPoint(x: size.width / 2, y: size.height - 1)
+            func point(_ f: Double, _ r: CGFloat) -> CGPoint {
+                let angle = Double.pi * (1 - f)
+                return CGPoint(x: center.x + cos(angle) * r, y: center.y - sin(angle) * r)
+            }
+            var track = Path()
+            track.addArc(center: center, radius: radius, startAngle: .degrees(180), endAngle: .degrees(360), clockwise: false)
+            context.stroke(track, with: .color(Chrome.palette.control), lineWidth: 3)
+            if fraction > 0 {
+                var reading = Path()
+                reading.addArc(center: center, radius: radius, startAngle: .degrees(180), endAngle: .degrees(180 + 180 * fraction),
+                               clockwise: false)
+                context.stroke(reading, with: .color(tint.opacity(0.55)), lineWidth: 3)
+            }
+            var ticks = Path()
+            for step in 0...10 {
+                let f = Double(step) / 10
+                ticks.move(to: point(f, radius - 5)); ticks.addLine(to: point(f, radius - (step % 5 == 0 ? 10 : 7)))
+            }
+            context.stroke(ticks, with: .color(Chrome.palette.faint), lineWidth: 1)
+            var needle = Path()
+            needle.move(to: center); needle.addLine(to: point(fraction, radius - 4))
+            context.stroke(needle, with: .color(tint), style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+            context.fill(Path(ellipseIn: CGRect(x: center.x - 2.5, y: center.y - 2.5, width: 5, height: 5)), with: .color(tint))
+        }
     }
 }

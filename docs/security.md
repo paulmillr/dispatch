@@ -228,7 +228,7 @@ Quitting doesn't ask for confirmation when only tmux and herdr tabs are open.
 | Chat drafts | `…/Dispatch/drafts.json` | Working and saved drafts, plus a copy of each prompt from before it is sent until delivery is confirmed, per host, agent, and conversation | 300 ms after typing stops, and at most every 2 s | Owner-only atomic write; excluded from backups; no expiry |
 | Helper files | `~/.dispatch/` | `bin/dispatch-helper`, the helper copy that hook entries run; `run/*/` hook sockets and startup files of running helpers; `routes/` which helper serves each hook; `state/` herdr recovery records | `bin/dispatch-helper` is refreshed when a helper writes a hook or startup command; each `run/*/` exists while its helper runs | Folders 0700, sockets 0600 |
 | Diagnostics | `~/Library/Logs/Dispatch/Diagnostics/` | Chat scroll and viewport events and geometry. Row IDs are replaced with keyed hashes; no conversation text, hosts, or paths. | Only while **Diagnostics** is on (off). Turning it off doesn't delete existing files. | 0600, rotated at 4 MiB |
-| UserDefaults (`dev.dispatch.local`) | `~/Library/Preferences` | Chat and hook switches, SSH grants (`SSHIntegrationPermissions.v2`), host records (`HostRegistry.v1`), herdr presentation, window frame | On change | Default |
+| UserDefaults (`yachts.dispatch.app`) | `~/Library/Preferences` | Chat and hook switches, SSH grants (`SSHIntegrationPermissions.v2`), host records (`HostRegistry.v1`), herdr presentation, window frame | On change | Default |
 
 Dispatch doesn't store transcripts, approvals, statistics, or model lists; those stay in memory only. Agent histories and tmux/herdr sessions belong to those tools. Logging is minimal and contains no terminal or chat content.
 

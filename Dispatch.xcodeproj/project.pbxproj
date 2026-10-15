@@ -1699,7 +1699,6 @@
 			outputFileListPaths = (
 			);
 			outputPaths = (
-				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/darwin-universal",
 				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/linux-aarch64",
 				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/linux-x86_64",
 				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/version",
@@ -2213,7 +2212,7 @@
 					"@executable_path/../Frameworks",
 					"@loader_path/../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.dispatch.local.tests;
+				PRODUCT_BUNDLE_IDENTIFIER = yachts.dispatch.app.tests;
 				SDKROOT = macosx;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Dispatch.app/Contents/MacOS/Dispatch";
 			};
@@ -2236,7 +2235,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.dispatch.term;
+				PRODUCT_BUNDLE_IDENTIFIER = yachts.dispatch.term;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
@@ -2262,7 +2261,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.dispatch.term;
+				PRODUCT_BUNDLE_IDENTIFIER = yachts.dispatch.term;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
@@ -2277,15 +2276,17 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
+				DEPLOYMENT_POSTPROCESSING = "$(DISPATCH_STRIP_APP)";
 				INFOPLIST_FILE = Dispatch/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = dev.dispatch.local;
+				PRODUCT_BUNDLE_IDENTIFIER = yachts.dispatch.app;
 				PRODUCT_MODULE_NAME = DispatchApp;
 				SDKROOT = macosx;
+				STRIP_INSTALLED_PRODUCT = "$(DISPATCH_STRIP_APP)";
 			};
 			name = Release;
 		};
@@ -2302,7 +2303,7 @@
 					"@executable_path/../Frameworks",
 					"@loader_path/../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.dispatch.local.tests;
+				PRODUCT_BUNDLE_IDENTIFIER = yachts.dispatch.app.tests;
 				SDKROOT = macosx;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Dispatch.app/Contents/MacOS/Dispatch";
 			};
@@ -2325,7 +2326,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.dispatch.termapple;
+				PRODUCT_BUNDLE_IDENTIFIER = yachts.dispatch.termapple;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
@@ -2380,6 +2381,7 @@
 				CODE_SIGN_STYLE = Manual;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = dwarf;
+				DISPATCH_STRIP_APP = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -2426,15 +2428,17 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
+				DEPLOYMENT_POSTPROCESSING = "$(DISPATCH_STRIP_APP)";
 				INFOPLIST_FILE = Dispatch/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = dev.dispatch.local;
+				PRODUCT_BUNDLE_IDENTIFIER = yachts.dispatch.app;
 				PRODUCT_MODULE_NAME = DispatchApp;
 				SDKROOT = macosx;
+				STRIP_INSTALLED_PRODUCT = "$(DISPATCH_STRIP_APP)";
 			};
 			name = Debug;
 		};
@@ -2461,7 +2465,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.dispatch.termapple;
+				PRODUCT_BUNDLE_IDENTIFIER = yachts.dispatch.termapple;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
@@ -2511,6 +2515,7 @@
 				CODE_SIGN_STYLE = Manual;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DISPATCH_STRIP_APP = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;

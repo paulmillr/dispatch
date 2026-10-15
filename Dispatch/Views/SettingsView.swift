@@ -59,7 +59,8 @@ struct SettingsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Text("Settings")
+            // Nautical's settings are the ship's bridge.
+            Text(SidebarThemeStore.shared.current == .nautical ? "Bridge" : "Settings")
                 .font(typography.font(offset: 0.5, design: .monospaced))
                 .foregroundStyle(Chrome.muted)
                 .frame(maxWidth: .infinity).frame(minHeight: typography.expanded(38))
@@ -125,6 +126,9 @@ struct SettingsView: View {
             let bundled = (try? FileManager.default.contentsOfDirectory(atPath: System.resources.appendingPathComponent("ghostty/themes").path)) ?? []
             themes = ["Default"] + Array(Set(bundled.filter { !$0.hasPrefix(".") } + [draft.theme, draft.lightTheme]).subtracting(["Default"])).sorted()
             loaded = true
+        }
+        .onChange(of: SidebarThemeStore.shared.nauticalUnlocked) { _, unlocked in
+            if unlocked { draft.appTheme = .nautical }
         }
         .onChange(of: draft) { _, _ in
             guard loaded, draft != store.values else { return }
@@ -198,10 +202,12 @@ struct SettingsView: View {
                         .disabled(!LiquidGlassStore.supported)
                         .accessibilityIdentifier("settings-liquid-glass")
                 }
-                row("Theme", detail: "Automatic follows macOS") {
+                row("Theme", detail: SidebarThemeStore.shared.nauticalUnlocked || draft.appTheme == .nautical
+                    ? "Automatic follows macOS · ⚓ Nautical unlocked" : "Automatic follows macOS") {
                     dropdown("Theme", selection: Binding(get: { draft.appTheme.label }, set: { label in
                         if let theme = AppTheme.allCases.first(where: { $0.label == label }) { draft.appTheme = theme }
-                    }), choices: AppTheme.allCases.map(\.label))
+                    }), choices: AppTheme.offered(selected: draft.appTheme,
+                                                  nauticalUnlocked: SidebarThemeStore.shared.nauticalUnlocked).map(\.label))
                 }
                 row("Host colors", detail: "Remote tabs, borders and sidebar items; off marks them in gray") {
                     settingToggle("Host colors", isOn: $draft.showHostColors)
@@ -215,7 +221,7 @@ struct SettingsView: View {
                         row("Dark color scheme") { themePicker("Dark color scheme", selection: $draft.theme) }
                     } else {
                         row("Color scheme") {
-                            themePicker("Color scheme", selection: draft.appTheme == .dark ? $draft.theme : $draft.lightTheme)
+                            themePicker("Color scheme", selection: draft.appTheme.isDark(systemIsDark: SidebarThemeStore.systemIsDark) ? $draft.theme : $draft.lightTheme)
                         }
                     }
                     row("Improve text contrast", detail: "Adjust text colors while keeping their hue") {
@@ -314,6 +320,12 @@ struct SettingsView: View {
                 }
                 row("Sound", detail: "play a sound for new background attention") {
                     settingToggle("Attention sound", isOn: $draft.attentionSound)
+                }
+                if draft.appTheme == .nautical {
+                    row("Ship's bell", detail: "two bells when an agent finishes in the background") {
+                        settingToggle("Ship's bell", isOn: $draft.shipsBell)
+                            .accessibilityIdentifier("settings-ships-bell")
+                    }
                 }
                 if let error = TerminalRuntime.shared.workspace === workspace ? (NSApp.delegate as? AppDelegate)?.attention.notificationError : nil {
                     Text(error).font(typography.font(offset: -1)).foregroundStyle(Chrome.muted)

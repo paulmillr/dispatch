@@ -68,3 +68,13 @@ The Rust helper is optional. The helper talks to tmux, herdr, reads agent chats.
 The MIT License (MIT)
 
 Copyright (c) 2026 Paul Miller (https://paulmillr.com)
+
+## Release
+
+```sh
+scripts/release-prepare.sh                     # maintainer: build, keep reference in tmp/dispatch-release
+scripts/release-notarize.sh Dispatch-unsigned.zip --identity 'Developer ID Application: NAME (TEAMID)'  # signer
+scripts/release-prepare.sh --verify Dispatch-X.Y.Z.dmg --team TEAMID  # maintainer: check signer's DMG
+```
+
+See [distribution](docs/distribution.md).

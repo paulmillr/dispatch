@@ -69,14 +69,15 @@ struct StripTab: View {
     /// Terminal's layout: a centred title, and the close button in place of the status glyph while hovered.
     var body: some View {
         // Both side slots reserve the wider of the two, so the title stays centred on the tab.
-        let legend = width >= 110 ? shortcut.flatMap(Self.legendText) : nil
+        // Nautical's tabs carry their channel instead of a shortcut legend.
+        let legend = width >= 110 && !nautical ? shortcut.flatMap(Self.legendText) : nil
         let side = max(Self.closeButtonWidth, Self.legendWidth(legend, typography: typography)) + 4
         // Glass marks the selected tab with its own pill and a semibold title, as macOS's tab bar does; Source Code
         // Pro keeps one advance width across weights, so the title neither shifts nor truncates differently.
         let glassSelected = selected && style == .outlined && !alone && LiquidGlassStore.shared.active
         return ZStack {
             Button(action: select) {
-                Text(title).font(Font(AppFont.native(size: typography.tabSize, semibold: glassSelected)))
+                channelTitle.font(Font(AppFont.native(size: typography.tabSize, semibold: glassSelected)))
                     .lineLimit(1).truncationMode(.middle)
                     .padding(.horizontal, width >= 100 ? side : Self.closeButtonWidth)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -100,8 +101,9 @@ struct StripTab: View {
         .modifier(SelectedTabGlass(on: glassSelected))
         .overlay(alignment: .bottom) {
             if selected && style == .strip && !alone {
-                Rectangle().fill(hostTint == nil ? Chrome.ink.opacity(0.7) : HostTint.selectedTabRule)
-                    .frame(height: 1).allowsHitTesting(false)
+                // Nautical tunes the selected channel in: a heavier rule in the radar's green.
+                Rectangle().fill(nautical ? Chrome.accent : hostTint == nil ? Chrome.ink.opacity(0.7) : HostTint.selectedTabRule)
+                    .frame(height: nautical ? 2 : 1).allowsHitTesting(false)
             }
         }
         .overlay(alignment: .trailing) {
@@ -112,6 +114,15 @@ struct StripTab: View {
         }
         .foregroundStyle(selected ? Chrome.ink : (hostTint?.tabForeground ?? Chrome.muted))
         .contentShape(Rectangle())
+    }
+
+    private var nautical: Bool { SidebarThemeStore.shared.current == .nautical }
+
+    /// Nautical tunes each tab to a VHF channel, named before its title.
+    private var channelTitle: Text {
+        guard nautical, let surface = activityIDs.first else { return Text(title) }
+        return Text(HarbourRadio.channel(for: surface) + "  ").font(HarbourType.heading(typography.tabSize)).tracking(1.4)
+            .foregroundColor(selected ? Chrome.accent : Chrome.muted) + Text(title)
     }
 
     private func legendView(_ legend: String) -> some View {

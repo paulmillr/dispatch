@@ -12,7 +12,7 @@ Enable **Settings → Behavior → Advanced → Diagnostics** (off by default; a
 mkdir -p build/chat-viewport-capture && cp ~/Library/Logs/Dispatch/Diagnostics/* build/chat-viewport-capture/
 ```
 
-`ChatViewportTrace` records geometry, row counts, scroll corrections, and watchdog decisions, at most 4 samples/s per viewport. It records no text, paths, hosts, or IDs; row IDs become in-memory HMAC tokens. Nothing is uploaded. Write failures go to unified log `com.dispatch.app`/`ChatViewport`. Read the sequence, not a single sample:
+`ChatViewportTrace` records geometry, row counts, scroll corrections, and watchdog decisions, at most 4 samples/s per viewport. It records no text, paths, hosts, or IDs; row IDs become in-memory HMAC tokens. Nothing is uploaded. Write failures go to unified log `yachts.dispatch.app`/`ChatViewport`. Read the sequence, not a single sample:
 
 - Transcript rows > 0 but mounted rows = 0: realization gap.
 - Mounted rows outside the clip rect: geometry/offset mismatch.

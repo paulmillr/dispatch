@@ -378,7 +378,7 @@ final class HelperAppTests: XCTestCase {
         try recorded.emit(kind: "exit")
         try journal.finish()
         journal = try AppReplay(url: path, replaying: true)
-        let queue = DispatchQueue(label: "dev.dispatch.tests.consumer"), backlog = DispatchSemaphore(value: 0)
+        let queue = DispatchQueue(label: "yachts.dispatch.tests.consumer"), backlog = DispatchSemaphore(value: 0)
         var failures: [String] = [], events: [String] = []
         let connection = try journal.open(kind: "connection", input: .null)
         connection.through(queue)

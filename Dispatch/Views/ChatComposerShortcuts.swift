@@ -67,8 +67,14 @@ struct ChatComposerActivity: View {
             let moving = active && visible && !reduceMotion && !state.waiting && session.showChat
             Button { details.toggle() } label: {
                 HStack(spacing: 8) {
-                    ChatComposerOrbit(moving: moving)
-                    ChatComposerStatus(label: state.label, moving: moving)
+                    if theme.radioLog {
+                        // Nautical: the vessel's status, as the radar plots it.
+                        Text("◆").foregroundStyle(state.waiting ? theme.yellow : theme.accent)
+                        Text(state.waiting ? "calling" : "under way").foregroundStyle(theme.ink)
+                    } else {
+                        ChatComposerOrbit(moving: moving)
+                        ChatComposerStatus(label: state.label, moving: moving)
+                    }
                     if !state.waiting {
                         TimelineView(.animation(minimumInterval: 1, paused: !active || !visible || !session.showChat)) { timeline in
                             Text("· " + AgentWorkingAnimation.timeText(state, now: timeline.date, appeared: appeared,

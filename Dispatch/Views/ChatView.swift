@@ -141,6 +141,10 @@ struct ChatView: View {
             }
             if let status = session.status, TerminalRuntime.shared.hosts.reconnect.state(for: session.id) == nil {
                 HStack {
+                    // Nautical calls a failure or a pane stuck on its terminal a MAYDAY.
+                    if theme.radioLog && (session.terminalAttention != nil || HarbourDistress.isFailure(status)) {
+                        ChatRadioLog.tag("MAYDAY", color: theme.red, theme: theme)
+                    }
                     Text(status).font(theme.typography.detail).foregroundStyle(theme.muted)
                     Spacer(minLength: 4)
                     if session.terminalAttention != nil {
@@ -289,7 +293,7 @@ struct ChatView: View {
             (workspace ?? TerminalRuntime.shared.workspace)?.selectSurface(session.id)
             session.focusRequest = System.uuid()
         } label: {
-            Text("Reply…").font(Font(theme.typography.reply))
+            Text(theme.radioLog ? "Transmit on \(HarbourRadio.channel(for: session.id))…" : "Reply…").font(Font(theme.typography.reply))
                 .foregroundStyle(theme.muted)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
@@ -370,8 +374,8 @@ struct ChatView: View {
                     .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(theme.border))
                     .contentShape(Rectangle())
             }.buttonStyle(.plain).disabled(!coordinator.canInterrupt(session))
-                .help(session.interruptionID == nil ? "Stop agent · ⎋ · Draft kept" : "Stopping…")
-                .accessibilityLabel("Stop agent").accessibilityIdentifier("chat-stop")
+                .help(session.interruptionID == nil ? "\(theme.radioLog ? "All stop" : "Stop agent") · ⎋ · Draft kept" : "Stopping…")
+                .accessibilityLabel(theme.radioLog ? "All stop" : "Stop agent").accessibilityIdentifier("chat-stop")
         }
     }
 

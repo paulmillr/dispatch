@@ -420,10 +420,10 @@ struct HostIdentityHeader: View {
                         .lineLimit(1).minimumScaleFactor(0.8)
                         .foregroundStyle(latency.state == .ready ? StatsStyle.secondary : StatsStyle.muted)
                         .help(latency.help)
-                        .accessibilityLabel("\(state.label). \(latency.help) \(latency.label)")
+                        .accessibilityLabel("\(state.shownLabel). \(latency.help) \(latency.label)")
                         .accessibilityIdentifier("host-ssh-latency")
                 } else {
-                    Text(host.id == .local ? "local" : state.label)
+                    Text(host.id == .local ? "local" : state.shownLabel)
                 }
             }.font(typography.font(offset: -1.5)).foregroundStyle(StatsStyle.secondary)
                 .frame(width: visibleLatency != nil ? typography.expanded(112) : nil, alignment: .trailing)

@@ -64,7 +64,8 @@ struct SSHReconnectGlassRow: View {
     @State private var width: CGFloat = 0
 
     var body: some View {
-        let presentation = SSHReconnectControl.Presentation(state: state, hostName: hostName)
+        let presentation = SSHReconnectControl.Presentation(state: state, hostName: hostName,
+                                                            nautical: SidebarThemeStore.shared.current == .nautical)
         let color = Color(nsColor: presentation.color)
         // A narrow pane drops the secondary action before Reconnect, as the flat bar does.
         let detail = state.reconnecting || width >= typography.expanded(280) ? presentation.detailTitle : nil
@@ -177,9 +178,13 @@ struct SSHReconnectControl: NSViewRepresentable {
         let color: NSColor
         var help: String { ([label] + info).joined(separator: " · ") }
 
-        init(state: SSHReconnectController.State, hostName: String) {
+        /// `nautical`: the radio's wording, contact with the host lost and re-established.
+        init(state: SSHReconnectController.State, hostName: String, nautical: Bool = false) {
             color = SSHReconnectControl.stateColor(connected: state.connected)
-            label = state.connected ? "connected" : state.reconnecting ? "reconnecting to \(hostName)" : "\(hostName) disconnected"
+            label = nautical
+                ? (state.connected ? "contact re-established" : state.reconnecting ? "re-establishing contact with \(hostName.uppercased())"
+                    : "\(hostName.uppercased()) out of range")
+                : state.connected ? "connected" : state.reconnecting ? "reconnecting to \(hostName)" : "\(hostName) disconnected"
             var info: [String] = []
             if state.connected { info = ["session resumed"] }
             else {
@@ -246,7 +251,7 @@ struct SSHReconnectControl: NSViewRepresentable {
                     hostName: String = "Host", close: @escaping () -> Void = {}, reduceMotion: Bool = false) {
             let starting = state.reconnecting && !self.state.reconnecting
             self.state = state; self.wheel = wheel
-            let presentation = Presentation(state: state, hostName: hostName)
+            let presentation = Presentation(state: state, hostName: hostName, nautical: SidebarThemeStore.shared.current == .nautical)
             color = presentation.color
             label.stringValue = presentation.label
             label.textColor = color

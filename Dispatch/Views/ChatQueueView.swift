@@ -68,14 +68,16 @@ struct ChatQueueView: View {
 
     private var glassHeader: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Text("\(session.queuedMessages.count) queued")
+            Text("\(session.queuedMessages.count) \(theme.radioLog ? "standing by" : "queued")")
                 .font(theme.typography.detail).foregroundStyle(theme.muted).fixedSize()
             status
         }.padding(.horizontal, 8).padding(.bottom, 2)
     }
 
     private var title: some View {
-        Text("\(session.queuedMessages.count) \(session.queuedMessages.count == 1 ? "message" : "messages") queued")
+        Text(theme.radioLog
+             ? "\(session.queuedMessages.count) \(session.queuedMessages.count == 1 ? "transmission" : "transmissions") standing by"
+             : "\(session.queuedMessages.count) \(session.queuedMessages.count == 1 ? "message" : "messages") queued")
             .font(theme.typography.detail)
             .fixedSize(horizontal: false, vertical: true)
             .foregroundStyle(theme.muted)

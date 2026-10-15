@@ -56,7 +56,7 @@ struct ChatComposerBorder: ViewModifier {
         content
             .overlay {
                 RoundedRectangle(cornerRadius: cornerRadius)
-                    .stroke(theme.accent.opacity(working ? 0.06 : 0), lineWidth: 6)
+                    .stroke(theme.accent.opacity(working ? 0.06 : theme.radioLog && active ? 0.07 : 0), lineWidth: 6)
                     .allowsHitTesting(false).accessibilityHidden(true)
             }
             .overlay {
@@ -64,6 +64,7 @@ struct ChatComposerBorder: ViewModifier {
                     .strokeBorder(working ? theme.accent.opacity(0.35)
                                   // On glass the panel's own edge already frames the idle input.
                                   : (session.drafts.shape.multiline ? theme.muted.opacity(0.55)
+                                     : theme.radioLog && active ? theme.accent.opacity(0.5)
                                      : LiquidGlassStore.shared.active ? .clear : theme.border))
                     .allowsHitTesting(false).accessibilityHidden(true)
             }

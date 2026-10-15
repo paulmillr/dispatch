@@ -111,7 +111,8 @@ struct SpaceSidebar: View {
             VStack(spacing: 0) {
                 // Outside full screen the window row carries the header's buttons. Search opens above the footer.
                 if windowControls { windowRow } else { header }
-                spaceList(listed: listed, attention: attention)
+                if harbour { harbourList(listed: listed, attention: attention) }
+                else { spaceList(listed: listed, attention: attention) }
             }
             .layoutPriority(1)
             VStack(spacing: 0) {
@@ -151,6 +152,8 @@ struct SpaceSidebar: View {
     }
 
     private var glass: Bool { LiquidGlassStore.shared.active }
+    /// Nautical draws the sidebar as a vessel traffic service: a radar plot of the spaces over a traffic list.
+    private var harbour: Bool { SidebarThemeStore.shared.current == .nautical }
     /// Whether the overflow control rides over the list as a bar (GlassScrollEdge) rather than below it.
     private var overflowBar: Bool {
         if #available(macOS 26, *) { return glass } else { return false }
@@ -269,7 +272,7 @@ struct SpaceSidebar: View {
             SidebarToggle(controller: controller)
             Spacer(minLength: 0)
             HStack(spacing: 4) {
-                groupingToggle
+                if harbour { harbourTitle } else { groupingToggle }
                 shortcutsButton
             }
         }
@@ -289,7 +292,7 @@ struct SpaceSidebar: View {
                 Color.clear.frame(width: 32, height: 20)
             }
             Spacer(minLength: 0)
-            groupingToggle
+            if harbour { harbourTitle } else { groupingToggle }
             shortcutsButton
         }
         .padding(.horizontal, 8)
@@ -426,7 +429,7 @@ struct SpaceSidebar: View {
                 .font(Font(AppFont.native(size: metrics.headerSize + 1, semibold: true)))
                 .lineLimit(1).truncationMode(.middle)
             if host.id != .local && state != .connected {
-                Text(state.shortLabel).font(AppFont.ui(size: metrics.headerSize)).foregroundStyle(Chrome.muted)
+                Text(state.shownShortLabel).font(AppFont.ui(size: metrics.headerSize)).foregroundStyle(Chrome.muted)
             }
             Spacer(minLength: 0)
         }
@@ -452,7 +455,7 @@ struct SpaceSidebar: View {
                             .foregroundStyle(hue ?? Chrome.palette.secondary)
                             .lineLimit(1).truncationMode(.middle)
                         if host.id != .local && state != .connected {
-                            Text(state.shortLabel).font(AppFont.ui(size: metrics.headerSize)).foregroundStyle(Chrome.muted)
+                            Text(state.shownShortLabel).font(AppFont.ui(size: metrics.headerSize)).foregroundStyle(Chrome.muted)
                         }
                     }
                     .padding(.leading, 8).frame(height: metrics.headerHeight).contentShape(Rectangle())
@@ -709,21 +712,62 @@ struct SpaceSidebar: View {
                 }
             }
         }
-        .contextMenu {
-            Button("Rename…") { controller.rename(title: "Rename space", value: space.name) { workspace.renameSpace(space.id, to: $0) } }
-            if space.structured {
-                Button("Detach") { controller.closeSpace(space.id) }
-                    .help("Remove from Dispatch; keep server work running")
-                Button("Terminate…") { controller.terminateSpace(space.id) }
-            } else {
-                Button("Close") { controller.closeSpace(space.id) }
-            }
-        }
+        .contextMenu { spaceMenu(space) }
         .id(space.id)
         .modifier(HostMoveRow(motion: workspace.hostMoveMotion, id: space.id))
         .background(GeometryReader { proxy in
             Color.clear.preference(key: SpaceRowFrames.self, value: [space.id: proxy.frame(in: .named("space-list"))])
         })
+    }
+
+    /// Nautical names the actions at sea, each with its plain name beside it so none surprises.
+    @ViewBuilder private func spaceMenu(_ space: Space) -> some View {
+        Button(harbour ? "Rename Vessel…" : "Rename…") {
+            controller.rename(title: harbour ? "Rename vessel" : "Rename space", value: space.name) { workspace.renameSpace(space.id, to: $0) }
+        }
+        if space.structured {
+            Button(harbour ? "Weigh Anchor (Detach)" : "Detach") { controller.closeSpace(space.id) }
+                .help("Remove from Dispatch; keep server work running")
+            Button(harbour ? "Scuttle (Terminate)…" : "Terminate…") { controller.terminateSpace(space.id) }
+        } else {
+            Button(harbour ? "Lay Up (Close)" : "Close") { controller.closeSpace(space.id) }
+        }
+    }
+
+    // MARK: Nautical
+
+    private var harbourTitle: some View {
+        Text("VTS · DISPATCH HARBOUR").font(HarbourType.heading(typography.size(offset: -1))).tracking(2.4)
+            .foregroundStyle(Chrome.accent).lineLimit(1).padding(.trailing, 4)
+            .accessibilityIdentifier("harbour-title")
+    }
+
+    /// The radar plot over the traffic list. The plot takes the sidebar's width, up to about half its height, so the
+    /// list keeps room for its rows.
+    private func harbourList(listed: [Space], attention: Set<UUID>) -> some View {
+        // Each space's key is its number, the first digit of its tabs' channels.
+        let numbers = Dictionary(uniqueKeysWithValues: workspace.presentationSpaces.enumerated().map { ($1.id, "\($0 + 1)") })
+        let vessels = listed.map {
+            HarbourVessel.make($0, workspace: workspace, selected: workspace.selectedSpace == $0.id,
+                               pending: attention.contains($0.id), shortcut: numbers[$0.id] ?? "",
+                               heading: settings.values.showGitBranches ? branches[$0.id] : nil)
+        }
+        return GeometryReader { area in
+            VStack(spacing: 0) {
+                HarbourRadar(vessels: vessels, reduceMotion: reduceMotion) { workspace.selectSpace($0) }
+                    .equatable()
+                    .frame(width: max(0, min(area.size.width - 24, area.size.height * 0.55)),
+                           height: max(0, min(area.size.width - 24, area.size.height * 0.55)))
+                    .padding(.top, 4)
+                HarbourTrafficList(vessels: vessels, typography: typography,
+                                   select: { workspace.selectSpace($0) },
+                                   menu: { id in AnyView(Group { if let space = listed.first(where: { $0.id == id }) { spaceMenu(space) } }) })
+                    .padding(.horizontal, glass ? Self.glassInset + Self.glassRowInset : 10).padding(.top, 10)
+            }
+            .frame(width: area.size.width, height: area.size.height, alignment: .top)
+        }
+        // Each space's branch, read as the regular rows read it, for its heading.
+        .background { ForEach(listed) { SpaceBranchObserver(space: $0, enabled: settings.values.showGitBranches) } }
     }
 
     private func overflowButton(hidden: [Space], below: [Space], attention: Set<UUID>, scroll: ScrollViewProxy) -> some View {
@@ -773,7 +817,7 @@ struct SpaceSidebar: View {
                     Circle().fill(workspace.hosts.state(host.id) == .connected ? host.tint?.border ?? Chrome.muted : Chrome.muted.opacity(0.45))
                         .frame(width: 4, height: 4)
                 }.modifier(FooterHostCell(glass: glass, height: footerCellHeight))
-            }.help("\(host.name) · \(workspace.hosts.state(host.id).label)")
+            }.help("\(host.name) · \(workspace.hosts.state(host.id).shownLabel)")
                 .accessibilityIdentifier("host-strip-\(host.id.rawValue)")
         }
     }
@@ -921,7 +965,7 @@ private struct GlassScrollEdge<Bar: View>: ViewModifier {
 private struct OverflowPanel: ViewModifier {
     let glass: Bool
     func body(content: Content) -> some View {
-        if glass { content } else { content.chromePanel(Chrome.palette.isDark ? Chrome.terminal : Chrome.window, cornerRadius: 6) }
+        if glass { content } else { content.chromePanel(Chrome.palette.terminal, cornerRadius: 6) }
     }
 }
 
@@ -948,5 +992,509 @@ final class PointerTrackingView: NSView {
         super.viewDidMoveToWindow()
         // Leaving the window (a group closing, the sidebar hiding) never sends an exit.
         if window == nil { changed(false) }
+    }
+}
+
+/// Nautical's type: the mockup's monospaced log text and condensed, letter-spaced headings.
+enum HarbourType {
+    static func mono(_ size: CGFloat) -> Font { .custom("SourceCodePro-Regular", fixedSize: size) }
+    static func heading(_ size: CGFloat) -> Font { .system(size: size, weight: .semibold).width(.condensed) }
+}
+
+/// A space as Nautical's sidebar shows it: a vessel at anchor, under way while its agent works, or calling while it
+/// waits for an answer.
+struct HarbourVessel: Equatable, Identifiable {
+    enum Status: Equatable { case anchor, underWay, calling }
+    let id: UUID
+    let name: String
+    let host: String
+    let status: Status
+    /// When its agent started working; the heading vector grows with the passage.
+    let since: Date?
+    let selected: Bool
+    let shortcut: String
+    /// Its git branch, the course it is set on.
+    var heading: String? = nil
+    /// Subagents its agents run: escorts trailing it.
+    var escorts = 0
+
+    var statusLabel: String {
+        switch status {
+        case .anchor: "at anchor"
+        case .underWay: "under way"
+        case .calling: "calling"
+        }
+    }
+
+    /// A space's fixed place on the scope (bearing in degrees, distance as a fraction of the radius) and course, from
+    /// its id so it stays put across launches.
+    var position: (bearing: Double, distance: Double) {
+        let bytes = id.uuid
+        return (Double(UInt16(bytes.0) << 8 | UInt16(bytes.1)) / 65536 * 360, 0.3 + 0.55 * Double(bytes.2) / 255)
+    }
+    var course: Int { Int(Double(id.uuid.3) / 256 * 360) }
+
+    @MainActor static func make(_ space: Space, workspace: Workspace, selected: Bool, pending: Bool, shortcut: String,
+                                heading: String? = nil) -> HarbourVessel {
+        let sessions = space.tabs.flatMap(\.surfaceIDs).compactMap { TerminalRuntime.shared.chat.sessions[$0] }
+        let working = sessions.filter { AgentWorkingState.isWorking($0) }
+        let host = workspace.hosts.record(space.hostID)
+        return HarbourVessel(id: space.id, name: workspace.liveName(space), host: space.hostID == .local ? "Local" : host.name,
+                             status: pending ? .calling : working.isEmpty ? .anchor : .underWay,
+                             since: working.compactMap(\.workingSince).min(), selected: selected, shortcut: shortcut,
+                             heading: heading, escorts: sessions.reduce(0) { $0 + $1.subagents.count })
+    }
+
+    static func elapsed(since date: Date?, now: Date) -> String {
+        guard let date else { return "" }
+        let seconds = max(0, Int(now.timeIntervalSince(date)))
+        return seconds >= 3600 ? "\(seconds / 3600)h \(seconds % 3600 / 60)m"
+            : seconds >= 60 ? "\(seconds / 60)m \(seconds % 60)s" : "\(seconds)s"
+    }
+}
+
+/// Nautical's radar scope: range rings, bearings and a sweep that turns every four seconds over the harbour, with each
+/// space plotted as a vessel. At anchor it rides on its anchor; under way it shows its course with a heading vector
+/// that lengthens over the passage and a wake behind; calling (waiting for an answer) it shows in the warning color.
+/// Clicking a vessel selects its space. Reduce Motion holds the sweep still.
+///
+/// The sweep turns in the compositor (HarbourSweep), as the composer's motion does: a SwiftUI redraw per frame of a
+/// full-screen window throttles its presentation on an Adaptive-refresh display (docs/chat-diagnostics.md). The plot
+/// redraws only when a vessel changes, and once a second while one is under way, for its passage time.
+struct HarbourRadar: View, Equatable {
+    let vessels: [HarbourVessel]
+    let reduceMotion: Bool
+    var select: (UUID) -> Void = { _ in }
+    static let period: TimeInterval = 4
+    /// The still sweep's bearing, the mockup's.
+    static let restingBearing: Double = 32
+    /// How far behind the sweep line its trail reaches, in degrees.
+    static let trail: Double = 70
+    /// A passage this long draws the full heading vector.
+    private static let fullPassage: TimeInterval = 600
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.vessels == rhs.vessels && lhs.reduceMotion == rhs.reduceMotion }
+
+    fileprivate static func point(_ bearing: Double, _ distance: CGFloat, from center: CGPoint) -> CGPoint {
+        let angle = bearing * .pi / 180
+        return CGPoint(x: center.x + sin(angle) * distance, y: center.y - cos(angle) * distance)
+    }
+
+    fileprivate static func geometry(_ size: CGSize) -> (center: CGPoint, radius: CGFloat) {
+        (CGPoint(x: size.width / 2, y: size.height / 2), min(size.width, size.height) / 2 - 1)
+    }
+
+    var body: some View {
+        let palette = Chrome.palette
+        let underWay = vessels.contains { $0.since != nil }
+        GeometryReader { proxy in
+            ZStack {
+                HarbourSweep(accent: palette.accent, moving: !reduceMotion)
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+                if !reduceMotion {
+                    HarbourPings(vessels: vessels, accent: palette.accent).frame(width: proxy.size.width, height: proxy.size.height)
+                }
+                TimelineView(.animation(minimumInterval: 1, paused: !underWay)) { timeline in
+                    Canvas { context, size in draw(in: &context, size: size, now: timeline.date, palette: palette) }
+                }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture(coordinateSpace: .local) { location in
+                let (center, radius) = Self.geometry(proxy.size)
+                let nearest = vessels.map { vessel -> (UUID, CGFloat) in
+                    let p = Self.point(vessel.position.bearing, radius * vessel.position.distance, from: center)
+                    return (vessel.id, hypot(p.x - location.x, p.y - location.y))
+                }.min { $0.1 < $1.1 }
+                if let nearest, nearest.1 < 18 { select(nearest.0) }
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Harbour radar")
+        .accessibilityValue(vessels.map { "\($0.name), \($0.statusLabel)" }.joined(separator: "; "))
+        .accessibilityIdentifier("harbour-radar")
+    }
+
+    private func draw(in context: inout GraphicsContext, size: CGSize, now: Date, palette: SidebarPalette) {
+        let (center, radius) = Self.geometry(size)
+        guard radius > 20 else { return }
+        func point(_ bearing: Double, _ distance: CGFloat, from origin: CGPoint = center) -> CGPoint {
+            Self.point(bearing, distance, from: origin)
+        }
+        func circle(_ r: CGFloat, at p: CGPoint = center) -> Path {
+            Path(ellipseIn: CGRect(x: p.x - r, y: p.y - r, width: r * 2, height: r * 2))
+        }
+
+        // Range rings, the cardinal cross and dashed diagonals.
+        context.stroke(circle(radius), with: .color(palette.faint), lineWidth: 1.5)
+        for fraction in [2.0 / 3, 1.0 / 3] {
+            context.stroke(circle(radius * fraction), with: .color(palette.control), lineWidth: 1)
+        }
+        var cross = Path()
+        for bearing in [0.0, 90] { cross.move(to: point(bearing, radius)); cross.addLine(to: point(bearing + 180, radius)) }
+        context.stroke(cross, with: .color(palette.control), lineWidth: 1)
+        var diagonals = Path()
+        for bearing in [45.0, 135] { diagonals.move(to: point(bearing, radius)); diagonals.addLine(to: point(bearing + 180, radius)) }
+        context.stroke(diagonals, with: .color(palette.separator), style: StrokeStyle(lineWidth: 1, dash: [2, 6]))
+        let small = HarbourType.mono(max(8, min(10, radius / 22)))
+        for bearing in [0, 90, 180, 270] {
+            context.draw(Text(String(format: "%03d", bearing)).font(HarbourType.heading(11)).foregroundColor(palette.detail),
+                         at: point(Double(bearing), radius - 10))
+        }
+        for (fraction, label) in [(2.0 / 3, "1.0 nm"), (1.0 / 3, "0.5 nm")] {
+            context.draw(Text(label).font(small).foregroundColor(palette.detail),
+                         at: CGPoint(x: center.x + 5, y: center.y - radius * fraction + 9), anchor: .leading)
+        }
+
+        // The harbour: you, at the center.
+        context.fill(circle(4), with: .color(palette.ink))
+        context.stroke(circle(9), with: .color(palette.ink.opacity(0.5)), lineWidth: 1)
+        context.draw(Text("harbour").font(small).foregroundColor(palette.muted),
+                     at: CGPoint(x: center.x + 10, y: center.y + 12), anchor: .leading)
+        if vessels.isEmpty {
+            context.draw(Text("No traffic in range").font(HarbourType.mono(max(9, min(11, radius / 20)))).foregroundColor(palette.detail),
+                         at: CGPoint(x: center.x, y: center.y + radius * 0.45))
+        }
+
+        // Labels already placed, so a later one moves clear of them.
+        var placed: [CGRect] = []
+        for vessel in vessels {
+            let position = vessel.position
+            let p = point(position.bearing, radius * position.distance)
+            switch vessel.status {
+            case .anchor:
+                let tint = palette.secondary
+                context.stroke(circle(7, at: p), with: .color(tint), lineWidth: 1.4)
+                var anchor = Path()
+                anchor.move(to: CGPoint(x: p.x, y: p.y - 4)); anchor.addLine(to: CGPoint(x: p.x, y: p.y + 4))
+                anchor.move(to: CGPoint(x: p.x - 2, y: p.y - 2.5)); anchor.addLine(to: CGPoint(x: p.x + 2, y: p.y - 2.5))
+                anchor.move(to: CGPoint(x: p.x - 3, y: p.y + 1.5))
+                anchor.addQuadCurve(to: CGPoint(x: p.x + 3, y: p.y + 1.5), control: CGPoint(x: p.x, y: p.y + 5.5))
+                context.stroke(anchor, with: .color(tint), style: StrokeStyle(lineWidth: 1.1, lineCap: .round))
+            case .underWay, .calling:
+                let tint = (vessel.status == .calling ? palette.warning : palette.accent)
+                let course = Double(vessel.course)
+                let passage = vessel.since.map { min(1, now.timeIntervalSince($0) / Self.fullPassage) } ?? 0
+                // The wake astern, the heading vector ahead and its progress, then the hull pointing along the course.
+                let reach = radius * 0.3
+                var wake = Path()
+                wake.move(to: p); wake.addLine(to: point(course + 180, reach * 0.85, from: p))
+                context.stroke(wake, with: .color(tint.opacity(0.7)), style: StrokeStyle(lineWidth: 1.2, dash: [1.5, 5]))
+                var vector = Path()
+                vector.move(to: p); vector.addLine(to: point(course, reach, from: p))
+                context.stroke(vector, with: .color(tint), lineWidth: 1.4)
+                if passage > 0 {
+                    var progress = Path()
+                    progress.move(to: p); progress.addLine(to: point(course, reach * passage, from: p))
+                    context.stroke(progress, with: .color(tint.opacity(0.35)), lineWidth: 5)
+                }
+                var hull = Path()
+                hull.move(to: point(course, 10, from: p))
+                hull.addLine(to: point(course + 141, 11.4, from: p))
+                hull.addLine(to: point(course - 141, 11.4, from: p))
+                hull.closeSubpath()
+                context.fill(hull, with: .color(tint))
+            }
+            // Escorts: its subagents, small hulls in line astern, alternating either side of its wake.
+            if vessel.escorts > 0 {
+                let course = Double(vessel.course)
+                let tint = vessel.status == .calling ? palette.warning : vessel.status == .underWay ? palette.accent : palette.secondary
+                for index in 0..<min(vessel.escorts, 4) {
+                    let side: Double = index % 2 == 0 ? 1 : -1
+                    let e = point(course + 180 + side * 28, 16 + CGFloat(index / 2) * 10, from: p)
+                    var hull = Path()
+                    hull.move(to: point(course, 5, from: e))
+                    hull.addLine(to: point(course + 141, 5.7, from: e))
+                    hull.addLine(to: point(course - 141, 5.7, from: e))
+                    hull.closeSubpath()
+                    context.fill(hull, with: .color(tint.opacity(0.75)))
+                }
+            }
+            if vessel.selected || vessel.status != .anchor {
+                let tint = vessel.status == .calling ? palette.warning : palette.accent
+                context.stroke(circle(16, at: p), with: .color(tint.opacity(vessel.selected ? 0.6 : 0.3)), lineWidth: 1)
+            }
+
+            // Its label: name and host, then status, course and passage time or its key. It sits beside the vessel,
+            // on whichever side has room, and stays inside the plot.
+            let font = HarbourType.mono(max(9, min(11, radius / 20)))
+            let title = Text(vessel.name).foregroundColor(vessel.selected ? palette.ink : palette.secondary)
+                + Text(" · " + vessel.host).foregroundColor(palette.detail)
+            let detail: String
+            switch vessel.status {
+            case .anchor: detail = [vessel.statusLabel, vessel.shortcut].filter { !$0.isEmpty }.joined(separator: " · ")
+            case .underWay, .calling:
+                detail = [vessel.statusLabel, String(format: "%03d°", vessel.course), HarbourVessel.elapsed(since: vessel.since, now: now)]
+                    .filter { !$0.isEmpty }.joined(separator: " · ")
+            }
+            let statusColor = vessel.status == .anchor ? palette.muted : vessel.status == .calling ? palette.warning : palette.accent
+            let first = context.resolve(title.font(font)), second = context.resolve(Text(detail).font(font).foregroundColor(statusColor))
+            let third = vessel.heading.map { context.resolve(Text("heading " + $0).font(font).foregroundColor(palette.detail)) }
+            let firstSize = first.measure(in: size), secondSize = second.measure(in: size)
+            let thirdSize = third?.measure(in: size) ?? .zero
+            let width = max(firstSize.width, secondSize.width, thirdSize.width)
+            let x = p.x + 20 + width <= size.width - 2 ? p.x + 20
+                : p.x - 20 - width >= 2 ? p.x - 20 - width
+                : min(max(2, p.x - width / 2), size.width - 2 - width)
+            let height = firstSize.height + secondSize.height + thirdSize.height
+            var frame = CGRect(x: x, y: min(p.y + 6, size.height - 2 - height), width: width, height: height)
+            // Step down past a label in the way, or up when the plot's bottom is reached.
+            for _ in 0..<8 {
+                guard let blocking = placed.first(where: { $0.insetBy(dx: 0, dy: -2).intersects(frame) }) else { break }
+                frame.origin.y = blocking.maxY + 3 + height <= size.height - 2 ? blocking.maxY + 3 : blocking.minY - 3 - height
+            }
+            placed.append(frame)
+            let y = frame.minY
+            context.draw(first, at: CGPoint(x: x, y: y), anchor: .topLeading)
+            context.draw(second, at: CGPoint(x: x, y: y + firstSize.height), anchor: .topLeading)
+            if let third { context.draw(third, at: CGPoint(x: x, y: y + firstSize.height + secondSize.height), anchor: .topLeading) }
+        }
+    }
+}
+
+/// Nautical's traffic list: one row per space with its status, passage time and key. Clicking selects the space;
+/// the context menu is the space's own.
+private struct HarbourTrafficList: View {
+    let vessels: [HarbourVessel]
+    let typography: AppTypography
+    let select: (UUID) -> Void
+    let menu: (UUID) -> AnyView
+
+    private var font: Font { HarbourType.mono(typography.size(offset: -1.5)) }
+    private var statusWidth: CGFloat { typography.expanded(64) }
+    private var timeWidth: CGFloat { typography.expanded(52) }
+    private var keyWidth: CGFloat { typography.expanded(38) }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            columns(Text("TRAFFIC · \(vessels.count)"), Text("STATUS"), Text("TIME"), Text("KEY"))
+                .font(HarbourType.heading(typography.size(offset: -2))).tracking(1.8)
+                .foregroundStyle(Chrome.palette.detail)
+                .padding(.vertical, 4)
+                .overlay(alignment: .bottom) { Rectangle().fill(Chrome.border).frame(height: 1) }
+            ScrollViewReader { scroll in
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(vessels) { row($0).id($0.id) }
+                    }.padding(.top, 2)
+                }
+                .scrollIndicators(.never)
+                .onChange(of: vessels.first(where: \.selected)?.id) { _, id in
+                    if let id { withAnimation(nil) { scroll.scrollTo(id) } }
+                }
+            }
+        }
+        .accessibilityIdentifier("harbour-traffic")
+    }
+
+    private func columns(_ name: some View, _ status: some View, _ time: some View, _ key: some View) -> some View {
+        HStack(spacing: 8) {
+            name.frame(maxWidth: .infinity, alignment: .leading)
+            status.frame(width: statusWidth, alignment: .leading)
+            time.frame(width: timeWidth, alignment: .leading)
+            key.frame(width: keyWidth, alignment: .trailing)
+        }
+        .lineLimit(1)
+        .padding(.horizontal, 8)
+    }
+
+    private func row(_ vessel: HarbourVessel) -> some View {
+        let tint = vessel.status == .calling ? Chrome.palette.warning : vessel.status == .underWay ? Chrome.accent : Chrome.palette.secondary
+        return Button { select(vessel.id) } label: {
+            columns(
+                HStack(spacing: 7) {
+                    glyph(vessel.status, tint: tint)
+                    Text(vessel.name).foregroundStyle(vessel.selected ? Chrome.ink : Chrome.palette.secondary)
+                        .truncationMode(.middle)
+                    Text(vessel.host).foregroundStyle(vessel.selected ? Chrome.muted : Chrome.palette.detail)
+                        .truncationMode(.tail).layoutPriority(-1)
+                    if let heading = vessel.heading {
+                        Text("⎇ " + heading).foregroundStyle(Chrome.palette.faint)
+                            .truncationMode(.tail).layoutPriority(-2)
+                    }
+                },
+                Text(vessel.status == .anchor ? "anchor" : vessel.statusLabel).foregroundStyle(vessel.status == .anchor ? Chrome.palette.secondary : tint),
+                TimelineView(.animation(minimumInterval: 1, paused: vessel.since == nil)) { timeline in
+                    Text(vessel.since == nil ? "–" : HarbourVessel.elapsed(since: vessel.since, now: timeline.date))
+                }.monospacedDigit().foregroundStyle(vessel.since == nil ? Chrome.palette.detail : Chrome.ink),
+                Text(vessel.shortcut).monospacedDigit().foregroundStyle(Chrome.muted)
+            )
+            .font(font)
+            .padding(.vertical, 6)
+            .background(vessel.selected ? Chrome.accent.opacity(0.08) : .clear, in: RoundedRectangle(cornerRadius: 4))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .contextMenu { menu(vessel.id) }
+        .accessibilityLabel("\(vessel.name), \(vessel.host), \(vessel.statusLabel)")
+        .accessibilityAddTraits(vessel.selected ? .isSelected : [])
+        .accessibilityIdentifier("space-\(vessel.id)")
+    }
+
+    @ViewBuilder private func glyph(_ status: HarbourVessel.Status, tint: Color) -> some View {
+        switch status {
+        case .anchor: Circle().strokeBorder(tint, lineWidth: 1.2).frame(width: 7, height: 7)
+        case .underWay, .calling: HarbourHull().fill(tint).frame(width: 8, height: 8)
+        }
+    }
+}
+
+private struct HarbourHull: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.midX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+        path.closeSubpath()
+        return path
+    }
+}
+
+/// The radar's sweep: its trail and line drawn once, turned by Core Animation at the screen's frame rate.
+private struct HarbourSweep: NSViewRepresentable {
+    let accent: Color
+    let moving: Bool
+
+    func makeNSView(context: Context) -> SweepView { SweepView(accent: accent) }
+
+    func updateNSView(_ view: SweepView, context: Context) {
+        view.accent = accent
+        view.moving = moving
+    }
+
+    static func dismantleNSView(_ view: SweepView, coordinator: ()) { view.stop() }
+
+    final class SweepView: CompositorView {
+        var accent: Color { didSet { if accent != oldValue { redraw() } } }
+        private let beam = CALayer()
+        private var drawnDiameter: CGFloat = 0
+        private var diameter: CGFloat { max(0, min(bounds.width, bounds.height) - 2) }
+
+        init(accent: Color) {
+            self.accent = accent
+            super.init()
+            layer?.addSublayer(beam)
+        }
+
+        override func layout() {
+            super.layout()
+            if drawnDiameter != diameter { redraw(); updateAnimations() }
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            beam.position = CGPoint(x: bounds.midX, y: bounds.midY)
+            CATransaction.commit()
+        }
+
+        /// Pointing north, its trail behind it counterclockwise. The view is flipped, so a positive rotation turns
+        /// it clockwise.
+        override func redraw() {
+            let diameter = diameter
+            drawnDiameter = diameter
+            guard diameter > 0 else { return }
+            let trail = HarbourRadar.trail / 360
+            let gradient = AngularGradient(stops: [
+                .init(color: accent.opacity(0), location: 0),
+                .init(color: accent.opacity(0), location: 1 - trail),
+                .init(color: accent.opacity(0.05), location: 1 - trail * 0.8),
+                .init(color: accent.opacity(0.28), location: 1),
+            ], center: .center, startAngle: .degrees(-90), endAngle: .degrees(270))
+            draw(ZStack(alignment: .top) {
+                Circle().fill(gradient)
+                Rectangle().fill(accent.opacity(0.55)).frame(width: 1.2, height: diameter / 2)
+            }.frame(width: diameter, height: diameter), into: beam, proposal: ProposedViewSize(width: diameter, height: diameter))
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            beam.position = CGPoint(x: bounds.midX, y: bounds.midY)
+            if !moving { rest() }
+            CATransaction.commit()
+        }
+
+        override func start(_ rate: CAFrameRateRange) {
+            guard drawnDiameter > 0 else { return }
+            beam.transform = CATransform3DIdentity
+            let turn = CABasicAnimation(keyPath: "transform.rotation.z")
+            turn.fromValue = 0; turn.toValue = 2 * Double.pi; turn.duration = HarbourRadar.period
+            loop(turn, on: beam, rate: rate)
+        }
+
+        override func stop() {
+            super.stop()
+            rest()
+        }
+
+        /// Reduce Motion, or a hidden window: the sweep rests at the mockup's bearing.
+        private func rest() {
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            beam.transform = CATransform3DMakeRotation(HarbourRadar.restingBearing * .pi / 180, 0, 0, 1)
+            CATransaction.commit()
+        }
+    }
+}
+
+/// A radar ping where a vessel gets under way: a ring that opens and fades once, in the compositor like the sweep.
+private struct HarbourPings: NSViewRepresentable {
+    let vessels: [HarbourVessel]
+    let accent: Color
+
+    func makeNSView(context: Context) -> PingView { PingView() }
+
+    func updateNSView(_ view: PingView, context: Context) {
+        view.accent = accent
+        view.update(vessels)
+    }
+
+    final class PingView: NSView {
+        var accent = Color.green
+        private var statuses: [UUID: HarbourVessel.Status] = [:]
+        private static let duration: CFTimeInterval = 1.4
+
+        init() {
+            super.init(frame: .zero)
+            wantsLayer = true
+            setAccessibilityElement(false)
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { fatalError() }
+        override var isFlipped: Bool { true }
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        /// Pings each vessel that was plotted before and has just got under way.
+        func update(_ vessels: [HarbourVessel]) {
+            let next = Dictionary(uniqueKeysWithValues: vessels.map { ($0.id, $0.status) })
+            defer { statuses = next }
+            guard let window, window.occlusionState.contains(.visible), bounds.width > 0 else { return }
+            let (center, radius) = HarbourRadar.geometry(bounds.size)
+            for vessel in vessels where vessel.status == .underWay {
+                guard let previous = statuses[vessel.id], previous != .underWay else { continue }
+                let position = vessel.position
+                ping(at: HarbourRadar.point(position.bearing, radius * position.distance, from: center), window: window)
+            }
+        }
+
+        private func ping(at point: CGPoint, window: NSWindow) {
+            let ring = CAShapeLayer()
+            let size: CGFloat = 52
+            ring.bounds = CGRect(x: 0, y: 0, width: size, height: size)
+            ring.position = point
+            ring.path = CGPath(ellipseIn: ring.bounds.insetBy(dx: 1, dy: 1), transform: nil)
+            ring.fillColor = nil
+            ring.strokeColor = NSColor(accent).cgColor
+            ring.lineWidth = 1.5
+            ring.opacity = 0
+            ring.contentsScale = window.backingScaleFactor
+            layer?.addSublayer(ring)
+            let fps = Float(max(1, window.screen?.maximumFramesPerSecond ?? 60))
+            let grow = CABasicAnimation(keyPath: "transform.scale")
+            grow.fromValue = 0.15; grow.toValue = 1
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = 0.9; fade.toValue = 0
+            let group = CAAnimationGroup()
+            group.animations = [grow, fade]
+            group.duration = Self.duration
+            group.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            group.preferredFrameRateRange = CAFrameRateRange(minimum: fps, maximum: fps, preferred: fps)
+            CATransaction.begin()
+            CATransaction.setCompletionBlock { ring.removeFromSuperlayer() }
+            ring.add(group, forKey: "ping")
+            CATransaction.commit()
+        }
     }
 }

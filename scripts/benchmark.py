@@ -273,7 +273,7 @@ def run(args):
                          '-configuration', 'Release', '-derivedDataPath', str(products),
                          '-destination', 'platform=macOS', '-parallel-testing-enabled', 'NO',
                          'ENABLE_TESTABILITY=YES', 'ENABLE_HARDENED_RUNTIME=NO',
-                         'PRODUCT_BUNDLE_IDENTIFIER=dev.dispatch.benchmark.$(PRODUCT_NAME:rfc1034identifier)',
+                         'PRODUCT_BUNDLE_IDENTIFIER=yachts.dispatch.benchmark.$(PRODUCT_NAME:rfc1034identifier)',
                          'build-for-testing'], folder / 'ui-build.log')
                 plans = list((products / 'Build/Products').glob('Dispatch_*.xctestrun'))
                 if len(plans) != 1:

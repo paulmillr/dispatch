@@ -4,16 +4,21 @@ destination="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/dispatch-helpe
 # Always the helper this build produced, never one named by the environment: Dispatch's own
 # terminals export DISPATCH_HELPER_EXECUTABLE (the running app's helper), and a build started
 # there would otherwise bundle and sign that binary.
-source="$(dirname "$destination")/helper/darwin-universal"
+source="$SRCROOT/build/helper-rust/bin/darwin-universal"
+# The macOS SSH upload reads helper/darwin-universal: a link to this one signed copy, not a second one.
+alias="$(dirname "$destination")/helper/darwin-universal"
 if [[ "${1:-}" == --dry-run ]]; then
-  printf 'Bundle and sign %s -> %s (atomic replacement)\n' "$source" "$destination"
+  printf 'Bundle and sign %s -> %s (atomic replacement), link %s\n' "$source" "$destination" "$alias"
   exit 0
 fi
 [[ $# == 0 ]] || { echo 'Usage: bundle-helper.sh [--dry-run]' >&2; exit 1; }
-mkdir -p "$(dirname "$destination")"
+mkdir -p "$(dirname "$alias")"
 staging="${destination}.next"
-trap 'rm -f "$staging"' EXIT
+link="${alias}.next"
+trap 'rm -f "$staging" "$link"' EXIT
 cp "$source" "$staging"
 chmod 700 "$staging"
-codesign --force --sign "${EXPANDED_CODE_SIGN_IDENTITY:--}" "$staging"
+codesign --force --sign "${EXPANDED_CODE_SIGN_IDENTITY:--}" --identifier yachts.dispatch.helper "$staging"
 mv -f "$staging" "$destination"
+ln -sfn ../dispatch-helper "$link"
+mv -fh "$link" "$alias"

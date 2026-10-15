@@ -246,6 +246,10 @@ def main():
                      os.environ.get('CONFIGURATION', 'Debug'))
     env = dict(environment(), CONFIGURATION=configuration,
                DISPATCH_SETUP_OFFLINE=os.environ.get('DISPATCH_SETUP_OFFLINE', '0'))
+    # The production build is the one shipped: size-optimized helpers and a stripped app (dSYM beside it).
+    production = configuration == 'Release'
+    if production:
+        env.setdefault('DISPATCH_HELPER_PROFILE', 'release')
     if sys.version_info < (3, 9):
         parser.error('Python 3.9 or newer is required; use the Python provided with current Xcode.')
     if args.clean:
@@ -281,6 +285,8 @@ def main():
                         '-scheme', 'Dispatch', '-configuration', configuration,
                         '-derivedDataPath', 'build', 'build',
                         f'DISPATCH_HELPER_BUILD_COMPLETE={helper_complete}']
+                if production:
+                    command.append('DISPATCH_STRIP_APP=YES')
                 if env.get('DISPATCH_BUILD_JOBS'):
                     command += ['-jobs', env['DISPATCH_BUILD_JOBS']]
                     env['CARGO_BUILD_JOBS'] = env['DISPATCH_BUILD_JOBS']

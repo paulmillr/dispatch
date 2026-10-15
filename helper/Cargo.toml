@@ -2,11 +2,14 @@
 members = ["core", "bin", "harnesses/*", "multiplexers/*", "plugins/*"]
 resolver = "3"
 
-# Archives. Thin LTO over 16 codegen units uses every core; fat LTO with one unit ran one LLVM
-# thread per target (2x the build time for binaries ~19% smaller).
+# Archives and `./run.sh --prod`: the bundled helpers are most of the download. Fat LTO with one
+# unit and opt-level "s" (one LLVM thread per target, ~2x the thin-LTO build time) is ~30% smaller
+# than thin LTO at O3, with latency, throughput and CPU within noise (terminals bench, Linux arm64);
+# "z" was ~43% smaller but ~20% slower.
 [profile.release]
-lto = "thin"
-codegen-units = 16
+lto = "fat"
+codegen-units = 1
+opt-level = "s"
 strip = true
 panic = "abort"
 

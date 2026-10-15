@@ -869,6 +869,50 @@ final class SettingsStatsPresentationTests: XCTestCase {
         XCTAssertEqual(window.frame.height, resized.height, accuracy: 1, "Reopening must preserve the user's height")
     }
 
+    func testTypingNauticalCodeInSettingsUnlocksAndAppliesNautical() async throws {
+        try DesktopTestSupport.requireUnlocked()
+        let directory = System.temporary.appendingPathComponent(System.uuid().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let originalUnlock = SidebarThemeStore.shared.nauticalUnlocked
+        defer { SidebarThemeStore.shared.nauticalUnlocked = originalUnlock }
+        SidebarThemeStore.shared.nauticalUnlocked = false
+        let settings = SettingsStore(file: directory.appendingPathComponent("settings.json"))
+        let controller = AppDelegate(settings: settings)
+        let existing = Set(NSApp.windows.map(\.windowNumber))
+        controller.showSettings()
+        let window = try XCTUnwrap(NSApp.windows.first { !existing.contains($0.windowNumber) && $0.title == "Settings" })
+        defer { window.close(); window.contentView = nil }
+        let root = try XCTUnwrap(window.contentView)
+        func themeTitles() -> [String]? {
+            PresentationTestSupport.views(of: NSPopUpButton.self, in: root)
+                .first { $0.accessibilityIdentifier() == "settings-dropdown-Theme" }?.itemTitles
+        }
+        try await TestSupport.eventually { themeTitles() == ["Automatic", "Dark", "Light", "Graphite", "Lavender"] }
+        func type(_ text: String, in target: NSWindow) {
+            for character in text {
+                NSApp.postEvent(TerminalTestSupport.keyEvent(0, String(character), in: target), atStart: false)
+            }
+        }
+        // Another window's keystrokes and a near miss leave it hidden.
+        let other = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 100), styleMask: [.titled], backing: .buffered, defer: false)
+        other.isReleasedWhenClosed = false
+        defer { other.close() }
+        type(AppTheme.nauticalCode, in: other)
+        window.makeKeyAndOrderFront(nil)
+        type("dispatch.yacht", in: window)
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertFalse(SidebarThemeStore.shared.nauticalUnlocked)
+        XCTAssertEqual(settings.values.appTheme, .automatic)
+        type("x" + AppTheme.nauticalCode.uppercased(), in: window)
+        try await TestSupport.eventually(diagnostic: themeTitles()?.description ?? "no picker") {
+            SidebarThemeStore.shared.nauticalUnlocked && settings.values.appTheme == .nautical
+                && themeTitles() == ["Automatic", "Dark", "Light", "Graphite", "Lavender", "Nautical"]
+                && SidebarThemeStore.shared.current == .nautical
+        }
+        XCTAssertEqual(window.appearance?.name, .darkAqua)
+        _ = try await capture(window, "settings-nautical")
+    }
+
     private func selectCPU(in window: NSWindow, waitForExpansion: Bool = true) async throws {
         try await Task.sleep(for: .milliseconds(300))
         let root = try XCTUnwrap(window.contentView)

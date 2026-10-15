@@ -148,7 +148,7 @@ def build(profile, target_dir, helper="helper", dry_run=False, capture=None):
             native = stage / "darwin-universal"
             run("xcrun", "lipo", "-create", str(cache / "aarch64-apple-darwin" / profile / binary),
                 str(cache / "x86_64-apple-darwin" / profile / binary), "-output", str(native))
-            run("codesign", "--force", "--sign", "-", "--identifier", "dev.dispatch." + helper, str(native))
+            run("codesign", "--force", "--sign", "-", "--identifier", "yachts.dispatch." + helper, str(native))
             for arch in ("aarch64", "x86_64"):
                 shutil.copyfile(cache / (arch + "-unknown-linux-musl") / profile / binary, stage / ("linux-" + arch))
             for name in NAMES:
@@ -168,19 +168,13 @@ def install(target_dir, helper="helper"):
     compatibility = ROOT / "build" / helper
     destination = Path(os.environ.get("TARGET_BUILD_DIR", ROOT / "build")) / os.environ.get(
         "UNLOCALIZED_RESOURCES_FOLDER_PATH", "ssh-helper-resources") / helper
-    identity = os.environ.get("EXPANDED_CODE_SIGN_IDENTITY") or "-"
     for directory in (compatibility, destination):
         directory.mkdir(parents=True, exist_ok=True)
         for name in (*NAMES, "version", "protocol-version"):
-            source = output / name
-            if directory == destination and name == "darwin-universal" and identity != "-":
-                with tempfile.TemporaryDirectory(prefix="sign-", dir=target_dir.resolve()) as temporary:
-                    source = Path(temporary) / name
-                    shutil.copy2(output / name, source)
-                    run("codesign", "--force", "--sign", identity, "--identifier", "dev.dispatch." + helper, str(source))
-                    replace_if_changed(source, directory / name)
+            # The app's darwin-universal links to the one signed dispatch-helper (scripts/bundle-helper.sh).
+            if directory == destination and name == "darwin-universal":
                 continue
-            replace_if_changed(source, directory / name)
+            replace_if_changed(output / name, directory / name)
 
 
 def verify(target_dir):
@@ -213,8 +207,8 @@ def default_capture():
 
 
 def default_profile():
-    # The fully optimized helper (thin LTO, no incremental builds) takes ~30s to rebuild after any edit,
-    # so it is reserved for archives and explicit requests; local Debug and Release builds use `local`.
+    # The fully optimized helper (fat LTO, no incremental builds) takes ~35s to rebuild after any edit,
+    # so it is reserved for archives and explicit requests (`./run.sh --prod`); other builds use `local`.
     requested = os.environ.get("DISPATCH_HELPER_PROFILE")
     if requested:
         return requested

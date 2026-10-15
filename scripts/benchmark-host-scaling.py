@@ -143,7 +143,7 @@ def main():
             run(['xcodebuild', '-project', 'Dispatch.xcodeproj', '-scheme', 'Dispatch', '-configuration', 'Release',
                  '-derivedDataPath', 'build/host-scaling-products', '-destination', 'platform=macOS',
                  '-parallel-testing-enabled', 'NO', 'SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) DISPATCH_BENCHMARK', 'ENABLE_TESTABILITY=YES', 'ENABLE_HARDENED_RUNTIME=NO',
-                 'PRODUCT_BUNDLE_IDENTIFIER=dev.dispatch.host-scaling.$(PRODUCT_NAME:rfc1034identifier)',
+                 'PRODUCT_BUNDLE_IDENTIFIER=yachts.dispatch.host-scaling.$(PRODUCT_NAME:rfc1034identifier)',
                  '-only-testing:' + SELECTOR, 'build-for-testing'], OUTPUT / (args.label + '-build.log'))
         build_source = OUTPUT / 'build-source.json'
         current_source = benchmark.source_identity()

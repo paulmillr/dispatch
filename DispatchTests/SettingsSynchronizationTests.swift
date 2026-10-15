@@ -209,7 +209,7 @@ final class SettingsSynchronizationTests: XCTestCase {
                 XCTAssertGreaterThanOrEqual(contrast(tint.tabForeground, on: Chrome.window), 4.5, "\(theme) \(name)")
                 XCTAssertGreaterThanOrEqual(contrast(tint.edge, on: Chrome.window), 3, "\(theme) \(name)")
                 // A pastel wash, never a gray band: the strip keeps a light window light.
-                if theme != .dark {
+                if !theme.isDark {
                     XCTAssertGreaterThan(luminance(rgb(tint.stripWash, over: Chrome.window)), 0.75, "\(theme) \(name)")
                 }
             }
@@ -559,7 +559,7 @@ final class SettingsSynchronizationTests: XCTestCase {
         defer { LiquidGlassStore.shared.enabled = originalGlass }
         for glass in [false] + (LiquidGlassStore.supported ? [true] : []) {
             LiquidGlassStore.shared.enabled = glass
-            for theme: SidebarTheme in [.dark, .lavender, .light, .graphite, .dark, .lavender] {
+            for theme: SidebarTheme in [.dark, .lavender, .light, .graphite, .nautical, .dark, .lavender] {
                 app.controller.settings.values.appTheme = AppTheme(rawValue: theme.rawValue)!
                 let palette = SidebarPalette(theme: theme)
                 try await TestSupport.eventually {
@@ -776,7 +776,7 @@ final class SettingsSynchronizationTests: XCTestCase {
             app.runtime.systemAppearanceDidChange()
             try await TestSupport.eventually {
                 SidebarThemeStore.shared.current == palette
-                    && ChatThemeStore.shared.current.isDark == (palette == .dark)
+                    && ChatThemeStore.shared.current.isDark == palette.isDark
                     && app.window.appearance?.name == appearance
             }
             XCTAssertTrue(app.runtime.views[id]?.surface === surface)
@@ -813,12 +813,20 @@ final class SettingsSynchronizationTests: XCTestCase {
         window.contentView = host; window.makeKeyAndOrderFront(nil)
         try await PresentationTestSupport.selectSettingsTab("Appearance", in: window)
         var picker: NSPopUpButton?
-        try await TestSupport.eventually {
-            picker = PresentationTestSupport.views(of: NSPopUpButton.self, in: host).first { $0.accessibilityIdentifier() == "settings-dropdown-Theme" }
-            return picker != nil
+        func themePicker(_ titles: [String]) async throws -> NSPopUpButton {
+            try await TestSupport.eventually(diagnostic: picker?.itemTitles.description ?? "no picker") {
+                picker = PresentationTestSupport.views(of: NSPopUpButton.self, in: host).first { $0.accessibilityIdentifier() == "settings-dropdown-Theme" }
+                return picker?.itemTitles == titles
+            }
+            return try XCTUnwrap(picker)
         }
-        let control = try XCTUnwrap(picker)
-        XCTAssertEqual(control.itemTitles, ["Automatic", "Dark", "Light", "Graphite", "Lavender"])
+        // Nautical is an easter egg: offered only once its code unlocks it.
+        let originalUnlock = SidebarThemeStore.shared.nauticalUnlocked
+        defer { SidebarThemeStore.shared.nauticalUnlocked = originalUnlock }
+        SidebarThemeStore.shared.nauticalUnlocked = false
+        _ = try await themePicker(["Automatic", "Dark", "Light", "Graphite", "Lavender"])
+        SidebarThemeStore.shared.nauticalUnlocked = true
+        let control = try await themePicker(["Automatic", "Dark", "Light", "Graphite", "Lavender", "Nautical"])
         for theme in AppTheme.allCases {
             control.selectItem(withTitle: theme.label)
             control.sendAction(control.action, to: control.target)
@@ -827,7 +835,7 @@ final class SettingsSynchronizationTests: XCTestCase {
             XCTAssertEqual(runtime.preferences.theme, "Default")
             XCTAssertEqual(runtime.preferences.lightTheme, "Default")
             XCTAssertEqual(runtime.preferences.appTheme, theme)
-            XCTAssertEqual(ChatThemeStore.shared.current.isDark, palette == .dark)
+            XCTAssertEqual(ChatThemeStore.shared.current.isDark, palette.isDark)
             if palette != .dark {
                 for (actual, expected) in [(ChatThemeStore.shared.current.terminal, palette.palette.window),
                                            (ChatThemeStore.shared.current.accent, palette.palette.accent)] {
@@ -915,9 +923,10 @@ final class SettingsSynchronizationTests: XCTestCase {
         content.layoutSubtreeIfNeeded()
         let expanded = try await PresentationTestSupport.capture(document).text()
         XCTAssertTrue(expanded.contains("Improve text contrast"), expanded)
-        for appearance: AppTheme in [.automatic, .light, .dark, .graphite, .lavender, .automatic] {
+        for appearance: AppTheme in [.automatic, .light, .dark, .graphite, .lavender, .nautical, .automatic] {
             var values = store.values
             values.appTheme = appearance
+            let darkAppearance = appearance.isDark(systemIsDark: SidebarThemeStore.systemIsDark)
             try store.save(values)
             try await TestSupport.eventually(diagnostic: PresentationTestSupport.views(of: NSPopUpButton.self, in: content).map {
                 "\($0.accessibilityIdentifier() ?? ""): \($0.titleOfSelectedItem ?? "") enabled=\($0.isEnabled)"
@@ -934,7 +943,7 @@ final class SettingsSynchronizationTests: XCTestCase {
                         && dark?.titleOfSelectedItem == label(values.theme)
                 }
                 return light == nil && dark == nil && single?.isEnabled == true
-                    && single?.titleOfSelectedItem == label(appearance == .dark ? values.theme : values.lightTheme)
+                    && single?.titleOfSelectedItem == label(darkAppearance ? values.theme : values.lightTheme)
             }
             XCTAssertEqual(store.values.lightTheme, values.lightTheme)
             XCTAssertEqual(store.values.theme, values.theme)
@@ -947,8 +956,8 @@ final class SettingsSynchronizationTests: XCTestCase {
                 single.sendAction(single.action, to: single.target)
                 let saved = choice == "Match app theme" ? "Default" : choice
                 try await TestSupport.eventually {
-                    store.values.theme == (appearance == .dark ? saved : values.theme)
-                        && store.values.lightTheme == (appearance == .dark ? values.lightTheme : saved)
+                    store.values.theme == (darkAppearance ? saved : values.theme)
+                        && store.values.lightTheme == (darkAppearance ? values.lightTheme : saved)
                 }
                 _ = try await PresentationTestSupport.capture(window, named: "settings-color-scheme-\(appearance.rawValue)")
             }

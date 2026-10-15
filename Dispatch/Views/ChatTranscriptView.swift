@@ -48,6 +48,8 @@ struct ChatTranscriptView: View {
             // A fixed scroll target inside the lazy rows can make
             // accessibility prefetch alternate their visibility forever.
             VStack(alignment: .leading, spacing: 0) {
+                if theme.radioLog { ChatRadioLogHeader(surface: session.id) }
+                let watches = theme.radioLog ? ChatRadioLog.watches(session.visibleTranscriptRows) : [:]
                 LazyVStack(alignment: .leading, spacing: 0) {
                     if session.hasEarlier || session.loadingEarlier {
                         earlierMessages
@@ -56,6 +58,7 @@ struct ChatTranscriptView: View {
                         // One layout child per ID, regardless of row kind or
                         // disclosure state, keeps the outer stack lazy.
                         VStack(alignment: .leading, spacing: 0) {
+                            if let watch = watches[row.id] { ChatRadioWatchDivider(day: watch.day, watch: watch.watch) }
                             if let match = session.searchMatch, match.document.row == row.id {
                                 let excerpt = match.excerpt
                                 VStack(alignment: .leading, spacing: 4) {
@@ -104,7 +107,7 @@ struct ChatTranscriptView: View {
             if session.hasNewMessages && !session.atBottom {
                 Button { session.revealLatestMessages() } label: {
                     HStack(spacing: 6) {
-                        Text("new messages")
+                        Text(theme.radioLog ? "new traffic" : "new messages")
                         Image(systemName: "arrow.down").font(.system(size: theme.typography.detailSize - 0.5))
                     }
                     .font(theme.typography.detail)
@@ -236,7 +239,7 @@ struct ChatTranscriptView: View {
             HStack(spacing: 8) {
                 Rectangle().fill(theme.border).frame(height: 1)
                 if session.loadingEarlier { ProgressView().controlSize(.mini) }
-                Text(session.earlierError ?? (session.loadingEarlier ? "Loading earlier messages…" : "Earlier messages"))
+                Text(session.earlierError ?? (session.loadingEarlier ? "Loading earlier \(earlierNoun)…" : "Earlier \(earlierNoun)"))
                     .fixedSize(horizontal: false, vertical: true)
                 Rectangle().fill(theme.border).frame(height: 1)
             }.font(theme.typography.detail).foregroundStyle(theme.muted)
@@ -345,6 +348,7 @@ struct ChatTranscriptView: View {
     private var directory: String {
         TerminalRuntime.shared.workspace?.directory(forSurface: session.id) ?? System.home.path
     }
+    private var earlierNoun: String { theme.radioLog ? "transmissions" : "messages" }
 }
 
 /// Fade and translate the new row's pixels without animating its measured height
@@ -405,9 +409,70 @@ private struct ChatTranscriptRowView: View {
     let coordinator: ChatCoordinator
     let directory: String
     let contentWidth: CGFloat
-    private var bubbleWidth: CGFloat { min(contentWidth, theme.typography.characterWidth * 80) }
+    private var bubbleWidth: CGFloat {
+        theme.radioLog ? ChatRadioLog.messageWidth(contentWidth, theme: theme) + 32 - (row.item?.kind == .tool ? 10 : 0)
+            : min(contentWidth, theme.typography.characterWidth * 80)
+    }
     private var isBubble: Bool { row.group != nil || row.item?.kind == .assistant || row.item?.kind == .tool || row.item?.isNarration == true }
     var body: some View {
+        if theme.radioLog { radioBody } else { standardBody }
+    }
+
+    /// Nautical: one log line per transmission, its time and call sign in columns beside the message. A bubble's
+    /// rows share the line, so only its first names the station and only its last draws the rule below.
+    @ViewBuilder private var radioBody: some View {
+        if let duration = row.workedFor {
+            ChatRadioLog.line(time: nil, station: nil, theme: theme) {
+                Text("moored · \(AgentWorkingAnimation.elapsedText(duration)) on passage").font(theme.typography.detail).foregroundStyle(theme.muted)
+            }.padding(.vertical, 6).overlay(alignment: .bottom) { ChatRadioLog.rule(theme) }
+        } else if let approval = row.approval {
+            ChatPermissionCard(approval: approval, directory: directory, agent: session.agentTitle) { coordinator.chooseChat(false, session: session) }
+                .padding(.vertical, 8)
+        } else if row.item?.kind == .user, let item = row.item {
+            ChatRadioLog.line(time: row.time, station: HarbourRadio.ownStation, own: true, theme: theme) {
+                ChatMarkdown(text: item.text).foregroundStyle(theme.ink)
+            }
+            .padding(.vertical, 9)
+            .background(LinearGradient(colors: [.clear, theme.ink.opacity(0.04)], startPoint: .leading, endPoint: .trailing))
+            .overlay(alignment: .bottom) { ChatRadioLog.rule(theme) }
+        } else if let item = row.item, item.kind == .notice {
+            ChatRadioLog.line(time: row.time, station: nil, theme: theme) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    if HarbourDistress.isFailure(item.text) { ChatRadioLog.tag("MAYDAY", color: theme.red, theme: theme) }
+                    itemView(item)
+                }
+            }
+            .padding(.vertical, 6).overlay(alignment: .bottom) { ChatRadioLog.rule(theme) }
+        } else {
+            ChatRadioLog.line(time: row.bubbleStart ? row.time : nil,
+                              station: row.bubbleStart ? HarbourRadio.callSign(for: session.id) : nil, theme: theme) {
+                VStack(alignment: .leading, spacing: 4) {
+                    if let item = row.item, item.kind == .tool {
+                        // A manoeuvre logs under its message on a rule down its leading edge.
+                        itemView(item).padding(.leading, 8)
+                            .overlay(alignment: .leading) { Rectangle().fill(theme.border).frame(width: 2) }
+                    } else if let item = row.item { itemView(item) }
+                    if let group = row.group {
+                        ChatToolGroupHeader(group: group, expanded: Binding(
+                            get: { session.groupIsExpanded(group, turnID: row.turnID) },
+                            set: { session.setGroupExpanded(group, $0) }
+                        ))
+                    }
+                    // Procedure words: a finished turn's last message ends its transmission.
+                    if row.signsOff {
+                        Text("out").font(theme.typography.detail).foregroundStyle(theme.muted)
+                            .accessibilityIdentifier("chat-radio-out")
+                    }
+                }
+            }
+            .padding(.top, row.bubbleStart ? 9 : 2)
+            .padding(.bottom, row.bubbleEnd ? 9 : 2)
+            .overlay(alignment: .bottom) { if row.bubbleEnd { ChatRadioLog.rule(theme) } }
+            .accessibilityIdentifier("chat-message-\(row.id)")
+        }
+    }
+
+    private var standardBody: some View {
         Group {
             if let duration = row.workedFor {
                 HStack(spacing: 12) {
@@ -451,6 +516,8 @@ private struct ChatTranscriptRowView: View {
     }
     @ViewBuilder private func itemView(_ item: ChatItem) -> some View {
         switch item.kind {
+        case .user where theme.radioLog:
+            ChatMarkdown(text: item.text).foregroundStyle(theme.ink)
         case .user:
             ChatUserMessage(text: item.text, contentWidth: contentWidth)
         case .assistant:
@@ -569,5 +636,113 @@ private struct ChatBubbleOutline: Shape {
         } else { path.move(to: CGPoint(x: r.minX, y: rect.maxY)) }
         path.addLine(to: CGPoint(x: r.minX, y: start ? r.minY + 10 : rect.minY))
         return path
+    }
+}
+
+/// Nautical's radio log columns: time, station and message.
+enum ChatRadioLog {
+    static func timeWidth(_ theme: ChatTheme) -> CGFloat { theme.typography.characterWidth * 6 }
+    static func stationWidth(_ theme: ChatTheme) -> CGFloat { theme.typography.characterWidth * 15 }
+    static let spacing: CGFloat = 14
+    /// What the message column leaves for text: the row less both columns, at most 80 characters.
+    static func messageWidth(_ contentWidth: CGFloat, theme: ChatTheme) -> CGFloat {
+        max(0, min(contentWidth - timeWidth(theme) - stationWidth(theme) - spacing * 2, theme.typography.characterWidth * 80))
+    }
+
+    @MainActor static func line<Message: View>(time: Date?, station: String?, own: Bool = false, theme: ChatTheme,
+                                              @ViewBuilder message: () -> Message) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: spacing) {
+            Group {
+                if let time {
+                    Text(time, format: .dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits))
+                        .help(ShipsTime.bellsText(time))
+                } else { Text(" ") }
+            }
+            .font(theme.typography.detail).monospacedDigit().foregroundStyle(theme.muted.opacity(0.6))
+            .frame(width: timeWidth(theme), alignment: .leading)
+            Text(station ?? " ").font(theme.typography.detail)
+                .foregroundStyle(own ? theme.ink : theme.accent)
+                .lineLimit(1).truncationMode(.middle)
+                .frame(width: stationWidth(theme), alignment: .leading)
+                .accessibilityHidden(station == nil)
+            message().frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    static func rule(_ theme: ChatTheme) -> some View {
+        Rectangle().fill(theme.border.opacity(0.5)).frame(height: 1)
+    }
+
+    /// A distress or urgency word: MAYDAY, PAN-PAN.
+    static func tag(_ word: String, color: Color, theme: ChatTheme) -> some View {
+        Text(word).font(HarbourType.heading(theme.typography.detailSize)).tracking(1.6)
+            .foregroundStyle(color)
+            .padding(.horizontal, 5).padding(.vertical, 1)
+            .overlay { RoundedRectangle(cornerRadius: 3).strokeBorder(color.opacity(0.6)) }
+            .fixedSize()
+    }
+
+    /// Where the log turns over a watch: each row that opens a new watch, with the day's header when the date
+    /// changes too. Only timed rows count; untimed ones stay in the watch above them.
+    static func watches(_ rows: [ChatTranscriptRow]) -> [String: (day: String?, watch: String)] {
+        var result: [String: (day: String?, watch: String)] = [:]
+        var lastDay: DateComponents?, lastWatch: String?
+        let calendar = Calendar.current
+        for row in rows {
+            guard let time = row.time else { continue }
+            let day = calendar.dateComponents([.year, .month, .day], from: time)
+            let watch = ShipsTime.watch(time, calendar: calendar)
+            if day != lastDay || watch != lastWatch {
+                result[row.id] = (day != lastDay ? ShipsTime.dayText(time) : nil, watch)
+                lastDay = day; lastWatch = watch
+            }
+        }
+        return result
+    }
+}
+
+/// A new watch in the radio log: its name, and the day's header above it when the date turns.
+struct ChatRadioWatchDivider: View {
+    @Environment(\.chatTheme) private var theme
+    let day: String?
+    let watch: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if let day {
+                Text(day).font(HarbourType.heading(theme.typography.detailSize + 0.5)).tracking(2)
+                    .foregroundStyle(theme.accent)
+            }
+            HStack(spacing: 10) {
+                Text(watch.uppercased()).font(HarbourType.heading(theme.typography.detailSize - 0.5)).tracking(1.6)
+                    .foregroundStyle(theme.muted.opacity(0.75)).fixedSize()
+                Rectangle().fill(theme.border).frame(height: 1)
+            }
+        }
+        .padding(.top, 12).padding(.bottom, 4)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("chat-radio-watch")
+    }
+}
+
+/// The log's column headings: time, station, and the channel the terminal is on.
+struct ChatRadioLogHeader: View {
+    @Environment(\.chatTheme) private var theme
+    let surface: UUID
+
+    var body: some View {
+        HStack(spacing: ChatRadioLog.spacing) {
+            Text("TIME").frame(width: ChatRadioLog.timeWidth(theme), alignment: .leading)
+            Text("STATION").frame(width: ChatRadioLog.stationWidth(theme), alignment: .leading)
+            Text("RADIO LOG · \(HarbourRadio.channel(for: surface))").lineLimit(1)
+            Spacer(minLength: 0)
+        }
+        .font(theme.typography.font(offset: -2.5, weight: .semibold)).tracking(1.6)
+        .foregroundStyle(theme.muted.opacity(0.6))
+        .padding(.vertical, 4)
+        .overlay(alignment: .bottom) { Rectangle().fill(theme.border).frame(height: 1) }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("chat-radio-log-header")
     }
 }

@@ -207,6 +207,10 @@ struct TabBar<Row: View>: View {
             // it. Flat strips keep plain buttons with their own gaps.
             Button(action: newTab) { NewTabLabel(style: style) }
                 .help("New Tab · ⌘T").accessibilityLabel("Create new tab")
+            // Nautical's top-right strip keeps the harbour's clock, in UTC as a vessel traffic service logs.
+            if showsLayoutPicker && SidebarThemeStore.shared.current == .nautical {
+                HarbourClock().padding(.leading, 8)
+            }
             HStack(spacing: glass ? 0 : 6) {
                 if let chatSession {
                     ChatModeSwitch(session: chatSession, coordinator: TerminalRuntime.shared.chat).fixedSize()
@@ -320,5 +324,23 @@ struct TabBar<Row: View>: View {
 
     private func scrollToSelected(_ scroll: ScrollViewProxy) {
         if let selected { scroll.scrollTo(selected) }
+    }
+}
+
+/// Nautical's UTC clock in the strip.
+struct HarbourClock: View {
+    @Environment(\.appTypography) private var typography
+    private static let format = Date.VerbatimFormatStyle(
+        format: "\(hour: .twoDigits(clock: .twentyFourHour, hourCycle: .zeroBased)):\(minute: .twoDigits):\(second: .twoDigits)",
+        timeZone: TimeZone(identifier: "UTC")!, calendar: Calendar(identifier: .gregorian))
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { timeline in
+            HStack(spacing: 4) {
+                Text(timeline.date, format: Self.format).monospacedDigit().foregroundStyle(Chrome.muted)
+                Text("UTC").foregroundStyle(Chrome.palette.detail)
+            }
+        }
+        .font(HarbourType.mono(typography.size(offset: -2))).fixedSize()
+        .accessibilityIdentifier("harbour-clock")
     }
 }

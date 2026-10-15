@@ -47,7 +47,7 @@ def main():
                 '-configuration', 'Release', '-derivedDataPath', 'build/chat-scroll-products',
                 '-destination', 'platform=macOS', '-parallel-testing-enabled', 'NO',
                 'ENABLE_TESTABILITY=YES', 'ENABLE_HARDENED_RUNTIME=NO',
-                'PRODUCT_BUNDLE_IDENTIFIER=dev.dispatch.scroll-benchmark.$(PRODUCT_NAME:rfc1034identifier)',
+                'PRODUCT_BUNDLE_IDENTIFIER=yachts.dispatch.scroll-benchmark.$(PRODUCT_NAME:rfc1034identifier)',
                 '-only-testing:DispatchTests/ChatScrollBenchmarkTests']
 
         def run(command, name):

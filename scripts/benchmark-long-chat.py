@@ -92,7 +92,7 @@ def main():
             run(['xcodebuild', '-project', 'Dispatch.xcodeproj', '-scheme', 'Dispatch', '-configuration', 'Release',
                  '-derivedDataPath', 'build/long-chat-products', '-destination', 'platform=macOS',
                  '-parallel-testing-enabled', 'NO', 'ENABLE_TESTABILITY=YES', 'ENABLE_HARDENED_RUNTIME=NO',
-                 'PRODUCT_BUNDLE_IDENTIFIER=dev.dispatch.long-benchmark.$(PRODUCT_NAME:rfc1034identifier)',
+                 'PRODUCT_BUNDLE_IDENTIFIER=yachts.dispatch.long-benchmark.$(PRODUCT_NAME:rfc1034identifier)',
                  'build-for-testing'], 'build')
             (OUTPUT / 'build-sources.json').write_text(json.dumps({str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()
                 for p in sorted((ROOT / 'Dispatch').rglob('*.swift'))}, indent=2))

@@ -14,7 +14,7 @@ struct ChatToolGroupHeader: View {
                 Image(systemName: "chevron.right").rotationEffect(.degrees(expanded ? 90 : 0))
                     .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: 0.12), value: expanded)
                     .frame(width: 8)
-                Text("\(group.children.count.formatted()) \(group.children.count == 1 ? "step" : "steps")").fixedSize()
+                Text("\(group.children.count.formatted()) \(Self.noun(group.children.count, radio: theme.radioLog))").fixedSize()
                     .foregroundStyle(theme.muted.opacity(0.75))
                 if !summary.isEmpty {
                     Text(summary).lineLimit(1).truncationMode(.tail)
@@ -40,6 +40,11 @@ struct ChatToolGroupHeader: View {
             guard !Task.isCancelled else { return }
             summary = value
         }
+    }
+
+    /// Nautical logs a tool run as a manoeuvre.
+    nonisolated static func noun(_ count: Int, radio: Bool) -> String {
+        radio ? (count == 1 ? "manoeuvre" : "manoeuvres") : (count == 1 ? "step" : "steps")
     }
 
     nonisolated static func summarize(_ items: [ChatItem]) -> String {

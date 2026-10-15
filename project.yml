@@ -15,6 +15,9 @@ settings:
     OTHER_SWIFT_FLAGS: ["-Xcc", "-Wno-incomplete-umbrella"]
     # CBzip2: the system bzip2 library's module (the app journal's capture files).
     SWIFT_INCLUDE_PATHS: ["$(SRCROOT)/Vendor/Bzip2"]
+    # `./run.sh --prod` sets YES: the shipped app is stripped (its symbols stay in the dSYM). Off for
+    # other Release builds, whose app hosts the tests (BUNDLE_LOADER needs its symbols).
+    DISPATCH_STRIP_APP: NO
   configs:
     # Xcode otherwise injects get-task-allow, which notarization rejects.
     Release:
@@ -38,7 +41,7 @@ targets:
     settings:
       groups: [term]
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: dev.dispatch.term
+        PRODUCT_BUNDLE_IDENTIFIER: yachts.dispatch.term
   TermApple:
     type: framework.static
     platform: macOS
@@ -50,7 +53,7 @@ targets:
     settings:
       groups: [term]
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: dev.dispatch.termapple
+        PRODUCT_BUNDLE_IDENTIFIER: yachts.dispatch.termapple
         SWIFT_VERSION: "5.0"
         SWIFT_STRICT_CONCURRENCY: minimal
   Dispatch:
@@ -61,7 +64,7 @@ targets:
         # Built by the SSHHelpers target, in parallel with the terminal frameworks.
         script: python3 "$SRCROOT/scripts/build-ssh-helper.py" --install-only
         inputFiles: ["$(SRCROOT)/build/helper-rust/bin/darwin-universal", "$(SRCROOT)/build/helper-rust/bin/linux-aarch64", "$(SRCROOT)/build/helper-rust/bin/linux-x86_64", "$(SRCROOT)/build/helper-rust/bin/version", "$(SRCROOT)/build/helper-rust/bin/protocol-version"]
-        outputFiles: ["$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/darwin-universal", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/linux-aarch64", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/linux-x86_64", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/version", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/protocol-version"]
+        outputFiles: ["$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/linux-aarch64", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/linux-x86_64", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/version", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/protocol-version"]
     postBuildScripts:
       - name: Bundle unified helper
         script: bash "$SRCROOT/scripts/bundle-helper.sh"
@@ -93,12 +96,15 @@ targets:
         buildPhase: resources
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: dev.dispatch.local
+        PRODUCT_BUNDLE_IDENTIFIER: yachts.dispatch.app
         PRODUCT_MODULE_NAME: DispatchApp
         INFOPLIST_FILE: Dispatch/Info.plist
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # Only this target: the static terminal frameworks keep the debug info the dSYM is made from.
+        DEPLOYMENT_POSTPROCESSING: "$(DISPATCH_STRIP_APP)"
+        STRIP_INSTALLED_PRODUCT: "$(DISPATCH_STRIP_APP)"
     dependencies:
       - target: SSHHelpers
       # Linked into the app (static), nothing to embed.
@@ -130,7 +136,7 @@ targets:
         embed: false
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: dev.dispatch.local.tests
+        PRODUCT_BUNDLE_IDENTIFIER: yachts.dispatch.app.tests
         INFOPLIST_KEY_NSPrincipalClass: DispatchTestObserver
         GENERATE_INFOPLIST_FILE: YES
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Dispatch.app/Contents/MacOS/Dispatch"

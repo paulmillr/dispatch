@@ -33,6 +33,13 @@ enum HostConnectionState: String, Hashable, Codable, Sendable {
     var shortLabel: String {
         switch self { case .connecting: "connecting"; case .connected: "ssh"; case .disconnected: "offline"; case .unverified: "ssh · ?" }
     }
+    /// Nautical calls hosts ports: making port while connecting, in port once connected, out of range when lost.
+    var portLabel: String {
+        switch self { case .connecting: "making port"; case .connected: "in port"; case .disconnected: "out of range"; case .unverified: "unidentified" }
+    }
+    /// What the interface shows: `label`, or the port wording in Nautical.
+    @MainActor var shownLabel: String { SidebarThemeStore.shared.current == .nautical ? portLabel : label }
+    @MainActor var shownShortLabel: String { SidebarThemeStore.shared.current == .nautical ? portLabel : shortLabel }
 }
 
 struct TerminalHostContext: Equatable, Codable, Sendable {

@@ -1605,7 +1605,7 @@ final class AppReplay: @unchecked Sendable {
     /// queue bound (128 MiB) waiting, recording waits for the writer: memory stays bounded, the journal whole.
     final class Writer: @unchecked Sendable {
         private static let bound = 128 << 20
-        private let file: FileHandle, queue = DispatchQueue(label: "dev.dispatch.journal.writer"), lock = NSCondition()
+        private let file: FileHandle, queue = DispatchQueue(label: "yachts.dispatch.journal.writer"), lock = NSCondition()
         private var rows: UInt64 = 0, done = false, queued = 0, failure: (any Error)?
         #if DEBUG && canImport(CBzip2)
         private var stream = bz_stream(), buffer = [UInt8](repeating: 0, count: 1 << 16)

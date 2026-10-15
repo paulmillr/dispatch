@@ -113,7 +113,7 @@ final class ChatViewportTrace {
         System.environment("DISPATCH_CHAT_VIEWPORT_TRACE") != "0" && !System.testing
     }()
     static var enabled: Bool { shared.isEnabled && samplingAllowed }
-    private static let log = Logger(subsystem: "com.dispatch.app", category: "ChatViewport")
+    private static let log = Logger(subsystem: "yachts.dispatch.app", category: "ChatViewport")
     let directory: URL
     private(set) var isEnabled = false
     private(set) var error: String?

@@ -20,10 +20,20 @@ struct ChatPermissionCard: View {
                         ChatQuestionForm(draft: draft, agent: agent, submit: approval.answer,
                                          skip: { approval.resolve(.deny) }, openTerminal: openTerminal)
                     } else {
+                    if theme.radioLog {
+                        // Nautical: an urgent call that needs an answer, the agent asking for a pilot aboard.
+                        HStack(spacing: 8) {
+                            ChatRadioLog.tag("PAN-PAN", color: theme.yellow, theme: theme)
+                            Text("Requesting pilot").foregroundStyle(theme.yellow)
+                            Spacer()
+                            Text("Permission required").font(theme.typography.detail).foregroundStyle(theme.muted)
+                        }
+                    } else {
                     HStack {
                         Label("Allow operation?", systemImage: "diamond.fill").foregroundStyle(theme.accent)
                         Spacer()
                         Text("Permission required").font(theme.typography.detail).foregroundStyle(theme.muted)
+                    }
                     }
                     operation
                     HStack(spacing: 8) {
@@ -55,12 +65,12 @@ struct ChatPermissionCard: View {
                 }
             }
             .font(theme.typography.detail).padding(pending ? 14 : 10)
-            .background(pending ? theme.accent.opacity(0.06) : theme.sidebar, in: RoundedRectangle(cornerRadius: 8))
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(pending ? theme.accent.opacity(0.3) : theme.border))
+            .background(pending ? urgent.opacity(0.06) : theme.sidebar, in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(pending ? urgent.opacity(0.3) : theme.border))
             .overlay {
                 if pending {
                     RoundedRectangle(cornerRadius: 8).trim(from: 0, to: arrived ? 1 : 0)
-                        .stroke(theme.accent.opacity(0.7), lineWidth: 1)
+                        .stroke(urgent.opacity(0.7), lineWidth: 1)
                         .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: 0.35), value: arrived)
                         .allowsHitTesting(false)
                 }
@@ -73,6 +83,8 @@ struct ChatPermissionCard: View {
             .accessibilityIdentifier("approval-\(approval.id)")
         }
     }
+    /// A pending request's color: the accent, or Nautical's PAN-PAN amber.
+    private var urgent: Color { theme.radioLog ? theme.yellow : theme.accent }
     @ViewBuilder private var operation: some View {
         if let item = approval.item {
             ChatToolCard(item: item, expanded: .constant(true), directory: directory, requested: true)

@@ -24,6 +24,8 @@ struct ChatTheme: Equatable, Sendable {
     var selection = Color(red: 46/255, green: 46/255, blue: 52/255)
     var selectedText = SidebarTheme.dark.palette.ink
     var isDark = true
+    /// Nautical's chat: the transcript is a radio log (time, call sign, message) and the composer transmits.
+    var radioLog = false
     static let standard = ChatTheme()
 
     /// The terminal config's colors: background, foreground and the palette. Selection colors
@@ -48,8 +50,86 @@ struct ChatTheme: Equatable, Sendable {
         red = colors[1]; green = colors[2]; yellow = colors[3]
         blue = colors[4]; accent = colors[5]; cyan = colors[6]
         keyword = colors[5]; string = colors[2]; number = colors[3]; comment = colors[8]
+        radioLog = preferences.resolvedSidebarTheme == .nautical
     }
     init() {}
+}
+
+/// Nautical's names for chat: each terminal is a VHF channel and each agent a vessel calling from its host and space.
+@MainActor enum HarbourRadio {
+    static let ownStation = "HARBOUR"
+
+    /// A terminal's channel: its space's number in the sidebar, then its tab's number in its pane, so the first tab
+    /// of the third space is CH 31. A terminal outside the workspace's tabs keeps VHF's calling channel, 16.
+    static func channel(for surface: UUID) -> String {
+        guard let workspace = TerminalRuntime.shared.workspace else { return "CH 16" }
+        let spaces = workspace.presentationSpaces
+        for (spaceIndex, space) in spaces.enumerated() {
+            for pane in space.panes {
+                if let tabIndex = pane.tabs.firstIndex(where: { $0.id == surface }) {
+                    return "CH \(spaceIndex + 1)\(tabIndex + 1)"
+                }
+            }
+        }
+        return "CH 16"
+    }
+
+    /// The agent's call sign: its host and space, as MINI/DISPATCH.
+    static func callSign(for surface: UUID) -> String {
+        guard let workspace = TerminalRuntime.shared.workspace,
+              let space = workspace.spaces.first(where: { $0.tabs.contains { $0.id == surface } }) else { return "VESSEL" }
+        return (workspace.hosts.record(space.hostID).name + "/" + workspace.liveName(space)).uppercased()
+    }
+}
+
+/// Ship's time for the radio log: the day's six watches and the bells struck through each.
+enum ShipsTime {
+    /// The watch a time falls in. The dog watches split 16–20 in two, so the same watch never falls on the same
+    /// hours two days running.
+    static func watch(_ date: Date, calendar: Calendar = .current) -> String {
+        switch calendar.component(.hour, from: date) {
+        case 0..<4: "Middle watch"
+        case 4..<8: "Morning watch"
+        case 8..<12: "Forenoon watch"
+        case 12..<16: "Afternoon watch"
+        case 16..<18: "First dog watch"
+        case 18..<20: "Last dog watch"
+        default: "First watch"
+        }
+    }
+
+    /// Bells struck at a time: one per half hour into the watch, eight at its end (00:00, 04:00, …). The last dog
+    /// watch strikes 4 at its start (the first dog's end), then 1, 2, 3 and 8, as at sea.
+    static func bells(_ date: Date, calendar: Calendar = .current) -> Int {
+        let hour = calendar.component(.hour, from: date), minute = calendar.component(.minute, from: date)
+        if hour >= 18 && hour < 20 {
+            let halves = (hour - 18) * 2 + minute / 30
+            return halves == 0 ? 4 : halves
+        }
+        let halves = (hour % 4) * 2 + minute / 30
+        return halves == 0 ? 8 : halves
+    }
+
+    static func bellsText(_ date: Date, calendar: Calendar = .current) -> String {
+        let count = bells(date, calendar: calendar)
+        return "\(count) \(count == 1 ? "bell" : "bells") · \(watch(date, calendar: calendar))"
+    }
+
+    /// The log's day header: LOG · 15 OCT.
+    static func dayText(_ date: Date) -> String {
+        "LOG · " + date.formatted(.dateTime.day().month(.abbreviated)).uppercased()
+    }
+}
+
+/// How an error or a stop reads on the radio: MAYDAY for a failure or a stuck pane, PAN-PAN for a request that needs
+/// an answer.
+enum HarbourDistress {
+    /// Status text that reports a failure rather than progress.
+    static func isFailure(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        return ["error", "failed", "failure", "exited", "crash", "unavailable", "denied", "cannot", "couldn’t", "could not"]
+            .contains { lower.contains($0) }
+    }
 }
 
 @MainActor @Observable

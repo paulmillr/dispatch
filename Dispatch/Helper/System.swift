@@ -55,7 +55,7 @@ enum System {
             return "the app's pty is " + (size.map { "\($0.columns)x\($0.rows)" } ?? "unsized") + "; recorded " + text(recorded)
                 + (sizes.isEmpty ? "" : ", later " + sizes.joined(separator: ", "))
         }
-        let output = DispatchQueue(label: "dev.dispatch.system.pty")
+        let output = DispatchQueue(label: "yachts.dispatch.system.pty")
         func record(_ body: () throws -> Void) { do { try body() } catch { AppReplay.fail(error) } }
         return Pty.Journal(replaying: ticket.replaying, observe: { read, exit in
             (terminal.read, terminal.exit) = (read, exit)

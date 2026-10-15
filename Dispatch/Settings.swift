@@ -2,7 +2,7 @@ import AppKit
 import Observation
 
 enum AppTheme: String, Codable, CaseIterable {
-    case automatic, dark, light, graphite, lavender
+    case automatic, dark, light, graphite, lavender, nautical
 
     var label: String { rawValue.capitalized }
 
@@ -13,11 +13,20 @@ enum AppTheme: String, Codable, CaseIterable {
         case .light: .light
         case .graphite: .graphite
         case .lavender: .lavender
+        case .nautical: .nautical
         }
     }
 
     func isDark(systemIsDark: Bool) -> Bool {
-        sidebarTheme(systemIsDark: systemIsDark) == .dark
+        sidebarTheme(systemIsDark: systemIsDark).isDark
+    }
+
+    /// The code that unlocks Nautical when typed in the Settings window.
+    static let nauticalCode = "dispatch.yachts"
+
+    /// The themes Settings offers. Nautical is an easter egg: hidden until its code is typed, or while selected.
+    static func offered(selected: AppTheme, nauticalUnlocked: Bool) -> [AppTheme] {
+        allCases.filter { $0 != .nautical || nauticalUnlocked || selected == .nautical }
     }
 }
 
@@ -155,6 +164,8 @@ struct Preferences: Codable, Equatable {
     var attentionNotifications = true
     var attentionDockBadge = true
     var attentionSound = true
+    /// Nautical only: a ship's double bell, instead of the attention sound, when an agent finishes in the background.
+    var shipsBell = false
     var startingDirectory = System.home.path
 
     func resolvedTheme(systemIsDark: Bool) -> String {
@@ -175,7 +186,7 @@ struct Preferences: Codable, Equatable {
     // Settings saved by earlier local builds gain defaults for new fields.
     // Explicit user choices remain unchanged.
     private enum CodingKeys: String, CodingKey {
-        case enableHostDetection, autoGrantNewHosts, allowRemoteClipboardWrites, autoReconnectSSH, attentionNotifications, attentionDockBadge, attentionSound
+        case enableHostDetection, autoGrantNewHosts, allowRemoteClipboardWrites, autoReconnectSSH, attentionNotifications, attentionDockBadge, attentionSound, shipsBell
         case spaceOrder, automaticTabNames, fontFamily, chatFont, fontSize, appTheme, theme, lightTheme, optionAsAlt
         case prefixKeys, backendPrefixKeys, keyGroups
         case hideSingleSpace, startingDirectory, rememberHosts, restoreTerminalOutput
@@ -199,6 +210,7 @@ struct Preferences: Codable, Equatable {
         attentionNotifications = try fields.decodeIfPresent(Bool.self, forKey: .attentionNotifications) ?? attentionNotifications
         attentionDockBadge = try fields.decodeIfPresent(Bool.self, forKey: .attentionDockBadge) ?? attentionDockBadge
         attentionSound = try fields.decodeIfPresent(Bool.self, forKey: .attentionSound) ?? attentionSound
+        shipsBell = try fields.decodeIfPresent(Bool.self, forKey: .shipsBell) ?? shipsBell
         spaceOrder = try fields.decodeIfPresent(SpaceOrder.self, forKey: .spaceOrder) ?? spaceOrder
         // Replaces `tabNaming`, whose stored "terminal" was usually the old default rather than a choice.
         automaticTabNames = try fields.decodeIfPresent(Bool.self, forKey: .automaticTabNames) ?? automaticTabNames

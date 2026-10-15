@@ -15,6 +15,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         }
     }
     private var settingsWindow: NSWindow?
+    /// Recent keystrokes in the Settings window, matched against `AppTheme.nauticalCode`.
+    private var settingsKeystrokes = ""
+    private var settingsKeyMonitor: Any?
     private var appearanceObservation: NSKeyValueObservation?
     private var termination: Task<Void, Never>?
     let hostSessionStore: HostSessionStore?
@@ -160,7 +163,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.backgroundColor = NSColor(settings.values.resolvedSidebarTheme.palette.window)
-        window.appearance = NSAppearance(named: settings.values.resolvedSidebarTheme == .dark ? .darkAqua : .aqua)
+        window.appearance = NSAppearance(named: settings.values.resolvedSidebarTheme.isDark ? .darkAqua : .aqua)
         window.minSize = NSSize(width: 620, height: 400)
         window.isReleasedWhenClosed = false
         window.delegate = self
@@ -405,8 +408,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         workspace.applyLayout(LayoutPreset.allCases[sender.tag])
     }
     func applySidebarTheme(_ theme: SidebarTheme) {
+        settingsWindow?.title = theme == .nautical ? "Bridge" : "Settings"
         for window in [window, settingsWindow].compactMap({ $0 }) {
-            window.appearance = NSAppearance(named: theme == .dark ? .darkAqua : .aqua)
+            window.appearance = NSAppearance(named: theme.isDark ? .darkAqua : .aqua)
             window.backgroundColor = NSColor(theme.palette.window)
         }
     }
@@ -419,14 +423,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         window.collectionBehavior = [.fullScreenAuxiliary, .moveToActiveSpace]
         window.standardWindowButton(.miniaturizeButton)?.isEnabled = false
         window.standardWindowButton(.zoomButton)?.isEnabled = false
-        window.title = "Settings"
+        window.title = settings.values.resolvedSidebarTheme == .nautical ? "Bridge" : "Settings"
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.minSize = NSSize(width: 560, height: 440)
         window.maxSize = NSSize(width: 560, height: screen?.visibleFrame.height ?? 900)
         window.backgroundColor = NSColor(settings.values.resolvedSidebarTheme.palette.window)
         window.isReleasedWhenClosed = false
-        window.appearance = NSAppearance(named: settings.values.resolvedSidebarTheme == .dark ? .darkAqua : .aqua)
+        window.appearance = NSAppearance(named: settings.values.resolvedSidebarTheme.isDark ? .darkAqua : .aqua)
         window.contentView = NSHostingView(rootView: SettingsView(store: settings, workspace: workspace,
             resetSSHState: { [weak self] in try await self?.resetSSHState() }, fitInitialHeight: { [weak window] difference in
             guard let window, let available = (window.screen ?? screen)?.visibleFrame else { return }
@@ -439,7 +443,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         }))
         window.center()
         settingsWindow = window
+        settingsKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            self?.recordSettingsKeystroke(event)
+            return event
+        }
         window.makeKeyAndOrderFront(nil)
+    }
+
+    /// Typing the Nautical code anywhere in Settings, fields included, unlocks the theme; Settings then switches to it.
+    private func recordSettingsKeystroke(_ event: NSEvent) {
+        guard event.window === settingsWindow, event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
+              let characters = event.charactersIgnoringModifiers?.lowercased() else { return }
+        let code = AppTheme.nauticalCode
+        settingsKeystrokes = String((settingsKeystrokes + characters).suffix(code.count))
+        guard settingsKeystrokes == code else { return }
+        settingsKeystrokes = ""
+        SidebarThemeStore.shared.nauticalUnlocked = true
     }
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {

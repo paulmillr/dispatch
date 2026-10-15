@@ -46,7 +46,7 @@ def main():
                  '-configuration', 'Release', '-derivedDataPath', 'build/terminal-fps-products',
                  '-destination', 'platform=macOS', '-parallel-testing-enabled', 'NO',
                  'ENABLE_TESTABILITY=YES', 'ENABLE_HARDENED_RUNTIME=NO',
-                 'PRODUCT_BUNDLE_IDENTIFIER=dev.dispatch.fps-benchmark.$(PRODUCT_NAME:rfc1034identifier)',
+                 'PRODUCT_BUNDLE_IDENTIFIER=yachts.dispatch.fps-benchmark.$(PRODUCT_NAME:rfc1034identifier)',
                  '-only-testing:DispatchTests/TerminalFPSBenchmarkTests', 'build-for-testing'], 'build')
         products = ROOT / 'build/terminal-fps-products/Build/Products'
         plan = next(products.glob('Dispatch_*.xctestrun'))

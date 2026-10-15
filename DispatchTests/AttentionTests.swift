@@ -46,6 +46,7 @@ final class AttentionTests: XCTestCase {
         XCTAssertTrue(old.attentionNotifications, "Notify is on by default")
         XCTAssertTrue(old.attentionDockBadge)
         XCTAssertTrue(old.attentionSound)
+        XCTAssertFalse(old.shipsBell, "Nautical's bell is off until chosen")
         XCTAssertTrue(old.enableHostDetection)
         XCTAssertTrue(old.allowRemoteClipboardWrites, "Programs on helper hosts can set the clipboard by default")
         XCTAssertFalse(old.showGitBranches)
@@ -64,6 +65,7 @@ final class AttentionTests: XCTestCase {
         updated.attentionNotifications = true
         updated.attentionDockBadge = false
         updated.attentionSound = false
+        updated.shipsBell = true
         updated.enableHostDetection = false
         updated.allowRemoteClipboardWrites = false
         XCTAssertEqual(try JSONDecoder().decode(Preferences.self, from: JSONEncoder().encode(updated)), updated)

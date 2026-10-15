@@ -230,10 +230,10 @@ struct SSHHostsSettings: View {
             if state == .connected {
                 HStack(spacing: 5) {
                     Circle().frame(width: 6, height: 6)
-                    Text("connected")
+                    Text(state.shownLabel)
                 }.font(typography.font(offset: -1.5)).foregroundStyle(Chrome.palette.green).fixedSize()
             } else {
-                Text(state == .disconnected ? "offline" : state.label)
+                Text(SidebarThemeStore.shared.current == .nautical ? state.portLabel : state == .disconnected ? "offline" : state.label)
                     .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail).fixedSize()
             }
         } else {

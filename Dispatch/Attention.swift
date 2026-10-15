@@ -122,7 +122,10 @@ final class AttentionCoordinator: NSObject, UNUserNotificationCenterDelegate {
             notificationsEnabled = preferences.attentionNotifications
             if !notificationsEnabled { UNUserNotificationCenter.current().removeAllDeliveredNotifications() }
             for entry in events where !(NSApp.isActive && controller.workspace.isSurfacePresented(entry.id)) {
-                if preferences.attentionSound { NSSound(named: "Glass")?.play() }
+                // Nautical's bell marks a finished reply in place of the attention sound.
+                if preferences.shipsBell && entry.urgency == .unread && SidebarThemeStore.shared.current == .nautical {
+                    ShipsBell.strike()
+                } else if preferences.attentionSound { NSSound(named: "Glass")?.play() }
                 if preferences.attentionNotifications { notify(entry) }
             }
         } onChange: { [weak self] in
@@ -313,5 +316,48 @@ final class AttentionCoordinator: NSObject, UNUserNotificationCenterDelegate {
         ["surface", "conversation", "row", "event"].reduce(into: [:]) { result, key in
             result[key] = content.userInfo[key] as? String
         }
+    }
+}
+
+/// Nautical's ship's bell: two strikes, synthesized once as a short WAV (a struck bell's inharmonic partials, each
+/// decaying at its own rate), so nothing ships as a sound file.
+@MainActor enum ShipsBell {
+    private static let sound: NSSound? = NSSound(data: wav())
+
+    static func strike() {
+        guard let sound else { return }
+        sound.stop()
+        sound.play()
+    }
+
+    nonisolated static func wav(rate: Int = 44_100) -> Data {
+        let fundamental = 880.0
+        // Ratio to the fundamental, level, decay time in seconds.
+        let partials: [(Double, Double, Double)] = [(0.5, 0.35, 1.8), (1, 1, 1.4), (2.0, 0.45, 0.9), (2.76, 0.3, 0.6),
+                                                    (5.4, 0.15, 0.35), (8.93, 0.07, 0.2)]
+        let strikes = [0.0, 0.42], length = 2.4
+        let count = Int(length * Double(rate))
+        var samples = [Double](repeating: 0, count: count)
+        for strike in strikes {
+            let start = Int(strike * Double(rate))
+            for index in start..<count {
+                let t = Double(index - start) / Double(rate)
+                let attack = min(1, t / 0.002)
+                var value = 0.0
+                for (ratio, level, decay) in partials {
+                    value += level * exp(-t / decay) * sin(2 * .pi * fundamental * ratio * t)
+                }
+                samples[index] += attack * value
+            }
+        }
+        let peak = samples.map(abs).max() ?? 1
+        var data = Data()
+        func append<T: FixedWidthInteger>(_ value: T) { withUnsafeBytes(of: value.littleEndian) { data.append(contentsOf: $0) } }
+        data.append(contentsOf: Array("RIFF".utf8)); append(UInt32(36 + count * 2))
+        data.append(contentsOf: Array("WAVEfmt ".utf8)); append(UInt32(16)); append(UInt16(1)); append(UInt16(1))
+        append(UInt32(rate)); append(UInt32(rate * 2)); append(UInt16(2)); append(UInt16(16))
+        data.append(contentsOf: Array("data".utf8)); append(UInt32(count * 2))
+        for sample in samples { append(Int16((max(-1, min(1, sample / peak * 0.45)) * 32_000).rounded())) }
+        return data
     }
 }
