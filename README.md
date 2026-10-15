@@ -21,7 +21,10 @@ Dispatch is a normal terminal. The goal is to improve user's workflow, not to ch
     - SSH-ing somewhere presents a popup, which asks to upload optional dispatch-helper
     - SSH helper opens no ports and serves as a part which does all the heavy lifting for the app
 2. Try **Native Tabs**: run `tmux -CC` / `tmux -CC attach` or `herdr` locally / remotely
-3. Try **Chat Mode**: Start an agent in a terminal, it would auto-switch the tab to chat
+3. Try **Chat Mode**: Start an agent in a terminal, it would auto-switch the tab to chat.
+    - It uses hooks, local usage needs pre setup, remote usage is easier
+    - For local usage: Settings => Agents & Hosts => This Mac => Install (next to codex, claude etc)
+    - For usage over SSH: just ssh somewhere, ensure to check the checkbox while connecting to auto-install hooks
     - All sent messages are queued - not steered
     - There is a separate key combo to steer; also it's possible to steer queued message
     - Multi-line editor is enabled with shift+enter. It highlights markdown code brackets
