@@ -51,6 +51,7 @@
 		0D181B111AF93D70F40D6F5F /* HostProcessWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = C036822D804B0C63C0559F27 /* HostProcessWatcher.swift */; };
 		0DDD763CEA7B7148D7B29630 /* SettingsStatsPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0684F35A32B3A0D2DC79E5D /* SettingsStatsPresentationTests.swift */; };
 		0F5086B6675AD15B3C3DBAE8 /* SourceCodePro-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 6E91D90D902FB28BBDBB4CFC /* SourceCodePro-Regular.ttf */; };
+		0F55A1DCE4A7CC3B7AD7D914 /* LocalAgentsConsent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CE9E13544AF9C0C6C2F572C /* LocalAgentsConsent.swift */; };
 		0FE892D7FCE4F5A48686EFFC /* live-tmux.json in Resources */ = {isa = PBXBuildFile; fileRef = 807E5FD1004390D3117E1895 /* live-tmux.json */; };
 		105D17002286648559EABA96 /* HelperStatistics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 852BABACDAB940C243626E59 /* HelperStatistics.swift */; };
 		10D2761F191E3EA71A1AA804 /* zstd_common.c in Sources */ = {isa = PBXBuildFile; fileRef = BA5361DA7D7ACB1DD7EDE8AB /* zstd_common.c */; };
@@ -236,6 +237,7 @@
 		88E6F7B2857778352EF6851B /* TerminalFPSBenchmarkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6896BF27272F8D7D8FE7CE74 /* TerminalFPSBenchmarkTests.swift */; };
 		894ED755E8F0C6E7D8F319D6 /* SSHFileConsistencyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84C8BF8394B9FB5A175E231E /* SSHFileConsistencyTests.swift */; };
 		8AB1445E5A36DAFD92BB652A /* LiquidGlass.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACF71F89E8C159D55C722B68 /* LiquidGlass.swift */; };
+		8B77F86E71A000C5F02D4D2B /* DispatchRemoval.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6935408B32A16E334379C64 /* DispatchRemoval.swift */; };
 		8B7DBE72A8F10549F97C268A /* ToolOutput.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3D3AE2A9530E6302705B7E5 /* ToolOutput.swift */; };
 		8C59C66295AE9CF39702A5C8 /* ChatDraftTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E079BE680AE34C086ED946C /* ChatDraftTests.swift */; };
 		8D2DC3164C8B8203FF017E1B /* SourceCodePro-Bold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = B28511BC91B1FF1B0BC262ED /* SourceCodePro-Bold.ttf */; };
@@ -607,6 +609,7 @@
 		1AC7BD628C1135E75D9A75D0 /* HerdrServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HerdrServer.swift; sourceTree = "<group>"; };
 		1BCC13D062A9BC88D8B86ECC /* ChatComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatComposer.swift; sourceTree = "<group>"; };
 		1BDBDBE6C6CEA3F55B19A8C7 /* ChatPermissionCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatPermissionCard.swift; sourceTree = "<group>"; };
+		1CE9E13544AF9C0C6C2F572C /* LocalAgentsConsent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalAgentsConsent.swift; sourceTree = "<group>"; };
 		1CEBAAA3132550873ECBB3DD /* TranscriptSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptSnapshotTests.swift; sourceTree = "<group>"; };
 		1D9D311CC8AAB48EE4FA4474 /* HelperRendererIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelperRendererIntegrationTests.swift; sourceTree = "<group>"; };
 		1DBC6F0B84A5789EF924000E /* SSHIntegrationPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHIntegrationPolicyTests.swift; sourceTree = "<group>"; };
@@ -967,6 +970,7 @@
 		F2CA25ED0FD0219B36B16DC1 /* GoalControlsTestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoalControlsTestSupport.swift; sourceTree = "<group>"; };
 		F36D70E62CAA390EB0C94767 /* ChatDiscoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatDiscoveryTests.swift; sourceTree = "<group>"; };
 		F41DFAEE8DEAE57308D7D55E /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		F6935408B32A16E334379C64 /* DispatchRemoval.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DispatchRemoval.swift; sourceTree = "<group>"; };
 		F740977DDEF16D19B0F7CC0F /* HelperChat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelperChat.swift; sourceTree = "<group>"; };
 		F7CE560648BA463B7EF08B98 /* streamed-replies.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "streamed-replies.json"; sourceTree = "<group>"; };
 		F8C8C9583C73620C3AED4A43 /* ChatToolOutput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatToolOutput.swift; sourceTree = "<group>"; };
@@ -1088,6 +1092,7 @@
 		369BC29A82AAF36B7DEB4611 /* Hosts */ = {
 			isa = PBXGroup;
 			children = (
+				F6935408B32A16E334379C64 /* DispatchRemoval.swift */,
 				1A526CFD7958D77641493CF5 /* HostCoordinator.swift */,
 				AAEACA4DE52915968D98BF0F /* HostPlacement.swift */,
 				C036822D804B0C63C0559F27 /* HostProcessWatcher.swift */,
@@ -1491,6 +1496,7 @@
 				8449E1FDF20F2E61618A22E3 /* ClaudeQuestions.swift */,
 				5A7EBAD2BAB0A72A8EC67644 /* CodexProcess.swift */,
 				F740977DDEF16D19B0F7CC0F /* HelperChat.swift */,
+				1CE9E13544AF9C0C6C2F572C /* LocalAgentsConsent.swift */,
 				C1BF95D2380C932C48E385C0 /* ToolCommandPresentation.swift */,
 				D7C3A5899BBC01470ACFD29F /* ToolCommandWords.swift */,
 				DB1866670549E0EF16484D08 /* ToolDocument.swift */,
@@ -2000,6 +2006,7 @@
 				CCD7037ED382248594B74F59 /* CodexProcess.swift in Sources */,
 				8EE78F679C3A4B2C147138F5 /* ComposerFences.swift in Sources */,
 				F367233B6EE6766ADA060F3C /* DispatchApp.swift in Sources */,
+				8B77F86E71A000C5F02D4D2B /* DispatchRemoval.swift in Sources */,
 				1972BC87038C33BAC1349E3B /* HelperBackend.swift in Sources */,
 				496BC4728F9E3E545AC8FEE4 /* HelperBinary.swift in Sources */,
 				08463353969C5E1B2EB6CFDB /* HelperChat.swift in Sources */,
@@ -2031,6 +2038,7 @@
 				032484F5719E54C56D58B11A /* KeyGroups.swift in Sources */,
 				9B9F504CB6394B07CA9FE927 /* LayoutPicker.swift in Sources */,
 				8AB1445E5A36DAFD92BB652A /* LiquidGlass.swift in Sources */,
+				0F55A1DCE4A7CC3B7AD7D914 /* LocalAgentsConsent.swift in Sources */,
 				385E23E2811A5E7795B9595F /* LocalReorder.swift in Sources */,
 				58395701C5279B53F68AC044 /* MainView.swift in Sources */,
 				DAE3F748DB8F1B47B0E4796B /* MainWindow.swift in Sources */,

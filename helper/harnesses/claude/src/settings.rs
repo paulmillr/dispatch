@@ -14,6 +14,51 @@ const LIFECYCLE: [&str; 7] = [
     "Stop",
 ];
 
+/// Every hook Dispatch installs: (event, matcher, timeout).
+fn events() -> impl Iterator<Item = (&'static str, Option<&'static str>, u64)> {
+    [
+        ("PermissionRequest", None, 60),
+        ("PreToolUse", Some("AskUserQuestion"), 190),
+    ]
+    .into_iter()
+    .chain(LIFECYCLE.into_iter().map(|event| (event, None, 3)))
+}
+
+/// `event` has a synchronous group with `matcher` (none: unfiltered) running `command`.
+fn hooked(doc: Option<&Json>, event: &str, matcher: Option<&str>, command: &str) -> bool {
+    doc.and_then(|doc| doc.root().get("hooks"))
+        .and_then(|hooks| hooks.get(event))
+        .and_then(Value::array)
+        .into_iter()
+        .flatten()
+        .any(|group| {
+            let matches = match matcher {
+                Some(matcher) => text(group, "matcher") == Some(matcher),
+                None => group
+                    .get("matcher")
+                    .is_none_or(|value| value.kind() == Kind::Null),
+            };
+            matches
+                && group
+                    .get("hooks")
+                    .and_then(Value::array)
+                    .into_iter()
+                    .flatten()
+                    .any(|handler| {
+                        text(handler, "type") == Some("command")
+                            && text(handler, "command") == Some(command)
+                            && handler
+                                .get("async")
+                                .is_none_or(|value| value.boolean() == Some(false))
+                    })
+        })
+}
+
+/// Every hook Dispatch installs runs `command`: nothing to upgrade.
+pub fn complete(doc: Option<&Json>, command: &str) -> bool {
+    events().all(|(event, matcher, _)| hooked(doc, event, matcher, command))
+}
+
 /// Remote setup preserves native group/handler positions and leaves no-ops unwritten.
 pub fn installation(previous: Option<&[u8]>, command: &str) -> Result<Option<Vec<u8>>, Error> {
     let invalid = || error("settings", "Invalid agent hook configuration");
@@ -73,39 +118,8 @@ pub fn installation(previous: Option<&[u8]>, command: &str) -> Result<Option<Vec
         }
     }
     let mut changed = false;
-    for (event, matcher, timeout) in [
-        ("PermissionRequest", None, 60),
-        ("PreToolUse", Some("AskUserQuestion"), 190),
-    ] {
-        let installed = doc
-            .as_ref()
-            .and_then(|doc| doc.root().get("hooks"))
-            .and_then(|hooks| hooks.get(event))
-            .and_then(Value::array)
-            .into_iter()
-            .flatten()
-            .any(|group| {
-                let matches = match matcher {
-                    Some(matcher) => text(group, "matcher") == Some(matcher),
-                    None => group
-                        .get("matcher")
-                        .is_none_or(|value| value.kind() == Kind::Null),
-                };
-                matches
-                    && group
-                        .get("hooks")
-                        .and_then(Value::array)
-                        .into_iter()
-                        .flatten()
-                        .any(|handler| {
-                            text(handler, "type") == Some("command")
-                                && text(handler, "command") == Some(command)
-                                && handler
-                                    .get("async")
-                                    .is_none_or(|value| value.boolean() == Some(false))
-                        })
-            });
-        if installed {
+    for (event, matcher, timeout) in events() {
+        if hooked(doc.as_ref(), event, matcher, command) {
             continue;
         }
         let mut group = vec![(
@@ -239,17 +253,7 @@ pub fn merge(doc: Option<&Json>, command: &str, enabled: bool) -> Result<Vec<u8>
         }
     }
     if enabled {
-        for event in ["PermissionRequest", "PreToolUse"]
-            .into_iter()
-            .chain(LIFECYCLE)
-        {
-            let timeout = if event == "PreToolUse" {
-                190
-            } else if event == "PermissionRequest" {
-                60
-            } else {
-                3
-            };
+        for (event, matcher, timeout) in events() {
             let mut group = vec![(
                 "hooks",
                 Data::Array(vec![Data::Object(vec![
@@ -258,8 +262,8 @@ pub fn merge(doc: Option<&Json>, command: &str, enabled: bool) -> Result<Vec<u8>
                     ("timeout", Data::Unsigned(timeout)),
                 ])]),
             )];
-            if event == "PreToolUse" {
-                group.push(("matcher", Data::String("AskUserQuestion")))
+            if let Some(matcher) = matcher {
+                group.push(("matcher", Data::String(matcher)))
             }
             hooks.entry(event).or_default().push(Data::Object(group));
         }

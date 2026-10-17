@@ -855,6 +855,21 @@ extension ChatCoordinator {
         }
     }
 
+    /// The first-launch answer to whether agents run on this Mac (LocalAgentsConsent). Yes (the launch keys whose
+    /// CLIs were found) installs their integrations here; optional ones stay opt-in, as for a new SSH host. No
+    /// (nil) turns this Mac's agent hooks off, leaving the agents' settings as they are.
+    func adoptLocalAgents(_ found: Set<String>?) {
+        loadLaunches()
+        integrationWork { chat in
+            for launch in chat.helperLaunches ?? [] {
+                guard let found else { chat.setLocalHooks(launch.key, allowed: false); continue }
+                guard found.contains(launch.key), let install = chat.helperInstalls[launch.key], install.optional != true else { continue }
+                if !chat.localHooksAllowed(launch.key) { chat.localHooks[launch.key] = nil }
+                chat.setHelperIntegration(launch.key, enabled: true)
+            }
+        }
+    }
+
     /// Settings defaults: every required integration on, every optional one off.
     func restoreHelperIntegrations() {
         for launch in helperLaunches ?? [] {
@@ -898,6 +913,11 @@ extension ChatCoordinator {
                 guard var install = try? await HelperChat.setup(.local, key: launch.key, enabled: nil, terminal: nil) else { continue }
                 if off, install.status != "off", let changed = try? await HelperChat.setup(.local, key: launch.key, enabled: false, terminal: nil) {
                     install = changed
+                }
+                // An earlier opt-in missing hooks a newer helper installs (its audit shows the edit) is upgraded.
+                if !off, install.optional != true, install.installed == true, install.edits.contains(where: { $0.before != $0.after }),
+                   let upgraded = try? await HelperChat.setup(.local, key: launch.key, enabled: true, terminal: nil) {
+                    install = upgraded
                 }
                 chat.helperInstalls[launch.key] = install
             }

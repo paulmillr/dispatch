@@ -19,6 +19,14 @@ struct SSHHostsSettings: View {
     var logins: (HostID) -> [String] = { host in TerminalRuntime.shared.ssh.integrationEntries(for: host).map(\.id) }
     @State private var expanded: String?
     @State private var forgetting: String?
+    /// A "Remove Dispatch" waiting for confirmation: which row, where it runs, and its dry run once known.
+    private struct Removal {
+        let id: String
+        let machine: TerminalMachine?
+        var preview: DispatchRemoval.Outcome?
+        var data = true
+    }
+    @State private var removal: Removal?
     /// The login each expanded multi-login host is editing.
     @State private var account: [String: String] = [:]
     /// Choices kept while they still match what is saved, so switching the
@@ -436,7 +444,15 @@ struct SSHHostsSettings: View {
 
     @ViewBuilder private func forgetControl(id: String, host: HostRecord?, entry: Entry?) -> some View {
         if let host {
-            if forgetting == id {
+            if removal?.id == id {
+                removalConfirmation(host.name, local: false) {
+                    let machine = removal?.machine
+                    TerminalRuntime.shared.hosts.reset(host.id)
+                    removal = nil; expanded = nil
+                    guard let machine else { return }
+                    Task { DispatchRemoval.report(await DispatchRemoval.run(on: machine, dry: false, attempts: 10), host: host.name) }
+                }
+            } else if forgetting == id {
                 HStack(spacing: 10) {
                     Text("Forget \(host.name)? Its tabs, helper choices and caches are removed; remote tmux, herdr and programs keep running.")
                         .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
@@ -449,14 +465,70 @@ struct SSHHostsSettings: View {
                         .accessibilityIdentifier("settings-reset-host-confirm-\(id)")
                 }
             } else {
-                actionLink("Forget host…", identifier: "settings-reset-host-\(id)", destructive: true,
-                           disabled: !TerminalRuntime.shared.hosts.canReset(host.id)) { forgetting = id }
-                    .help("Disconnect and remove this host’s saved tabs, helper choices and caches")
+                HStack(spacing: 14) {
+                    actionLink("Forget host…", identifier: "settings-reset-host-\(id)", destructive: true,
+                               disabled: !TerminalRuntime.shared.hosts.canReset(host.id)) { forgetting = id }
+                        .help("Disconnect and remove this host’s saved tabs, helper choices and caches")
+                    actionLink("Remove Dispatch…", identifier: "settings-remove-host-\(id)", destructive: true,
+                               disabled: !TerminalRuntime.shared.hosts.canReset(host.id)) {
+                        let machine = workspace.newSpaceMachine(on: host.id)
+                            ?? host.destinations.first.map { .ssh(SSHShell(destination: $0)) }
+                        preview(Removal(id: id, machine: machine))
+                    }.help("Forget this host, then remove Dispatch’s hooks, Pi extension and helper files from it")
+                }
             }
         } else if let entry {
             actionLink("Forget choice", identifier: "settings-reset-host-integration-\(entry.id)", destructive: true) {
                 permissions.reset(entry.scope); expanded = nil
             }.help("The next connection asks again")
+        }
+    }
+
+    /// Starts a removal's confirmation and fills in its dry run.
+    private func preview(_ value: Removal) {
+        forgetting = nil; removal = value
+        guard let machine = value.machine else { return }
+        Task {
+            let outcome = await DispatchRemoval.run(on: machine, dry: true)
+            if removal?.id == value.id { removal?.preview = outcome }
+        }
+    }
+
+    /// What a removal changes (its dry run) before it is confirmed. This Mac's quits Dispatch and can take its data.
+    private func removalConfirmation(_ name: String, local: Bool, remove: @escaping () -> Void) -> some View {
+        let small = typography.font(offset: -1.5)
+        return VStack(alignment: .leading, spacing: 8) {
+            Text(local ? "Remove Dispatch from this Mac? Dispatch quits, then removes:"
+                 : "Remove Dispatch from \(name)? This disconnects and forgets the host, then removes there:")
+                .font(small).foregroundStyle(SettingsControlStyle.detail).fixedSize(horizontal: false, vertical: true)
+            Group {
+                if removal?.machine == nil {
+                    Text("No way to reach \(name) is known. Run \(DispatchRemoval.command) there yourself.")
+                } else if let preview = removal?.preview {
+                    if preview.absent { Text("Nothing: Dispatch isn’t installed there.") }
+                    else if preview.removed { Text(preview.output.isEmpty ? "Nothing to remove." : preview.output) }
+                    else {
+                        Text("Couldn’t check (\(preview.output.isEmpty ? "status \(preview.status)" : preview.output)). "
+                             + "Removing still \(local ? "quits" : "forgets the host"); if it fails, run \(DispatchRemoval.command) there.")
+                    }
+                } else { Text("Checking…") }
+            }.font(typography.font(offset: -2)).foregroundStyle(Chrome.ink).textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("settings-removal-preview")
+            Text("Codex may ask you to trust your own hooks again in /hooks.")
+                .font(small).foregroundStyle(SettingsControlStyle.detail)
+            if local {
+                Toggle("Also delete Dispatch’s settings, drafts and saved hosts", isOn: Binding(
+                    get: { removal?.data ?? true }, set: { removal?.data = $0 }))
+                    .toggleStyle(.checkbox).font(small).accessibilityIdentifier("settings-removal-data")
+            }
+            HStack(spacing: 10) {
+                Spacer(minLength: 0)
+                actionLink("Cancel", identifier: "settings-removal-cancel") { removal = nil }
+                Button(local ? "Remove & Quit" : "Remove", action: remove).buttonStyle(.plain)
+                    .font(typography.font(offset: -1, weight: .semibold)).foregroundStyle(.red)
+                    .accessibilityIdentifier("settings-removal-confirm")
+            }
         }
     }
 
@@ -529,6 +601,20 @@ struct SSHHostsSettings: View {
             Text("Off, Dispatch ignores the agent’s hooks here and leaves its settings as they are. Agents turned off in Chat mode stay off on every machine.")
                 .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
                 .fixedSize(horizontal: false, vertical: true)
+            if removal?.id == Self.localID {
+                removalConfirmation("this Mac", local: true) {
+                    let data = removal?.data ?? true
+                    // Nothing may install them again while Dispatch quits.
+                    for launch in launches { chat.setLocalHooks(launch.key, allowed: false) }
+                    (NSApp.delegate as? AppDelegate)?.removalOnQuit = data
+                    removal = nil
+                    NSApp.terminate(nil)
+                }
+            } else {
+                actionLink("Remove Dispatch from this Mac…", identifier: "settings-remove-local", destructive: true) {
+                    preview(Removal(id: Self.localID, machine: .local))
+                }.help("Quit Dispatch, then remove its hooks, Pi extension and helper files from this Mac")
+            }
         }.padding(.leading, 37).padding(.trailing, 14).padding(.bottom, 12)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("settings-host-editor-\(Self.localID)")

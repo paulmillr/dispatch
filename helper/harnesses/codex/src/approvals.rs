@@ -1,6 +1,6 @@
 //! Main-thread approvals from the Codex PermissionRequest hook: the card of c1654cc
-//! ChatCoordinator.swift:784-795 with the shared PendingApproval (ChatModels.swift:103-138), and
-//! the PreCompact/PostCompact compacting status (:795-796).
+//! ChatCoordinator.swift:784-795 with the shared PendingApproval (ChatModels.swift:103-138), the
+//! PreCompact/PostCompact compacting status (:795-796) and the SubagentStart/SubagentStop agents.
 use crate::{channel::failure, tools::printable};
 use dispatch_helper_core::{
     api::*,
@@ -46,6 +46,9 @@ struct Pending {
 pub struct Approvals {
     checks: BTreeMap<Work, Check>,
     pending: BTreeMap<String, Pending>,
+    /// Running subagents per session id, oldest first: (agent_id, agent_type) from SubagentStart
+    /// until SubagentStop. Background agents keep running after their turn ends.
+    agents: BTreeMap<String, Vec<(String, String)>>,
 }
 
 /// No decision: Codex continues with its own approval UI (old empty reply).
@@ -90,6 +93,11 @@ fn card(root: Value<'_>, reply: u64) -> Option<Interaction> {
 }
 
 impl Approvals {
+    /// An exited session's agents end with it.
+    pub fn forget(&mut self, session: &str) {
+        self.agents.remove(session);
+    }
+
     pub fn revoke(&mut self, io: &mut dyn Io, pid: u32) -> Vec<Update> {
         let checks: Vec<_> = self.checks.iter()
             .filter(|(_, check)| check.owners.iter().any(|owner| owner.binding.process.pid == pid))
@@ -213,6 +221,57 @@ impl Approvals {
                 });
             }
             return true;
+        }
+        // Subagent lifecycle datagrams update `State.agents` like the Claude harness's; a new or
+        // ended session forgets its agents (other handlers still see SessionStart/SessionEnd).
+        if let Event::Hook { message, reply, .. } = event
+            && let Ok(document) = Json::parse(message)
+            && let root = document.root()
+            && let Some(name @ ("SubagentStart" | "SubagentStop" | "SessionStart" | "SessionEnd")) =
+                root.get("hook_event_name").and_then(Value::string)
+            && let Some(session) = root.get("session_id").and_then(Value::string)
+        {
+            let subagent = name.starts_with("Subagent");
+            if subagent && let Some(reply) = reply {
+                fallback(io, *reply);
+            }
+            let agent = root.get("agent_id").and_then(Value::string).unwrap_or("");
+            let agents = self.agents.entry(session.to_owned()).or_default();
+            let changed = match name {
+                "SubagentStart" if !agent.is_empty() && !agents.iter().any(|(id, _)| id == agent) => {
+                    let kind = root
+                        .get("agent_type")
+                        .and_then(Value::string)
+                        .filter(|kind| !kind.trim().is_empty())
+                        .unwrap_or("agent");
+                    agents.push((agent.to_owned(), kind.to_owned()));
+                    true
+                }
+                "SubagentStop" => {
+                    let count = agents.len();
+                    agents.retain(|(id, _)| id != agent);
+                    agents.len() != count
+                }
+                "SessionStart" | "SessionEnd" => std::mem::take(agents).len() > 0,
+                _ => false,
+            };
+            let kinds: Vec<String> = agents.iter().map(|(_, kind)| kind.clone()).collect();
+            if kinds.is_empty() {
+                self.agents.remove(session);
+            }
+            if changed && let Some(owner) = owners(session).into_iter().next() {
+                let mut states = states.borrow_mut();
+                let state = states.entry(owner.binding.session.clone()).or_default();
+                state.agents = kinds;
+                let state = state.clone();
+                ui.update(Update::State {
+                    binding: owner.binding,
+                    state,
+                });
+            }
+            if subagent {
+                return true;
+            }
         }
         match event {
             Event::Hook {

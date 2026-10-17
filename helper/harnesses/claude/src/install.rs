@@ -94,6 +94,11 @@ impl Setup {
         self.after = match (self.remote, self.enabled) {
             (true, _) => settings::installation(self.before.as_deref(), &self.command)?
                 .unwrap_or_else(|| self.before.clone().unwrap_or_default()),
+            // A complete installation is never rewritten, so an audit shows no edit; an older
+            // opt-in missing hooks shows the upgrade an install makes.
+            (false, None | Some(true)) if settings::complete(doc.as_ref(), &self.command) => {
+                self.before.clone().unwrap_or_default()
+            }
             _ => settings::merge(doc.as_ref(), &self.command, self.enabled.unwrap_or(true))?,
         };
         // Unchanged settings are never rewritten.
