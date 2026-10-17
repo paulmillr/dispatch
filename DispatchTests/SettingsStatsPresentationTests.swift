@@ -784,10 +784,10 @@ final class SettingsStatsPresentationTests: XCTestCase {
             scroll.reflectScrolledClipView(scroll.contentView)
         }
         // SwiftUI can reset the scroll position during layout; retry until the
-        // last listed login is on screen.
+        // last listed login is on screen (logins sort by host, then account: bob@build.example).
         try await TestSupport.eventually {
             try scrollToBottom()
-            return try await PresentationTestSupport.capture(window).text().lowercased().contains("carol")
+            return try await PresentationTestSupport.capture(window).text().lowercased().contains("bob")
         }
         let snapshot = try await capture(window, "settings-host-integrations")
         // Vision may insert a space after punctuation in monospaced hostnames.

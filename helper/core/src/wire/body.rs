@@ -9,6 +9,10 @@ include!(concat!(env!("OUT_DIR"), "/wire-schema.rs"));
 
 // This is a transport nesting bound, not a provider transcript-parsing bound.
 pub const DEPTH: usize = 512;
+/// Values one wire body may hold. The frame limit is sized for TEXT_LIMIT bytes of text as JSON (six-byte escapes),
+/// but a binary null is one byte: a peer's frame would otherwise be millions of values, each a Data in memory. Plain
+/// values (captures, job output, values made here) are not counted.
+const VALUES: usize = super::TEXT_LIMIT as usize;
 
 fn error() -> Error {
     Error {
@@ -211,6 +215,7 @@ pub(crate) fn method(bytes: &[u8]) -> Option<&str> {
         bytes,
         at: 0,
         names: WIRE,
+        values: VALUES,
     };
     let named = match reader.take(1).ok()?[0] {
         10 => *RECORDS.get(reader.symbol().ok()? as usize)?.first()? != "method",
@@ -248,9 +253,10 @@ pub struct Encoded {
     wire: bool,
 }
 impl Encoded {
-    /// A value tree made here (e.g. what the helper derived from an agent's JSON).
+    /// A value tree made here (e.g. what the helper derived from an agent's JSON), checked as `plain` is: agent JSON
+    /// can repeat a key, which the reader refuses.
     pub fn value(data: &Data<'_>) -> Result<Self, Error> {
-        Ok(Self { bytes: encode_plain(data)?, wire: false })
+        Self::plain(&encode_plain(data)?)
     }
     pub fn plain(bytes: &[u8]) -> Result<Self, Error> {
         decode_plain(bytes)?;
@@ -271,6 +277,7 @@ pub fn decode_plain(bytes: &[u8]) -> Result<Data<'_>, Error> {
         bytes,
         at: 0,
         names: PLAIN,
+        values: usize::MAX,
     };
     let data = reader.value(DEPTH)?;
     if reader.at != bytes.len() {
@@ -283,6 +290,8 @@ pub struct Reader<'a> {
     bytes: &'a [u8],
     at: usize,
     names: Dictionary,
+    /// Values this body may still hold (VALUES).
+    values: usize,
 }
 impl<'a> Reader<'a> {
     fn take(&mut self, count: usize) -> Result<&'a [u8], Error> {
@@ -310,9 +319,10 @@ impl<'a> Reader<'a> {
         }
     }
     fn value(&mut self, depth: usize) -> Result<Data<'a>, Error> {
-        if depth == 0 {
+        if depth == 0 || self.values == 0 {
             return Err(error());
         }
+        self.values -= 1;
         let tag = self.take(1)?[0];
         let data = match tag {
             0 => Data::Null,
@@ -393,6 +403,7 @@ pub fn decode(bytes: &[u8]) -> Result<Data<'_>, Error> {
         bytes,
         at: 0,
         names: WIRE,
+        values: VALUES,
     };
     if reader.take(SCHEMA.len())? != SCHEMA {
         return Err(Error {
@@ -406,3 +417,7 @@ pub fn decode(bytes: &[u8]) -> Result<Data<'_>, Error> {
     }
     Ok(data)
 }
+
+#[cfg(test)]
+#[path = "body.test.rs"]
+mod tests;

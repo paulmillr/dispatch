@@ -93,9 +93,14 @@ pub fn fail(code: &'static str, message: impl Into<String>) -> Error {
     }
 }
 pub fn home(runtime: &Shared, value: &Data<'_>) -> Result<String, Error> {
-    // Environment values are bytes; the agent directory is composed as text.
-    let variable = |name| value.get(name).and_then(Data::bytes).and_then(|v| std::str::from_utf8(v).ok());
-    let home = match variable("HOME") {
+    // Environment values are bytes; the agent directory is composed as text. One that is not UTF-8 is refused: the
+    // default directory instead would be one Pi does not read.
+    let variable = |name| {
+        value.get(name).and_then(Data::bytes).map(|v| {
+            std::str::from_utf8(v).map_err(|_| fail("not_sent", "Pi configuration directory is unavailable"))
+        }).transpose()
+    };
+    let home = match variable("HOME")? {
         Some(home) => home.to_owned(),
         None => runtime
             .borrow()
@@ -104,7 +109,7 @@ pub fn home(runtime: &Shared, value: &Data<'_>) -> Result<String, Error> {
             .ok_or_else(|| fail("not_sent", "Pi account home is unavailable"))?
             .to_owned(),
     };
-    let configured = variable("PI_CODING_AGENT_DIR").unwrap_or_default().to_owned();
+    let configured = variable("PI_CODING_AGENT_DIR")?.unwrap_or_default().to_owned();
     let directory = if configured.is_empty() {
         format!("{home}/.pi/agent")
     } else if configured == "~" {
@@ -825,3 +830,7 @@ pub fn event(runtime: &Shared, io: &mut dyn Io, event: Event) {
         _ => {}
     }
 }
+
+#[cfg(test)]
+#[path = "bridge.test.rs"]
+mod tests;

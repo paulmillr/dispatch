@@ -28,6 +28,7 @@ struct HostSample: Codable, Sendable {
     var diskTotal: UInt64 = 0
     var diskFree: UInt64 = 0
     var processes: [HostProcess] = []
+    var processesPartial = false
     var volumes: [HostVolume] = []
     var receivedPerSecond: Double = 0
     var sentPerSecond: Double = 0

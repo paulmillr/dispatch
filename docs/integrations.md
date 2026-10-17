@@ -4,7 +4,7 @@ Rules every integration follows: server jobs and agent processes belong to their
 
 ## tmux and herdr
 
-Launch with `tmux -CC new-session -A -s work`, or `herdr` (`--session NAME`, `session attach NAME`). tmux windows become tabs that keep their server splits; herdr workspaces/tabs become spaces/tabs.
+Launch with `tmux -CC new-session -A -s work`, or `herdr` (`--session NAME`, `session attach NAME`). tmux windows become tabs that keep their server splits; herdr workspaces/tabs become spaces/tabs. A tab moved to another space keeps its splits on both (herdr has no tab move between workspaces: the helper moves its panes one by one as one move, and puts them back if a step fails).
 
 - **Close tab** terminates only if every pane is verified idle (foreground, background, and stopped jobs). Otherwise, or if inspection is unavailable (e.g. disconnected), it detaches. Close space, Detach, and quit always detach.
 - **Detached** sidebar items reattach to the original client or session, never a replacement. The list lasts only for the current run.

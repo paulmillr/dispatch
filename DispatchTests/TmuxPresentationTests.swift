@@ -252,6 +252,56 @@ final class TmuxPresentationTests: XCTestCase {
         XCTAssertNil(app.runtime.helpers[.local]?.error)
     }
 
+    func testTypedSSHAttachNewTabStaysInTheAttachSpace() async throws {
+        try await newTabInAttachSpace(remote: true)
+    }
+
+    func testTypedLocalAttachNewTabStaysInTheAttachSpace() async throws {
+        try await newTabInAttachSpace(remote: false)
+    }
+
+    /// A new tab (Cmd+T) in the space a typed attach made becomes a tab there: never a space of its own, not even
+    /// for a frame.
+    private func newTabInAttachSpace(remote: Bool) async throws {
+        let app = try TmuxWalkthrough(autoClose: true, liquidGlass: false)
+        defer { app.close() }
+        app.controller.settings.values = Preferences.flat
+        let server = remote ? try await SSHTestServer() : nil
+        defer { server?.stop() }
+        let gateway = try XCTUnwrap(app.workspace.activeTab?.id)
+        try await app.wait { app.runtime.views[gateway].map { !TerminalTestSupport.screen(terminal: $0).isEmpty } == true }
+        let origin = try XCTUnwrap(app.runtime.views[gateway])
+        if let server {
+            TerminalTestSupport.send("ssh " + (server.options + [server.destination]).map(HerdrLaunch.quote).joined(separator: " "), to: origin)
+            try await TestSupport.eventually(timeout: .seconds(20)) {
+                app.runtime.ssh.links.values.contains { $0.launch.tabID == gateway && $0.shellPID != nil }
+            }
+        }
+        TerminalTestSupport.send("\(HerdrLaunch.quote(TestSupport.tool("tmux"))) -u -L \(app.socket) -CC attach -t edge", to: origin)
+        try await app.wait { app.workspace.activeTab.flatMap { app.target($0) } != nil && app.runtime.views[app.workspace.activeTab!.id]?.surface != nil }
+        try await app.ready()
+        let attached = try XCTUnwrap(app.workspace.current)
+        XCTAssertEqual(attached.windows.count, 1)
+        let spaces = app.workspace.spaces.map(\.id)
+        var seen: [[UUID]] = []
+        let sampler = Task { @MainActor in
+            while !Task.isCancelled {
+                let ids = app.workspace.spaces.map(\.id)
+                if seen.last != ids { seen.append(ids) }
+                try? await Task.sleep(for: .milliseconds(5))
+            }
+        }
+        app.workspace.newTab()
+        try await app.wait { app.workspace.spaces.first { $0.id == attached.id }?.windows.count == 2 }
+        try await app.ready()
+        try await Task.sleep(for: .seconds(1))
+        sampler.cancel()
+        XCTAssertEqual(app.workspace.spaces.map(\.id), spaces, "The new tab must not add a space")
+        XCTAssertEqual(seen.filter { $0 != spaces }, [], "No frame may show another space")
+        XCTAssertEqual(app.workspace.selectedSpace, attached.id)
+        XCTAssertNil(app.runtime.helpers[.local]?.error)
+    }
+
     private func walkthrough(remote: Bool) async throws {
         let app = try TmuxWalkthrough(autoClose: true, liquidGlass: false)
         defer { app.close() }

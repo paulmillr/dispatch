@@ -142,7 +142,7 @@ final class HostStatisticsStore {
                 result.memoryUsed = value.memoryAvailable ? value.memoryUsed : nil; result.memoryTotal = value.memoryTotal
                 result.swapUsed = value.swapAvailable ? value.swapUsed : nil; result.uptime = value.uptime
                 result.receivedPerSecond = value.networkAvailable ? value.receivedPerSecond : nil; result.sentPerSecond = value.networkAvailable ? value.sentPerSecond : nil
-                result.processes = value.processes
+                result.processes = value.processes; result.processesPartial = value.processesPartial
             }
             if value.diskTotal > 0 {
                 result.volumes = [HostVolume(path: System.home.path, total: value.diskTotal, free: value.diskFree)] + value.volumes

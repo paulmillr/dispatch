@@ -100,6 +100,9 @@ pub(crate) struct Client {
     /// Creations in flight; a detach waits for them like c1654cc pendingDetach
     /// (TmuxCoordinator.swift:1219-1223) and then includes their panes.
     pub creating: usize,
+    /// Of those, the ones kills no longer wait for (close.rs `ordered`). Which creation settles is
+    /// not known, so these count down first: a kill may wait for one of them again, never for too few.
+    pub overdue: usize,
     pub detaching: bool,
     /// detach-client was sent; until tmux's %exit ends it, no new work may use this client.
     pub leaving: bool,

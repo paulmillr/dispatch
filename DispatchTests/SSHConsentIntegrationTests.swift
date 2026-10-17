@@ -137,6 +137,32 @@ final class SSHConsentIntegrationTests: XCTestCase {
         XCTAssertTrue((try? System.read(hooks)) == hooksBefore)
     }
 
+    /// Consent for an ssh typed in a local terminal waits for this Mac's helper's terminal creations (its tab may not
+    /// have its terminal yet), never for an SSH host's: a creation on a silent link held every local ssh.
+    func testLocalSSHConsentDoesNotWaitForAnSSHHostsTerminalCreation() async throws {
+        let app = try TmuxWalkthrough(server: false); defer { dismiss(app.window); app.close() }
+        let previous = app.runtime.ssh.presentIntegrationConsent
+        var scopes: [SSHIntegrationScope] = []
+        app.runtime.ssh.presentIntegrationConsent = { scope, _ in scopes.append(scope); return nil }
+        defer { app.runtime.ssh.presentIntegrationConsent = previous }
+        // An SSH host's helper whose link never answers, creating a terminal.
+        let incoming = Pipe(), outgoing = Pipe(), link = SSHConnectionID()
+        let silent = HelperConnection(read: incoming.fileHandleForReading, write: outgoing.fileHandleForWriting)
+        await HelperApp.shared.borrow(silent, for: link)
+        defer { silent.close(); Task { await HelperApp.shared.forget(link) } }
+        app.runtime.connect(link, terminal: 1, tab: System.uuid(), granted: [], host: .authenticated("silent"))
+        try XCTUnwrap(app.runtime.helpers[.remote(link)]).prepare(TerminalTab(directory: "/remote"))
+        let id = try XCTUnwrap(app.workspace.activeSurfaceID)
+        try await app.wait { app.runtime.views[id].map { !TerminalTestSupport.screen(terminal: $0).isEmpty } == true }
+        let terminal = try XCTUnwrap(app.runtime.views[id])
+        // Cancelled at the consent: ssh never runs (its ProxyCommand would fail without connecting anywhere).
+        TerminalTestSupport.send("ssh -o ProxyCommand=/usr/bin/false consent-fixture.invalid; printf 'LOCAL_%s:%s\\n' DONE \"$?\"", to: terminal)
+        try await TestSupport.eventually(timeout: .seconds(10), diagnostic: TerminalTestSupport.screen(terminal: terminal)) {
+            TerminalTestSupport.screen(terminal: terminal).contains("LOCAL_DONE:130")
+        }
+        XCTAssertEqual(scopes.map(\.destination), ["consent-fixture.invalid"])
+    }
+
     func testRememberedChoiceAndChangedConfigurationUseTheNativeSheet() async throws {
         let app = try TmuxWalkthrough(); defer { dismiss(app.window); app.close() }
         let store = SSHIntegrationPermissions(defaults: nil)

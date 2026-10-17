@@ -223,8 +223,9 @@ pub enum Job {
     /// - "stats.host": {local:bool} -> {boot,monotonic,cpu?,network?,memoryTotal?,memoryUsed?,
     ///   swapTotal?,swapUsed?,load?,uptime?}; cpu entries {name,busy,total,ticks?:[u32;4]},
     ///   network entries {name,received,sent}. Local ticks preserve native Mach wrap behavior.
-    /// - "stats.processes": {local:bool} -> {boot,monotonic,truncated,ps:string} locally;
-    ///   remote {boot,monotonic,truncated,processes:[{pid,start,name,cpuNanos,rss}]}.
+    /// - "stats.processes": {local:bool} -> {boot,monotonic,truncated,processes:[{pid,start?,
+    ///   name,cpu?,cpuNanos?,rss}]}, local or not. macOS rows carry cpu (/bin/ps's percentage),
+    ///   Linux rows start and cpuNanos (CPU time so far).
     /// - "stats.disks": {local:bool} -> {disks:[{identity:string,paths:[string],total,free}]};
     ///   identity is the native signed fsid pair, "word:word". No fabricated identity.
     Native {

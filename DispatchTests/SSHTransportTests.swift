@@ -210,6 +210,22 @@ final class SSHTransportTests: XCTestCase {
         }
     }
 
+    func testRemoteHelperCannotMakeTheAppBuildMoreValuesThanTheBudget() throws {
+        // A value per byte (arrays of `false`): far inside the frame limit, one body could build millions of them.
+        func array(_ count: Int, _ items: Data) -> Data {
+            var body = Data([7])
+            withUnsafeBytes(of: UInt32(count).littleEndian) { body.append(contentsOf: $0) }
+            return body + items
+        }
+        func falses(_ count: Int) -> Data { array(count, Data(repeating: 1, count: count)) }
+        let budget = HelperBinary.nodes, schema = Data(HelperBinary.schema)
+        XCTAssertEqual(try HelperBinary.decode(schema + falses(budget - 1)), .array(Array(repeating: .bool(false), count: budget - 1)))
+        // Past it: in one array, or in two that each fit alone.
+        for body in [falses(budget), array(2, falses(budget / 2) + falses(budget / 2))] {
+            XCTAssertThrowsError(try HelperBinary.decode(schema + body)) { XCTAssertEqual($0 as? HelperBinary.Failure, .limit) }
+        }
+    }
+
     func testBootstrapConcurrentUploadsRepairCorruptCacheAndRecoverFromPartialUpload() async throws {
         let fixture = try BootstrapFixture()
         defer { fixture.remove() }

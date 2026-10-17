@@ -312,6 +312,41 @@ impl Multiplexer for Herdr {
             );
             return;
         }
+        // A window into another workspace, or into a new one under the backend, moves whole, as a tmux window into
+        // another group does (tmux affinity.rs r#move); kept consistent with tmux: see actions::Target.
+        if let Ok((Kind::Tab, key)) = &source {
+            let tab = self
+                .snapshot
+                .tabs
+                .iter()
+                .find(|tab| &tab.key == key)
+                .unwrap();
+            let to = match &target {
+                Ok((Kind::Workspace, workspace)) if *workspace != tab.parent => {
+                    let tabs: Vec<_> = self
+                        .snapshot
+                        .tabs
+                        .iter()
+                        .filter(|other| &other.parent == workspace)
+                        .collect();
+                    let index = before
+                        .as_ref()
+                        .and_then(|(_, key)| tabs.iter().position(|other| &other.key == key));
+                    Some(actions::Target::Tab(
+                        workspace.clone(),
+                        index.unwrap_or(tabs.len()),
+                    ))
+                }
+                Err(_) if parent == self.backend => {
+                    Some(actions::Target::Workspace(tab.label.clone()))
+                }
+                _ => None,
+            };
+            if let Some(to) = to {
+                self.relocate(io, node, key.clone(), to, done);
+                return;
+            }
+        }
         match (source, target) {
             (Ok((kind, key)), Ok((target, parent))) => {
                 if kind == Kind::Terminal {

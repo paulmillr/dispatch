@@ -530,6 +530,77 @@ final class HerdrTests: XCTestCase {
         XCTAssertFalse(closed.contains(terminal))
     }
 
+    func testMovedSplitWindowKeepsItsServerSplitInNewAndExistingSpaces() async throws {
+        // A window moves whole, as a tmux window does (TmuxChatIntegrationTests): herdr moves no tab between
+        // workspaces, so its panes move one by one and the app sees one move. Like tmux's, it keeps its split, zoom,
+        // id and focused pane.
+        let herdr = try await HerdrSession(); defer { herdr.close() }
+        let workspace = herdr.app.workspace
+        let space = try XCTUnwrap(herdr.spaces.first).id
+        let first = try XCTUnwrap(HerdrTestSupport.panes(workspace, socket: herdr.socket).first)
+        try herdr.api("pane.split", ["target_pane_id": first.pane, "direction": "right", "ratio": 0.3, "focus": true])
+        try await TestSupport.eventually { workspace.current?.activeWindow?.terminals.count == 2 }
+        let window = try XCTUnwrap(workspace.current?.activeWindow)
+        let keys = try window.terminals.map { try XCTUnwrap(workspace.key(of: $0)) }
+        workspace.newTab()
+        try await TestSupport.eventually { workspace.current?.windows.count == 2 && workspace.activeTab?.isConnecting == false }
+        let other = try XCTUnwrap(workspace.current?.windows.first { $0.id != window.id }).id
+        // Where the server holds the window: its workspace, its place there, and its split (panes, dividers, zoom, and
+        // the pane it shows focused: the split one, while the server's focus is on the other window).
+        func held() throws -> (workspace: String, index: Int, split: [String])? {
+            let snapshot = try herdr.snapshot()
+            let tabs = Set(snapshot.panes.filter { keys.contains($0.terminal_id) }.map(\.tab_id))
+            guard tabs.count == 1, let id = tabs.first, let tab = snapshot.tabs.first(where: { $0.tab_id == id }),
+                  let layout = snapshot.layouts.first(where: { $0.tab_id == id }) else { return nil }
+            let terminals = Dictionary(uniqueKeysWithValues: snapshot.panes.map { ($0.pane_id, $0.terminal_id) })
+            let split = layout.panes.compactMap { terminals[$0.pane_id] }
+                + (layout.splits ?? []).map { "\($0.path ?? []) \($0.direction) \(String(format: "%.3f", $0.ratio))" }
+                + [layout.zoomed == true ? "zoomed" : "unzoomed", "focus " + (terminals[layout.focused_pane_id] ?? "none")]
+            let siblings = snapshot.tabs.filter { $0.workspace_id == tab.workspace_id }
+            return (tab.workspace_id, try XCTUnwrap(siblings.firstIndex { $0.tab_id == id }), split)
+        }
+        let before = try XCTUnwrap(held())
+        workspace.moveWindowToNewSpace(window.id)
+        try await TestSupport.eventually(diagnostic: herdr.shown) {
+            try held().map { $0.workspace != before.workspace } == true && workspace.current?.windows.map(\.id) == [window.id]
+        }
+        let moved = try XCTUnwrap(held())
+        XCTAssertEqual(moved.split, before.split, "The whole window moves with its split")
+        XCTAssertEqual(try herdr.snapshot().tabs.filter { $0.workspace_id == moved.workspace }.count, 1)
+        XCTAssertEqual(workspace.current?.windows.first?.terminals.map(\.id), window.terminals.map(\.id))
+        XCTAssertEqual(workspace.spaces.first { $0.id == space }?.windows.map(\.id), [other])
+        // Back to the first space, before the other window, zoomed: a move into an existing space of the session.
+        let pane = try XCTUnwrap(herdr.snapshot().panes.first { $0.terminal_id == keys[0] }).pane_id
+        try herdr.api("pane.zoom", ["pane_id": pane, "mode": "on"])
+        try await TestSupport.eventually { try held()?.split.contains("zoomed") == true }
+        let zoomed = try XCTUnwrap(held())
+        XCTAssertTrue(workspace.moveContainer(window.id, beside: other, edge: nil))
+        try await TestSupport.eventually(diagnostic: herdr.shown) {
+            try held()?.workspace == before.workspace && workspace.spaces.first { $0.id == space }?.windows.map(\.id) == [window.id, other]
+        }
+        let back = try XCTUnwrap(held())
+        XCTAssertEqual(back.index, 0)
+        XCTAssertEqual(back.split, zoomed.split, "The window moves back with its split and zoom")
+        XCTAssertEqual(try herdr.snapshot().workspaces.count, 1, "The emptied workspace closes")
+        XCTAssertNil(herdr.app.runtime.helpers[.local]?.error)
+    }
+
+    func testNoWaitEndsOnAMoveItsServerHasNotAnswered() async throws {
+        // A move shows at once, before its server answers; a refused one goes back. A wait that ended on the move
+        // as shown would pass whatever the server answers (a broken herdr window move passed that way).
+        let herdr = try await HerdrSession(); defer { herdr.close() }
+        let workspace = herdr.app.workspace
+        let initial = try XCTUnwrap(herdr.spaces.first).id
+        let window = try XCTUnwrap(workspace.current?.windows.first).id
+        try herdr.pause()
+        workspace.moveWindowToNewSpace(window)
+        XCTAssertNotEqual(workspace.current?.id, initial, "The moved window shows in a new space at once: \(herdr.shown)")
+        XCTAssertFalse(TestSupport.settled, "No wait ends while the server has not answered the move")
+        herdr.resume()
+        try await TestSupport.eventually(diagnostic: herdr.shown) { workspace.current?.windows.map(\.id) == [window] }
+        XCTAssertTrue(TestSupport.settled)
+    }
+
     func testUncertainMutationIgnoresObserverReadStartedBeforeFailure() async throws {
         // Which observer read may follow a lost reply is the herdr multiplexer's (moved). App half: a mutation
         // whose reply is lost shows the server's state afterwards and is never sent twice.

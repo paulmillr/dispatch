@@ -97,9 +97,14 @@
         }
     }
     public enum Failure: Error { case invalid, schema, limit }
+    /// The most values one body builds. Its length bounds them only at one per byte, each tens of bytes in memory: a
+    /// hostile helper's 12 MB frame (or longer chunked reply) built about 12 million. Real replies stay far below a
+    /// million (the largest recorded, a long chat session: about 14,000); a million costs about what one connection
+    /// may already buffer (4 frames).
+    public static let nodes = 1 << 20
     public static func decode(_ data: Data, schema names: Bool = true) throws -> Value {
         let bytes = [UInt8](data)
-        var at = 0
+        var at = 0, budget = nodes
         func take(_ count: Int) throws -> ArraySlice<UInt8> {
             guard count >= 0, count <= bytes.count - at else { throw Failure.invalid }
             defer { at += count }
@@ -123,7 +128,8 @@
             return symbols[Int(index)]
         }
         func read(_ depth: Int) throws -> Value {
-            guard depth > 0 else { throw Failure.limit }
+            guard depth > 0, budget > 0 else { throw Failure.limit }
+            budget -= 1
             switch try number(1) {
             case 0: return .null
             case 1: return .bool(false)
@@ -153,6 +159,8 @@
                 let count = try number(4)
                 guard count <= UInt64((bytes.count - at) / (tag == 7 ? 1 : 3))
                 else { throw Failure.invalid }
+                // Each item is a value: more than the budget has left never fits (nor is an array reserved for them).
+                guard count <= UInt64(budget) else { throw Failure.limit }
                 if tag == 7 {
                     return .array(try (0..<Int(count)).map { _ in try read(depth - 1) })
                 }
@@ -289,7 +297,8 @@ private final class Slot {
     }
     func append() -> Slot {
         let slot = Slot()
-        items = (items ?? []) + [slot]
+        items = items ?? []
+        items!.append(slot)
         return slot
     }
 }

@@ -392,9 +392,10 @@ final class HostCoordinator {
 
     /// A request from a new terminal can be read before the reply that gives its tab the terminal is handled (replay
     /// hands both over at once): attribution waits for the creations in flight, or no target has the process's tty.
+    /// Only this Mac's helper's: targets are its terminals alone, and a remote helper's creation (a silent link) must
+    /// not hold every local ssh.
     private func created() async {
-        guard let runtime else { return }
-        for helper in Array(runtime.helpers.values) { await helper.created() }
+        await runtime?.helpers[.local]?.created()
     }
 
     private func targets() -> [HostProcessTarget] {

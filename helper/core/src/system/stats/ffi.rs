@@ -161,25 +161,12 @@ pub(super) fn disk(path: &str) -> io::Result<Option<Disk>> {
     }))
 }
 
-pub(super) fn units() -> io::Result<[u64; 4]> {
-    #[cfg(target_os = "linux")]
-    let names = [2, 30]; // _SC_CLK_TCK / _SC_PAGESIZE.
-    #[cfg(target_os = "macos")]
-    let names = [3, 29];
+#[cfg(target_os = "linux")]
+pub(super) fn units() -> io::Result<[u64; 2]> {
     // SAFETY: sysconf has scalar arguments only.
-    let values = names.map(|name| unsafe { sysconf(name) });
-    #[cfg(target_os = "linux")]
+    let values = [2, 30].map(|name| unsafe { sysconf(name) }); // _SC_CLK_TCK / _SC_PAGESIZE.
     if values.iter().any(|value| *value <= 0) {
         return Err(invalid());
     }
-    #[cfg(target_os = "linux")]
-    let base = [1u32; 2];
-    #[cfg(target_os = "macos")]
-    let base = super::macos::timebase()?;
-    Ok([
-        values[0].max(0) as u64,
-        values[1].max(0) as u64,
-        base[0].into(),
-        base[1].into(),
-    ])
+    Ok(values.map(|value| value as u64))
 }

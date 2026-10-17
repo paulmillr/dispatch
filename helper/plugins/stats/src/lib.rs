@@ -10,11 +10,11 @@
 //!   order and preserve UInt32 components. Native workers omit failed fields independently;
 //!   an empty successful network list is []. Loopback is excluded. Local memory keeps
 //!   HostSampler's physicalMemory/Mach reclaimable-page calculation and systemUptime.
-//! - stats.processes remote: {boot:string,monotonic:f64,truncated:bool,
-//!   processes:[{pid:i32,start:string,name:string,cpuNanos:u64,rss:u64}]}.
+//! - stats.processes: {boot:string,monotonic:f64,truncated:bool,processes:[{pid:i32,
+//!   start?:string,name:string,cpu?:f64,cpuNanos?:u64,rss:u64}]}, local or not: one producer
+//!   per OS. macOS rows (/bin/ps) have cpu, a percentage; Linux rows (/proc) start and cpuNanos.
 //!   Keep c1654cc's birth verification, name sanitization, cross-user display and 4096/750ms
-//!   budgets. Denied/exited omissions are not truncation. Local: {boot:string,monotonic:f64,
-//!   truncated:false,ps:string}; ps is exact /bin/ps -axo pid=,pcpu=,rss=,comm= stdout.
+//!   budgets. Denied/exited omissions are not truncation.
 //!   Every collector failure surfaces as an error for local and remote requests.
 //! - stats.disks: {disks:[{identity:string|u64,paths:[string],total:u64,free:u64}]}.
 //!   String identity is the two signed32 fsid words joined by colon; packing into u64 is
@@ -22,7 +22,8 @@
 //!   Local workers keep home first, then existing visible/local mounted-volume filtering.
 //!
 //! Memory/swap tuples are (total,used). Remote CPU uses the aggregate ratio, local CPU the
-//! core mean. Local ps percentages are available immediately and may exceed 100.
+//! core mean. Process CPU is a percentage of one core, so it may exceed 100: macOS's is ps's
+//! running average, there at once; Linux's the growth of cpuNanos since the previous sample.
 pub mod native;
 
 use dispatch_helper_core::{
@@ -75,13 +76,10 @@ impl Call {
             Self::Processes(done) => {
                 let result = result.and_then(|v| {
                     let value = &v.root();
-                    if fixture
-                        && !local
-                        && let Some(time) = clock(value)
-                    {
+                    if fixture && let Some(time) = clock(value) {
                         rates.processes_at(value, time)
                     } else {
-                        rates.processes(value, local)
+                        rates.processes(value)
                     }
                 });
                 if reset && result.is_err() {

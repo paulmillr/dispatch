@@ -176,7 +176,7 @@ The token routes the request to a pane. If the token doesn't match any pane, Dis
 
 **What the helper reads**, depending on the grant:
 
-- **Stats:** CPU, memory, swap, load, uptime, network counters, and disk space for `/` and your home folder. It also reads a process table (pid, name, CPU, memory). On Linux this table covers every user's processes. Stats are sampled every 15 s while connected and every 2 s while the stats view is open; latency is pinged every 60 s in the background. On the Mac, stats are kept in memory for up to an hour and never written to disk.
+- **Stats:** CPU, memory, swap, load, uptime, network counters, and disk space for `/` and your home folder. It also reads a process table (pid, name, CPU, memory). It covers every user's processes: on macOS it comes from `/bin/ps`, on Linux from `/proc`. Stats are sampled every 15 s while connected and every 2 s while the stats view is open; latency is pinged every 60 s in the background. On the Mac, stats are kept in memory for up to an hour and never written to disk.
 - **Host identity:** sent with every connection. It is the machine ID (`/etc/machine-id` or `kern.uuid`), boot ID, uid, home folder, hostname, and OS/distribution.
 - **Processes**, for agent discovery: executable, full argument list, working directory, open files, and a short allowlist of environment variables. Agent processes are verified again (pid, start time, executable) before every operation.
 - **Files** (granted by Files, Git, or Chat): any regular file your remote account can read, by absolute path, with symlinks followed and no folder allowlist. Text reads are capped at 2 MB; byte reads continue to the end of the file unless the request gives a length.

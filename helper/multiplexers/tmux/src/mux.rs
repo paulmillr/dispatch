@@ -848,6 +848,7 @@ impl Multiplexer for Tmux {
     fn event(&mut self, io: &mut dyn Io, ui: &mut dyn Ui, event: Event) {
         let event = self.endpoints(io, event);
         if let Some(Event::Timer { at }) = &event {
+            self.overdue(io, *at);
             let resumed = std::mem::take(&mut *self.resumes.borrow_mut());
             for next in resumed {
                 next(self, io, true);

@@ -7,7 +7,6 @@ publish = false
 autotests = false
 
 [lib]
-test = false
 path = "src/lib.rs"
 
 

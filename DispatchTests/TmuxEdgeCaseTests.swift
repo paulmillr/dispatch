@@ -24,6 +24,49 @@ final class TmuxEdgeCaseTests: XCTestCase {
         try await restoreDeletedDetachedPane(partial: false, disconnect: true)
     }
 
+    func testNewTabAfterReattachingDetachedSessionAddsNoSpace() async throws {
+        try await newTabAfterReattach { app in
+            app.detachSession()
+            try await app.wait { !app.attached }
+        }
+    }
+
+    func testNewTabAfterReattachingDetachedWindowAddsNoSpace() async throws {
+        try await newTabAfterReattach { app in
+            _ = try await app.detach(try XCTUnwrap(app.workspace.current?.activeWindow))
+            try await app.wait { !app.attached }
+        }
+    }
+
+    /// A session the app already watches with every window hidden (detached work) is attached again by
+    /// typing; a new tab there (Cmd+T) is a tab of that space only, never also a space of the hidden view.
+    private func newTabAfterReattach(hide: (TmuxWalkthrough) async throws -> Void) async throws {
+        let app = try TmuxWalkthrough(); defer { app.close() }
+        try await app.attach(); try await app.ready()
+        try await hide(app)
+        app.workspace.newLocalSpace()
+        try await app.attach(); try await app.ready()
+        let attached = try XCTUnwrap(app.workspace.current)
+        let spaces = app.workspace.spaces.map(\.id)
+        var seen: [[UUID]] = []
+        let sampler = Task { @MainActor in
+            while !Task.isCancelled {
+                let ids = app.workspace.spaces.map(\.id)
+                if seen.last != ids { seen.append(ids) }
+                try? await Task.sleep(for: .milliseconds(5))
+            }
+        }
+        app.workspace.newTab()
+        try await app.wait { app.workspace.spaces.first { $0.id == attached.id }?.windows.count == attached.windows.count + 1 }
+        try await app.ready()
+        try await Task.sleep(for: .seconds(1))
+        sampler.cancel()
+        XCTAssertEqual(app.workspace.spaces.map(\.id), spaces, "The new tab must not add a space")
+        XCTAssertEqual(seen.filter { $0 != spaces }, [], "No frame may show another space")
+        XCTAssertEqual(app.visiblePanes.count, Set(app.visiblePanes).count, "A pane shown twice")
+        XCTAssertNil(app.error)
+    }
+
     func testDetachedRestoreRacingServerDeletionRemovesStalePane() async throws {
         let app = try TmuxWalkthrough(); defer { app.close() }
         _ = try app.server(["new-window", "-d", "/bin/sh"])
@@ -411,7 +454,9 @@ final class TmuxEdgeCaseTests: XCTestCase {
         try await PresentationTestSupport.chooseNewSpace(in: app.workspace)
         try await app.wait { app.workspace.current?.id != first.id }
         let plain = try XCTUnwrap(app.workspace.current)
-        XCTAssertFalse(plain.structured); XCTAssertNil(plain.backend)
+        // A plain space runs in no multiplexer: no backend, or this Mac's helper's native one.
+        XCTAssertFalse(plain.structured)
+        XCTAssertEqual(plain.backend.flatMap { app.workspace.helper(plain)?.kind(of: $0)?.name } ?? "native", "native")
         XCTAssertEqual(app.workspace.activeTab?.machine, .local)
         app.workspace.selectSpace(first.id)
         try await PresentationTestSupport.chooseNewSpace("New tmux space", in: app.workspace)
@@ -1045,6 +1090,11 @@ final class TmuxWalkthrough {
         controller.detachWindow(window.id)
         try await wait { self.workspace.detached.contains { !known.contains($0.id) } }
         return (try XCTUnwrap(workspace.detached.first { !known.contains($0.id) }), panes)
+    }
+
+    /// Control-mode clients attached to the test server.
+    func controlClients() throws -> Int {
+        try server(["list-clients", "-F", "#{client_control_mode}"]).split(separator: "\n").filter { $0 == "1" }.count
     }
 
     /// The test server's socket path.

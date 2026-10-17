@@ -50,14 +50,12 @@ final class ChatScrollPosition {
     /// A live row arriving at the followed bottom glides there with its fade instead of jumping.
     static let arrivalGlide: TimeInterval = 0.22
     private var arrivalExpectedAt = -Double.infinity
-    private var glide: (from: CGFloat, start: TimeInterval, link: CADisplayLink, fallback: DispatchWorkItem)?
+    private var glide: (from: CGFloat, start: TimeInterval, link: CADisplayLink)?
     /// SwiftUI's item scroll would land before the glide starts; hold it while one is pending or running.
     var glidesToBottom: Bool {
         let now = ProcessInfo.processInfo.systemUptime
         return glide != nil || now - arrivalExpectedAt < 0.3 || now - rowExpectedAt < 0.3
     }
-    /// Tests: a glide is running.
-    var isGliding: Bool { glide != nil }
     private var rowExpectedAt = -Double.infinity
     var hasContent: (() -> Bool)?
     var recoverViewport: ((Anchor?, Bool) -> Void)?
@@ -559,11 +557,7 @@ final class ChatScrollPosition {
             // out of phase with it, or faster than the display, scrolls and lays out the transcript again.
             let link = scroll.displayLink(target: GlideStep { [weak self] in self?.glideFrame() }, selector: #selector(GlideStep.step))
             link.add(to: .main, forMode: .common)
-            // A link that stops firing (the window ordered out, the display asleep) would hold the glide, and
-            // following with it, until the reader scrolls: the glide still ends on time (SidebarSlide's fallback).
-            let fallback = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.finishGlide() } }
-            DispatchQueue.main.asyncAfter(deadline: .now() + Self.arrivalGlide + 0.1, execute: fallback)
-            glide = (scroll.contentView.bounds.minY, now, link, fallback)
+            glide = (scroll.contentView.bounds.minY, now, link)
             return
         }
         adjusting = true
@@ -590,13 +584,7 @@ final class ChatScrollPosition {
         if progress >= 1 { cancelGlide() }
     }
     private func cancelGlide() {
-        glide?.link.invalidate(); glide?.fallback.cancel(); glide = nil
-    }
-    /// The glide's frames did not end it in time: at its destination now, as its last frame would be.
-    private func finishGlide() {
-        guard glide != nil else { return }
-        cancelGlide()
-        if pending == nil, followsBottom?() == true { pinToBottom() }
+        glide?.link.invalidate(); glide = nil
     }
     private func updateScrollbar() {
         guard let scroll, let document = scroll.documentView else { return }

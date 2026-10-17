@@ -121,6 +121,55 @@ final class HelperAppTests: XCTestCase {
         await fulfillment(of: [closed], timeout: 5)
     }
 
+    /// A chat call first awaits the screen its tab shows (`current`): the publication in flight and, when that one is
+    /// older, the next. An agent that redraws before each acknowledgement (a slow link) must not hold the call for its
+    /// whole burst, as the publishing loop did: it went on while newer screens came, and `current` awaited the loop.
+    @MainActor
+    func testCurrentScreenWaitsForAtMostTwoPublicationsWhileTheAgentRedraws() async throws {
+        let incoming = Pipe(), outgoing = Pipe(), link = SSHConnectionID()
+        let connection = HelperConnection(read: incoming.fileHandleForReading, write: outgoing.fileHandleForWriting)
+        let peer = HelperTransport(read: outgoing.fileHandleForReading, write: incoming.fileHandleForWriting)
+        await HelperApp.shared.borrow(connection, for: link)
+        var space = Space(name: "remote", directory: "/remote")
+        space.structure([TerminalTab(directory: "/remote")], selected: 0)
+        space.remote = link
+        let workspace = Workspace()
+        workspace.spaces = [space]
+        let helper = HelperWorkspace(workspace: workspace, renderer: nil, endpoint: .remote(link), host: .authenticated("remote"))
+        let screen = { @Sendable (frame: Int) in
+            HelperClient.Screen(terminal: 1, text: "frame \(frame)", cursor: .init(column: 0, row: 0), faint_tail: false)
+        }
+        final class Agent: @unchecked Sendable { var received: [String] = [], frame = 1 }
+        let agent = Agent()
+        var decoder = HelperWire.Decoder()
+        peer.start(receive: { bytes in
+            do {
+                try decoder.feed(bytes) { message in
+                    guard message.kind == .request, case .object(let body) = try HelperBinary.decode(message.body),
+                          body["method"] == .string("terminals.publish"), case .object(let params)? = body["params"],
+                          case .string(let text)? = params["text"] else { return }
+                    let ack = try HelperWire.encode(.init(kind: .response, id: message.id,
+                        body: HelperBinary.encode(.object(["result": .null]))))
+                    DispatchQueue.main.async {
+                        MainActor.assumeIsolated {
+                            agent.received.append(text)
+                            // The agent redraws before each acknowledgement, up to frame 20.
+                            if agent.frame < 20 { agent.frame += 1; helper.publish(screen(agent.frame)) }
+                            peer.send(ack)
+                        }
+                    }
+                }
+            } catch { XCTFail(String(describing: error)) }
+        }, closed: { _ in })
+        helper.publish(screen(0))
+        helper.publish(screen(1))
+        await helper.current(1)
+        // Frame 1, shown at the call, was replaced by frame 2 while frame 0 was in flight: frame 2 is the second.
+        XCTAssertEqual(agent.received, ["frame 0", "frame 2"])
+        helper.stop(); connection.close(); peer.close()
+        await HelperApp.shared.forget(link)
+    }
+
     func testSubmittedRequestsKeepOrderAndCompleteIndependently() async throws {
         let incoming = Pipe(), outgoing = Pipe()
         let connection = HelperConnection(read: incoming.fileHandleForReading, write: outgoing.fileHandleForWriting)

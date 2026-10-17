@@ -105,16 +105,24 @@ actor HostProcessWatcher {
     }
 
     /// What `ssh -G` resolves only reads configuration: an observation, asked whenever and as often as a probe asks, so
-    /// how often a run's probes see an ssh changes nothing recorded. Nil when it fails or takes longer than 2 s.
+    /// how often a run's probes see an ssh changes nothing recorded. Nil when it fails, takes longer than 2 s or prints
+    /// more than 1 MiB. Its output is read while it runs: one larger than the pipe's buffer would block it until the 2 s.
     private static func configuration(_ executable: String, _ arguments: [String]) -> String? {
         (try? System.observe("ssh.config", [executable] + arguments) { () -> String? in
-            let process = Process(), output = Pipe(), done = DispatchSemaphore(value: 0)
+            let process = Process(), output = Pipe()
             process.executableURL = URL(fileURLWithPath: executable); process.arguments = arguments
             process.standardInput = FileHandle.nullDevice; process.standardOutput = output; process.standardError = FileHandle.nullDevice
-            process.terminationHandler = { _ in done.signal() }
             try process.run()
-            guard done.wait(timeout: .now() + 2) == .success else { process.terminate(); return nil }
-            let data = output.fileHandleForReading.readDataToEndOfFile()
+            output.fileHandleForWriting.closeFile()
+            let deadline = DispatchWorkItem { if process.isRunning { process.terminate() } }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 2, execute: deadline)
+            defer { deadline.cancel() }
+            var data = Data()
+            while let bytes = try output.fileHandleForReading.read(upToCount: 65_536), !bytes.isEmpty {
+                guard data.count + bytes.count <= 1_048_576 else { process.terminate(); process.wait(); return nil }
+                data.append(bytes)
+            }
+            process.wait()
             return process.terminationStatus == 0 ? String(decoding: data, as: UTF8.self) : nil
         }) ?? nil
     }
