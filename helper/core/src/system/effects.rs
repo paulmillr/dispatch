@@ -319,8 +319,10 @@ impl Io for System {
             .ok_or(io::ErrorKind::OutOfMemory)?;
         let order = self.files.order(&self.section);
         // A job's args: what it asks for, as values (a native job's JSON input as its value
-        // tree). Encoded now: the job itself moves to its worker.
-        let encoded = {
+        // tree). Encoded now, and only for a capture or replay: the job itself moves to its worker.
+        let encoded = if !self.capture.enabled() && self.capture.replay.is_none() {
+            Vec::new()
+        } else {
                         fn object<'a>(name: &'static str, fields: Vec<(&'static str, Data<'a>)>) -> Data<'a> {
                 Data::Object([("job", Data::String(name))].into_iter().chain(fields).collect())
             }
@@ -441,7 +443,9 @@ impl Io for System {
                     )
                 })
         })();
-        self.record("submit", args(), &result, Data::Unsigned(id))?;
+        if self.capture.enabled() {
+            self.record("submit", args(), &result, Data::Unsigned(id))?;
+        }
         result?;
         self.serial = id;
         self.files.admit(&self.section);

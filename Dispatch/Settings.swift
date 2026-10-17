@@ -283,13 +283,16 @@ enum Home {
     }
 
     /// While testing, this process's own environment moves to the test home (HOME there, the test PATH, no
-    /// variables that move an agent's home): every process it starts, however, inherits it.
+    /// variables that move an agent's home): every process it starts, however, inherits it. Nor does it keep what
+    /// names this Mac or the account's login session (Xcode's run destination: the device's UDID and name; the
+    /// session's SSH agent socket): nothing a test runs needs them, and every recording would keep them.
     static func isolate() {
         guard System.testing else { return }
         try? FileManager.default.createDirectory(at: System.home, withIntermediateDirectories: true)
         setenv("HOME", System.home.path, 1)
         setenv("PATH", System.path, 1)
-        for name in ["CODEX_HOME", "CLAUDE_CONFIG_DIR", "PI_CODING_AGENT_DIR"] { unsetenv(name) }
+        for name in ["CODEX_HOME", "CLAUDE_CONFIG_DIR", "PI_CODING_AGENT_DIR", "RUN_DESTINATION_DEVICE_NAME",
+                     "RUN_DESTINATION_DEVICE_UDID", "RUN_DESTINATION_DEVICE_PLATFORM_IDENTIFIER", "SSH_AUTH_SOCK"] { unsetenv(name) }
     }
 }
 

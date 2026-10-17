@@ -434,9 +434,9 @@ Tests replay their recorded I/O by default and run live when nothing is recorded
 
 ```sh
 python3 test/xcode.py DispatchTests/ChatTests                      # replay where replays/ has a journal, live otherwise
-python3 test/xcode.py --capture investigation-01 DispatchTests/ChatTests   # record live tests, store the passed ones
-python3 test/xcode.py --capture investigation-02 --live DispatchTests/ChatTests   # record every test
-python3 test/xcode.py --replay investigation-01 DispatchTests/ChatTests    # replay only that run's journals
+python3 test/xcode.py --capture DispatchTests/ChatTests           # record live tests in build/captures, store the passed ones
+python3 test/xcode.py --capture --live DispatchTests/ChatTests    # record every test
+python3 test/xcode.py --replay DispatchTests/ChatTests            # replay only the journals in build/captures
 ```
 
 The corpus in `replays/` is a git submodule (`git submodule update --init replays`); without it only `--live` runs.

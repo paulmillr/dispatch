@@ -272,6 +272,7 @@ def run(args):
                 command(['xcodebuild', '-project', 'Dispatch.xcodeproj', '-scheme', 'Dispatch',
                          '-configuration', 'Release', '-derivedDataPath', str(products),
                          '-destination', 'platform=macOS', '-parallel-testing-enabled', 'NO',
+                         'SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) DISPATCH_BENCHMARK',
                          'ENABLE_TESTABILITY=YES', 'ENABLE_HARDENED_RUNTIME=NO',
                          'PRODUCT_BUNDLE_IDENTIFIER=yachts.dispatch.benchmark.$(PRODUCT_NAME:rfc1034identifier)',
                          'build-for-testing'], folder / 'ui-build.log')

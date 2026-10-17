@@ -14,7 +14,7 @@
 - **The corpus**: `replays/<TestFile>/<testName>/<key>.rpl.bz2`
   - `<TestFile>` is the Swift file declaring the test class; `<testName>` the test method.
   - A test's directory holds its app journal and all its helper captures (local and remote).
-  - `<key>` is a hash of what replay sees (records without the bookkeeping clock or wire version): the same content is one file.
+  - `<key>` is a hash of what replay sees (records without the bookkeeping clock or wire version): the same content is one file. A scrubbed corpus has random names instead ([capture_scrub.md](capture_scrub.md)); nothing reads a key from a name.
   - **One app journal per test for now.** A recording names its run's pids, seeds and temp paths, so without deduplication every live re-run would look like a new variant. `store` skips a test that already has one.
   - **The corpus is its own repository**, a git submodule at `replays/` (`scripts/split-replays.py` made it one). Its path never changes: recordings name `/tmp/dt-journal/checkout/replays`.
     - Get it: `git clone --recurse-submodules`, or `git submodule update --init replays` in a checkout. Without it `test/xcode.py` refuses to run (only `--live` runs) and the Debug build skips its corpus check with a warning.
@@ -23,6 +23,8 @@
 ## Common tasks
 
 Most work needs no full live run. Replaying every recording takes about 15 minutes, one class seconds. Run live only what you changed on purpose, record it, and replay the rest.
+
+**Recording everything again is the last resort**, for when no recording can replay at all (a new wire version, below). After any change, yours or merged, replay the corpus first: the replays that fail are exactly what changed. Read each failure, then record again only those tests, and only once you know why each one changed. Never guess that a change "probably touches everything": a fresh recording passes by construction, so recording everything hides exactly what the replay would have shown. When the recording format itself changes, convert the existing recordings instead of recording them again.
 
 - **Prefer changes that touch few recordings.** A change to what many tests do (startup requests every test sends, a timer every test runs, common helper behavior) changes many recordings: each one must be checked and recorded again, which is slow, and recordings that passed are what tells us the rest still works. Before such a change, look for a narrower one; when it is needed, make it on its own, not mixed with other work.
 
@@ -33,8 +35,8 @@ Most work needs no full live run. Replaying every recording takes about 15 minut
   - A test you changed on purpose, or a new test: delete its `replays/<TestFile>/<testName>/` (if any), then record it and replay that recording:
 
     ```sh
-    python3 test/xcode.py --capture my-change DispatchTests/ChatTests/testNew
-    python3 test/xcode.py --replay my-change DispatchTests/ChatTests/testNew
+    python3 test/xcode.py --capture DispatchTests/ChatTests/testNew
+    python3 test/xcode.py --replay DispatchTests/ChatTests/testNew
     ```
 
 - **I work on the helper only**
@@ -48,8 +50,11 @@ Most work needs no full live run. Replaying every recording takes about 15 minut
   - Helper replays passing means the helper answers every recorded request as before, so the app's recordings still hold.
   - A capture that fails: the helper now does something else for that request (`report.jsonl` names the record). If that is the change you meant, the test that recorded it is stale: record that app test again. Helper captures are only recorded through app tests (`--capture`).
 
+- **I merged other changes** (upstream commits, another branch)
+  - Same as any change: replay every recording on the merged code (app and helper). The failures list what the merged changes do differently; read each before recording it again. Tests outside what the merge touched must still pass: a failure there is a regression of the merge, not a stale recording.
+
 - **I fix a bug** (the cause is in the app, the helper, or both)
-  - Reproduce it from a recording first: a live failure recorded with `--capture RUN` replays with `--replay RUN`, the same way every time ([Investigating a test that fails live sometimes](#investigating-a-test-that-fails-live-sometimes)).
+  - Reproduce it from a recording first: a live failure recorded with `--capture` replays with `--replay`, the same way every time ([Investigating a test that fails live sometimes](#investigating-a-test-that-fails-live-sometimes)).
   - App fix: replay the test's class, then every app recording. Tests that now fail are exactly the ones whose recorded behavior the fix changed: check each failure is the intended change, then record those tests again.
   - Helper fix: replay every helper capture. The failing captures name the tests the fix changes: record those again (live, `--capture`), then replay them in the app.
   - Both: helper first (its failing captures list the affected tests), then record those tests again and replay all app recordings.
@@ -68,8 +73,8 @@ Most work needs no full live run. Replaying every recording takes about 15 minut
 
   ```sh
   git -C replays rm -r -q .            # start empty; the corpus repository's history keeps the old one
-  python3 test/xcode.py --capture all-01 --live --suite exhaustive
-  python3 test/xcode.py --replay all-01 --suite exhaustive
+  python3 test/xcode.py --capture --live --suite exhaustive
+  python3 test/xcode.py --replay --suite exhaustive
   ```
 
   - Tests that fail the second command are stale in a way the first run did not reveal (UI timing it decided differently): read their failure.
@@ -95,24 +100,24 @@ Most work needs no full live run. Replaying every recording takes about 15 minut
 - **Record** live tests and add the passed ones to the corpus.
 
   ```sh
-  python3 test/xcode.py --capture investigation-01 DispatchTests/ChatTests
-  python3 test/xcode.py --capture investigation-02 --live DispatchTests/ChatTests   # record tests already in the corpus too
+  python3 test/xcode.py --capture DispatchTests/ChatTests
+  python3 test/xcode.py --capture --live DispatchTests/ChatTests   # record tests already in the corpus too
   ```
 
-  - The whole run stays in `build/captures/<run>/` for debugging, failed tests included:
-    - `raw/<Class.test>-<pid>-<start>.rpl.bz2`: local helper captures; `raw/remote/<Class.test>/<host>/...`: remote ones.
-    - `app/<Class.test>/<uuid>.rpl.bz2`: app journals.
-    - `raw/cases.jsonl`: each test's start, end and outcome (the runner's, not a capture format).
+  - Everything stays in `build/captures/` for debugging, failed tests included, laid out as the corpus: `<TestFile>/<testName>/` holds the test's app journal (`<uuid>.rpl.bz2`), its local helper captures (`helper-<pid>-<start>.rpl.bz2`) and a folder per SSH host with that host's.
+    - `cases.jsonl`: each test's start, end and outcome; `tests.json`: each test class's file (the runner's, not a capture format).
+    - Its path is the same in every capture (test processes see it, and recordings hold it), so it names no run: `--capture` refuses a `build/captures` that holds an earlier capture. Move that one away to keep it (and back to replay it).
+    - On an SSH host a test's helpers write into `~/.cache/dispatch-capture/<digest of its staging folder>/`, the same folder in every capture of that test; after the test its new files come over (a copied file is acknowledged there, never deleted). Files left by a capture whose collection failed come along with the next capture of that test: they link to no journal, so `store` refuses the test ("not linked"). Capture it again.
   - Then `capture store` takes each passed test: every helper capture must replay on the current helper, and `capture check` must find its app and helper ends agreeing and linked. Only then are its files placed in `replays/`.
   - A test that does not pass these checks is listed and stays in staging only; the run reports it.
 
 - **Verify one run** by replaying only its recordings (nothing runs live).
 
   ```sh
-  python3 test/xcode.py --replay investigation-01 DispatchTests/ChatTests
+  python3 test/xcode.py --replay DispatchTests/ChatTests
   ```
 
-  - The run's tests go to a scratch corpus under `build/app-replay/<id>/`, failed ones included (they reproduce their failure); a selected test without a journal there fails.
+  - The capture's tests go to a scratch corpus under `build/app-replay/<id>/`, failed ones included (they reproduce their failure); a selected test without a journal there fails.
 
 - **Building checks the helper against the corpus.** A Debug build, right after building the helper, replays every helper capture in `replays/` on it.
   - Any failure fails the build and names the captures; the replay results stay in `build/helper-rust/replay-results-<pid>/`.
@@ -159,7 +164,7 @@ Most work needs no full live run. Replaying every recording takes about 15 minut
 - **App <-> helper check**: both sides of every connection carried the same bytes.
 
   ```sh
-  "$HELPER" capture check build/captures/<run>/app/<Class.test> build/captures/<run>/raw/<Class.test>-*.rpl.bz2 build/captures/<run>/raw/remote/<Class.test>
+  "$HELPER" capture check build/captures/<TestFile>/<testName>
   ```
 
   - Pairs app lifetimes with helper stdio, spawned children with their helpers, socket connects with accepts, hook senders with the hook server's messages (by pid, or by the datagram's bytes).
@@ -189,16 +194,18 @@ Most work needs no full live run. Replaying every recording takes about 15 minut
   "$HELPER" capture inspect replays/ChatTests/testX/<key>.rpl.bz2 --from 280 --limit 20   # around a replay message's record 290
   "$HELPER" capture value results/000003.mismatch/mismatch.value
   "$HELPER" capture key replays/ChatTests
+  "$HELPER" capture diff old/<key>.rpl.bz2 new/<key>.rpl.bz2   # or two directories of captures
   ```
 
   - `inspect` prints one line per record: its number (app replay messages name the same `record N`), milliseconds since the capture started, section, operation, what was asked, then `->` and what came back (`null`, sequence 0 and no error print nothing). A record holding several wire frames prints one line per frame, so `grep` finds a method together with its record. Our own frames print decoded (`request 45 terminals.attach {size: ...}`, `notify 45 terminal.output {...}`, `cancel 45`). A frame split over several reads prints whole on the record where it completes; the reads before it show `response 3 continues (22530 of 65544 bytes)`. A streamed reply prints its chunks as `chunk 3 #0 (65536 bytes)` and the whole message, decoded, with its last frame (`response 3 {...} (streamed)`). Other bytes as text when UTF-8, as the value when they are one of our plain values (a hook question's body), else hex (only bytes nothing here knows the structure of: hashes, random bytes, OS structs, binary files). `--from N` starts at record N. It says `complete` at the footer, or how to see more.
   - A capture without its footer is cut (its process ended mid-write or is still running).
+  - `diff` compares two captures on what `inspect` decodes: records aligned on their section and operation (lifetime numbers aside), then each one's sequence, error, frames, fields and values; text and bytes word by word (a terminal escape sequence and a character beyond ASCII are words of their own). The same change anywhere is one group: how often, in how many pairs of captures, and its first place (both files and record numbers, section, operation, `args`/`output` and the path inside: frame, field, list index). Not compared: the clock and the wire version (as `key`). Two directories: the captures of each test directory are paired by their records whatever their names; the rest are listed unpaired. It fails when anything differs. Both sides are read with this helper: recordings of another wire version need their own helper's `inspect` (below).
 
 - **Search** every text and bytes value, keys included (a literal, case-sensitive substring):
 
   ```sh
   "$HELPER" capture grep '/Users/' replays
-  "$HELPER" capture grep 'Authorization' --limit 50 build/captures/run-01
+  "$HELPER" capture grep 'Authorization' --limit 50 build/captures
   ```
 
 - **Replay helper captures**
@@ -239,7 +246,7 @@ After an app or helper change (or an upstream merge) a replay that fails says: t
   "$HELPER" capture inspect replays/ChatTests/testX/<key>.rpl.bz2 --from 280 --limit 40   # record 300 named by the failure
   ```
 
-- **Compare the old recording with a new one** of the same test (`--capture` it live, then find its file in `build/captures/<run>/`). Numbers that differ in every run (record numbers, times, lifetimes, request ids, pids, uuids) are masked so only real differences remain:
+- **Compare the old recording with a new one** of the same test (`--capture` it live, then find its file in `build/captures/<TestFile>/<testName>/`): `"$HELPER" capture diff old/<key>.rpl.bz2 new/<key>.rpl.bz2` (ids, pids and uuids that differ in every run show as changes, grouped). Recorded with another wire version (a merge changed the protocol), each side needs its own helper's `inspect`; numbers that differ in every run (record numbers, times, lifetimes, request ids, pids, uuids) are masked so only real differences remain:
 
   ```sh
   norm() { "$1" capture inspect "$2" --limit 100000000 | sed -E 's/^[0-9]+ [0-9.]+ //; s#app/[0-9]+#app/L#g;
@@ -256,9 +263,9 @@ After an app or helper change (or an upstream merge) a replay that fails says: t
 
 A test that fails only now and then is a race in the app or the test, often one users can hit too. A recording turns it into a repeatable failure:
 
-- **Keep the failing run's recordings.** Run with `--capture RUN`: `build/captures/RUN/` keeps every test's journal and helper captures, failed ones included.
-- **Reproduce it.** `python3 test/xcode.py --replay RUN DispatchTests/Class/testName` replays the failed test from its own journal: the app gets the same inputs in the same order, so it takes the same path and fails the same way, every time.
-- **Find the difference.** Compare with a passing recording of the same test (another run's `build/captures/`, or `replays/`):
+- **Keep the failing run's recordings.** Run with `--capture`: `build/captures/` keeps every test's journal and helper captures, failed ones included.
+- **Reproduce it.** `python3 test/xcode.py --replay DispatchTests/Class/testName` replays the failed test from its own journal: the app gets the same inputs in the same order, so it takes the same path and fails the same way, every time.
+- **Find the difference.** Compare with a passing recording of the same test (an earlier capture you moved away, or `replays/`):
   - `capture inspect` both journals; the terminal output, the app's requests (`out.wire request N method {...}`) and the files it consumed show where the runs part. Terminal bytes are split differently in every run: compare what a stream carried, not how it was chunked.
   - The app's own log lines of both runs (the XCTest output) show which code path it took.
 - **Ask the app why.** Add log lines around the suspected decision, rebuild and replay the failed recording again. Log lines change nothing the app sends or asks, so the recording still applies: the replay prints the reason in seconds instead of waiting for the race to happen again live.
@@ -280,6 +287,7 @@ A test that fails only now and then is a race in the app or the test, often one 
   - Work a test does live on purpose, in replay too (real shells running the app's wrappers: NativeSSHEnvironmentTests), runs inside `AppReplay.live`: the journal does not see it, and without it the watchdog calls the app idle while it runs (mix52: a shell that took 3 s once). A test runs a process to its end with `TestSupport.live` (inside `AppReplay.live`) and starts one beside it with `TestSupport.start`; one whose result the recording depends on is recorded instead (`System.run`, `System.Child`, `TestSupport.fixture`, so replay starts nothing). `test/xcode.py` refuses `.run()` or `.waitUntilExit()` in test sources outside TestSupport and lists the lines.
   - A fake the app awaits in place of remote work (`SSHStatisticsStoreTests.Provider`'s `sample`) takes its time through `System.sleep`, never `Task.sleep`, as the helper round trip it stands in for is recorded. On wall time two providers' calls end in another order in replay, and identical timers (each provider's next `metrics` wait) take their recorded wakes in recorded order: one account's 20 ms loop got another's 15 s timer and never sampled again (mix42b).
   - A wait does not end while the sidebar slides (`TestSupport.eventually` also checks no split's `sidebarAnimating`): the slide runs on wall time, so layout read or changed during it differs between runs.
+  - What a wait's condition asks the outside world (a fixture's `tmux list-panes`, any query made while `System.polling`) is a read, asked as often as the test checks: replay answers it with what capture saw as far as the app got, never by count, and the wait's recorded asks are not owed. How often a test checks is wall time (a check refuses while the sidebar slides): counted, the HostNative host-move test ran out of recorded asks in most replays.
   - Fixture code that does real file work in replay (copying helper resources into a test server's root) must not rely on its recorded cleanup: replay answers the cleanup from the recording, so the next replay of the same recording finds the leftovers.
 - Every `System.sleep` (and `SSHTimeout.run`) names its timer (`System.sleep(for: interval, "poll")`): a recording knows it by file and name, so editing other lines of the file keeps the recordings that use it (a line number did not: one added line above a polling timer failed every test that polls).
 - In the app, a timer that bounds I/O (`SSHTimeout`) sleeps through `System.sleep`: a replay times out exactly where its capture did, never on its own clock. A sleep the capture's caller cancelled (the operation finished first) ends in replay only when its caller cancels it: its recorded cancellation holds nothing and reaches no one (identical timers running at once cannot take each other's).

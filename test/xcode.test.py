@@ -1,4 +1,6 @@
 """Runner admission tests; no native interaction captures are invented here."""
+import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -19,7 +21,10 @@ class Corpus(unittest.TestCase):
         for mode in ('default', 'capture', 'live', 'replay'):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory(dir=parent) as directory:
                 root = Path(directory)
-                events, environments = [], []
+                # A test class declared in a file named otherwise: staging is per file, as the corpus.
+                (root / 'DispatchTests').mkdir()
+                (root / 'DispatchTests/ExampleTests.swift').write_text('final class Example: XCTestCase {\n    func testOne() {}\n}\n')
+                events, environments, stores = [], [], []
 
                 def run(command, **kwargs):
                     if command[0] == 'xcodebuild':
@@ -27,13 +32,17 @@ class Corpus(unittest.TestCase):
                         environments.append(kwargs['env'])
                     elif command[1:3] == ['capture', 'store']:
                         events.append('store')
+                        stores.append(command[3:])
                         return subprocess.CompletedProcess(command, 0, stdout='stored 1 new captures\n')
                     elif command[-1].endswith('release.py'):
                         events.append('release')
                     return subprocess.CompletedProcess(command, 0)
 
                 # The runner's fixed journal root (/tmp/dt-journal) is the Mac's; this test keeps its own.
-                with patch.object(xcode, 'ensure_build', side_effect=lambda *a, **k: events.append('build') or root / 'plan'), \
+                # The account's own locale (made up), as a shell hands it over.
+                private = {'LANG': 'xx_YY.UTF-8', 'LANGUAGE': 'xx_YY:en', 'LC_ALL': 'xx_YY.UTF-8', 'LC_TIME': 'xx_YY.UTF-8',
+                           '__CF_USER_TEXT_ENCODING': '0x1F5:0x0:0x7'}
+                with patch.dict(os.environ, private), patch.object(xcode, 'ensure_build', side_effect=lambda *a, **k: events.append('build') or root / 'plan'), \
                      patch.object(xcode, 'JOURNAL', str(root / 'dt')), \
                      patch.object(xcode.subprocess, 'run', side_effect=run), \
                      patch.object(xcode.subprocess, 'check_output', return_value='Xcode'), \
@@ -41,14 +50,28 @@ class Corpus(unittest.TestCase):
                      patch.object(xcode.codex_fixture, 'resources', return_value={}), \
                      patch.object(xcode, 'fingerprint', return_value='inputs'), \
                      patch.object(xcode, 'report', return_value=timing):
-                    xcode.execute(root, selection['selected'], selection=selection, capture_run='captured' if mode == 'capture' else None,
+                    xcode.execute(root, selection['selected'], selection=selection, capture=mode == 'capture',
                                   replays=root / 'scratch' if mode == 'replay' else None, required=mode == 'replay', live=mode == 'live')
-                variables = {key: environments[0].get('TEST_RUNNER_DISPATCH_' + key) for key in ('REPLAYS', 'LIVE', 'REPLAY_REQUIRED', 'TEST_CAPTURE')}
+                variables = {key: environments[0].get('TEST_RUNNER_DISPATCH_' + key)
+                             for key in ('REPLAYS', 'LIVE', 'REPLAY_REQUIRED', 'TEST_CAPTURE', 'CAPTURE', 'APP_CAPTURE')}
                 # Tests see the checkout through the root's link: recorded paths are the same on every Mac.
                 self.assertEqual(variables, {'REPLAYS': str(root / 'dt/checkout' / ('scratch' if mode == 'replay' else 'replays')),
                                              'LIVE': '1' if mode == 'live' else None, 'REPLAY_REQUIRED': '1' if mode == 'replay' else None,
-                                             'TEST_CAPTURE': '1' if mode == 'capture' else None})
+                                             'TEST_CAPTURE': '1' if mode == 'capture' else None,
+                                             # One staging root, no run in its path: every case writes <TestFile>/<test>/ in it.
+                                             'CAPTURE': str(root / 'dt/checkout/build/captures/helper-%p.rpl.bz2') if mode == 'capture' else None,
+                                             'APP_CAPTURE': None})
+                staged = root / 'build/captures'
+                self.assertEqual((json.loads((staged / 'tests.json').read_text()) if mode == 'capture' else None, stores),
+                                 ({'Example': 'ExampleTests'}, [[str(staged), str(root / 'replays')]]) if mode == 'capture' else (None, []))
                 self.assertEqual(events, ['build', 'xctest'] + (['store'] if mode == 'capture' else []) + (['release'] if mode != 'replay' else []))
+                # Tests run in UTC and one basic locale: agents write the machine's time zone into what is recorded (Codex's
+                # context), and every recorded environment holds the locale (the helper's, each command's).
+                uid = '0x%X:0x0:0x0' % os.getuid()
+                locale = {key: value for key, value in environments[0].items()
+                          if key.removeprefix('TEST_RUNNER_') in ('TZ', 'LANG', 'LANGUAGE', '__CF_USER_TEXT_ENCODING') or 'LC_' in key}
+                self.assertEqual(locale, {'TEST_RUNNER_TZ': 'UTC', 'LANG': 'en_US.UTF-8', 'TEST_RUNNER_LANG': 'en_US.UTF-8',
+                                          '__CF_USER_TEXT_ENCODING': uid, 'TEST_RUNNER___CF_USER_TEXT_ENCODING': uid})
 
 
 class Machine(unittest.TestCase):
