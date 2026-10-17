@@ -67,8 +67,8 @@ fn main() -> std::io::Result<()> {
     if first("renderer") {
         return dispatch_helper_core::system::renderer::run();
     }
-    if first("uninstall-hooks") {
-        std::process::exit(uninstall::run(&argv[1..])?);
+    if first("uninstall-hooks") || first("uninstall") {
+        std::process::exit(uninstall::run(&argv[1..], first("uninstall"))?);
     }
     if first("exit-status") {
         let session = argv

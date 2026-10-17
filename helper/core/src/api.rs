@@ -775,8 +775,8 @@ pub struct State {
     pub service_tier: Option<String>,
     /// Native collaboration mode, including the acknowledged /plan setting.
     pub mode: Option<String>,
-    /// Running subagents' types, oldest first (Claude SubagentStart until SubagentStop). They
-    /// can outlive the turn that started them (background agents).
+    /// Running subagents' types, oldest first (Claude and Codex SubagentStart until
+    /// SubagentStop). They can outlive the turn that started them (background agents).
     pub agents: Vec<String>,
 }
 

@@ -669,6 +669,54 @@ final class ChatTests: XCTestCase {
         XCTAssertEqual(handlers.filter { $0["command"] as? String == "echo mine" }.map { $0["timeout"] as? Int }, [7])
     }
 
+    /// An older opt-in (approvals installed, the subagent events not yet) audits as installed with the edit that
+    /// appends the missing events; installing appends only those, after the existing groups.
+    func testOlderOptInAuditsInstalledAndAppendsSubagentEvents() async throws {
+        _ = try await codex(false)
+        defer { try? FileManager.default.removeItem(at: codexHooks) }
+        _ = try await codex(true)
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with: System.read(codexHooks)) as? [String: Any])
+        var hooks = try XCTUnwrap(root["hooks"] as? [String: Any])
+        let ours = try XCTUnwrap(hooks["SubagentStart"])
+        hooks["SubagentStart"] = nil; hooks["SubagentStop"] = nil
+        root["hooks"] = hooks
+        try JSONSerialization.data(withJSONObject: root).write(to: codexHooks)
+        let audit = try await codex(nil)
+        XCTAssertEqual(audit.installed, true, "An earlier opt-in stays installed")
+        XCTAssertTrue(audit.edits.contains { $0.before != $0.after }, "The audit shows the upgrade")
+        _ = try await codex(true)
+        let upgraded = try XCTUnwrap(JSONSerialization.jsonObject(with: System.read(codexHooks)) as? [String: Any])
+        let after = try XCTUnwrap(upgraded["hooks"] as? [String: Any])
+        XCTAssertEqual(after["SubagentStart"] as? NSArray, ours as? NSArray)
+        XCTAssertEqual(after["SubagentStop"] as? NSArray, ours as? NSArray)
+        XCTAssertEqual(after["Stop"] as? NSArray, hooks["Stop"] as? NSArray, "Existing groups are never edited")
+        let current = try await codex(nil)
+        XCTAssertFalse(current.edits.contains { $0.before != $0.after }, "Nothing is left to append")
+    }
+
+    /// The fresh-install answer (LocalAgentsConsent): no turns this Mac's agent hooks off without writing any agent
+    /// settings; yes installs the integrations of the agents found, leaving the others and the opt-in Pi alone.
+    func testLocalAgentsAnswerInstallsFoundAgentsOrTurnsHooksOff() async throws {
+        let claude = System.home.appendingPathComponent(".claude/settings.json")
+        let pi = System.home.appendingPathComponent(".pi/agent/extensions/dispatch-chat.js")
+        for file in [codexHooks, claude, pi] { try? FileManager.default.removeItem(at: file) }
+        defer { for file in [codexHooks, claude, pi] { try? FileManager.default.removeItem(at: file) } }
+        let off = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
+        off.adoptLocalAgents(nil)
+        try await TestSupport.eventually(timeout: .seconds(10)) {
+            off.helperLaunches?.isEmpty == false && off.helperLaunches!.allSatisfy { !off.localHooksAllowed($0.key) }
+        }
+        await off.integrationChanges?.value
+        XCTAssertFalse([codexHooks, claude, pi].contains { System.exists($0) }, "Answering no writes no agent settings")
+        let on = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
+        on.adoptLocalAgents(["claude", "pi"])
+        try await TestSupport.eventually(timeout: .seconds(10)) { on.hookStatus("claude") != .off }
+        await on.integrationChanges?.value
+        XCTAssertTrue(System.exists(claude))
+        XCTAssertFalse(System.exists(codexHooks), "An agent not found is left alone")
+        XCTAssertFalse(System.exists(pi), "Pi's extension stays opt-in")
+    }
+
     /// A hooks.json the integration cannot read as hooks is never rewritten: the install fails instead.
     func testInvalidConfigurationRemainsUntouched() async throws {
         _ = try await codex(false)

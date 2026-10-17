@@ -374,7 +374,7 @@ enum SSHChatTestSupport {
         try await Task.sleep(for: .milliseconds(250)); TerminalTestSupport.key(17, "t", terminal)
         try await eventually {
             let config = try? await contents("codex-home/config.toml")
-            return (config?.components(separatedBy: "trusted_hash").count ?? 0) == 11
+            return (config?.components(separatedBy: "trusted_hash").count ?? 0) == 13
         }
         TerminalTestSupport.key(53, "\u{1b}", terminal)
         try await TestSupport.eventually { AgentModelMenu.containsModel(TerminalTestSupport.viewport(terminal: terminal), slug: "dispatch-fixture default", name: "Dispatch fixture default") }

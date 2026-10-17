@@ -20,6 +20,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private var settingsKeyMonitor: Any?
     private var appearanceObservation: NSKeyValueObservation?
     private var termination: Task<Void, Never>?
+    /// Settings' "Remove Dispatch from this Mac": run once the runtime stopped (true also deletes the app's data).
+    var removalOnQuit: Bool?
     let hostSessionStore: HostSessionStore?
     private var closingNativeTabs: Set<UUID> = []
     private var savedHostSession = false
@@ -168,6 +170,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         window.isReleasedWhenClosed = false
         window.delegate = self
         window.center()
+        LocalAgentsConsent.noteLaunch(frame: "Dispatch.Local.MainWindow")
         window.setFrameAutosaveName("Dispatch.Local.MainWindow")
         window.contentView = NSHostingView(rootView: MainView(workspace: workspace, settings: settings, controller: self))
         buildMenus()
@@ -175,6 +178,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         DispatchQueue.main.async { runtime.focusActive() }
+        let window = window!
+        Task { await LocalAgentsConsent.start(over: window, chat: runtime.chat) }
     }
 
     func applicationDidBecomeActive(_ notification: Notification) { TerminalRuntime.shared.setActive(true) }
@@ -198,7 +203,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
     func requestTermination(reply: @escaping @MainActor (Bool) -> Void) -> NSApplication.TerminateReply {
         guard termination == nil else { return .terminateLater }
-        guard confirmClosing(Array(workspace.allTabIDs), detaching: true) else { return .terminateCancel }
+        guard confirmClosing(Array(workspace.allTabIDs), detaching: true) else { removalOnQuit = nil; return .terminateCancel }
         saveHostSession()
         // Unmount terminal views before stopping the runtime, then keep AppKit
         // alive until private SSH masters and their mailbox paths are released.
@@ -218,6 +223,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         Task { await cleanup.value; deadline.cancel(); finish.finish() }
         termination = Task {
             for await _ in finished {}
+            // Dispatch's helpers here have stopped, so the removal is not refused or undone.
+            if let data = removalOnQuit { await DispatchRemoval.finishLocal(data: data) }
             reply(true)
         }
         return .terminateLater

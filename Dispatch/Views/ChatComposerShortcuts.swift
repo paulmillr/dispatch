@@ -50,6 +50,59 @@ struct ChatComposerShortcuts: View {
     ]
 }
 
+/// The agent's running subagents beside its activity, while they run (they can outlive their turn): their
+/// count, and their types on click.
+struct ChatComposerAgents: View {
+    @Environment(\.chatTheme) private var theme
+    let session: ChatSession
+    @State private var details = false
+
+    struct Kind: Identifiable, Equatable {
+        let id: String
+        let count: Int
+    }
+
+    /// Types in the order they started, each once with how many run.
+    static func kinds(_ agents: [String]) -> [Kind] {
+        var order: [String] = [], counts: [String: Int] = [:]
+        for agent in agents {
+            if counts[agent] == nil { order.append(agent) }
+            counts[agent, default: 0] += 1
+        }
+        return order.map { Kind(id: $0, count: counts[$0] ?? 0) }
+    }
+
+    static func title(_ count: Int) -> String { count == 1 ? "1 agent running" : "\(count) agents running" }
+
+    var body: some View {
+        let agents = session.subagents
+        if session.active && !agents.isEmpty {
+            Button { details.toggle() } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "person.2").imageScale(.small)
+                    Text("\(agents.count)").monospacedDigit()
+                }.foregroundStyle(theme.muted).contentShape(Rectangle())
+            }.buttonStyle(.plain)
+                .font(theme.typography.detail)
+                .help(Self.title(agents.count))
+                .accessibilityLabel(Self.title(agents.count))
+                .accessibilityIdentifier("chat-agents")
+                .popover(isPresented: $details) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(Self.title(agents.count)).foregroundStyle(theme.ink)
+                        ForEach(Self.kinds(agents)) { kind in
+                            Text(kind.count > 1 ? "\(kind.id) ×\(kind.count)" : kind.id)
+                        }
+                    }.font(theme.typography.detail).foregroundStyle(theme.muted)
+                        .padding(14).frame(minWidth: 200, alignment: .leading)
+                        // On glass the popover's own system glass shows through instead of the sidebar fill.
+                        .background(LiquidGlassStore.shared.active ? Color.clear : theme.sidebar)
+                        .preferredColorScheme(theme.isDark ? .dark : .light)
+                }
+        }
+    }
+}
+
 /// Keep animation ticks in the footer, outside the transcript and native editor.
 struct ChatComposerActivity: View {
     @Environment(\.chatTheme) private var theme

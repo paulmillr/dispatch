@@ -317,6 +317,7 @@ struct ChatView: View {
                         HStack(spacing: 12) {
                             modelControls(compactEffort: hasActivity).fixedSize().focusedOnly(focused)
                             ChatComposerActivity(session: session, active: focused || agentWorking).fixedSize()
+                            ChatComposerAgents(session: session).fixedSize()
                         }
                     }.scrollIndicators(.hidden).frame(height: max(24, theme.typography.detailLineHeight))
                     composerStop
@@ -361,6 +362,7 @@ struct ChatView: View {
     private var composerActivity: some View {
         HStack(spacing: 8) {
             ChatComposerActivity(session: session, active: focused || agentWorking)
+            ChatComposerAgents(session: session)
             composerStop
         }
     }
