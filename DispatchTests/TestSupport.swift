@@ -522,7 +522,7 @@ enum Corpus {
               let file = files[parts[1]] else { return nil }
         let directory = root.appendingPathComponent(file).appendingPathComponent(parts[2])
         let urls = ((try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? [])
-            .filter { $0.lastPathComponent.hasSuffix(".rpl.bz2") }.sorted { $0.path < $1.path }
+            .filter { url in [".rpl.zst", ".rpl.bz2"].contains { url.lastPathComponent.hasSuffix($0) } }.sorted { $0.path < $1.path }
         for url in urls {
             switch try AppReplay.journal(url) {
             case true?: return url

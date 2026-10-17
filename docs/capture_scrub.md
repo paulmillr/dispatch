@@ -20,7 +20,7 @@
   ```
 
   - Replay with the current helper: a capture replays on the latest helper or is dropped (`capture prune`, docs/replay.md). Keep `review/` out of anything you publish.
-  - `grep` and `replace` read the captures `--jobs N` at a time (default: every core). With 4 jobs, `grep` over 324 MB of bzip2 takes under a minute at about 1.1 GB of memory; `replace` over 383 MB took about 11 minutes (mostly compressing again).
+  - `grep` and `replace` read the captures `--jobs N` at a time (default: every core). With 4 jobs, `grep` over 324 MB of bzip2 takes under a minute at about 1.1 GB of memory; `replace` over 383 MB of bzip2 took about 11 minutes (mostly compressing again); its output is zstd, as the corpus keeps it, which compresses far faster.
 
 - **List what a run may record: `test/leak.py`.** It takes the same arguments as `test/run.sh` and prints a needles file draft:
 
@@ -111,15 +111,15 @@
   - **Hashes follow**: for every value of its own `replace` changed (a command's output, a file), the SHA-256 of it before (lowercase hex) is replaced everywhere by the SHA-256 of what it became. Our code hashes text it reads (an SSH configuration's fingerprint is the SHA-256 of `ssh -G` output): in replay the app hashes the replaced text, and the original's hash, which confirms a guess of the private text, is gone. It prints how many hashes it followed. A hash of built-up text (parts joined, lines filtered) is not followed: the app replay fails on it; capture that scenario again with non-private values.
     - **Ids hashed from part of a value are the limit.** The helper ids Codex records by the SHA-256 of a transcript line or a prompt, and keys Pi's history by its session header line. A value scrubbed inside such a line changes the id the replay makes, so the check fails, and the recorded id, a hash of the original line, confirms a guess of the value. Keep such values out of the capture (tests run with `TZ=UTC`: Codex writes the time zone into its lines) or leave them as recorded (dates in Codex transcripts).
   - First every helper capture replays as recorded (`review/attempt-1.replay-original/`), then the rewritten ones (`review/attempt-1.replay-candidate/`). It prints each capture the scrub broke (`BROKEN BY THE SCRUB`) with the replay's reason: the record and op it stopped at, and its mismatch file (`"$HELPER" capture value FILE`). A capture that does not replay before the scrub either is `NOT CHECKED`. Either exits non-zero.
-  - **Last, every output file gets a random name** in its directory. A stored capture is named by its content key, a hash of the original's records: kept for a changed capture, it would confirm any guess at what the scrub replaced. Until that step (and on any failure) the output files keep their input names, so the reports above name the same files as the input.
+  - **Last, every output file gets a random name** in its directory (`.rpl.zst`: the output is zstd, as the corpus keeps it). A stored capture is named by its content key, a hash of the original's records: kept for a changed capture, it would confirm any guess at what the scrub replaced. Until that step (and on any failure) the output files keep their input names, so the reports above name the same files as the input.
   - A needle or pattern in a record's section or op is refused: those are names the helper itself chose.
   - App journals get the same substitutions, but only their app tests can replay them: run those tests (on the Mac) before relying on them.
 
-- **Check with plain tools too.** Captures are bzip2 around our binary records, with no hex or base64 layer of ours: `bzcat` and `grep` see every literal needle but those inside the encodings above.
+- **Check with plain tools too.** Captures are bzip2 (as recorded) or zstd (in the corpus) around our binary records, with no hex or base64 layer of ours: `zstd -dc --long=27` (or `bzcat`) and `grep` see every literal needle but those inside the encodings above.
 
   ```sh
   grep -v -e '^#' -e '^$' review/needles.txt | cut -f1 > review/plain.txt
-  find replays -name '*.rpl.bz2' -exec bzcat {} + | LC_ALL=C grep -aoFf review/plain.txt | sort | uniq -c
+  find replays -name '*.rpl.zst' -exec zstd -dcq --long=27 {} + | LC_ALL=C grep -aoFf review/plain.txt | sort | uniq -c
   ```
 
   - Before the scrub it counts each needle; after it, it must print nothing (but the values kept with `value<TAB>value`).

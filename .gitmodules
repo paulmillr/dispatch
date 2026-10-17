@@ -1,0 +1,3 @@
+[submodule "replays"]
+	path = replays
+	url = git@github.com:paulmillr/dispatch-replays.git

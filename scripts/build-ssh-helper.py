@@ -181,7 +181,7 @@ def verify(target_dir):
     """The helper just built replays every helper capture in replays/ (the corpus) or the build fails:
     a capture either replays on the latest helper or is dropped (`capture prune`), never silently."""
     corpus = ROOT / "replays"
-    if not any(corpus.rglob("*.rpl.bz2")):
+    if not any(corpus.rglob("*.rpl.zst")) and not any(corpus.rglob("*.rpl.bz2")):
         # The corpus is a git submodule; a checkout without it builds, unchecked.
         print("warning: no replay corpus in " + str(corpus) + " (git submodule update --init replays); the helper is not checked against it", flush=True)
         return

@@ -1,11 +1,14 @@
-//! The capture file: bzip2 around length-prefixed frames. A header names the layer (helper or
+//! The capture file: bzip2 (live captures) or zstd (the replay corpus, capture/zstd.rs) around length-prefixed frames. A header names the layer (helper or
 //! app) and the helper wire version; each record is one I/O row; a footer counts the records.
 //! bzip2's checksums refuse a damaged file and the footer a cut one: a file is whole only when it
 //! ends with a footer that counts every record before it. A checkpoint (before exec) writes a
-//! footer and ends the bzip2 member; later records continue in a new member.
+//! footer and ends the bzip2 member (zstd frame); later records continue in a new one. A reader tells the two by
+//! their magic bytes.
 //! Args and output are wire values without the schema's names (wire::body::encode_plain):
 //! nothing inside is JSON, hex or base64.
-use super::bzip2::{Decoder, Encoder};
+use super::bzip2;
+#[cfg(dispatch_zstd)]
+use super::zstd;
 use std::io::{self, Read, Write};
 
 const MAGIC: &[u8; 8] = b"DCAPTURE";
@@ -13,6 +16,8 @@ const VERSION: u32 = 1;
 const RECORD: u8 = 0;
 const INVALID: u8 = 254;
 const FOOTER: u8 = 255;
+/// A zstd frame's first bytes (0xFD2FB528, little-endian); a bzip2 stream starts "BZh".
+const ZSTD: [u8; 4] = [0x28, 0xb5, 0x2f, 0xfd];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Layer {
@@ -53,16 +58,56 @@ fn blob(out: &mut Vec<u8>, bytes: &[u8]) -> io::Result<()> {
     Ok(())
 }
 
+enum Encoder<W: Write> {
+    Bzip2(bzip2::Encoder<W>),
+    #[cfg(dispatch_zstd)]
+    Zstd(zstd::Encoder<W>),
+}
+impl<W: Write> Encoder<W> {
+    fn write_all(&mut self, bytes: &[u8]) -> io::Result<()> {
+        match self {
+            Self::Bzip2(encoder) => encoder.write_all(bytes),
+            #[cfg(dispatch_zstd)]
+            Self::Zstd(encoder) => encoder.write_all(bytes),
+        }
+    }
+    fn checkpoint(&mut self) -> io::Result<()> {
+        match self {
+            Self::Bzip2(encoder) => encoder.checkpoint(),
+            #[cfg(dispatch_zstd)]
+            Self::Zstd(encoder) => encoder.checkpoint(),
+        }
+    }
+    fn finish(self) -> io::Result<W> {
+        match self {
+            Self::Bzip2(encoder) => encoder.finish(),
+            #[cfg(dispatch_zstd)]
+            Self::Zstd(encoder) => encoder.finish(),
+        }
+    }
+}
+
 pub struct Writer<W: Write> {
     output: Encoder<W>,
     rows: u64,
 }
 impl<W: Write> Writer<W> {
+    /// A live capture: bzip2, which every helper can write.
     pub fn new(output: W, header: &Header) -> io::Result<Self> {
-        let mut writer = Self {
-            output: Encoder::new(output, 9)?,
-            rows: 0,
-        };
+        Self::start(Encoder::Bzip2(bzip2::Encoder::new(output, 9)?), header)
+    }
+    /// A replay corpus file: zstd, which only a macOS helper with the capture tool has (helper/core/build.rs).
+    pub fn zstd(output: W, header: &Header) -> io::Result<Self> {
+        #[cfg(dispatch_zstd)]
+        return Self::start(Encoder::Zstd(zstd::Encoder::new(output)?), header);
+        #[cfg(not(dispatch_zstd))]
+        {
+            let _ = (output, header);
+            Err(io::Error::new(io::ErrorKind::Unsupported, "zstd captures need a macOS helper with the capture tool"))
+        }
+    }
+    fn start(output: Encoder<W>, header: &Header) -> io::Result<Self> {
+        let mut writer = Self { output, rows: 0 };
         let mut frame = MAGIC.to_vec();
         frame.extend_from_slice(&VERSION.to_le_bytes());
         frame.push(header.layer as u8);
@@ -112,6 +157,40 @@ impl<W: Write> Writer<W> {
         frame.extend_from_slice(reason.as_bytes());
         self.frame(&frame)?;
         self.output.finish()
+    }
+}
+
+/// The compressed input with its first bytes, read to tell its format, put back in front.
+type Peeked<R> = io::Chain<io::Cursor<Vec<u8>>, R>;
+
+enum Decoder<R: Read> {
+    Bzip2(bzip2::Decoder<Peeked<R>>),
+    #[cfg(dispatch_zstd)]
+    Zstd(zstd::Decoder<Peeked<R>>),
+}
+impl<R: Read> Decoder<R> {
+    fn new(mut input: R, limit: usize) -> io::Result<Self> {
+        let mut magic = Vec::new();
+        (&mut input).take(4).read_to_end(&mut magic)?;
+        let zstd = magic == ZSTD;
+        let input = io::Cursor::new(magic).chain(input);
+        #[cfg(dispatch_zstd)]
+        if zstd {
+            return Ok(Self::Zstd(zstd::Decoder::new(input, limit)?));
+        }
+        if zstd {
+            return Err(invalid("a zstd capture (the replay corpus): only a macOS helper with the capture tool reads it"));
+        }
+        Ok(Self::Bzip2(bzip2::Decoder::new(input, limit)?))
+    }
+}
+impl<R: Read> Read for Decoder<R> {
+    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+        match self {
+            Self::Bzip2(decoder) => decoder.read(out),
+            #[cfg(dispatch_zstd)]
+            Self::Zstd(decoder) => decoder.read(out),
+        }
     }
 }
 

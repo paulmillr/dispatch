@@ -324,7 +324,7 @@ fn replace_names_every_output_file_at_random() {
     for (dir, records) in [("in/T/a", lists(&ROWS, 40, 30)), ("in/T/a", lists(&ROWS, 40, 30)[..2].to_vec()), ("in/T/b", socket("fakeco"))] {
         let file = root.join(dir).join("new.rpl.bz2");
         write(&file, &records);
-        std::fs::rename(&file, root.join(dir).join(format!("{}.rpl.bz2", key(&file).unwrap()))).unwrap();
+        std::fs::rename(&file, root.join(dir).join(format!("{}.rpl.zst", key(&file).unwrap()))).unwrap();
     }
     std::fs::write(root.join("needles.txt"), "fakeco\n").unwrap();
     let path = |name: &str| root.join(name).to_str().unwrap().to_string();
@@ -342,11 +342,18 @@ fn replace_names_every_output_file_at_random() {
     let inputs = files("in");
     let outputs = ["one", "two"].map(|out| -> Result<_, String> {
         run(&["replace", &path("in"), &path(out), "--needles", &path("needles.txt")].map(Into::into)).map_err(|error| error.to_string())?;
+        // Written as the corpus keeps captures: zstd.
+        for file in captures(&root.join(out)).map_err(|error| error.to_string())? {
+            let magic = std::fs::read(&file).map_err(|error| error.to_string())?[..4].to_vec();
+            if magic != [0x28, 0xb5, 0x2f, 0xfd] {
+                return Err(format!("{} is not zstd", file.display()));
+            }
+        }
         files(out)
     });
     std::fs::remove_dir_all(&root).unwrap();
     let (inputs, [one, two]) = (inputs.unwrap(), outputs.map(Result::unwrap));
-    let random = |name: &str| name.len() == 64 + ".rpl.bz2".len() && name.ends_with(".rpl.bz2")
+    let random = |name: &str| name.len() == 64 + ".rpl.zst".len() && name.ends_with(".rpl.zst")
         && name[..64].bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'));
     let shape = |files: &[(&str, String, Vec<trace::Record>, String)]| {
         files.iter().map(|(dir, name, records, _)| (dir.to_string(), random(name), records.clone())).collect::<Vec<_>>()
@@ -355,8 +362,8 @@ fn replace_names_every_output_file_at_random() {
     let expected: Vec<_> = shape(&one).into_iter().map(|(dir, _, records)| (dir, true, records)).collect();
     assert_eq!((shape(&one), shape(&two), one.iter().map(|file| file.0).collect::<Vec<_>>()), (expected.clone(), expected, vec!["T/a", "T/a", "T/b"]));
     // Nothing of a name comes from content: not the input's name (its key), not the output's key, not the other run's.
-    let taken: Vec<String> = inputs.iter().flat_map(|file| [file.1.clone(), format!("{}.rpl.bz2", file.3)])
-        .chain(one.iter().map(|file| format!("{}.rpl.bz2", file.3))).chain(two.iter().map(|file| file.1.clone())).collect();
+    let taken: Vec<String> = inputs.iter().flat_map(|file| [file.1.clone(), format!("{}.rpl.zst", file.3)])
+        .chain(one.iter().map(|file| format!("{}.rpl.zst", file.3))).chain(two.iter().map(|file| file.1.clone())).collect();
     assert_eq!(one.iter().filter(|file| taken.contains(&file.1)).count(), 0);
 }
 

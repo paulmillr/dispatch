@@ -12,6 +12,7 @@
 //!                          sent are the bytes the other side read; every capture linked)
 //! capture store STAGE REPLAYS [--failed]   (a capture's passed tests into the corpus; --failed: its failed ones too, unchecked)
 //! capture prune REPLAYS [--dry-run]   (drop corpus helper captures that no longer replay)
+//! capture repack REPLAYS [--jobs N]   (every bzip2 capture of the corpus as zstd: the same records and name, `.rpl.zst`)
 //! Options go anywhere after the command.
 use dispatch_helper_core::{
     hash::Sha256,
@@ -2034,7 +2035,7 @@ fn pass(file: &Path, matcher: &Matcher, patterns: &[Hit], replacements: &[Vec<u8
     let mut writer = match output {
         Some(output) => {
             std::fs::DirBuilder::new().recursive(true).mode(0o700).create(output.parent().unwrap())?;
-            Some(trace::Writer::new(File::options().write(true).create_new(true).mode(0o600).open(output)?, &header)?)
+            Some(trace::Writer::zstd(File::options().write(true).create_new(true).mode(0o600).open(output)?, &header)?)
         }
         None => None,
     };
@@ -2314,7 +2315,7 @@ fn replace(directory: &str, out: &str, list: Vec<(Vec<u8>, Option<Vec<u8>>)>, pa
         let mut bytes = [0; 32];
         io::Read::read_exact(&mut random, &mut bytes)?;
         let name: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
-        std::fs::rename(&file, file.with_file_name(name + ".rpl.bz2"))?;
+        std::fs::rename(&file, file.with_file_name(name + ".rpl.zst"))?;
     }
     Ok(())
 }
@@ -2560,6 +2561,43 @@ fn check(paths: &[PathBuf], out: &mut dyn io::Write) -> io::Result<Checked> {
     Ok(Checked { different: failed, unlinked })
 }
 
+/// `file` (a live capture: bzip2) written to `target` as the corpus keeps it: zstd, whose long window stores a payload
+/// recorded again and again (a helper binary uploaded many times) once. The same records, so the same key; one footer.
+fn corpus(file: &Path, target: &Path) -> io::Result<()> {
+    let (mut reader, header) = trace::Reader::new(File::open(file)?, usize::MAX)?;
+    let mut writer = trace::Writer::zstd(File::options().write(true).create_new(true).mode(0o600).open(target)?, &header)?;
+    for _ in 0.. {
+        let Some(record) = reader.next()? else { break };
+        writer.push(&record)?;
+    }
+    writer.finish()?.sync_all()
+}
+
+/// Every bzip2 capture under `replays` replaced by its zstd form (`corpus`), named as before but `.rpl.zst`; the
+/// zstd file must hold the same records (its key) before the bzip2 one goes.
+fn repack(replays: &Path, jobs: usize) -> io::Result<()> {
+    let files: Vec<PathBuf> = captures(replays)?.into_iter().filter(|file| file.to_string_lossy().ends_with(".rpl.bz2")).collect();
+    let (mut before, mut after) = (0, 0);
+    for result in parallel(&files, jobs, |file| -> io::Result<(u64, u64)> {
+        let target = file.with_extension("zst");
+        let partial = file.with_extension(format!("zst.{}.partial", std::process::id()));
+        corpus(file, &partial)?;
+        if key(file)? != key(&partial)? {
+            std::fs::remove_file(&partial)?;
+            return Err(io::Error::other(format!("{}: repacked records differ", file.display())));
+        }
+        std::fs::rename(&partial, &target)?;
+        let sizes = (file.metadata()?.len(), target.metadata()?.len());
+        std::fs::remove_file(file)?;
+        Ok(sizes)
+    }) {
+        let (bzip2, zstd) = result?;
+        (before, after) = (before + bzip2, after + zstd);
+    }
+    println!("repacked {} captures: {:.1} MB of bzip2 as {:.1} MB of zstd", files.len(), before as f64 / 1e6, after as f64 / 1e6);
+    Ok(())
+}
+
 /// An app journal (its header's layer).
 fn app(file: &Path) -> bool {
     File::open(file).and_then(|file| trace::Reader::new(file, usize::MAX)).is_ok_and(|(_, header)| header.layer == trace::Layer::App)
@@ -2567,7 +2605,8 @@ fn app(file: &Path) -> bool {
 
 /// Stores a capture's passed tests (STAGE/cases.jsonl) in the corpus: what a test wrote in STAGE/<TestFile>/<test>/ (its
 /// app journal and every helper capture, a remote host's in a folder of its own; STAGE/tests.json names each test class's
-/// file) becomes REPLAYS/<TestFile>/<test>/<key>.rpl.bz2, once each of its helper captures replays on this helper and its
+/// file) becomes REPLAYS/<TestFile>/<test>/<key>.rpl.zst (compressed again: `corpus`), once each of its helper captures
+/// replays on this helper and its
 /// files agree (`check`). Failed tests stay in the staging only; `failed` places them too, as recorded and unchecked (a
 /// capture's own replay: they reproduce their failure). False: a passed test was not stored.
 fn store(stage: &Path, replays: &Path, failed: bool) -> io::Result<bool> {
@@ -2636,13 +2675,13 @@ fn store(stage: &Path, replays: &Path, failed: bool) -> io::Result<bool> {
         }
         std::fs::create_dir_all(&target)?;
         for (file, key) in files.iter().zip(&keys) {
-            let destination = target.join(format!("{key}.rpl.bz2"));
-            if destination.exists() {
+            let destination = target.join(format!("{key}.rpl.zst"));
+            if destination.exists() || target.join(format!("{key}.rpl.bz2")).exists() {
                 present += 1;
                 continue;
             }
             let partial = target.join(format!(".{}.partial", std::process::id()));
-            std::fs::copy(file, &partial)?;
+            corpus(file, &partial)?;
             std::fs::rename(&partial, &destination)?;
             placed += 1;
         }
@@ -2872,6 +2911,11 @@ pub fn run(arguments: &[std::ffi::OsString]) -> io::Result<()> {
             }
             Ok(())
         }
+        "repack" => {
+            let jobs = jobs(&mut args)?;
+            let [replays] = &args[..] else { return Err(usage()) };
+            repack(Path::new(replays), jobs)
+        }
         "prune" => {
             let dry = flag(&mut args, "--dry-run");
             let [replays] = &args[..] else { return Err(usage()) };
@@ -2900,7 +2944,7 @@ pub fn run(arguments: &[std::ffi::OsString]) -> io::Result<()> {
     }
 }
 
-const USAGE: &str = "usage: dispatch-helper capture replay DIR [--output DIR] [--timeout SECONDS] [--completion required] | inspect FILE [--from N] [--limit N] | diff A B [--limit N] [--jobs N] | value FILE | grep NEEDLE PATH... [--limit N] [--jobs N] | grep PATH... [--needles FILE] [--values SHAPE]... [--limit N] [--jobs N] | replace DIR OUT [--needles FILE] [--uuids] [--ips] [--jobs N] | key PATH... | check PATH... | store STAGE REPLAYS [--failed] | prune REPLAYS [--dry-run]   (options go anywhere after the command)";
+const USAGE: &str = "usage: dispatch-helper capture replay DIR [--output DIR] [--timeout SECONDS] [--completion required] | inspect FILE [--from N] [--limit N] | diff A B [--limit N] [--jobs N] | value FILE | grep NEEDLE PATH... [--limit N] [--jobs N] | grep PATH... [--needles FILE] [--values SHAPE]... [--limit N] [--jobs N] | replace DIR OUT [--needles FILE] [--uuids] [--ips] [--jobs N] | key PATH... | check PATH... | store STAGE REPLAYS [--failed] | prune REPLAYS [--dry-run] | repack REPLAYS [--jobs N]   (options go anywhere after the command)";
 
 #[cfg(test)]
 #[path = "capture.test.rs"]

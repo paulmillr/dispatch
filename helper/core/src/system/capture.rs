@@ -1,6 +1,8 @@
 //! Capture writes use one bounded disk queue; they never block the reactor. The file is the
 //! binary capture format (capture/trace.rs): typed values in bzip2, certified by its footer.
 mod bzip2;
+#[cfg(dispatch_zstd)]
+mod zstd;
 pub mod trace;
 pub mod screen;
 pub mod views;

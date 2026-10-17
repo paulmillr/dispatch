@@ -13,8 +13,9 @@ settings:
     ENABLE_HARDENED_RUNTIME: YES
     OTHER_LDFLAGS: ["-lc++"]
     OTHER_SWIFT_FLAGS: ["-Xcc", "-Wno-incomplete-umbrella"]
-    # CBzip2: the system bzip2 library's module (the app journal's capture files).
-    SWIFT_INCLUDE_PATHS: ["$(SRCROOT)/Vendor/Bzip2"]
+    # CBzip2: the system bzip2 library's module (the app journal's capture files). CZstd: the replay corpus's
+    # decoder (target Zstd).
+    SWIFT_INCLUDE_PATHS: ["$(SRCROOT)/Vendor/Bzip2", "$(SRCROOT)/Vendor/Zstd"]
     # `./run.sh --prod` sets YES: the shipped app is stripped (its symbols stay in the dSYM). Off for
     # other Release builds, whose app hosts the tests (BUNDLE_LOADER needs its symbols).
     DISPATCH_STRIP_APP: NO
@@ -56,6 +57,21 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: yachts.dispatch.termapple
         SWIFT_VERSION: "5.0"
         SWIFT_STRICT_CONCURRENCY: minimal
+  # Zstandard's decoder (Vendor/Zstd/PROVENANCE.md): Debug app replays read the corpus (zstd) with it. Only
+  # Debug code calls it, so a Release link takes nothing from the archive. Optimized in every configuration:
+  # the corpus is hundreds of megabytes expanded.
+  Zstd:
+    type: library.static
+    platform: macOS
+    sources:
+      - path: Vendor/Zstd/lib/common
+      - path: Vendor/Zstd/lib/decompress
+    settings:
+      base:
+        HEADER_SEARCH_PATHS: ["$(SRCROOT)/Vendor/Zstd/lib"]
+        GCC_PREPROCESSOR_DEFINITIONS: ["XXH_NAMESPACE=ZSTD_"]
+        GCC_OPTIMIZATION_LEVEL: "2"
+        GCC_WARN_INHIBIT_ALL_WARNINGS: YES
   Dispatch:
     type: application
     platform: macOS
@@ -112,6 +128,8 @@ targets:
         embed: false
       - target: TermApple
         embed: false
+      - target: Zstd
+        embed: false
       - sdk: AppKit.framework
       - sdk: Carbon.framework
       - sdk: CoreText.framework
@@ -150,7 +168,7 @@ aggregateTargets:
       - name: Build portable SSH helpers
         script: bash "$SRCROOT/scripts/build-ssh-helper.sh" --build-only
         basedOnDependencyAnalysis: false
-        inputFiles: ["$(SRCROOT)/helper", "$(SRCROOT)/scripts/build-ssh-helper.sh", "$(SRCROOT)/scripts/build-ssh-helper.py", "$(SRCROOT)/scripts/setup-ssh-rust.py"]
+        inputFiles: ["$(SRCROOT)/helper", "$(SRCROOT)/Vendor/Zstd", "$(SRCROOT)/scripts/build-ssh-helper.sh", "$(SRCROOT)/scripts/build-ssh-helper.py", "$(SRCROOT)/scripts/setup-ssh-rust.py"]
         outputFiles: ["$(SRCROOT)/build/helper-rust/bin/darwin-universal", "$(SRCROOT)/build/helper-rust/bin/linux-aarch64", "$(SRCROOT)/build/helper-rust/bin/linux-x86_64", "$(SRCROOT)/build/helper-rust/bin/version", "$(SRCROOT)/build/helper-rust/bin/protocol-version"]
 schemes:
   Dispatch:

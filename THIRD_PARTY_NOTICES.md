@@ -64,3 +64,10 @@ header, license, and a documented backport of upstream number-parser fix
 `1e4b0d830506d99fd94d364613538fbcb72bde35`. The original license is bundled in
 `ThirdPartyLicenses/yyjson-MIT.txt`.
 Source: https://github.com/ibireme/yyjson/tree/0.12.0.
+
+## Zstandard
+
+Dispatch's test tooling uses Zstandard 1.5.7, copyright Meta Platforms, Inc. and affiliates, under the BSD license,
+to compress the replay corpus (the app's Debug replays and the helper's capture tool; no Release build includes it).
+`Vendor/Zstd/` holds the unmodified library sources and license (see `Vendor/Zstd/PROVENANCE.md`). The license is
+bundled in `ThirdPartyLicenses/Zstandard-BSD.txt`. Source: https://github.com/facebook/zstd/tree/v1.5.7.

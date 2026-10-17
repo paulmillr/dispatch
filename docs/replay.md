@@ -9,9 +9,10 @@
   - One **helper capture** per helper process the test started: its startup facts, every I/O request and its result, its end (return status, handoff or signal).
   - Helpers on SSH hosts (the Mac's own test sshd, the Linux test host) write their captures there; each test collects them when it ends.
   - The file format is the same for both: bzip2 around length-prefixed frames, binary values (`helper/core/src/system/capture/trace.rs`). Bytes stay bytes.
+  - The corpus keeps them as zstd instead (`.rpl.zst`, level 9, `--long=27`: `Vendor/Zstd/PROVENANCE.md`): its 128 MiB window stores a payload recorded again and again (the bootstrap tests upload the helper binary many times) once, where bzip2's 900 KB blocks store it every time. `capture store` compresses again as it stores; `capture repack replays` converts bzip2 files already there. Every reader tells the two by their first bytes; `zstd -dc --long=27` expands one.
   - Captures hold unredacted I/O: never publish one without [capture_scrub.md](capture_scrub.md).
 
-- **The corpus**: `replays/<TestFile>/<testName>/<key>.rpl.bz2`
+- **The corpus**: `replays/<TestFile>/<testName>/<key>.rpl.zst`
   - `<TestFile>` is the Swift file declaring the test class; `<testName>` the test method.
   - A test's directory holds its app journal and all its helper captures (local and remote).
   - `<key>` is a hash of what replay sees (records without the bookkeeping clock or wire version): the same content is one file. A scrubbed corpus has random names instead ([capture_scrub.md](capture_scrub.md)); nothing reads a key from a name.
@@ -190,11 +191,11 @@ Most work needs no full live run. Replaying every recording takes about 15 minut
 - **Read a capture**
 
   ```sh
-  "$HELPER" capture inspect replays/ChatTests/testX/<key>.rpl.bz2 --limit 200
-  "$HELPER" capture inspect replays/ChatTests/testX/<key>.rpl.bz2 --from 280 --limit 20   # around a replay message's record 290
+  "$HELPER" capture inspect replays/ChatTests/testX/<key>.rpl.zst --limit 200
+  "$HELPER" capture inspect replays/ChatTests/testX/<key>.rpl.zst --from 280 --limit 20   # around a replay message's record 290
   "$HELPER" capture value results/000003.mismatch/mismatch.value
   "$HELPER" capture key replays/ChatTests
-  "$HELPER" capture diff old/<key>.rpl.bz2 new/<key>.rpl.bz2   # or two directories of captures
+  "$HELPER" capture diff old/<key>.rpl.zst new/helper-<pid>-<start>.rpl.bz2   # or two directories of captures
   ```
 
   - `inspect` prints one line per record: its number (app replay messages name the same `record N`), milliseconds since the capture started, section, operation, what was asked, then `->` and what came back (`null`, sequence 0 and no error print nothing). A record holding several wire frames prints one line per frame, so `grep` finds a method together with its record. Our own frames print decoded (`request 45 terminals.attach {size: ...}`, `notify 45 terminal.output {...}`, `cancel 45`). A frame split over several reads prints whole on the record where it completes; the reads before it show `response 3 continues (22530 of 65544 bytes)`. A streamed reply prints its chunks as `chunk 3 #0 (65536 bytes)` and the whole message, decoded, with its last frame (`response 3 {...} (streamed)`). Other bytes as text when UTF-8, as the value when they are one of our plain values (a hook question's body), else hex (only bytes nothing here knows the structure of: hashes, random bytes, OS structs, binary files). `--from N` starts at record N. It says `complete` at the footer, or how to see more.
@@ -243,15 +244,15 @@ After an app or helper change (or an upstream merge) a replay that fails says: t
 - **Start at the first difference the replay names** ([Reading a failed app replay](#reading-a-failed-app-replay); for a helper capture, `mismatch` in `report.jsonl`), and read the recording around it:
 
   ```sh
-  "$HELPER" capture inspect replays/ChatTests/testX/<key>.rpl.bz2 --from 280 --limit 40   # record 300 named by the failure
+  "$HELPER" capture inspect replays/ChatTests/testX/<key>.rpl.zst --from 280 --limit 40   # record 300 named by the failure
   ```
 
-- **Compare the old recording with a new one** of the same test (`--capture` it live, then find its file in `build/captures/<TestFile>/<testName>/`): `"$HELPER" capture diff old/<key>.rpl.bz2 new/<key>.rpl.bz2` (ids, pids and uuids that differ in every run show as changes, grouped). Recorded with another wire version (a merge changed the protocol), each side needs its own helper's `inspect`; numbers that differ in every run (record numbers, times, lifetimes, request ids, pids, uuids) are masked so only real differences remain:
+- **Compare the old recording with a new one** of the same test (`--capture` it live, then find its file in `build/captures/<TestFile>/<testName>/`): `"$HELPER" capture diff old/<key>.rpl.zst new/<file>.rpl.bz2` (ids, pids and uuids that differ in every run show as changes, grouped). Recorded with another wire version (a merge changed the protocol), each side needs its own helper's `inspect`; numbers that differ in every run (record numbers, times, lifetimes, request ids, pids, uuids) are masked so only real differences remain:
 
   ```sh
   norm() { "$1" capture inspect "$2" --limit 100000000 | sed -E 's/^[0-9]+ [0-9.]+ //; s#app/[0-9]+#app/L#g;
     s/(request|response|notify|cancel) [0-9]+/\1 N/g; s/[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}/UUID/g; s/[0-9]{4,}/N/g'; }
-  diff <(norm "$OLD_HELPER" old/<key>.rpl.bz2) <(norm "$HELPER" new/<key>.rpl.bz2) | head -100
+  diff <(norm "$OLD_HELPER" old/<key>.rpl.zst) <(norm "$HELPER" new/<file>.rpl.bz2) | head -100
   ```
 
   - The first block that differs is usually the cause; the rest follows from it. Terminal bytes are split differently in every run: compare what a stream carried, not where reads split it.

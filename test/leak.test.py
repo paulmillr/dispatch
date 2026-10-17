@@ -2,6 +2,8 @@
 login banner times read from captures, and the prompts and startup files a machine's facts make."""
 import bz2
 from pathlib import Path
+import shutil
+import subprocess
 import tempfile
 import unittest
 
@@ -40,11 +42,17 @@ class Banner(unittest.TestCase):
             text = b'\0Last login: Fri Oct 16 14:44:47 on ttys007\r\nLast login: Tue Jun  9 04:32:50 on ttys012'
             (case / 'one.rpl.bz2').write_bytes(bz2.compress(text + b'\x01Last login: Fri Oct 16 14:44:47 on ttys002'))
             (case / 'two.rpl').write_bytes(b'Last login: Thu Jan  1 00:00:01 2026 from 10.0.0.1')
+            # The corpus's zstd, through the zstd tool.
+            if shutil.which('zstd'):
+                packed = subprocess.run(['zstd', '-cq', '--long=27'], input=b'Last login: Sat Mar  7 09:08:07 on ttys001',
+                                        stdout=subprocess.PIPE, check=True).stdout
+                (case / 'three.rpl.zst').write_bytes(packed)
             lines = leak.banners([Path(directory)])
         needles = [line.split('\t')[0] for line in lines]
         values = [line.split('\t')[1] for line in lines]
-        self.assertEqual(needles, ['Fri Oct 16 14:44:47', 'Thu Jan  1 00:00:01', 'Tue Jun  9 04:32:50'])
-        self.assertEqual(len(set(values)), 3)
+        zstd = ['Sat Mar  7 09:08:07'] if shutil.which('zstd') else []
+        self.assertEqual(needles, ['Fri Oct 16 14:44:47'] + zstd + ['Thu Jan  1 00:00:01', 'Tue Jun  9 04:32:50'])
+        self.assertEqual(len(set(values)), len(needles))
         self.assertTrue(all(value.startswith('Thu Jan  1 00:00:') and len(value) == 19 for value in values))
         # A value never equals a time met: capture replace refuses a value that is also a needle.
         self.assertNotIn('Thu Jan  1 00:00:01', values)
