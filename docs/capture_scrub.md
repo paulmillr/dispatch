@@ -20,7 +20,7 @@
   ```
 
   - Replay with the current helper: a capture replays on the latest helper or is dropped (`capture prune`, docs/replay.md). Keep `review/` out of anything you publish.
-  - `grep` and `replace` read the captures `--jobs N` at a time (default: every core). With 4 jobs, `grep` over 324 MB of bzip2 takes under a minute at about 1.1 GB of memory; `replace` over 383 MB of bzip2 took about 11 minutes (mostly compressing again); its output is zstd, as the corpus keeps it, which compresses far faster.
+  - `grep` and `replace` read the captures `--jobs N` at a time (default: every core). `replace` writes its output as the corpus keeps it (zstd level 9, long window).
 
 - **List what a run may record: `test/leak.py`.** It takes the same arguments as `test/run.sh` and prints a needles file draft:
 
@@ -115,7 +115,7 @@
   - A needle or pattern in a record's section or op is refused: those are names the helper itself chose.
   - App journals get the same substitutions, but only their app tests can replay them: run those tests (on the Mac) before relying on them.
 
-- **Check with plain tools too.** Captures are bzip2 (as recorded) or zstd (in the corpus) around our binary records, with no hex or base64 layer of ours: `zstd -dc --long=27` (or `bzcat`) and `grep` see every literal needle but those inside the encodings above.
+- **Check with plain tools too.** Captures are zstd around our binary records, with no hex or base64 layer of ours: `zstd -dc --long=27` and `grep` see every literal needle but those inside the encodings above.
 
   ```sh
   grep -v -e '^#' -e '^$' review/needles.txt | cut -f1 > review/plain.txt

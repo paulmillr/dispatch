@@ -232,7 +232,7 @@ final class HelperAppTests: XCTestCase {
 
     func testAppJournalFailureReleasesPendingAndLateListenersOnce() throws {
         let directory = System.temporary.appendingPathComponent(UUID().uuidString)
-        let path = directory.appendingPathComponent("app.rpl.bz2")
+        let path = directory.appendingPathComponent("app.rpl.zst")
         defer { try? FileManager.default.removeItem(at: directory) }
         var journal = try AppReplay(url: path, replaying: false)
         let first = try journal.open(kind: "command", input: .string("first"))
@@ -270,7 +270,7 @@ final class HelperAppTests: XCTestCase {
             ("helper", ["end"], ["exit"]),
         ] {
             let directory = System.temporary.appendingPathComponent(UUID().uuidString)
-            let path = directory.appendingPathComponent("app.rpl.bz2")
+            let path = directory.appendingPathComponent("app.rpl.zst")
             defer { try? FileManager.default.removeItem(at: directory) }
             var journal = try AppReplay(url: path, replaying: false)
             let first = try journal.open(kind: kind, input: .null)
@@ -296,7 +296,7 @@ final class HelperAppTests: XCTestCase {
 
     func testAppJournalRoutesOverlappingLifetimesAndMatchesReorderedActions() throws {
         let directory = System.temporary.appendingPathComponent(UUID().uuidString)
-        let path = directory.appendingPathComponent("app.rpl.bz2")
+        let path = directory.appendingPathComponent("app.rpl.zst")
         defer { try? FileManager.default.removeItem(at: directory) }
         var journal = try AppReplay(url: path, replaying: false)
         let command = try journal.open(kind: "command", input: .string("probe"))
@@ -331,7 +331,7 @@ final class HelperAppTests: XCTestCase {
     func testAppJournalTakesSequentialAndOverlappingIdenticalCreationsInRecordedOrder() throws {
         for overlap in [false, true] {
             let directory = System.temporary.appendingPathComponent(UUID().uuidString)
-            let path = directory.appendingPathComponent("app.rpl.bz2")
+            let path = directory.appendingPathComponent("app.rpl.zst")
             defer { try? FileManager.default.removeItem(at: directory) }
             var journal = try AppReplay(url: path, replaying: false)
             let first = try journal.open(kind: "command", input: .null)
@@ -354,7 +354,7 @@ final class HelperAppTests: XCTestCase {
 
     func testAppJournalObservationsAnswerTheStateReplayReached() throws {
         let directory = System.temporary.appendingPathComponent(UUID().uuidString)
-        let path = directory.appendingPathComponent("app.rpl.bz2")
+        let path = directory.appendingPathComponent("app.rpl.zst")
         defer { try? FileManager.default.removeItem(at: directory) }
         var journal = try AppReplay(url: path, replaying: false)
         func ask(_ kind: String, _ value: String = "") throws -> String {
@@ -394,7 +394,7 @@ final class HelperAppTests: XCTestCase {
         // Work a test does live on purpose (real shells running the app's wrappers) is not in the journal: while it runs
         // inside `live`, replay waits for it instead of calling the app idle.
         let directory = System.temporary.appendingPathComponent(UUID().uuidString)
-        let path = directory.appendingPathComponent("app.rpl.bz2")
+        let path = directory.appendingPathComponent("app.rpl.zst")
         defer { try? FileManager.default.removeItem(at: directory) }
         var journal = try AppReplay(url: path, replaying: false)
         let recorded = try journal.open(kind: "connection", input: .null)
@@ -418,7 +418,7 @@ final class HelperAppTests: XCTestCase {
         // decoding a burst of topologies) may still be working through it while the main queue answers. What the app
         // sends after that work (a request queued behind it) is not a stall: the app is not idle until those queues answer.
         let directory = System.temporary.appendingPathComponent(UUID().uuidString)
-        let path = directory.appendingPathComponent("app.rpl.bz2")
+        let path = directory.appendingPathComponent("app.rpl.zst")
         defer { try? FileManager.default.removeItem(at: directory) }
         var journal = try AppReplay(url: path, replaying: false)
         let recorded = try journal.open(kind: "connection", input: .null)
@@ -445,7 +445,7 @@ final class HelperAppTests: XCTestCase {
 
     func testAppJournalEverythingFinishesInRecordedOrderWhileRequestsGoOutInAnyOrder() throws {
         let directory = System.temporary.appendingPathComponent(UUID().uuidString)
-        let path = directory.appendingPathComponent("app.rpl.bz2")
+        let path = directory.appendingPathComponent("app.rpl.zst")
         defer { try? FileManager.default.removeItem(at: directory) }
         var journal = try AppReplay(url: path, replaying: false)
         let command = try journal.open(kind: "command", input: .null), mailbox = try journal.open(kind: "mailbox", input: .null)
@@ -477,7 +477,7 @@ final class HelperAppTests: XCTestCase {
         // asks it before replay delivers that input.
         for late in [false, true] {
             let directory = System.temporary.appendingPathComponent(UUID().uuidString)
-            let path = directory.appendingPathComponent("app.rpl.bz2")
+            let path = directory.appendingPathComponent("app.rpl.zst")
             defer { try? FileManager.default.removeItem(at: directory) }
             var journal = try AppReplay(url: path, replaying: false)
             let command = try journal.open(kind: "command", input: .null)
@@ -517,7 +517,7 @@ final class HelperAppTests: XCTestCase {
         // it checks is wall time (a check refuses while a sidebar slides): replay answers each such ask with what capture
         // saw as far as the app got, however often it is asked, and owes none of the recorded asks.
         let directory = System.temporary.appendingPathComponent(UUID().uuidString)
-        let path = directory.appendingPathComponent("app.rpl.bz2")
+        let path = directory.appendingPathComponent("app.rpl.zst")
         defer { try? FileManager.default.removeItem(at: directory) }
         var journal = try AppReplay(url: path, replaying: false)
         func poll(_ value: String = "") async throws -> String {
@@ -557,7 +557,7 @@ final class HelperAppTests: XCTestCase {
         // the test waited for) is still before the step. The step carries where the check was; while the test waits,
         // replay holds what came after it. A check itself may read through the app's connections: those come through.
         let directory = System.temporary.appendingPathComponent(UUID().uuidString)
-        let path = directory.appendingPathComponent("app.rpl.bz2")
+        let path = directory.appendingPathComponent("app.rpl.zst")
         defer { try? FileManager.default.removeItem(at: directory) }
         var journal = try AppReplay(url: path, replaying: false)
         let screen = try journal.open(kind: "command", input: .string("screen"))
@@ -594,7 +594,7 @@ final class HelperAppTests: XCTestCase {
         // a turn to react) frees what the check may have seen: one input, then as many as passed so far (a flood comes in
         // a few rounds), never what was read after the check returned.
         let directory = System.temporary.appendingPathComponent(UUID().uuidString)
-        let path = directory.appendingPathComponent("app.rpl.bz2")
+        let path = directory.appendingPathComponent("app.rpl.zst")
         defer { try? FileManager.default.removeItem(at: directory) }
         var journal = try AppReplay(url: path, replaying: false)
         let screen = try journal.open(kind: "command", input: .null)
@@ -645,7 +645,7 @@ final class HelperAppTests: XCTestCase {
         // the test must not see before it continues) stays held until the step. A check that keeps failing still frees
         // what it may have seen: its own I/O is not the app's progress.
         let directory = System.temporary.appendingPathComponent(UUID().uuidString)
-        let path = directory.appendingPathComponent("app.rpl.bz2")
+        let path = directory.appendingPathComponent("app.rpl.zst")
         defer { try? FileManager.default.removeItem(at: directory) }
         let read = try HelperWire.encode(.init(kind: .request, id: 1, body: HelperBinary.encode(.object([
             "method": .string("files.text"), "params": .object(["path": .string("hooks.json")])]))))
@@ -725,7 +725,7 @@ final class HelperAppTests: XCTestCase {
         // what the app asks answers past it (up to what the app makes next). The test's own reads and checks still see
         // the state as of its next step.
         let directory = System.temporary.appendingPathComponent(UUID().uuidString)
-        let path = directory.appendingPathComponent("app.rpl.bz2")
+        let path = directory.appendingPathComponent("app.rpl.zst")
         defer { try? FileManager.default.removeItem(at: directory) }
         var journal = try AppReplay(url: path, replaying: false)
         let step = { (journal: AppReplay) in
@@ -765,7 +765,7 @@ final class HelperAppTests: XCTestCase {
         // it in its terminal. Tasks that saw nothing newer, and the test's checks, see the world as of that first record;
         // a poll that asked something capture asked only later is not held ahead once the app moved on.
         let directory = System.temporary.appendingPathComponent(UUID().uuidString)
-        let path = directory.appendingPathComponent("app.rpl.bz2")
+        let path = directory.appendingPathComponent("app.rpl.zst")
         defer { try? FileManager.default.removeItem(at: directory) }
         let group = HelperBinary.Value.unsigned(7), ssh = HelperBinary.Value.unsigned(9), other = HelperBinary.Value.unsigned(11)
         let shell = HelperBinary.Value.array([.string("shell")]), both = HelperBinary.Value.array([.string("shell"), .string("ssh")])
@@ -815,7 +815,7 @@ final class HelperAppTests: XCTestCase {
         // A helper connection ended (the master exited): replay delivers its end to the transport's queue; the app may close
         // its side before that queue takes the end. Capture's transport had stopped first and recorded no close.
         let directory = System.temporary.appendingPathComponent(UUID().uuidString)
-        let path = directory.appendingPathComponent("app.rpl.bz2")
+        let path = directory.appendingPathComponent("app.rpl.zst")
         defer { try? FileManager.default.removeItem(at: directory) }
         let request = try HelperWire.encode(.init(kind: .request, id: 1, body: HelperBinary.encode(.object(["method": .string("launches.list")]))))
         let answer = try HelperWire.encode(.init(kind: .response, id: 1, body: HelperBinary.encode(.object(["result": .array([])]))))
@@ -842,7 +842,7 @@ final class HelperAppTests: XCTestCase {
         // transport's queue took that end: capture's transport had stopped and recorded nothing. Nothing answers it,
         // nothing waits for it: the journal settles (the case's teardown waits for that) and lists it.
         let directory = System.temporary.appendingPathComponent(UUID().uuidString)
-        let path = directory.appendingPathComponent("app.rpl.bz2")
+        let path = directory.appendingPathComponent("app.rpl.zst")
         defer { try? FileManager.default.removeItem(at: directory) }
         func request(_ id: UInt64, _ method: String) throws -> Data {
             try HelperWire.encode(.init(kind: .request, id: id, body: HelperBinary.encode(.object(["method": .string(method), "params": .object(["terminal": .unsigned(1)])]))))
@@ -872,7 +872,7 @@ final class HelperAppTests: XCTestCase {
         // can hold before that: settling first makes a step follow what was read before it, as replay delivers it.
         let directory = System.temporary.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let journal = try AppReplay(url: directory.appendingPathComponent("app.rpl.bz2"), replaying: false)
+        let journal = try AppReplay(url: directory.appendingPathComponent("app.rpl.zst"), replaying: false)
         let queue = DispatchQueue(label: "consumer"), command = try journal.open(kind: "command", input: .null)
         command.through(queue)
         final class Handled: @unchecked Sendable { var value = false }
@@ -890,7 +890,7 @@ final class HelperAppTests: XCTestCase {
         // A recorded cancellation is a CancellationError again (callers catch it by type). A wait the recording never
         // saw end (still pending at its end, or never begun there) ends at cancellation: nothing else ever will.
         let directory = System.temporary.appendingPathComponent(UUID().uuidString)
-        let path = directory.appendingPathComponent("app.rpl.bz2")
+        let path = directory.appendingPathComponent("app.rpl.zst")
         defer { try? FileManager.default.removeItem(at: directory) }
         var journal = try AppReplay(url: path, replaying: false)
         let sleeping = try journal.open(kind: "clock", input: .string("probe"))
@@ -931,7 +931,7 @@ final class HelperAppTests: XCTestCase {
         // as an error). Only the caller's cancellation does; the record holds nothing meanwhile (identical concurrent
         // timers may pair with each other's records).
         let directory = System.temporary.appendingPathComponent(UUID().uuidString)
-        let path = directory.appendingPathComponent("app.rpl.bz2")
+        let path = directory.appendingPathComponent("app.rpl.zst")
         defer { try? FileManager.default.removeItem(at: directory) }
         var journal = try AppReplay(url: path, replaying: false)
         let timer = try journal.open(kind: "clock", input: .string("timeout"))
@@ -968,7 +968,7 @@ final class HelperAppTests: XCTestCase {
         // fails to its caller (it would wait forever otherwise). The test's own steps stay exact (one the recording
         // lacks is a divergence).
         let directory = System.temporary.appendingPathComponent(UUID().uuidString)
-        let path = directory.appendingPathComponent("app.rpl.bz2")
+        let path = directory.appendingPathComponent("app.rpl.zst")
         defer { try? FileManager.default.removeItem(at: directory) }
         var journal = try AppReplay(url: path, replaying: false)
         try journal.open(kind: "clock", input: .string("poll")).emit(kind: "result")
@@ -998,7 +998,7 @@ final class HelperAppTests: XCTestCase {
         // follow window activation, which the cases run before decide: no side waits on them (iso60). A test waiting for
         // its step types nothing: then a hand-back of what this run never typed (a report its screen did not send) goes on.
         let directory = System.temporary.appendingPathComponent(UUID().uuidString)
-        let path = directory.appendingPathComponent("app.rpl.bz2")
+        let path = directory.appendingPathComponent("app.rpl.zst")
         defer { try? FileManager.default.removeItem(at: directory) }
         var journal = try AppReplay(url: path, replaying: false)
         let pty = try journal.open(kind: "pty", input: .null)
@@ -1046,7 +1046,7 @@ final class HelperAppTests: XCTestCase {
         // connection never happens; the hangup is the app's next record of that pty. A connection the app did open still
         // closes as recorded, whichever of its pty's ends the app closes first.
         let directory = System.temporary.appendingPathComponent(UUID().uuidString)
-        let path = directory.appendingPathComponent("app.rpl.bz2")
+        let path = directory.appendingPathComponent("app.rpl.zst")
         defer { try? FileManager.default.removeItem(at: directory) }
         var journal = try AppReplay(url: path, replaying: false)
         let pty = try journal.open(kind: "pty", input: .null)
@@ -1083,7 +1083,7 @@ final class HelperAppTests: XCTestCase {
         // order; the app may ask fewer (a cache, another path: the recording does not wait for them) or more (made now).
         // Making one tells the app nothing about other processes: what it observes stays where replay is.
         let directory = System.temporary.appendingPathComponent(UUID().uuidString)
-        let path = directory.appendingPathComponent("app.rpl.bz2")
+        let path = directory.appendingPathComponent("app.rpl.zst")
         defer { try? FileManager.default.removeItem(at: directory) }
         var journal = try AppReplay(url: path, replaying: false)
         _ = try journal.query(kind: "observe.state", input: .null) { .string("early") }
@@ -1114,7 +1114,7 @@ final class HelperAppTests: XCTestCase {
         // the seed, its site and how many that site made before: replay makes the same ones in any interleaving of
         // sites, and one site making more shifts nothing elsewhere.
         let directory = System.temporary.appendingPathComponent(UUID().uuidString)
-        let path = directory.appendingPathComponent("app.rpl.bz2")
+        let path = directory.appendingPathComponent("app.rpl.zst")
         defer { try? FileManager.default.removeItem(at: directory) }
         var journal = try AppReplay(url: path, replaying: false)
         let captured = try ["a", "a", "b"].map { try journal.made($0) }
@@ -1133,7 +1133,7 @@ final class HelperAppTests: XCTestCase {
         // The app got further than the recording before teardown cut it (a shim install after a list arrived): the
         // query fails to its caller as unrecorded (the app's own error path), the journal goes on and lists it.
         let directory = System.temporary.appendingPathComponent(UUID().uuidString)
-        let path = directory.appendingPathComponent("app.rpl.bz2")
+        let path = directory.appendingPathComponent("app.rpl.zst")
         defer { try? FileManager.default.removeItem(at: directory) }
         var journal = try AppReplay(url: path, replaying: false)
         _ = try journal.query(kind: "launch.install", input: .string("a")) { .null }
@@ -1153,7 +1153,7 @@ final class HelperAppTests: XCTestCase {
         // deterministically; otherwise every dictionary has its own seed and no two decodes iterate alike.
         try XCTSkipUnless(System.environment("SWIFT_DETERMINISTIC_HASHING") != nil, "random hashing")
         let directory = System.temporary.appendingPathComponent(UUID().uuidString)
-        let path = directory.appendingPathComponent("app.rpl.bz2")
+        let path = directory.appendingPathComponent("app.rpl.zst")
         defer { try? FileManager.default.removeItem(at: directory) }
         func orders(_ journal: AppReplay) throws -> [[String]] {
             try (1...64).map { size in
@@ -1172,7 +1172,7 @@ final class HelperAppTests: XCTestCase {
 
     func testAppJournalCreationValuesPreserveTheirTypes() throws {
         let directory = System.temporary.appendingPathComponent(UUID().uuidString)
-        let path = directory.appendingPathComponent("app.rpl.bz2")
+        let path = directory.appendingPathComponent("app.rpl.zst")
         defer { try? FileManager.default.removeItem(at: directory) }
         var journal = try AppReplay(url: path, replaying: false)
         let capture = try journal.open(kind: "command", input: .object(["value": .bool(true)]))
@@ -1194,7 +1194,7 @@ final class HelperAppTests: XCTestCase {
     func testAppJournalBindsWireIDsWithoutChangingValuesOrCancellation() throws {
         for identity: UInt64 in [72, 41] {
             let directory = System.temporary.appendingPathComponent(UUID().uuidString)
-            let path = directory.appendingPathComponent("app.rpl.bz2")
+            let path = directory.appendingPathComponent("app.rpl.zst")
             defer { try? FileManager.default.removeItem(at: directory) }
             let body = try HelperBinary.encode(.object(["method": .string("hello"), "params": .object([:])]))
             let answer = try HelperBinary.encode(.object(["result": .array([])]))
@@ -1233,7 +1233,7 @@ final class HelperAppTests: XCTestCase {
         // whether that changed anything; the journal lists them. A request replay acknowledges itself (a screen
         // publication) is never pending, so the app's recorded cancel of it is not waited for.
         let directory = System.temporary.appendingPathComponent(UUID().uuidString)
-        let path = directory.appendingPathComponent("app.rpl.bz2")
+        let path = directory.appendingPathComponent("app.rpl.zst")
         defer { try? FileManager.default.removeItem(at: directory) }
         func request(_ id: UInt64, _ method: String, _ params: [String: HelperBinary.Value] = [:]) throws -> Data {
             try HelperWire.encode(.init(kind: .request, id: id, body: HelperBinary.encode(.object(["method": .string(method), "params": .object(params)]))))
@@ -1293,7 +1293,7 @@ final class HelperAppTests: XCTestCase {
         // capture's test made that reopen moot first): the recording lacks it, and the helper is still answering the open
         // one, so it gets no answer either. A request equal to one already answered is one the recording lacks.
         let directory = System.temporary.appendingPathComponent(UUID().uuidString)
-        let path = directory.appendingPathComponent("app.rpl.bz2")
+        let path = directory.appendingPathComponent("app.rpl.zst")
         defer { try? FileManager.default.removeItem(at: directory) }
         func open(_ id: UInt64, _ terminal: UInt64) throws -> Data {
             try HelperWire.encode(.init(kind: .request, id: id, body: HelperBinary.encode(.object(["method": .string("chat.open"),
@@ -1341,7 +1341,7 @@ final class HelperAppTests: XCTestCase {
                                            ([3, 2, -2, 1], refusal + answer, []),
                                            ([1, 3], answer + refusal, ["unsent terminals.create {}"])] {
             let directory = System.temporary.appendingPathComponent(UUID().uuidString)
-            let path = directory.appendingPathComponent("app.rpl.bz2")
+            let path = directory.appendingPathComponent("app.rpl.zst")
             defer { try? FileManager.default.removeItem(at: directory) }
             var journal = try AppReplay(url: path, replaying: false)
             let capture = try journal.open(kind: "helper", input: .null)
@@ -1379,7 +1379,7 @@ final class HelperAppTests: XCTestCase {
         let changed = try HelperWire.encode(.init(kind: .notify, id: 9, body: HelperBinary.encode(.object(["method": .string("agent.changed")]))))
         let answer = { (id: UInt64) in try HelperWire.encode(.init(kind: .response, id: id, body: HelperBinary.encode(.object(["result": .null])))) }
         let directory = System.temporary.appendingPathComponent(UUID().uuidString)
-        let path = directory.appendingPathComponent("app.rpl.bz2")
+        let path = directory.appendingPathComponent("app.rpl.zst")
         defer { try? FileManager.default.removeItem(at: directory) }
         var journal = try AppReplay(url: path, replaying: false)
         let capture = try journal.open(kind: "helper", input: .null), screen = try journal.open(kind: "command", input: .null)
@@ -1427,7 +1427,7 @@ final class HelperAppTests: XCTestCase {
         let changed = try HelperWire.encode(.init(kind: .notify, id: 9, body: HelperBinary.encode(.object(["method": .string("agent.changed")]))))
         let answer = { (id: UInt64) in try HelperWire.encode(.init(kind: .response, id: id, body: HelperBinary.encode(.object(["result": .null])))) }
         let directory = System.temporary.appendingPathComponent(UUID().uuidString)
-        let path = directory.appendingPathComponent("app.rpl.bz2")
+        let path = directory.appendingPathComponent("app.rpl.zst")
         defer { try? FileManager.default.removeItem(at: directory) }
         var journal = try AppReplay(url: path, replaying: false)
         let capture = try journal.open(kind: "helper", input: .null)
@@ -1467,7 +1467,7 @@ final class HelperAppTests: XCTestCase {
         let changed = try HelperWire.encode(.init(kind: .notify, id: 9, body: HelperBinary.encode(.object(["method": .string("agent.changed")]))))
         let answer = { (id: UInt64) in try HelperWire.encode(.init(kind: .response, id: id, body: HelperBinary.encode(.object(["result": .null])))) }
         let directory = System.temporary.appendingPathComponent(UUID().uuidString)
-        let path = directory.appendingPathComponent("app.rpl.bz2")
+        let path = directory.appendingPathComponent("app.rpl.zst")
         defer { try? FileManager.default.removeItem(at: directory) }
         var journal = try AppReplay(url: path, replaying: false)
         let capture = try journal.open(kind: "helper", input: .null), screen = try journal.open(kind: "command", input: .null)
@@ -1508,7 +1508,7 @@ final class HelperAppTests: XCTestCase {
             "error": .object(["code": .string("session"), "message": .string("Transcript belongs to another session")])]))))
         let answer = try HelperWire.encode(.init(kind: .response, id: 2, body: HelperBinary.encode(.object(["result": .null]))))
         let directory = System.temporary.appendingPathComponent(UUID().uuidString)
-        let path = directory.appendingPathComponent("app.rpl.bz2")
+        let path = directory.appendingPathComponent("app.rpl.zst")
         defer { try? FileManager.default.removeItem(at: directory) }
         var journal = try AppReplay(url: path, replaying: false)
         let capture = try journal.open(kind: "helper", input: .null)
@@ -1546,7 +1546,7 @@ final class HelperAppTests: XCTestCase {
             try HelperWire.encode(.init(kind: .response, id: id, body: HelperBinary.encode(.object(["result": .string(text)]))))
         }
         let directory = System.temporary.appendingPathComponent(UUID().uuidString)
-        let path = directory.appendingPathComponent("app.rpl.bz2")
+        let path = directory.appendingPathComponent("app.rpl.zst")
         defer { try? FileManager.default.removeItem(at: directory) }
         var journal = try AppReplay(url: path, replaying: false)
         let capture = try journal.open(kind: "helper", input: .null)
@@ -1573,7 +1573,7 @@ final class HelperAppTests: XCTestCase {
         // The app sends independent requests in its own order (a 4-slot limiter, task scheduling). An answer to one it
         // has sent does not wait behind a request recorded earlier that it sends only after that answer.
         let directory = System.temporary.appendingPathComponent(UUID().uuidString)
-        let path = directory.appendingPathComponent("app.rpl.bz2")
+        let path = directory.appendingPathComponent("app.rpl.zst")
         defer { try? FileManager.default.removeItem(at: directory) }
         func request(_ id: UInt64, _ path: String) throws -> Data {
             try HelperWire.encode(.init(kind: .request, id: id, body: HelperBinary.encode(.object(["method": .string("files.branch"), "params": .object(["path": .string(path)])]))))
@@ -1610,7 +1610,7 @@ final class HelperAppTests: XCTestCase {
         // through other sizes in each run: the gate sees what the lifetime records later too. The stall report names
         // what it waits for.
         let directory = System.temporary.appendingPathComponent(UUID().uuidString)
-        let path = directory.appendingPathComponent("app.rpl.bz2")
+        let path = directory.appendingPathComponent("app.rpl.zst")
         defer { try? FileManager.default.removeItem(at: directory) }
         var journal = try AppReplay(url: path, replaying: false)
         let pty = try journal.open(kind: "pty", input: .null)
@@ -1646,7 +1646,7 @@ final class HelperAppTests: XCTestCase {
         // closes an endpoint) or asks its helper to close what it shows, that state can no longer matter (a closing
         // view gets no more layout): the gate holds nothing more.
         let directory = System.temporary.appendingPathComponent(UUID().uuidString)
-        let path = directory.appendingPathComponent("app.rpl.bz2")
+        let path = directory.appendingPathComponent("app.rpl.zst")
         defer { try? FileManager.default.removeItem(at: directory) }
         var journal = try AppReplay(url: path, replaying: false)
         for name in ["hung up", "closed by its helper"] {
@@ -1680,7 +1680,7 @@ final class HelperAppTests: XCTestCase {
         // size capture's layout passed through for a moment) would hold that terminal's input for good. When nothing
         // else can come (the replay would stall), those inputs come at the app's size and the journal lists them.
         let directory = System.temporary.appendingPathComponent(UUID().uuidString)
-        let path = directory.appendingPathComponent("app.rpl.bz2")
+        let path = directory.appendingPathComponent("app.rpl.zst")
         defer { try? FileManager.default.removeItem(at: directory) }
         var journal = try AppReplay(url: path, replaying: false)
         let pty = try journal.open(kind: "pty", input: .string("launcher"))
@@ -1709,7 +1709,7 @@ final class HelperAppTests: XCTestCase {
         // (a redraw drawn at a stale size is lost when the view shrinks back) while the other lifetimes go on past them;
         // shown again, it holds what follows it until its layout reaches that size (what follows can move it away).
         let directory = System.temporary.appendingPathComponent(UUID().uuidString)
-        let path = directory.appendingPathComponent("app.rpl.bz2")
+        let path = directory.appendingPathComponent("app.rpl.zst")
         defer { try? FileManager.default.removeItem(at: directory) }
         var journal = try AppReplay(url: path, replaying: false)
         let view = try journal.open(kind: "pty", input: .string("view")), other = try journal.open(kind: "pty", input: .string("other"))
@@ -1747,7 +1747,7 @@ final class HelperAppTests: XCTestCase {
 
     func testAppJournalPreservesEveryLifetimeAndRejectsDifferentActions() throws {
         let directory = System.temporary.appendingPathComponent(UUID().uuidString)
-        let path = directory.appendingPathComponent("app.rpl.bz2")
+        let path = directory.appendingPathComponent("app.rpl.zst")
         defer { try? FileManager.default.removeItem(at: directory) }
         var journal = try AppReplay(url: path, replaying: false)
         let first = try XCTUnwrap(journal.open(kind: "helper", input: .string("local")))

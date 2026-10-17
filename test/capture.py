@@ -49,9 +49,9 @@ if sys.argv[2]=='export':
  # A helper still writing holds its capture locked; its test just closed its connection, so it ends within
  # seconds. One still running after that is copied as it is (a cut snapshot).
  deadline=time.monotonic()+10
- for p in sorted(root.glob('*.rpl.bz2')):
+ for p in sorted(root.glob('*.rpl.zst')):
   while p.is_file() and not p.is_symlink() and writing(p) and time.monotonic()<deadline:time.sleep(0.05)
- files=[p for p in sorted(root.glob('*.rpl.bz2')) if p.is_file() and not p.is_symlink()]
+ files=[p for p in sorted(root.glob('*.rpl.zst')) if p.is_file() and not p.is_symlink()]
  hashes={p.name:digest(p) for p in files}
  files=[p for p in files if acknowledged.get(p.name)!=hashes[p.name]]
  manifest={'platform':{'Darwin':'macos','Linux':'linux'}.get(platform.system(),platform.system().lower()),'files':{p.name:hashes[p.name] for p in files}}

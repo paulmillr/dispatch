@@ -1,7 +1,9 @@
 //! Capture writes use one bounded disk queue; they never block the reactor. The file is the
-//! binary capture format (capture/trace.rs): typed values in bzip2, certified by its footer.
-mod bzip2;
-#[cfg(dispatch_zstd)]
+//! binary capture format (capture/trace.rs): typed values in zstd, certified by its footer.
+#[cfg(feature = "capture")]
+mod zstd;
+#[cfg(not(feature = "capture"))]
+#[path = "capture/without_zstd.rs"]
 mod zstd;
 pub mod trace;
 pub mod screen;
@@ -34,8 +36,8 @@ pub(crate) fn control(name: &str) -> Option<std::ffi::OsString> {
 }
 
 // Native protocol records can be 32 MiB; the byte bound includes queued owned strings. The writer compresses on one
-// thread (bzip2, ~10 MB/s) while a terminal flood is recorded several times over (pty reads, wire frames): a 23 MB
-// flood queued past 128 MiB. Memory, not disk, bounds it.
+// thread while a terminal flood is recorded several times over (pty reads, wire frames): with bzip2 (~10 MB/s, before
+// zstd) a 23 MB flood queued past 128 MiB. Memory, not disk, bounds it.
 pub(super) const QUEUE: usize = 1024 * 1024 * 1024;
 
 /// What came back: an encoded value, or an error (encoded on the writer thread).

@@ -13,9 +13,8 @@ settings:
     ENABLE_HARDENED_RUNTIME: YES
     OTHER_LDFLAGS: ["-lc++"]
     OTHER_SWIFT_FLAGS: ["-Xcc", "-Wno-incomplete-umbrella"]
-    # CBzip2: the system bzip2 library's module (the app journal's capture files). CZstd: the replay corpus's
-    # decoder (target Zstd).
-    SWIFT_INCLUDE_PATHS: ["$(SRCROOT)/Vendor/Bzip2", "$(SRCROOT)/Vendor/Zstd"]
+    # CZstd: the app journal's capture files (target Zstd).
+    SWIFT_INCLUDE_PATHS: ["$(SRCROOT)/Vendor/Zstd"]
     # `./run.sh --prod` sets YES: the shipped app is stripped (its symbols stay in the dSYM). Off for
     # other Release builds, whose app hosts the tests (BUNDLE_LOADER needs its symbols).
     DISPATCH_STRIP_APP: NO
@@ -57,14 +56,15 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: yachts.dispatch.termapple
         SWIFT_VERSION: "5.0"
         SWIFT_STRICT_CONCURRENCY: minimal
-  # Zstandard's decoder (Vendor/Zstd/PROVENANCE.md): Debug app replays read the corpus (zstd) with it. Only
-  # Debug code calls it, so a Release link takes nothing from the archive. Optimized in every configuration:
-  # the corpus is hundreds of megabytes expanded.
+  # Zstandard (Vendor/Zstd/PROVENANCE.md): Debug app journals are written and read with it. Only Debug code
+  # calls it, so a Release link takes nothing from the archive. Optimized in every configuration: the corpus is
+  # hundreds of megabytes expanded.
   Zstd:
     type: library.static
     platform: macOS
     sources:
       - path: Vendor/Zstd/lib/common
+      - path: Vendor/Zstd/lib/compress
       - path: Vendor/Zstd/lib/decompress
     settings:
       base:

@@ -4,9 +4,6 @@ import Darwin
 #else
 import Glibc
 #endif
-#if DEBUG && canImport(CBzip2)
-import CBzip2
-#endif
 #if DEBUG && canImport(CZstd)
 import CZstd
 #endif
@@ -1012,7 +1009,7 @@ final class AppReplay: @unchecked Sendable {
         let directory = ProcessInfo.processInfo.environment["DISPATCH_APP_DIAGNOSTICS"].map { URL(fileURLWithPath: $0) }
             ?? source.deletingLastPathComponent()
         let path = directory.appendingPathComponent(source.deletingLastPathComponent().lastPathComponent + "-"
-            + source.deletingPathExtension().deletingPathExtension().lastPathComponent + ".mismatch-" + UUID().uuidString + ".rpl.bz2")
+            + source.deletingPathExtension().deletingPathExtension().lastPathComponent + ".mismatch-" + UUID().uuidString + ".rpl.zst")
         let output = try Writer(Self.create(path))
         for event in [expected, actual].compactMap({ $0 }) { try output.write(event, clock: 0) }
         try output.finish(certified: true)
@@ -1514,8 +1511,8 @@ final class AppReplay: @unchecked Sendable {
         }
     }
 
-    /// The journal file is a capture (the helper's core/src/system/capture/trace.rs): bzip2 (as recorded) or zstd
-    /// (in the corpus) around length-prefixed frames; a header (magic, version, layer app, helper wire version), one record per event, a footer counting them.
+    /// The journal file is a capture (the helper's core/src/system/capture/trace.rs): zstd around length-prefixed
+    /// frames; a header (magic, version, layer app, helper wire version), one record per event, a footer counting them.
     /// What the app asked or sent is a record's args, what came back its output.
     private enum Capture {
         static let magic = Array("DCAPTURE".utf8)
@@ -1582,48 +1579,11 @@ final class AppReplay: @unchecked Sendable {
             return events
         }
 
-        /// The whole file expanded (bzip2 members, or zstd frames, one after another).
+        /// The whole file expanded: its zstd frames one after another (the helper's capture/zstd.rs), the window no
+        /// larger than the corpus encoder's.
         static func expand(_ data: Data) throws -> [UInt8] {
             #if DEBUG && canImport(CZstd)
-            if data.starts(with: [0x28, 0xb5, 0x2f, 0xfd]) { return try unzstd([UInt8](data)) }
-            #endif
-            #if DEBUG && canImport(CBzip2)
-            var output: [UInt8] = [], input = [UInt8](data), offset = 0, buffer = [UInt8](repeating: 0, count: 1 << 20)
-            for _ in sequence(first: 0, next: { $0 + 1 }) {
-                guard offset < input.count else { break }
-                var stream = bz_stream()
-                guard BZ2_bzDecompressInit(&stream, 0, 0) == BZ_OK else { throw error("bzip2 decoder") }
-                defer { BZ2_bzDecompressEnd(&stream) }
-                var code = BZ_OK
-                for _ in sequence(first: 0, next: { $0 + 1 }) {
-                    guard code == BZ_OK else { break }
-                    code = input.withUnsafeMutableBufferPointer { source in
-                        buffer.withUnsafeMutableBufferPointer { target in
-                            stream.next_in = UnsafeMutableRawPointer(source.baseAddress! + offset).assumingMemoryBound(to: CChar.self)
-                            stream.avail_in = UInt32(min(source.count - offset, Int(UInt32.max)))
-                            stream.next_out = UnsafeMutableRawPointer(target.baseAddress!).assumingMemoryBound(to: CChar.self)
-                            stream.avail_out = UInt32(target.count)
-                            let before = stream.avail_in
-                            let code = BZ2_bzDecompress(&stream)
-                            offset += Int(before - stream.avail_in)
-                            output.append(contentsOf: target[0..<(target.count - Int(stream.avail_out))])
-                            return code
-                        }
-                    }
-                    if code == BZ_OK && offset >= input.count && stream.avail_out != 0 { throw error("app journal is cut: bzip2") }
-                }
-                guard code == BZ_STREAM_END else { throw error("app journal is damaged: bzip2 \(code)") }
-            }
-            return output
-            #else
-            // Linux engine checks only (no bzip2 headers there): the frames uncompressed.
-            return [UInt8](data)
-            #endif
-        }
-
-        #if DEBUG && canImport(CZstd)
-        /// A corpus journal: zstd frames (the helper's capture/zstd.rs), the window no larger than its encoder's.
-        static func unzstd(_ input: [UInt8]) throws -> [UInt8] {
+            guard data.starts(with: [0x28, 0xb5, 0x2f, 0xfd]) else { throw error("app journal is not a capture: no zstd frame") }
             guard let stream = ZSTD_createDStream() else { throw error("zstd decoder") }
             defer { ZSTD_freeDStream(stream) }
             func check(_ code: Int) throws -> Int {
@@ -1633,6 +1593,7 @@ final class AppReplay: @unchecked Sendable {
                 return code
             }
             _ = try check(ZSTD_DCtx_setParameter(stream, ZSTD_d_windowLogMax, 27))
+            let input = [UInt8](data)
             var output: [UInt8] = [], buffer = [UInt8](repeating: 0, count: 1 << 20), left = 0
             try input.withUnsafeBytes { source in
                 try buffer.withUnsafeMutableBytes { target in
@@ -1648,31 +1609,42 @@ final class AppReplay: @unchecked Sendable {
             }
             guard left == 0 else { throw error("app journal is cut: zstd") }
             return output
+            #else
+            // Linux engine checks only (no zstd there): the frames uncompressed.
+            return [UInt8](data)
+            #endif
         }
-        #endif
     }
 
     /// Capture: frames compressed as they are recorded, then the footer. Compression and file writes run on the
-    /// writer's own queue, as the helper's capture writer thread does: recording costs the record's encoding, never a
-    /// bzip2 block on the thread that recorded it (a terminal flood stalled the app at ~2 MB/s). Past the helper's
-    /// queue bound (128 MiB) waiting, recording waits for the writer: memory stays bounded, the journal whole.
+    /// writer's own queue, as the helper's capture writer thread does: recording costs the record's encoding, never
+    /// compression on the thread that recorded it (with bzip2, before zstd, a terminal flood stalled the app at ~2 MB/s).
+    /// Past the helper's queue bound (128 MiB) waiting, recording waits for the writer: memory stays bounded, the journal
+    /// whole.
     final class Writer: @unchecked Sendable {
         private static let bound = 128 << 20
         private let file: FileHandle, queue = DispatchQueue(label: "yachts.dispatch.journal.writer"), lock = NSCondition()
         private var rows: UInt64 = 0, done = false, queued = 0, failure: (any Error)?
-        #if DEBUG && canImport(CBzip2)
-        private var stream = bz_stream(), buffer = [UInt8](repeating: 0, count: 1 << 16)
+        #if DEBUG && canImport(CZstd)
+        private let stream: OpaquePointer
+        private var buffer = [UInt8](repeating: 0, count: 1 << 17)
         #endif
         init(_ file: FileHandle) throws {
             self.file = file
-            #if DEBUG && canImport(CBzip2)
-            guard BZ2_bzCompressInit(&stream, 9, 0, 0) == BZ_OK else { throw AppReplay.error("bzip2 encoder") }
+            #if DEBUG && canImport(CZstd)
+            guard let stream = ZSTD_createCStream() else { throw AppReplay.error("zstd encoder") }
+            self.stream = stream
+            // A live capture, as the helper writes one (capture/zstd.rs): level 1 in its own window, each frame checked.
+            for (parameter, value) in [(ZSTD_c_compressionLevel, Int32(1)), (ZSTD_c_checksumFlag, Int32(1))] {
+                let code = ZSTD_CCtx_setParameter(stream, parameter, value)
+                guard ZSTD_isError(code) == 0 else { throw AppReplay.error("zstd encoder: " + String(cString: ZSTD_getErrorName(code))) }
+            }
             #endif
             try queue.sync { try put(Capture.header, finishing: false) }
         }
         deinit {
-            #if DEBUG && canImport(CBzip2)
-            BZ2_bzCompressEnd(&stream)
+            #if DEBUG && canImport(CZstd)
+            ZSTD_freeCStream(stream)
             #endif
         }
         func write(_ event: Event, clock: UInt64) throws {
@@ -1704,25 +1676,22 @@ final class AppReplay: @unchecked Sendable {
                 try put(certified ? Capture.footer(rows) : [], finishing: true)
             }
         }
-        /// On the writer's queue only.
+        /// On the writer's queue only. `finishing` ends the frame.
         private func put(_ bytes: [UInt8], finishing: Bool) throws {
-            #if DEBUG && canImport(CBzip2)
-            var input = bytes
-            try input.withUnsafeMutableBufferPointer { source in
-                stream.next_in = source.baseAddress.map { UnsafeMutableRawPointer($0).assumingMemoryBound(to: CChar.self) }
-                stream.avail_in = UInt32(source.count)
-                for _ in sequence(first: 0, next: { $0 + 1 }) {
-                    let (code, produced) = buffer.withUnsafeMutableBufferPointer { target -> (Int32, Data) in
-                        stream.next_out = UnsafeMutableRawPointer(target.baseAddress!).assumingMemoryBound(to: CChar.self)
-                        stream.avail_out = UInt32(target.count)
-                        let code = BZ2_bzCompress(&stream, finishing ? BZ_FINISH : BZ_RUN)
-                        return (code, Data(target[0..<(target.count - Int(stream.avail_out))]))
+            #if DEBUG && canImport(CZstd)
+            try bytes.withUnsafeBytes { source in
+                try buffer.withUnsafeMutableBytes { target in
+                    var from = ZSTD_inBuffer(src: source.baseAddress, size: source.count, pos: 0)
+                    for _ in sequence(first: 0, next: { $0 + 1 }) {
+                        var to = ZSTD_outBuffer(dst: target.baseAddress, size: target.count, pos: 0)
+                        let left = ZSTD_compressStream2(stream, &to, &from, finishing ? ZSTD_e_end : ZSTD_e_continue)
+                        guard ZSTD_isError(left) == 0 else {
+                            throw AppReplay.error("zstd encoder: " + String(cString: ZSTD_getErrorName(left)))
+                        }
+                        if to.pos > 0 { try file.write(contentsOf: Data(target[0..<to.pos])) }
+                        // Every input byte taken (continue), or the frame ended with nothing left to flush (end).
+                        if finishing ? left == 0 : from.pos == from.size { break }
                     }
-                    guard code == (finishing ? BZ_FINISH_OK : BZ_RUN_OK) || code == BZ_STREAM_END else {
-                        throw AppReplay.error("bzip2 encoder \(code)")
-                    }
-                    if !produced.isEmpty { try file.write(contentsOf: produced) }
-                    if finishing ? code == BZ_STREAM_END : stream.avail_in == 0 { break }
                 }
             }
             #else

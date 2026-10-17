@@ -59,7 +59,7 @@ class Corpus(unittest.TestCase):
                                              'LIVE': '1' if mode == 'live' else None, 'REPLAY_REQUIRED': '1' if mode == 'replay' else None,
                                              'TEST_CAPTURE': '1' if mode == 'capture' else None,
                                              # One staging root, no run in its path: every case writes <TestFile>/<test>/ in it.
-                                             'CAPTURE': str(root / 'dt/checkout/build/captures/helper-%p.rpl.bz2') if mode == 'capture' else None,
+                                             'CAPTURE': str(root / 'dt/checkout/build/captures/helper-%p.rpl.zst') if mode == 'capture' else None,
                                              'APP_CAPTURE': None})
                 staged = root / 'build/captures'
                 self.assertEqual((json.loads((staged / 'tests.json').read_text()) if mode == 'capture' else None, stores),

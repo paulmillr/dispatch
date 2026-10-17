@@ -1,14 +1,15 @@
-//! The replay corpus's compression: Zstandard (Vendor/Zstd, compiled by build.rs into macOS helpers with the capture
-//! tool), level 9 with long-distance matching over a 128 MiB window, so a payload recorded again and again (a helper
-//! binary uploaded many times) is stored once; each frame ends with a checksum of its content, which refuses a damaged
-//! file as bzip2's checksums do. A checkpoint ends a frame and later records continue in the next, as the bzip2 codec
-//! ends a member; the decoder reads frames one after another.
+//! The capture files' compression: Zstandard (Vendor/Zstd, compiled by build.rs into every helper with the capture
+//! tool). A live capture is level 1 (zstd's fast strategy: recording never waits on it); the replay corpus is level 9
+//! with long-distance matching over a 128 MiB window, so a payload recorded again and again (a helper binary uploaded
+//! many times) is stored once. Each frame ends with a checksum of its content, which refuses a damaged file. A
+//! checkpoint ends a frame and later records continue in the next; the decoder reads frames one after another.
 use std::ffi::{CStr, c_char, c_int, c_uint, c_void};
 use std::io::{self, Read, Write};
 
-// Vendor/Zstd builds only level 9's search strategy (lazy2, PROVENANCE.md): another level would quietly cascade to lazy2
-// or fast instead of failing.
-const LEVEL: c_int = 9;
+// Vendor/Zstd builds only these two levels' search strategies (fast and lazy2, PROVENANCE.md): another level would
+// quietly cascade to one of them instead of failing.
+const LIVE: c_int = 1;
+const CORPUS: c_int = 9;
 const WINDOW_LOG: c_int = 27;
 // zstd.h's parameter and directive values.
 const COMPRESSION_LEVEL: c_int = 100;
@@ -64,14 +65,22 @@ pub struct Encoder<W: Write> {
     pending: bool,
 }
 impl<W: Write> Encoder<W> {
-    pub fn new(output: W) -> io::Result<Self> {
+    /// A live capture: fast, in level 1's own small window (a helper process holds one while it runs).
+    pub fn live(output: W) -> io::Result<Self> {
+        Self::new(output, &[(COMPRESSION_LEVEL, LIVE), (CHECKSUM, 1)])
+    }
+    /// A corpus file: level 9 over the long window.
+    pub fn corpus(output: W) -> io::Result<Self> {
+        Self::new(output, &[(COMPRESSION_LEVEL, CORPUS), (WINDOW, WINDOW_LOG), (LONG_DISTANCE, 1), (CHECKSUM, 1)])
+    }
+    fn new(output: W, parameters: &[(c_int, c_int)]) -> io::Result<Self> {
         // SAFETY: allocates a context, freed once in Drop.
         let stream = unsafe { ZSTD_createCStream() };
         if stream.is_null() {
             return Err(io::Error::other("zstd encoder"));
         }
         let encoder = Self { output: Some(output), stream, buffer: vec![0; 1 << 17], pending: false };
-        for (parameter, value) in [(COMPRESSION_LEVEL, LEVEL), (WINDOW, WINDOW_LOG), (LONG_DISTANCE, 1), (CHECKSUM, 1)] {
+        for &(parameter, value) in parameters {
             // SAFETY: the context is live.
             check(unsafe { ZSTD_CCtx_setParameter(encoder.stream, parameter, value) })?;
         }
@@ -144,7 +153,7 @@ impl<R: Read> Decoder<R> {
             return Err(io::Error::other("zstd decoder"));
         }
         let decoder = Self { input, stream, buffer: vec![0; 1 << 17], start: 0, end: 0, exhausted: false, ended: true, limit, produced: 0 };
-        // SAFETY: the context is live. The encoder's window: a larger one is refused rather than allocated.
+        // SAFETY: the context is live. The corpus encoder's window: a larger one is refused rather than allocated.
         check(unsafe { ZSTD_DCtx_setParameter(decoder.stream, WINDOW_MAX, WINDOW_LOG) })?;
         Ok(decoder)
     }

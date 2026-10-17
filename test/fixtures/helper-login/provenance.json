@@ -1,9 +1,9 @@
 {
-  "capture_sha256": "26aadbf0b81cba101069e0cd770634a8d66976ba5c6701e2c1611ee17693b1d4",
-  "origin": "Real SSH login of the remote helper, recorded by test/run.sh --capture (SSHSpaceTests/testSSHTmuxHandoffLoginStaysHiddenAcrossReconnect, 2026-10-14); unchanged capture bytes. Replaces the Linux login capture, which was never committed. Scrubbed on 2026-10-19 member by member (each compressed again with bzip2 -9, the members kept): this Mac's host name, kernel and boot ids and temporary folder name replaced by values of the same length, as the replay corpus has them.",
+  "capture_sha256": "e828b9c9b9db09fa26da63e9c33f3552be231197ff5fdf2788c3b5c9a57a3614",
+  "origin": "Real SSH login of the remote helper, recorded by test/run.sh --capture (SSHSpaceTests/testSSHTmuxHandoffLoginStaysHiddenAcrossReconnect, 2026-10-14); its expanded bytes unchanged, recorded as bzip2 and recompressed on 2026-10-17 as zstd, one level-1 frame per bzip2 member, as a live capture is written now. Replaces the Linux login capture, which was never committed. Scrubbed on 2026-10-19 frame by frame (each recompressed at level 1 with its checksum, the frames kept): this Mac's host name, kernel and boot ids and temporary folder name replaced by values of the same length, as the replay corpus has them.",
   "helper_version": "08b2121f40092a824530c4df8d69be292868693ce7236fde2b6ed8baaefd60f4",
   "wire_version": "13472849151989474303",
   "platform": "macos",
-  "members": 2,
-  "usage": "Collection and transfer regressions use the original bytes; the second bzip2 member is what a running helper appends after its startup checkpoint. Native replay also needs the original launch context; no context has been synthesized."
+  "frames": 2,
+  "usage": "Collection and transfer regressions use the original bytes; the second zstd frame is what a running helper appends after its startup checkpoint. Native replay also needs the original launch context; no context has been synthesized."
 }
