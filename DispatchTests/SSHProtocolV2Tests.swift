@@ -41,7 +41,7 @@ final class SSHProtocolV2Tests: XCTestCase {
             process.arguments = ["--stdio"]
             var environment = System.inherited
             if let capture = environment["DISPATCH_CAPTURE"] {
-                environment["DISPATCH_CAPTURE"] = capture + ".client-\(index)-%p.rpl.bz2"
+                environment["DISPATCH_CAPTURE"] = capture + ".client-\(index)-%p.rpl.zst"
             }
             process.environment = environment
             process.standardError = FileHandle.nullDevice

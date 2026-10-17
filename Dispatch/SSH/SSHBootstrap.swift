@@ -105,14 +105,14 @@ enum SSHBootstrap {
     }
 
     /// Test runs (DISPATCH_CAPTURE set for this app) trace remote helpers too: the remote login and
-    /// `connect` export DISPATCH_CAPTURE=$HOME/<captureDirectory>/helper-%p.rpl.bz2 (every remote helper,
-    /// nested ones included, writes its own file); the tests collect that directory after each case.
-    /// Set in capture runs only: replay keeps the recorded value.
-    static var captureDirectory: String? {
+    /// `connect` export DISPATCH_CAPTURE=$HOME/<captureDirectory>/<its file name> (helper-%p.rpl.zst: every remote
+    /// helper, nested ones included, writes its own file); the tests collect that directory after each case.
+    /// Set in capture runs only: replay keeps the recorded value, so the command sent is the recorded one.
+    static var capturePath: String? {
         let path: String?
         do { path = try System.observe("environment", "DISPATCH_CAPTURE") { System.environment("DISPATCH_CAPTURE") } }
         catch { AppReplay.fail(error); path = nil }
-        return path.map(captureDirectory)
+        return path
     }
 
     /// The remote folder of a capture path: a digest of its directory (a test case's staging folder), so shared hosts
@@ -122,7 +122,10 @@ enum SSHBootstrap {
         return ".cache/dispatch-capture/" + SHA256.hash(data: Data(directory.utf8)).prefix(6).map { String(format: "%02x", $0) }.joined()
     }
     static var captureExport: String {
-        captureDirectory.map { "mkdir -p \"$HOME/\($0)\" && export DISPATCH_CAPTURE=\"$HOME/\($0)/helper-%p.rpl.bz2\"\n" } ?? ""
+        capturePath.map { path in
+            let directory = captureDirectory(path), name = URL(fileURLWithPath: path).lastPathComponent
+            return "mkdir -p \"$HOME/\(directory)\" && export DISPATCH_CAPTURE=\"$HOME/\(directory)/\(name)\"\n"
+        } ?? ""
     }
 
     static func validSessionID(_ id: String) -> Bool {

@@ -446,7 +446,7 @@ The workflows, the corpus, the build's corpus check and the `capture` tool
 Collection regression checks use an existing real native capture:
 
 ```sh
-TMPDIR="$PWD/build/capture-tests" DISPATCH_CAPTURE_TEST_SOURCE=/path/to/helper-capture.rpl.bz2 \
+TMPDIR="$PWD/build/capture-tests" DISPATCH_CAPTURE_TEST_SOURCE=/path/to/helper-capture.rpl.zst \
   python3 test/capture.test.py
 ```
 

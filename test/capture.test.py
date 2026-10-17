@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Collection contracts exercised with an existing, unmodified native capture."""
-import bz2
 import fcntl
 import importlib.util
 import json
@@ -24,7 +23,7 @@ spec.loader.exec_module(capture)
 class Collection(unittest.TestCase):
     def setUp(self):
         root=Path(__file__).resolve().parent.parent
-        self.fixture = Path(os.environ.get('DISPATCH_CAPTURE_TEST_SOURCE', root/'test/fixtures/helper-login/capture.rpl.bz2'))
+        self.fixture = Path(os.environ.get('DISPATCH_CAPTURE_TEST_SOURCE', root/'test/fixtures/helper-login/capture.rpl.zst'))
         temporary=Path(os.environ.get('TMPDIR',root/'build/capture-tests'))
         temporary.mkdir(parents=True,exist_ok=True)
         self.directory = tempfile.TemporaryDirectory(dir=temporary)
@@ -32,16 +31,23 @@ class Collection(unittest.TestCase):
         self.root = Path(self.directory.name)
         self.remote = self.root / 'remote'
         self.remote.mkdir()
-        self.source = self.remote / 'helper-17-1.rpl.bz2'
+        self.source = self.remote / 'helper-17-1.rpl.zst'
         shutil.copyfile(self.fixture, self.source)
         self.target = self.root / 'download'
 
     def snapshot(self):
-        """The fixture as a running helper's snapshot: its first bzip2 member (the startup checkpoint)."""
+        """The fixture as a running helper's snapshot: its first zstd frame (the startup checkpoint). The frame's end, from
+        its header (RFC 8878): the descriptor byte's sizes of what follows, then blocks up to the last, then a checksum."""
         original = self.fixture.read_bytes()
-        member = bz2.BZ2Decompressor()
-        member.decompress(original)
-        return original[:len(original) - len(member.unused_data)]
+        flags = original[4]
+        single = flags & 0x20
+        at = 5 + (not single) + (0, 1, 2, 4)[flags & 3] + (bool(single), 2, 4, 8)[flags >> 6]
+        last = False
+        while not last:
+            block = int.from_bytes(original[at:at + 3], 'little')
+            last, kind, size = block & 1, block >> 1 & 3, block >> 3
+            at += 3 + (1 if kind == 1 else size)
+        return original[:at + 4 * bool(flags & 4)]
 
     def test_verified_download_acknowledges_but_retains_source(self):
         original = self.source.read_bytes()

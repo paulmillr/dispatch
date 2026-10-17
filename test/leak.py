@@ -6,7 +6,6 @@ then search the captures for them (capture grep --needles). The output holds pri
 shared. Environments are not printed (they can hold credentials): the helper records its own at startup, and capture
 grep lists every capture's: read them there. With --captures, also the login banners' times those captures show: run it
 after the recording then (the run's own logins make most of them)."""
-import bz2
 import contextlib
 import json
 import os
@@ -131,9 +130,9 @@ BANNER = re.compile(rb'Last login: ((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|M
 
 @contextlib.contextmanager
 def expanded(path):
-    """A capture's bytes as a stream: bzip2 as recorded, zstd in the corpus (through the zstd tool)."""
+    """A capture's bytes as a stream: zstd, through the zstd tool."""
     if path.suffix != '.zst':
-        with (bz2.open if path.suffix == '.bz2' else open)(path, 'rb') as stream:
+        with open(path, 'rb') as stream:
             yield stream
         return
     with subprocess.Popen(['zstd', '-dcq', '--long=27', str(path)], stdout=subprocess.PIPE) as process:

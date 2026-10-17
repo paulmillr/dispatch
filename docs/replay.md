@@ -8,8 +8,8 @@
   - The **app journal**: everything the app exchanges with the outside world in one test: helper connections (bytes both ways), terminal ptys, commands it runs, files it reads and writes, what it observes (process state, file existence, the time), its own waits (`System.sleep`) and the test's steps.
   - One **helper capture** per helper process the test started: its startup facts, every I/O request and its result, its end (return status, handoff or signal).
   - Helpers on SSH hosts (the Mac's own test sshd, the Linux test host) write their captures there; each test collects them when it ends.
-  - The file format is the same for both: bzip2 around length-prefixed frames, binary values (`helper/core/src/system/capture/trace.rs`). Bytes stay bytes.
-  - The corpus keeps them as zstd instead (`.rpl.zst`, level 9, `--long=27`: `Vendor/Zstd/PROVENANCE.md`): its 128 MiB window stores a payload recorded again and again (the bootstrap tests upload the helper binary many times) once, where bzip2's 900 KB blocks store it every time. `capture store` compresses again as it stores; `capture repack replays` converts bzip2 files already there. Every reader tells the two by their first bytes; `zstd -dc --long=27` expands one.
+  - The file format is the same for both: zstd around length-prefixed frames, binary values (`helper/core/src/system/capture/trace.rs`). Bytes stay bytes.
+  - Live captures are zstd level 1, fast and in a small window; the corpus keeps them at level 9 with `--long=27` (`.rpl.zst` either way: `Vendor/Zstd/PROVENANCE.md`), whose 128 MiB window stores a payload recorded again and again (the bootstrap tests upload the helper binary many times) once. `capture store` compresses again as it stores. `zstd -dc --long=27` expands either.
   - Captures hold unredacted I/O: never publish one without [capture_scrub.md](capture_scrub.md).
 
 - **The corpus**: `replays/<TestFile>/<testName>/<key>.rpl.zst`
@@ -47,7 +47,7 @@ Most work needs no full live run. Replaying every recording takes about 15 minut
     "$HELPER" capture replay replays --completion required --output results/my-change
     ```
 
-  - Rust unit tests: `cd helper && cargo test --offline`.
+  - Rust unit tests: `cd helper && cargo test --offline --features dispatch-helper/capture` (the capture tests need zstd, which only the `capture` feature builds).
   - Helper replays passing means the helper answers every recorded request as before, so the app's recordings still hold.
   - A capture that fails: the helper now does something else for that request (`report.jsonl` names the record). If that is the change you meant, the test that recorded it is stale: record that app test again. Helper captures are only recorded through app tests (`--capture`).
 
@@ -105,7 +105,7 @@ Most work needs no full live run. Replaying every recording takes about 15 minut
   python3 test/xcode.py --capture --live DispatchTests/ChatTests   # record tests already in the corpus too
   ```
 
-  - Everything stays in `build/captures/` for debugging, failed tests included, laid out as the corpus: `<TestFile>/<testName>/` holds the test's app journal (`<uuid>.rpl.bz2`), its local helper captures (`helper-<pid>-<start>.rpl.bz2`) and a folder per SSH host with that host's.
+  - Everything stays in `build/captures/` for debugging, failed tests included, laid out as the corpus: `<TestFile>/<testName>/` holds the test's app journal (`<uuid>.rpl.zst`), its local helper captures (`helper-<pid>-<start>.rpl.zst`) and a folder per SSH host with that host's.
     - `cases.jsonl`: each test's start, end and outcome; `tests.json`: each test class's file (the runner's, not a capture format).
     - Its path is the same in every capture (test processes see it, and recordings hold it), so it names no run: `--capture` refuses a `build/captures` that holds an earlier capture. Move that one away to keep it (and back to replay it).
     - On an SSH host a test's helpers write into `~/.cache/dispatch-capture/<digest of its staging folder>/`, the same folder in every capture of that test; after the test its new files come over (a copied file is acknowledged there, never deleted). Files left by a capture whose collection failed come along with the next capture of that test: they link to no journal, so `store` refuses the test ("not linked"). Capture it again.
@@ -195,7 +195,7 @@ Most work needs no full live run. Replaying every recording takes about 15 minut
   "$HELPER" capture inspect replays/ChatTests/testX/<key>.rpl.zst --from 280 --limit 20   # around a replay message's record 290
   "$HELPER" capture value results/000003.mismatch/mismatch.value
   "$HELPER" capture key replays/ChatTests
-  "$HELPER" capture diff old/<key>.rpl.zst new/helper-<pid>-<start>.rpl.bz2   # or two directories of captures
+  "$HELPER" capture diff old/<key>.rpl.zst new/helper-<pid>-<start>.rpl.zst   # or two directories of captures
   ```
 
   - `inspect` prints one line per record: its number (app replay messages name the same `record N`), milliseconds since the capture started, section, operation, what was asked, then `->` and what came back (`null`, sequence 0 and no error print nothing). A record holding several wire frames prints one line per frame, so `grep` finds a method together with its record. Our own frames print decoded (`request 45 terminals.attach {size: ...}`, `notify 45 terminal.output {...}`, `cancel 45`). A frame split over several reads prints whole on the record where it completes; the reads before it show `response 3 continues (22530 of 65544 bytes)`. A streamed reply prints its chunks as `chunk 3 #0 (65536 bytes)` and the whole message, decoded, with its last frame (`response 3 {...} (streamed)`). Other bytes as text when UTF-8, as the value when they are one of our plain values (a hook question's body), else hex (only bytes nothing here knows the structure of: hashes, random bytes, OS structs, binary files). `--from N` starts at record N. It says `complete` at the footer, or how to see more.
@@ -227,7 +227,7 @@ Most work needs no full live run. Replaying every recording takes about 15 minut
   - `recent`: the last records replay consumed.
   - `stale observation`: an observation answered with an older recorded value than the newest one (it shows which record the app's progress pointed at).
   - one line per lifetime with its next record and what the app waits for there; `typed`: what the app typed into a renderer that no hand-back took yet; `held`: why its next input waits for the app's own state (a pty size: `the app's pty is 31x42; recorded 32x42, later 30x42`: the app's layout gave the pane another size than capture's). Once the app hangs up or closes that pty, or asks its helper to close the terminal it shows, nothing holds there anymore: a closing view gets no more layout. While its view is in a window, a gate holds everything recorded after it: what follows can move the view away before its layout reaches that size (mix53: a herdr launch's release reply selected the new space before the launcher's view got the sidebar's width). While its view is in no window (it gets no layout there), what it holds waits without holding the other lifetimes (`held: ... (in no window: the others go on)`): a redraw drawn at the stale size would be lost when the view shrinks back (an alternate screen does not reflow; mix46 herdr+tmux coexist). A size capture's layout passed through for a moment that replay's never produces (mix49 repeated detach: 146 columns, the sidebar hidden during a detach) still holds: such a moment is a flash on screen, found and fixed in the app. As a last resort, when replay would otherwise stall with nothing but such sizes holding input (the app's layout went another way: the herdr launcher left the window before the sidebar's width reached it), those inputs come at the app's size and the test's relaxed list names them ("size not reached on lifetime N: ..."); a passing replay never gets there.
-- **Mismatch** ("expected X, received Y"): the app did something else than the recording at that point. The two events are written to `build/replay-diagnostics/<test>-<journal>.mismatch-<id>.rpl.bz2` (`capture inspect` reads it); the message names the file.
+- **Mismatch** ("expected X, received Y"): the app did something else than the recording at that point. The two events are written to `build/replay-diagnostics/<test>-<journal>.mismatch-<id>.rpl.zst` (`capture inspect` reads it); the message names the file.
 - **"made ids differently"**: a site made another number of ids than in the recording; later ids from that site shift. Usually the symptom of an earlier divergence, not its cause.
 - **"relaxed"**: requests replay answered or dropped because UI timing differed from the recording (listed, not a failure by itself).
   - "after its end X": the app closed its side of a connection (or pty channel), or sent it request X, after replay had already delivered its recorded end and before its transport's queue took that end; capture's transport had stopped first and recorded nothing. Nothing answers such a request (nothing could take the answer).
@@ -247,12 +247,12 @@ After an app or helper change (or an upstream merge) a replay that fails says: t
   "$HELPER" capture inspect replays/ChatTests/testX/<key>.rpl.zst --from 280 --limit 40   # record 300 named by the failure
   ```
 
-- **Compare the old recording with a new one** of the same test (`--capture` it live, then find its file in `build/captures/<TestFile>/<testName>/`): `"$HELPER" capture diff old/<key>.rpl.zst new/<file>.rpl.bz2` (ids, pids and uuids that differ in every run show as changes, grouped). Recorded with another wire version (a merge changed the protocol), each side needs its own helper's `inspect`; numbers that differ in every run (record numbers, times, lifetimes, request ids, pids, uuids) are masked so only real differences remain:
+- **Compare the old recording with a new one** of the same test (`--capture` it live, then find its file in `build/captures/<TestFile>/<testName>/`): `"$HELPER" capture diff old/<key>.rpl.zst new/<file>.rpl.zst` (ids, pids and uuids that differ in every run show as changes, grouped). Recorded with another wire version (a merge changed the protocol), each side needs its own helper's `inspect`; numbers that differ in every run (record numbers, times, lifetimes, request ids, pids, uuids) are masked so only real differences remain:
 
   ```sh
   norm() { "$1" capture inspect "$2" --limit 100000000 | sed -E 's/^[0-9]+ [0-9.]+ //; s#app/[0-9]+#app/L#g;
     s/(request|response|notify|cancel) [0-9]+/\1 N/g; s/[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}/UUID/g; s/[0-9]{4,}/N/g'; }
-  diff <(norm "$OLD_HELPER" old/<key>.rpl.zst) <(norm "$HELPER" new/<file>.rpl.bz2) | head -100
+  diff <(norm "$OLD_HELPER" old/<key>.rpl.zst) <(norm "$HELPER" new/<file>.rpl.zst) | head -100
   ```
 
   - The first block that differs is usually the cause; the rest follows from it. Terminal bytes are split differently in every run: compare what a stream carried, not where reads split it.

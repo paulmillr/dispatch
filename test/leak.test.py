@@ -1,6 +1,5 @@
 """leak.py's needles: time zones over a made-up zone database (a zone name gets another real zone of its byte length),
 login banner times read from captures, and the prompts and startup files a machine's facts make."""
-import bz2
 from pathlib import Path
 import shutil
 import subprocess
@@ -40,9 +39,9 @@ class Banner(unittest.TestCase):
             case = Path(directory, 'Suite/test')
             case.mkdir(parents=True)
             text = b'\0Last login: Fri Oct 16 14:44:47 on ttys007\r\nLast login: Tue Jun  9 04:32:50 on ttys012'
-            (case / 'one.rpl.bz2').write_bytes(bz2.compress(text + b'\x01Last login: Fri Oct 16 14:44:47 on ttys002'))
+            (case / 'one.rpl').write_bytes(text + b'\x01Last login: Fri Oct 16 14:44:47 on ttys002')
             (case / 'two.rpl').write_bytes(b'Last login: Thu Jan  1 00:00:01 2026 from 10.0.0.1')
-            # The corpus's zstd, through the zstd tool.
+            # A capture's zstd, through the zstd tool.
             if shutil.which('zstd'):
                 packed = subprocess.run(['zstd', '-cq', '--long=27'], input=b'Last login: Sat Mar  7 09:08:07 on ttys001',
                                         stdout=subprocess.PIPE, check=True).stdout

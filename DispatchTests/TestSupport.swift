@@ -358,7 +358,7 @@ final class DispatchTestObserver: NSObject, XCTestObservation {
         return (["DispatchTests"] + parts.suffix(2).map(String.init)).joined(separator: "/")
     }
 
-    /// A capture's staging root (the runner's DISPATCH_CAPTURE=<root>/helper-%p.rpl.bz2, inherited by every helper): each
+    /// A capture's staging root (the runner's DISPATCH_CAPTURE=<root>/helper-%p.rpl.zst, inherited by every helper): each
     /// case writes <TestFile>/<test>/ in it, as in replays/ (tests.json there names each test class's file), and its
     /// boundaries in cases.jsonl.
     private static let staging = System.environment("DISPATCH_CAPTURE").map { URL(fileURLWithPath: $0).deletingLastPathComponent() }
@@ -398,14 +398,14 @@ final class DispatchTestObserver: NSObject, XCTestObservation {
     }
 
     /// The case's remote helper captures (SSHBootstrap.captureDirectory on each host it used) move to
-    /// <root>/<TestFile>/<test>/<host>/helper-<pid>-<start ns>.rpl.bz2; per case, so remote clocks never matter.
+    /// <root>/<TestFile>/<test>/<host>/helper-<pid>-<start ns>.rpl.zst; per case, so remote clocks never matter.
     private static func collectRemote(_ testCase: XCTestCase) {
         defer { SSHLinuxTestProfile.used.removeAll() }
         guard cases != nil else { return }
         let target: URL
         do { target = try staged(testCase) } catch { XCTFail("\(error)"); return }
         // Where the case's remote helpers wrote: the folder of the case's own capture path (DISPATCH_CAPTURE during it).
-        let directory = SSHBootstrap.captureDirectory(target.appendingPathComponent("helper-%p.rpl.bz2").path)
+        let directory = SSHBootstrap.captureDirectory(target.appendingPathComponent("helper-%p.rpl.zst").path)
         let script = System.checkout.appendingPathComponent("test/capture.py").path
         var sources: [(String, URL, [String])] = []
         // The loopback sshd runs as this account: the remote HOME is the account's, not this test's HOME.
@@ -442,7 +442,7 @@ final class DispatchTestObserver: NSObject, XCTestObservation {
             do { try AppReplay.begin(url: journal, replaying: true) } catch { XCTFail("App replay setup failed: \(error)") }
         } else if System.environment("DISPATCH_TEST_CAPTURE") == "1" {
             do {
-                let path = try Self.staged(testCase).appendingPathComponent(System.uuid().uuidString + ".rpl.bz2")
+                let path = try Self.staged(testCase).appendingPathComponent(System.uuid().uuidString + ".rpl.zst")
                 try AppReplay.begin(url: path, replaying: false)
                 Self.journals[Self.identifier(testCase)] = path.path
             } catch { XCTFail("App journal setup failed: \(error)") }
@@ -468,7 +468,7 @@ final class DispatchTestObserver: NSObject, XCTestObservation {
                     let directory = try Self.staged(testCase)
                     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
                                                            attributes: [.posixPermissions: 0o700])
-                    let pattern = directory.appendingPathComponent("helper-%p.rpl.bz2").path
+                    let pattern = directory.appendingPathComponent("helper-%p.rpl.zst").path
                     setenv("DISPATCH_CAPTURE", pattern, 1)
                     // Registered first: all case cleanup and shared-state checks finish before the helper exits.
                     testCase.addTeardownBlock {
@@ -490,7 +490,7 @@ final class DispatchTestObserver: NSObject, XCTestObservation {
     }
 }
 
-/// The replay corpus, `replays/<TestFile>/<test>/<key>.rpl.bz2` (DISPATCH_REPLAYS: another root): a test with an app
+/// The replay corpus, `replays/<TestFile>/<test>/<key>.rpl.zst` (DISPATCH_REPLAYS: another root): a test with an app
 /// journal there replays it, one without runs live (recorded when the runner captures). DISPATCH_LIVE=1 runs every test
 /// live; DISPATCH_REPLAY_REQUIRED=1 fails a test without one. A journal of another protocol version is a wrong
 /// capture: the test fails (`capture prune` drops it).
@@ -522,7 +522,7 @@ enum Corpus {
               let file = files[parts[1]] else { return nil }
         let directory = root.appendingPathComponent(file).appendingPathComponent(parts[2])
         let urls = ((try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? [])
-            .filter { url in [".rpl.zst", ".rpl.bz2"].contains { url.lastPathComponent.hasSuffix($0) } }.sorted { $0.path < $1.path }
+            .filter { $0.lastPathComponent.hasSuffix(".rpl.zst") }.sorted { $0.path < $1.path }
         for url in urls {
             switch try AppReplay.journal(url) {
             case true?: return url

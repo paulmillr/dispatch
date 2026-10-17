@@ -42,10 +42,15 @@ never builds; everything else is upstream's code, so the compressed and decompre
   except inside `common/error_private.h`'s macros; `common/debug.h` keeps their definitions. Each object's
   machine code is unchanged by these.
 
-The replay corpus (`replays/`) is zstd: level 9 with long-distance matching (`--long=27`), whose 128 MiB window
-finds the same large payload recorded again and again (a helper binary uploaded many times) that bzip2's 900 KB
-blocks cannot see. Only test tooling uses it, never a Release build:
+Captures are zstd. The replay corpus (`replays/`) is level 9 with long-distance matching (`--long=27`), whose 128 MiB
+window finds the same large payload recorded again and again (a helper binary uploaded many times). Live captures are
+level 1 (the `fast` strategy): quick, in a small window; `capture store` compresses them again for the corpus. Only test
+tooling uses it, never a Release build:
 
-- The helper (`helper/core/build.rs`) compiles all three parts for macOS targets with its `capture` feature: the
-  capture tool writes the corpus and every replay reads it. Linux helpers and live captures stay bzip2.
-- The app (target `Zstd`, module `CZstd`) compiles `common` and `decompress`: Debug app replays read the corpus.
+- The helper (`helper/core/build.rs`) compiles all three parts into every helper with its `capture` feature, macOS and
+  Linux: live captures and the capture tool write it, every replay reads it. Linux helpers are built on macOS with the
+  same clang, for `*-unknown-linux-musl` and freestanding (macOS has no Linux libc headers): `freestanding/`, ours and
+  not upstream's, declares the libc functions zstd calls (`memcpy`, `memmove`, `memset`, `memcmp`, `malloc`, `calloc`,
+  `free`), which the static musl libc of Rust's musl targets supplies.
+- The app (target `Zstd`, module `CZstd`) compiles all three parts: Debug app journals are written (level 1, as live
+  captures) and read with it.

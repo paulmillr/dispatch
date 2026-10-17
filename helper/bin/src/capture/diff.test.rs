@@ -21,7 +21,7 @@ fn changed(old: Option<&str>, new: Option<&str>, first: String) -> Group {
 #[test]
 fn two_captures_differ_once_at_each_place_their_decoded_values_do() {
     let root = scratch("diff-two");
-    let (a, b) = (root.join("a.rpl.bz2"), root.join("b.rpl.bz2"));
+    let (a, b) = (root.join("a.rpl.zst"), root.join("b.rpl.zst"));
     let reply = |result: Data<'_>| packet(wire::Kind::Response, 1, &Data::Object(vec![("result", result)]));
     // A request frame's two params, a reply's field only in a, a record only in a and one only in b, bytes that are no
     // text, and a request frame b recorded as other bytes.
@@ -66,23 +66,23 @@ fn directories_pair_each_tests_captures_by_their_records_whatever_their_names() 
     // Three of a test's captures with the same records but other values, named in another order on each side: each
     // pairs with its own.
     for (index, rows) in [24, 30, 36].into_iter().enumerate() {
-        write(&a.join(format!("T/a{index}.rpl.bz2")), &size(rows));
-        write(&b.join(format!("T/b{}.rpl.bz2", (index + 1) % 3)), &size(rows));
+        write(&a.join(format!("T/a{index}.rpl.zst")), &size(rows));
+        write(&b.join(format!("T/b{}.rpl.zst", (index + 1) % 3)), &size(rows));
     }
-    write(&a.join("T/a3.rpl.bz2"), &opened("/home/alice"));
-    write(&a.join("U/x.rpl.bz2"), &size(24));
-    write(&b.join("T/zz.rpl.bz2"), &opened("/home/bobby"));
-    write(&b.join("V/new.rpl.bz2"), &[on("app/1", record("in.read", &Data::Null, &Data::Null))]);
+    write(&a.join("T/a3.rpl.zst"), &opened("/home/alice"));
+    write(&a.join("U/x.rpl.zst"), &size(24));
+    write(&b.join("T/zz.rpl.zst"), &opened("/home/bobby"));
+    write(&b.join("V/new.rpl.zst"), &[on("app/1", record("in.read", &Data::Null, &Data::Null))]);
     let found = compare(&a, &b, 2).map_err(|error| error.to_string());
     std::fs::remove_dir_all(&root).unwrap();
     assert_eq!(found, Ok(Compared { pairs: 4, groups: vec![changed(Some("\"alice\""), Some("\"bobby\""), format!("{}:0 {}:0 app/1 out.wire args[0] request 1 files.read.path",
-        a.join("T/a3.rpl.bz2").display(), b.join("T/zz.rpl.bz2").display()))], unpaired: vec![a.join("U/x.rpl.bz2"), b.join("V/new.rpl.bz2")] }));
+        a.join("T/a3.rpl.zst").display(), b.join("T/zz.rpl.zst").display()))], unpaired: vec![a.join("U/x.rpl.zst"), b.join("V/new.rpl.zst")] }));
 }
 
 #[test]
 fn an_app_journal_and_a_helper_capture_are_not_compared() {
     let root = scratch("diff-layers");
-    let (a, b) = (root.join("a.rpl.bz2"), root.join("b.rpl.bz2"));
+    let (a, b) = (root.join("a.rpl.zst"), root.join("b.rpl.zst"));
     write(&a, &[record("in.read", &Data::Null, &Data::Null)]);
     layered(&b, trace::Layer::Native, &[record("in.read", &Data::Null, &Data::Null)]);
     let found = compare(&a, &b, 1).map(|_| ()).map_err(|error| error.to_string());
@@ -93,7 +93,7 @@ fn an_app_journal_and_a_helper_capture_are_not_compared() {
 #[test]
 fn values_too_different_to_align_are_one_change_shown_shortened() {
     let root = scratch("diff-far");
-    let (a, b) = (root.join("a.rpl.bz2"), root.join("b.rpl.bz2"));
+    let (a, b) = (root.join("a.rpl.zst"), root.join("b.rpl.zst"));
     let text = |letter: char| (0..1500).map(|index| format!("{letter}{index}")).collect::<Vec<_>>().join(" ");
     let (old, new) = (text('a'), text('b'));
     write(&a, &[record("in.output", &Data::Null, &Data::String(&old))]);
@@ -108,7 +108,7 @@ fn values_too_different_to_align_are_one_change_shown_shortened() {
 #[test]
 fn a_word_ends_at_a_terminal_escape_and_at_a_character_beyond_ascii() {
     let root = scratch("diff-words");
-    let (a, b) = (root.join("a.rpl.bz2"), root.join("b.rpl.bz2"));
+    let (a, b) = (root.join("a.rpl.zst"), root.join("b.rpl.zst"));
     let shown = |name: &str| format!("\x1b[0;39;49m{name}@host \x1b]0;{name}\x07│{name}│ é{name}");
     write(&a, &[record("in.output", &Data::Null, &Data::String(&shown("alice")))]);
     write(&b, &[record("in.output", &Data::Null, &Data::String(&shown("bobby")))]);
@@ -124,7 +124,7 @@ fn a_word_ends_at_a_terminal_escape_and_at_a_character_beyond_ascii() {
 #[test]
 fn a_long_word_that_changed_shows_where_it_differs() {
     let root = scratch("diff-long");
-    let (a, b) = (root.join("a.rpl.bz2"), root.join("b.rpl.bz2"));
+    let (a, b) = (root.join("a.rpl.zst"), root.join("b.rpl.zst"));
     let word = |name: &str| format!("{}{name}{}", "x".repeat(1500), "y".repeat(1500));
     write(&a, &[record("in.output", &Data::Null, &Data::String(&word("alice")))]);
     write(&b, &[record("in.output", &Data::Null, &Data::String(&word("bobby")))]);

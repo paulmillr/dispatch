@@ -136,7 +136,7 @@ fn replace_removes_process_rows_and_masks_no_process_name() {
             .map(|record| trace::Record { output: bytes_replaced(&record.output, b"fakeco", fakeco.as_bytes()), ..record })
             .collect()
     };
-    write(&root.join("in/T/a/x.rpl.bz2"), &journal(&ROWS, "fakeco"));
+    write(&root.join("in/T/a/x.rpl.zst"), &journal(&ROWS, "fakeco"));
     std::fs::write(root.join("needles.txt"), "fakeco\n").unwrap();
     let path = |name: &str| root.join(name).to_str().unwrap().to_string();
     let replaced = run(&["replace", &path("in"), &path("out"), "--needles", &path("needles.txt")].map(Into::into))
@@ -164,7 +164,7 @@ fn grep_lists_every_whole_token_holding_a_needle_or_its_replacement() {
     let list = vec![(b"fakeco".to_vec(), None), (b"/home/someone".to_vec(), Some(b"/home/anybody".to_vec()))];
     let (replaced, _) = replacements(&list).unwrap();
     let mask = String::from_utf8(replaced[0].clone()).unwrap();
-    let file = root.join("in/a.rpl.bz2");
+    let file = root.join("in/a.rpl.zst");
     write(&file, &[
         record("in.result", &Data::Null, &Data::String(&format!("{mask}-collector reads /home/anybody/notes and {mask}"))),
         record("read", &fd(3), &Data::Bytes(&frame(4, &Data::Object(vec![("result", Data::String(&format!("user@{mask}.example")))])))),
@@ -203,7 +203,7 @@ fn socket(fakeco: &str) -> Vec<trace::Record> {
 #[test]
 fn grep_and_replace_read_inside_masked_websocket_frames() {
     let root = scratch("socket");
-    let file = root.join("in/a.rpl.bz2");
+    let file = root.join("in/a.rpl.zst");
     write(&file, &socket("fakeco"));
     std::fs::write(root.join("needles.txt"), "fakeco\n").unwrap();
     let matcher = Matcher::new(vec![b"fakeco".to_vec()]);
@@ -225,7 +225,7 @@ fn grep_and_replace_read_inside_masked_websocket_frames() {
 #[test]
 fn grep_reports_a_needle_the_screen_shows_drawn_from_its_end_back() {
     let root = scratch("backwards");
-    let file = root.join("in/a.rpl.bz2");
+    let file = root.join("in/a.rpl.zst");
     // The terminal draws "cd" at column 3, a long line below, then jumps back and draws "ab": the screen shows "abcd",
     // its first cell written long after its last.
     let bytes = [&b"\x1b[1;3Hcd\x1b[5;1H"[..], &[b'x'; 200], b"\x1b[1;1Hab"].concat();
@@ -243,7 +243,7 @@ fn grep_reports_a_needle_the_screen_shows_drawn_from_its_end_back() {
 /// What grep finds of `needle` in a capture of `records`: each place and how many times (where first is for reading).
 fn places(name: &str, records: &[trace::Record], needle: &[u8]) -> Result<BTreeMap<String, usize>, String> {
     let root = scratch(name);
-    let file = root.join("in/a.rpl.bz2");
+    let file = root.join("in/a.rpl.zst");
     write(&file, records);
     let matcher = Matcher::new(vec![needle.to_vec()]);
     let found = search(&file, &matcher, &matcher, &[]).map_err(|error| error.to_string());
@@ -303,7 +303,7 @@ fn only_terminals_have_screens_and_grep_lists_those_of_no_size() {
         ("params", Data::Object(vec![("terminal", Data::Unsigned(7)), ("bytes", Data::Bytes(b"\x1b[1;1Hok"))]))]));
     let text = frame(wire::Kind::Response, Data::Object(vec![("result", Data::Object(vec![("hostname", Data::String("a\u{1b}[1mb"))]))]));
     let root = scratch("terminals");
-    let file = root.join("in/a.rpl.bz2");
+    let file = root.join("in/a.rpl.zst");
     write(&file, &[
         on("app/3", record("in.output", &Data::Null, &Data::Bytes(b"\x1b[2;1Hplain"))),
         on("app/4", record("in.read", &Data::Null, &Data::Bytes(&[&output[..], &text[..]].concat()))),
@@ -322,7 +322,7 @@ fn replace_names_every_output_file_at_random() {
     let root = scratch("names");
     // Named as store names them: by their content's key.
     for (dir, records) in [("in/T/a", lists(&ROWS, 40, 30)), ("in/T/a", lists(&ROWS, 40, 30)[..2].to_vec()), ("in/T/b", socket("fakeco"))] {
-        let file = root.join(dir).join("new.rpl.bz2");
+        let file = root.join(dir).join("new.rpl.zst");
         write(&file, &records);
         std::fs::rename(&file, root.join(dir).join(format!("{}.rpl.zst", key(&file).unwrap()))).unwrap();
     }
@@ -342,11 +342,12 @@ fn replace_names_every_output_file_at_random() {
     let inputs = files("in");
     let outputs = ["one", "two"].map(|out| -> Result<_, String> {
         run(&["replace", &path("in"), &path(out), "--needles", &path("needles.txt")].map(Into::into)).map_err(|error| error.to_string())?;
-        // Written as the corpus keeps captures: zstd.
+        // Written as the corpus keeps captures: zstd over the long window (the frame header's window descriptor,
+        // after the magic and the descriptor byte: 2^27), where a live capture keeps level 1's own.
         for file in captures(&root.join(out)).map_err(|error| error.to_string())? {
-            let magic = std::fs::read(&file).map_err(|error| error.to_string())?[..4].to_vec();
-            if magic != [0x28, 0xb5, 0x2f, 0xfd] {
-                return Err(format!("{} is not zstd", file.display()));
+            let head = std::fs::read(&file).map_err(|error| error.to_string())?[..6].to_vec();
+            if head[..4] != [0x28, 0xb5, 0x2f, 0xfd] || (head[5] >> 3) + 10 != 27 {
+                return Err(format!("{} is not the corpus's zstd", file.display()));
             }
         }
         files(out)
@@ -378,7 +379,7 @@ fn store_takes_a_staged_test_directory_as_it_is() {
     }).concat()).unwrap();
     let journal = |test: &str| vec![record("in.result", &Data::Null, &Data::String(test))];
     for test in ["testA", "testB"] {
-        write(&stage.join("ExampleTests").join(test).join("c0ffee.rpl.bz2"), &journal(test));
+        write(&stage.join("ExampleTests").join(test).join("c0ffee.rpl.zst"), &journal(test));
     }
     let path = |name: &str| root.join(name).to_str().unwrap().to_string();
     let stored = run(&["store", &path("in"), &path("replays")].map(Into::into)).map_err(|error| error.to_string()).and_then(|_| {
@@ -407,12 +408,12 @@ fn check_links_a_relay_whatever_the_order_of_its_files() {
     ];
     let helper = vec![fact("pid", Data::Unsigned(600)), on("ui", record("accept", &Data::Signed(3), &Data::Signed(7))),
                       io("ui", "read", 7, up), io("ui", "write", 7, down)];
-    write(&root.join("in/app.rpl.bz2"), &app);
-    layered(&root.join("in/relay.rpl.bz2"), trace::Layer::Native, &relay);
-    layered(&root.join("in/helper.rpl.bz2"), trace::Layer::Native, &helper);
+    write(&root.join("in/app.rpl.zst"), &app);
+    layered(&root.join("in/relay.rpl.zst"), trace::Layer::Native, &relay);
+    layered(&root.join("in/helper.rpl.zst"), trace::Layer::Native, &helper);
     let file = |name: &str| root.join("in").join(name);
     let orders = [["app", "relay", "helper"], ["app", "helper", "relay"], ["helper", "relay", "app"], ["relay", "helper", "app"]].map(|order| {
-        let checked = check(&order.map(|name| file(&format!("{name}.rpl.bz2"))), &mut io::sink()).map_err(|error| error.to_string());
+        let checked = check(&order.map(|name| file(&format!("{name}.rpl.zst"))), &mut io::sink()).map_err(|error| error.to_string());
         checked.map(|checked| (checked.different, checked.unlinked))
     });
     std::fs::remove_dir_all(&root).unwrap();

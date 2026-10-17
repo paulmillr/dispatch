@@ -195,7 +195,7 @@ def corpus(root, stage, replays, helper, failed=False):
 def corpus_missing(root):
     """None, or why the corpus in replays/ (a git submodule) is absent: without it every test would run live, unnoticed."""
     replays = root / 'replays'
-    if next(replays.rglob('*.rpl.zst'), None) or next(replays.rglob('*.rpl.bz2'), None):
+    if next(replays.rglob('*.rpl.zst'), None):
         return None
     return ('The replay corpus is not checked out (' + str(replays) + ' has no recordings): run '
             '`git submodule update --init replays`, or pass --live to run every test live')
@@ -281,7 +281,7 @@ def execute(root, tests, skips=(), recheck=False, benchmarks=False, selection=No
                 raise ValueError('build/captures holds an earlier capture: move it away to keep it, or delete it')
             recording.mkdir(parents=True, exist_ok=True, mode=0o700)
             (recording / 'tests.json').write_text(json.dumps(scan(root)[1], indent=1, sort_keys=True) + '\n')
-            environment.update(TEST_RUNNER_DISPATCH_TEST_CAPTURE='1', TEST_RUNNER_DISPATCH_CAPTURE=linked(recording) + '/helper-%p.rpl.bz2')
+            environment.update(TEST_RUNNER_DISPATCH_TEST_CAPTURE='1', TEST_RUNNER_DISPATCH_CAPTURE=linked(recording) + '/helper-%p.rpl.zst')
         command = ["xcodebuild", "-xctestrun", str(plan), "-destination", "platform=macOS",
                    "-parallel-testing-enabled", "NO", "-resultBundlePath", str(result), "test-without-building"]
         command += ["-only-testing:" + test for test in tests]
