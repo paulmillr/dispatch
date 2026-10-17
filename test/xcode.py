@@ -195,7 +195,7 @@ def corpus(root, stage, replays, helper, failed=False):
 def corpus_missing(root):
     """None, or why the corpus in replays/ (a git submodule) is absent: without it every test would run live, unnoticed."""
     replays = root / 'replays'
-    if next(replays.rglob('*.rpl.bz2'), None):
+    if next(replays.rglob('*.rpl.zst'), None) or next(replays.rglob('*.rpl.bz2'), None):
         return None
     return ('The replay corpus is not checked out (' + str(replays) + ' has no recordings): run '
             '`git submodule update --init replays`, or pass --live to run every test live')

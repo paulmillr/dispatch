@@ -1,0 +1,4 @@
+module CZstd {
+    header "lib/zstd.h"
+    export *
+}

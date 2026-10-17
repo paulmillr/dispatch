@@ -7,6 +7,9 @@ import Glibc
 #if DEBUG && canImport(CBzip2)
 import CBzip2
 #endif
+#if DEBUG && canImport(CZstd)
+import CZstd
+#endif
 
 /// Ordered app inputs and outputs. Native helper captures remain independent evidence.
 /// A replay consumes every event; unknown work never falls back to a live process.
@@ -1511,8 +1514,8 @@ final class AppReplay: @unchecked Sendable {
         }
     }
 
-    /// The journal file is a capture (the helper's core/src/system/capture/trace.rs): bzip2 around length-prefixed
-    /// frames; a header (magic, version, layer app, helper wire version), one record per event, a footer counting them.
+    /// The journal file is a capture (the helper's core/src/system/capture/trace.rs): bzip2 (as recorded) or zstd
+    /// (in the corpus) around length-prefixed frames; a header (magic, version, layer app, helper wire version), one record per event, a footer counting them.
     /// What the app asked or sent is a record's args, what came back its output.
     private enum Capture {
         static let magic = Array("DCAPTURE".utf8)
@@ -1579,8 +1582,11 @@ final class AppReplay: @unchecked Sendable {
             return events
         }
 
-        /// The whole file expanded (bzip2 members one after another).
+        /// The whole file expanded (bzip2 members, or zstd frames, one after another).
         static func expand(_ data: Data) throws -> [UInt8] {
+            #if DEBUG && canImport(CZstd)
+            if data.starts(with: [0x28, 0xb5, 0x2f, 0xfd]) { return try unzstd([UInt8](data)) }
+            #endif
             #if DEBUG && canImport(CBzip2)
             var output: [UInt8] = [], input = [UInt8](data), offset = 0, buffer = [UInt8](repeating: 0, count: 1 << 20)
             for _ in sequence(first: 0, next: { $0 + 1 }) {
@@ -1614,6 +1620,36 @@ final class AppReplay: @unchecked Sendable {
             return [UInt8](data)
             #endif
         }
+
+        #if DEBUG && canImport(CZstd)
+        /// A corpus journal: zstd frames (the helper's capture/zstd.rs), the window no larger than its encoder's.
+        static func unzstd(_ input: [UInt8]) throws -> [UInt8] {
+            guard let stream = ZSTD_createDStream() else { throw error("zstd decoder") }
+            defer { ZSTD_freeDStream(stream) }
+            func check(_ code: Int) throws -> Int {
+                guard ZSTD_isError(code) == 0 else {
+                    throw error("app journal is damaged: zstd " + String(cString: ZSTD_getErrorName(code)))
+                }
+                return code
+            }
+            _ = try check(ZSTD_DCtx_setParameter(stream, ZSTD_d_windowLogMax, 27))
+            var output: [UInt8] = [], buffer = [UInt8](repeating: 0, count: 1 << 20), left = 0
+            try input.withUnsafeBytes { source in
+                try buffer.withUnsafeMutableBytes { target in
+                    var from = ZSTD_inBuffer(src: source.baseAddress, size: source.count, pos: 0)
+                    for _ in sequence(first: 0, next: { $0 + 1 }) {
+                        var to = ZSTD_outBuffer(dst: target.baseAddress, size: target.count, pos: 0)
+                        left = try check(ZSTD_decompressStream(stream, &to, &from))
+                        output.append(contentsOf: target[0..<to.pos])
+                        // Done once the input is read and a buffer with room left nothing more to flush.
+                        guard from.pos < from.size || to.pos == to.size else { break }
+                    }
+                }
+            }
+            guard left == 0 else { throw error("app journal is cut: zstd") }
+            return output
+        }
+        #endif
     }
 
     /// Capture: frames compressed as they are recorded, then the footer. Compression and file writes run on the

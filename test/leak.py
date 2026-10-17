@@ -7,6 +7,7 @@ shared. Environments are not printed (they can hold credentials): the helper rec
 grep lists every capture's: read them there. With --captures, also the login banners' times those captures show: run it
 after the recording then (the run's own logins make most of them)."""
 import bz2
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -128,6 +129,20 @@ BANNER = re.compile(rb'Last login: ((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|M
                     rb'\d\d:\d\d:\d\d)')
 
 
+@contextlib.contextmanager
+def expanded(path):
+    """A capture's bytes as a stream: bzip2 as recorded, zstd in the corpus (through the zstd tool)."""
+    if path.suffix != '.zst':
+        with (bz2.open if path.suffix == '.bz2' else open)(path, 'rb') as stream:
+            yield stream
+        return
+    with subprocess.Popen(['zstd', '-dcq', '--long=27', str(path)], stdout=subprocess.PIPE) as process:
+        yield process.stdout
+        process.stdout.read()
+    if process.returncode:
+        raise OSError(f'{path}: zstd exited {process.returncode}')
+
+
 def banners(directories):
     """The login times the captures under `directories` show, each with a value of its shape on 1 January 1970: all one
     day, in random order (secrets), never a time met (capture replace refuses a value equal to a needle or another value).
@@ -135,7 +150,7 @@ def banners(directories):
     times = set()
     for directory in directories:
         for path in sorted(Path(directory).rglob('*.rpl*')):
-            with (bz2.open if path.suffix == '.bz2' else open)(path, 'rb') as stream:
+            with expanded(path) as stream:
                 tail = b''
                 while chunk := stream.read(1 << 24):
                     data = tail + chunk

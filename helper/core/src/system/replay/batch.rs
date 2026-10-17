@@ -9,7 +9,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// Every capture under `directory`, sorted: each regular `*.rpl.bz2` file but the app's mismatch diagnostics. A
+/// Every capture under `directory`, sorted: each regular `*.rpl.bz2` (live) or `*.rpl.zst` (corpus) file but the
+/// app's mismatch diagnostics. A
 /// symbolic link is not followed (listed on stderr): nothing outside the tree is read or pruned, and a loop ends.
 pub fn captures(directory: &Path) -> io::Result<Vec<PathBuf>> {
     let mut out = Vec::new();
@@ -20,7 +21,7 @@ pub fn captures(directory: &Path) -> io::Result<Vec<PathBuf>> {
             eprintln!("{}: a symbolic link, not followed", path.display());
         } else if kind.is_dir() {
             out.extend(captures(&path)?);
-        } else if kind.is_file() && path.to_string_lossy().ends_with(".rpl.bz2") && !path.to_string_lossy().contains(".mismatch-") {
+        } else if kind.is_file() && [".rpl.bz2", ".rpl.zst"].iter().any(|end| path.to_string_lossy().ends_with(end)) && !path.to_string_lossy().contains(".mismatch-") {
             out.push(path);
         }
     }
