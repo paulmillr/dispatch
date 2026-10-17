@@ -107,16 +107,19 @@ enum SSHBootstrap {
     /// Test runs (DISPATCH_CAPTURE set for this app) trace remote helpers too: the remote login and
     /// `connect` export DISPATCH_CAPTURE=$HOME/<captureDirectory>/helper-%p.rpl.bz2 (every remote helper,
     /// nested ones included, writes its own file); the tests collect that directory after each case.
-    /// The directory is per run (a digest of this run's capture path), so shared hosts keep runs apart.
     /// Set in capture runs only: replay keeps the recorded value.
     static var captureDirectory: String? {
         let path: String?
         do { path = try System.observe("environment", "DISPATCH_CAPTURE") { System.environment("DISPATCH_CAPTURE") } }
         catch { AppReplay.fail(error); path = nil }
-        return path.map { path in
-            let directory = URL(fileURLWithPath: path).deletingLastPathComponent().path
-            return ".cache/dispatch-capture/" + SHA256.hash(data: Data(directory.utf8)).prefix(6).map { String(format: "%02x", $0) }.joined()
-        }
+        return path.map(captureDirectory)
+    }
+
+    /// The remote folder of a capture path: a digest of its directory (a test case's staging folder), so shared hosts
+    /// keep cases apart.
+    static func captureDirectory(_ path: String) -> String {
+        let directory = URL(fileURLWithPath: path).deletingLastPathComponent().path
+        return ".cache/dispatch-capture/" + SHA256.hash(data: Data(directory.utf8)).prefix(6).map { String(format: "%02x", $0) }.joined()
     }
     static var captureExport: String {
         captureDirectory.map { "mkdir -p \"$HOME/\($0)\" && export DISPATCH_CAPTURE=\"$HOME/\($0)/helper-%p.rpl.bz2\"\n" } ?? ""

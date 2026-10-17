@@ -19,10 +19,22 @@ final class TmuxOutputPerformanceTests: XCTestCase {
         let bytes = Data(String(repeating: row, count: 164_549).utf8)
         try bytes.write(to: fixture)
         defer { try? FileManager.default.removeItem(at: fixture) }
+        // A find over a generated tree as large as the checkout (~30k paths), not the checkout: a recording keeps
+        // every path it lists.
+        let tree = artifacts.appendingPathComponent("tree")
+        try? FileManager.default.removeItem(at: tree)
+        for directory in 0..<300 {
+            let folder = tree.appendingPathComponent(String(format: "d%03d", directory))
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            for file in 0..<100 {
+                FileManager.default.createFile(atPath: folder.appendingPathComponent(String(format: "f%03d.txt", file)).path, contents: nil)
+            }
+        }
+        defer { try? FileManager.default.removeItem(at: tree) }
 
         var report: [String] = []
         for (name, command) in [
-            ("find", "cd \(HerdrLaunch.quote(root.path)) && /usr/bin/find . -print"),
+            ("find", "cd \(HerdrLaunch.quote(tree.path)) && /usr/bin/find . -print"),
             ("burst", "/bin/cat \(HerdrLaunch.quote(fixture.path))")
         ] {
             var gaps: [Double] = []

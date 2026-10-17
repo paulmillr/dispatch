@@ -248,6 +248,8 @@ final class AppReplay: @unchecked Sendable {
     private struct Key: Hashable { let kind: String; let input: HelperBinary.Value }
     private var creations: [Key: ArraySlice<Int>] = [:]
     private var observations: [Key: [Int]] = [:]
+    /// Replay: what a test's condition asked capture as it polled (System.polling), by kind and input: read, not owed.
+    private var polls: [Key: [Int]] = [:]
     private var owed: [Int] = []
     private var reached = 0
     private var synced = 0
@@ -413,9 +415,14 @@ final class AppReplay: @unchecked Sendable {
             // before (its floor, kept within the frontier: an answer past it is a guess). Nothing recorded between its
             // floor and the frontier: answered from its floor on (the test's next view mounting held the frontier before
             // what the task saw; capture ran the task after it). The test's checks keep their step's state.
-            if replaying, kind.hasPrefix("observe.") {
+            // A test's condition asks the world as often as it checks (System.polling), and how often it checks is wall time
+            // (a check refuses while a sidebar slides): its other questions (a fixture's command) are read like observations.
+            let polled = replaying && System.polling && !kind.hasPrefix("observe.") && !kind.hasPrefix("identity.")
+            if replaying, kind.hasPrefix("observe.") || polled {
                 // Polled hot (a view reading the time every frame, 500 tabs' processes): both lookups are binary searches.
-                let recorded = observations[Key(kind: "open." + kind, input: input)] ?? []
+                let key = Key(kind: "open." + kind, input: input)
+                if polled, polls[key] == nil { polls[key] = opens[key.kind, default: []].filter { rows[$0].value == input } }
+                let recorded = (polled ? polls[key] : observations[key]) ?? []
                 let task = Self.asking ? nil : withUnsafeCurrentTask { $0 }
                 let app = !Self.asking && !testers.isEmpty && task.map { !testers.contains($0) } ?? true
                 _ = first(owed, &reached)
@@ -436,6 +443,16 @@ final class AppReplay: @unchecked Sendable {
                 }
                 if index < recorded[recorded.count - 1] {
                     stale = Array((stale + ["\(kind) \(String(Self.text(input).prefix(80))): record \(index), newest \(recorded[recorded.count - 1]), frontier \(frontier)"]).suffix(8))
+                }
+                // The wait's recorded asks (before the test's next step) were reads: none is owed.
+                if polled {
+                    let step = self.recorded("open.step", .null) ?? rows.count
+                    for ask in recorded where ask < step && !consumed.contains(ask) {
+                        for row in streams[rows[ask].id] ?? [] where !consumed.contains(row) {
+                            consume(row)
+                            if Self.asking, limits.count > loose { own += 1 }
+                        }
+                    }
                 }
                 return event.kind == "in.error" ? .failure(try Self.decode(Failure.self, event.value).error) : .success(event.value)
             }

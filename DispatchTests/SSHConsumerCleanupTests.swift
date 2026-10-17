@@ -169,9 +169,10 @@ final class SSHConsumerCleanupTests: XCTestCase {
 
     private func processes(_ connection: SSHCoordinator.Link) async throws -> [AgentProcess] {
         // Loopback fixture: inspect the real helper process from the test's
-        // ordinary SSH channel. The random public session ID scopes the match;
+        // ordinary SSH channel. The random public session ID scopes the match
+        // (only those processes are listed, not the whole machine's);
         // the local process record also captures start time for cleanup checks.
-        let list = try await SSHTestCommand.run(master: connection.launch.master, argv: ["/bin/ps", "-axww", "-o", "pid=,command="])
+        let list = try await SSHTestCommand.run(master: connection.launch.master, argv: ["/usr/bin/pgrep", "-lf", connection.launch.sessionID])
         XCTAssertEqual(list.status, 0)
         let logins = String(decoding: list.output, as: UTF8.self).split(separator: "\n").compactMap { line -> (pid: Int32, worker: Bool)? in
             let fields = line.split(whereSeparator: \.isWhitespace)

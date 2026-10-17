@@ -2216,7 +2216,7 @@
       "outcome": "Passed"
     },
     {
-      "identifier": "DispatchTests/NewSpacePresentationTests/testEachHostOffersNewSpaceInItsHeaderWithLocalShortcutHint",
+      "identifier": "DispatchTests/NewSpacePresentationTests/testEachHostOffersNewSpaceInItsHeader",
       "seconds": 3.7718729972839355,
       "outcome": "Passed"
     },
@@ -2248,11 +2248,6 @@
     {
       "identifier": "DispatchTests/NewSpacePresentationTests/testRemoteBackendProbeLoadsZshInteractiveLoginPath",
       "seconds": 0.16037499904632568,
-      "outcome": "Passed"
-    },
-    {
-      "identifier": "DispatchTests/NewSpacePresentationTests/testRightClickAndHoldRequestMenuWithoutCreatingSpace",
-      "seconds": 0.5265629291534424,
       "outcome": "Passed"
     },
     {

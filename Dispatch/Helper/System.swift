@@ -106,8 +106,13 @@ enum System {
 
     /// The machine as the app and its tests know it; nothing else reads it (test/xcode.py checks). While testing these
     /// are paths in the run's private root (DISPATCH_TEST_ROOT), the same on every Mac: recordings name no machine's
-    /// paths and replay anywhere.
+    /// paths and replay anywhere. Only a Debug build (or a benchmark's, DISPATCH_BENCHMARK) tests: a Release app takes no
+    /// home, PATH or helper from DISPATCH_TESTING in the environment it was launched from.
+    #if DEBUG || DISPATCH_BENCHMARK
     static let testing = ProcessInfo.processInfo.environment["DISPATCH_TESTING"] == "1"
+    #else
+    static let testing = false
+    #endif
     private static let root = testing ? ProcessInfo.processInfo.environment["DISPATCH_TEST_ROOT"].map { URL(fileURLWithPath: $0) } : nil
 
     /// The account's home; while testing the test home (a fresh one without the runner's root).
@@ -137,7 +142,8 @@ enum System {
 
     /// The machine and the account the app runs as, also while testing: the account's name (the tests' ssh logins), its
     /// own home (where the app must not write; the loopback sshd's remote home), shell and whether login is quiet; the
-    /// machine's name (what OSC 7 names) and memory (terminal buffer limits). Replay answers the recorded ones.
+    /// machine's name (what OSC 7 names) and memory (terminal buffer limits). Replay answers the recorded ones. While
+    /// testing the memory is a fixed 16 GiB, the same on every Mac: recordings do not tell this Mac's.
     struct Machine: Codable {
         let name: String, home: URL, shell: String?, quiet: Bool, host: String, memory: UInt64
         /// What the terminal engine reads of the machine.
@@ -150,7 +156,7 @@ enum System {
             let machine = Launch.Machine.current
             return Machine(name: machine.name ?? NSUserName(), home: URL(fileURLWithPath: machine.home ?? NSHomeDirectory()),
                            shell: machine.shell, quiet: machine.quiet, host: machine.host,
-                           memory: ProcessInfo.processInfo.physicalMemory)
+                           memory: testing ? 16 << 30 : ProcessInfo.processInfo.physicalMemory)
         }
         return (try? observe("machine", "") { live() }) ?? live()
     }

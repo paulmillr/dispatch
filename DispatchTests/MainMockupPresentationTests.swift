@@ -39,12 +39,13 @@ final class MainMockupPresentationTests: XCTestCase {
             controller.settings.values.appTheme = AppTheme(rawValue: theme.rawValue)!
             try runtime.apply(controller.settings.values)
             try await TestSupport.eventually { SidebarThemeStore.shared.current == theme }
-            let text = try await capture(window, "main-sidebar-" + theme.rawValue).text()
+            let snapshot = try await capture(window, "main-sidebar-" + theme.rawValue)
             // Nautical's sidebar is the harbour's traffic service: its title, the traffic list and the UTC clock.
             let harbour = ["VTS", "TRAFFIC", "STATUS", "api-refactor", "anchor", "UTC"]
             if theme == .nautical {
-                for word in harbour { XCTAssertTrue(text.contains(word), "\(word) in \(text)") }
+                for word in harbour { try PresentationTestSupport.assertText(word, in: snapshot) }
             } else {
+                let text = try snapshot.text()
                 XCTAssertFalse(text.contains("TRAFFIC"), text)
             }
             XCTAssertTrue(runtime.views[tab.id]?.surface === surface)

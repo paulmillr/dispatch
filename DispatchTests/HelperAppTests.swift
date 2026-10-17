@@ -512,6 +512,46 @@ final class HelperAppTests: XCTestCase {
         }
     }
 
+    func testAppJournalTestsPolledQueryIsAReadAskedAsOftenAsItPolls() async throws {
+        // A test's condition asks the outside world (a fixture's `tmux list-panes`) as often as it checks, and how often
+        // it checks is wall time (a check refuses while a sidebar slides): replay answers each such ask with what capture
+        // saw as far as the app got, however often it is asked, and owes none of the recorded asks.
+        let directory = System.temporary.appendingPathComponent(UUID().uuidString)
+        let path = directory.appendingPathComponent("app.rpl.bz2")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var journal = try AppReplay(url: path, replaying: false)
+        func poll(_ value: String = "") async throws -> String {
+            try await journal.checking { try System.$polling.withValue(true) {
+                try AppReplay.decode(String.self, journal.query(kind: "fixture.panes", input: .null) { .string(value) })
+            } }
+        }
+        var asked = [try await poll("old")]
+        let command = try journal.open(kind: "command", input: .null)
+        try command.action(kind: "kill")
+        asked += [try await poll("new"), try await poll("new")]
+        XCTAssertEqual(asked, ["old", "new", "new"])
+        try await journal.open(kind: "step", input: .null).reach(.object(["at": .string("site")]))
+        try command.emit(kind: "exit")
+        try journal.finish()
+        for asks in [5, 1] {
+            journal = try AppReplay(url: path, replaying: true)
+            let replayed = try journal.open(kind: "command", input: .null)
+            try replayed.listen({ _ in }, failed: { XCTFail("Unexpected replay failure: \($0)") })
+            var answers: [String] = []
+            try await journal.waiting {
+                answers.append(try await poll())
+                answers.append(try await poll())
+                try replayed.action(kind: "kill")
+                for _ in 0..<asks { answers.append(try await poll()) }
+            }
+            try await journal.open(kind: "step", input: .null).reach()
+            await withCheckedContinuation { continuation in DispatchQueue.main.async { continuation.resume() } }
+            XCTAssertEqual(answers, ["old", "old"] + Array(repeating: "new", count: asks))
+            XCTAssertNoThrow(try journal.finish())
+            XCTAssertEqual(journal.relaxed, [])
+        }
+    }
+
     func testAppJournalWaitingTestSeesTheStateItsCheckSaw() async throws {
         // Capture reads input while the test checks its condition: what came after the check (a redraw that clears what
         // the test waited for) is still before the step. The step carries where the check was; while the test waits,

@@ -53,7 +53,13 @@ def inventory(root=ROOT):
     Classification is deliberately separate: discovering a new method never
     authorizes it for fast execution. Result identifiers verify this inventory.
     """
-    cases = []
+    return scan(root)[0]
+
+
+def scan(root=ROOT):
+    """inventory()'s cases, and each test class's file (its declaration's, without .swift): captures are staged and
+    stored as <file>/<test>."""
+    cases, files = [], {}
     tokens = re.compile(r'//[^\n]*|/\*|(?P<raw>\#*)(?P<quote>"""|")(?:\\(?P=raw).|(?!(?P=quote)(?P=raw)).)*(?P=quote)(?P=raw)', re.S)
     comments = re.compile(r'/\*|\*/')
     for path in sorted((root / 'DispatchTests').rglob('*.swift')):
@@ -76,12 +82,14 @@ def inventory(root=ROOT):
             extension = re.match(r'\s*extension\s+(\w+Tests)\b', line)
             if declaration or extension:
                 owner = (declaration or extension)[1]
+            if declaration:
+                files[owner] = path.stem
             method = re.match(r'\s*(?:@\w+\s+)?func\s+(test\w+)\s*\(\s*\)', line)
             if owner and method:
                 cases.append(f'{TARGET}/{owner}/{method[1]}')
     if not cases or len(cases) != len(set(cases)):
         raise ValueError('Empty or ambiguous XCTest source inventory')
-    return sorted(cases)
+    return sorted(cases), files
 
 
 def matches(case, selectors):

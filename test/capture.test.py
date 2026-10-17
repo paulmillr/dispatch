@@ -24,7 +24,7 @@ spec.loader.exec_module(capture)
 class Collection(unittest.TestCase):
     def setUp(self):
         root=Path(__file__).resolve().parent.parent
-        self.fixture = Path(os.environ.get('DISPATCH_CAPTURE_TEST_SOURCE', root/'test/fixtures/helper-login/capture.jsonl'))
+        self.fixture = Path(os.environ.get('DISPATCH_CAPTURE_TEST_SOURCE', root/'test/fixtures/helper-login/capture.rpl.bz2'))
         temporary=Path(os.environ.get('TMPDIR',root/'build/capture-tests'))
         temporary.mkdir(parents=True,exist_ok=True)
         self.directory = tempfile.TemporaryDirectory(dir=temporary)

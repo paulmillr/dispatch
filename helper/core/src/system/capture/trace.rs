@@ -164,8 +164,11 @@ impl<R: Read> Reader<R> {
         if count > super::QUEUE {
             return Err(invalid("capture frame exceeds the queue bound"));
         }
-        let mut bytes = vec![0; count];
-        self.input.read_exact(&mut bytes)?;
+        // Grown as the bytes arrive: a declared size alone (a cut or crafted capture) allocates nothing.
+        let mut bytes = Vec::new();
+        if (&mut self.input).take(count as u64).read_to_end(&mut bytes)? != count {
+            return Err(invalid("capture frame cut"));
+        }
         Ok(Some(bytes))
     }
     /// The next record; None only after a footer that covers every record before it.
