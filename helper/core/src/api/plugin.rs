@@ -168,7 +168,9 @@ pub trait Plugin {
         _path: &Path,
         _bytes: Vec<u8>,
         _mode: Option<u32>,
-        _replace: bool, done: Done<Metadata>) {
+        _replace: bool,
+        _parent: FileIdentity,
+        _replaced: Option<FileIdentity>, done: Done<Metadata>) {
         done(
             io,
             Err(Error {
@@ -212,7 +214,9 @@ pub trait Plugin {
         _transfer: &str,
         _target: &Path,
         _policy: &str,
-        _names: &[String], done: Done<Transfer>) {
+        _names: &[String],
+        _parent: FileIdentity,
+        _replacements: &[Replacement], done: Done<Transfer>) {
         done(
             io,
             Err(Error {

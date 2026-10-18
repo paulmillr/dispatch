@@ -3,8 +3,8 @@
 //! or the staging directory is removed. One transfer is open per helper; the helper closes it uncommitted when
 //! the client that opened it disconnects.
 use super::*;
-use dispatch_helper_core::api::{FileIdentity, Policy, Progress, Staging, Stop, Transfer, UnpackJob, Unpacked};
-use std::collections::BTreeSet;
+use dispatch_helper_core::api::{FileIdentity, Policy, Progress, Replacement, Staging, Stop, Transfer, UnpackJob, Unpacked};
+use std::collections::{BTreeMap, BTreeSet};
 use transfer::{Gate, failure, job, plain};
 
 const ARCHIVE: &str = "archive.tar.zst";
@@ -19,16 +19,18 @@ pub(super) struct Open {
     policy: Policy,
     /// The top-level names the client packed; the archive may hold no others.
     names: BTreeSet<Vec<u8>>,
+    replacements: BTreeMap<Vec<u8>, FileIdentity>,
     /// Archive bytes staged so far.
     staged: u64,
     /// A job for this transfer is running; writes wait for none, a close waits for it.
     working: bool,
-    /// The running job is the commit, holding `gate`.
+    /// The running job is the commit, holding the long-job gate and exclusive file-publication access.
     committing: bool,
     closing: Option<(bool, Done<Unpacked>)>,
     /// Stops a running commit's extraction when an uncommitted close comes (its client leaving).
     stop: Stop,
     gate: Gate,
+    access: transfer::SharedAccess,
 }
 
 pub(super) type Shared = Rc<RefCell<Option<Open>>>;
@@ -37,11 +39,14 @@ pub(super) type Shared = Rc<RefCell<Option<Open>>>;
 pub(super) fn open(
     shared: &Shared,
     gate: &Gate,
+    access: &transfer::SharedAccess,
     io: &mut dyn Io,
     transfer: &str,
     target: &Path,
     policy: &str,
     names: &[String],
+    expected_parent: FileIdentity,
+    replacements: &[Replacement],
     done: Done<Transfer>,
 ) {
     let policy = match policy {
@@ -62,6 +67,18 @@ pub(super) fn open(
         return done(io, Err(error("invalid_request")));
     }
     let names: BTreeSet<_> = names.iter().map(|name| name.as_bytes().to_vec()).collect();
+    let replacement_count = replacements.len();
+    let replacements: BTreeMap<_, _> = replacements
+        .iter()
+        .map(|replacement| (replacement.name.as_bytes().to_vec(), replacement.identity))
+        .collect();
+    let guarded = replacements.len() == replacement_count
+        && replacements.keys().all(|name| names.contains(name));
+    if !guarded
+        || (policy != Policy::Replace && !replacements.is_empty())
+    {
+        return done(io, Err(error("invalid_request")));
+    }
     if transfer.is_empty() || !plain(target) {
         return done(io, Err(error("invalid_request")));
     }
@@ -77,12 +94,14 @@ pub(super) fn open(
         staging: None,
         policy,
         names,
+        replacements,
         staged: 0,
         working: true,
         committing: false,
         closing: None,
         stop: Stop::default(),
         gate: gate.clone(),
+        access: access.clone(),
     });
     let (shared, transfer, target) = (shared.clone(), transfer.to_owned(), target.to_owned());
     let stat = Job::Stat {
@@ -91,13 +110,17 @@ pub(super) fn open(
     };
     job(io, stat, move |io, result| {
         let parent = match result {
-            Ok(Output::Metadata(metadata)) if metadata.kind == FileKind::Directory => identity(&metadata),
+            Ok(Output::Metadata(metadata)) if metadata.kind == FileKind::Directory
+                && metadata.device == expected_parent.device && metadata.inode == expected_parent.inode => identity(&metadata),
+            Ok(Output::Metadata(metadata)) if metadata.kind == FileKind::Directory => {
+                return abandon(&shared, io, done, error("changed"));
+            }
             Ok(Output::Metadata(_)) => return abandon(&shared, io, done, error("not_directory")),
             Ok(_) => return abandon(&shared, io, done, error("internal")),
             Err(value) => return abandon(&shared, io, done, native(value)),
         };
         // One job makes the folder and its archive, or nothing: a folder that exists already is never taken.
-        job(io, Job::Stage(staging.clone()), move |io, result| {
+        job(io, Job::Stage(staging.clone(), expected_parent), move |io, result| {
             let folder = match result {
                 Ok(Output::Metadata(metadata)) => identity(&metadata),
                 Ok(_) => return abandon(&shared, io, done, error("internal")),
@@ -147,9 +170,9 @@ pub(super) fn write(shared: &Shared, io: &mut dyn Io, transfer: &str, bytes: Vec
         if bytes.is_empty() {
             return done(io, Ok(Progress { bytes: open.staged }));
         }
-        let path = staging.path.join(ARCHIVE);
+        let staging = staging.clone();
         open.working = true;
-        path
+        staging
     };
     let shared = shared.clone();
     let append = Job::Append(path, bytes);
@@ -157,7 +180,7 @@ pub(super) fn write(shared: &Shared, io: &mut dyn Io, transfer: &str, bytes: Vec
         let result = match result {
             Ok(Output::Appended(total)) => Ok(Progress { bytes: total }),
             Ok(_) => Err(error("internal")),
-            Err(value) => Err(native(value)),
+            Err(value) => Err(failure(value)),
         };
         if let Some(open) = shared.borrow_mut().as_mut() {
             open.working = false;
@@ -212,8 +235,8 @@ fn finish(shared: &Shared, io: &mut dyn Io, commit: bool, done: Done<Unpacked>) 
         let Some(staging) = open.staging.clone() else {
             return done(io, Err(error("internal")));
         };
-        if commit && open.gate.get() {
-            // A pack holds the one long job: the transfer stays open for a later commit.
+        if commit && (open.gate.get() || !open.access.begin_write()) {
+            // A pack, Git read or file write is active: the transfer stays open for a later commit.
             None
         } else if commit {
             open.gate.set(true);
@@ -223,6 +246,7 @@ fn finish(shared: &Shared, io: &mut dyn Io, commit: bool, done: Done<Unpacked>) 
                 staging,
                 policy: open.policy,
                 names: open.names.clone(),
+                replacements: open.replacements.clone(),
                 stop: open.stop.clone(),
             }))
         } else {
@@ -241,6 +265,7 @@ fn finish(shared: &Shared, io: &mut dyn Io, commit: bool, done: Done<Unpacked>) 
             && open.committing
         {
             open.gate.set(false);
+            open.access.end_write();
         }
         // A close that arrived meanwhile (its client leaving) finds the transfer already ended.
         if let Some((_, close)) = open.and_then(|open| open.closing) {

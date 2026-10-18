@@ -485,7 +485,9 @@ final class FileTransferEngineTests: XCTestCase {
         let (other, busy) = hosts()
         other.file("/src/a.txt", "a")
         busy.failures["write"] = .busy("The helper on homelab is busy with another copy")
-        let refused = engine().copy(items: ["/src/a.txt"], from: other, to: busy, directory: "/dst",
+        let retrying = engine()
+        retrying.limits.busyWaits = [.milliseconds(1)]
+        let refused = retrying.copy(items: ["/src/a.txt"], from: other, to: busy, directory: "/dst",
                                     in: session(busy), kind: .copyIn)
         try await settle(refused)
         XCTAssertFalse(refused.uncertain)
@@ -863,9 +865,10 @@ final class GatedFilesSource: FilesSource, @unchecked Sendable {
         return try await inner.read(path, offset: offset, length: length, revision: revision)
     }
 
-    func write(_ path: String, data: Data, mode: UInt32?, replace: Bool) async throws -> FileRevision {
+    func write(_ path: String, data: Data, mode: UInt32?, replace: Bool, parent: FileIdentity,
+               replaced: FileIdentity?) async throws -> FileRevision {
         await gate("write")
-        return try await inner.write(path, data: data, mode: mode, replace: replace)
+        return try await inner.write(path, data: data, mode: mode, replace: replace, parent: parent, replaced: replaced)
     }
 
     func pack(transfer: String, base: String, paths: [String]) async throws -> PackedArchive {
@@ -878,9 +881,11 @@ final class GatedFilesSource: FilesSource, @unchecked Sendable {
         try await inner.dropArchive(transfer: transfer)
     }
 
-    func openUnpack(transfer: String, target: String, policy: ConflictPolicy, names: [String]) async throws -> UnpackTransfer {
+    func openUnpack(transfer: String, target: String, policy: ConflictPolicy, names: [String], parent: FileIdentity,
+                    replacements: [String: FileIdentity]) async throws -> UnpackTransfer {
         await gate("unpack.open")
-        return try await inner.openUnpack(transfer: transfer, target: target, policy: policy, names: names)
+        return try await inner.openUnpack(transfer: transfer, target: target, policy: policy, names: names,
+                                          parent: parent, replacements: replacements)
     }
     func git(_ path: String, args: [String], limit: UInt64) async throws -> GitOutput {
         try await inner.git(path, args: args, limit: limit)

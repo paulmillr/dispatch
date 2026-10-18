@@ -267,10 +267,10 @@ impl<T: Plugin> Plugin for Registered<T> {
         fn branch(cwd: &Path) -> Option<String>;
         fn list(path: &Path, hidden: bool, limit: u64, git: bool) -> Listing;
         fn summary(path: &Path, limit: u64) -> FolderSummary;
-        fn write(path: &Path, bytes: Vec<u8>, mode: Option<u32>, replace: bool) -> Metadata;
+        fn write(path: &Path, bytes: Vec<u8>, mode: Option<u32>, replace: bool, parent: FileIdentity, replaced: Option<FileIdentity>) -> Metadata;
         fn pack(transfer: &str, base: &Path, paths: &[PathBuf], limit: u64) -> Packed;
         fn pack_drop(transfer: &str) -> ();
-        fn unpack_open(transfer: &str, target: &Path, policy: &str, names: &[String]) -> Transfer;
+        fn unpack_open(transfer: &str, target: &Path, policy: &str, names: &[String], parent: FileIdentity, replacements: &[Replacement]) -> Transfer;
         fn unpack_write(transfer: &str, bytes: Vec<u8>) -> Progress;
         fn unpack_close(transfer: &str, commit: bool) -> Unpacked;
         fn git(path: &Path, args: &[String], limit: u64) -> Git;

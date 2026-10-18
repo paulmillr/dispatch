@@ -252,6 +252,7 @@ pub(crate) fn write(
                         bytes,
                         mode: 0o600,
                         expected: Expected::Absent,
+                        parent: None,
                     })
                 })
                 .transpose()

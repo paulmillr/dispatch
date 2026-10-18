@@ -244,6 +244,7 @@ impl Setup {
                     bytes: self.after.clone(),
                     mode: 0o600,
                     expected: self.expected,
+                    parent: None,
                 }))
             }
             (Stage::Write, Output::Written) => Ok(Next::Done(self.report())),

@@ -429,6 +429,7 @@ fn commit(io: &mut dyn Io, setup: Setup, edit: Edit, mode: u32, expected: Expect
                 bytes,
                 mode,
                 expected,
+                parent: None,
             };
             jobs::submit(
                 &next,

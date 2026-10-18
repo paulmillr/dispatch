@@ -31,8 +31,34 @@ const NUMBERS: u32 = 10_000;
 const NAMES_HELD: u64 = 64 << 20;
 /// File content one extraction writes at most.
 const CONTENT: u64 = 64 << 30;
+/// Compressed bytes staged for one incoming transfer. Expanded content and headers have their own bounds; this
+/// prevents an endless upload that never reaches an archive end.
+const ARCHIVE_LIMIT: u64 = 128 << 30;
 /// Free space an extraction leaves on the target's file system.
 const RESERVE: u64 = 64 << 20;
+
+/// Refuses before a packed archive consumes the free-space reserve measured when the pack began.
+struct Reserved<'a> {
+    file: &'a File,
+    left: u64,
+}
+
+impl Write for Reserved<'_> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if bytes.len() as u64 > self.left {
+            return Err(limited("not enough free space for the archive"));
+        }
+        let mut file = self.file;
+        let written = file.write(bytes)?;
+        self.left -= written as u64;
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        let mut file = self.file;
+        file.flush()
+    }
+}
 
 fn refused(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, format!("archive: {message}"))
@@ -128,7 +154,9 @@ pub(super) fn pack(base: &Path, paths: &[PathBuf], archive: &Path, limit: u64, s
             archive: archive.to_string_lossy().into_owned(),
             ..Packed::default()
         };
-        let mut writer = tar::Writer::new(zstd::Encoder::live(&file)?);
+        let room = stats::available(directory)?.saturating_sub(RESERVE);
+        let output = Reserved { file: &file, left: room };
+        let mut writer = tar::Writer::new(zstd::Encoder::live(output)?);
         let mut stack: Vec<Walked> = kept.into_iter().rev().map(|(path, name)| Walked { holder: None, path, name, kind: UNKNOWN }).collect();
         while let Some(walked) = stack.pop() {
             if stop.is_set() {
@@ -183,7 +211,10 @@ pub(super) fn pack(base: &Path, paths: &[PathBuf], archive: &Path, limit: u64, s
                     if !m.is_dir() || !same(&m) {
                         return Err(changed());
                     }
-                    let mut children = match native::entries(&folder) {
+                    // If the immediate children alone do not fit, fail before retaining the whole directory.
+                    let remaining = limit.saturating_sub(packed.entries.saturating_add(1));
+                    let remaining = usize::try_from(remaining).unwrap_or(usize::MAX);
+                    let mut children = match native::entries_bounded(&folder, remaining) {
                         Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {
                             packed.skipped += 1;
                             continue;
@@ -222,11 +253,35 @@ pub(super) fn pack(base: &Path, paths: &[PathBuf], archive: &Path, limit: u64, s
                     count(&mut packed, limit)?;
                     let mut header = header(&m, tar::Kind::File);
                     header.size = m.len();
+                    let bytes = packed.bytes.checked_add(header.size).filter(|&bytes| bytes <= CONTENT);
+                    let bytes = bytes.ok_or_else(|| limited("more than 64 GiB of content"))?;
                     packed.files += 1;
-                    packed.bytes += header.size;
+                    packed.bytes = bytes;
                     writer.entry(&header)?;
-                    // A file that shrank since its header was written cannot be stored as it was.
-                    if io::copy(&mut (&mut source).take(header.size), &mut writer)? != header.size {
+                    // Check cancellation within one large file instead of only between entries.
+                    let mut left = header.size;
+                    let mut buffer = [0u8; 1 << 17];
+                    while left > 0 {
+                        if stop.is_set() {
+                            return Err(stopped());
+                        }
+                        let length = buffer.len().min(usize::try_from(left).unwrap_or(usize::MAX));
+                        let read = source.read(&mut buffer[..length])?;
+                        if read == 0 {
+                            return Err(changed());
+                        }
+                        writer.write_all(&buffer[..read])?;
+                        left -= read as u64;
+                    }
+                    let after = source.metadata()?;
+                    if after.dev() != m.dev()
+                        || after.ino() != m.ino()
+                        || after.len() != m.len()
+                        || after.mtime() != m.mtime()
+                        || after.mtime_nsec() != m.mtime_nsec()
+                        || after.ctime() != m.ctime()
+                        || after.ctime_nsec() != m.ctime_nsec()
+                    {
                         return Err(changed());
                     }
                 }
@@ -237,7 +292,7 @@ pub(super) fn pack(base: &Path, paths: &[PathBuf], archive: &Path, limit: u64, s
                     })?;
                     // A link's own mode, owner and time, which nothing restores, come from its path.
                     let m = fs::symlink_metadata(&walked.path)?;
-                    if !m.file_type().is_symlink() {
+                    if !m.file_type().is_symlink() || !same(&m) {
                         return Err(changed());
                     }
                     count(&mut packed, limit)?;
@@ -285,13 +340,19 @@ fn count(packed: &mut Packed, limit: u64) -> io::Result<()> {
 }
 
 /// Job::Append.
-pub(super) fn append(path: &Path, bytes: &[u8]) -> io::Result<u64> {
-    let mut file = File::options()
-        .append(true)
-        .custom_flags(native::O_NOFOLLOW | native::O_NONBLOCK | native::O_CLOEXEC)
-        .open(path)?;
-    if !file.metadata()?.is_file() {
+pub(super) fn append(staging: &Staging, bytes: &[u8]) -> io::Result<u64> {
+    let (_, folder, _) = pinned(staging)?;
+    let folder = folder.ok_or(io::ErrorKind::NotFound)?;
+    let mut file = native::append(&folder, OsStr::new(ARCHIVE))?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
         return Err(io::ErrorKind::InvalidInput.into());
+    }
+    if metadata.len().checked_add(bytes.len() as u64).is_none_or(|total| total > ARCHIVE_LIMIT) {
+        return Err(limited("more than 128 GiB of archive data"));
+    }
+    if bytes.len() as u64 > stats::available(&staging.target)?.saturating_sub(RESERVE) {
+        return Err(limited("not enough free space for the archive"));
     }
     file.write_all(bytes)?;
     Ok(file.metadata()?.len())
@@ -357,12 +418,16 @@ fn opened(parent: &File, name: &OsStr) -> io::Result<(File, Vec<std::ffi::OsStri
 
 /// Job::Stage: see api.rs. Made through the pinned target, so the identity answered is the folder's that holds the
 /// archive.
-pub(super) fn stage(path: &Path) -> io::Result<fs::Metadata> {
+pub(super) fn stage(path: &Path, expected: FileIdentity) -> io::Result<fs::Metadata> {
     let parent = path.parent().ok_or(io::ErrorKind::InvalidInput)?;
     let name = path.file_name().filter(|name| name.as_bytes().starts_with(STAGING.as_bytes())).ok_or(io::ErrorKind::InvalidInput)?;
     let target = native::directory(parent, Expected::Any)?;
+    let current = target.metadata()?;
+    if current.dev() != expected.device || current.ino() != expected.inode {
+        return Err(io::Error::from_raw_os_error(native::ESTALE));
+    }
     // Never recursive and never an existing folder: whatever a later removal takes, this job made.
-    fs::DirBuilder::new().mode(0o700).create(path)?;
+    native::mkdir(&target, name, 0o700)?;
     let made = (|| {
         let folder = native::folder(&target, name)?;
         native::open(&folder, OsStr::new(ARCHIVE), Some(0o600))?;
@@ -408,7 +473,7 @@ fn pinned(staging: &Staging) -> io::Result<(File, Option<File>, &OsStr)> {
         folder => folder?,
     };
     if !same(&folder.metadata()?, staging.folder) {
-        return Err(io::Error::other(format!("{} is not the staging folder this copy made", staging.path.display())));
+        return Err(io::Error::from_raw_os_error(native::ESTALE));
     }
     Ok((target, Some(folder), name))
 }
@@ -594,6 +659,9 @@ impl Tree {
                     .map_err(|e| if e.kind() == io::ErrorKind::AlreadyExists { refused("a duplicate file") } else { e })?;
                 let mut left = header.size;
                 while left > 0 {
+                    if self.stop.is_set() {
+                        return Err(stopped());
+                    }
                     let length = self.buffer.len().min(usize::try_from(left).unwrap_or(usize::MAX));
                     let n = content.read(&mut self.buffer[..length])?;
                     if n == 0 {
@@ -680,7 +748,17 @@ pub(super) fn unpack(job: &UnpackJob) -> io::Result<Unpacked> {
         }
         let tree_dir = directory(&staging_dir, OsStr::new("tree"))?;
         let (mut moved, mut settled) = (BTreeMap::new(), Unpacked::default());
-        let outcome = place(&tree, &tree_dir, &staging_dir, &target_dir, policy, &mut moved, &mut settled, &mut stranded);
+        let outcome = place(
+            &tree,
+            &tree_dir,
+            &staging_dir,
+            &target_dir,
+            policy,
+            &job.replacements,
+            &mut moved,
+            &mut settled,
+            &mut stranded,
+        );
         // Folder modes and times last, deepest first: a read-only folder could not have been filled or moved.
         let mut folders: Vec<_> = tree.directories.iter().collect();
         folders.sort_by_key(|(name, _)| std::cmp::Reverse(name.iter().filter(|&&b| b == b'/').count()));
@@ -765,6 +843,7 @@ fn place(
     staging: &File,
     target: &File,
     policy: Policy,
+    replacements: &BTreeMap<Vec<u8>, FileIdentity>,
     moved: &mut BTreeMap<Vec<u8>, Vec<u8>>,
     counts: &mut Unpacked,
     stranded: &mut bool,
@@ -803,14 +882,29 @@ fn place(
                 moved.insert(top.clone(), placed);
             }
             Policy::Replace => {
+                // A conflict may have existed when the client listed the directory or appeared later. Only the
+                // former carries consent to replace, bound to that exact directory entry. Moving it aside before
+                // checking closes the check/rename race; a mismatch is restored without exposing the incoming item.
+                let expected = replacements
+                    .get(top)
+                    .copied()
+                    .ok_or_else(|| io::Error::from_raw_os_error(native::ESTALE))?;
                 if aside.is_none() {
-                    fs::DirBuilder::new().mode(0o700).create(tree.root.with_file_name("old"))?;
+                    native::mkdir(staging, OsStr::new("old"), 0o700)?;
                     aside = Some(directory(staging, OsStr::new("old"))?);
                 }
                 let Some(old) = &aside else { continue };
                 // The existing entry steps aside first and comes back if the new one cannot take its name, so a
                 // failure never loses both; once replaced it is removed with the staging directory.
                 native::rename(target, name, old, name)?;
+                let mismatch = match native::identity(old, name) {
+                    Ok(current) if current == expected => None,
+                    Ok(_) => Some(io::Error::from_raw_os_error(native::ESTALE)),
+                    Err(error) => Some(error),
+                };
+                if let Some(error) = mismatch {
+                    return Err(restore(old, target, top, folder_of(tree, top), stranded).unwrap_or(error));
+                }
                 #[cfg(test)]
                 ASIDE.with_borrow_mut(|hook| hook.as_mut().map(|hook| hook(name)));
                 if let Err(e) = native::rename(from, name, target, name) {

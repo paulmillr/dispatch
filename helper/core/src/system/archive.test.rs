@@ -39,6 +39,11 @@ fn mode(path: &Path, mode: u32) {
     fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
 }
 
+fn identity(path: &Path) -> FileIdentity {
+    let metadata = fs::symlink_metadata(path).unwrap();
+    FileIdentity { device: metadata.dev(), inode: metadata.ino() }
+}
+
 /// The sample tree under `root/a`: nested and empty folders, empty and 3 MiB files, a 150-byte name, a path over
 /// 300 bytes, a link with a long target, modes 0755 and 0600, mtimes with nanoseconds, and a fifo (skipped).
 fn sample(root: &Path) -> PathBuf {
@@ -107,7 +112,7 @@ fn facts(root: &Path) -> BTreeMap<PathBuf, Fact> {
 /// `bytes` staged as files.unpack.open and .write leave them: `<target>/.dispatch-copy-test/archive.tar.zst`.
 fn staged(target: &Path, bytes: &[u8]) -> (PathBuf, PathBuf) {
     let staging = target.join(format!("{STAGING}test"));
-    stage(&staging).unwrap();
+    stage(&staging, identity(target)).unwrap();
     let archive = staging.join(ARCHIVE);
     fs::write(&archive, bytes).unwrap();
     (archive, staging)
@@ -115,10 +120,6 @@ fn staged(target: &Path, bytes: &[u8]) -> (PathBuf, PathBuf) {
 
 /// The Staging a files.unpack.open of `staging` in `target` would record now.
 fn located(staging: &Path, target: &Path) -> Staging {
-    let identity = |path: &Path| {
-        let m = fs::metadata(path).unwrap();
-        FileIdentity { device: m.dev(), inode: m.ino() }
-    };
     Staging { path: staging.to_owned(), target: target.to_owned(), folder: identity(staging), parent: identity(target) }
 }
 
@@ -136,11 +137,25 @@ fn tops(bytes: &[u8]) -> BTreeSet<Vec<u8>> {
 }
 
 fn job(archive: &Path, staging: &Path, target: &Path, policy: Policy, names: &BTreeSet<Vec<u8>>) -> UnpackJob {
+    let replacements = if policy == Policy::Replace {
+        names
+            .iter()
+            .filter_map(|name| {
+                let path = target.join(OsStr::from_bytes(name));
+                fs::symlink_metadata(&path).ok().map(|metadata| {
+                    (name.clone(), FileIdentity { device: metadata.dev(), inode: metadata.ino() })
+                })
+            })
+            .collect()
+    } else {
+        BTreeMap::new()
+    };
     UnpackJob {
         archive: archive.to_owned(),
         staging: located(staging, target),
         policy,
         names: names.clone(),
+        replacements,
         stop: Stop::default(),
     }
 }
@@ -363,6 +378,36 @@ fn replace_puts_each_incoming_entry_in_place_of_the_existing_one() {
 }
 
 #[test]
+fn replace_consent_is_bound_to_the_entry_that_was_listed() {
+    let scratch = Scratch::new("replace-identity");
+    let bytes = packed(&scratch.0, &[("notes.txt", b"incoming")]);
+
+    // An identity from an older listing cannot authorize the entry now at that name.
+    let target = scratch.0.join("stale");
+    fs::create_dir(&target).unwrap();
+    fs::write(target.join("notes.txt"), b"mine").unwrap();
+    let (archive, staging) = staged(&target, &bytes);
+    let mut stale_job = job(&archive, &staging, &target, Policy::Replace, &tops(&bytes));
+    stale_job.replacements.get_mut(b"notes.txt".as_slice()).unwrap().inode ^= 1;
+    let error = unpack(&stale_job).unwrap_err();
+    assert_eq!(error.raw_os_error(), Some(native::ESTALE));
+    assert_eq!(fs::read(target.join("notes.txt")).unwrap(), b"mine");
+    assert!(!staging.exists());
+
+    // A name that was absent at open is not silently overwritten if it appears before commit.
+    let target = scratch.0.join("appeared");
+    fs::create_dir(&target).unwrap();
+    let (archive, staging) = staged(&target, &bytes);
+    let appeared_job = job(&archive, &staging, &target, Policy::Replace, &tops(&bytes));
+    assert!(appeared_job.replacements.is_empty());
+    fs::write(target.join("notes.txt"), b"appeared").unwrap();
+    let error = unpack(&appeared_job).unwrap_err();
+    assert_eq!(error.raw_os_error(), Some(native::ESTALE));
+    assert_eq!(fs::read(target.join("notes.txt")).unwrap(), b"appeared");
+    assert!(!staging.exists());
+}
+
+#[test]
 fn keep_names_the_incoming_entry_like_finder() {
     let scratch = Scratch::new("keep");
     let target = scratch.0.join("target");
@@ -426,13 +471,19 @@ fn modes_are_restored_under_the_umask_and_read_only_folders_still_move() {
 #[test]
 fn append_remove_tree_and_sweep() {
     let scratch = Scratch::new("small");
-    let file = scratch.0.join("staged");
-    assert_eq!(append(&file, b"x").unwrap_err().kind(), io::ErrorKind::NotFound, "never created");
+    let folder = scratch.0.join(format!("{STAGING}append"));
+    stage(&folder, identity(&scratch.0)).unwrap();
+    let staged = located(&folder, &scratch.0);
+    let file = folder.join(ARCHIVE);
+    fs::remove_file(&file).unwrap();
+    assert_eq!(append(&staged, b"x").unwrap_err().kind(), io::ErrorKind::NotFound, "never created");
     fs::write(&file, b"").unwrap();
-    assert_eq!(append(&file, b"abc").unwrap(), 3);
-    assert_eq!(append(&file, b"de").unwrap(), 5);
-    symlink(&file, scratch.0.join("alias")).unwrap();
-    assert!(append(&scratch.0.join("alias"), b"x").is_err(), "never through a link");
+    assert_eq!(append(&staged, b"abc").unwrap(), 3);
+    assert_eq!(append(&staged, b"de").unwrap(), 5);
+    let alias = scratch.0.join(format!("{STAGING}alias"));
+    symlink(&folder, &alias).unwrap();
+    let aliased = Staging { path: alias, ..staged.clone() };
+    assert!(append(&aliased, b"x").is_err(), "never through a link");
     assert_eq!(fs::read(&file).unwrap(), b"abcde");
 
     let tree = scratch.0.join("tree");
@@ -679,13 +730,14 @@ fn a_staging_folder_is_made_new_or_not_at_all() {
     let existing = scratch.0.join(format!("{STAGING}taken"));
     fs::create_dir(&existing).unwrap();
     fs::write(existing.join("theirs"), b"x").unwrap();
-    assert_eq!(stage(&existing).unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+    let parent = identity(&scratch.0);
+    assert_eq!(stage(&existing, parent).unwrap_err().kind(), io::ErrorKind::AlreadyExists);
     assert_eq!(names(&existing), ["theirs"], "a folder that exists is never taken");
     symlink(&scratch.0, scratch.0.join(format!("{STAGING}link"))).unwrap();
-    assert_eq!(stage(&scratch.0.join(format!("{STAGING}link"))).unwrap_err().kind(), io::ErrorKind::AlreadyExists);
-    assert_eq!(stage(&scratch.0.join("plain")).unwrap_err().kind(), io::ErrorKind::InvalidInput);
+    assert_eq!(stage(&scratch.0.join(format!("{STAGING}link")), parent).unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+    assert_eq!(stage(&scratch.0.join("plain"), parent).unwrap_err().kind(), io::ErrorKind::InvalidInput);
     let made = scratch.0.join(format!("{STAGING}new"));
-    let m = stage(&made).unwrap();
+    let m = stage(&made, parent).unwrap();
     let on_disk = fs::symlink_metadata(&made).unwrap();
     assert_eq!((m.dev(), m.ino(), on_disk.mode() & 0o777), (on_disk.dev(), on_disk.ino(), 0o700));
     assert_eq!(fs::metadata(made.join(ARCHIVE)).unwrap().len(), 0);
@@ -719,7 +771,7 @@ fn a_staging_folder_is_touched_only_where_it_was_made() {
     fs::create_dir(&staging).unwrap();
     let mut fresh = job.clone();
     fresh.staging.parent = located(&staging, &target).parent;
-    assert_eq!(discard(&fresh.staging).unwrap_err().kind(), io::ErrorKind::Other);
+    assert_eq!(discard(&fresh.staging).unwrap_err().kind(), io::ErrorKind::StaleNetworkFileHandle);
     assert!(staging.exists());
     // The folder it made, where it made it, goes; one already gone is no failure.
     fs::remove_dir(&staging).unwrap();
@@ -889,7 +941,7 @@ fn transfer_job_outputs_replay_as_recorded() {
     let (result, recorded, again) = replayed(Ok(Output::Removed));
     assert_eq!(again, recorded);
     assert!(matches!(result, Ok(Output::Removed)));
-    let folder = super::super::metadata(stage(&target.join(format!("{STAGING}replay"))).unwrap());
+    let folder = super::super::metadata(stage(&target.join(format!("{STAGING}replay")), identity(&target)).unwrap());
     let (result, recorded, again) = replayed(Ok(Output::Metadata(folder)));
     assert_eq!(again, recorded);
     assert!(matches!(result, Ok(Output::Metadata(back)) if back == folder));

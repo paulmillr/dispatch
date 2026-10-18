@@ -55,6 +55,8 @@ fn files_records_round_trip_as_schema_records() {
         modified_ns: -1_500,
         target,
         mark: mark.map(str::to_owned),
+        device: 7,
+        inode: 11,
     };
     let link = entry("docs", FileKind::Symlink, Some(FileKind::Directory), Some("M"));
     let dangling = entry("gone", FileKind::Symlink, None, None);
@@ -64,6 +66,8 @@ fn files_records_round_trip_as_schema_records() {
             ("kind", Data::String("symlink")),
             ("size", Data::Unsigned(42)),
             ("modified_ns", Data::String("-1500")),
+            ("device", Data::Unsigned(7)),
+            ("inode", Data::Unsigned(11)),
             ("target", target),
             ("mark", mark),
         ])
@@ -71,7 +75,13 @@ fn files_records_round_trip_as_schema_records() {
     round_trip(&link, entry_data("docs", Data::String("directory"), Data::String("M")));
     round_trip(&dangling, entry_data("gone", Data::Null, Data::Null));
     round_trip(
-        &Listing { path: "/tmp".into(), entries: vec![link.clone(), dangling.clone()], truncated: true },
+        &Listing {
+            path: "/tmp".into(),
+            entries: vec![link.clone(), dangling.clone()],
+            truncated: true,
+            device: 13,
+            inode: 17,
+        },
         object(vec![
             ("path", Data::String("/tmp")),
             (
@@ -82,6 +92,8 @@ fn files_records_round_trip_as_schema_records() {
                 ]),
             ),
             ("truncated", Data::Bool(true)),
+            ("device", Data::Unsigned(13)),
+            ("inode", Data::Unsigned(17)),
         ]),
     );
     round_trip(

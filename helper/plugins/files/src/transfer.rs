@@ -7,6 +7,71 @@ use std::path::Component;
 /// left to everything else. Held from the request until the job's completion.
 pub(super) type Gate = Rc<std::cell::Cell<bool>>;
 
+/// Git reads may overlap each other, but no helper file publication may overlap their config scan and command.
+/// This closes the scan/run race for clients of this helper: a clean config cannot be exchanged for one naming a
+/// program until the Git process has ended.
+#[derive(Default)]
+pub(super) struct Access {
+    readers: std::cell::Cell<u32>,
+    writer: std::cell::Cell<bool>,
+}
+
+pub(super) type SharedAccess = Rc<Access>;
+
+impl Access {
+    pub(super) fn begin_read(&self) -> bool {
+        if self.writer.get() {
+            return false;
+        }
+        let Some(readers) = self.readers.get().checked_add(1) else { return false };
+        self.readers.set(readers);
+        true
+    }
+
+    pub(super) fn end_read(&self) {
+        let readers = self.readers.get();
+        debug_assert!(readers > 0);
+        if readers > 0 {
+            self.readers.set(readers - 1);
+        }
+    }
+
+    pub(super) fn begin_write(&self) -> bool {
+        if self.writer.get() || self.readers.get() != 0 {
+            return false;
+        }
+        self.writer.set(true);
+        true
+    }
+
+    pub(super) fn end_write(&self) {
+        debug_assert!(self.writer.get());
+        self.writer.set(false);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Access;
+
+    #[test]
+    fn git_reads_share_access_but_publications_are_exclusive() {
+        let access = Access::default();
+        assert!(access.begin_read());
+        assert!(access.begin_read());
+        assert!(!access.begin_write());
+        access.end_read();
+        assert!(!access.begin_write());
+        access.end_read();
+        assert!(access.begin_write());
+        assert!(!access.begin_read());
+        assert!(!access.begin_write());
+        access.end_write();
+        assert!(access.begin_read());
+        access.end_read();
+    }
+}
+
 /// Run `job` on a worker and `then` with its result, which always comes later, never during this call.
 pub(super) fn job(io: &mut dyn Io, job: Job, then: impl FnOnce(&mut dyn Io, io::Result<Output>) + 'static) {
     match io.submit(job) {

@@ -13,6 +13,13 @@ import ImageIO
     static let headLength: UInt64 = 65_536
     /// Images are read whole; past this they are treated as binary rather than read.
     static let imageLimit: UInt64 = 32 * 1_048_576
+    /// Reject implausible image canvases before ImageIO allocates their backing storage. Encoded byte size alone
+    /// does not bound a highly compressed image's decoded memory.
+    nonisolated static let imageDimensionLimit = 32_768
+    nonisolated static let imagePixelLimit = 64_000_000
+    /// Even actual-size mode uses a bounded thumbnail. The view may lay it out larger, but a preview never asks
+    /// ImageIO for an unbounded source-sized bitmap.
+    nonisolated static let imageDecodeDimensionLimit = 4_096
 
     static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "heic", "webp", "tif", "tiff", "bmp"]
     static let markdownExtensions: Set<String> = ["md", "markdown"]
@@ -150,6 +157,10 @@ import ImageIO
                 preview.kind = .binary(size: size, head: nil)
                 return
             }
+            guard isSafeImageSize(pixels) else {
+                preview.kind = .error("Image dimensions are too large to preview safely")
+                return
+            }
             preview.kind = .image(data, pixelSize: pixels)
         case .markdown:
             preview.kind = .markdown(text(data))
@@ -172,15 +183,21 @@ import ImageIO
         return turned ? CGSize(width: height, height: width) : CGSize(width: width, height: height)
     }
 
-    /// The image in `data` decoded no larger than `maxPixels` on its long side (nil: whole, for actual size), rotated
-    /// as it shows. Off the main actor, and bounded: a 40-megapixel photo is not decoded whole for a 560 pt pane.
+    /// The image in `data` decoded no larger than `maxPixels` on its long side (nil: the hard preview cap), rotated
+    /// as it shows. Off the main actor, and bounded: a 40-megapixel photo is never decoded at source size.
     @concurrent nonisolated static func decodeImage(_ data: Data, maxPixels: Int?) async -> CGImage? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil), CGImageSourceGetCount(source) > 0 else { return nil }
         var options: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true,
                                         kCGImageSourceCreateThumbnailWithTransform: true,
                                         kCGImageSourceShouldCacheImmediately: true]
-        if let maxPixels { options[kCGImageSourceThumbnailMaxPixelSize] = max(1, maxPixels) }
+        options[kCGImageSourceThumbnailMaxPixelSize] = min(imageDecodeDimensionLimit, max(1, maxPixels ?? imageDecodeDimensionLimit))
         return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+    }
+
+    nonisolated static func isSafeImageSize(_ size: CGSize) -> Bool {
+        guard size.width.isFinite, size.height.isFinite, size.width > 0, size.height > 0,
+              size.width <= CGFloat(imageDimensionLimit), size.height <= CGFloat(imageDimensionLimit) else { return false }
+        return size.width * size.height <= CGFloat(imagePixelLimit)
     }
 
     /// Text decoded as UTF-8; invalid sequences show as replacement characters rather than hiding the file.

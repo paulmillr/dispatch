@@ -56,6 +56,17 @@ final class ChatRenderingTests: XCTestCase {
         XCTAssertEqual(size(ChatLinkBanner(link: .reconnecting(attempt: 1, since: Date()), host: "mba2")).height, 38, "32 pt and 6 below (M4c)")
     }
 
+    func testAgentMarkdownKeepsOnlyCredentialFreeWebLinks() {
+        let value = MobileChatMarkdown.text(
+            "[secure](https://example.com/docs) [web](http://example.com) [file](file:///etc/passwd) " +
+            "[shell](ssh://host.test) [script](javascript:alert%281%29) [credential](https://user:pass@example.com)")
+        XCTAssertEqual(value.runs.compactMap { $0.link?.absoluteString },
+                       ["https://example.com/docs", "http://example.com"])
+        for label in ["secure", "web", "file", "shell", "script", "credential"] {
+            XCTAssertTrue(String(value.characters).contains(label))
+        }
+    }
+
     func testTheComposerSlotFollowsTheDraftAndTheAgent() {
         XCTAssertEqual(CodeComposer.slot(text: "", working: false), .mic)
         XCTAssertEqual(CodeComposer.slot(text: "  ", working: true), .stop, "Stop takes the send slot (M5a)")

@@ -1,7 +1,7 @@
 //! Job::Entries (files.list) and Job::Summary (files.summary) on a worker, and their capture
 //! values (file::encode / file::decode).
 use super::*;
-use crate::api::{Entry, FolderSummary};
+use crate::api::{Entry, FileIdentity, FolderSummary};
 use std::collections::BinaryHeap;
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStrExt;
@@ -12,6 +12,10 @@ use std::os::unix::ffi::OsStrExt;
 const DEADLINE: Duration = Duration::from_secs(5);
 
 pub(super) fn entries(path: &Path, hidden: bool, limit: u64) -> io::Result<Output> {
+    let before = std::fs::metadata(path)?;
+    if !before.is_dir() {
+        return Err(io::ErrorKind::NotADirectory.into());
+    }
     // Names stream into the selection, so only the kept ones are held; a failed read fails
     // the listing (a partial one would claim to be complete).
     let mut failure = None;
@@ -56,11 +60,22 @@ pub(super) fn entries(path: &Path, hidden: bool, limit: u64) -> io::Result<Outpu
             // Clamped to what i64 nanoseconds hold (years 1677 to 2262): one file with a wild mtime must not
             // fail the whole listing's capture, and the live answer is what replay gives back.
             modified_ns: facts.modified_ns.clamp(i64::MIN.into(), i64::MAX.into()),
+            device: facts.device,
+            inode: facts.inode,
             target,
             mark: None,
         });
     }
-    Ok(Output::Entries(entries, truncated))
+    let after = std::fs::metadata(path)?;
+    use std::os::unix::fs::MetadataExt;
+    if before.dev() != after.dev() || before.ino() != after.ino() {
+        return Err(io::Error::from_raw_os_error(native::ESTALE));
+    }
+    Ok(Output::Entries(
+        entries,
+        truncated,
+        FileIdentity { device: after.dev(), inode: after.ino() },
+    ))
 }
 
 /// The `limit` smallest names in order, each lossy and native, and whether more were left
@@ -148,7 +163,7 @@ fn named(name: &str) -> io::Result<FileKind> {
 }
 
 /// Output::Entries as a capture value: one record per entry with Entry's fields.
-pub(super) fn encode_entries(entries: &[Entry], truncated: bool) -> io::Result<Data<'_>> {
+pub(super) fn encode_entries(entries: &[Entry], truncated: bool, directory: FileIdentity) -> io::Result<Data<'_>> {
     let entries = entries
         .iter()
         .map(|entry| {
@@ -160,6 +175,8 @@ pub(super) fn encode_entries(entries: &[Entry], truncated: bool) -> io::Result<D
                     "modified_ns",
                     Data::Signed(i64::try_from(entry.modified_ns).map_err(|_| file::invalid())?),
                 ),
+                ("device", Data::Unsigned(entry.device)),
+                ("inode", Data::Unsigned(entry.inode)),
                 (
                     "target",
                     entry
@@ -177,6 +194,8 @@ pub(super) fn encode_entries(entries: &[Entry], truncated: bool) -> io::Result<D
         ("kind", Data::String("entries")),
         ("entries", Data::Array(entries)),
         ("truncated", Data::Bool(truncated)),
+        ("device", Data::Unsigned(directory.device)),
+        ("inode", Data::Unsigned(directory.inode)),
     ]))
 }
 
@@ -197,6 +216,8 @@ pub(super) fn decode_entries(value: &Data<'_>) -> io::Result<Output> {
                 kind: named(file::field(entry, "kind", Data::string)?)?,
                 size: file::field(entry, "size", Data::unsigned)?,
                 modified_ns: file::field(entry, "modified_ns", Data::signed)?.into(),
+                device: file::field(entry, "device", Data::unsigned)?,
+                inode: file::field(entry, "inode", Data::unsigned)?,
                 target: optional(entry, "target")?.map(named).transpose()?,
                 mark: optional(entry, "mark")?.map(str::to_owned),
             })
@@ -205,6 +226,10 @@ pub(super) fn decode_entries(value: &Data<'_>) -> io::Result<Output> {
     Ok(Output::Entries(
         entries,
         file::field(value, "truncated", Data::boolean)?,
+        FileIdentity {
+            device: file::field(value, "device", Data::unsigned)?,
+            inode: file::field(value, "inode", Data::unsigned)?,
+        },
     ))
 }
 

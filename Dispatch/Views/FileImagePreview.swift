@@ -19,12 +19,12 @@ struct FileImagePreview: View {
     private struct DecodeKey: Hashable {
         let revision: FileRevision?
         let bytes: Int
-        /// Nil decodes the whole image.
+        /// Nil requests actual-size layout; the loader still applies its safety ceiling.
         let maxPixels: Int?
     }
 
     /// About twice the area's long side, in 512-pixel steps so a live resize decodes a few times, not every frame;
-    /// nil (whole) when that reaches the image's own size anyway.
+    /// nil when that reaches the image's own size anyway. The loader applies its hard decode ceiling in either mode.
     static func decodeBound(_ pixels: CGSize, area: CGSize, actualSize: Bool) -> Int? {
         let full = Int(max(pixels.width, pixels.height))
         guard !actualSize else { return nil }

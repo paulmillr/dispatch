@@ -19,6 +19,15 @@ final class ReleasePrivacyTests: XCTestCase {
     private func assertPrivate(_ url: URL, file: StaticString = #filePath, line: UInt = #line) throws {
         let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
         XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600, url.lastPathComponent, file: file, line: line)
+        if let protection = attributes[.protectionKey] as? FileProtectionType {
+            XCTAssertEqual(protection, .complete, url.lastPathComponent, file: file, line: line)
+        } else {
+            // Simulator files live on the Mac filesystem, which accepts the attribute but does not report an iOS
+            // protection class. A real device must expose the Class A value.
+            #if !targetEnvironment(simulator)
+            XCTFail("Missing NSFileProtectionComplete: \(url.lastPathComponent)", file: file, line: line)
+            #endif
+        }
         let values = try url.resourceValues(forKeys: [.isExcludedFromBackupKey])
         XCTAssertEqual(values.isExcludedFromBackup, true, url.lastPathComponent, file: file, line: line)
     }

@@ -20,7 +20,8 @@ struct ChatMessageDetails: View {
         let steps = turn.map { ChatStep.steps($0, directory: directory, reasoning: false) } ?? []
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                Text(LocalizedStringKey(row.item.text))
+                Text(MobileChatMarkdown.text(row.item.text))
+                    .environment(\.openURL, MobileChatMarkdown.openURL)
                     .font(.subheadline)
                     .lineSpacing(2)
                     .foregroundStyle(.secondary)

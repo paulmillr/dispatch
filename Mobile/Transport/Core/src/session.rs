@@ -2,7 +2,7 @@ use crate::error::{Code, Failure};
 use crate::keys::{signature_blob, ssh_string};
 use russh::client::{self, DisconnectReason, Handle, KeyboardInteractiveAuthResponse};
 use russh::keys::agent::AgentIdentity;
-use russh::keys::{HashAlg, PrivateKey, PrivateKeyWithHashAlg, PublicKey, PublicKeyOrCertificate};
+use russh::keys::{Algorithm, HashAlg, PrivateKey, PrivateKeyWithHashAlg, PublicKey, PublicKeyOrCertificate};
 use russh::{MethodKind, MethodSet};
 use std::future::Future;
 use std::pin::Pin;
@@ -195,6 +195,7 @@ impl Session {
             keepalive_interval: Some(options.keepalive_interval),
             keepalive_max: options.keepalive_max,
             nodelay: true,
+            preferred: preferred_algorithms(),
             ..Default::default()
         });
         let client = Client { link: link.clone(), gate: gate.clone(), reason: None };
@@ -317,6 +318,37 @@ impl Session {
         let _ = handle.disconnect(russh::Disconnect::ByApplication, "", "").await;
         drop(handle);
         self.link.end(Code::Closed, "closed".into());
+    }
+}
+
+/// `ssh-rsa` means an RSA/SHA-1 host signature. Keep RSA host keys through their SHA-2 algorithms, but never
+/// negotiate the legacy signature (client authentication already makes the same guarantee below).
+fn preferred_algorithms() -> russh::Preferred {
+    let mut preferred = russh::Preferred::default();
+    preferred.key = preferred
+        .key
+        .iter()
+        .filter(|algorithm| !matches!(algorithm, Algorithm::Rsa { hash: None }))
+        .cloned()
+        .collect::<Vec<_>>()
+        .into();
+    preferred
+}
+
+#[cfg(test)]
+mod tests {
+    use super::preferred_algorithms;
+
+    #[test]
+    fn host_key_algorithms_exclude_ssh_rsa_sha1() {
+        let names = preferred_algorithms()
+            .key
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        assert!(!names.iter().any(|name| name == "ssh-rsa"));
+        assert!(names.iter().any(|name| name == "rsa-sha2-256"));
+        assert!(names.iter().any(|name| name == "rsa-sha2-512"));
     }
 }
 

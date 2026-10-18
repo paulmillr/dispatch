@@ -92,8 +92,10 @@ final class HelperFilesSource: FilesSource, Sendable {
         return (reply.bytes, reply.result.model)
     }
 
-    func write(_ path: String, data: Data, mode: UInt32?, replace: Bool) async throws -> FileRevision {
-        let params = Wire.Write(path: path, bytes: data, mode: mode.map(UInt64.init), replace: replace)
+    func write(_ path: String, data: Data, mode: UInt32?, replace: Bool, parent: FileIdentity,
+               replaced: FileIdentity?) async throws -> FileRevision {
+        let params = Wire.Write(path: path, bytes: data, mode: mode.map(UInt64.init), replace: replace,
+                                parent: Wire.Identity(parent), replaced: replaced.map(Wire.Identity.init))
         let metadata: Wire.Metadata = try await call("files.write", params, .bytes(UInt64(data.count)), path: path)
         return metadata.model
     }
@@ -108,8 +110,11 @@ final class HelperFilesSource: FilesSource, Sendable {
         let _: HelperClient.Ignored = try await call("files.pack.drop", Wire.Named(transfer: transfer), .quick, path: transfer)
     }
 
-    func openUnpack(transfer: String, target: String, policy: ConflictPolicy, names: [String]) async throws -> UnpackTransfer {
-        let params = Wire.Open(transfer: transfer, target: target, policy: policy.rawValue, names: names)
+    func openUnpack(transfer: String, target: String, policy: ConflictPolicy, names: [String], parent: FileIdentity,
+                    replacements: [String: FileIdentity]) async throws -> UnpackTransfer {
+        let guarded = replacements.map { Wire.Replacement(name: $0.key, device: $0.value.device, inode: $0.value.inode) }
+        let params = Wire.Open(transfer: transfer, target: target, policy: policy.rawValue, names: names,
+                               parent: Wire.Identity(parent), replacements: guarded)
         let opened: Wire.Transfer = try await call("files.unpack.open", params, .quick, path: target)
         return UnpackTransfer(transfer: opened.transfer, staging: opened.staging)
     }
@@ -236,6 +241,21 @@ private enum Wire {
         /// Absent: 0o644 less the helper's umask.
         let mode: UInt64?
         let replace: Bool
+        let parent: Identity
+        let replaced: Identity?
+    }
+
+    struct Identity: Codable, Sendable {
+        let device: UInt64
+        let inode: UInt64
+
+        init(_ identity: FileIdentity) { (device, inode) = (identity.device, identity.inode) }
+    }
+
+    struct Replacement: Encodable, Sendable {
+        let name: String
+        let device: UInt64
+        let inode: UInt64
     }
 
     struct Pack: Encodable, Sendable {
@@ -256,6 +276,8 @@ private enum Wire {
         let policy: String
         /// The archive's top-level names; the helper refuses any other.
         let names: [String]
+        let parent: Identity
+        let replacements: [Replacement]
     }
 
     struct Append: Encodable, Sendable {
@@ -317,11 +339,13 @@ private enum Wire {
         let modified_ns: Stamp
         let target: String?
         let mark: String?
+        let device: UInt64?
+        let inode: UInt64?
 
         var model: FileEntry {
             FileEntry(name: name, kind: FileEntryKind(rawValue: kind) ?? .other, size: size,
                       modified: FileRevision.date(modified_ns.text), targetKind: target.map { FileEntryKind(rawValue: $0) ?? .other },
-                      mark: mark)
+                      mark: mark, identity: device.flatMap { device in inode.map { FileIdentity(device: device, inode: $0) } })
         }
     }
 
@@ -329,8 +353,13 @@ private enum Wire {
         let path: String
         let entries: [Entry]
         let truncated: Bool
+        let device: UInt64?
+        let inode: UInt64?
 
-        var model: FileListing { FileListing(path: path, entries: entries.map(\.model), truncated: truncated) }
+        var model: FileListing {
+            FileListing(path: path, entries: entries.map(\.model), truncated: truncated,
+                        identity: device.flatMap { device in inode.map { FileIdentity(device: device, inode: $0) } })
+        }
     }
 
     struct Summary: Decodable, Sendable {

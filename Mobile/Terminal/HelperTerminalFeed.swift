@@ -10,6 +10,10 @@ import Synchronization
 /// (`HelperWorkspace`): input made while a call is in flight is sent as one batch after it, resizes made meanwhile
 /// collapse into the latest, and so do publications. A detach drops what its attachment had not sent yet. Nothing is retried.
 final class HelperTerminalFeed: TerminalFeed {
+    /// The AsyncStream is count-bounded, so split untrusted output first to make its memory bound meaningful.
+    private static let outputChunk = 64 * 1024
+    private static let eventBufferCount = 128
+
     let client: HelperClient
     let terminal: UInt64
 
@@ -61,7 +65,8 @@ final class HelperTerminalFeed: TerminalFeed {
     }
 
     func attach(_ size: TerminalFeedSize) -> AsyncStream<TerminalFeedEvent> {
-        let (events, continuation) = AsyncStream<TerminalFeedEvent>.makeStream()
+        let (events, continuation) = AsyncStream<TerminalFeedEvent>.makeStream(
+            bufferingPolicy: .bufferingOldest(Self.eventBufferCount))
         let previous = shared.state.withLock { state -> (UInt64?, AsyncStream<TerminalFeedEvent>.Continuation?, [ScrollReply]) in
             defer {
                 state.generation += 1
@@ -180,25 +185,40 @@ final class HelperTerminalFeed: TerminalFeed {
                                 shared: Shared) async {
         switch operation {
         case .attach(let size):
-            let emit = { @Sendable (event: TerminalFeedEvent, last: Bool) in
+            let emit = { @Sendable (event: TerminalFeedEvent, last: Bool) -> Bool in
                 let events = shared.state.withLock { state -> AsyncStream<TerminalFeedEvent>.Continuation? in
                     guard state.generation == generation else { return nil }
                     if last { state.attached = false }
                     return state.events
                 }
-                events?.yield(event)
-                if last { events?.finish() }
+                guard let events else { return false }
+                let accepted: Bool
+                switch events.yield(event) {
+                case .enqueued: accepted = true
+                case .dropped, .terminated: accepted = false
+                @unknown default: accepted = false
+                }
+                if last { events.finish() }
+                if !accepted { events.finish() }
+                return accepted
             }
             do {
                 let request = try await client.attach(.init(terminal: terminal, size: grid(size), takeover: false)) { result in
                     switch result {
-                    case .success(.output(let output)) where output.terminal == terminal: emit(.output(output.bytes), false)
+                    case .success(.output(let output)) where output.terminal == terminal:
+                        var offset = output.bytes.startIndex
+                        while offset < output.bytes.endIndex {
+                            let end = min(offset + Self.outputChunk, output.bytes.endIndex)
+                            guard emit(.output(Data(output.bytes[offset..<end])), false) else { break }
+                            offset = end
+                        }
                     case .success(.history(let history)) where history.terminal == terminal:
-                        emit(.history(.init(offset: history.offset, maximum: history.max, viewport: history.viewport)), false)
-                    case .success(.attached): emit(.attached, false)
-                    case .success(.exit(let exit)) where exit.terminal == terminal: emit(.exited(exit.status), true)
-                    case .success(.clipboard(let clipboard)): emit(.clipboard(clipboard.bytes), false)
-                    case .failure(let error): emit(.failed(Self.message(error)), true)
+                        _ = emit(.history(.init(offset: history.offset, maximum: history.max, viewport: history.viewport)), false)
+                    case .success(.attached): _ = emit(.attached, false)
+                    case .success(.exit(let exit)) where exit.terminal == terminal: _ = emit(.exited(exit.status), true)
+                    // There is no mobile consent surface for a remote helper to write the system clipboard.
+                    case .success(.clipboard): break
+                    case .failure(let error): _ = emit(.failed(Self.message(error)), true)
                     default: break
                     }
                 }

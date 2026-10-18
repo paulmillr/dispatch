@@ -363,9 +363,8 @@ final class TerminalSession: @unchecked Sendable {
     }
 }
 
-/// The surface's host: actions become `TerminalSession.Event`s on the main queue; the clipboard is the general
-/// pasteboard's text. A program's clipboard write is allowed (the Mac's default for hosts with the helper); a
-/// program's read is denied (there is no prompt on the phone); a paste is the user's own gesture.
+/// The surface's host: actions become `TerminalSession.Event`s on the main queue. Remote program clipboard access is
+/// denied: the phone has no consent surface for it; a paste is the user's own gesture.
 private final class TerminalSurfaceHost: SurfaceHost, @unchecked Sendable {
     weak var surface: Surface?
     var onEvent: (@MainActor (TerminalSession.Event) -> Void)?
@@ -393,18 +392,13 @@ private final class TerminalSurfaceHost: SurfaceHost, @unchecked Sendable {
     }
 
     func setClipboard(_ location: SurfaceMessage.Clipboard, _ contents: [ClipboardContent], confirm: Bool) {
-        guard let content = contents.first(where: { $0.mime == Array("text/plain".utf8) }) else { return }
-        post(.clipboard(String(decoding: content.data, as: UTF8.self)))
+        // `clipboard-write = deny` keeps Ghostty from reaching this. Keep the host fail-closed too, so a parser or
+        // configuration regression cannot silently replace the phone's global pasteboard.
     }
 
     func clipboardRequest(_ location: SurfaceMessage.Clipboard, _ request: ClipboardRequest, mimes: [[UInt8]], list: Bool) -> ClipboardReadResult {
         guard let surface else { return .unsupported }
-        switch request {
-        case .kittyWrite:
-            try? surface.completeClipboard(request, ClipboardCompletion(confirmed: true))
-        default:
-            surface.denyClipboard(request)
-        }
+        surface.denyClipboard(request)
         return .started
     }
 

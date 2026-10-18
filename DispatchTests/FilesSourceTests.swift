@@ -132,19 +132,26 @@ final class FilesSourceTests: XCTestCase {
 
     func testWritesAndCopiesATreeOnceTheHelperDoes() async throws {
         let written = root.appendingPathComponent("new.txt").path
+        let rootListing = try await source.list(root.path, hidden: true)
+        let rootIdentity = try XCTUnwrap(rootListing.identity)
         guard let revision = try await once("files.write", {
-            try await source.write(written, data: Data("hello".utf8), mode: nil, replace: false)
+            try await source.write(written, data: Data("hello".utf8), mode: nil, replace: false,
+                                   parent: rootIdentity, replaced: nil)
         }) else { return }
         XCTAssertEqual(revision.kind, .file)
         XCTAssertEqual(revision.size, 5)
         XCTAssertEqual(try System.read(URL(fileURLWithPath: written)), Data("hello".utf8))
         do {
-            _ = try await source.write(written, data: Data("again".utf8), mode: nil, replace: false)
+            _ = try await source.write(written, data: Data("again".utf8), mode: nil, replace: false,
+                                       parent: rootIdentity, replaced: nil)
             XCTFail("An existing file was replaced without replace")
         } catch let error as FilesSourceError {
             XCTAssertEqual(error, .exists(written))
         }
-        let replaced = try await source.write(written, data: Data("bye".utf8), mode: 0o600, replace: true)
+        let currentListing = try await source.list(root.path, hidden: true)
+        let existing = try XCTUnwrap(currentListing.entries.first { $0.name == "new.txt" }?.identity)
+        let replaced = try await source.write(written, data: Data("bye".utf8), mode: 0o600, replace: true,
+                                              parent: rootIdentity, replaced: existing)
         XCTAssertEqual(replaced.size, 3)
         XCTAssertEqual(try attributes(written).permissions, 0o600)
 
@@ -173,8 +180,10 @@ final class FilesSourceTests: XCTestCase {
         XCTAssertEqual(UInt64(archive.count), packed.size)
 
         let unpack = System.uuid().uuidString
+        let targetListing = try await source.list(target.path, hidden: true)
+        let targetIdentity = try XCTUnwrap(targetListing.identity)
         let opened = try await source.openUnpack(transfer: unpack, target: target.path, policy: .keep,
-                                                 names: ["docs", "README.md"])
+                                                 names: ["docs", "README.md"], parent: targetIdentity, replacements: [:])
         XCTAssertTrue(opened.staging.hasPrefix(target.path + "/.dispatch-copy-"))
         let staged = try await source.writeUnpack(transfer: unpack, data: archive)
         XCTAssertEqual(staged, UInt64(archive.count))
@@ -216,7 +225,10 @@ final class FilesSourceTests: XCTestCase {
         }
         try await source.dropArchive(transfer: transfer)
         let unpack = System.uuid().uuidString
-        _ = try await source.openUnpack(transfer: unpack, target: target.path, policy: .keep, names: names)
+        let targetListing = try await source.list(target.path, hidden: true)
+        let targetIdentity = try XCTUnwrap(targetListing.identity)
+        _ = try await source.openUnpack(transfer: unpack, target: target.path, policy: .keep, names: names,
+                                        parent: targetIdentity, replacements: [:])
         _ = try await source.writeUnpack(transfer: unpack, data: archive)
         let result = try await source.closeUnpack(transfer: unpack, commit: true)
         XCTAssertEqual(result.kept, UInt64(names.count))

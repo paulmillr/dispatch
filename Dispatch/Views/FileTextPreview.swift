@@ -61,6 +61,11 @@ import SwiftUI
 
     /// A displayed line past this many characters is cut: text layout of a megabyte-long line stalls the pane.
     static let lineLimit = 10_000
+    /// A small, newline-heavy file can otherwise create millions of Swift strings and view rows.
+    static let linesLimit = 100_000
+    /// Find stores one row index per match. Bound that independent of the file byte limit.
+    static let occurrencesLimit = 100_000
+    static let truncatedLine = "… preview truncated after 100,000 lines …"
 
     private(set) var key: Key?
     private(set) var lines: [String] = []
@@ -130,7 +135,20 @@ import SwiftUI
 
     /// Lines without their terminators; a CRLF file shows no stray carriage returns.
     static func split(_ text: String) -> [String] {
-        normalized(text).split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let text = normalized(text)
+        var result: [String] = []
+        result.reserveCapacity(min(linesLimit, 1_024))
+        var start = text.startIndex
+        while let newline = text[start...].firstIndex(of: "\n") {
+            result.append(String(text[start..<newline]))
+            start = text.index(after: newline)
+            if result.count == linesLimit {
+                result[result.index(before: result.endIndex)] = truncatedLine
+                return result
+            }
+        }
+        result.append(String(text[start...]))
+        return result
     }
 
     static func normalized(_ text: String) -> String {
@@ -144,6 +162,7 @@ import SwiftUI
             var start = line.startIndex
             while start < line.endIndex, let range = line.range(of: query, options: .caseInsensitive, range: start..<line.endIndex) {
                 result.append(index)
+                if result.count == occurrencesLimit { return result }
                 start = range.upperBound
             }
         }

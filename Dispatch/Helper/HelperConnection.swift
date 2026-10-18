@@ -10,6 +10,9 @@ struct HelperFailure: Codable, Error, Equatable, Sendable, LocalizedError {
 
 /// The common app API. Payloads are normalized UI data; native formats stay in the helper.
 final class HelperConnection: @unchecked Sendable {
+  /// Aggregate chunk bytes retained across all pending replies on one connection.
+  nonisolated static let replyLimit = 64 * 1024 * 1024
+
   private struct Request<P: Encodable>: Encodable {
     let method: String
     let params: P
@@ -29,7 +32,7 @@ final class HelperConnection: @unchecked Sendable {
   private var limit = HelperWire.limit
   /// Generated binary body codec (HelperBinary.swift, from the helper build): reassembles chunks.
   private var collector = HelperBinary.Collector(
-    limit: HelperWire.maximum, chunkKind: HelperWire.Kind.chunk.rawValue, chunkLimit: 0)
+    limit: replyLimit, chunkKind: HelperWire.Kind.chunk.rawValue, chunkLimit: 0)
   private var pending: [UInt64: Pending] = [:]
   private var next: UInt64 = 1
   private var failure: (any Error)?
@@ -188,9 +191,9 @@ final class HelperConnection: @unchecked Sendable {
         }
         self.limit = limit
         self.ops = ops.map(Set.init)
-        // A chunked reply may exceed one frame; retain the whole-reply bound.
+        // A chunked reply may exceed one frame, but all in-flight replies share a strict aggregate memory bound.
         self.collector = HelperBinary.Collector(
-          limit: HelperWire.maximum, chunkKind: (kind ?? .chunk).rawValue, chunkLimit: Int(chunkLimit ?? 0))
+          limit: Self.replyLimit, chunkKind: (kind ?? .chunk).rawValue, chunkLimit: Int(chunkLimit ?? 0))
         self.decoder.limit = limit
         self.transport.capacity = 4 * (limit + 13)
         reply.resume()

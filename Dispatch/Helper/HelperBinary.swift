@@ -3,8 +3,8 @@ import Foundation
 import CoreFoundation
 
 public enum HelperBinary {
-    public static let schema: [UInt8] = [255, 231, 239, 199, 226, 75, 7, 130]
-    public static let version: UInt64 = 9369540987156686847
+    public static let schema: [UInt8] = [255, 181, 85, 203, 7, 80, 83, 25]
+    public static let version: UInt64 = 1824890268421567999
     public static let symbols: [String] = [
 ":",
 "activity",
@@ -246,6 +246,7 @@ public enum HelperBinary {
 "repeat_ms",
 "replace",
 "replaced",
+"replacements",
 "reply",
 "reset",
 "restart",
@@ -334,7 +335,7 @@ public enum HelperBinary {
 ["identity", "paths", "total", "available"],
 ["path", "kind", "diff", "workdir"],
 ["path", "before", "after", "backup"],
-["name", "kind", "size", "modified_ns", "target", "mark"],
+["name", "kind", "size", "modified_ns", "device", "inode", "target", "mark"],
 ["code", "message"],
 ["watch", "reset"],
 ["reply"],
@@ -366,9 +367,9 @@ public enum HelperBinary {
 ["path", "expected"],
 ["command", "input", "deadline"],
 ["path", "follow"],
-["path", "bytes", "mode", "expected"],
+["path", "bytes", "mode", "expected", "parent"],
 ["container", "full", "visible", "focus"],
-["path", "entries", "truncated"],
+["path", "entries", "truncated", "device", "inode"],
 ["choices", "current", "default"],
 ["kind", "size", "device", "inode", "modified_ns", "changed_ns"],
 ["id", "key", "parent", "kind", "name", "renamed", "cwd", "size", "agent", "tty", "detached"],
@@ -623,6 +624,7 @@ public enum HelperBinary {
         public let chunkKind: UInt8
         public let chunkLimit: Int
         private var pending: [UInt64: (UInt64, Data)] = [:]
+        private var total = 0
         public init(limit: Int, chunkKind: UInt8, chunkLimit: Int) {
             self.limit = limit; self.chunkKind = chunkKind; self.chunkLimit = chunkLimit
         }
@@ -633,15 +635,17 @@ public enum HelperBinary {
                     $0 | UInt64($1.element) << ($1.offset * 8)
                 }
                 var item = pending[id] ?? (0, Data())
-                guard sequence == item.0, body.count - 8 <= limit - item.1.count,
+                let count = body.count - 8
+                guard sequence == item.0, limit >= 0, total <= limit, count <= limit - total,
                     item.0 < UInt64.max else { throw Failure.limit }
-                item.1.append(body.dropFirst(8)); item.0 += 1
+                item.1.append(body.dropFirst(8)); item.0 += 1; total += count
                 pending[id] = item
                 return nil
             }
             guard kind == 2 || kind == 3 else { throw Failure.invalid }
             let envelope = try decode(body)
             let item = pending.removeValue(forKey: id) ?? (0, Data())
+            total -= item.1.count
             guard case .object(let fields) = envelope else { throw Failure.invalid }
             guard let stream = fields["stream"] else {
                 guard item.0 == 0, body.count <= limit else { throw Failure.limit }
@@ -663,7 +667,9 @@ public enum HelperBinary {
             default: throw Failure.invalid
             }
         }
-        public mutating func cancel(_ id: UInt64) { pending.removeValue(forKey: id) }
+        public mutating func cancel(_ id: UInt64) {
+            if let item = pending.removeValue(forKey: id) { total -= item.1.count }
+        }
         public func finish() throws {
             guard pending.isEmpty else { throw Failure.invalid }
         }

@@ -8,6 +8,13 @@ enum FileEntryKind: String, Codable, Hashable, Sendable {
     case file, directory, symlink, other
 }
 
+/// A filesystem object's stable identity for one operation. It binds copy authorization to the
+/// directory and conflicting entry the user actually saw.
+struct FileIdentity: Hashable, Sendable, Codable {
+    var device: UInt64
+    var inode: UInt64
+}
+
 /// One row of a listing as `files.list` returns it. `size` and `modified` describe the entry itself (a
 /// symlink's own metadata); `targetKind` is what a symlink points at, nil when it dangles.
 struct FileEntry: Hashable, Sendable, Identifiable {
@@ -18,6 +25,7 @@ struct FileEntry: Hashable, Sendable, Identifiable {
     var targetKind: FileEntryKind?
     /// Reserved for the git tabs: "M", "A", "U", "D", "R" or "!" (ignored). Nil until they exist.
     var mark: String?
+    var identity: FileIdentity? = nil
 
     var id: String { name }
     var isHidden: Bool { name.hasPrefix(".") }
@@ -31,6 +39,7 @@ struct FileListing: Hashable, Sendable {
     var entries: [FileEntry]
     /// The 10,000-entry bound stopped the listing.
     var truncated: Bool
+    var identity: FileIdentity? = nil
 }
 
 struct FolderSummary: Hashable, Sendable {
@@ -145,7 +154,8 @@ protocol FilesSource: AnyObject, Sendable {
     func read(_ path: String, offset: UInt64, length: UInt64?, revision: FileRevision?) async throws
         -> (data: Data, revision: FileRevision)
     /// One whole small file, written to a temporary name beside the target and renamed into place.
-    func write(_ path: String, data: Data, mode: UInt32?, replace: Bool) async throws -> FileRevision
+    func write(_ path: String, data: Data, mode: UInt32?, replace: Bool, parent: FileIdentity,
+               replaced: FileIdentity?) async throws -> FileRevision
     /// Packs `paths` (absolute, inside `base`) into a temporary tar.zst on that host, named relative to `base`.
     func pack(transfer: String, base: String, paths: [String]) async throws -> PackedArchive
     /// Removes a packed archive, or marks a running pack so its archive is removed when it completes.
@@ -153,7 +163,8 @@ protocol FilesSource: AnyObject, Sendable {
     /// Opens a staging folder beside `target` for an archive to arrive in. `names` are the archive's top-level
     /// names (the dragged items' own names, before any keep-both numbering): the helper refuses an archive that
     /// holds any other, so a host answering for the source cannot plant a name the user never dragged.
-    func openUnpack(transfer: String, target: String, policy: ConflictPolicy, names: [String]) async throws -> UnpackTransfer
+    func openUnpack(transfer: String, target: String, policy: ConflictPolicy, names: [String], parent: FileIdentity,
+                    replacements: [String: FileIdentity]) async throws -> UnpackTransfer
     /// Appends archive bytes; returns the bytes staged so far.
     func writeUnpack(transfer: String, data: Data) async throws -> UInt64
     /// Extracts and moves the archive's entries into the target (`commit`), or removes the staging folder.

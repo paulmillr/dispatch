@@ -865,17 +865,7 @@ impl DispatchHelper {
             section: format!("plugin/{}", self.plugins.len()),
             muted: None,
             permitted: Rc::new(move |method| {
-                login::permits(
-                    &grants,
-                    match method {
-                        "text" | "read" | "branch" | "list" | "summary" | "pack" | "pack_drop" => {
-                            "file.text"
-                        }
-                        "write" | "unpack_open" | "unpack_write" | "unpack_close" => "file.write",
-                        "git" => "git.read",
-                        _ => "stats.sample",
-                    },
-                )
+                login::permits(&grants, login::plugin_required(method))
             }),
         }));
         self.plugins.push(plugin.clone());

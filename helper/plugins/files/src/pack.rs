@@ -7,6 +7,8 @@ use transfer::{Gate, failure, job, normal};
 
 /// Entries one pack holds when the request names no limit.
 const ENTRIES: u64 = 250_000;
+/// A caller may lower the ordinary bound, never turn a copy into an unbounded filesystem walk.
+const MAX_ENTRIES: u64 = 1_000_000;
 const PREFIX: &str = "dispatch-pack-";
 /// Archives this old were left by a helper that ended before their drop.
 const AGE: Duration = Duration::from_secs(24 * 60 * 60);
@@ -90,7 +92,7 @@ pub(super) fn pack(
         transfer: transfer.to_owned(),
         base,
         paths,
-        limit: if limit == 0 { ENTRIES } else { limit },
+        limit: if limit == 0 { ENTRIES } else { limit.min(MAX_ENTRIES) },
         done,
     };
     let temporary = packs.borrow().temporary.clone();

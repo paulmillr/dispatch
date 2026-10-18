@@ -294,6 +294,7 @@ impl Herdr {
                                 bytes,
                                 mode: 0o600,
                                 expected: Expected::Absent,
+                                parent: None,
                             },
                             Box::new(move |mux, io, result| {
                                 mux.registrations -= 1;

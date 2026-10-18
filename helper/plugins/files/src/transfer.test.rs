@@ -1,7 +1,7 @@
 //! files.write, files.pack and files.unpack.* through the plugin, on a real System, completions delivered the
 //! way the reactor delivers them.
 use super::*;
-use dispatch_helper_core::api::Update;
+use dispatch_helper_core::api::{Replacement, Update};
 use dispatch_helper_core::system::System;
 use std::os::unix::fs::MetadataExt;
 
@@ -16,6 +16,10 @@ fn slot<T: 'static>() -> (Slot<T>, Done<T>) {
     let slot: Slot<T> = Rc::default();
     let filled = slot.clone();
     (slot, Box::new(move |_, result| *filled.borrow_mut() = Some(result)))
+}
+
+fn identity(metadata: &std::fs::Metadata) -> FileIdentity {
+    FileIdentity { device: metadata.dev(), inode: metadata.ino() }
 }
 
 struct Helper {
@@ -47,7 +51,15 @@ impl Helper {
 
     fn write(&mut self, path: &Path, bytes: &[u8], mode: Option<u32>, replace: bool) -> Result<Metadata, Error> {
         let (result, done) = slot();
-        self.files.write(&mut self.io, path, bytes.to_vec(), mode, replace, done);
+        let parent = path
+            .parent()
+            .and_then(|parent| std::fs::metadata(parent).ok())
+            .map_or(FileIdentity { device: 0, inode: 0 }, |metadata| identity(&metadata));
+        let replaced = replace.then(|| {
+            std::fs::symlink_metadata(path)
+                .map_or(FileIdentity { device: 0, inode: 0 }, |metadata| identity(&metadata))
+        });
+        self.files.write(&mut self.io, path, bytes.to_vec(), mode, replace, parent, replaced, done);
         self.wait(&result)
     }
 
@@ -71,7 +83,20 @@ impl Helper {
     /// files.unpack.open for an archive of the top-level `names`.
     fn open(&mut self, transfer: &str, target: &Path, policy: &str, names: &[&str]) -> Result<Transfer, Error> {
         let (result, done) = slot();
-        self.files.unpack_open(&mut self.io, transfer, target, policy, &strings(names), done);
+        let parent = std::fs::metadata(target)
+            .map_or(FileIdentity { device: 0, inode: 0 }, |metadata| identity(&metadata));
+        let replacements: Vec<_> = if policy == "replace" {
+            names
+                .iter()
+                .filter_map(|name| {
+                    std::fs::symlink_metadata(target.join(name)).ok().map(|metadata| Replacement {
+                        name: (*name).to_owned(),
+                        identity: identity(&metadata),
+                    })
+                })
+                .collect()
+        } else { Vec::new() };
+        self.files.unpack_open(&mut self.io, transfer, target, policy, &strings(names), parent, &replacements, done);
         self.wait(&result)
     }
 
@@ -181,6 +206,43 @@ fn files_write_creates_replaces_and_refuses() {
     std::os::unix::fs::symlink(&scratch.0, scratch.0.join("alias")).unwrap();
     helper.write(&scratch.0.join("alias/via-link"), b"x", None, false).unwrap();
     assert!(scratch.0.join("via-link").is_file());
+}
+
+#[test]
+fn files_write_is_bound_to_the_listed_parent_and_entry() {
+    let scratch = Scratch::new("write-identity");
+    let mut helper = Helper::new();
+    let target = scratch.0.join("target");
+    std::fs::create_dir(&target).unwrap();
+    let path = target.join("note.txt");
+    std::fs::write(&path, b"listed").unwrap();
+    let parent = identity(&std::fs::metadata(&target).unwrap());
+    let replaced = identity(&std::fs::symlink_metadata(&path).unwrap());
+
+    std::fs::remove_file(&path).unwrap();
+    std::fs::write(&path, b"intruder").unwrap();
+    let (result, done) = slot();
+    helper.files.write(&mut helper.io, &path, b"incoming".to_vec(), None, true, parent, Some(replaced), done);
+    assert_eq!(code(helper.wait(&result)), "changed");
+    assert_eq!(std::fs::read(&path).unwrap(), b"intruder");
+
+    let moved = scratch.0.join("moved");
+    std::fs::rename(&target, &moved).unwrap();
+    std::fs::create_dir(&target).unwrap();
+    let (result, done) = slot();
+    helper.files.write(
+        &mut helper.io,
+        &target.join("new.txt"),
+        b"incoming".to_vec(),
+        None,
+        false,
+        parent,
+        None,
+        done,
+    );
+    assert_eq!(code(helper.wait(&result)), "changed");
+    assert!(!target.join("new.txt").exists());
+    assert_eq!(std::fs::read(moved.join("note.txt")).unwrap(), b"intruder");
 }
 
 fn tree(scratch: &Scratch) -> PathBuf {
@@ -367,7 +429,8 @@ fn unpack_requests_are_checked_and_an_uncommitted_close_leaves_the_target_alone(
     assert_eq!(names(&target), ["folder", "mine.txt"]);
     // A close sent during the open (a client leaving at once) removes what the open made.
     let (opened, open) = slot();
-    helper.files.unpack_open(&mut helper.io, "u", &target, "skip", &strings(&["folder"]), open);
+    let parent = identity(&std::fs::metadata(&target).unwrap());
+    helper.files.unpack_open(&mut helper.io, "u", &target, "skip", &strings(&["folder"]), parent, &[], open);
     let (closed, close) = slot();
     helper.files.unpack_close(&mut helper.io, "u", false, close);
     let staging = PathBuf::from(helper.wait(&opened).unwrap().staging);
@@ -510,8 +573,8 @@ fn files_write_without_replace_finds_anything_at_the_path() {
     std::os::unix::fs::symlink(scratch.0.join("missing"), scratch.0.join("dangling")).unwrap();
     std::fs::write(scratch.0.join("closed"), b"closed").unwrap();
     std::fs::set_permissions(scratch.0.join("closed"), std::fs::Permissions::from_mode(0)).unwrap();
-    let _socket = std::os::unix::net::UnixListener::bind(scratch.0.join("socket")).unwrap();
-    for name in ["link", "dangling", "closed", "socket"] {
+    std::fs::create_dir(scratch.0.join("directory")).unwrap();
+    for name in ["link", "dangling", "closed", "directory"] {
         assert_eq!(code(helper.write(&scratch.0.join(name), b"new", None, false)), "exists", "{name}");
     }
     assert_eq!(std::fs::read(scratch.0.join("real")).unwrap(), b"real");
@@ -545,6 +608,37 @@ fn a_target_renamed_during_the_copy_keeps_its_staging_folder_and_says_where() {
         helper.open("u", &renamed, "skip", &["folder"]).unwrap();
         helper.close("u", false).unwrap();
     }
+}
+
+#[test]
+fn an_unpack_is_bound_to_its_staging_folder_and_replacement_entry() {
+    let scratch = Scratch::new("unpack-identity");
+    let mut helper = Helper::new();
+    let base = tree(&scratch);
+    let bytes = helper.packed(&base, &[base.join("notes.txt")]);
+    let target = scratch.0.join("target");
+    std::fs::create_dir(&target).unwrap();
+    std::fs::write(target.join("notes.txt"), b"listed").unwrap();
+
+    let transfer = helper.open("staging", &target, "replace", &["notes.txt"]).unwrap();
+    let staging = PathBuf::from(&transfer.staging);
+    let original = scratch.0.join("original-staging");
+    std::fs::rename(&staging, &original).unwrap();
+    std::fs::create_dir(&staging).unwrap();
+    std::fs::write(staging.join("archive.tar.zst"), b"intruder").unwrap();
+    assert_eq!(code(helper.send("staging", &bytes)), "changed");
+    assert_eq!(std::fs::read(staging.join("archive.tar.zst")).unwrap(), b"intruder");
+    assert_eq!(std::fs::metadata(original.join("archive.tar.zst")).unwrap().len(), 0);
+
+    // A fresh helper stands in for the disconnected first client; its stale staging state is discarded with it.
+    let mut helper = Helper::new();
+    let transfer = helper.open("entry", &target, "replace", &["notes.txt"]).unwrap();
+    helper.send("entry", &bytes).unwrap();
+    std::fs::remove_file(target.join("notes.txt")).unwrap();
+    std::fs::write(target.join("notes.txt"), b"intruder").unwrap();
+    assert_eq!(code(helper.close("entry", true)), "changed");
+    assert_eq!(std::fs::read(target.join("notes.txt")).unwrap(), b"intruder");
+    assert!(!Path::new(&transfer.staging).exists(), "a safely restored conflict leaves no staging tree");
 }
 
 #[test]

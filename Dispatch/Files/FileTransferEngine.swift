@@ -220,6 +220,7 @@ import Observation
         let path: String
         let name: String
         let policy: ConflictPolicy
+        let replacement: FileIdentity?
         var base: String { (path as NSString).deletingLastPathComponent }
     }
 
@@ -254,7 +255,14 @@ import Observation
         let names = try run.items.map(Self.plainName(of:))
         let listing = try await run.target.list(run.directory, hidden: true)
         try check(run)
+        guard let parent = listing.identity else {
+            throw FilesSourceError.unsupported("The host helper cannot securely verify this copy destination. Update Dispatch on that host.")
+        }
         let present = Set(listing.entries.map { Self.folded($0.name) })
+        var identities: [String: FileIdentity] = [:]
+        for entry in listing.entries {
+            if let identity = entry.identity { identities[Self.folded(entry.name)] = identities[Self.folded(entry.name)] ?? identity }
+        }
         // A name dragged twice: the later items keep both, so only the first is asked about.
         var seen = Set<String>(), repeated = Set<Int>()
         for (index, name) in names.enumerated() where !seen.insert(Self.folded(name)).inserted { repeated.insert(index) }
@@ -286,16 +294,20 @@ import Observation
                 policy = repeated.contains(index) ? .keep : .skip
             case .keepBoth, .cancel: policy = .keep
             }
-            items.append(Item(path: path, name: names[index], policy: policy))
+            let replacement = policy == .replace ? identities[Self.folded(names[index])] : nil
+            if policy == .replace, replacement == nil {
+                throw FilesSourceError.changed((run.directory as NSString).appendingPathComponent(names[index]))
+            }
+            items.append(Item(path: path, name: names[index], policy: policy, replacement: replacement))
         }
         update(run) { $0.skipped = skipped }
         guard !items.isEmpty else { return }
         if let bytes = try await planned(run, items) {
-            let rest = try await writeFiles(run, items, bytes: bytes, taken: present)
+            let rest = try await writeFiles(run, items, bytes: bytes, taken: present, parent: parent)
             // A file grew past the few-and-small bound since it was listed: what is left travels as archives.
-            if !rest.isEmpty { try await sendArchives(run, Self.grouped(rest), done: run.primary.entriesDone) }
+            if !rest.isEmpty { try await sendArchives(run, Self.grouped(rest), done: run.primary.entriesDone, parent: parent) }
         } else {
-            try await sendArchives(run, Self.grouped(items), done: 0)
+            try await sendArchives(run, Self.grouped(items), done: 0, parent: parent)
         }
     }
 
@@ -346,7 +358,8 @@ import Observation
     }
 
     /// Reads and writes the items one by one; returns those left once a file read longer than the bound allows.
-    private func writeFiles(_ run: Run, _ items: [Item], bytes: UInt64, taken: Set<String>) async throws -> [Item] {
+    private func writeFiles(_ run: Run, _ items: [Item], bytes: UInt64, taken: Set<String>,
+                            parent: FileIdentity) async throws -> [Item] {
         var taken = taken
         update(run) {
             $0.archived = false
@@ -362,7 +375,7 @@ import Observation
             let data = try await run.source.read(item.path, offset: 0, length: budget + 1, revision: nil).data
             try check(run)
             if UInt64(data.count) > budget { return Array(items[index...]) }
-            if let placed = try await place(run, data, item: item, taken: &taken) {
+            if let placed = try await place(run, data, item: item, taken: &taken, parent: parent) {
                 taken.insert(Self.folded(placed))
                 written += 1
             } else {
@@ -381,7 +394,8 @@ import Observation
 
     /// Writes one file under its policy and returns the name it took; nil when it was skipped. Only a name the user
     /// agreed to replace is ever replaced: one that appeared since the listing is kept beside it (skipped under Skip).
-    private func place(_ run: Run, _ data: Data, item: Item, taken: inout Set<String>) async throws -> String? {
+    private func place(_ run: Run, _ data: Data, item: Item, taken: inout Set<String>,
+                       parent: FileIdentity) async throws -> String? {
         let name = item.name
         var candidate = item.policy == .keep && taken.contains(Self.folded(name))
             ? Self.keptName(name) { [taken] in taken.contains(Self.folded($0)) } : name
@@ -389,7 +403,11 @@ import Observation
             let path = (run.directory as NSString).appendingPathComponent(candidate)
             update(run) { $0.uncertain = true }
             do {
-                _ = try await run.target.write(path, data: data, mode: nil, replace: item.policy == .replace && candidate == name)
+                let replacing = item.policy == .replace && candidate == name ? item.replacement : nil
+                _ = try await retryingBusy(run) {
+                    try await run.target.write(path, data: data, mode: nil, replace: replacing != nil,
+                                               parent: parent, replaced: replacing)
+                }
                 update(run) { $0.uncertain = false }
                 return candidate
             } catch {
@@ -405,7 +423,7 @@ import Observation
         throw FilesSourceError.exists((run.directory as NSString).appendingPathComponent(name))
     }
 
-    private func sendArchives(_ run: Run, _ groups: [Group], done: UInt64) async throws {
+    private func sendArchives(_ run: Run, _ groups: [Group], done: UInt64, parent: FileIdentity) async throws {
         var sentBefore: UInt64 = 0, total: UInt64 = 0, entries = done, arrived = done, skipped = run.primary.skipped
         run.samples = []
         update(run) {
@@ -438,8 +456,12 @@ import Observation
                 }
                 do {
                     _ = try await retryingBusy(run) {
-                        try await target.openUnpack(transfer: transfer, target: run.directory, policy: group.policy,
-                                                    names: group.items.map(\.name))
+                        let replacements = Dictionary(uniqueKeysWithValues: group.items.compactMap { item in
+                            item.replacement.map { (item.name, $0) }
+                        })
+                        _ = try await target.openUnpack(transfer: transfer, target: run.directory, policy: group.policy,
+                                                       names: group.items.map(\.name), parent: parent,
+                                                       replacements: replacements)
                     }
                     open = true
                 } catch {
@@ -470,9 +492,18 @@ import Observation
                 // the call runs to its end even if this task is cancelled, since the target must not be left half
                 // moved. Until it answers, what arrived is unknown.
                 set(run, .unpacking)
-                committed = true
                 update(run) { $0.uncertain = true }
-                let result = try await Task { try await target.closeUnpack(transfer: transfer, commit: true) }.value
+                let result = try await retryingBusy(run) {
+                    committed = true
+                    do {
+                        return try await Task {
+                            try await target.closeUnpack(transfer: transfer, commit: true)
+                        }.value
+                    } catch let error as FilesSourceError {
+                        if case .busy = error { committed = false }
+                        throw error
+                    }
+                }
                 arrived += result.entries
                 skipped += result.skipped
                 update(run) {

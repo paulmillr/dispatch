@@ -206,6 +206,9 @@ pub enum Job {
         bytes: Vec<u8>,
         mode: u32,
         expected: Expected,
+        /// The directory the caller listed before authorizing this write. None is reserved for
+        /// internal writes that establish their own stronger transaction.
+        parent: Option<FileIdentity>,
     },
     /// Create missing directory components using mode; existing directories are unchanged.
     /// c1654cc Dispatch/Chat/PiChatSetup.swift:90-91.
@@ -224,13 +227,13 @@ pub enum Job {
     // fields as wire fields, and these never reach the wire.
     /// files.pack (PackJob).
     Pack(PackJob),
-    /// Append bytes to an existing regular file (never created, never through a symlink); the
-    /// answer (Output::Appended) is its size afterwards.
-    Append(PathBuf, Vec<u8>),
+    /// Append bytes to the archive inside a verified staging folder; the answer
+    /// (Output::Appended) is its size afterwards.
+    Append(Staging, Vec<u8>),
     /// files.unpack.open's staging folder: a new directory at the path (0700, never one that
     /// exists: EEXIST) holding a new empty `archive.tar.zst` (0600). The answer is the folder's
     /// Output::Metadata, whose identity later jobs check (Staging) before they touch it.
-    Stage(PathBuf),
+    Stage(PathBuf, FileIdentity),
     /// files.unpack.close with commit (UnpackJob).
     Unpack(UnpackJob),
     /// Remove a staging folder with everything in it, through its pinned target, only while both
@@ -309,7 +312,7 @@ pub enum Job {
 pub enum Output {
     List(Vec<(String, FileKind)>),
     /// Job::Entries: the entries and whether more exist.
-    Entries(Vec<Entry>, bool),
+    Entries(Vec<Entry>, bool, FileIdentity),
     /// Job::Summary.
     Summary(FolderSummary),
     Metadata(Metadata),
@@ -1638,6 +1641,10 @@ pub struct Entry {
     pub kind: FileKind,
     pub size: u64,
     pub modified_ns: i128,
+    /// Identity of the entry itself, without following a symlink. Copy replacement consent is
+    /// bound to this identity rather than only to its name.
+    pub device: u64,
+    pub inode: u64,
     /// A symlink's target kind; None when dangling or not a symlink.
     pub target: Option<FileKind>,
     /// Reserved for git marks ("M", "A", "U", "D", "R", "!"); None until files.list honors `git`.
@@ -1650,6 +1657,16 @@ pub struct Listing {
     pub path: String,
     pub entries: Vec<Entry>,
     pub truncated: bool,
+    /// Identity of the directory whose entries were returned.
+    pub device: u64,
+    pub inode: u64,
+}
+
+/// One top-level entry whose replacement the user approved after listing it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Replacement {
+    pub name: String,
+    pub identity: FileIdentity,
 }
 
 /// Job::Collect: `command` runs in its own process group with stdin closed, killed with that group once it
@@ -1811,6 +1828,9 @@ pub struct UnpackJob {
     pub staging: Staging,
     pub policy: Policy,
     pub names: std::collections::BTreeSet<Vec<u8>>,
+    /// Exact entries the user approved replacing: the subset of top-level names that existed in
+    /// the destination listing. A conflict absent from this map is never overwritten.
+    pub replacements: std::collections::BTreeMap<Vec<u8>, FileIdentity>,
     /// Set by an uncommitted close (its client leaving): extraction stops before its next entry
     /// (Interrupted) and nothing moves; once the move phase has begun it runs to its end.
     pub stop: Stop,

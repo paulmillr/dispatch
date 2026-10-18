@@ -45,14 +45,35 @@ final class TerminalPresenceTests: XCTestCase {
 
     func testInboxKeepsOrderAndLimitsBatches() {
         let inbox = TerminalInbox()
-        XCTAssertTrue(inbox.append(Data("ab".utf8)))
-        XCTAssertFalse(inbox.append(Data("cdef".utf8)))
+        XCTAssertEqual(inbox.append(Data("ab".utf8)), .signal)
+        XCTAssertEqual(inbox.append(Data("cdef".utf8)), .queued)
         XCTAssertEqual(inbox.take(limit: 4), Data("abcd".utf8))
         XCTAssertEqual(inbox.take(limit: 4), Data("ef".utf8))
         XCTAssertNil(inbox.take(limit: 4))
-        XCTAssertTrue(inbox.append(Data("g".utf8)))
+        XCTAssertEqual(inbox.append(Data("g".utf8)), .signal)
         inbox.clear()
         XCTAssertNil(inbox.take(limit: 4))
+    }
+
+    func testInboxRejectsAnEntireAppendAtItsByteLimit() {
+        let inbox = TerminalInbox(limit: 5)
+        XCTAssertEqual(inbox.append(Data("abc".utf8)), .signal)
+        XCTAssertEqual(inbox.append(Data("def".utf8)), .overflow)
+        XCTAssertEqual(inbox.take(limit: 10), Data("abc".utf8), "An overflowing event is never partly appended")
+    }
+
+    func testRemoteClipboardEventsDoNotChangeThePasteboard() async throws {
+        let previous = UIPasteboard.general.string
+        defer { UIPasteboard.general.string = previous }
+        UIPasteboard.general.string = "kept"
+        let feed = ControlledFeed()
+        let presence = TerminalPresence(feed: feed, configuration: TerminalConfiguration())
+        presence.start()
+        feed.events?.yield(.clipboard(Data("host-controlled".utf8)))
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(UIPasteboard.general.string, "kept")
+        XCTAssertEqual(presence.configuration.config().clipboardWrite.rawValue, "deny")
+        presence.stop()
     }
 
     func testScrollbackFollowsTheBackendKind() {

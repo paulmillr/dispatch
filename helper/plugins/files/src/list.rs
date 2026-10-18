@@ -47,10 +47,12 @@ impl State {
 
     pub(super) fn event(self, io: &mut dyn Io, result: io::Result<Output>) {
         let listing = match result {
-            Ok(Output::Entries(entries, truncated)) => Ok(Listing {
+            Ok(Output::Entries(entries, truncated, directory)) => Ok(Listing {
                 path: self.path,
                 entries,
                 truncated,
+                device: directory.device,
+                inode: directory.inode,
             }),
             Ok(_) => Err(error("internal")),
             Err(value) => Err(failure(value)),

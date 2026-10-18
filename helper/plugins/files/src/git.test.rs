@@ -500,6 +500,7 @@ fn named_formats_and_signature_checks_never_run_gpg() {
             &["log", "--format=% GS", "-n", "1"],
             &["for-each-ref", "--format=%(*signature)", "refs/tags"],
             &["for-each-ref", "--format=%(signature:key)", "refs/tags"],
+            &["for-each-ref", "--sort=signature:grade", "refs/tags"],
         ] {
             let error = run(files, root, args, 0).unwrap_err();
             assert_eq!(error.code, "invalid_request", "{args:?}");
@@ -565,6 +566,80 @@ fn a_repositorys_filters_never_run() {
     // speaking the process protocol).
     repo.setup().args(["status", "--porcelain"]).output().unwrap();
     assert!(marker.exists());
+}
+
+#[test]
+fn filters_are_reloaded_when_other_config_scopes_or_conditions_change() {
+    let repo = Repo::new("git-filter-scopes");
+    let marker = repo.tree.root.join("filter-ran");
+    let filter = script(&repo, "filter.sh", &format!("touch '{}'\ncat\n", marker.display()));
+    repo.write(".git/info/attributes", b"*.txt filter=late\n");
+    stat_dirty(&repo, "a.txt");
+
+    // This include is inactive on main, so the first request sees no `late` filter. Switching HEAD changes which
+    // config Git reads without changing .git/config itself.
+    let included = repo.tree.file(
+        "conditional.gitconfig",
+        format!("[filter \"late\"]\n\tclean = {filter}\n\trequired = true\n").as_bytes(),
+    );
+    repo.git(&[
+        "config",
+        "includeIf.onbranch:feature.path",
+        included.to_str().unwrap(),
+    ]);
+    for mut files in repo.plugins() {
+        ok(&mut files, &repo.root, &["status", "--porcelain=v2", "-z"]);
+        assert!(!marker.exists());
+        repo.git(&["symbolic-ref", "HEAD", "refs/heads/feature"]);
+        ok(&mut files, &repo.root, &["status", "--porcelain=v2", "-z"]);
+        assert!(!marker.exists());
+        repo.git(&["symbolic-ref", "HEAD", "refs/heads/main"]);
+
+        // The user's config is another independent scope; changing it must not reuse a repository-only cache.
+        std::fs::write(
+            repo.home.join(".gitconfig"),
+            format!("[filter \"late\"]\n\tclean = {filter}\n\trequired = true\n"),
+        )
+        .unwrap();
+        ok(&mut files, &repo.root, &["status", "--porcelain=v2", "-z"]);
+        assert!(!marker.exists());
+        std::fs::remove_file(repo.home.join(".gitconfig")).unwrap();
+    }
+}
+
+#[test]
+fn git_lookup_never_uses_a_relative_path_or_home() {
+    let settings = Settings {
+        environment: Some(vec![
+            ("PATH".into(), ".:/tmp/bin::relative:/usr/bin".into()),
+            ("HOME".into(), "relative-home".into()),
+        ]),
+        ..Settings::default()
+    };
+    let sanitized = command(&settings, Path::new("/tmp"), &[], &["status"]);
+    assert!(Path::new(sanitized.get_program()).is_absolute());
+    let environment: std::collections::BTreeMap<_, _> = sanitized
+        .get_envs()
+        .filter_map(|(name, value)| value.map(|value| (name.to_owned(), value.to_owned())))
+        .collect();
+    let path = environment.get(std::ffi::OsStr::new("PATH")).unwrap();
+    assert!(std::env::split_paths(path).all(|part| part.is_absolute()));
+    assert_eq!(std::env::split_paths(path).next().unwrap(), Path::new(sanitized.get_program()).parent().unwrap());
+    assert!(!environment.contains_key(std::ffi::OsStr::new("HOME")));
+
+    // A protected immediate bin directory is not trusted through a group/world-writable ancestor.
+    let tree = Tree::new("git-path-ancestor");
+    let fake = tree.file("writable/protected/bin/git", b"#!/bin/sh\nexit 0\n");
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::set_permissions(fake.parent().unwrap(), std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::set_permissions(tree.root.join("writable"), std::fs::Permissions::from_mode(0o777)).unwrap();
+    let settings = Settings {
+        environment: Some(vec![("PATH".into(), format!("{}:/usr/bin:/bin", fake.parent().unwrap().display()).into())]),
+        ..Settings::default()
+    };
+    let unsafe_command = command(&settings, Path::new("/tmp"), &[], &["status"]);
+    assert_ne!(Path::new(unsafe_command.get_program()), std::fs::canonicalize(fake).unwrap());
 }
 
 #[test]
@@ -692,8 +767,8 @@ fn git_speaks_english_whatever_the_helpers_locale() {
         assert_eq!(
             names,
             [
-                "GIT_CONFIG_NOSYSTEM", "GIT_NO_LAZY_FETCH", "GIT_OPTIONAL_LOCKS", "GIT_PAGER", "GIT_TERMINAL_PROMPT",
-                "HOME", "LC_ALL", "PATH", "USER"
+                "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_SYSTEM", "GIT_NO_LAZY_FETCH",
+                "GIT_OPTIONAL_LOCKS", "GIT_PAGER", "GIT_TERMINAL_PROMPT", "HOME", "LC_ALL", "PATH", "USER"
             ],
             "{output}"
         );

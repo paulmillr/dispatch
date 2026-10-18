@@ -421,8 +421,10 @@ operations! {
         ("bytes", Bytes),
         ("mode", Nullable(&Unsigned)),
         ("replace", Boolean),
+        ("parent", Object(params::IDENTITY)),
+        ("replaced", Nullable(&Object(params::IDENTITY))),
     ]),
-        plugin write(Path::new(text(p, "path")?), bytes(p)?, permissions(p)?, flag(p, "replace")) value;
+        plugin write(Path::new(text(p, "path")?), bytes(p)?, permissions(p)?, flag(p, "replace"), identity(p, "parent")?, optional_identity(p, "replaced")?) value;
     "files.pack" => Object(&[
         ("plugin", Text),
         ("transfer", Text),
@@ -447,12 +449,16 @@ operations! {
         ("target", Text),
         ("policy", Text),
         ("names", Array(&Text)),
+        ("parent", Object(params::IDENTITY)),
+        ("replacements", Array(&Object(params::REPLACEMENT))),
     ]),
         plugin unpack_open(
         text(p, "transfer")?,
         Path::new(text(p, "target")?),
         text(p, "policy")?,
-        &strings(p, "names")?
+        &strings(p, "names")?,
+        identity(p, "parent")?,
+        &replacements(p)?
     ) value;
     "files.unpack.write" => Object(&[
         ("plugin", Text),

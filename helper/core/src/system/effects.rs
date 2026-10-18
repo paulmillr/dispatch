@@ -348,19 +348,20 @@ impl Io for System {
                         ("limit", Data::Unsigned(*limit)),
                     ],
                 ),
-                Job::Append(at, bytes) => {
-                    object("append", vec![("path", Data::from(at.as_path())), ("bytes", Data::Bytes(bytes))])
+                Job::Append(staging, bytes) => {
+                    object("append", vec![("path", Data::from(staging.path.as_path())), ("bytes", Data::Bytes(bytes))])
                 }
-                Job::Unpack(crate::api::UnpackJob { archive, staging, policy, names, stop: _ }) => object(
+                Job::Unpack(crate::api::UnpackJob { archive, staging, policy, names, replacements, stop: _ }) => object(
                     "unpack",
                     vec![
                         ("archive", Data::from(archive.as_path())),
                         ("staging", capture::staging(staging)),
                         ("policy", Data::String(capture::policy(*policy))),
                         ("names", Data::Array(names.iter().map(|name| Data::Bytes(name)).collect())),
+                        ("replacements", Data::Array(replacements.iter().map(|(name, identity)| Data::Array(vec![Data::Bytes(name), Data::Unsigned(identity.device), Data::Unsigned(identity.inode)])).collect())),
                     ],
                 ),
-                Job::Stage(at) => object("stage", vec![("path", Data::from(at.as_path()))]),
+                Job::Stage(at, parent) => object("stage", vec![("path", Data::from(at.as_path())), ("parent_device", Data::Unsigned(parent.device)), ("parent_inode", Data::Unsigned(parent.inode))]),
                 Job::Discard(staging) => object("discard", vec![("staging", capture::staging(staging))]),
                 Job::RemoveTree(at) => object("remove_tree", vec![("path", Data::from(at.as_path()))]),
                 Job::Sweep(prefix, age) => object(
@@ -380,13 +381,15 @@ impl Io for System {
                 Job::Summary(at) => {
                     object("summary", vec![("path", Data::from(at.path.as_path())), ("limit", Data::Unsigned(at.limit))])
                 }
-                Job::Write { path: at, bytes, mode, expected } => object(
+                Job::Write { path: at, bytes, mode, expected, parent } => object(
                     "write",
                     vec![
                         ("path", Data::from(at.as_path())),
                         ("bytes", Data::Bytes(bytes)),
                         ("mode", Data::Unsigned((*mode).into())),
                         ("expected", capture::expected(expected)?),
+                        ("parent_device", parent.map_or(Data::Null, |value| Data::Unsigned(value.device))),
+                        ("parent_inode", parent.map_or(Data::Null, |value| Data::Unsigned(value.inode))),
                     ],
                 ),
                 Job::Native { name, value } | Job::Isolated { name, value, .. } => {

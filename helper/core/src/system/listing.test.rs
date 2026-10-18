@@ -62,7 +62,7 @@ impl Drop for Tree {
 
 fn listed(path: &Path, hidden: bool, limit: u64) -> (Vec<Entry>, bool) {
     match entries(path, hidden, limit).unwrap() {
-        Output::Entries(entries, truncated) => (entries, truncated),
+        Output::Entries(entries, truncated, _) => (entries, truncated),
         other => panic!("not entries: {other:?}"),
     }
 }
@@ -314,12 +314,15 @@ fn listings_and_summaries_replay_as_recorded() {
     let (mut listed, _) = listed(&tree.root, true, 10);
     // Marks are reserved, but their encoding is not.
     listed[0].mark = Some("M".into());
-    let (result, recorded, again) = replayed(Ok(Output::Entries(listed.clone(), true)));
+    let metadata = std::fs::metadata(&tree.root).unwrap();
+    let directory = FileIdentity { device: metadata.dev(), inode: metadata.ino() };
+    let (result, recorded, again) = replayed(Ok(Output::Entries(listed.clone(), true, directory)));
     assert_eq!(again, recorded);
-    let Ok(Output::Entries(entries, truncated)) = result else {
+    let Ok(Output::Entries(entries, truncated, back_directory)) = result else {
         panic!("not entries: {result:?}")
     };
     assert_eq!((entries, truncated), (listed, true));
+    assert_eq!(back_directory, directory);
 
     let totals = FolderSummary {
         files: 3,
@@ -382,7 +385,9 @@ fn an_mtime_past_i64_nanoseconds_is_clamped_and_the_listing_still_records() {
     }
     let (entries, _) = listed(&tree.root, true, 10);
     assert_eq!(entries[0].modified_ns, i128::from(i64::MAX));
-    let (result, recorded, again) = replayed(Ok(Output::Entries(entries.clone(), false)));
+    let metadata = std::fs::metadata(&tree.root).unwrap();
+    let directory = FileIdentity { device: metadata.dev(), inode: metadata.ino() };
+    let (result, recorded, again) = replayed(Ok(Output::Entries(entries.clone(), false, directory)));
     assert_eq!(again, recorded);
-    assert!(matches!(result, Ok(Output::Entries(back, false)) if back == entries));
+    assert!(matches!(result, Ok(Output::Entries(back, false, identity)) if back == entries && identity == directory));
 }

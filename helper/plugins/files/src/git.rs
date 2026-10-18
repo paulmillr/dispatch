@@ -3,13 +3,14 @@
 //! The helper is the boundary, not the app: on a remote host the `git.read` grant must mean "read only" whoever
 //! asks. So the subcommand and every argument are checked against an allow-list, the repository's configuration
 //! that could run a program or write is overridden on the command line, and git sees a reduced environment.
-//! Filters are the one kind of program the configuration names under names of its own: before a repository's
-//! first command (and again whenever its config file changes) the helper asks git which filters are configured
-//! and turns each one off by name.
+//! Filters are the one kind of program repository configuration names under names of its own: immediately before
+//! every command the helper asks git which filters are configured and turns each one off by name. This cannot be
+//! cached: included config files and conditional includes selected by the current branch can change without
+//! changing the repository's own config file. User and system configuration are ignored entirely.
 
 use super::*;
 use dispatch_helper_core::api::{CollectJob, Collected, Git};
-use std::{collections::BTreeMap, ffi::OsString, process::Command, time::Duration};
+use std::{ffi::OsString, os::unix::fs::MetadataExt, process::Command, time::Duration};
 
 /// Long enough for `status` on a large tree on a slow disk; the process group is killed after it.
 pub(super) const DEADLINE: Duration = Duration::from_secs(20);
@@ -120,15 +121,58 @@ fn kept(name: &OsString) -> bool {
     )
 }
 
+fn trusted_git(path: &OsString) -> Option<PathBuf> {
+    unsafe extern "C" { fn getuid() -> u32; }
+    let uid = unsafe { getuid() };
+    for directory in std::env::split_paths(path).filter(|part| part.is_absolute()) {
+        let Ok(candidate) = std::fs::canonicalize(directory.join("git")) else { continue };
+        let Ok(metadata) = std::fs::metadata(&candidate) else { continue };
+        let executable = metadata.is_file()
+            && (metadata.uid() == 0 || metadata.uid() == uid)
+            && metadata.mode() & 0o022 == 0
+            && metadata.mode() & 0o111 != 0;
+        // Checking only `bin` is insufficient: another account could replace it through a writable ancestor
+        // after the check. The canonical executable and every directory that names it must be owned by root or
+        // this account and not writable by group or others.
+        let directories = candidate.parent().into_iter().flat_map(Path::ancestors).all(|path| {
+            std::fs::metadata(path).is_ok_and(|metadata| {
+                metadata.is_dir()
+                    && (metadata.uid() == 0 || metadata.uid() == uid)
+                    && metadata.mode() & 0o022 == 0
+            })
+        });
+        if executable && directories {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
 /// `git -C <path>`, its environment and GLOBAL, then each filter of the repository turned off, then `args`.
 fn command(settings: &Settings, path: &Path, filters: &[String], args: &[&str]) -> Command {
-    let mut command = Command::new("git");
-    command.env_clear();
     let environment = match &settings.environment {
         Some(environment) => environment.clone(),
         None => std::env::vars_os().collect(),
     };
-    command.envs(environment.into_iter().filter(|(name, _)| kept(name)));
+    let raw_path = environment.iter().find(|(name, _)| name.as_encoded_bytes() == b"PATH")
+        .map(|(_, value)| value.clone()).unwrap_or_else(|| OsString::from("/usr/bin:/bin"));
+    let program = trusted_git(&raw_path).unwrap_or_else(|| PathBuf::from("/nonexistent/dispatch-git"));
+    let mut child_directories: Vec<&Path> = program.parent().into_iter().collect();
+    for directory in [Path::new("/usr/bin"), Path::new("/bin")] {
+        if !child_directories.contains(&directory) { child_directories.push(directory); }
+    }
+    let child_path = std::env::join_paths(child_directories).unwrap_or_else(|_| OsString::from("/usr/bin:/bin"));
+    let mut command = Command::new(&program);
+    command.env_clear();
+    for (name, value) in environment.into_iter().filter(|(name, _)| kept(name)) {
+        if name.as_encoded_bytes() == b"PATH" {
+            // An empty or relative PATH component means the helper's current directory. A read request must
+            // never turn a repository-local `git` executable into code execution.
+            command.env(name, &child_path);
+        } else if name.as_encoded_bytes() != b"HOME" || Path::new(&value).is_absolute() {
+            command.env(name, value);
+        }
+    }
     // The app matches git's own words (`not a git repository`) and its English dates; a translated git breaks
     // that. File names are unaffected: core.quotepath=false prints them as their bytes in any locale.
     command.env("LC_ALL", "C");
@@ -138,6 +182,11 @@ fn command(settings: &Settings, path: &Path, filters: &[String], args: &[&str]) 
     command.env("GIT_TERMINAL_PROMPT", "0");
     command.env("GIT_PAGER", "cat");
     command.env("GIT_NO_LAZY_FETCH", "1");
+    // User and system configuration are not needed to read repository state and add independent executable
+    // configuration sources. Repository-local configuration is inspected afresh immediately below.
+    command.env("GIT_CONFIG_GLOBAL", "/dev/null");
+    command.env("GIT_CONFIG_SYSTEM", "/dev/null");
+    command.env("GIT_CONFIG_NOSYSTEM", "1");
     command.arg("-C").arg(path).args(GLOBAL);
     for name in filters {
         // Empty commands are no commands (git skips them), and a filter that is not required may then do
@@ -157,27 +206,12 @@ fn command(settings: &Settings, path: &Path, filters: &[String], args: &[&str]) 
     command
 }
 
-/// What the helper knows of one repository's filters: the names its configuration gives, as of the config
-/// file's identity then. Kept for the helper's lifetime, by the folder the app names.
-pub(super) struct Probe {
-    config: PathBuf,
-    identity: Option<Identity>,
-    filters: Vec<String>,
-}
-
-/// The config file's modification time, inode and size: git rewrites it through a new file, so any change
-/// shows in one of them. None: no config file.
-type Identity = (i128, u64, u64);
-
-pub(super) type Repositories = Rc<RefCell<BTreeMap<PathBuf, Probe>>>;
-
 /// The configuration keys that name a filter's program: `filter.<name>.<key>`.
 const FILTERS: &str = r"^filter\..*\.(clean|process|smudge)$";
 
 /// One request, carried through the probe to its run.
 struct Request {
     settings: Settings,
-    repositories: Repositories,
     path: PathBuf,
     args: Vec<String>,
     limit: usize,
@@ -186,9 +220,9 @@ struct Request {
 }
 
 pub(super) fn git(
+    access: &transfer::SharedAccess,
     io: &mut dyn Io,
     settings: &Settings,
-    repositories: &Repositories,
     path: &Path,
     args: &[String],
     limit: u64,
@@ -201,20 +235,23 @@ pub(super) fn git(
         Ok(end) => end,
         Err(message) => return done(io, Err(refused(message))),
     };
+    if !access.begin_read() {
+        return done(io, Err(error("busy")));
+    }
+    let access = access.clone();
+    let done: Done<Git> = Box::new(move |io, result| {
+        access.end_read();
+        done(io, result);
+    });
     let request = Request {
         settings: settings.clone(),
-        repositories: repositories.clone(),
         path: path.to_path_buf(),
         args: args.to_vec(),
         limit: if limit == 0 { DEFAULT } else { limit.min(CAP) } as usize,
         end,
         done,
     };
-    let known = repositories.borrow().get(path).map(|probe| probe.config.clone());
-    match known {
-        Some(config) => recheck(io, request, config),
-        None => locate(io, request),
-    }
+    list(io, request);
 }
 
 /// An internal git command, never through the allow-list, with the run's environment and deadline; its
@@ -241,51 +278,10 @@ fn internal(
     });
 }
 
-/// A folder seen for the first time: where its repository's config file is. Outside a repository there is no
-/// repository configuration to fear, and nothing is kept (the folder may become one).
-fn locate(io: &mut dyn Io, request: Request) {
-    internal(io, request, &["rev-parse", "--git-path", "config"], |io, request, collected| {
-        let line = collected.stdout.strip_suffix(b"\n").unwrap_or(&collected.stdout);
-        if collected.truncated {
-            return (request.done)(io, Err(error("internal")));
-        }
-        if collected.status != Some(0) || line.is_empty() {
-            return run(io, request, Vec::new());
-        }
-        // Relative to the folder git ran in (`-C`); joining an absolute one gives it unchanged.
-        use std::os::unix::ffi::OsStrExt;
-        let config = request.path.join(std::ffi::OsStr::from_bytes(line));
-        recheck(io, request, config);
-    });
-}
-
-/// The config file's identity now: the same as when its filters were read, they still hold; else read again.
-fn recheck(io: &mut dyn Io, request: Request, config: PathBuf) {
-    let job = Job::Stat {
-        path: config.clone(),
-        follow: true,
-    };
-    transfer::job(io, job, move |io, result| {
-        let identity = match result {
-            Ok(Output::Metadata(metadata)) => Some(Some((metadata.modified_ns, metadata.inode, metadata.size))),
-            Err(value) if value.kind() == io::ErrorKind::NotFound => Some(None),
-            // Unknown: read the filters for this run and keep nothing.
-            _ => None,
-        };
-        let cached = identity.and_then(|identity| {
-            let repositories = request.repositories.borrow();
-            let probe = repositories.get(&request.path)?;
-            (probe.config == config && probe.identity == identity).then(|| probe.filters.clone())
-        });
-        match cached {
-            Some(filters) => run(io, request, filters),
-            None => list(io, request, config, identity),
-        }
-    });
-}
-
-/// The filters the configuration names, every scope git reads (the repository's, the user's, includes).
-fn list(io: &mut dyn Io, request: Request, config: PathBuf, identity: Option<Option<Identity>>) {
+/// The filters the configuration names, every scope git reads (the repository's, the user's, includes). This is
+/// deliberately a fresh query immediately before the requested command; no single config file identifies all of
+/// those scopes or conditional includes.
+fn list(io: &mut dyn Io, request: Request) {
     let args = ["config", "-z", "--name-only", "--get-regexp", FILTERS];
     internal(io, request, &args, move |io, request, collected| {
         if collected.truncated {
@@ -318,14 +314,6 @@ fn list(io: &mut dyn Io, request: Request, config: PathBuf, identity: Option<Opt
             if !filters.iter().any(|known| known == name) {
                 filters.push(name.to_owned());
             }
-        }
-        if let Some(identity) = identity {
-            let probe = Probe {
-                config,
-                identity,
-                filters: filters.clone(),
-            };
-            request.repositories.borrow_mut().insert(request.path.clone(), probe);
         }
         run(io, request, filters);
     });
@@ -558,6 +546,7 @@ fn refs(argument: &str) -> bool {
     if let Some(field) = argument.strip_prefix("--sort=") {
         let field = field.strip_prefix('-').unwrap_or(field);
         return !field.is_empty()
+            && !field.starts_with("signature")
             && field
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || matches!(b, b':' | b'(' | b')' | b'-' | b'_'));

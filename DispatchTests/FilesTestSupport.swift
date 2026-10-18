@@ -191,9 +191,11 @@ final class FakeFilesSource: FilesSource, @unchecked Sendable {
             let entries = names.map { name -> FileEntry in
                 let child = node.children[name]!
                 return FileEntry(name: name, kind: child.kind, size: child.kind == .directory ? 0 : UInt64(child.data.count),
-                                 modified: child.modified, targetKind: targetKind(of: child, in: path), mark: nil)
+                                 modified: child.modified, targetKind: targetKind(of: child, in: path), mark: nil,
+                                 identity: FileIdentity(device: 1, inode: child.inode))
             }
-            return FileListing(path: normalize(path), entries: entries, truncated: truncated)
+            return FileListing(path: normalize(path), entries: entries, truncated: truncated,
+                               identity: FileIdentity(device: 1, inode: node.inode))
         }
     }
 
@@ -235,12 +237,22 @@ final class FakeFilesSource: FilesSource, @unchecked Sendable {
         }
     }
 
-    func write(_ path: String, data: Data, mode: UInt32?, replace: Bool) async throws -> FileRevision {
+    func write(_ path: String, data: Data, mode: UInt32?, replace: Bool, parent expectedParent: FileIdentity,
+               replaced: FileIdentity?) async throws -> FileRevision {
         try await enter("write", path)
         return try lock.withLock {
             let (parent, name) = split(path)
             guard let directory = node(at: parent), directory.kind == .directory else {
                 throw FilesSourceError.notFound(parent)
+            }
+            guard expectedParent == FileIdentity(device: 1, inode: directory.inode) else {
+                throw FilesSourceError.changed(parent)
+            }
+            if replace {
+                guard let current = directory.children[name],
+                      replaced == FileIdentity(device: 1, inode: current.inode) else { throw FilesSourceError.changed(path) }
+            } else if replaced != nil {
+                throw FilesSourceError.changed(path)
             }
             if directory.children[name] != nil, !replace { throw FilesSourceError.exists(path) }
             let node = Node(kind: .file, data: data, modified: System.date(), mode: mode ?? 0o644, inode: allocate())
@@ -309,12 +321,21 @@ final class FakeFilesSource: FilesSource, @unchecked Sendable {
         }
     }
 
-    func openUnpack(transfer: String, target: String, policy: ConflictPolicy, names: [String]) async throws -> UnpackTransfer {
+    func openUnpack(transfer: String, target: String, policy: ConflictPolicy, names: [String], parent: FileIdentity,
+                    replacements: [String: FileIdentity]) async throws -> UnpackTransfer {
         try await enter("unpack.open", target)
         return try lock.withLock {
             opened.append(names)
             guard let node = node(at: target) else { throw FilesSourceError.notFound(target) }
             guard node.kind == .directory else { throw FilesSourceError.notDirectory(target) }
+            guard parent == FileIdentity(device: 1, inode: node.inode) else { throw FilesSourceError.changed(target) }
+            if policy == .replace {
+                guard Set(replacements.keys) == Set(names), replacements.allSatisfy({ name, identity in
+                    node.children[name].map { identity == FileIdentity(device: 1, inode: $0.inode) } ?? false
+                }) else { throw FilesSourceError.changed(target) }
+            } else if !replacements.isEmpty {
+                throw FilesSourceError.changed(target)
+            }
             if transfers.values.contains(where: { $0.target == normalize(target) }) {
                 throw FilesSourceError.busy("A copy into \(target) is already open")
             }

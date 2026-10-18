@@ -161,7 +161,7 @@ pub(super) fn encode(result: &io::Result<Output>) -> io::Result<Vec<u8>> {
                 ),
             ])
         }
-        Ok(Output::Entries(entries, truncated)) => super::listing::encode_entries(entries, *truncated)?,
+        Ok(Output::Entries(entries, truncated, directory)) => super::listing::encode_entries(entries, *truncated, *directory)?,
         Ok(Output::Summary(totals)) => super::listing::encode_summary(totals),
         Ok(Output::Process(p)) => Data::Object(vec![
             ("kind", Data::String("process")),

@@ -409,6 +409,26 @@ fn strings(p: &Data<'_>, name: &str) -> Result<Vec<String>, Error> {
 fn paths(p: &Data<'_>, name: &str) -> Result<Vec<PathBuf>, Error> {
     Ok(strings(p, name)?.into_iter().map(PathBuf::from).collect())
 }
+fn identity(p: &Data<'_>, name: &str) -> Result<FileIdentity, Error> {
+    let value = p.get(name).ok_or_else(|| invalid(name))?;
+    Ok(FileIdentity { device: number(value, "device")?, inode: number(value, "inode")? })
+}
+fn optional_identity(p: &Data<'_>, name: &str) -> Result<Option<FileIdentity>, Error> {
+    match p.get(name) {
+        None | Some(Data::Null) => Ok(None),
+        Some(_) => identity(p, name).map(Some),
+    }
+}
+fn replacements(p: &Data<'_>) -> Result<Vec<Replacement>, Error> {
+    p.get("replacements")
+        .and_then(Data::array)
+        .ok_or_else(|| invalid("replacements"))?
+        .map(|value| Ok(Replacement {
+            name: text(value, "name")?.to_owned(),
+            identity: FileIdentity { device: number(value, "device")?, inode: number(value, "inode")? },
+        }))
+        .collect()
+}
 /// files.write `mode`: permission bits; null or absent leaves the default to the plugin.
 fn permissions(p: &Data<'_>) -> Result<Option<u32>, Error> {
     optional(p, "mode")

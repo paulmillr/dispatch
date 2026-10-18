@@ -65,6 +65,9 @@ final class TerminalPresence {
     @ObservationIgnored private let publishQueued = TerminalFlag()
 
     nonisolated static let batchLimit = 256 * 1024
+    /// Enough for a short rendering stall, but never an unbounded claim on the phone's memory. Overflow ends the
+    /// attachment: dropping terminal bytes would leave its parser in a state different from the remote terminal.
+    nonisolated static let inboxLimit = 8 * 1024 * 1024
     nonisolated static let publishInterval = Duration.milliseconds(33)
 
     private struct Publication {
@@ -119,8 +122,8 @@ final class TerminalPresence {
         // terminal shown again (or reattached after a reconnect) never flashes empty.
         let repaint = attachments > 1
         let stream = feed.attach(session.currentSize)
-        inbox = TerminalInbox()
-        let session = session, inbox = inbox, attachment = attachments
+        inbox = TerminalInbox(limit: Self.inboxLimit)
+        let session = session, inbox = inbox, attachment = attachments, feed = feed
         let (signals, signal) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
         parser = Task.detached(priority: .userInitiated) {
             var clear = repaint
@@ -134,12 +137,29 @@ final class TerminalPresence {
         consumer = Task.detached(priority: .userInitiated) { [weak self] in
             for await event in stream {
                 if case .output(let bytes) = event {
-                    if inbox.append(bytes) { signal.yield() }
+                    switch inbox.append(bytes) {
+                    case .signal: signal.yield()
+                    case .queued: break
+                    case .overflow:
+                        signal.finish()
+                        feed.detach()
+                        await MainActor.run {
+                            self?.handle(.failed("Terminal output exceeded the device buffer limit."), attachment: attachment)
+                        }
+                        return
+                    }
                 } else {
                     await MainActor.run { self?.handle(event, attachment: attachment) }
                 }
             }
             signal.finish()
+            // A producer that ends without an exit/failure event overflowed its bounded event queue or broke its
+            // subscription. Cancel it and make the loss visible; continuing after dropped terminal bytes is unsafe.
+            feed.detach()
+            await MainActor.run {
+                guard let self, self.attached, attachment == self.attachments else { return }
+                self.handle(.failed("Terminal output stream ended unexpectedly."), attachment: attachment)
+            }
         }
     }
 
@@ -183,7 +203,8 @@ final class TerminalPresence {
         case .output: break
         case .attached: session.refresh()
         case .history(let position): scroll.history(position)
-        case .clipboard(let bytes): UIPasteboard.general.string = String(decoding: bytes, as: UTF8.self)
+        // Remote helper clipboard writes are denied on iPhone; only explicit user copy actions touch the pasteboard.
+        case .clipboard: break
         case .exited, .failed:
             ended = event
             attached = false
@@ -194,10 +215,7 @@ final class TerminalPresence {
         switch event {
         case .title(let text): title = text.isEmpty ? nil : text
         case .pwd(let url): directory = TerminalSubtitle.path(fromWorkingDirectory: url)
-        // A program's copy (OSC 52, kitty clipboard): allowed, as on the Mac for hosts with the helper.
-        case .clipboard(let text):
-            UIPasteboard.general.string = text
-            return
+        case .clipboard: return
         default: break
         }
         onViewEvent?(event)
@@ -233,14 +251,20 @@ final class TerminalPresence {
 
 /// Output waiting for the parse task: appends from the feed's events, batches taken in order.
 final class TerminalInbox: Sendable {
-    private let state = Mutex(Data())
+    enum Append: Equatable { case signal, queued, overflow }
 
-    /// True: the inbox was empty (the parse task needs a signal).
-    func append(_ bytes: Data) -> Bool {
+    private let state = Mutex(Data())
+    private let limit: Int
+
+    init(limit: Int = TerminalPresence.inboxLimit) { self.limit = limit }
+
+    /// `signal`: the inbox was empty (the parse task needs a signal); `overflow`: no bytes were appended.
+    func append(_ bytes: Data) -> Append {
         state.withLock { pending in
+            guard pending.count <= limit, bytes.count <= limit - pending.count else { return .overflow }
             let wasEmpty = pending.isEmpty
             pending.append(bytes)
-            return wasEmpty
+            return wasEmpty ? .signal : .queued
         }
     }
 

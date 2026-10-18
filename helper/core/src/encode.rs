@@ -318,13 +318,17 @@ records! {
         kind,
         size,
         modified_ns,
+        device,
+        inode,
         target,
         mark
     };
     Listing {
         path,
         entries,
-        truncated
+        truncated,
+        device,
+        inode
     };
     FolderSummary {
         files,

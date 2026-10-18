@@ -142,7 +142,8 @@ struct ChatThreadView: View {
                 .contextMenu { Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = row.item.text } }
         case .agent(let summary):
             VStack(spacing: 5) {
-                ChatBubble(side: .agent) { Text(LocalizedStringKey(row.item.text)) }
+                ChatBubble(side: .agent) { Text(MobileChatMarkdown.text(row.item.text)) }
+                    .environment(\.openURL, MobileChatMarkdown.openURL)
                     .onTapGesture { details = row }
                     .contextMenu {
                         Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = row.item.text }

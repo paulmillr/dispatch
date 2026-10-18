@@ -138,6 +138,41 @@ pub(super) fn open(parent: &File, name: &OsStr, mode: Option<u32>) -> io::Result
     child(parent, name, mode, 0)
 }
 
+/// Open an existing regular file for append through a pinned directory.
+pub(super) fn append(parent: &File, name: &OsStr) -> io::Result<File> {
+    let name = component(name)?;
+    let flags = O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK | O_NOCTTY
+        | if cfg!(target_os = "linux") { 1 | 0x400 } else { 1 | 0x8 };
+    unsafe extern "C" {
+        fn openat(fd: i32, path: *const c_char, flags: i32, ...) -> i32;
+    }
+    // SAFETY: validated one-component name and borrowed live directory.
+    let fd = unsafe { openat(parent.as_raw_fd(), name.as_ptr(), flags) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(unsafe { File::from_raw_fd(fd) })
+}
+
+/// Create one child directory through a pinned parent.
+pub(super) fn mkdir(parent: &File, name: &OsStr, mode: u32) -> io::Result<()> {
+    let name = component(name)?;
+    #[cfg(target_os = "macos")]
+    type Mode = u16;
+    #[cfg(target_os = "linux")]
+    type Mode = u32;
+    unsafe extern "C" {
+        fn mkdirat(fd: i32, path: *const c_char, mode: Mode) -> i32;
+    }
+    let mode = Mode::try_from(mode & 0o7777).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+    // SAFETY: validated one-component name and borrowed live directory.
+    if unsafe { mkdirat(parent.as_raw_fd(), name.as_ptr(), mode) } == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
 /// This pinned directory's child folder, never through a symlink (ELOOP) and never anything else (ENOTDIR).
 pub(super) fn folder(parent: &File, name: &OsStr) -> io::Result<File> {
     child(parent, name, None, O_DIRECTORY)
@@ -168,6 +203,16 @@ fn child(parent: &File, name: &OsStr, mode: Option<u32>, extra: i32) -> io::Resu
 /// The names in an open directory, read through its descriptor (so a path swapped meanwhile cannot change what is
 /// listed), without `.` and `..`, each with its readdir type (DT_*; 0 when the file system does not say).
 pub(super) fn entries(directory: &File) -> io::Result<Vec<(std::ffi::OsString, u8)>> {
+    entries_with_limit(directory, None)
+}
+
+/// The names in `directory`, refusing before retaining more than `limit`. Packing uses this because its entry
+/// bound must also bound memory for one exceptionally wide directory.
+pub(super) fn entries_bounded(directory: &File, limit: usize) -> io::Result<Vec<(std::ffi::OsString, u8)>> {
+    entries_with_limit(directory, Some(limit))
+}
+
+fn entries_with_limit(directory: &File, limit: Option<usize>) -> io::Result<Vec<(std::ffi::OsString, u8)>> {
     use std::os::fd::IntoRawFd;
     unsafe extern "C" {
         #[cfg_attr(all(target_os = "macos", target_arch = "x86_64"), link_name = "fdopendir$INODE64")]
@@ -218,6 +263,12 @@ pub(super) fn entries(directory: &File) -> io::Result<Vec<(std::ffi::OsString, u
         let (kind, name) = unsafe { (*entry.add(TYPE), CStr::from_ptr(entry.add(NAME).cast())) };
         let name = name.to_bytes();
         if name != b"." && name != b".." {
+            if limit.is_some_and(|limit| names.len() == limit) {
+                break Err(io::Error::new(
+                    io::ErrorKind::QuotaExceeded,
+                    "more entries than the limit",
+                ));
+            }
             names.push((OsStr::from_bytes(name).to_owned(), kind));
         }
     };
@@ -292,6 +343,28 @@ pub(super) fn exists(parent: &File, name: &OsStr) -> io::Result<bool> {
     } else {
         Err(error)
     }
+}
+
+/// Device and inode of one child of a pinned directory, without following a symlink and without needing read
+/// permission or opening special files.
+pub(super) fn identity(parent: &File, name: &OsStr) -> io::Result<crate::api::FileIdentity> {
+    let name = component(name)?;
+    unsafe extern "C" {
+        #[cfg_attr(all(target_os = "macos", target_arch = "x86_64"), link_name = "fstatat$INODE64")]
+        fn fstatat(fd: i32, path: *const c_char, value: *mut c_void, flags: i32) -> i32;
+    }
+    const AT_SYMLINK_NOFOLLOW: i32 = if cfg!(target_os = "macos") { 0x20 } else { 0x100 };
+    let mut value = [0u8; 256];
+    // SAFETY: validated child name, borrowed live directory and storage larger than struct stat on supported ABIs.
+    if unsafe { fstatat(parent.as_raw_fd(), name.as_ptr(), value.as_mut_ptr().cast(), AT_SYMLINK_NOFOLLOW) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    #[cfg(target_os = "macos")]
+    let device = u32::from_ne_bytes(value[..4].try_into().unwrap()).into();
+    #[cfg(target_os = "linux")]
+    let device = u64::from_ne_bytes(value[..8].try_into().unwrap());
+    let inode = u64::from_ne_bytes(value[8..16].try_into().unwrap());
+    Ok(crate::api::FileIdentity { device, inode })
 }
 
 pub(super) fn remove(parent: &File, name: &OsStr) -> io::Result<()> {
@@ -373,6 +446,45 @@ pub(super) fn publish(
         Ok(())
     } else if replace {
         Err(io::Error::last_os_error())
+    } else {
+        Err(unreplacing(io::Error::last_os_error()))
+    }
+}
+
+/// Atomically swap two children of one pinned directory. A checked replacement uses this so it can inspect the
+/// exact object displaced by publication and roll the swap back if it is not the object the caller authorized.
+pub(super) fn exchange(parent: &File, first: &OsStr, second: &OsStr) -> io::Result<()> {
+    let first = component(first)?;
+    let second = component(second)?;
+    let fd = parent.as_raw_fd();
+    #[cfg(target_os = "linux")]
+    let status = {
+        unsafe extern "C" {
+            fn syscall(number: std::ffi::c_long, ...) -> std::ffi::c_long;
+        }
+        #[cfg(target_arch = "x86_64")]
+        const NUMBER: std::ffi::c_long = 316;
+        #[cfg(target_arch = "aarch64")]
+        const NUMBER: std::ffi::c_long = 276;
+        // SAFETY: native renameat2 ABI, pinned fd, validated names and RENAME_EXCHANGE.
+        unsafe { syscall(NUMBER, fd, first.as_ptr(), fd, second.as_ptr(), 2u32) }
+    };
+    #[cfg(target_os = "macos")]
+    let status = {
+        unsafe extern "C" {
+            fn renameatx_np(
+                first_fd: i32,
+                first: *const c_char,
+                second_fd: i32,
+                second: *const c_char,
+                flags: u32,
+            ) -> i32;
+        }
+        // SAFETY: Darwin RENAME_SWAP, pinned fd and validated names.
+        unsafe { renameatx_np(fd, first.as_ptr(), fd, second.as_ptr(), 2) as std::ffi::c_long }
+    };
+    if status == 0 {
+        Ok(())
     } else {
         Err(unreplacing(io::Error::last_os_error()))
     }

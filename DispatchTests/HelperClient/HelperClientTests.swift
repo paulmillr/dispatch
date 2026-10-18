@@ -250,6 +250,21 @@ final class HelperClientTests: XCTestCase {
         XCTAssertEqual(actual, [.limit, .invalid, .invalid, .limit, .invalid, .invalid, .invalid, .limit])
     }
 
+    func testStreamCollectorBoundsAllPendingRepliesTogether() throws {
+        func chunk(_ sequence: UInt64, _ bytes: String) -> Data {
+            var sequence = sequence.littleEndian
+            return withUnsafeBytes(of: &sequence) { Data($0) } + Data(bytes.utf8)
+        }
+        var collector = HelperBinary.Collector(limit: 5, chunkKind: HelperWire.Kind.chunk.rawValue, chunkLimit: 5)
+        XCTAssertNil(try collector.push(kind: HelperWire.Kind.chunk.rawValue, id: 1, body: chunk(0, "abc")))
+        XCTAssertThrowsError(try collector.push(kind: HelperWire.Kind.chunk.rawValue, id: 2, body: chunk(0, "def"))) {
+            XCTAssertEqual($0 as? HelperBinary.Failure, .limit)
+        }
+        collector.cancel(1)
+        XCTAssertNil(try collector.push(kind: HelperWire.Kind.chunk.rawValue, id: 2, body: chunk(0, "def")),
+                     "Cancel releases its bytes from the connection-wide budget")
+    }
+
     func testStreamProtocolFailureSurvivesConnectionCleanup() async throws {
         let fixture = try Self.fixture("streamed-replies").frames
         let hello = fixture["write"]![0]

@@ -109,7 +109,14 @@ final class FilesProtocolTests: XCTestCase {
     /// its archive, then files.unpack.* into a folder that holds a conflicting name. A transfer still open when its
     /// client disconnects is removed, staging folder and all, before that helper exits.
     func testLocalHelperCopiesFilesOutAndInAndEndsTransfersItsClientLeftOpen() async throws {
-        struct Write: Encodable { let path: String; let bytes: Data; let mode: UInt64?; let replace: Bool }
+        struct Identity: Codable { let device: UInt64; let inode: UInt64 }
+        struct Entry: Decodable { let name: String; let device: UInt64; let inode: UInt64 }
+        struct Listing: Decodable { let entries: [Entry]; let device: UInt64; let inode: UInt64 }
+        struct List: Encodable { let path: String; let hidden = true; let limit: UInt64 = 0; let git = false }
+        struct Write: Encodable {
+            let path: String; let bytes: Data; let mode: UInt64?; let replace: Bool
+            let parent: Identity; let replaced: Identity?
+        }
         struct Written: Decodable { let size: UInt64 }
         struct Pack: Encodable { let transfer: String; let base: String; let paths: [String]; let limit: UInt64 }
         struct Packed: Decodable {
@@ -117,7 +124,11 @@ final class FilesProtocolTests: XCTestCase {
         }
         struct Named: Encodable { let transfer: String }
         struct Read: Encodable { let path: String; let offset: UInt64; let length: UInt64 }
-        struct Open: Encodable { let transfer: String; let target: String; let policy: String; let names: [String] }
+        struct Replacement: Encodable { let name: String; let device: UInt64; let inode: UInt64 }
+        struct Open: Encodable {
+            let transfer: String; let target: String; let policy: String; let names: [String]
+            let parent: Identity; let replacements: [Replacement]
+        }
         struct Transfer: Decodable { let transfer: String; let staging: String }
         struct Append: Encodable { let transfer: String; let bytes: Data }
         struct Progress: Decodable { let bytes: UInt64 }
@@ -140,18 +151,25 @@ final class FilesProtocolTests: XCTestCase {
         let connection = session.connection
 
         let file = source.appendingPathComponent("folder/alpha.txt"), notes = source.appendingPathComponent("notes.txt")
+        let folderListing: Listing = try await connection.request("files.list", params: List(path: file.deletingLastPathComponent().path))
+        let sourceListing: Listing = try await connection.request("files.list", params: List(path: source.path))
+        let folderIdentity = Identity(device: folderListing.device, inode: folderListing.inode)
+        let sourceIdentity = Identity(device: sourceListing.device, inode: sourceListing.inode)
         let written: Written = try await connection.request(
-            "files.write", params: Write(path: file.path, bytes: Data("alpha".utf8), mode: nil, replace: false))
+            "files.write", params: Write(path: file.path, bytes: Data("alpha".utf8), mode: nil, replace: false,
+                                          parent: folderIdentity, replaced: nil))
         XCTAssertEqual(written.size, 5)
         do {
             let _: Written = try await connection.request(
-                "files.write", params: Write(path: file.path, bytes: Data("again".utf8), mode: nil, replace: false))
+                "files.write", params: Write(path: file.path, bytes: Data("again".utf8), mode: nil, replace: false,
+                                              parent: folderIdentity, replaced: nil))
             XCTFail("files.write replaced a file without replace")
         } catch let failure as HelperFailure {
             XCTAssertEqual(failure.code, "exists")
         }
         let _: Written = try await connection.request(
-            "files.write", params: Write(path: notes.path, bytes: Data("new notes".utf8), mode: 0o600, replace: false))
+            "files.write", params: Write(path: notes.path, bytes: Data("new notes".utf8), mode: 0o600, replace: false,
+                                          parent: sourceIdentity, replaced: nil))
 
         let out = System.uuid().uuidString
         let packed: Packed = try await connection.request(
@@ -164,8 +182,11 @@ final class FilesProtocolTests: XCTestCase {
 
         try System.write(Data("old notes".utf8), to: target.appendingPathComponent("notes.txt"))
         let copy = System.uuid().uuidString
+        let targetListing: Listing = try await connection.request("files.list", params: List(path: target.path))
+        let targetIdentity = Identity(device: targetListing.device, inode: targetListing.inode)
         let opened: Transfer = try await connection.request(
-            "files.unpack.open", params: Open(transfer: copy, target: target.path, policy: "keep", names: ["folder", "notes.txt"]))
+            "files.unpack.open", params: Open(transfer: copy, target: target.path, policy: "keep", names: ["folder", "notes.txt"],
+                                                parent: targetIdentity, replacements: []))
         XCTAssertEqual(opened.transfer, copy)
         let progress: Progress = try await connection.request(
             "files.unpack.write", params: Append(transfer: copy, bytes: archive.bytes))
@@ -177,8 +198,13 @@ final class FilesProtocolTests: XCTestCase {
 
         let leaving = try await helper()
         let left = System.uuid().uuidString
+        let replacementListing: Listing = try await leaving.connection.request("files.list", params: List(path: target.path))
+        let replacementIdentity = Identity(device: replacementListing.device, inode: replacementListing.inode)
+        let replacements = replacementListing.entries.filter { ["folder", "notes.txt"].contains($0.name) }
+            .map { Replacement(name: $0.name, device: $0.device, inode: $0.inode) }
         let staged: Transfer = try await leaving.connection.request(
-            "files.unpack.open", params: Open(transfer: left, target: target.path, policy: "replace", names: ["folder", "notes.txt"]))
+            "files.unpack.open", params: Open(transfer: left, target: target.path, policy: "replace", names: ["folder", "notes.txt"],
+                                                parent: replacementIdentity, replacements: replacements))
         let _: Progress = try await leaving.connection.request(
             "files.unpack.write", params: Append(transfer: left, bytes: archive.bytes.prefix(100)))
         XCTAssertTrue(System.exists(URL(fileURLWithPath: staged.staging)))

@@ -44,8 +44,25 @@ final class HelperTerminalFeedTests: XCTestCase {
         peer.notify(attach.id, .exit(.init(terminal: 7, status: 0)), method: "terminal.exit")
         var received: [TerminalFeedEvent] = []
         for await event in stream { received.append(event) }
-        XCTAssertEqual(received, [.output(Data("hello".utf8)), .history(.init(offset: 3, maximum: 120, viewport: 30)), .attached,
-                                  .clipboard(Data("copied".utf8)), .exited(0)])
+        XCTAssertEqual(received, [.output(Data("hello".utf8)), .history(.init(offset: 3, maximum: 120, viewport: 30)),
+                                  .attached, .exited(0)], "Remote clipboard notifications are denied on the phone")
+    }
+
+    func testLargeOutputIsSplitBeforeEnteringTheBoundedEventQueue() async throws {
+        let peer = ScriptedHelper.terminal()
+        defer { peer.close() }
+        let feed = HelperTerminalFeed(client: peer.client, terminal: 7)
+        let stream = feed.attach(TerminalFeedSize(columns: 80, rows: 24))
+        let attach = try await peer.wait(for: "terminals.attach")[0]
+        let sent = Data(repeating: 0x61, count: 150_000)
+        peer.notify(attach.id, .output(.init(terminal: 7, bytes: sent)), method: "terminal.output")
+        peer.notify(attach.id, .exit(.init(terminal: 7, status: 0)), method: "terminal.exit")
+        var chunks: [Data] = []
+        for await event in stream {
+            if case .output(let bytes) = event { chunks.append(bytes) }
+        }
+        XCTAssertEqual(chunks.map(\.count), [64 * 1024, 64 * 1024, 18_928])
+        XCTAssertEqual(chunks.reduce(into: Data()) { $0.append($1) }, sent)
     }
 
     /// A scroll step still queued when the attachment ends (a detach, or a reattach) answers `failed`: its caller (the

@@ -322,6 +322,13 @@ final class FilePreviewTests: XCTestCase {
         XCTAssertEqual(lines.occurrences(of: "A"), [0], "Case-insensitive: the a of const a")
         XCTAssertEqual(lines.occurrences(of: "l"), [1])
         XCTAssertEqual(FileTextLines.occurrences(of: "ab", in: ["abab", "x", "AB"]), [0, 0, 2])
+        let manyLines = String(repeating: "x\n", count: FileTextLines.linesLimit + 1)
+        let boundedLines = FileTextLines.split(manyLines)
+        XCTAssertEqual(boundedLines.count, FileTextLines.linesLimit)
+        XCTAssertEqual(boundedLines.last, FileTextLines.truncatedLine)
+        let manyMatches = FileTextLines.occurrences(
+            of: "x", in: [String(repeating: "x", count: FileTextLines.occurrencesLimit + 1)])
+        XCTAssertEqual(manyMatches.count, FileTextLines.occurrencesLimit)
         lines.prepare(.init(owner: owner, count: 2, language: "swift", theme: .standard)) { "let a = 1\r\nlet b = 2\r\n" }
         XCTAssertEqual(lines.lines, ["let a = 1", "let b = 2"])
         XCTAssertEqual(lines.highlighted?.count, 2, "CRLF text keeps its colours")
@@ -353,6 +360,13 @@ final class FilePreviewTests: XCTestCase {
         XCTAssertEqual(find.current, 0)
         find.previous()
         XCTAssertEqual(find.current, 2)
+    }
+
+    func testImagePreviewRejectsDecodeAmplification() {
+        XCTAssertTrue(FilePreviewLoader.isSafeImageSize(CGSize(width: 8_000, height: 8_000)))
+        XCTAssertFalse(FilePreviewLoader.isSafeImageSize(CGSize(width: 8_001, height: 8_000)))
+        XCTAssertFalse(FilePreviewLoader.isSafeImageSize(CGSize(width: 32_769, height: 1)))
+        XCTAssertFalse(FilePreviewLoader.isSafeImageSize(CGSize(width: CGFloat.infinity, height: 1)))
     }
 
     func testHexDumpRows() {
@@ -497,15 +511,18 @@ final class ScriptedFilesSource: FilesSource, @unchecked Sendable {
         return try await base.read(path, offset: offset, length: length, revision: revision)
     }
 
-    func write(_ path: String, data: Data, mode: UInt32?, replace: Bool) async throws -> FileRevision {
-        try await base.write(path, data: data, mode: mode, replace: replace)
+    func write(_ path: String, data: Data, mode: UInt32?, replace: Bool, parent: FileIdentity,
+               replaced: FileIdentity?) async throws -> FileRevision {
+        try await base.write(path, data: data, mode: mode, replace: replace, parent: parent, replaced: replaced)
     }
     func pack(transfer: String, base path: String, paths: [String]) async throws -> PackedArchive {
         try await base.pack(transfer: transfer, base: path, paths: paths)
     }
     func dropArchive(transfer: String) async throws { try await base.dropArchive(transfer: transfer) }
-    func openUnpack(transfer: String, target: String, policy: ConflictPolicy, names: [String]) async throws -> UnpackTransfer {
-        try await base.openUnpack(transfer: transfer, target: target, policy: policy, names: names)
+    func openUnpack(transfer: String, target: String, policy: ConflictPolicy, names: [String], parent: FileIdentity,
+                    replacements: [String: FileIdentity]) async throws -> UnpackTransfer {
+        try await base.openUnpack(transfer: transfer, target: target, policy: policy, names: names,
+                                  parent: parent, replacements: replacements)
     }
     func git(_ path: String, args: [String], limit: UInt64) async throws -> GitOutput {
         try await base.git(path, args: args, limit: limit)

@@ -203,6 +203,7 @@
         public let chunkKind: UInt8
         public let chunkLimit: Int
         private var pending: [UInt64: (UInt64, Data)] = [:]
+        private var total = 0
         public init(limit: Int, chunkKind: UInt8, chunkLimit: Int) {
             self.limit = limit; self.chunkKind = chunkKind; self.chunkLimit = chunkLimit
         }
@@ -213,15 +214,17 @@
                     $0 | UInt64($1.element) << ($1.offset * 8)
                 }
                 var item = pending[id] ?? (0, Data())
-                guard sequence == item.0, body.count - 8 <= limit - item.1.count,
+                let count = body.count - 8
+                guard sequence == item.0, limit >= 0, total <= limit, count <= limit - total,
                     item.0 < UInt64.max else { throw Failure.limit }
-                item.1.append(body.dropFirst(8)); item.0 += 1
+                item.1.append(body.dropFirst(8)); item.0 += 1; total += count
                 pending[id] = item
                 return nil
             }
             guard kind == 2 || kind == 3 else { throw Failure.invalid }
             let envelope = try decode(body)
             let item = pending.removeValue(forKey: id) ?? (0, Data())
+            total -= item.1.count
             guard case .object(let fields) = envelope else { throw Failure.invalid }
             guard let stream = fields["stream"] else {
                 guard item.0 == 0, body.count <= limit else { throw Failure.limit }
@@ -243,7 +246,9 @@
             default: throw Failure.invalid
             }
         }
-        public mutating func cancel(_ id: UInt64) { pending.removeValue(forKey: id) }
+        public mutating func cancel(_ id: UInt64) {
+            if let item = pending.removeValue(forKey: id) { total -= item.1.count }
+        }
         public func finish() throws {
             guard pending.isEmpty else { throw Failure.invalid }
         }

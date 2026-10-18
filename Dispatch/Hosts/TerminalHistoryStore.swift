@@ -112,6 +112,12 @@ enum PrivateFile {
         guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         do {
+            #if os(iOS)
+            // Class A: drafts, queued prompts, host metadata and terminal history are unavailable while locked. Set it
+            // on the temporary inode before content is written; the atomic rename retains the protection class.
+            try FileManager.default.setAttributes([.protectionKey: FileProtectionType.complete],
+                                                  ofItemAtPath: temporary.path)
+            #endif
             try body(handle)
             try handle.synchronize()
             try handle.close()

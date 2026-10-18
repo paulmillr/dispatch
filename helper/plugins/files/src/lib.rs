@@ -6,7 +6,7 @@
 //! and unpacks a client has open.
 
 use dispatch_helper_core::api::{
-    Chunk, Done, Error, Event, FileKind, Io, Job, Metadata, Output, Plugin, Read, Ui, Work,
+    Chunk, Done, Error, Event, FileIdentity, FileKind, Io, Job, Metadata, Output, Plugin, Read, Replacement, Ui, Work,
     deferred,
 };
 use dispatch_helper_core::api::{FolderSummary, Listing};
@@ -40,9 +40,8 @@ pub struct Files {
     packs: pack::Shared,
     unpack: unpack::Shared,
     gate: transfer::Gate,
+    access: transfer::SharedAccess,
     git: git::Settings,
-    /// Each repository's filters, read once (files.git turns them off).
-    repositories: git::Repositories,
 }
 
 enum Stage {
@@ -90,6 +89,7 @@ fn native(value: io::Error) -> Error {
         io::ErrorKind::Interrupted => "interrupted",
         io::ErrorKind::TimedOut => "timeout",
         io::ErrorKind::WouldBlock => "busy",
+        io::ErrorKind::StaleNetworkFileHandle => "changed",
         _ => "io",
     };
     Error {
@@ -108,8 +108,8 @@ impl Files {
             packs: Rc::new(RefCell::new(pack::Packs::new(gate.clone()))),
             unpack: Rc::default(),
             gate,
+            access: Rc::default(),
             git: git::Settings::default(),
-            repositories: git::Repositories::default(),
         }
     }
 
@@ -219,9 +219,11 @@ impl Plugin for Files {
         bytes: Vec<u8>,
         mode: Option<u32>,
         replace: bool,
+        parent: FileIdentity,
+        replaced: Option<FileIdentity>,
         done: Done<Metadata>,
     ) {
-        write::write(io, path, bytes, mode, replace, deferred(done));
+        write::write(&self.access, io, path, bytes, mode, replace, parent, replaced, deferred(done));
     }
 
     fn pack(
@@ -247,9 +249,23 @@ impl Plugin for Files {
         target: &Path,
         policy: &str,
         names: &[String],
+        parent: FileIdentity,
+        replacements: &[Replacement],
         done: Done<Transfer>,
     ) {
-        unpack::open(&self.unpack, &self.gate, io, transfer, target, policy, names, deferred(done));
+        unpack::open(
+            &self.unpack,
+            &self.gate,
+            &self.access,
+            io,
+            transfer,
+            target,
+            policy,
+            names,
+            parent,
+            replacements,
+            deferred(done),
+        );
     }
 
     fn unpack_write(&mut self, io: &mut dyn Io, transfer: &str, bytes: Vec<u8>, done: Done<Progress>) {
@@ -261,7 +277,7 @@ impl Plugin for Files {
     }
 
     fn git(&mut self, io: &mut dyn Io, path: &Path, args: &[String], limit: u64, done: Done<Git>) {
-        git::git(io, &self.git, &self.repositories, path, args, limit, deferred(done));
+        git::git(&self.access, io, &self.git, path, args, limit, deferred(done));
     }
 
     /// The client that opened `transfer` left: its archive or staging folder goes, by the same paths as its own

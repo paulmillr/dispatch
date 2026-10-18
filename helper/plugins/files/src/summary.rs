@@ -4,6 +4,7 @@ use dispatch_helper_core::api::{FolderSummary, SummaryJob};
 
 /// Entries one summary visits when the caller names no bound.
 const ENTRIES: u64 = 100_000;
+const MAX_ENTRIES: u64 = 1_000_000;
 
 pub(super) struct State {
     pub done: Done<FolderSummary>,
@@ -19,7 +20,7 @@ impl State {
     ) {
         let job = Job::Summary(SummaryJob {
             path: path.to_path_buf(),
-            limit: if limit == 0 { ENTRIES } else { limit },
+            limit: if limit == 0 { ENTRIES } else { limit.min(MAX_ENTRIES) },
         });
         Files::submit(jobs, io, job, Pending::Summary(Self { done }));
     }

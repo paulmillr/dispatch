@@ -37,7 +37,9 @@ struct TerminalConfiguration: Equatable, Sendable {
         scrollback-limit-bytes = \(scrollbackBytes)
         image-storage-limit = 0
         clipboard-read = ask
-        clipboard-write = ask
+        // The phone has no trusted consent surface for a remote program's write. Fail closed instead of turning an
+        // `ask` request into an unconditional write in the SurfaceHost.
+        clipboard-write = deny
         keybind = clear
         """
     }

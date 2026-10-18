@@ -382,6 +382,7 @@ fn write(runtime: &Shared, io: &mut dyn Io, setup: SharedSetup, result: Rc<Insta
             path: edit.path.clone(),
             bytes: bytes.clone(),
             mode: 0o600,
+            parent: None,
         },
         None if edit.before.is_some() => Job::Remove {
             expected: setup.borrow().expected[index],
