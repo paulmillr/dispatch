@@ -1,4 +1,4 @@
-//! A terminal screen fed a stream's bytes (docs/capture_scrub.md): a program that redraws only the cells that changed
+//! A terminal screen fed a stream's bytes (docs/replay.md, Scrub captures): a program that redraws only the cells that changed
 //! jumps the cursor over cells already showing the right byte, so a needle it draws is whole on the screen and in no
 //! run of bytes. It draws what the terminal that showed the stream drew (Ghostty, the app's and herdr's: its tests
 //! compare with it, screen.fixtures): the stream's size, autowrap, scroll regions, insert and delete, the alternate

@@ -80,9 +80,14 @@ struct SpaceBranchObserver: View {
         Color.clear
             .preference(key: SpaceBranchNames.self, value: branch.map { [id: $0] } ?? [:])
             .task(id: Polling(key: source?.key, active: appActive)) {
-                // A new source starts blank; resuming the same one keeps its branch.
+                // A new source starts blank; resuming the same one keeps its branch. A row mounted again (another
+                // layout) or shown again starts from the last branch read there while it reads anew: blank, it would
+                // wait for that read, which can come long after (a replay holds a read's answer until the test's step).
                 if resolved != source?.key { value = nil; resolved = nil }
                 guard let source else { return }
+                if resolved == nil, let last = await SpaceBranchReader.shared.last(source.key), !Task.isCancelled {
+                    value = last; resolved = source.key
+                }
                 while !Task.isCancelled {
                     let next = await SpaceBranchReader.shared.branch(source)
                     guard !Task.isCancelled else { return }

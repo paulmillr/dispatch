@@ -3,7 +3,7 @@ import Foundation
 /// What chat input needs from the terminal side: the conversation's terminal attached (`terminals.attach`) and its
 /// screen published (`terminals.publish`), even while only the Chat segment shows. The helper verifies `chat.send`,
 /// `queue.start` and typed answers against the screen the client publishes; without one they fail with
-/// `terminal_unavailable` (docs/ios-helper-spike.md, "Publish screens"). The Terminal stream's `TerminalPresences`
+/// `terminal_unavailable` (docs/ios.md, Helper contract: "Publish screens"). The Terminal stream's `TerminalPresences`
 /// satisfies it at integration (one `TerminalPresence` per host and topology key, `open(_:feed:terminal:)` with a
 /// `HelperTerminalFeed`, `attached`); Chat only retains, releases and reads whether the terminal is attached.
 @MainActor protocol ChatTerminalPresence: AnyObject {

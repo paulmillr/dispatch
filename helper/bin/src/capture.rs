@@ -6,7 +6,7 @@
 //! capture diff A B [--limit N] [--jobs N]   (two captures, or two directories of them paired per test, compared on what
 //!                          inspect decodes: every change grouped, the most frequent first; capture/diff.rs)
 //! capture grep NEEDLE PATH... | grep PATH... [--needles FILE] [--values SHAPE]...   [--limit N] [--jobs N]   (needles, literal, in every text/bytes value as a reader sees it (cut across records, wrapped), keys included, and in herdr's base64, tmux's send-keys hex and websocket clients' masked frames; lists the helpers' environments at startup; warns of other text that looks encoded; per needle the whole tokens holding it or its replacement; --values: every distinct line of the values at places holding SHAPE, digits as #)
-//! capture replace DIR OUT [--needles FILE] [--uuids] [--ips] [--jobs N]   (scrub: docs/capture_scrub.md; process rows: ALLOWED)
+//! capture replace DIR OUT [--needles FILE] [--uuids] [--ips] [--jobs N]   (scrub: docs/replay.md, Scrub captures; process rows: ALLOWED)
 //! capture key PATH...   (each capture's content key: its records without the bookkeeping clock)
 //! capture check PATH...   (one case's app journals and helper captures: the bytes each side
 //!                          sent are the bytes the other side read; every capture linked)
@@ -310,7 +310,7 @@ fn stream(record: &trace::Record) -> String {
     format!("{} {}", target(record), record.op)
 }
 
-/// The terminal sizes a capture names, in record order (docs/capture_scrub.md): a pty's (a helper's `spawn` gives its
+/// The terminal sizes a capture names, in record order (docs/replay.md, Scrub captures): a pty's (a helper's `spawn` gives its
 /// descriptors one, `resize` another; an app's `in.size` its section's), the helper's own terminal (`tty.start`, then
 /// `tty.grid`: its `stdio` descriptors) and each terminal's of ours (by id: an object naming a `terminal` or a topology
 /// node's `id` beside a `size`).
@@ -481,7 +481,7 @@ fn spans(record: &trace::Record) -> io::Result<[Vec<(String, usize, usize)>; 2]>
     Ok(out)
 }
 
-/// The needles file (docs/capture_scrub.md): one needle per line, `needle<TAB>value` for a value of its own; empty
+/// The needles file (docs/replay.md, Scrub captures): one needle per line, `needle<TAB>value` for a value of its own; empty
 /// lines and lines starting with `#` hold none.
 fn needles(path: &str) -> io::Result<Vec<(Vec<u8>, Option<Vec<u8>>)>> {
     let mut out: Vec<(Vec<u8>, Option<Vec<u8>>)> = Vec::new();
@@ -1154,7 +1154,7 @@ impl<'a> Find<'a> {
     }
 }
 
-/// A stream's views (docs/capture_scrub.md): needles on its unwrapped text, patterns (UUIDs, IPv4 addresses) on its
+/// A stream's views (docs/replay.md, Scrub captures): needles on its unwrapped text, patterns (UUIDs, IPv4 addresses) on its
 /// bytes as recorded, and needles on the screen it draws. Joined, each keeps what a match can start in (a needle's or a
 /// UUID's bytes less one) and the screen; else every piece is matched alone.
 struct Views {
@@ -2280,7 +2280,7 @@ fn grep(paths: &[String], needles: Vec<Vec<u8>>, replaced: &[Vec<u8>], shapes: &
         println!("  ... {} more places: raise --limit", groups.len() - limit);
     }
     // A stream whose terminal size no record names is drawn on a screen of no size: the screen view there is not the
-    // terminal's (docs/capture_scrub.md).
+    // terminal's (docs/replay.md, Scrub captures).
     let mut streams: Vec<_> = sizeless.iter().collect();
     streams.sort_by_key(|(_, (count, ..))| std::cmp::Reverse(*count));
     println!("screens of no size: {} streams drew {} pieces with escape sequences on a screen of no size ({ROWS} x {COLS}, no wrap, \
@@ -2367,7 +2367,7 @@ fn draw(value: &[u8], hit: Hit, seed: u64, taken: &HashSet<Vec<u8>>) -> Vec<u8> 
 /// `found` lacked, the values it could not decode, and per whole value it changed the SHA-256 (hex) before and after.
 type Rewritten = (bool, BTreeMap<Hit, usize>, Vec<(Hit, Vec<u8>)>, Vec<String>, Vec<(Vec<u8>, Vec<u8>)>);
 
-/// One capture with its matches rewritten (docs/capture_scrub.md): needles by `replacements`, values of `patterns` by
+/// One capture with its matches rewritten (docs/replay.md, Scrub captures): needles by `replacements`, values of `patterns` by
 /// `found` (a value it lacks stays and is listed, in the order met), as views read them (a stream across its records,
 /// our frames' texts across frames, terminal wraps), and in the values protocol lines carry as text (`fields`: decoded,
 /// encoded again in the same length), written to `output` when given. A match that reaches back into records already
@@ -2561,7 +2561,7 @@ fn replacements(list: &[(Vec<u8>, Option<Vec<u8>>)]) -> io::Result<(Vec<Vec<u8>>
     Ok((replacements, taken))
 }
 
-/// Scrub (docs/capture_scrub.md): every needle, and with `patterns` every UUID or IPv4 address, becomes a replacement
+/// Scrub (docs/replay.md, Scrub captures): every needle, and with `patterns` every UUID or IPv4 address, becomes a replacement
 /// of the same byte length in every text/bytes value of every capture under DIR, literally (text another program
 /// encoded stays as it is: `grep` lists it), written under OUT with the same layout. Equal length keeps every length prefix and wire frame intact. One run
 /// gives a value the same replacement in every file: an app journal and its helper captures stay linked. Every helper

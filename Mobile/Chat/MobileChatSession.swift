@@ -14,7 +14,7 @@ import Observation
 ///   connected; a message whose delivery the device cannot establish is paused for the user, never sent again.
 ///
 /// Identity is the host plus the terminal's topology key: node ids belong to one helper process and change with every
-/// reconnect (docs/ios-helper-spike.md).
+/// reconnect (docs/ios.md, Helper contract).
 @MainActor @Observable
 final class MobileChatSession: Identifiable {
     enum Phase: Equatable {
@@ -185,7 +185,7 @@ final class MobileChatSession: Identifiable {
         return terminal != nil && client != nil && presence.attached(key)
     }
     /// Codex runs Dispatch's hooks only after "Trust all" in its own terminal; until an approval has come through,
-    /// the thread says so (docs/ios-helper-spike.md, "Surface native trust steps").
+    /// the thread says so (docs/ios.md, Helper contract: "Surface native trust steps").
     var needsHookTrust: Bool { agentKey == "codex" && !receivedApproval }
 
     private func open() {
@@ -626,7 +626,7 @@ final class MobileChatSession: Identifiable {
     }
 
     /// `chat.send`, sent once more after half a second when the agent refused it as still starting: `input` means
-    /// nothing was typed (docs/ios-helper-spike.md, "Expect input refusals").
+    /// nothing was typed (docs/ios.md, Helper contract: "Expect input refusals").
     private func deliver(_ input: HelperChat.Input, generation: UUID) async throws {
         do {
             let sent: HelperChat.Sent = try await call("chat.send", input, generation: generation)

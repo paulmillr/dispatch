@@ -14,9 +14,9 @@ struct DispatchMobileApp: App {
         WindowGroup {
             MobileRoot(composition: composition).environment(composition.hosts).mobileAppearance()
         }
-        // Connected in the foreground, disconnected in the background (docs/ios-contracts.md).
+        // Connected in the foreground, disconnected in the background (docs/ios.md, Connection).
         .onChange(of: scenePhase) { _, phase in composition.scenePhaseChanged(phase) }
-        // The background refresh (docs/ios.md, Resilience): the system launches or wakes the app for it.
+        // The background refresh (docs/ios.md, Background refresh): the system launches or wakes the app for it.
         .backgroundTask(.appRefresh(BackgroundRefresh.identifier)) { [composition] in
             await composition.backgroundRefresh()
         }

@@ -2,7 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- docs/ios.md, Privacy manifest. Dispatch collects nothing and tracks nothing: what it keeps stays on the phone.
+	<!-- docs/ios.md, Release. Dispatch collects nothing and tracks nothing: what it keeps stays on the phone.
 	     test/ios-release.py checks this file, and that every required-reason API the built executable imports is
 	     declared here. -->
 	<key>NSPrivacyTracking</key>

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """What a test run with these arguments (test/run.sh's) may record about the machines it touches: this Mac and every
-SSH test host of the checkout's profiles. Prints a needles file draft (docs/capture_scrub.md): `#` lines say where the
+SSH test host of the checkout's profiles. Prints a needles file draft (docs/replay.md, Scrub captures): `#` lines say where the
 values below them come from; process lists are context, as comments. Keep the private values, delete the public ones,
 then search the captures for them (capture grep --needles). The output holds private values: keep it out of anything
 shared. Environments are not printed (they can hold credentials): the helper records its own at startup, and capture

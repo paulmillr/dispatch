@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Release check for Dispatch for iPhone (docs/ios.md, Release check).
+"""Release check for Dispatch for iPhone (docs/ios.md, Release).
 
 usage: python3 test/ios-release.py [--simulator NAME] [--helper-profile release|local] [--skip-build] [--no-launch]
                                    [--with-fast-suite]

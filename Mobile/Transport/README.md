@@ -4,7 +4,7 @@ The SSH transport of Dispatch for iPhone: one SSH connection per host, the helpe
 channel, the helper's `--stdio` session as a file handle for the unmodified `HelperTransport`, and the host
 connection state machine. The SSH engine is Rust (`Core/`: russh behind the C ABI in
 `Core/include/dispatch_mobile_ssh.h`); this package is its Swift API (Foundation and CryptoKit only, no
-UIKit or AppKit). Findings and numbers: `docs/ios-ssh-spike.md`.
+UIKit or AppKit). Design decisions and limits: `docs/ios.md`, Transport.
 
 ## Building the engine
 

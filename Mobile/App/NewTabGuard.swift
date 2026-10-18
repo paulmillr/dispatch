@@ -3,7 +3,7 @@ import UIKit
 
 /// Turns the tab bar's last tab (New) into a button: its selection is refused in the tab bar controller's delegate,
 /// before UIKit switches to the tab's empty content, and `action` runs instead. Refusing it in SwiftUI's selection
-/// binding is too late: the recording in docs/ios.md shows the empty tab for 16 frames (about 250 ms) before
+/// binding is too late: a screen recording showed the empty tab for 16 frames (about 250 ms) before
 /// SwiftUI puts the selection back and the sheet starts. SwiftUI keeps its own delegate; this one wraps it and
 /// forwards everything else.
 struct NewTabGuard: UIViewRepresentable {

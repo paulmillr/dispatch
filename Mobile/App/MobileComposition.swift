@@ -193,7 +193,7 @@ final class MobileComposition {
         }
     }
 
-    /// The app refresh task (`BGAppRefreshTask`, docs/ios.md Resilience).
+    /// The app refresh task (`BGAppRefreshTask`, docs/ios.md, Background refresh).
     func backgroundRefresh() async {
         await refresh?.run()
     }
@@ -265,7 +265,7 @@ final class MobileComposition {
         return row.summary.preview
     }
 
-    /// Pi's extension is enabled per helper connection (docs/ios-helper-spike.md): re-enabled on every connection where
+    /// Pi's extension is enabled per helper connection (docs/ios.md, Helper contract): re-enabled on every connection where
     /// Pi and its Dispatch integration are installed. Starting Pi the first time installs it (New chat).
     static let enablePi: HostPostConnectStep = { _, client in
         guard let launches = try? await client.launches(), let pi = launches.first(where: { $0.key == "pi" }) else { return }
@@ -385,7 +385,7 @@ private struct TerminalSegment: View {
 }
 
 /// Chat's terminal side over the Terminal area's presences: a verified conversation keeps its terminal attached and
-/// its screen published (docs/ios-helper-spike.md) as one of the presence's users; its release lets the attachment go
+/// its screen published (docs/ios.md, Helper contract) as one of the presence's users; its release lets the attachment go
 /// unless the Terminal segment shows it.
 @MainActor
 final class TerminalChatPresence: ChatTerminalPresence {

@@ -44,7 +44,7 @@ settingGroups:
     SWIFT_OPTIMIZATION_LEVEL: -O
     SWIFT_COMPILATION_MODE: wholemodule
     ENABLE_TESTABILITY: NO
-# The iPhone app's SSH transport (Mobile/Transport, docs/ios-ssh-spike.md): a local package over the Rust engine that
+# The iPhone app's SSH transport (Mobile/Transport, docs/ios.md, Transport): a local package over the Rust engine that
 # scripts/build-mobile-ssh.py builds into build/mobile-ssh (run it with --fetch once before the first Xcode build).
 packages:
   MobileTransport:
@@ -314,7 +314,7 @@ targets:
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         ENABLE_PREVIEWS: YES
       configs:
-        # Release is what goes on a phone (docs/ios.md, Release builds and app size): the executable is stripped once
+        # Release is what goes on a phone (docs/ios.md, Release): the executable is stripped once
         # its dSYM is made (half of it is symbols). The iPhone tests never run against Release: they need @testable and
         # the Debug demos.
         Release:

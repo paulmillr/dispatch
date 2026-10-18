@@ -38,6 +38,9 @@ actor SpaceBranchReader {
     static let shared = SpaceBranchReader()
     /// Timed by System.date(): whether a read reuses the cache decides whether the helper is asked, so a replay
     /// must decide it as the capture did (a slower run past 2 s on the wall clock asked again, unrecorded).
+    /// An entry is stamped with the time its read was asked for, never with another reading after it: replay answers
+    /// a time the app asks on its own with what capture saw just before the app's next request, so a second reading
+    /// after the read took the next poll's time, and every later poll found the entry fresh and never asked again.
     private struct Cached { let time: Date; let branch: String? }
     private var cache: [SpaceBranchSource.Key: Cached] = [:]
     private var pending: [SpaceBranchSource.Key: Task<String?, Never>] = [:]
@@ -53,12 +56,13 @@ actor SpaceBranchReader {
 
     func branch(_ source: SpaceBranchSource) async -> String? {
         guard !Task.isCancelled else { return nil }
-        if let cached = recent(source.key) { return cached.branch }
+        let asked = System.date()
+        if let cached = recent(source.key, at: asked) { return cached.branch }
         if let task = pending[source.key] { return await task.value }
         if free > 0 { free -= 1 } else {
             await withCheckedContinuation { waiting.append($0) }
             // Meanwhile another space read this directory, or this one was cancelled: the slot goes on to the next.
-            if Task.isCancelled || recent(source.key) != nil || pending[source.key] != nil {
+            if Task.isCancelled || recent(source.key, at: System.date()) != nil || pending[source.key] != nil {
                 release()
                 return await branch(source)
             }
@@ -66,7 +70,7 @@ actor SpaceBranchReader {
         let task = Task {
             let result = await read(source)
             if cache.count >= 128 { cache.removeAll(keepingCapacity: true) }
-            cache[source.key] = Cached(time: System.date(), branch: result)
+            cache[source.key] = Cached(time: asked, branch: result)
             pending[source.key] = nil
             release()
             return result
@@ -75,8 +79,11 @@ actor SpaceBranchReader {
         return await task.value
     }
 
-    private func recent(_ key: SpaceBranchSource.Key) -> Cached? {
-        cache[key].flatMap { System.date().timeIntervalSince($0.time) < 2 ? $0 : nil }
+    /// The last branch read for this directory, however old (nil: never read; .some(nil): no branch there).
+    func last(_ key: SpaceBranchSource.Key) -> String?? { cache[key].map(\.branch) }
+
+    private func recent(_ key: SpaceBranchSource.Key, at now: Date) -> Cached? {
+        cache[key].flatMap { now.timeIntervalSince($0.time) < 2 ? $0 : nil }
     }
 
     private func release() {

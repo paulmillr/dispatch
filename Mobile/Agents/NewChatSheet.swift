@@ -28,7 +28,7 @@ extension ChatConversations {
 
     /// Starts `launch` in a new tab of `space` (`terminals.create` with `launch`) and returns the conversation once the
     /// topology shows its terminal. Optional integrations (Pi's extension) are enabled on this connection first: the
-    /// helper keeps that choice in memory per connection (docs/ios-helper-spike.md).
+    /// helper keeps that choice in memory per connection (docs/ios.md, Helper contract).
     func start(_ launch: HelperClient.Launch, in space: ChatSpaceChoice,
                settings: (model: String, effort: String?)?) async throws -> ChatConversationKey {
         guard let client = hosts[space.host]?.client else {

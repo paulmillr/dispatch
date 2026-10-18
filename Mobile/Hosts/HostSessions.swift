@@ -38,7 +38,7 @@ enum HostQuestion: Identifiable, Equatable {
     }
 }
 
-/// Every stored host's session (docs/ios-contracts.md): one per host, connected while the app is in the foreground
+/// Every stored host's session (docs/ios.md, Areas and seams): one per host, connected while the app is in the foreground
 /// and disconnected in the background. Also the stores the host screens edit, and the host key questions.
 @MainActor @Observable
 final class HostSessions {

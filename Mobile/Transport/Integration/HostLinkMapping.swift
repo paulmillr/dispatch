@@ -2,7 +2,7 @@ import Foundation
 import MobileTransport
 
 // Every mapping of a host's connection state lives here: the transport's reconnect state machine to the Hosts area's
-// `HostLink` (one to one, docs/ios-ssh-spike.md), and `HostLink` to what the Spaces tab draws.
+// `HostLink` (one to one, docs/ios.md, Transport), and `HostLink` to what the Spaces tab draws.
 
 extension HostLink {
     /// The transport's state as the host session shows it.

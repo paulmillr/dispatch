@@ -6,7 +6,7 @@ import MobileTransport
 import XCTest
 
 /// Requirement 3 (throughput) and 8 (latency, idle memory) against the loopback sshd. Numbers are
-/// printed as `MEASURE` lines for docs/ios-ssh-spike.md.
+/// printed as `MEASURE` lines.
 final class MeasurementTests: XCTestCase {
   static let size = 50 * 1024 * 1024
 

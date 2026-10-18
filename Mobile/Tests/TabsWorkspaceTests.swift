@@ -212,7 +212,7 @@ private extension Date {
     var rounded: Date { Date(timeIntervalSince1970: timeIntervalSince1970.rounded()) }
 }
 
-/// The helper spike (docs/ios-helper-spike.md): node, tab, space and backend ids change with every helper connection;
+/// docs/ios.md, Areas and seams: node, tab, space and backend ids change with every helper connection;
 /// the host and the topology key are the identity.
 @MainActor
 final class TabsReconnectTests: XCTestCase {

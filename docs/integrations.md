@@ -18,7 +18,7 @@ Launch with `tmux -CC new-session -A -s work`, or `herdr` (`--session NAME`, `se
 
 OpenSSH owns host keys, identities, aliases, ports, and jumps. **On new hosts** (Ask by default; Full features; Plain SSH) decides whether to upload the helper; Escape or a timeout aborts the `ssh` (status 130) rather than silently falling back to plain SSH. What the helper may read and change is listed in [security](security.md#ssh-integration).
 
-- **Helper:** the bundled Rust helper (macOS 14+, Linux arm64/x86-64) needs no remote compiler or Python; its contract is in [`Helpers/ssh-helper/README.md`](../Helpers/ssh-helper/README.md). Unsupported hosts fall back to ordinary SSH. Cached legacy C helpers grant nothing.
+- **Helper:** the bundled Rust helper (macOS 14+, Linux arm64/x86-64) needs no remote compiler or Python; its contract is in [`helper/PROTOCOL.md`](../helper/PROTOCOL.md). Unsupported hosts fall back to ordinary SSH. Cached legacy C helpers grant nothing.
 - **Grants are per configuration:** executable, destination, account, port, proxy, and identity. Hosts that share a sidebar card (same destination, account, port, proxy route, and host-key alias) share presentation only; each connection keeps its own generation and grant. Conflicting machine identities split the card.
 - **Grant changes:** reductions take effect immediately (helper operations, hooks, and native views stop; the shell and jobs stay). Increases apply on the next explicit connection. Helper updates keep existing grants, but new capabilities need a new choice. Reset/Forget/Reset all revoke live grants and clear saved choices without touching remote jobs.
 - **Passthrough:** noninteractive commands, RemoteCommand, multiplexing overrides, tunnels, and subsystems run as plain SSH. `ssh -tt host cmd` can be enhanced. Nested interactive SSH stays plain and suppresses outer-host agent discovery. Clones use `ClearAllForwardings=yes`.
@@ -29,7 +29,12 @@ OpenSSH owns host keys, identities, aliases, ports, and jumps. **On new hosts** 
 
 Quit saves remote hosts, layouts, and plain local spaces to `~/Library/Application Support/Dispatch/host-session.json` (when **Reopen spaces on launch** is on). They reopen disconnected, with no automatic login. Tabs keep their placement, renderer, loaded Chat history, and drafts across transport loss. Recovery re-verifies the SSH configuration, grant, account, and host identity over a fresh connection. tmux/herdr reattach to existing servers and panes only, and a missing session stays an error. Chat rejects reads and input from the old connection, and queues stay paused. Direct `/usr/bin/ssh` and plain-SSH connections get no managed recovery. Recovery state does not survive an app restart.
 
-**Reconnect automatically** (SSH settings, off by default) recovers a connection that dropped while Dispatch was running: only after the launcher reports a transport loss with no exit status or receipt, never after Disconnect, a normal exit, or a launch restore. Automatic attempts run the same verified recovery, but never show anything: the remembered grant only, and OpenSSH with `BatchMode=yes` (keys and the agent). An unreachable host is retried 2 s, 4 s… up to a minute apart, and at once on wake or a network change. OpenSSH refusing the login (a password, passphrase, or changed host key), any later recovery failure, a closed login tab (e.g. herdr's after handoff, whose recovery opens a login tab), and your own Reconnect, Cancel, or Disconnect each end the retries for that drop and leave the Reconnect bar.
+**Reconnect automatically** (SSH settings, off by default) recovers a connection that dropped while Dispatch was running:
+
+- It starts only after the launcher reports a transport loss with no exit status or receipt, never after Disconnect, a normal exit, or a launch restore.
+- Attempts run the same verified recovery but show nothing: the remembered grant only, and OpenSSH with `BatchMode=yes` (keys and the agent).
+- An unreachable host is retried 2 s, 4 s… up to a minute apart, and at once on wake or a network change.
+- Retries for that drop end, leaving the Reconnect bar, when OpenSSH refuses the login (a password, passphrase, or changed host key), a later recovery step fails, the login tab is closed (herdr's after handoff, whose recovery opens a login tab), or you choose Reconnect, Cancel, or Disconnect.
 
 ## Chat
 
@@ -48,4 +53,4 @@ Codex, Claude Code, Pi, and Nanocodex attach to the agent already running in a l
 - **Pi:** needs the **Pi chat extension** setting, then `/reload`. Chat follows the current branch of the session tree. `--no-session`, print, and RPC processes don't attach. Remote installs resolve `PI_CODING_AGENT_DIR` and touch only Dispatch's extension.
 - **Nanocodex:** no install step. Discovery reads a private registration under `$CODEX_HOME/nanocodex/tui/instances` that must name the same, already-running PID. Before sending its token, the connection verifies the socket peer's PID and user. Every command carries the instance, conversation, and generation. Sending needs nanocodex ≥ 0.6.6 (#681). Live rows come from the socket and merge with the rollout when the turn commits. Chat never touches the TUI's draft. Remotely, the helper authenticates on the host and relays allowlisted methods; the token never leaves the host. `NANOCODEX_TUI_CONTROL=off` opts a TUI out, and managed `nanocodex2` sessions stay Terminal-only.
 
-Fixtures and validation: [testing](vm_testing.md#chat-and-ui-fixtures).
+Fixtures and validation: [testing](../test/README.md#agent-chat-fixtures).

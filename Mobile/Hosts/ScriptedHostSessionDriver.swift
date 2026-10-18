@@ -72,7 +72,7 @@ final class ScriptedHostSessionDriver: HostSessionDriver {
     }
 
     /// Connecting, authenticating, starting the helper, then ready as a Mac with tmux and two spaces. Timed as the
-    /// helper spike measured over loopback ssh (docs/ios-helper-spike.md): about 90 ms to `hello` (71 to 113), a
+    /// helper spike measured over loopback ssh: about 90 ms to `hello` (71 to 113), a
     /// 0.16 ms ping; pass a network's latency for hosts elsewhere.
     @Sendable static func connects(_ host: HostRecord) -> [Step] { connects(host, latency: .microseconds(160)) }
 
@@ -108,7 +108,7 @@ enum HostFixture {
                                      "hostname": hostname, "os": os,
                                      "distribution": distribution.map { $0 as Any } ?? NSNull(),
                                      "os_name": osName.map { $0 as Any } ?? NSNull()]
-        // Newer helpers (host.identity, docs/ios-helper-spike.md): "macOS 26.1" or "Ubuntu 24.04", and the version.
+        // Newer helpers (host.identity): "macOS 26.1" or "Ubuntu 24.04", and the version.
         if let label { fields["os_label"] = label }
         if let version { fields["os_version"] = version }
         return fields

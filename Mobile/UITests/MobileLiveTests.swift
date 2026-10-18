@@ -184,7 +184,7 @@ final class MobileLiveTests: XCTestCase {
         shot("M3b")
         let approval = Date()
         var sent = false
-        // A prompt that is still starting refuses input (docs/ios-helper-spike.md); the session sends once more.
+        // A prompt that is still starting refuses input (docs/ios.md, Helper contract); the session sends once more.
         for _ in 0..<3 where !sent {
             type("permission tool please", into: composer)
             app.buttons["Send"].tap()

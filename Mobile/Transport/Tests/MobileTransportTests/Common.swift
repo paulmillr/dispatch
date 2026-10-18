@@ -22,7 +22,7 @@ func residentBytes() -> Int {
   return status == KERN_SUCCESS ? Int(info.resident_size) : 0
 }
 
-/// Records a measurement line for docs/ios-ssh-spike.md (printed; `swift test` output is the source).
+/// Records a measurement line (printed as `MEASURE`; `swift test` output is the source).
 func report(_ line: String) {
   print("MEASURE " + line)
 }

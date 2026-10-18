@@ -42,6 +42,8 @@ def failed_tests(path):
 
 
 SUITES = ('fast', 'full', 'exhaustive')
+# A disabled case runs in no suite, only when selected explicitly.
+TIERS = SUITES + ('disabled',)
 BENCHMARKS = ('DispatchTests/ChatScrollBenchmarkTests', 'DispatchTests/HostScalingBenchmarkTests', 'DispatchTests/UIBenchmarkTests',
               'DispatchTests/UISettingsBenchmarkTests', 'DispatchTests/TerminalFPSBenchmarkTests')
 ROOT = Path(__file__).resolve().parent.parent
@@ -112,7 +114,7 @@ def resolve(tests=(), skips=(), suite=None, benchmarks=False, root=ROOT):
     # Other test bundles' entries (DispatchMobileTests/...: test/ios.py) are classified and checked by their runners.
     classifications = {case: tier for case, tier in manifest['cases'].items() if case.split('/')[0] == TARGET}
     for case, tier in classifications.items():
-        if case not in cases or tier not in SUITES:
+        if case not in cases or tier not in TIERS:
             raise ValueError('Stale or invalid suite manifest entry: ' + case)
     for selector in tests + skips:
         if not any(matches(case, [selector]) for case in cases):
@@ -129,6 +131,8 @@ def resolve(tests=(), skips=(), suite=None, benchmarks=False, root=ROOT):
         elif matches(case, BENCHMARKS):
             if not benchmarks:
                 reason = 'benchmark (opt-in)'
+        elif tier == 'disabled':
+            reason = 'disabled'
         elif SUITES.index(tier) > SUITES.index(selected_suite):
             reason = tier + ' coverage'
         if reason:

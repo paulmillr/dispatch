@@ -1,6 +1,6 @@
 import Foundation
 
-/// The one grant the phone runs the helper with (docs/ios-helper-spike.md): the Mac's full profile with hooks on
+/// The one grant the phone runs the helper with (docs/ios.md, Helper contract): the Mac's full profile with hooks on
 /// (`SSHIntegrationGrant.capabilities(.full, hooks: true)`). On the phone the helper is not optional, so there is no
 /// per-host choice; the New host sheet states what this grant lets it do (`disclosures`), and the SSH driver runs
 /// `command(sha256:)` on a plain exec channel: no PTY, no extra environment.

@@ -3,7 +3,7 @@ import Synchronization
 import UIKit
 @preconcurrency import Term
 
-/// Which side keeps a terminal's scrollback, from the backend kind in the topology (docs/ios-helper-spike.md):
+/// Which side keeps a terminal's scrollback, from the backend kind in the topology (docs/ios.md, Helper contract):
 /// tmux replays the pane's whole history into the client on every attach, so Term's own scrollback holds it and
 /// `terminals.scroll` is never asked; herdr scrolls on the server through `terminals.scroll` and reports
 /// `terminal.scroll`. Other multiplexers are learned from the first answer (`scrollback_app_owned`).

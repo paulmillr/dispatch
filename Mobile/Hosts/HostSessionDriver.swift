@@ -33,7 +33,7 @@ enum HostSessionEvent: Sendable {
     case latency(Duration)
 }
 
-/// How the driver starts the helper (docs/ios-helper-spike.md): `command(sha256)` on a plain exec channel, with no
+/// How the driver starts the helper (docs/ios.md, Helper contract): `command(sha256)` on a plain exec channel, with no
 /// PTY and no environment of its own. `sha256` is the shipped helper's version (the hash its install is named by).
 struct HelperLaunch: Sendable, Equatable {
     var capabilities = HelperGrant.capabilityList

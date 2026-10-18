@@ -47,7 +47,7 @@ fn clocks(local: bool) -> io::Result<(String, f64)> {
 
 /// While capturing (DISPATCH_CAPTURE, a test instrument) the host's statistics would be recorded as they are: its
 /// CPUs, memory, swap, load, uptime, boot, network interfaces and their traffic, its disks. A capture reports one fixed
-/// synthetic host instead, the same on every machine (docs/capture_scrub.md); its counters grow with its clock, so
+/// synthetic host instead, the same on every machine (docs/replay.md, Scrub captures); its counters grow with its clock, so
 /// rates still come out. Replay answers the recorded values either way.
 fn synthetic() -> bool {
     super::capture::control("DISPATCH_CAPTURE").is_some()
@@ -354,7 +354,7 @@ pub(super) fn native(operation: &str, local: bool) -> io::Result<Vec<u8>> {
         // kernel's names (cut at 31 bytes) and no CPU % before a second sample. Linux: /proc, whose stat
         // files every account may read; a CPU % needs two samples (the stats plugin keeps the previous one).
         // Later: captures recording protocol messages rather than wire frames, so a scrub can drop the
-        // processes a test does not need instead of masking them (docs/capture_scrub.md).
+        // processes a test does not need instead of masking them (docs/replay.md, Scrub captures).
         "stats.processes" => {
             let mut scan = Scan {
                 started: Instant::now(),

@@ -4,7 +4,7 @@ import Observation
 /// A step after a connection is ready (see `HostSession.postConnect`).
 typealias HostPostConnectStep = @MainActor (HostSession, HelperClient) async -> Void
 
-/// A host's connection state (docs/ios-contracts.md).
+/// A host's connection state (docs/ios.md, Areas and seams).
 enum HostLink: Equatable, Sendable {
     case disconnected, connecting, authenticating, bootstrapping, connected
     case reconnecting(attempt: Int, since: Date)
@@ -20,7 +20,7 @@ enum HostLink: Equatable, Sendable {
     }
 }
 
-/// The one object the UI observes per host (docs/ios-contracts.md): its link, and while connected the helper
+/// The one object the UI observes per host (docs/ios.md, Areas and seams): its link, and while connected the helper
 /// client, the `hello` record, the multiplexers and the latest topology. Other areas take the `HelperClient` and
 /// topology from here and never see SSH.
 @MainActor @Observable
@@ -61,7 +61,7 @@ final class HostSession: Identifiable {
     /// Called on the main actor with each `hello` (HostSessions saves the OS and the connection time).
     @ObservationIgnored var helloReceived: ((HostSession, HelperSession.Info) -> Void)?
     /// Runs after each connection is ready, in order, with that connection's client (`HostSessions.postConnect`:
-    /// enabling Pi with `installation.install` on every connection, docs/ios-helper-spike.md). Cancelled when the
+    /// enabling Pi with `installation.install` on every connection, docs/ios.md, Helper contract). Cancelled when the
     /// connection goes away; the link is already `.connected` while it runs.
     @ObservationIgnored var postConnect: [HostPostConnectStep] = []
     @ObservationIgnored private var postConnectTask: Task<Void, Never>?

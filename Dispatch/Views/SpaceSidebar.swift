@@ -1265,7 +1265,7 @@ struct HarbourVessel: Equatable, Identifiable {
 /// Clicking a vessel selects its space. Reduce Motion holds the sweep still.
 ///
 /// The sweep turns in the compositor (HarbourSweep), as the composer's motion does: a SwiftUI redraw per frame of a
-/// full-screen window throttles its presentation on an Adaptive-refresh display (docs/chat-diagnostics.md). The plot
+/// full-screen window throttles its presentation on an Adaptive-refresh display (docs/benchmarks.md, Chat rendering). The plot
 /// redraws only when a vessel changes, and once a second while one is under way, for its passage time.
 struct HarbourRadar: View, Equatable {
     let vessels: [HarbourVessel]

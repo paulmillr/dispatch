@@ -7,7 +7,7 @@ struct HostRemovalConfirmation: Equatable {
     let button: String
 }
 
-/// What Hosts offers the Spaces tab (docs/ios-contracts.md, Hosts ↔ Tabs): removing a host after the user confirms
+/// What Hosts offers the Spaces tab (docs/ios.md, Areas and seams): removing a host after the user confirms
 /// (M1e), reordering over `HostStore`, and the host screens Spaces embeds through `SpacesHostViews` (M1f pushed, M8a as
 /// a sheet).
 extension HostSessions: SpacesHostActions {

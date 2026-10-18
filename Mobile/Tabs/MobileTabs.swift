@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-/// One host as the Tabs area takes it from its host session (docs/ios-contracts.md): identity, the connected client
+/// One host as the Tabs area takes it from its host session (docs/ios.md, Areas and seams): identity, the connected client
 /// (nil while not connected), the latest topology, and the host's multiplexer override.
 struct TabsHostInput {
     var host: TabsHost

@@ -97,7 +97,7 @@ final class HelperChannelTests: XCTestCase {
     defer { Task { await connection.close() } }
     let installed = try await HelperBootstrap.install(on: connection, binaries: Self.realHelpers)
     let start = ContinuousClock.now
-    // The iPhone grant: the Mac's full profile with hooks (docs/ios-helper-spike.md on `mobile`).
+    // The iPhone grant: the Mac's full profile with hooks (docs/ios.md, Helper contract).
     let capabilities = "agent.events,agent.inspect,agent.pi,agent.pi.configure,agent.queue,agent.side,agent.submit,agent.version,"
       + "backend.register,cancel,events,file.read,file.text,herdr.rpc,herdr.start,herdr.terminal,hooks.configure,host.identity,"
       + "input.window,shell.lifecycle,stats.ping,stats.processes,stats.sample,tmux.pane"

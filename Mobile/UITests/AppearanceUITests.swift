@@ -112,7 +112,7 @@ final class AppearanceUITests: XCTestCase {
         }
     }
 
-    /// Issues the design takes on purpose, each with its reason (docs/ios.md, Appearance and accessibility).
+    /// Issues the design takes on purpose, each with its reason (docs/ios.md, Appearance).
     static func accepted(_ issue: XCUIAccessibilityAuditIssue, screen: String, keyboard: CGRect) -> Bool {
         let label = issue.element?.label ?? ""
         let frame = issue.element?.frame ?? .null

@@ -3,7 +3,7 @@ import Observation
 
 /// Where a conversation lives on the device: its host (the Hosts stream's `HostRecord.id`) and its terminal's
 /// topology key (tmux `…:%<pane>`, herdr `term_…`). Node ids are the helper process's own and change with every
-/// reconnect; the key does not (docs/ios-helper-spike.md, "Reattach by key").
+/// reconnect; the key does not (docs/ios.md, Helper contract: "Reattach by key").
 struct ChatConversationKey: Hashable, Codable, Sendable {
     let host: UUID
     let node: String

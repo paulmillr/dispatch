@@ -135,7 +135,12 @@ impl client::Handler for Client {
 
     /// The initial key exchange only: russh 0.64.1 does not call this on a rekey, and its `kex_done`
     /// sees only the negotiated algorithm names, so a later exchange's host key is never compared with
-    /// the trusted one. The hook a patch would need is in docs/security.md (Dispatch for iPhone, host keys).
+    /// the trusted one (docs/security.md, Dispatch for iPhone, host keys). A patch would go in
+    /// `russh/src/client/mod.rs`, `KexProgress::Done` in the client's read loop: the rekey branch
+    /// (`if session.common.encrypted.is_some()`) drops `server_host_key` and `server_host_certificate`;
+    /// it should compare them with the key accepted at the first exchange (or call `check_server_key`
+    /// again and fail with `Error::UnknownKey` on false) before `common.newkeys(newkeys)`. This handler
+    /// would then answer a rekey by comparing with the key it trusted, without asking the user.
     async fn check_server_key(&mut self, key: &PublicKeyOrCertificate) -> Result<bool, Self::Error> {
         let PublicKeyOrCertificate::PublicKey { key, .. } = key else {
             // Host certificates are not part of v1: refuse rather than trust an unchecked CA.

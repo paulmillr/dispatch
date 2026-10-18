@@ -34,6 +34,8 @@
     private var missingWindows: [UUID: HelperFailure] = [:]
     private var restoringWindows: Set<UUID> = []
     private var restoreRequests: [UUID: (route: HelperBackend.Route, node: UInt64, task: Task<Void, Never>)] = [:]
+    /// restoreRequests' routes, read where topologies are queued (off the main actor); restoreRequestsChanged() keeps it.
+    @ObservationIgnored private let restoringRoutes = OSAllocatedUnfairLock(initialState: Set<HelperBackend.Route>())
     /// Each route's latest window restore: the next one finishes after it, so windows restored together are presented
     /// (and the first selected) in the order they were asked for, not in the order their tasks happen to resume.
     @ObservationIgnored private var restoreTails: [HelperBackend.Route: Task<Void, Never>] = [:]
@@ -550,10 +552,15 @@
           }
           // Topologies are whole states: of consecutive ones still queued for the main actor only the newest
           // applies (a large server publishes a burst, e.g. one per discovered shell, and each costs a full pass).
+          // Not while a window restore on this route is pending: a restored window's space selects the server's focus
+          // of the first topology that shows it, so each one applies however the reads were batched (live, the main
+          // actor took them one by one; a replay hands them over at once, and the restore showed another window).
           let queue = OSAllocatedUnfairLock(initialState: [Result<HelperClient.Update, any Error>]())
+          let restoring = restoringRoutes
           let observer = try await client.open(.init(mux: route.mux, key: key)) { [weak self] result in
+            let ordered = restoring.withLock { $0.contains(route) }
             let first = queue.withLock { queue in
-              if case .success(.topology) = result, case .success(.topology)? = queue.last {
+              if !ordered, case .success(.topology) = result, case .success(.topology)? = queue.last {
                 queue[queue.count - 1] = result
                 return false
               }
@@ -868,6 +875,7 @@
           defer {
             if !Task.isCancelled {
               self.restoreRequests.removeValue(forKey: window.id)
+              self.restoreRequestsChanged()
               self.restoringWindows.remove(window.id)
               self.restored(window.route)
               if complete {
@@ -895,6 +903,7 @@
         }
         restoreTails[window.route] = task
         restoreRequests[window.id] = (window.route, window.node, task)
+        restoreRequestsChanged()
       }
       for var entry in detachedRoutes where restoring[entry.route] == nil {
         entry.presentation.removeAll { !ids.contains($0.id) }
@@ -926,8 +935,14 @@
       }
     }
 
+    private func restoreRequestsChanged() {
+      let routes = Set(restoreRequests.values.map(\.route))
+      restoringRoutes.withLock { $0 = routes }
+    }
+
     private func cancel(_ id: UUID) {
       guard let request = restoreRequests.removeValue(forKey: id) else { return }
+      restoreRequestsChanged()
       request.task.cancel()
       imports.removeValue(forKey: request.route)
       restoringWindows.remove(id)
@@ -1913,6 +1928,7 @@
       controlEvents.removeAll()
       restoreRequests.values.forEach { $0.task.cancel() }
       restoreRequests.removeAll()
+      restoreRequestsChanged()
       restoreTails.removeAll()
       // A queued restore may still be awaiting final detach when its transport retires.
       // Preserve its cancellation token so it can resume through authenticated recovery.

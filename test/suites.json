@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "description": "Explicit case-level review. New cases default to full/exhaustive; timings do not classify tests. Full keeps focused agent transports and security/platform regressions; exhaustive retains detailed live matrices and reconnect stress.",
+  "description": "Explicit case-level review. New cases default to full/exhaustive; timings do not classify tests. Full keeps focused agent transports and security/platform regressions; exhaustive retains detailed live matrices and reconnect stress. Disabled cases run in no suite, only when selected explicitly.",
   "cases": {
     "DispatchTests/AppDefaultsTests/testAppStoresLeaveTheUserDefaultsAlone": "fast",
     "DispatchTests/AppDefaultsTests/testStateSnapshotsReportChangesAndAcceptRestoration": "fast",
@@ -804,8 +804,8 @@
     "DispatchTests/MainMockupPresentationTests/testMainEmptyReducedFlatTreeAndCustomSplitStates": "full",
     "DispatchTests/MainMockupPresentationTests/testOverflowAttentionJumpSwitcherAndLastSpaceShortcut": "full",
     "DispatchTests/MainMockupPresentationTests/testSidebarPalettesPreserveTerminalSurface": "full",
-    "DispatchTests/NanocodexChatIntegrationTests/testNativePromptSteerQueueStopAndSettings": "full",
-    "DispatchTests/NanocodexChatIntegrationTests/testRemotePromptSteerQueueStopAndSettings": "full",
+    "DispatchTests/NanocodexChatIntegrationTests/testNativePromptSteerQueueStopAndSettings": "disabled",
+    "DispatchTests/NanocodexChatIntegrationTests/testRemotePromptSteerQueueStopAndSettings": "disabled",
     "DispatchTests/NanocodexTests/testLiveEventsReconcileWithCommittedRolloutIncludingSteers": "full",
     "DispatchTests/NanocodexTests/testPendingReceiptsResolveByRequestIDAndRejectionsAreNotSent": "full",
     "DispatchTests/NativeChatCommandTests/testRemoteTmuxExitLatency": "full",

@@ -3,7 +3,7 @@ import Foundation
 import MobileTransport
 import Synchronization
 
-/// The app's `HostSessionDriver` (docs/ios-contracts.md, Transport → Hosts): one SSH connection per host through
+/// The app's `HostSessionDriver` (docs/ios.md, Areas and seams): one SSH connection per host through
 /// `MobileTransport`, kept up by its `HostConnection` reconnect policy. Each connection verifies the host key through
 /// the session (trust on first use, a mismatch is the hard stop Hosts shows), logs in with the host's key or password
 /// (and keyboard-interactive through the Hosts sheet), installs the bundled helper for the host's platform under its
@@ -11,7 +11,7 @@ import Synchronization
 /// follows the topology of the host's multiplexer (`backends.open` of the chosen backend) and measures latency with
 /// `echo`. Cancelling the run (`HostSession.disconnect()`) closes the connection; nothing on the host stops.
 struct SSHHostSessionDriver: HostSessionDriver {
-    /// The hello features the phone asks for (docs/ios-helper-spike.md, "The hello the phone sends"). With
+    /// The hello features the phone asks for (docs/ios.md, Helper contract). With
     /// `stdio.liveness` the helper ends after 45 s without a frame from the phone: the latency ping (`pingInterval`)
     /// keeps it alive while connected, so it must stay at most `livenessPing`.
     static let features = ["interaction.options", "chat.list", "projects.recent", "multiplexers.versions", "terminals.coalesce",

@@ -157,7 +157,7 @@ final class SSHDriverTests: XCTestCase {
         XCTAssertEqual(later.open(), ReadyGate.Pending.noBackend, "the kept first snapshot is followed by its end")
     }
 
-    /// The phone's hello (docs/ios-helper-spike.md and helper/PROTOCOL.md Features): with `stdio.liveness` the helper
+    /// The phone's hello (docs/ios.md, Helper contract, and helper/PROTOCOL.md Features): with `stdio.liveness` the helper
     /// ends after 45 s without a frame, so the latency ping keeps it alive at most every 15 s.
     func testHelloFeaturesAndTheLivenessPing() {
         XCTAssertEqual(SSHHostSessionDriver.features, ["interaction.options", "chat.list", "projects.recent", "multiplexers.versions",

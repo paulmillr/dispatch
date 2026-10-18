@@ -28,7 +28,7 @@ Dispatch is a normal terminal. The goal is to improve user's workflow, not to ch
     - All sent messages are queued - not steered
     - There is a separate key combo to steer; also it's possible to steer queued message
     - Multi-line editor is enabled with shift+enter. It highlights markdown code brackets
-    - Requires codex-cli 0.161.0, claude 2.1.293, pi 1.1.0 or nanocodex
+    - Requires codex-cli 0.163.0, claude 2.1.302, pi 1.3.0 or nanocode
     - Try [Nanocodex](https://github.com/gakonst/nanocodex): Codex rebuilt so that it's faster and can be embedded in third party applications via an ergonomic library API
 4. Try splits: open 4 tabs, use ctrl+1, ctrl+2, ctrl+3, ctrl+4
 
@@ -38,6 +38,7 @@ Extra features:
 - Tabs only (Settings › Appearance): no tab strips; the sidebar lists every tab and "+ tab" replaces "+ space"
 - Check out sidebar footer: clicking on a host brings up stats widget
 - Auto-improve text contrast on light themes
+- Single window for *everything*: no multiple windows
 - OSC-7501 support
 
 ## How it works
@@ -80,13 +81,7 @@ python3 scripts/ios-signing.py TEAMID --suffix .you    # once: your team from Xc
 
 See [docs/ios.md](docs/ios.md).
 
-## Architecture
-
-Dispatch is two things: Swift macOS app and Rust helper.
-
-The Rust helper is optional. The helper talks to tmux, herdr, reads agent chats.
-
-### Releasing
+## Releasing
 
 ```sh
 scripts/release-prepare.sh                     # maintainer: build, keep reference in tmp/dispatch-release

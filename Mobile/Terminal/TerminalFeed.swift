@@ -55,7 +55,7 @@ enum TerminalFeedEvent: Equatable, Sendable {
     case failed(String)
 }
 
-/// Terminal bytes in, input, size and scroll steps out, for one terminal node (docs/ios-contracts.md, Terminal).
+/// Terminal bytes in, input, size and scroll steps out, for one terminal node (docs/ios.md, Areas and seams).
 /// `HelperTerminalFeed` speaks the helper protocol; `ScriptedTerminalFeed` plays fixtures for tests and previews.
 ///
 /// Lifecycle: `attach(_:)` starts an attachment at a size and returns its events; `detach()` ends it (the stream

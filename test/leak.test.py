@@ -63,12 +63,12 @@ class Banner(unittest.TestCase):
 
 class Groups(unittest.TestCase):
     def test_prompts_and_startup_files(self):
-        candidates, _ = leak.groups({'account': ['user'], 'host': ['test.local', 'test'],
-                                     'startup': ['/Users/user/dots/home/.zshrc', '/Users/user/dots']})
+        candidates, _ = leak.groups({'account': ['ivan'], 'host': ['studio.local', 'studio'],
+                                     'startup': ['/Users/ivan/dots/home/.zshrc', '/Users/ivan/dots']})
         found = dict(candidates)
-        self.assertEqual(found['shell prompts: account@host as a prompt shows it'], ['user@test', 'user@test.local'])
+        self.assertEqual(found['shell prompts: account@host as a prompt shows it'], ['ivan@studio', 'ivan@studio.local'])
         self.assertEqual(found['shell startup files linked elsewhere and their repositories'],
-                         ['/Users/user/dots/home/.zshrc', '/Users/user/dots'])
+                         ['/Users/ivan/dots/home/.zshrc', '/Users/ivan/dots'])
 
     def test_utc_names_no_place(self):
         # A machine in UTC (the runner's zone, a test VM's) gives no time zone needle: replaced, UTC would change in
