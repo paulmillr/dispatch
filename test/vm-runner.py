@@ -520,7 +520,10 @@ final class UIBenchmarkTests: XCTestCase {
         profile = Profile(self.root / 'profile.json')
         with patch.object(vm, 'synchronize', return_value='copied') as source, patch.object(vm, 'sync_codex') as cli:
             vm.prepare_test_inputs('desktop', profile, needs_codex=False)
-            source.assert_called_once()
+            # The sources, then the iPhone engine when the checkout has it: nothing else.
+            self.assertIn('Dispatch', source.call_args_list[0].args[1])
+            self.assertEqual([call.args[1] for call in source.call_args_list[1:]],
+                             [[str(vm.ROOT / vm.MOBILE_ENGINE)]] if (vm.ROOT / vm.MOBILE_ENGINE).is_dir() else [])
             cli.assert_not_called()
 
     def testFailedAndIncompleteResultsStillExportTimingsAndNeverPass(self):
