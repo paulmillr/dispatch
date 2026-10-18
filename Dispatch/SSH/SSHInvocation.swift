@@ -1,5 +1,6 @@
 import Foundation
 
+#if canImport(AppKit)
 /// Parse only invocations whose terminal semantics we can preserve. The original
 /// argv is kept for passthrough; remote command words use OpenSSH's space joining.
 struct SSHInvocation: Equatable, Sendable {
@@ -83,12 +84,14 @@ struct SSHInvocation: Equatable, Sendable {
         ["-tt", "--", destination, remoteCommand]
     }
 }
+#endif
 
 struct SSHConnectionID: Hashable, Codable, Sendable {
     let rawValue: UUID
     init(_ rawValue: UUID = System.uuid()) { self.rawValue = rawValue }
 }
 
+#if canImport(AppKit)
 /// Auxiliary processes may use only this authenticated master. ProxyCommand
 /// closes the fallback path if the socket disappears between check and use.
 struct SSHMaster: Codable, Sendable {
@@ -126,3 +129,4 @@ struct SSHMaster: Codable, Sendable {
          "-T", "--", destination, "exec /bin/sh -c " + HerdrLaunch.quote(command)]
     }
 }
+#endif

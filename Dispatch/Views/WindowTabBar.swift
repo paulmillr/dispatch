@@ -14,8 +14,9 @@ struct WindowTabBar: View {
     }
     private var selected: UUID? { group?.selected ?? space.activeWindow?.id }
     private var paneID: UUID { group?.id ?? space.numberedPaneIDs.first ?? space.id }
-    static func showsTabs(space: Space) -> Bool {
-        space.structured && ((space.windowPresentation?.groups.count ?? 1) > 1 || space.windows.count > 1)
+    /// Tabs only lists the windows in the sidebar instead.
+    static func showsTabs(space: Space, tabsOnly: Bool) -> Bool {
+        !tabsOnly && space.structured && ((space.windowPresentation?.groups.count ?? 1) > 1 || space.windows.count > 1)
     }
 
     /// Spacing and the full-screen slot match the native pane strip, so tabs keep their place across spaces.
@@ -36,22 +37,19 @@ struct WindowTabBar: View {
     /// Tabs take the host color with Liquid Glass; flat chrome keeps just the pane's top border.
     private var tabTint: HostTint? { RemoteTabHighlight.current == .fade ? hostTint : nil }
 
-    /// The selected window's chat session, when that window is a single terminal that can switch to chat.
+    /// The selected window's chat session, when that window is a single terminal; a split window's panes switch in
+    /// their own headers.
     private var chatSession: ChatSession? {
-        let chat = TerminalRuntime.shared.chat
         guard let window = tabs.first(where: { $0.id == selected }), window.arrangement.panes.count == 1,
               let terminal = window.arrangement.panes.first?.activeTab else { return nil }
-        let session = chat.session(for: terminal.focusedSurfaceID)
-        return chat.canEnterChat(session) || session.showChat ? session : nil
+        return TerminalRuntime.shared.chat.session(for: terminal.focusedSurfaceID)
     }
 
     var body: some View {
         TabBar(ids: tabs.map(\.id), selected: selected, space: space, workspace: workspace, controller: controller,
                placement: placement, paneID: paneID, paneFocused: selected == space.activeWindow?.id,
                chatSession: chatSession,
-               reservesChatSwitch: TerminalRuntime.shared.chat.canShowChat(anyOf: tabs.compactMap { window in
-                   window.arrangement.panes.count == 1 ? window.arrangement.panes.first?.activeTab?.focusedSurfaceID : nil
-               }),
+               reservesChatSwitch: tabs.contains { $0.arrangement.panes.count == 1 },
                showsLayoutPicker: space.layoutTabCount > 1 && (group == nil || group?.id == space.windowPresentation?.layout.topRightPaneID), hostTint: hostTint,
                host: TerminalRuntime.shared.ssh.stripHost(active: space.activeTab, among: tabs.flatMap(\.terminals)),
                overflowItems: { tabs.map { .init(id: $0.id, title: label($0), surfaceIDs: $0.terminals.flatMap(\.surfaceIDs)) } },

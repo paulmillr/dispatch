@@ -22,6 +22,8 @@ struct ChatSidePermission: Equatable {
     let language: String
 }
 
+// The Mac app's side conversations, on its live chat client.
+#if canImport(AppKit)
 @MainActor @Observable
 final class ChatSideConversation: Identifiable {
     struct Message: Identifiable {
@@ -242,3 +244,4 @@ extension ChatCoordinator {
         session.focusRequest = System.uuid()
     }
 }
+#endif

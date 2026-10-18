@@ -306,10 +306,8 @@ final class AttentionTests: XCTestCase {
         try PresentationTestSupport.click(window, at: root.convert(point, to: nil))
         try await Task.sleep(for: .milliseconds(150))
         _ = try await PresentationTestSupport.capture(window, named: "settings-1o", in: "attention-validation")
-        // AppKit fits the window to a 1280×832 desktop, which can clip the page:
-        // read its whole scroll document rather than the visible part.
-        let scroll = try XCTUnwrap(PresentationTestSupport.views(of: NSScrollView.self, in: window.contentView!).first)
-        let settingsText = try await PresentationTestSupport.capture(XCTUnwrap(scroll.documentView)).text()
-        for title in ["Notify", "Dock badge", "Sound"] { XCTAssertTrue(settingsText.contains(title), settingsText) }
+        // AppKit fits the window to the desktop, which clips the page, and with the Files group the page outgrows a
+        // 1080 pt display, so a capture of the whole scroll document cannot read it: the text drawn there can.
+        for title in ["Notify", "Dock badge", "Sound"] { try PresentationTestSupport.assertRendered(title, in: root) }
     }
 }

@@ -159,7 +159,7 @@ The token routes the request to a pane. If the token doesn't match any pane, Dis
 **Consent.**
 
 - **On new hosts** chooses what happens the first time you connect: **Ask** (default), **Full features**, or **Plain SSH**.
-- The Ask sheet offers the helper upload, Stats, File access (which also covers Git), and Codex/Claude/Pi hooks. On a new host, every box is checked.
+- The Ask sheet offers the helper upload, Stats, Files (which also covers Git), and Codex/Claude/Pi hooks. On a new host, every box is checked.
 - Pressing **Don't connect** (Esc) or waiting 120 s aborts the `ssh`; Dispatch never silently falls back to plain SSH.
 - With **Full features** there is no sheet: everything is granted, Codex and Claude hooks are on, and Pi hooks are off.
 - A grant is tied to one ssh executable, destination, resolved-config fingerprint, and remote user. Aliases that differ in any of these never share a grant. Grouping hosts in the sidebar doesn't share permissions either.

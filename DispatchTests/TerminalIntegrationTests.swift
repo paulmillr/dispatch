@@ -268,6 +268,14 @@ final class TerminalIntegrationTests: XCTestCase {
             XCTAssertTrue(terminal.window === window, "Chat keeps the terminal mounted")
             try await expectVisibility(visible, terminal: terminal, surface: surface, pid: pid, sequence: &sequence)
         }
+        // Files covers the terminal as chat does: hidden, still mounted, its process still answering.
+        runtime.files.switchMode(id, to: .files)
+        try await eventually { !terminal.isPresented }
+        XCTAssertTrue(terminal.window === window, "Files keeps the terminal mounted")
+        try await expectVisibility(false, terminal: terminal, surface: surface, pid: pid, sequence: &sequence)
+        runtime.files.switchMode(id, to: .terminal)
+        try await eventually { terminal.isPresented }
+        try await expectVisibility(true, terminal: terminal, surface: surface, pid: pid, sequence: &sequence)
         window.orderOut(nil)
         try await eventually { !window.occlusionState.contains(.visible) }
         try await expectVisibility(false, terminal: terminal, surface: surface, pid: pid, sequence: &sequence)
@@ -352,6 +360,14 @@ final class TerminalIntegrationTests: XCTestCase {
         controller.toggleChat()
         XCTAssertFalse(runtime.chat.session(for: firstID).showChat, "Plain shells cannot enter agent chat")
         XCTAssertTrue(first.surface === surface)
+        // Files works on every local tab and covers the terminal without resizing or replacing it.
+        controller.toggleFiles()
+        XCTAssertTrue(runtime.files.isShowing(firstID), "Plain shells can show files")
+        try await eventually { !first.isPresented }
+        XCTAssertTrue(first.surface === surface)
+        XCTAssertEqual(surface.grid.columns, initialSize.columns); XCTAssertEqual(surface.grid.rows, initialSize.rows)
+        controller.toggleFiles()
+        try await eventually { first.isPresented }
 
         func splits(_ view: NSView) -> [TerminalSplitView] {
             PresentationTestSupport.views(of: TerminalSplitView.self, in: view, includingNestedMatches: true)

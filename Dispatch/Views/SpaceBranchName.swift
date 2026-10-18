@@ -2,13 +2,27 @@ import SwiftUI
 import AppKit
 
 struct SpaceBranchName: View {
-    let space: Space
+    /// The row's id (a space's, or a tabs-only row's tab) and name.
+    let id: UUID
+    let title: String
     let showBranch: Bool
     let fontSize: CGFloat
     var inline = false
     var branchFontSize: CGFloat? = nil
     var branch: String?
     var branchColor: Color = Chrome.muted
+
+    init(space: Space, showBranch: Bool, fontSize: CGFloat, inline: Bool = false, branchFontSize: CGFloat? = nil,
+         branch: String? = nil, branchColor: Color = Chrome.muted) {
+        self.init(id: space.id, name: space.name, showBranch: showBranch, fontSize: fontSize, inline: inline,
+                  branchFontSize: branchFontSize, branch: branch, branchColor: branchColor)
+    }
+
+    init(id: UUID, name: String, showBranch: Bool, fontSize: CGFloat, inline: Bool = false, branchFontSize: CGFloat? = nil,
+         branch: String? = nil, branchColor: Color = Chrome.muted) {
+        self.id = id; self.title = name; self.showBranch = showBranch; self.fontSize = fontSize; self.inline = inline
+        self.branchFontSize = branchFontSize; self.branch = branch; self.branchColor = branchColor
+    }
 
     var body: some View {
         let layout = inline ? AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 10))
@@ -20,7 +34,7 @@ struct SpaceBranchName: View {
     }
 
     var name: some View {
-        Text(space.name).lineLimit(1).layoutPriority(1)
+        Text(title).lineLimit(1).layoutPriority(1)
     }
 
     @ViewBuilder var branchLine: some View {
@@ -36,7 +50,7 @@ struct SpaceBranchName: View {
         Text(branch).font(AppFont.ui(size: branchFontSize ?? max(8, fontSize - 2), design: .monospaced))
             .foregroundStyle(branchColor).lineLimit(1).truncationMode(.middle)
             .accessibilityLabel("Git branch: \(branch)")
-            .accessibilityIdentifier("space-branch-\(space.id)")
+            .accessibilityIdentifier("space-branch-\(id)")
     }
 }
 
@@ -44,17 +58,27 @@ struct SpaceBranchName: View {
 /// Polls only while branches are shown and the app is active; activation refreshes at once.
 struct SpaceBranchObserver: View {
     let space: Space
+    /// One of the space's tabs, for a tabs-only row, keyed by that tab; the space's first tab otherwise.
+    var tab: TerminalTab? = nil
     var enabled = true
+    private var id: UUID { tab?.id ?? space.id }
     @State private var value: String?
     @State private var resolved: SpaceBranchSource.Key?
     @State private var appActive = NSApp?.isActive ?? true
     private struct Polling: Equatable { let key: SpaceBranchSource.Key?; let active: Bool }
 
+    /// Where the branch is read: the tab's own directory on its machine, or the space's first tab's.
+    private var source: SpaceBranchSource? {
+        guard enabled else { return nil }
+        if let tab { return SpaceBranchSource.tab(in: space, tab, runtime: .shared) }
+        return SpaceBranchSource.firstTab(in: space, runtime: .shared)
+    }
+
     var body: some View {
-        let source = enabled ? SpaceBranchSource.firstTab(in: space, runtime: .shared) : nil
+        let source = source
         let branch = resolved == source?.key ? value : nil
         Color.clear
-            .preference(key: SpaceBranchNames.self, value: branch.map { [space.id: $0] } ?? [:])
+            .preference(key: SpaceBranchNames.self, value: branch.map { [id: $0] } ?? [:])
             .task(id: Polling(key: source?.key, active: appActive)) {
                 // A new source starts blank; resuming the same one keeps its branch.
                 if resolved != source?.key { value = nil; resolved = nil }

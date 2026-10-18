@@ -95,6 +95,7 @@ extension Workspace {
   }
 
   func cycleTab(_ delta: Int) {
+    if tabsOnly { cycleSidebarTab(delta); return }
     if let space = current, let selected = space.selectedContainer, !space.containers.isEmpty {
       let members = space.focusedWindowIDs
       if let index = members.firstIndex(of: selected) {
@@ -109,6 +110,7 @@ extension Workspace {
   }
 
   func selectNumberedItem(at index: Int) {
+    if tabsOnly { selectSidebarTab(at: index); return }
     guard let space = current, index >= 0, index < space.numberedShortcutCount else { return }
     if space.usesPaneShortcuts {
       selectPane(at: index)

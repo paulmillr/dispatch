@@ -11,7 +11,12 @@ struct SpaceBranchSource: Sendable {
     let key: Key
 
     @MainActor static func firstTab(in space: Space, runtime: TerminalRuntime) -> Self? {
-        guard let tab = space.tabs.first, tab.directory.hasPrefix("/") else { return nil }
+        space.tabs.first.flatMap { tab(in: space, $0, runtime: runtime) }
+    }
+
+    /// One of the space's tabs: its own branch, for a tabs-only sidebar row.
+    @MainActor static func tab(in space: Space, _ tab: TerminalTab, runtime: TerminalRuntime) -> Self? {
+        guard tab.directory.hasPrefix("/") else { return nil }
         // A remote backend's pane: its directory is on that link's host.
         if let remote = space.remote { return Self(key: Key(directory: tab.directory, connection: remote)) }
         let machine = runtime.hosts.machine(for: tab.id) ?? runtime.owningMachine(for: tab)
@@ -31,7 +36,9 @@ struct SpaceBranchSource: Sendable {
 /// same directory once per space; connection generations isolate remote caches.
 actor SpaceBranchReader {
     static let shared = SpaceBranchReader()
-    private struct Cached { let time: ContinuousClock.Instant; let branch: String? }
+    /// Timed by System.date(): whether a read reuses the cache decides whether the helper is asked, so a replay
+    /// must decide it as the capture did (a slower run past 2 s on the wall clock asked again, unrecorded).
+    private struct Cached { let time: Date; let branch: String? }
     private var cache: [SpaceBranchSource.Key: Cached] = [:]
     private var pending: [SpaceBranchSource.Key: Task<String?, Never>] = [:]
     /// At most 4 reads run. Spaces wait for a slot in arrival order, and a read that ends hands its slot to the first of
@@ -59,7 +66,7 @@ actor SpaceBranchReader {
         let task = Task {
             let result = await read(source)
             if cache.count >= 128 { cache.removeAll(keepingCapacity: true) }
-            cache[source.key] = Cached(time: .now, branch: result)
+            cache[source.key] = Cached(time: System.date(), branch: result)
             pending[source.key] = nil
             release()
             return result
@@ -69,7 +76,7 @@ actor SpaceBranchReader {
     }
 
     private func recent(_ key: SpaceBranchSource.Key) -> Cached? {
-        cache[key].flatMap { $0.time.duration(to: .now) < .seconds(2) ? $0 : nil }
+        cache[key].flatMap { System.date().timeIntervalSince($0.time) < 2 ? $0 : nil }
     }
 
     private func release() {

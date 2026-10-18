@@ -65,10 +65,11 @@ final class SSHStatisticsStoreTests: XCTestCase {
             pingCalls += 1; pendingPings += 1
             maximumPendingPings = max(maximumPendingPings, pendingPings)
             defer { pendingPings -= 1 }
-            let fails = pingFails
             if blockPing { await withCheckedContinuation { finishPing = $0 } }
             else { try await System.sleep(for: .milliseconds(5), "ping") }
-            if fails { throw HerdrFailure("Latency timeout") }
+            // Read as the reply comes: a ping in flight when a test flips pingFails answers the new way, so no success
+            // lands after a test has turned replies into failures.
+            if pingFails { throw HerdrFailure("Latency timeout") }
         }
     }
 

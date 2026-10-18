@@ -1,5 +1,6 @@
 import Foundation
 
+#if canImport(AppKit)
 /// Plain local and SSH tabs' output from the last proper quit, for the next launch only. It is written
 /// once as the app quits (never mid-session, so a crash or kill leaves nothing new), taken off
 /// the disk as the next launch starts whether or not it is used, excluded from backups, and
@@ -93,6 +94,7 @@ struct TerminalHistoryStore {
         return out + Array("\r\n\u{1B}[0m".utf8)
     }
 }
+#endif
 
 /// Owner-only files replaced whole: created 0600 under a temporary name beside the target,
 /// synced, then renamed over it, so no reader or crash sees a partial or more readable file.

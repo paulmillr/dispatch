@@ -34,6 +34,9 @@
     private var missingWindows: [UUID: HelperFailure] = [:]
     private var restoringWindows: Set<UUID> = []
     private var restoreRequests: [UUID: (route: HelperBackend.Route, node: UInt64, task: Task<Void, Never>)] = [:]
+    /// Each route's latest window restore: the next one finishes after it, so windows restored together are presented
+    /// (and the first selected) in the order they were asked for, not in the order their tasks happen to resume.
+    @ObservationIgnored private var restoreTails: [HelperBackend.Route: Task<Void, Never>] = [:]
     private var restoreSpaces: [HelperBackend.Route: UUID] = [:]
     @ObservationIgnored private var restoration = System.uuid()
     private var restoring: [HelperBackend.Route: Detached] = [:]
@@ -859,6 +862,7 @@
         }
         guard restoringWindows.insert(window.id).inserted else { continue }
         placeholder(window.route, name: window.name, host: window.host)
+        let previous = restoreTails[window.route]
         let task = perform { client in
           var complete = false
           defer {
@@ -885,9 +889,11 @@
             throw error
           }
           await self.published()
+          await previous?.value
           try Task.checkCancellation()
           complete = true
         }
+        restoreTails[window.route] = task
         restoreRequests[window.id] = (window.route, window.node, task)
       }
       for var entry in detachedRoutes where restoring[entry.route] == nil {
@@ -1907,6 +1913,7 @@
       controlEvents.removeAll()
       restoreRequests.values.forEach { $0.task.cancel() }
       restoreRequests.removeAll()
+      restoreTails.removeAll()
       // A queued restore may still be awaiting final detach when its transport retires.
       // Preserve its cancellation token so it can resume through authenticated recovery.
       if !retaining { restoreSpaces.removeAll() }

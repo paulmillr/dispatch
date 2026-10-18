@@ -23,6 +23,24 @@ final class NativeSSHEnvironmentTests: XCTestCase {
         XCTAssertTrue(output.contains("--ssh-launch"), output)
     }
 
+    /// The up arrow finds earlier commands: history goes to the user's file, not to this launch's startup folder
+    /// (macOS's /etc/zshrc names `${ZDOTDIR:-$HOME}/.zsh_history` while ZDOTDIR is still that folder).
+    func testNativeZshKeepsHistoryInTheUsersFolder() async throws {
+        let root = URL(fileURLWithPath: "/tmp/native-history-\(System.uuid())"), home = root.appendingPathComponent("home")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try NativeSSHEnvironment.install(in: root)
+        var environment = System.inherited
+        environment.merge(NativeSSHEnvironment.variables(directory: root, inheriting: ["ZDOTDIR": home.path]), uniquingKeysWith: { _, new in new })
+        let history = { try await self.command("/bin/zsh", ["-l", "-i", "-c", "print -r -- HISTFILE=$HISTFILE"], environment) }
+        try "".write(to: home.appendingPathComponent(".zshrc"), atomically: true, encoding: .utf8)
+        var output = try await history()
+        XCTAssertTrue(output.contains("HISTFILE=" + home.path + "/.zsh_history"), output)
+        try "HISTFILE=\(root.path)/chosen\n".write(to: home.appendingPathComponent(".zshrc"), atomically: true, encoding: .utf8)
+        output = try await history()
+        XCTAssertTrue(output.contains("HISTFILE=" + root.path + "/chosen"), "A HISTFILE the user sets wins: \(output)")
+    }
+
     func testNativeBashImportsPrivateSSHFunction() async throws {
         let environment = System.inherited.merging(NativeSSHEnvironment.variables(directory: URL(fileURLWithPath: "/tmp/native-test"), inheriting: [:]), uniquingKeysWith: { _, new in new })
         let output = try await command("/bin/bash", ["--noprofile", "--norc", "-i", "-c", "type ssh"], environment)

@@ -82,11 +82,13 @@ final class AppReplay: @unchecked Sendable {
         let executable: String?
         let arguments: [String]
         let directory: String?
+        #if canImport(AppKit)
         init(_ process: Process) {
             executable = process.executableURL?.path
             arguments = process.arguments ?? []
             directory = process.currentDirectoryURL?.path
         }
+        #endif
     }
 
     final class Ticket: @unchecked Sendable {

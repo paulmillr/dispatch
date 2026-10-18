@@ -92,6 +92,8 @@ enum TerminalEvent {
     case startSearch(String), endSearch, searchTotal(Int?), searchSelected(Int?)
     /// The terminal's OSC 7501 records after a change.
     case programStatus([ProgramStatus])
+    /// The shell finished a command and is back at its prompt (OSC 133 D).
+    case commandFinished(exitCode: Int?)
 }
 
 extension TerminalView {
@@ -128,6 +130,9 @@ extension TerminalView {
             case .title(let title), .tabTitle(let title): runtime.workspace?.updateTab(self.id, title: title)
             case .pwd(let path): runtime.workspace?.updateTab(self.id, directory: path)
             case .childExited: self.didExit()
+            case .commandFinished:
+                guard runtime.views[self.id] === self else { return }
+                runtime.files.shellPrompted(self.id)
             case .programStatus(let records):
                 guard runtime.views[self.id] === self else { return }
                 runtime.programs.update(self.id, records)

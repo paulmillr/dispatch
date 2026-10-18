@@ -20,7 +20,9 @@ final class ChatModelChoicesCache {
     private struct Scope: Equatable {
         let agent: String
         let conversation: String?
+        #if canImport(AppKit)
         let process: AgentProcess?
+        #endif
         let version: String?
     }
     private var scope: Scope?
@@ -31,11 +33,21 @@ final class ChatModelChoicesCache {
 
     init(now: @escaping () -> Date = { Date() }) { self.now = now }
 
+    #if canImport(AppKit)
     func prepare(for session: ChatSession) {
         let next = Scope(agent: session.agentID, conversation: session.sessionID, process: session.process,
                          version: session.version)
         if scope != next { invalidate(); scope = next }
     }
+    #endif
+
+    #if !canImport(AppKit)
+    /// The iPhone's scope: it has no local agent process; the conversation and the agent's version stand for it.
+    func prepare(agent: String, conversation: String?, version: String?) {
+        let next = Scope(agent: agent, conversation: conversation, version: version)
+        if scope != next { invalidate(); scope = next }
+    }
+    #endif
 
     var catalog: Catalog? {
         guard let entry = catalogEntry, entry.fresh(at: now()) else { invalidate(); return nil }

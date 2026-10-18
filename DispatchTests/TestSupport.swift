@@ -548,12 +548,6 @@ extension AgentModelMenu {
     }
 }
 
-@MainActor final class ChatDraftMemoryStore: ChatDraftPersistence {
-    var buckets: [String: ChatDraftBucket] = [:]
-    func load() throws -> [String: ChatDraftBucket] { buckets }
-    func save(_ buckets: [String: ChatDraftBucket]) throws { self.buckets = buckets }
-}
-
 /// A modal alert nobody answers blocks the whole run (runs 135 and 136 hung on one). A test that
 /// expects one answers it at once (CloseConfirmationAnswerer); any other fails its test with the
 /// alert's text and is aborted, which the app reads as Cancel.
@@ -744,14 +738,6 @@ extension Space {
             return ContainerTab(id: System.uuid(), node: UInt64(index + 1), name: name ?? "\(index)", arrangement: PaneArrangement(tab: tab))
         }
         selectedContainer = containers[selected].id
-    }
-}
-
-extension ChatSideQuestion {
-    /// The form for a helper interaction (its chat.interaction JSON) in conversation `session`.
-    static func helper(_ interaction: [String: Any], session: String) throws -> ChatSideQuestion {
-        let value = try JSONDecoder().decode(HelperChat.Interaction.self, from: JSONSerialization.data(withJSONObject: interaction))
-        return try XCTUnwrap(ChatSideQuestion(interaction: value, session: session))
     }
 }
 

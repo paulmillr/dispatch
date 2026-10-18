@@ -44,6 +44,15 @@ final class ChatCoordinator {
     /// The first queued message showed its steering tip (once, ever).
     var queueTipShown: Bool { didSet { defaults?.set(queueTipShown, forKey: "chatQueueSteerTipShown") } }
     @ObservationIgnored private var owners: [String: UUID] = [:]
+    /// Files on the same tabs, for a coordinator that is not the runtime's (tests pair their own).
+    @ObservationIgnored weak var pairedFiles: FilesCoordinator?
+    /// Files on the same tabs: automatic switches leave a visible files view alone, explicit ones go through it so it
+    /// hides. Nil for a stand-alone coordinator, whose tabs have chat and the terminal only.
+    var files: FilesCoordinator? {
+        if let pairedFiles { return pairedFiles }
+        let runtime = TerminalRuntime.shared
+        return runtime.chat === self ? runtime.files : nil
+    }
     /// A remote chat's presentation outlives its surface: after a reconnect the same host's conversation
     /// (or, before it has one, the same process) shows it again in whichever tab it appears.
     private struct RemotePresentation {
@@ -141,10 +150,6 @@ final class ChatCoordinator {
     func canEnterChat(_ session: ChatSession) -> Bool {
         enabled && (session.hasOpenedChat || session.sessionID != nil || !session.draft.isEmpty || (session.active && !session.discoveryBlocked))
     }
-    /// Whether any of these terminals can switch to chat or is showing it. Unlike `session(for:)`, creates no sessions.
-    func canShowChat(anyOf ids: some Sequence<UUID>) -> Bool {
-        ids.contains { id in sessions[id].map { canEnterChat($0) || $0.showChat } ?? false }
-    }
     func chatAvailabilityHint(_ session: ChatSession) -> String {
         if !enabled { return "Enable Agent chat in Settings, then start \(agents) in this terminal." }
         if (!session.active || session.inputBlocked), session.hasOpenedChat || session.sessionID != nil || !session.draft.isEmpty { return "View the retained conversation and edit drafts · sending paused" }
@@ -157,16 +162,31 @@ final class ChatCoordinator {
         guard session.showChat || canEnterChat(session) else { return }
         chooseChat(!session.showChat, session: session)
     }
+    /// The user chose the terminal from chat's own controls (Open in terminal, a permission card, the model picker).
+    func showTerminal(_ session: ChatSession) {
+        guard let files, files.mode(for: session.id) != .terminal else { return chooseChat(false, session: session) }
+        files.switchMode(session.id, to: .terminal)
+    }
+    /// The user chose this chat from outside it (a notification): whatever the tab shows, files included, gives way.
+    func showChat(_ session: ChatSession) {
+        guard let files else { return chooseChat(true, session: session) }
+        files.switchMode(session.id, to: .chat)
+    }
+    /// A visible files view covers the tab: automatic switches (discovery, an agent's exit) leave it in front.
+    func filesShowing(_ session: ChatSession) -> Bool { files?.isShowing(session.id) == true }
     /// Only explicit UI actions call this. Backend failures request attention instead.
     func chooseChat(_ value: Bool, session: ChatSession) {
         session.manualViewChoice = true
         if value { session.terminalAttention = nil }
         setChatVisible(value, session: session, reason: "user")
-        if !value {
-            session.submissionFailure = nil
-            session.command?.cancel(); session.command = nil; session.nativePrompt = nil
-            session.relinquish(); DispatchQueue.main.async { TerminalRuntime.shared.focusActive() }
-        }
+        if !value { leaveChat(session) }
+    }
+    /// The user chose the terminal over this chat: what chat started gives way to it. Also run when files, which hid
+    /// the chat, gives way to the terminal, where `showChat` is already false.
+    func leaveChat(_ session: ChatSession) {
+        session.submissionFailure = nil
+        session.command?.cancel(); session.command = nil; session.nativePrompt = nil
+        session.relinquish(); DispatchQueue.main.async { TerminalRuntime.shared.focusActive() }
     }
     /// Double Ctrl+D quits the agent, as it does in Terminal. An agent without
     /// a quit command, or one that is not idle, only switches to Terminal.
@@ -243,10 +263,13 @@ final class ChatCoordinator {
         guard saved.surface != session.id else { return }
         if session.sessionID == nil { session.drafts.resumeProvisional(saved.draftScope) }
         let choice = session.manualViewChoice ? session.showChat : nil
-        session.restorePresentation(saved.saved)
+        // A visible files view stays in front: the restored chat must not show behind it (files and chat never show
+        // together), and the user's next mode choice decides.
+        let files = filesShowing(session)
+        session.restorePresentation(saved.saved, view: !files)
         if let choice {
             session.manualViewChoice = true
-            session.setView(choice, reason: "user-preference-retained")
+            if !files { session.setView(choice, reason: "user-preference-retained") }
         }
     }
 

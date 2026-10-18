@@ -19,7 +19,7 @@ extension ChatCoordinator {
         where session.helper.map({ $0.endpoint == endpoint && (terminal == nil || $0.route.terminal == terminal) }) == true {
             if session.exitRequested, !disabled {
                 session.exitRequested = false
-                setChatVisible(false, session: session, reason: "exit")
+                if !filesShowing(session) { setChatVisible(false, session: session, reason: "exit") }
             }
             rememberRemotePresentation(session)
             // An explicit exit can retire the subscription before its checked Return
@@ -200,7 +200,8 @@ extension ChatCoordinator {
             if let version = state.version { session.version = version }
             // A native dialog owns the terminal (e.g. Claude's startup review of changed hooks, which
             // runs after the session registers): Chat opens once it closes.
-            if session.sessionID != nil, state.dialog == nil, !session.manualViewChoice, !session.exitRequested, !session.showChat {
+            if session.sessionID != nil, state.dialog == nil, !session.manualViewChoice, !session.exitRequested, !session.showChat,
+               !filesShowing(session) {
                 setChatVisible(true, session: session)
                 adoptTerminalTypeahead(session)
             }
@@ -527,12 +528,12 @@ extension ChatCoordinator {
                 // A native turn or output may have acknowledged the command before its write reply.
                 session.optimisticPromptDelivered = true
                 session.lastInputAt = .now
-                if exits { self.setChatVisible(false, session: session, reason: "exit") }
+                if exits, !self.filesShowing(session) { self.setChatVisible(false, session: session, reason: "exit") }
                 // The picker is open: Terminal takes the keyboard, as the user's own switch would.
                 // Nothing prints back to Chat; a picked conversation arrives as a new history.
                 if opensTerminal {
                     session.observedCommand = nil
-                    self.chooseChat(false, session: session)
+                    self.showTerminal(session)
                 }
             } catch {
                 guard session.helper === helper, session.submissionID == id else { return }
@@ -547,7 +548,7 @@ extension ChatCoordinator {
                     session.submissionID = nil
                     session.queuedSubmissionID = nil
                     session.helperTask = nil
-                    self.setChatVisible(false, session: session, reason: "exit")
+                    if !self.filesShowing(session) { self.setChatVisible(false, session: session, reason: "exit") }
                     return
                 }
                 if exits { session.exitRequested = false }

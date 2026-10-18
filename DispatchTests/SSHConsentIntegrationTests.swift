@@ -17,7 +17,7 @@ final class SSHConsentIntegrationTests: XCTestCase {
         content.layoutSubtreeIfNeeded()
         let views = descendants(content)
         let buttons = views.compactMap { $0 as? NSButton }
-        XCTAssertEqual(Array(buttons.prefix(6).map(\.title)), ["Upload the Dispatch helper", "Stats", "File access", "Codex", "Claude", "Pi"])
+        XCTAssertEqual(Array(buttons.prefix(7).map(\.title)), ["Upload the Dispatch helper", "Stats", "Files", "Copy files in", "Codex", "Claude", "Pi"])
         for button in buttons {
             XCTAssertTrue(content.bounds.contains(button.convert(button.bounds, to: content)))
         }
@@ -216,7 +216,7 @@ final class SSHConsentIntegrationTests: XCTestCase {
         defer { choice.cancel() }
         try await TestSupport.eventually { app.window.attachedSheet != nil }
         let choices = try controls(app.window)
-        for title in ["Stats", "File access", "Codex", "Claude", "Pi"] {
+        for title in ["Stats", "Files", "Codex", "Claude", "Pi"] {
             let button = try XCTUnwrap(choices.first { $0.title == title })
             if button.state != .on { try click(title, in: app.window) }
         }

@@ -34,20 +34,27 @@ struct ShortcutRow: Identifiable {
         return rows.compactMap { $0 }
     }
 
-    @MainActor static var window: [ShortcutRow] { [
+    @MainActor static var window: [ShortcutRow] { windowRows(KeyGroupsStore.shared.current) }
+
+    /// ⌃⌘1…3 are the files tabs' unless a Settings › Keys group takes ⌃⌘ digits (AppDelegate.filesTabModifiers).
+    @MainActor static func windowRows(_ keys: KeyGroups) -> [ShortcutRow] { [
         .init("⌘N / ⇧⌘N", "new space / new local space"),
         .init("⌘T", "new tab"),
         .init("⌘W / ⇧⌘W", "close tab / close space"),
         .init("⌘D / ⇧⌘D", "split right / split down"),
         .init("⌘J / ⇧⌘J", "notification scroll"),
         .init("⇧⌘C", "switch between terminal and chat"),
+        .init("⇧⌘F", "switch between terminal and files"),
+        .init("⇧⌘U / ⇧⌘L", "show files on the Changes / Commits tab"),
+        .init("⌃⌘1…3", "files tabs: Files / Changes / Commits"),
+        .init("⌥⌘P", "show or hide the files preview"),
         .init("⌘K", "clear the terminal screen and scrollback"),
         .init("⌘F", "find · ⌘G / ⇧⌘G next / previous"),
         .init("⌘+ / ⌘- / ⌘0", "bigger / smaller / reset font size"),
         .init("⌃⌘F", "full screen"),
         .init("⌘,", "settings"),
         .init("⌘/", "show this shortcut sheet"),
-    ] }
+    ].filter { $0.key != "⌃⌘1…3" || AppDelegate.filesTabModifiers(keys) != nil } }
 }
 
 struct ShortcutGroup: Identifiable {

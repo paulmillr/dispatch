@@ -10,16 +10,13 @@ enum SSHBootstrap {
     private static func install(resource: String, resources: URL,
                                 run: (String, Data) async throws -> SSHCommand.Result) async throws
         -> (relativePath: String, preamble: String, verify: String) {
-        let probe = try await run("printf 'DISPATCH_PLATFORM=%s:%s\\n' \"$(uname -s)\" \"$(uname -m)\"", Data())
+        let probe = try await run(SSHBootstrapScript.probe, Data())
         guard probe.status == 0 else { throw HerdrFailure("Could not use the authenticated SSH connection.") }
-        let platforms = String(decoding: probe.output, as: UTF8.self).split(separator: "\n").filter { $0.hasPrefix("DISPATCH_PLATFORM=") }
-        guard platforms.count == 1, let platform = platforms.first else { throw HerdrFailure("Could not identify the SSH host platform.") }
         let name: String
-        switch platform {
-        case "DISPATCH_PLATFORM=Darwin:arm64", "DISPATCH_PLATFORM=Darwin:x86_64": name = "darwin-universal"
-        case "DISPATCH_PLATFORM=Linux:aarch64", "DISPATCH_PLATFORM=Linux:arm64": name = "linux-aarch64"
-        case "DISPATCH_PLATFORM=Linux:x86_64": name = "linux-x86_64"
-        default: throw HerdrFailure("SSH integration requires Linux or macOS on ARM64 or x86-64.")
+        switch SSHBootstrapScript.platform(String(decoding: probe.output, as: UTF8.self)) {
+        case .helper(let helper): name = helper
+        case .unidentified: throw HerdrFailure("Could not identify the SSH host platform.")
+        case .unsupported: throw HerdrFailure("SSH integration requires Linux or macOS on ARM64 or x86-64.")
         }
         // The bundled file is read like any other: its identity is observed (a replay answers the recorded one, whatever
         // the build bundles now), its bytes are read only to upload them.
@@ -29,30 +26,15 @@ enum SSHBootstrap {
             let binary = try Data(contentsOf: url)
             return Payload(digest: SHA256.hash(data: binary).map { String(format: "%02x", $0) }.joined(), size: binary.count)
         }
-        guard payload.size > 0, payload.size <= 32 * 1024 * 1024 else { throw HerdrFailure("SSH helper is missing or invalid.") }
+        guard payload.size > 0, payload.size <= SSHBootstrapScript.maximumSize else { throw HerdrFailure("SSH helper is missing or invalid.") }
         let digest = payload.digest
-        let relativePath = ".dispatch/bin/versions/" + digest + "/dispatch-helper"
+        let relativePath = SSHBootstrapScript.relativePath(digest: digest)
         let preamble = cachePreamble(digest: digest)
-        let verify = "safe_file dispatch-helper && test -x dispatch-helper && test \"$(wc -c < dispatch-helper | tr -d ' ')\" = '\(payload.size)' && test \"$(checksum dispatch-helper)\" = '\(digest)'"
+        let verify = SSHBootstrapScript.verify(size: payload.size, digest: digest)
         let existing = try await run(preamble + "\n" + verify, Data())
         if existing.status != 0 {
-            // The exclusive private staging directory prevents following a
-            // planted temporary link. Concurrent uploads publish whole files.
-            // Existing cache permissions are verified, never repaired by chmod.
             let staging = "upload-" + System.uuid().uuidString.lowercased()
-            let upload = """
-            \(preamble)
-            test ! -e dispatch-helper && test ! -L dispatch-helper || safe_file dispatch-helper || exit 1
-            mkdir '\(staging)' || exit 1
-            trap 'rm -f \(staging)/dispatch-helper; rmdir \(staging) 2>/dev/null' EXIT HUP INT TERM
-            (set -C; cat > '\(staging)/dispatch-helper') || exit 1
-            test "$(wc -c < '\(staging)/dispatch-helper' | tr -d ' ')" = '\(payload.size)' || exit 1
-            test "$(checksum '\(staging)/dispatch-helper')" = '\(digest)' || exit 1
-            chmod 700 '\(staging)/dispatch-helper' || exit 1
-            test ! -e dispatch-helper && test ! -L dispatch-helper || safe_file dispatch-helper || exit 1
-            mv -f '\(staging)/dispatch-helper' dispatch-helper || exit 1
-            \(verify)
-            """
+            let upload = SSHBootstrapScript.upload(digest: digest, size: payload.size, staging: staging)
             let installed = try await run(upload, try System.read(url))
             guard installed.status == 0 else { throw HerdrFailure("Could not install the SSH helper in the remote cache.") }
         }
@@ -132,51 +114,9 @@ enum SSHBootstrap {
         id.utf8.count == 24 && id.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
     }
 
-    /// Every child is reached from an already checked working directory. Keeping
-    /// cwd inside it prevents replacement of an ancestor redirecting an upload.
-    /// Same-account processes are outside the helper's security boundary.
-    static let privateDirectoryScript = """
-    umask 077
-    owner=$(id -u) || exit 1
-    if test "$(uname -s)" = Darwin; then
-      metadata() { stat -f '%u %Lp %l' "$1"; }
-    else
-      metadata() { stat -c '%u %a %h' "$1"; }
-    fi
-    private_directory() {
-      test ! -L "$1" && test -d "$1" || return 1
-      set -- $(metadata "$1")
-      test "$#" = 3 && test "$1" = "$owner" && test "$2" = 700
-    }
-    safe_file() {
-      test ! -L "$1" && test -f "$1" || return 1
-      set -- $(metadata "$1")
-      test "$#" = 3 && test "$1" = "$owner" && test "$3" = 1 || return 1
-      case "$2" in 600|700) return 0;; *) return 1;; esac
-    }
-    enter_private() {
-      test -e "$1" || test -L "$1" || mkdir "$1" || return 1
-      private_directory "$1" && cd -P "$1"
-    }
-    cd -P "$HOME" || exit 1
-    set -- $(metadata .)
-    test "$#" = 3 && test "$1" = "$owner" && test "$((0$2 & 022))" = 0 || exit 1
-    test ! -L .dispatch || exit 1
-    enter_private .dispatch || exit 1
-    """
+    static var privateDirectoryScript: String { SSHBootstrapScript.privateDirectoryScript }
 
-    static func cachePreamble(digest: String) -> String {
-        precondition(digest.utf8.count == 64 && digest.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) })
-        return privateDirectoryScript + """
-
-        enter_private bin && enter_private versions && enter_private '\(digest)' || exit 1
-        checksum() {
-          if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d ' ' -f 1
-          elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | cut -d ' ' -f 1
-          else return 1; fi
-        }
-        """
-    }
+    static func cachePreamble(digest: String) -> String { SSHBootstrapScript.cachePreamble(digest: digest) }
 
     static func publish(sessionID: String, relativePath: String?) -> String {
         precondition(validSessionID(sessionID))

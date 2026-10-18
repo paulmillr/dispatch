@@ -284,6 +284,7 @@ struct SSHHostsSettings: View {
         switch choice {
         case .stats: "stats"
         case .files: "files"
+        case .filesWrite: "copy-in"
         case .agent(let agent): agent.rawValue
         }
     }
@@ -348,13 +349,16 @@ struct SSHHostsSettings: View {
             }.help("Cached on the host in ~/.dispatch")
             Group {
                 separator
-                ForEach([SSHIntegrationDraft.Choice.stats, .files], id: \.self) { choice in
-                    option(choice.title, detail: choice.detail, indented: true) {
+                ForEach([SSHIntegrationDraft.Choice.stats, .files, .filesWrite], id: \.self) { choice in
+                    // Copy files in sits under Files and needs it.
+                    let nested = choice == .filesWrite
+                    option(choice.title, detail: choice.detail, indented: true, nested: nested) {
                         switchControl(choice.title, isOn: draft.checked.contains(choice),
                                       identifier: "settings-feature-\(Self.chipTitle(choice))-\(entry.id)") {
                             update(entry) { $0.toggle(choice) }
                         }
                     }
+                    .opacity(nested && !draft.checked.contains(.files) ? 0.5 : 1)
                     separator
                 }
                 option("Agent hooks", detail: "chat hooks · attention", indented: true) {
@@ -369,7 +373,7 @@ struct SSHHostsSettings: View {
             .overlay { RoundedRectangle(cornerRadius: 7).strokeBorder(SettingsControlStyle.border) }
     }
 
-    private func option<Control: View>(_ title: String, detail: String, indented: Bool = false,
+    private func option<Control: View>(_ title: String, detail: String, indented: Bool = false, nested: Bool = false,
                                        @ViewBuilder control: () -> Control) -> some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
@@ -378,7 +382,7 @@ struct SSHHostsSettings: View {
                     .fixedSize(horizontal: false, vertical: true)
             }.frame(maxWidth: .infinity, alignment: .leading)
             control()
-        }.padding(.leading, indented ? 26 : 12).padding(.trailing, 12).padding(.vertical, 8)
+        }.padding(.leading, nested ? 40 : indented ? 26 : 12).padding(.trailing, 12).padding(.vertical, 8)
     }
 
     private func switchControl(_ title: String, isOn: Bool, identifier: String, toggle: @escaping () -> Void) -> some View {

@@ -3,6 +3,8 @@ import XCTest
 
 #if SWIFT_PACKAGE
     @testable import DispatchHelperClient
+#elseif os(iOS)
+    @testable import DispatchMobile
 #else
     @testable import DispatchApp
 #endif

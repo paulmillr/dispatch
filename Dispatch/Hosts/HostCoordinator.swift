@@ -154,6 +154,9 @@ final class HostCoordinator {
     }
 
     func machine(for terminal: UUID) -> TerminalMachine? { bindings[terminal].map { .ssh($0.shell) } }
+    /// Whether the SSH login in this terminal is one Dispatch launched (its helper comes over it), not a plain ssh
+    /// typed in a shell; nil when the terminal runs no SSH login.
+    func integrated(_ terminal: UUID) -> Bool? { bindings[terminal]?.integrated }
 
     private func generations(for host: HostID) -> Set<UUID> {
         guard host != .local, let workspace = runtime?.workspace else { return [] }

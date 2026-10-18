@@ -1,5 +1,9 @@
 import XCTest
+#if canImport(AppKit)
 @testable import DispatchApp
+#else
+@testable import DispatchMobile
+#endif
 
 @MainActor
 final class ChatSideQuestionTests: XCTestCase {
@@ -16,6 +20,7 @@ final class ChatSideQuestionTests: XCTestCase {
         String(decoding: try JSONEncoder().encode(try XCTUnwrap(question.answers)), as: UTF8.self)
     }
 
+    #if canImport(AppKit)
     func testMainQuestionsKeepDraftAndRespectBlockingAndResolution() throws {
         let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
         let session = chat.session(for: System.uuid())
@@ -36,7 +41,9 @@ final class ChatSideQuestionTests: XCTestCase {
         session.questions = []
         XCTAssertEqual(session.draft, "keep my draft")
     }
+    #endif
 
+    #if canImport(AppKit)
     func testQuestionHistoryShowsAnswersWithoutRawProtocolAndRedactsSecrets() async throws {
         let questions: [[String: Any]] = [
             ["id": "choice", "header": "Approach", "question": "Which approach?", "isOther": true, "isSecret": false,
@@ -65,6 +72,7 @@ final class ChatSideQuestionTests: XCTestCase {
         XCTAssertTrue(presentation.output.contains("Skipped"))
         XCTAssertFalse(presentation.output.contains("private-value"))
     }
+    #endif
 
     func testAnswersUseIDsAndRequireExplicitCompleteInput() throws {
         let request = try ChatSideQuestion.helper(interaction(), session: "side")

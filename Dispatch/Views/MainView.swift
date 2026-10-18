@@ -16,12 +16,14 @@ struct MainView: View {
     private var sidebarVisible: Bool { controller.sidebarVisible }
     private var showTmuxTabs: Bool {
         guard let space = workspace.current, space.structured else { return false }
-        return (space.windowPresentation?.groups.count ?? 1) <= 1 && (titlebarTabs || WindowTabBar.showsTabs(space: space))
+        return (space.windowPresentation?.groups.count ?? 1) <= 1
+            && (titlebarTabs || WindowTabBar.showsTabs(space: space, tabsOnly: workspace.tabsOnly))
     }
 
-    /// Outside full screen, the strips along the top edge are the title row, as pills.
+    /// Outside full screen, the strips along the top edge are the title row, as pills. Tabs only has no strips: the
+    /// sidebar lists the tabs, and with it hidden the plain title row carries the toggle and the tab's name.
     private var titlebarTabs: Bool {
-        !controller.windowState.isFullScreen && TerminalRuntime.shared.error == nil && workspace.current != nil
+        !controller.windowState.isFullScreen && TerminalRuntime.shared.error == nil && workspace.current != nil && !workspace.tabsOnly
     }
 
     /// The title-row placement for a pane or tmux group, if its strip touches the top edge. With the
@@ -41,14 +43,16 @@ struct MainView: View {
         guard let space = workspace.current,
               let pane = space.panes.first(where: { $0.id == space.layout.paneIDs.first }) else { return false }
         if space.structured { return showTmuxTabs || space.panes.count > 1 }
-        return PaneView.showsTabs(pane: pane, space: space)
+        return PaneView.showsTabs(pane: pane, space: space, tabsOnly: workspace.tabsOnly)
     }
 
     /// In full screen without a tab row, the edge reveal shows the host mark in place of the sidebar button, whenever a
     /// strip would lead with one: the active tab's host, or the Mac with other spaces to switch to. Its picker carries
     /// the sidebar toggle.
     private var revealHost: StripHost? {
-        guard controller.windowState.isFullScreen, !sidebarVisible, !hasLeadingTabRow, let space = workspace.current else { return nil }
+        // The mark's picker lists spaces, which tabs only keeps out of sight: its reveal is the plain button.
+        guard controller.windowState.isFullScreen, !sidebarVisible, !hasLeadingTabRow, !workspace.tabsOnly,
+              let space = workspace.current else { return nil }
         if let host = TerminalRuntime.shared.ssh.stripHost(active: space.activeTab, among: space.tabs) { return host }
         return workspace.lastingSpaceCount > 1 ? StripHost(record: .local, tint: nil) : nil
     }
@@ -133,6 +137,8 @@ struct MainView: View {
             (controller.window as? MainWindow)?.titleBarHeight = height
         }
         .onChange(of: settings.values.hideSingleSpace) { _, _ in controller.windowState.sidebarVisibilityOverride = nil }
+        // The runtime mirrors a saved choice as it applies it; this covers a value set without saving (tests).
+        .onChange(of: settings.values.tabsOnly, initial: true) { _, tabsOnly in workspace.tabsOnly = tabsOnly }
         .onChange(of: minimumContentSize, initial: true) { _, size in controller.updateMinimumContentSize(size) }
     }
 
@@ -214,9 +220,12 @@ struct MainView: View {
                         .accessibilityHidden(true)
                     Text("A space to work.").font(typography.font(offset: 4.5))
                     HStack(spacing: 10) {
-                        Button { workspace.newNativeSpace() } label: {
-                            EmptyStateAction(symbol: "plus", title: "New Space", shortcut: "⌘N")
-                        }.keyboardShortcut("n")
+                        // Tabs only: a new tab is the only thing to make (⌘N still works, unadvertised).
+                        if !workspace.tabsOnly {
+                            Button { workspace.newNativeSpace() } label: {
+                                EmptyStateAction(symbol: "plus", title: "New Space", shortcut: "⌘N")
+                            }.keyboardShortcut("n")
+                        }
                         Button { workspace.newTab() } label: {
                             EmptyStateAction(symbol: "macwindow.badge.plus", title: "New Tab", shortcut: "⌘T")
                         }.keyboardShortcut("t")
@@ -252,12 +261,16 @@ struct MainView: View {
            let group = presentation.groups.first(where: { group in
                space.windows.first(where: { $0.id == group.selected })?.arrangement.layout == node
            }) {
+            // Tabs only lists the windows in the sidebar: each group keeps its place and focus ring, without a strip.
+            let strip = !workspace.tabsOnly
             return AnyView(GlassStripStack(overlaid: glassStrips) {
-                WindowTabBar(space: space, workspace: workspace, controller: controller, group: group,
-                           titlebar: titlebar(for: group.id, in: presentation.layout))
+                if strip {
+                    WindowTabBar(space: space, workspace: workspace, controller: controller, group: group,
+                               titlebar: titlebar(for: group.id, in: presentation.layout))
+                }
             } content: {
-                layout(node, space: space, groupHeaders: false, stripInset: glassStrips ? tmuxStripHeight : 0)
-            }.hostTintBorder(glassStrips ? tmuxTint(space) : nil, surfaceID: group.selected, stripHeight: tmuxStripHeight)
+                layout(node, space: space, groupHeaders: false, stripInset: glassStrips && strip ? tmuxStripHeight : 0)
+            }.hostTintBorder(glassStrips && strip ? tmuxTint(space) : nil, surfaceID: group.selected, stripHeight: strip ? tmuxStripHeight : 0)
                 .id(group.id)
                 .modifier(PaneFocusHighlight(workspace: workspace, paneID: group.selected == space.activeWindow?.id ? group.id : nil)))
         }
@@ -630,6 +643,8 @@ final class FullScreenSidebarRevealView: NSView {
     let runtime = TerminalRuntime.shared, automatic = settings.values.automaticTabNames
     let tab = space.containers.first { $0.id == space.selectedContainer }.map { runtime.label(for: $0, automatic: automatic) }
         ?? space.activeTab.map { runtime.label(for: workspace.liveTab($0.id) ?? $0, automatic: automatic) }
+    // Tabs only names no space.
+    if workspace.tabsOnly { return tab ?? "Terminal" }
     return "\(tab ?? "Terminal") — \(workspace.liveName(space))"
 }
 

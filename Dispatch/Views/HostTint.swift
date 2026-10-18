@@ -165,6 +165,7 @@ final class HostColorStore {
     }
 }
 
+#if canImport(AppKit)
 extension View {
     func hostTintStrip(_ tint: HostTint?, surface: StripSurface = .solid) -> some View {
         modifier(HostTintStrip(tint: tint, surface: surface))
@@ -309,3 +310,4 @@ private struct HostBorder: View {
         }
     }
 }
+#endif

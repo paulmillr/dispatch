@@ -121,6 +121,18 @@ extension AppDelegate {
         }
         view.addItem(.separator())
         add(view, "Switch Terminal / Chat", #selector(toggleChat), "C", [.command, .shift], target: self)
+        add(view, "Switch Terminal / Files", #selector(toggleFiles), "F", [.command, .shift], target: self)
+        // Files on a git tab from any mode (F5b); the tag is the FilesTab's index.
+        add(view, "Changes", #selector(openFilesTab(_:)), "U", [.command, .shift], target: self, tag: 1)
+        add(view, "Commits", #selector(openFilesTab(_:)), "L", [.command, .shift], target: self, tag: 2)
+        // Their keys yield to a Settings › Keys group that takes ⌃⌘ digits (applyKeyGroups). ⌃⌘2 and ⌃⌘3 reach the
+        // places Changes and Commits above name, and only while files shows, so the menu does not list them twice.
+        add(view, "Files Tab", #selector(showFilesTab(_:)), "1", [.control, .command], target: self, tag: 0)
+        add(view, "Changes Tab", #selector(showFilesTab(_:)), "2", [.control, .command], target: self, tag: 1, hidden: true)
+        add(view, "Commits Tab", #selector(showFilesTab(_:)), "3", [.control, .command], target: self, tag: 2, hidden: true)
+        // Its title follows the pane (validateMenuItem); ⌥⌘P reaches it only while files shows. ⇧⌘P is left alone: the
+        // space search's test holds the menu to ⌘P only.
+        add(view, "Hide Preview", #selector(togglePreview), "P", [.command, .option], target: self)
         add(view, "Split Right", #selector(splitColumns), "d", target: self)
         add(view, "Split Down", #selector(splitRows), "D", [.command, .shift], target: self)
         add(view, "Move Tab to Next Pane", #selector(moveTabToNextPane), target: self)
@@ -183,16 +195,25 @@ extension AppDelegate {
             case #selector(nextSpace): step(item, steps.spaces, next: true)
             case #selector(previousTab): step(item, steps.tabs, next: false)
             case #selector(nextTab): step(item, steps.tabs, next: true)
+            case #selector(showFilesTab(_:)): digit(item, Self.filesTabModifiers(groups) ?? [], key: String(item.tag + 1))
             default: break
             }
         }
+    }
+
+    /// ⌃⌘ for the files tabs' digits, or nil while a Settings › Keys group already uses ⌃⌘ for its own.
+    static func filesTabModifiers(_ groups: KeyGroups) -> NSEvent.ModifierFlags? {
+        let modifiers: NSEvent.ModifierFlags = [.control, .command]
+        return [groups.spaces, groups.tabs, groups.splits].contains(modifiers) ? nil : modifiers
     }
 
     @objc func increaseFontSize() { setFontSize(settings.values.fontSize + 1) }
     @objc func findInContent() {
         guard let id = workspace.activeSurfaceID else { return }
         let runtime = TerminalRuntime.shared, session = runtime.chat.session(for: id)
-        if session.showChat { session.search.open() }
+        // The files view's filter field takes it, or its preview's find while the preview has focus.
+        if let files = runtime.files.existing(id), files.visible { files.findRequest = System.uuid() }
+        else if session.showChat { session.search.open() }
         else { runtime.views[id]?.performBindingAction("start_search") }
     }
     @objc func findNext() {
@@ -250,7 +271,8 @@ extension AppDelegate {
         }
         guard !groups.tabs.isEmpty, modifiers == groups.tabs else { return nil }
         guard NSApp.keyWindow === window else { return false }
-        guard workspace.current?.usesPaneShortcuts != true || index < 4 else { return nil }
+        // Tabs only numbers the sidebar's list; otherwise, with splits, the digits past the panes are typing.
+        guard workspace.tabsOnly || workspace.current?.usesPaneShortcuts != true || index < 4 else { return nil }
         workspace.selectNumberedItem(at: index)
         return true
     }

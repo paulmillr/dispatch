@@ -18,6 +18,9 @@ final class HelperSession: @unchecked Sendable {
     /// The SSH login terminal a remote helper wraps and its shell process (absent locally).
     let terminal: UInt64?
     let process: Shell?
+    /// The opt-in features the hello request named and this helper accepted (helper/PROTOCOL.md, Features); absent
+    /// from older helpers and for clients that named none.
+    var features: [String]? = nil
 
     struct Shell: Codable, Equatable, Sendable {
       let pid: UInt64
@@ -26,6 +29,8 @@ final class HelperSession: @unchecked Sendable {
     struct Account: Codable, Equatable, Sendable {
       let uid: UInt32
       let home: String
+      /// The login environment's HOME, when the helper reports it (the iPhone app's "~"; absent from current helpers).
+      var login_home: String? = nil
     }
 
     struct Identity: Codable, Equatable, Sendable {
@@ -35,8 +40,11 @@ final class HelperSession: @unchecked Sendable {
       let os: String
       let distribution: String?
       let os_name: String?
+      /// "26.1", "24.04" and "macOS 26.1", "Ubuntu 24.04" (newer helpers; the iPhone app's host rows show the label).
+      var os_version: String? = nil
+      var os_label: String? = nil
 
-      enum CodingKeys: String, CodingKey { case host, boot, hostname, os, distribution, os_name }
+      enum CodingKeys: String, CodingKey { case host, boot, hostname, os, distribution, os_name, os_version, os_label }
 
       func encode(to encoder: any Encoder) throws {
         var fields = encoder.container(keyedBy: CodingKeys.self)
@@ -46,11 +54,16 @@ final class HelperSession: @unchecked Sendable {
         try fields.encode(os, forKey: .os)
         try fields.encode(distribution, forKey: .distribution)
         try fields.encode(os_name, forKey: .os_name)
+        // Absent from older helpers' records: written only when the helper sent them.
+        try fields.encodeIfPresent(os_version, forKey: .os_version)
+        try fields.encodeIfPresent(os_label, forKey: .os_label)
       }
     }
 
     enum CodingKeys: String, CodingKey {
-      case version, os, arch, plugins, unavailable_harnesses, ops, account, identity, terminal, process
+      // `features` is written only when the helper accepted some: the Mac names none, so its records never carry it;
+      // the iPhone's launch cache keeps them with the hello.
+      case version, os, arch, plugins, unavailable_harnesses, ops, account, identity, terminal, process, features
       case limit = "frame_limit"
       case chunkKind = "chunk_kind"
       case chunkLimit = "chunk_limit"
@@ -71,9 +84,12 @@ final class HelperSession: @unchecked Sendable {
       try fields.encode(identity, forKey: .identity)
       try fields.encode(terminal, forKey: .terminal)
       try fields.encode(process, forKey: .process)
+      try fields.encodeIfPresent(features, forKey: .features)
     }
   }
 
+  // The Mac app runs its helper as a child process; the iPhone app reaches helpers over SSH channels only.
+  #if canImport(AppKit)
   let connection: HelperConnection
   let info: Info
   let exited: AsyncStream<Int32>
@@ -163,8 +179,10 @@ final class HelperSession: @unchecked Sendable {
       if process.isRunning { process.terminate() }
     }
   }
+  #endif
 }
 
+#if canImport(AppKit)
 /// All local feature families borrow the same helper process and connection; remote
 /// helpers are lent by the SSH connection that owns and closes them.
 actor HelperApp {
@@ -256,3 +274,4 @@ actor HelperApp {
     return await closing?.value
   }
 }
+#endif

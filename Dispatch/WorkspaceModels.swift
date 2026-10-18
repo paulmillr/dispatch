@@ -94,10 +94,12 @@ enum LayoutPreset: String, CaseIterable, Codable {
         case .grid: "4"
         }
     }
+    #if canImport(AppKit)
     /// The preset the Splits number keys (⌃1…4 by default) choose, by physical key.
     static func shortcut(keyCode: UInt16) -> LayoutPreset? {
         ApplicationMenu.digitKeyCodes.firstIndex(of: keyCode).flatMap { index in allCases.first { $0.shortcutKey == String(index + 1) } }
     }
+    #endif
     var count: Int {
         switch self {
         case .single: 1
@@ -384,6 +386,7 @@ struct Space: Identifiable, Equatable, Codable {
 
     enum TabShortcut: Equatable { case number(Int), next, previous }
 
+    #if canImport(AppKit)
     /// What a tab's legend advertises. Without splits, its number. With them the numbers focus panes, so the
     /// focused pane's tabs either side of its selection show ⌘] and ⌘[, landing where cycleTab would (wrapping;
     /// with two tabs the other one is "next").
@@ -400,6 +403,7 @@ struct Space: Identifiable, Equatable, Codable {
         if id == cycle[(index - 1 + cycle.count) % cycle.count] { return .previous }
         return nil
     }
+    #endif
 
     /// Native panes and window groups have stable numbers regardless of which tab is selected
     /// inside them. An ungrouped structured space is one pane.

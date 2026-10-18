@@ -89,6 +89,45 @@ final class SSHIntegrationPolicyTests: XCTestCase {
         XCTAssertTrue(SSHIntegrationFeature.statistics.capabilities.contains("stats.processes"))
     }
 
+    /// Files lists, reads and copies out; writing is Copy files in, on by default and nested under Files: turning
+    /// Files off turns it off, turning it on turns Files on. Saved grants keep what they allowed and stay current.
+    func testCopyFilesInIsItsOwnFeatureUnderFiles() throws {
+        XCTAssertFalse(SSHIntegrationFeature.files.capabilities.contains("file.write"))
+        XCTAssertTrue(SSHIntegrationFeature.filesWrite.capabilities.contains("file.write"))
+        var draft = SSHIntegrationDraft(current: nil, agents: [:])
+        XCTAssertTrue(draft.checked.contains(.filesWrite), "On for new hosts")
+        XCTAssertTrue(draft.grant.capabilities.contains("file.write"))
+        XCTAssertTrue(draft.isDefault)
+        draft.toggle(.filesWrite)
+        XCTAssertTrue(draft.features.contains(.files))
+        XCTAssertFalse(draft.features.contains(.filesWrite))
+        XCTAssertFalse(draft.grant.capabilities.contains("file.write"))
+        XCTAssertTrue(draft.grant.capabilities.contains("file.read"), "Read-only still lists and copies out")
+        XCTAssertFalse(draft.isDefault)
+        draft.toggle(.filesWrite)
+        draft.toggle(.files)
+        XCTAssertFalse(draft.checked.contains(.filesWrite), "Writing needs Files")
+        XCTAssertTrue(draft.features.isDisjoint(with: [.files, .filesWrite, .git]))
+        draft.toggle(.filesWrite)
+        XCTAssertTrue(draft.checked.isSuperset(of: [.files, .filesWrite]), "Copying in turns Files on")
+        XCTAssertTrue(SSHIntegrationGrant(profile: .full).selectedFeatures.contains(.filesWrite))
+
+        func decode(_ capabilities: [String]) throws -> SSHIntegrationGrant {
+            let base = ["host.identity", "shell.lifecycle", "cancel", "events", "input.window", "stats.sample", "stats.ping",
+                        "stats.processes", "file.read", "file.text", "git.read"]
+            let json: [String: Any] = ["profile": "full", "hooks": false, "revision": SSHIntegrationGrant.currentRevision,
+                                       "capabilities": base + capabilities, "features": ["statistics", "files", "git"]]
+            return try JSONDecoder().decode(SSHIntegrationGrant.self, from: JSONSerialization.data(withJSONObject: json))
+        }
+        let writing = try decode(["file.write"])
+        XCTAssertTrue(writing.selectedFeatures.contains(.filesWrite), "Files that wrote keeps writing")
+        XCTAssertTrue(writing.isCurrent)
+        let reading = try decode([])
+        XCTAssertFalse(reading.selectedFeatures.contains(.filesWrite))
+        XCTAssertTrue(reading.isCurrent, "Files from before writing existed is current, not asked again")
+        XCTAssertEqual(SSHIntegrationDraft(current: reading, agents: [:]).checked.contains(.filesWrite), false)
+    }
+
     func testIndividualFeaturesRoundTripAndNeverEnableUnselectedOperations() throws {
         for mask in 0..<(1 << SSHIntegrationFeature.allCases.count) {
             let selected = Set(SSHIntegrationFeature.allCases.enumerated().compactMap { index, feature in
@@ -102,6 +141,7 @@ final class SSHIntegrationPolicyTests: XCTestCase {
             XCTAssertEqual(grant.capabilities.contains("herdr.start"), selected.contains(.herdr))
             XCTAssertEqual(grant.capabilities.contains("agent.inspect"), selected.contains(.chat))
             XCTAssertEqual(grant.capabilities.contains("agent.side"), selected.contains(.chat))
+            XCTAssertEqual(grant.capabilities.contains("file.write"), selected.contains(.filesWrite))
             XCTAssertEqual(grant.hooks, selected.contains(.hooks))
             let reduced = SSHIntegrationGrant(profile: .full, hooks: true).reduced(to: grant)
             XCTAssertEqual(reduced, grant)

@@ -90,6 +90,17 @@ enum ChatFont: String, Codable, CaseIterable {
     }
 }
 
+/// What opening a file in files mode does. The stored value is the case name, so titles can change freely.
+enum FilesOpenWith: String, Codable, CaseIterable {
+    case editorInTab
+
+    var title: String {
+        switch self {
+        case .editorInTab: "$EDITOR in this tab"
+        }
+    }
+}
+
 struct Preferences: Codable, Equatable {
     var spaceOrder = SpaceOrder.flat
     /// Tabs follow the agent's conversation, a running program's title, then the folder.
@@ -138,6 +149,9 @@ struct Preferences: Codable, Equatable {
     var keyGroups = KeyGroups()
     var enableDiagnostics = false
     var hideSingleSpace = true
+    /// Tabs only: no tab strips, and the sidebar lists every tab (a tmux or herdr space's windows) instead of spaces,
+    /// with "+ tab" in place of "+ space". Spaces still exist underneath (⌘N, splits, layouts); they are just not shown.
+    var tabsOnly = false
     /// Per multiplexer (the helper's name): open its sessions started in terminals as spaces.
     var spaces: [String: Bool] = [:]
     /// Per multiplexer: close the launching tab once its client attaches. Settings no longer shows it, so it stays on
@@ -167,6 +181,15 @@ struct Preferences: Codable, Equatable {
     /// Nautical only: a ship's double bell, instead of the attention sound, when an agent finishes in the background.
     var shipsBell = false
     var startingDirectory = System.home.path
+    /// Files mode: copy in from Finder, out to Finder, or onto a terminal as paths.
+    var filesDragAndDrop = true
+    /// Files mode opens at the tab's shell directory and follows cd until the user navigates.
+    var filesFollowShell = true
+    /// Each tab's ⇧⌘. overrides this for that tab only (FilesSession.showHidden).
+    var filesShowHidden = false
+    var filesOpenWith = FilesOpenWith.editorInTab
+    /// Off keeps both files instead of asking when a copy would overwrite.
+    var filesAskBeforeReplacing = true
 
     func resolvedTheme(systemIsDark: Bool) -> String {
         let selected = appTheme.isDark(systemIsDark: systemIsDark) ? theme : lightTheme
@@ -189,11 +212,12 @@ struct Preferences: Codable, Equatable {
         case enableHostDetection, autoGrantNewHosts, allowRemoteClipboardWrites, autoReconnectSSH, attentionNotifications, attentionDockBadge, attentionSound, shipsBell
         case spaceOrder, automaticTabNames, fontFamily, chatFont, fontSize, appTheme, theme, lightTheme, optionAsAlt
         case prefixKeys, backendPrefixKeys, keyGroups
-        case hideSingleSpace, startingDirectory, rememberHosts, restoreTerminalOutput
+        case hideSingleSpace, tabsOnly, startingDirectory, rememberHosts, restoreTerminalOutput
         case enableDiagnostics
         case sidebarStyle, showGitBranches, liquidGlass, hostColors, showHostColors
         case improveTextContrast
         case spaces, closeLaunching, enableKittyGraphics
+        case filesDragAndDrop, filesFollowShell, filesShowHidden, filesOpenWith, filesAskBeforeReplacing
     }
 
     private enum LegacyCodingKeys: String, CodingKey {
@@ -252,6 +276,7 @@ struct Preferences: Codable, Equatable {
         restoreTerminalOutput = try fields.decodeIfPresent(Bool.self, forKey: .restoreTerminalOutput) ?? restoreTerminalOutput
         enableDiagnostics = try fields.decodeIfPresent(Bool.self, forKey: .enableDiagnostics) ?? false
         hideSingleSpace = try fields.decodeIfPresent(Bool.self, forKey: .hideSingleSpace) ?? hideSingleSpace
+        tabsOnly = try fields.decodeIfPresent(Bool.self, forKey: .tabsOnly) ?? tabsOnly
         spaces = try fields.decodeIfPresent([String: Bool].self, forKey: .spaces) ?? [:]
         closeLaunching = try fields.decodeIfPresent([String: Bool].self, forKey: .closeLaunching) ?? [:]
         enableKittyGraphics = try fields.decodeIfPresent(Bool.self, forKey: .enableKittyGraphics) ?? enableKittyGraphics
@@ -263,6 +288,12 @@ struct Preferences: Codable, Equatable {
             if closeLaunching[name] == nil { closeLaunching[on: name] = try legacy.decodeIfPresent(Bool.self, forKey: close) ?? autoClose }
         }
         startingDirectory = try fields.decodeIfPresent(String.self, forKey: .startingDirectory) ?? startingDirectory
+        filesDragAndDrop = try fields.decodeIfPresent(Bool.self, forKey: .filesDragAndDrop) ?? filesDragAndDrop
+        filesFollowShell = try fields.decodeIfPresent(Bool.self, forKey: .filesFollowShell) ?? filesFollowShell
+        filesShowHidden = try fields.decodeIfPresent(Bool.self, forKey: .filesShowHidden) ?? filesShowHidden
+        // A choice a later build no longer offers falls back without discarding the other settings.
+        filesOpenWith = try fields.decodeIfPresent(String.self, forKey: .filesOpenWith).flatMap(FilesOpenWith.init(rawValue:)) ?? filesOpenWith
+        filesAskBeforeReplacing = try fields.decodeIfPresent(Bool.self, forKey: .filesAskBeforeReplacing) ?? filesAskBeforeReplacing
     }
 }
 

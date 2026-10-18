@@ -35,6 +35,7 @@ Dispatch is a normal terminal. The goal is to improve user's workflow, not to ch
 Extra features:
 
 - Spaces: tree view, reopen on launch, restore history, git branch titles, compact space list
+- Tabs only (Settings › Appearance): no tab strips; the sidebar lists every tab and "+ tab" replaces "+ space"
 - Check out sidebar footer: clicking on a host brings up stats widget
 - Auto-improve text contrast on light themes
 - OSC-7501 support

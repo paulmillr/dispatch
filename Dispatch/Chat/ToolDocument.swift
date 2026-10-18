@@ -146,6 +146,7 @@ struct ToolDocument: Identifiable, Hashable, Sendable {
             return nil
         }
     }
+    #if canImport(AppKit)
     func source(in directory: String, endpoint: HelperWorkspace.Endpoint = .local) async throws -> String {
         let base = workingDirectory.map {
             $0.hasPrefix("/") ? $0 : URL(fileURLWithPath: directory).appendingPathComponent($0).path
@@ -159,6 +160,7 @@ struct ToolDocument: Identifiable, Hashable, Sendable {
             throw SourceError.unsupported
         }
     }
+    #endif
     enum SourceError: LocalizedError {
         case unsupported
         var errorDescription: String? { "Source preview supports UTF-8 text files up to 2 MB." }

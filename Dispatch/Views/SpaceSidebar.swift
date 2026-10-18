@@ -10,6 +10,13 @@ struct SpaceSidebar: View {
     }
     private var sidebarFont: Font { AppFont.ui(size: metrics.nameSize) }
     private var sidebarDetailFont: Font { AppFont.ui(size: metrics.detailSize) }
+    /// Tabs only (Preferences.tabsOnly): the rows are tabs (SidebarTab), not spaces.
+    private var tabsOnly: Bool { workspace.tabsOnly }
+    /// The selected row: the current space, or tabs only's active tab.
+    private var selectedRow: UUID? { tabsOnly ? workspace.selectedSidebarTab : workspace.selectedSpace }
+    private func select(_ row: UUID) {
+        if tabsOnly { workspace.selectSidebarTab(row) } else { workspace.selectSpace(row) }
+    }
     /// The footer's host icons are the app's host icon size, like the tab bar's host button in a cell as tall.
     private var footerIconSize: CGFloat { typography.hostIconSize }
     private var footerCellHeight: CGFloat {
@@ -64,55 +71,84 @@ struct SpaceSidebar: View {
         if next != rowPlacements { rowPlacements = next }
     }
 
-    private func hiddenSpaces(in order: [Space]) -> [Space] {
+    /// The listed rows (spaces or tabs, by id) the viewport hides.
+    private func hiddenRows(in order: [UUID]) -> [UUID] {
         _ = rowPlacements
         // The overflow bar changes the scroll safe area. It must not keep itself alive
         // through shifted row frames after the complete rows stack fits again.
         guard viewportHeight > 0, rowsHeight > viewportHeight else { return [] }
         return order.filter {
-            guard let placement = placement(of: $0.id) else { return true }
+            guard let placement = placement(of: $0) else { return true }
             return placement.above || placement.below
         }
     }
 
-    private func spacesBelowViewport(in order: [Space]) -> [Space] {
+    private func rowsBelowViewport(in order: [UUID]) -> [UUID] {
         guard viewportHeight > 0, rowsHeight > viewportHeight else { return [] }
-        let lastVisible = order.lastIndex { space in placement(of: space.id)?.showing ?? false } ?? -1
-        return order.enumerated().compactMap { index, space in
-            if let placement = placement(of: space.id) { return placement.below ? space : nil }
-            return index > lastVisible ? space : nil
+        let lastVisible = order.lastIndex { id in placement(of: id)?.showing ?? false } ?? -1
+        return order.enumerated().compactMap { index, id in
+            if let placement = placement(of: id) { return placement.below ? id : nil }
+            return index > lastVisible ? id : nil
         }
     }
 
-    private var attentionSpaceIDs: Set<UUID> {
-        Set(workspace.spaces.filter { space in
-            space.tabs.contains { tab in
-                tab.surfaceIDs.contains { TerminalRuntime.shared.chat.sessions[$0]?.approvals.contains(where: \.pending) == true
-                    || TerminalRuntime.shared.programs.visible($0).contains { $0.state == .blocked } }
-            }
-        }.map(\.id))
+    /// Each row's terminals: a space's tabs', or tabs only's tab's.
+    private var rowSurfaces: [UUID: [UUID]] {
+        if tabsOnly { return Dictionary(workspace.sidebarTabs.map { ($0.id, $0.surfaceIDs) }, uniquingKeysWith: { first, _ in first }) }
+        return Dictionary(workspace.spaces.map { ($0.id, $0.tabs.flatMap(\.surfaceIDs)) }, uniquingKeysWith: { first, _ in first })
     }
 
-    /// Spaces with a finished, unseen reply: the tile's green ●.
-    private var readySpaceIDs: Set<UUID> {
-        Set(workspace.spaces.filter { space in
-            space.tabs.flatMap(\.surfaceIDs).contains { id in
+    /// Rows with an agent waiting for approval or a blocked program.
+    private var attentionIDs: Set<UUID> {
+        Set(rowSurfaces.filter { _, surfaces in
+            surfaces.contains { TerminalRuntime.shared.chat.sessions[$0]?.approvals.contains(where: \.pending) == true
+                || TerminalRuntime.shared.programs.visible($0).contains { $0.state == .blocked } }
+        }.keys)
+    }
+
+    /// Rows with a finished, unseen reply: the tile's green ●.
+    private var readyIDs: Set<UUID> {
+        Set(rowSurfaces.filter { _, surfaces in
+            surfaces.contains { id in
                 TerminalRuntime.shared.chat.sessions[id].map { $0.hasNewMessages && !($0.active && $0.busy) } == true
                     || TerminalRuntime.shared.programs.visible(id).contains(where: \.finished)
             }
-        }.map(\.id))
+        }.keys)
+    }
+
+    /// A listed tab's name: the window's, or the tab's live label (its agent's conversation, program or folder).
+    fileprivate func label(_ tab: SidebarTab) -> String {
+        let runtime = TerminalRuntime.shared, automatic = settings.values.automaticTabNames
+        if tab.window {
+            guard let window = workspace.spaces.lazy.flatMap(\.containers).first(where: { $0.id == tab.id }) else { return "Terminal" }
+            return runtime.label(for: window, automatic: automatic)
+        }
+        guard let live = workspace.liveTab(tab.id) else { return "Terminal" }
+        return runtime.label(for: live, automatic: automatic)
+    }
+
+    /// Tabs only's rows matching the search: by the tab's name, or its host's name or address.
+    private func listedTabs(_ query: String) -> [SidebarTab] {
+        let tabs = workspace.sidebarTabs
+        guard !query.isEmpty else { return tabs }
+        return tabs.filter { tab in
+            let host = workspace.hosts.record(tab.host)
+            return label(tab).localizedStandardContains(query) || host.name.localizedStandardContains(query)
+                || host.details.localizedStandardContains(query)
+        }
     }
 
     var body: some View {
-        let attention = attentionSpaceIDs
+        let attention = attentionIDs
         let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        let listed = workspace.spaces(matching: query)
+        let listed = tabsOnly ? [] : workspace.spaces(matching: query)
+        let tabs = tabsOnly ? listedTabs(query) : []
         VStack(spacing: 0) {
             VStack(spacing: 0) {
                 // Outside full screen the window row carries the header's buttons. Search opens above the footer.
                 if windowControls { windowRow } else { header }
-                if harbour { harbourList(listed: listed, attention: attention) }
-                else { spaceList(listed: listed, attention: attention) }
+                if harbour { harbourList(listed: listed, tabs: tabs, attention: attention) }
+                else { spaceList(listed: listed, tabs: tabs, attention: attention) }
             }
             .layoutPriority(1)
             VStack(spacing: 0) {
@@ -158,16 +194,16 @@ struct SpaceSidebar: View {
     private var overflowBar: Bool {
         if #available(macOS 26, *) { return glass } else { return false }
     }
-    /// The flat order's "+ local" and "+ space" on one row after the last space, on Liquid Glass two capsules close
-    /// enough that their glass blends. With only the local host, "+ local" would repeat "+ space", so "+ space" stands
-    /// alone in the left half rather than filling the row.
+    /// The flat order's "+ local" and "+ space" (tabs only: "+ tab") on one row after the last row, on Liquid Glass two
+    /// capsules close enough that their glass blends. With only the local host, "+ local" would repeat "+ space", so
+    /// "+ space" stands alone in the left half rather than filling the row.
     private var newSpaceButtons: some View {
         let remote = workspace.liveHosts.contains(where: { $0.id != .local })
         return HStack(spacing: glass ? 4 : 6) {
             if remote {
-                NewSpaceButton(workspace: workspace, host: workspace.hosts.record(.local), metrics: metrics)
+                NewSpaceButton(workspace: workspace, host: workspace.hosts.record(.local), metrics: metrics, tabs: tabsOnly)
             }
-            NewSpaceButton(workspace: workspace, metrics: metrics)
+            NewSpaceButton(workspace: workspace, metrics: metrics, tabs: tabsOnly)
             if !remote {
                 Color.clear.frame(maxWidth: .infinity, maxHeight: 0).accessibilityHidden(true)
             }
@@ -205,14 +241,15 @@ struct SpaceSidebar: View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass").font(.system(size: typography.size(offset: -2)))
                 .foregroundStyle(Chrome.palette.detail).accessibilityHidden(true)
-            TextField("Search spaces…",
+            let prompt = tabsOnly ? "Search tabs…" : "Search spaces…"
+            TextField(prompt,
                       text: Binding(get: { searchQuery }, set: { setSearchQuery($0) }),
-                      prompt: Text("Search spaces…").foregroundColor(Chrome.palette.detail))
+                      prompt: Text(prompt).foregroundColor(Chrome.palette.detail))
                 .textFieldStyle(.plain)
                 .foregroundStyle(searchQuery.isEmpty ? Chrome.palette.detail : Chrome.ink)
                 .focused($searchFocused)
-                .help("Search spaces · ⌘P")
-                .accessibilityLabel("Search spaces")
+                .help((tabsOnly ? "Search tabs" : "Search spaces") + " · ⌘P")
+                .accessibilityLabel(tabsOnly ? "Search tabs" : "Search spaces")
                 .accessibilityIdentifier("sidebar-space-search")
                 // Escape clears the query first, then closes search.
                 .onExitCommand {
@@ -326,23 +363,49 @@ struct SpaceSidebar: View {
         .accessibilityIdentifier("sidebar-group-by-host")
     }
 
+    /// Below the last row: a dropped space goes last (in its host's group); tabs only puts a dropped tab after the
+    /// last tab, or a window after the last window.
     private var trailingDrop: some View {
-        LocalReorder(edge: .pane, accepts: { if case .space = $0 { return true }; return false }) { item, _ in
-            guard case .space(let id) = item,
-                  let source = workspace.spaces.first(where: { $0.id == id }),
-                  let last = workspace.presentationSpaces.last(where: { workspace.spaceOrder != .tree || $0.hostID == source.hostID }) else { return }
-            workspace.reorderSpace(id, relativeTo: last.id, after: true)
+        LocalReorder(edge: .pane, accepts: { item in
+            switch item {
+            case .space: return !tabsOnly
+            case .tab(let id):
+                guard tabsOnly, let last = workspace.sidebarTabs.last(where: { !$0.window }), let pane = last.pane else { return false }
+                return workspace.canMoveTab(id, to: pane)
+            case .window(let id):
+                guard tabsOnly, let last = workspace.sidebarTabs.last(where: \.window) else { return false }
+                return workspace.canMoveWindow(id, beside: last.id)
+            case .host, .queued: return false
+            }
+        }) { item, _ in
+            switch item {
+            case .space(let id):
+                guard let source = workspace.spaces.first(where: { $0.id == id }),
+                      let last = workspace.presentationSpaces.last(where: { workspace.spaceOrder != .tree || $0.hostID == source.hostID }) else { return }
+                workspace.reorderSpace(id, relativeTo: last.id, after: true)
+            case .tab(let id):
+                guard let last = workspace.sidebarTabs.last(where: { !$0.window }), let pane = last.pane else { return }
+                workspace.moveTab(id, to: pane, relativeTo: last.id, after: true)
+            case .window(let id):
+                guard let last = workspace.sidebarTabs.last(where: \.window) else { return }
+                workspace.moveContainer(id, beside: last.id, edge: nil, after: true)
+            case .host, .queued: break
+            }
         }
     }
 
-    private func spaceList(listed: [Space], attention: Set<UUID>) -> some View {
-        let hidden = hiddenSpaces(in: listed)
-        let below = spacesBelowViewport(in: listed)
+    private func spaceList(listed: [Space], tabs: [SidebarTab], attention: Set<UUID>) -> some View {
+        let order = tabsOnly ? tabs.map(\.id) : listed.map(\.id)
+        let hidden = hiddenRows(in: order)
+        let below = rowsBelowViewport(in: order)
+        // The rows' order, with each one's host: a move between hosts or a reorder scrolls the selection back into view.
+        let arrangement = tabsOnly ? workspace.sidebarTabs.map { "\($0.host.rawValue):\($0.id)" }
+            : workspace.presentationSpaces.map { "\($0.hostID.rawValue):\($0.id)" }
         return ScrollViewReader { scroll in
             VStack(spacing: 0) {
                 // The rows stretch to the viewport for the trailing drop target.
                 GeometryReader { area in
-                    rowsScroll(listed: listed, attention: attention, hidden: hidden, below: below, scroll: scroll,
+                    rowsScroll(listed: listed, tabs: tabs, attention: attention, hidden: hidden, below: below, scroll: scroll,
                                minHeight: area.size.height)
                         .onAppear { viewportHeight = area.size.height }
                         .onChange(of: area.size.height) { _, height in viewportHeight = height }
@@ -351,21 +414,21 @@ struct SpaceSidebar: View {
                     overflowButton(hidden: hidden, below: below, attention: attention, scroll: scroll)
                 }
             }
-            .onChange(of: workspace.selectedSpace) { _, id in
+            .onChange(of: selectedRow) { _, id in
                 if let id { DispatchQueue.main.async { scroll.scrollTo(id) } }
             }
-            .onChange(of: workspace.presentationSpaces.map { "\($0.hostID.rawValue):\($0.id)" }) { _, _ in
-                if let id = workspace.selectedSpace { DispatchQueue.main.async { scroll.scrollTo(id) } }
+            .onChange(of: arrangement) { _, _ in
+                if let id = selectedRow { DispatchQueue.main.async { scroll.scrollTo(id) } }
             }
-            .onAppear { if let id = workspace.selectedSpace { scroll.scrollTo(id) } }
+            .onAppear { if let id = selectedRow { scroll.scrollTo(id) } }
         }
     }
 
-    private func rowsScroll(listed: [Space], attention: Set<UUID>, hidden: [Space], below: [Space], scroll: ScrollViewProxy,
-                            minHeight: CGFloat) -> some View {
+    private func rowsScroll(listed: [Space], tabs: [SidebarTab], attention: Set<UUID>, hidden: [UUID], below: [UUID],
+                            scroll: ScrollViewProxy, minHeight: CGFloat) -> some View {
         ScrollView {
             VStack(spacing: 0) {
-                spaceRows(listed: listed, attention: attention)
+                spaceRows(listed: listed, tabs: tabs, attention: attention)
                     .background(GeometryReader { rows in
                         Color.clear.onAppear { measureRows(rows.size.height) }
                             .onChange(of: rows.size.height) { _, height in measureRows(height) }
@@ -391,30 +454,52 @@ struct SpaceSidebar: View {
                                     .onDisappear { overflowBarHeight = 0 }))
     }
 
-    private func spaceRows(listed: [Space], attention: Set<UUID>) -> some View {
-        let order = workspace.presentationSpaces
+    /// The rows: spaces, or tabs only's tabs, in one list or grouped under their hosts.
+    private func spaceRows(listed: [Space], tabs: [SidebarTab], attention: Set<UUID>) -> some View {
+        let tree = settings.values.spaceOrder == .tree
         let groups = Dictionary(grouping: listed, by: \.hostID)
-        // Unbound spaces show no shortcut.
-        let shortcuts = StripSpaceMenu.shortcuts(order, keys: settings.values.keyGroups)
-        return VStack(spacing: settings.values.spaceOrder == .tree ? metrics.groupSpacing : metrics.rowSpacing) {
-            if settings.values.spaceOrder == .tree {
+        let tabGroups = Dictionary(grouping: tabs, by: \.host)
+        // Unbound spaces (tabs) show no shortcut: the Spaces digits jump to spaces, the Tabs digits through the list.
+        let shortcuts = tabsOnly ? StripSpaceMenu.shortcuts(workspace.sidebarTabs.map(\.id), keys: settings.values.keyGroups, group: \.tabs)
+            : StripSpaceMenu.shortcuts(workspace.presentationSpaces, keys: settings.values.keyGroups)
+        return VStack(spacing: tree ? metrics.groupSpacing : metrics.rowSpacing) {
+            if tree {
                 ForEach(workspace.hosts.ordered(Set(workspace.liveHosts.map(\.id)).union(workspace.detached.map(\.host)))) { host in
-                    let spaces = groups[host.id] ?? []
-                    if !spaces.isEmpty || !detachedEntries(host.id).isEmpty || (host.id == .local && searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) {
-                        hostGroup(host, spaces: spaces, attention: attention, shortcuts: shortcuts)
+                    let spaces = groups[host.id] ?? [], hostTabs = tabGroups[host.id] ?? []
+                    if !spaces.isEmpty || !hostTabs.isEmpty || !detachedEntries(host.id).isEmpty || (host.id == .local && searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) {
+                        hostGroup(host, empty: spaces.isEmpty && hostTabs.isEmpty) {
+                            if tabsOnly {
+                                ForEach(hostTabs) { tab in
+                                    tabRow(tab, pending: attention.contains(tab.id), shortcut: shortcuts[tab.id] ?? "")
+                                }
+                            } else {
+                                ForEach(spaces) { space in
+                                    spaceRow(space, pending: attention.contains(space.id), shortcut: shortcuts[space.id] ?? "")
+                                }
+                            }
+                        }
                     }
                 }
             } else {
-                ForEach(listed) { space in
-                    spaceRow(space, pending: attention.contains(space.id), shortcut: shortcuts[space.id] ?? "")
+                if tabsOnly {
+                    ForEach(tabs) { tab in
+                        tabRow(tab, pending: attention.contains(tab.id), shortcut: shortcuts[tab.id] ?? "")
+                    }
+                } else {
+                    ForEach(listed) { space in
+                        spaceRow(space, pending: attention.contains(space.id), shortcut: shortcuts[space.id] ?? "")
+                    }
                 }
                 newSpaceButtons
                 flatDetachedSection
             }
-            if listed.isEmpty && matchingDetachedEntries.isEmpty { Text("No matching spaces").font(sidebarDetailFont).foregroundStyle(Chrome.muted).padding(10) }
+            if listed.isEmpty && tabs.isEmpty && matchingDetachedEntries.isEmpty {
+                Text(tabsOnly ? "No matching tabs" : "No matching spaces").font(sidebarDetailFont).foregroundStyle(Chrome.muted).padding(10)
+            }
         }
-        .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: InterfaceMotion.spaceSwitchDuration), value: workspace.selectedSpace)
-        .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: 0.2), value: listed.map { "\($0.id):\($0.hostID.rawValue)" })
+        .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: InterfaceMotion.spaceSwitchDuration), value: selectedRow)
+        .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: 0.2),
+                   value: tabsOnly ? tabs.map { "\($0.id):\($0.host.rawValue)" } : listed.map { "\($0.id):\($0.hostID.rawValue)" })
     }
 
     /// A tree group's heading: the host's name in title case, its connection state while not connected after it in a
@@ -475,13 +560,15 @@ struct SpaceSidebar: View {
         }
     }
 
-    private func hostGroup(_ host: HostRecord, spaces: [Space], attention: Set<UUID>, shortcuts: [UUID: String]) -> some View {
+    /// A host's group: its heading (or Large's chip) with the group's new-space button, then `rows` (its spaces, or
+    /// tabs only's tabs there) and its detached work. `empty`: no rows to click through to the heading's button.
+    private func hostGroup<Rows: View>(_ host: HostRecord, empty: Bool, @ViewBuilder rows: () -> Rows) -> some View {
         let tint = host.tint?.foreground ?? Chrome.palette.secondary
         let arriving = workspace.hostMoveMotion.arrivals.values.contains(host.id)
         // A heading's plus shows while its header is under the pointer, when the group has no spaces to click through
         // to it, and always for VoiceOver; Large's chip always ends in it, the chip's own control.
-        let revealed = metrics.cards || hoveredHost == host.id || spaces.isEmpty || NSWorkspace.shared.isVoiceOverEnabled
-        let newSpace = NewSpaceButton(workspace: workspace, host: host, metrics: metrics, grouped: true, revealed: revealed)
+        let revealed = metrics.cards || hoveredHost == host.id || empty || NSWorkspace.shared.isVoiceOverEnabled
+        let newSpace = NewSpaceButton(workspace: workspace, host: host, metrics: metrics, grouped: true, revealed: revealed, tabs: tabsOnly)
             .fixedSize()
         return LazyVStack(spacing: metrics.rowSpacing) {
             Group {
@@ -506,9 +593,7 @@ struct SpaceSidebar: View {
             }
             // Compact rows have no gaps; keep the header off the first row.
             .padding(.bottom, metrics.large ? 0 : 2)
-            ForEach(spaces) { space in
-                spaceRow(space, pending: attention.contains(space.id), shortcut: shortcuts[space.id] ?? "")
-            }
+            rows()
             detachedSection(host.id)
         }
         // A rule down a compact group's leading edge marks its host; the icons style marks every row with its icon,
@@ -667,6 +752,11 @@ struct SpaceSidebar: View {
                         shortcut: shortcut, branch: branches[space.id], selection: selection).equatable()
     }
 
+    private func tabRow(_ tab: SidebarTab, pending: Bool, shortcut: String) -> some View {
+        SidebarTabRow(sidebar: self, tab: tab, selected: workspace.selectedSidebarTab == tab.id, pending: pending,
+                      shortcut: shortcut, branch: branches[tab.id], selection: selection).equatable()
+    }
+
     /// The body of `SpaceSidebarRow`. It reads selection and branch only through its arguments,
     /// so a space switch re-renders the two rows whose selection changed, not every row.
     fileprivate func rowContent(_ space: Space, selected: Bool, pending: Bool, shortcut: String, branch: String?, selection: Namespace.ID) -> some View {
@@ -675,7 +765,7 @@ struct SpaceSidebar: View {
         return Button { workspace.selectSpace(space.id) } label: {
             let surfaces = space.tabs.flatMap(\.surfaceIDs)
             let mixed = Set(surfaces.compactMap { workspace.hosts.terminals[$0]?.host }).subtracting([space.hostID])
-            SidebarSpaceTile(space: space, host: workspace.hosts.record(space.hostID),
+            SidebarSpaceTile(entry: SidebarEntry(space: space), host: workspace.hosts.record(space.hostID),
                              mixedHost: workspace.hosts.ordered(mixed).first(where: { $0.id != .local }),
                              grouped: !flat, selected: selected, pending: pending, shortcut: shortcut,
                              connecting: surfaces.contains { workspace.hostMoveMotion.connecting.contains($0) },
@@ -720,6 +810,71 @@ struct SpaceSidebar: View {
         })
     }
 
+    /// The body of `SidebarTabRow`: a tab (or a tmux or herdr window) drawn as a space's row is, named by its live
+    /// label, with its host, agent activity, branch and ⌘ digit. Tabs reorder among tabs and windows among windows;
+    /// a tab dropped on another lands beside it, in that tab's pane, moving between spaces if it must.
+    fileprivate func tabRowContent(_ tab: SidebarTab, selected: Bool, pending: Bool, shortcut: String, branch: String?,
+                                   selection: Namespace.ID) -> some View {
+        let flat = settings.values.spaceOrder != .tree
+        let host = workspace.hosts.record(tab.host)
+        let owner = workspace.spaces.first { $0.id == tab.space }
+        // The terminal that names a window's branch and hover card: its focused pane.
+        let terminal: TerminalTab? = tab.window
+            ? owner?.containers.first { $0.id == tab.id }?.focusedTerminal.map { workspace.liveTab($0.id) ?? $0 }
+            : workspace.liveTab(tab.id)
+        let name = label(tab)
+        let hover = terminal.map { SpaceHoverDetails.make(tab: $0, host: host, runtime: .shared, title: tab.window ? name : nil) }
+        return Button { workspace.selectSidebarTab(tab.id) } label: {
+            SidebarSpaceTile(entry: SidebarEntry(id: tab.id, name: name, surfaceIDs: tab.surfaceIDs), host: host,
+                             mixedHost: nil, grouped: !flat, selected: selected, pending: pending, shortcut: shortcut,
+                             connecting: tab.surfaceIDs.contains { workspace.hostMoveMotion.connecting.contains($0) },
+                             branch: branch, showBranch: settings.values.showGitBranches, metrics: metrics, selection: selection)
+        }
+        .background {
+            if let owner, let terminal { SpaceBranchObserver(space: owner, tab: terminal, enabled: settings.values.showGitBranches) }
+        }
+        .accessibilityHint(hover?.summary ?? "")
+        .accessibilityIdentifier("sidebar-tab-\(tab.id)")
+        .overlay {
+            LocalReorder(item: tab.window ? .window(tab.id) : .tab(tab.id), edge: .vertical, spaceHover: hover,
+                         hoverFontSize: metrics.nameSize, dragLabel: name,
+                         select: { workspace.selectSidebarTab(tab.id) }, accepts: { item in
+                switch item {
+                case .tab(let id): return !tab.window && tab.pane.map { workspace.canMoveTab(id, to: $0) } == true
+                case .window(let id): return tab.window && workspace.canMoveWindow(id, beside: tab.id)
+                case .space, .host, .queued: return false
+                }
+            }) { item, after in
+                switch item {
+                case .tab(let id): if let pane = tab.pane { workspace.moveTab(id, to: pane, relativeTo: tab.id, after: after) }
+                case .window(let id): workspace.moveContainer(id, beside: tab.id, edge: nil, after: after)
+                case .space, .host, .queued: break
+                }
+            }
+        }
+        .contextMenu { tabMenu(tab, label: name) }
+        .id(tab.id)
+        .modifier(HostMoveRow(motion: workspace.hostMoveMotion, id: tab.id))
+        .background(GeometryReader { proxy in
+            Color.clear.preference(key: SpaceRowFrames.self, value: [tab.id: proxy.frame(in: .named("space-list"))])
+        })
+    }
+
+    /// A listed tab's actions, as its strip offered them: a window detaches or terminates, a tab closes.
+    @ViewBuilder private func tabMenu(_ tab: SidebarTab, label: String) -> some View {
+        Button("Rename…") {
+            controller.rename(title: "Rename tab", value: label) { name in
+                if tab.window { workspace.renameWindow(tab.id, to: name) } else { workspace.updateTab(tab.id, customTitle: name) }
+            }
+        }
+        if tab.window {
+            Button("Detach") { controller.detachWindow(tab.id) }
+            Button("Terminate…") { controller.terminateWindow(tab.id) }
+        } else {
+            Button("Close Tab") { controller.closeTab(tab.id) }
+        }
+    }
+
     /// Nautical names the actions at sea, each with its plain name beside it so none surprises.
     @ViewBuilder private func spaceMenu(_ space: Space) -> some View {
         Button(harbour ? "Rename Vessel…" : "Rename…") {
@@ -750,42 +905,59 @@ struct SpaceSidebar: View {
 
     /// The radar plot over the traffic list. The plot takes the sidebar's width, up to about half its height, so the
     /// list keeps room for its rows.
-    private func harbourList(listed: [Space], attention: Set<UUID>) -> some View {
-        // Each space's key is its number, the first digit of its tabs' channels.
-        let numbers = Dictionary(uniqueKeysWithValues: workspace.presentationSpaces.enumerated().map { ($1.id, "\($0 + 1)") })
-        let vessels = listed.map {
+    private func harbourList(listed: [Space], tabs: [SidebarTab], attention: Set<UUID>) -> some View {
+        // Each space's (tabs only: tab's) key is its number, the first digit of its tabs' channels.
+        let order = tabsOnly ? workspace.sidebarTabs.map(\.id) : workspace.presentationSpaces.map(\.id)
+        let numbers = Dictionary(order.enumerated().map { ($1, "\($0 + 1)") }, uniquingKeysWith: { first, _ in first })
+        let heading = settings.values.showGitBranches
+        let vessels = tabsOnly ? tabs.map { tab in
+            HarbourVessel.make(id: tab.id, name: label(tab), host: workspace.hosts.record(tab.host), surfaceIDs: tab.surfaceIDs,
+                               selected: workspace.selectedSidebarTab == tab.id, pending: attention.contains(tab.id),
+                               shortcut: numbers[tab.id] ?? "", heading: heading ? branches[tab.id] : nil)
+        } : listed.map {
             HarbourVessel.make($0, workspace: workspace, selected: workspace.selectedSpace == $0.id,
                                pending: attention.contains($0.id), shortcut: numbers[$0.id] ?? "",
-                               heading: settings.values.showGitBranches ? branches[$0.id] : nil)
+                               heading: heading ? branches[$0.id] : nil)
         }
         return GeometryReader { area in
             VStack(spacing: 0) {
-                HarbourRadar(vessels: vessels, reduceMotion: reduceMotion) { workspace.selectSpace($0) }
+                HarbourRadar(vessels: vessels, reduceMotion: reduceMotion) { select($0) }
                     .equatable()
                     .frame(width: max(0, min(area.size.width - 24, area.size.height * 0.55)),
                            height: max(0, min(area.size.width - 24, area.size.height * 0.55)))
                     .padding(.top, 4)
                 HarbourTrafficList(vessels: vessels, typography: typography,
-                                   select: { workspace.selectSpace($0) },
-                                   menu: { id in AnyView(Group { if let space = listed.first(where: { $0.id == id }) { spaceMenu(space) } }) })
+                                   select: { select($0) },
+                                   menu: { id in AnyView(Group {
+                                       if let space = listed.first(where: { $0.id == id }) { spaceMenu(space) }
+                                       if let tab = tabs.first(where: { $0.id == id }) { tabMenu(tab, label: label(tab)) }
+                                   }) })
                     .padding(.horizontal, glass ? Self.glassInset + Self.glassRowInset : 10).padding(.top, 10)
             }
             .frame(width: area.size.width, height: area.size.height, alignment: .top)
         }
-        // Each space's branch, read as the regular rows read it, for its heading.
-        .background { ForEach(listed) { SpaceBranchObserver(space: $0, enabled: settings.values.showGitBranches) } }
+        // Each row's branch, read as the regular rows read it, for its heading.
+        .background {
+            ForEach(listed) { SpaceBranchObserver(space: $0, enabled: heading) }
+            ForEach(tabs) { tab in
+                if let owner = workspace.spaces.first(where: { $0.id == tab.space }),
+                   let terminal = tab.window ? owner.containers.first(where: { $0.id == tab.id })?.focusedTerminal : owner.tabs.first(where: { $0.id == tab.id }) {
+                    SpaceBranchObserver(space: owner, tab: terminal, enabled: heading)
+                }
+            }
+        }
     }
 
-    private func overflowButton(hidden: [Space], below: [Space], attention: Set<UUID>, scroll: ScrollViewProxy) -> some View {
-        let pending = hidden.filter { attention.contains($0.id) }
-        let ready = readySpaceIDs
-        let finished = hidden.filter { ready.contains($0.id) && !attention.contains($0.id) }
+    private func overflowButton(hidden: [UUID], below: [UUID], attention: Set<UUID>, scroll: ScrollViewProxy) -> some View {
+        let pending = hidden.filter { attention.contains($0) }
+        let ready = readyIDs
+        let finished = hidden.filter { ready.contains($0) && !attention.contains($0) }
         return Button {
             if let target = pending.first ?? finished.first {
-                workspace.selectSpace(target.id)
-                scroll.scrollTo(target.id, anchor: .center)
+                select(target)
+                scroll.scrollTo(target, anchor: .center)
             } else if let target = below.first ?? hidden.last {
-                scroll.scrollTo(target.id, anchor: .top)
+                scroll.scrollTo(target, anchor: .top)
             }
         } label: {
             HStack(spacing: 4) {
@@ -800,7 +972,8 @@ struct SpaceSidebar: View {
                 .modifier(OverflowPanel(glass: glass))
         }
         .accessibilityIdentifier("space-overflow")
-        .help("Reveal hidden spaces; jump to a hidden space awaiting approval, then one with a ready reply.")
+        .help(tabsOnly ? "Reveal hidden tabs; jump to a hidden tab awaiting approval, then one with a ready reply."
+              : "Reveal hidden spaces; jump to a hidden space awaiting approval, then one with a ready reply.")
         .padding(.horizontal, 8).padding(.vertical, 6)
     }
 
@@ -895,6 +1068,27 @@ private struct SpaceSidebarRow: View, Equatable {
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.space == rhs.space && lhs.selected == rhs.selected && lhs.pending == rhs.pending
+            && lhs.shortcut == rhs.shortcut && lhs.branch == rhs.branch && lhs.selection == rhs.selection
+    }
+}
+
+/// Tabs only's row, equatable on its inputs like a space's; its label is live (`Workspace.liveTab`), so a title
+/// change re-renders this row alone.
+private struct SidebarTabRow: View, Equatable {
+    let sidebar: SpaceSidebar
+    let tab: SidebarTab
+    let selected: Bool
+    let pending: Bool
+    let shortcut: String
+    let branch: String?
+    let selection: Namespace.ID
+
+    var body: some View {
+        sidebar.tabRowContent(tab, selected: selected, pending: pending, shortcut: shortcut, branch: branch, selection: selection)
+    }
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.tab == rhs.tab && lhs.selected == rhs.selected && lhs.pending == rhs.pending
             && lhs.shortcut == rhs.shortcut && lhs.branch == rhs.branch && lhs.selection == rhs.selection
     }
 }
@@ -1042,10 +1236,16 @@ struct HarbourVessel: Equatable, Identifiable {
 
     @MainActor static func make(_ space: Space, workspace: Workspace, selected: Bool, pending: Bool, shortcut: String,
                                 heading: String? = nil) -> HarbourVessel {
-        let sessions = space.tabs.flatMap(\.surfaceIDs).compactMap { TerminalRuntime.shared.chat.sessions[$0] }
+        make(id: space.id, name: workspace.liveName(space), host: workspace.hosts.record(space.hostID),
+             surfaceIDs: space.tabs.flatMap(\.surfaceIDs), selected: selected, pending: pending, shortcut: shortcut, heading: heading)
+    }
+
+    /// A vessel for any row: a space, or tabs only's tab, by its terminals' agents.
+    @MainActor static func make(id: UUID, name: String, host: HostRecord, surfaceIDs: [UUID], selected: Bool, pending: Bool,
+                                shortcut: String, heading: String? = nil) -> HarbourVessel {
+        let sessions = surfaceIDs.compactMap { TerminalRuntime.shared.chat.sessions[$0] }
         let working = sessions.filter { AgentWorkingState.isWorking($0) }
-        let host = workspace.hosts.record(space.hostID)
-        return HarbourVessel(id: space.id, name: workspace.liveName(space), host: space.hostID == .local ? "Local" : host.name,
+        return HarbourVessel(id: id, name: name, host: host.id == .local ? "Local" : host.name,
                              status: pending ? .calling : working.isEmpty ? .anchor : .underWay,
                              since: working.compactMap(\.workingSince).min(), selected: selected, shortcut: shortcut,
                              heading: heading, escorts: sessions.reduce(0) { $0 + $1.subagents.count })

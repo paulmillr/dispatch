@@ -1,7 +1,10 @@
+import Foundation
+#if canImport(AppKit)
 import AppKit
 import Observation
 import Term
 @preconcurrency import UserNotifications
+#endif
 
 enum PaneUrgency: Int, CaseIterable {
     case waiting, unread, running, idle
@@ -9,14 +12,23 @@ enum PaneUrgency: Int, CaseIterable {
         switch self { case .waiting: "●"; case .unread: "◆"; case .running: "◐"; case .idle: "·" }
     }
 
+    /// The precedence the Mac and the iPhone share: needs you, then working, then an unseen result.
+    init(waiting: Bool, working: Bool, unread: Bool) {
+        self = waiting ? .waiting : working ? .running : unread ? .unread : .idle
+    }
+
+    #if canImport(AppKit)
     /// `programs`: the surface's visible OSC 7501 records.
     @MainActor init(session: ChatSession?, programs: [ProgramStatus] = []) {
         let waiting = session?.approvals.contains(where: \.pending) == true || programs.contains { $0.state == .blocked }
         let working = session?.active == true && session?.busy == true || programs.contains { $0.state == .working }
         let unread = session?.hasNewMessages == true || programs.contains(where: \.finished)
-        self = waiting ? .waiting : working ? .running : unread ? .unread : .idle
+        self.init(waiting: waiting, working: working, unread: unread)
     }
+    #endif
 }
+
+#if canImport(AppKit)
 
 struct AttentionEntry: Identifiable {
     let id: UUID
@@ -260,7 +272,7 @@ final class AttentionCoordinator: NSObject, UNUserNotificationCenterDelegate {
         session.followRevision = nil
         session.atBottom = false
         session.scrollAnchor = rowID
-        TerminalRuntime.shared.chat.chooseChat(true, session: session)
+        TerminalRuntime.shared.chat.showChat(session)
         session.scrollPosition.restore(.init(id: rowID, offset: 0))
         session.scrollPosition.realizeAnchor?(rowID)
         if current { session.hasNewMessages = false }
@@ -361,3 +373,4 @@ final class AttentionCoordinator: NSObject, UNUserNotificationCenterDelegate {
         return data
     }
 }
+#endif

@@ -150,7 +150,7 @@ struct ChatView: View {
                     if session.terminalAttention != nil {
                         Button("Retry chat") { coordinator.retryChat(session) }
                     }
-                    Button("Open in terminal") { coordinator.chooseChat(false, session: session) }
+                    Button("Open in terminal") { coordinator.showTerminal(session) }
                 }.floatingGlassPanel()
             }
             if let side = session.sideConversation {

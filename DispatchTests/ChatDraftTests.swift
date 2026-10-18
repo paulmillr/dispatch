@@ -1,5 +1,9 @@
 import XCTest
+#if canImport(AppKit)
 @testable import DispatchApp
+#else
+@testable import DispatchMobile
+#endif
 
 @MainActor final class ChatDraftTests: XCTestCase {
     private func collection(_ store: ChatDraftMemoryStore = ChatDraftMemoryStore()) -> ChatDraftCollection {
@@ -231,6 +235,7 @@ import XCTest
         XCTAssertEqual(Set(drafts.saved.map(\.id)).count, 2)
     }
 
+    #if canImport(AppKit)
     func testAtomicJSONRoundTripAndRestartNeverQueuesSnapshots() throws {
         let url = System.temporary.appendingPathComponent(System.uuid().uuidString).appendingPathComponent("drafts.json")
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
@@ -254,6 +259,7 @@ import XCTest
         let again = ChatSession(id: System.uuid(), draftRepository: ChatDraftRepository(store: store)); again.sessionID = "same"
         XCTAssertEqual(again.drafts.saved, [record])
     }
+    #endif
 
     func testRestartRecoversRepeatedPendingRevisionOnlyOnceAlongsideNewerEdit() throws {
         let store = ChatDraftMemoryStore()
@@ -344,6 +350,7 @@ import XCTest
         XCTAssertEqual(store.buckets[drafts.scope]?.working.text, "continuous typing 25")
     }
 
+    #if canImport(AppKit)
     func testDebounceAndCoordinatorClosureFlush() async throws {
         let store = ChatDraftMemoryStore(), closing = ChatDraftMemoryStore()
         let repo = ChatDraftRepository(store: store), chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: closing))
@@ -361,9 +368,11 @@ import XCTest
         chat.stop()
         XCTAssertEqual(closing.buckets[next.drafts.scope]?.working.text, "shutdown immediately")
     }
+    #endif
 }
 
 extension ChatDraftTests {
+    #if canImport(AppKit)
     func testProvisionalDeliveryMigratesAndCompletesInIdentifiedConversation() throws {
         let store = ChatDraftMemoryStore(), drafts = ChatDraftCollection(repository: ChatDraftRepository(store: ChatDraftMemoryStore()))
         drafts.edit(text: "first message")
@@ -381,6 +390,7 @@ extension ChatDraftTests {
         XCTAssertEqual(session.draft, "before new identification")
         XCTAssertEqual(store.buckets[old]?.working.text, "old conversation")
     }
+    #endif
     func testSuccessfulCommandConsumesItsSavedRevisionAfterSwitchingDrafts() throws {
         let drafts = ChatDraftCollection(repository: ChatDraftRepository(store: ChatDraftMemoryStore()))
         drafts.edit(text: "/status"); drafts.keep()

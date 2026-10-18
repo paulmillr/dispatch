@@ -261,8 +261,13 @@ struct SettingsView: View {
                     settingToggle("Show git branch", isOn: $draft.showGitBranches)
                         .accessibilityIdentifier("show-git-branch")
                 }
-                row("Hide sidebar with one space") {
+                row(draft.tabsOnly ? "Hide sidebar with one tab" : "Hide sidebar with one space") {
                     settingToggle("Hide sidebar with one space", isOn: $draft.hideSingleSpace)
+                }
+                row("Tabs only", detail: "Every tab in the sidebar instead of spaces, with no tab strips") {
+                    settingToggle("Tabs only", isOn: $draft.tabsOnly)
+                        .accessibilityIdentifier("settings-tabs-only")
+                        .help("Lists every tab in the sidebar, grouped by host when spaces are. Tab strips go; ⌘T adds a tab and ⌘1…9 jump through the list. Spaces keep working underneath (⌘N, splits, layouts).")
                 }
             }
         }
@@ -309,6 +314,30 @@ struct SettingsView: View {
                 row("Automatic tab names") {
                     settingToggle("Automatic tab names", isOn: $draft.automaticTabNames)
                     .help("An agent's conversation title, a running program's own title, or the folder at an idle prompt. Off shows the terminal title. Renamed tabs keep their names.")
+                }
+            }
+            settingsGroup("Files") {
+                row("Drag and drop", detail: "Copy files in from Finder, out to Finder, or onto a terminal as paths") {
+                    settingToggle("Drag and drop", isOn: $draft.filesDragAndDrop)
+                        .accessibilityIdentifier("settings-files-drag-and-drop")
+                }
+                row("Follow the shell’s directory", detail: "Files opens where the tab’s shell is and moves with cd until you navigate") {
+                    settingToggle("Follow the shell’s directory", isOn: $draft.filesFollowShell)
+                        .accessibilityIdentifier("settings-files-follow-shell")
+                }
+                row("Show hidden files", detail: "Dotfiles and ignored folders; ⇧⌘. toggles per tab") {
+                    settingToggle("Show hidden files", isOn: $draft.filesShowHidden)
+                        .accessibilityIdentifier("settings-files-show-hidden")
+                }
+                // The popup names itself settings-dropdown-<title> in AppKit, like the other dropdowns.
+                row("Open files with", detail: "Open in editor types the command into the tab’s terminal") {
+                    dropdown("Open files with", selection: Binding(get: { draft.filesOpenWith.title }, set: { title in
+                        if let choice = FilesOpenWith.allCases.first(where: { $0.title == title }) { draft.filesOpenWith = choice }
+                    }), choices: FilesOpenWith.allCases.map(\.title))
+                }
+                row("Ask before replacing", detail: "A copy that would overwrite stops and asks; off keeps both") {
+                    settingToggle("Ask before replacing", isOn: $draft.filesAskBeforeReplacing)
+                        .accessibilityIdentifier("settings-files-ask-before-replacing")
                 }
             }
             settingsGroup("Notifications") {

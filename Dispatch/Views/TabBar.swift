@@ -23,10 +23,11 @@ extension TabBarPlacement {
                                                      fullScreen: Bool) -> Bool {
         guard !sidebarVisible, let space else { return false }
         guard workspace.lastingSpaceCount > 1 || leadingStripHost(space) != nil else { return false }
-        guard fullScreen else { return true }
-        if space.structured { return WindowTabBar.showsTabs(space: space) }
+        // Tabs only has no strip: in a window the plain title row carries the toggle.
+        guard fullScreen else { return !workspace.tabsOnly }
+        if space.structured { return WindowTabBar.showsTabs(space: space, tabsOnly: workspace.tabsOnly) }
         guard let pane = space.panes.first(where: { $0.id == space.layout.paneIDs.first }) else { return false }
-        return PaneView.showsTabs(pane: pane, space: space)
+        return PaneView.showsTabs(pane: pane, space: space, tabsOnly: workspace.tabsOnly)
     }
 
     /// The host the strip leading the window shows for its own tabs, as PaneView and WindowTabBar ask for it.
@@ -70,7 +71,7 @@ extension StripTab {
 }
 
 /// The strip above a native pane or a tmux window group: the pane badge, the scrolling tabs, the new-tab button,
-/// the chat switch and the layout picker. Callers supply each tab's row and what selecting and creating tabs means.
+/// the mode switch (terminal, chat, files) and the layout picker. Callers supply each tab's row and what selecting and creating tabs means.
 struct TabBar<Row: View>: View {
     @Environment(\.appTypography) private var typography
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -83,10 +84,10 @@ struct TabBar<Row: View>: View {
     /// The pane the shortcut badge focuses, and whether it is the focused one.
     let paneID: UUID
     let paneFocused: Bool
-    /// The active terminal's chat session when it can switch to chat.
+    /// The active terminal's chat session, whose tab the mode switch acts on; nil when the selected tab has no switch
+    /// of its own (a server window split into panes switches each pane in its header).
     let chatSession: ChatSession?
-    /// Some tab in the strip can switch to chat, so the switch keeps its place on the others. Strips of plain
-    /// terminals leave no gap for it.
+    /// Some tab in the strip has a switch, so it keeps its place on the others.
     let reservesChatSwitch: Bool
     let showsLayoutPicker: Bool
     let hostTint: HostTint?
@@ -203,8 +204,8 @@ struct TabBar<Row: View>: View {
             // Tabs always fill the strip (or scroll), so the button simply follows it: no offset from measured
             // tab frames, which lag a resize or a tmux window update and slid the button over the tabs.
             // On a split pane's capsule the buttons sit on its glass. On a lone glass strip new tab acts on the strip, so
-            // it is its own circle beside the track; chat and layout act on the pane and space and share a pill after
-            // it. Flat strips keep plain buttons with their own gaps.
+            // it is its own circle beside the track; the mode switch and layout act on the pane and space and share a pill
+            // after it. Flat strips keep plain buttons with their own gaps.
             Button(action: newTab) { NewTabLabel(style: style) }
                 .help("New Tab · ⌘T").accessibilityLabel("Create new tab")
             // Nautical's top-right strip keeps the harbour's clock, in UTC as a vessel traffic service logs.

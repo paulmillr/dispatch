@@ -707,7 +707,7 @@ final class ChatTests: XCTestCase {
             off.helperLaunches?.isEmpty == false && off.helperLaunches!.allSatisfy { !off.localHooksAllowed($0.key) }
         }
         await off.integrationChanges?.value
-        XCTAssertFalse([codexHooks, claude, pi].contains { System.exists($0) }, "Answering no writes no agent settings")
+        XCTAssertEqual([codexHooks, claude, pi].filter { System.exists($0) }.map(\.path), [], "Answering no writes no agent settings")
         let on = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
         on.adoptLocalAgents(["claude", "pi"])
         try await TestSupport.eventually(timeout: .seconds(10)) { on.hookStatus("claude") != .off }

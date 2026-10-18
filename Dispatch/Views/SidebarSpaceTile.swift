@@ -76,9 +76,27 @@ struct SidebarMetrics: Equatable, Sendable {
     }
 }
 
-/// One space in the sidebar, in either density.
+/// What a sidebar row draws: a space, or in tabs-only mode a tab (SidebarTab).
+struct SidebarEntry: Equatable {
+    let id: UUID
+    let name: String
+    /// Its terminals, whose agents and programs make its activity.
+    let surfaceIDs: [UUID]
+    /// A space's tabs, counted on its card; a tab has none to count.
+    var tabCount: Int? = nil
+
+    init(id: UUID, name: String, surfaceIDs: [UUID], tabCount: Int? = nil) {
+        self.id = id; self.name = name; self.surfaceIDs = surfaceIDs; self.tabCount = tabCount
+    }
+
+    init(space: Space) {
+        self.init(id: space.id, name: space.name, surfaceIDs: space.tabs.flatMap(\.surfaceIDs), tabCount: space.tabs.count)
+    }
+}
+
+/// One space (or tabs only's tab) in the sidebar, in either density.
 struct SidebarSpaceTile: View {
-    let space: Space
+    let entry: SidebarEntry
     let host: HostRecord
     let mixedHost: HostRecord?
     let grouped: Bool
@@ -94,13 +112,13 @@ struct SidebarSpaceTile: View {
 
     private var selectedFill: Color { host.tint.map { $0.foreground.opacity(0.16) } ?? Chrome.palette.selection }
     private var label: SpaceBranchName {
-        SpaceBranchName(space: space, showBranch: showBranch, fontSize: metrics.nameSize,
+        SpaceBranchName(id: entry.id, name: entry.name, showBranch: showBranch, fontSize: metrics.nameSize,
                         inline: true, branchFontSize: metrics.detailSize, branch: branch,
                         branchColor: selected ? Chrome.palette.sidebarDetail : Chrome.palette.detail)
     }
 
     private var activity: some View {
-        AgentActivityGlyph(tabIDs: space.tabs.flatMap(\.surfaceIDs),
+        AgentActivityGlyph(tabIDs: entry.surfaceIDs,
                            connecting: connecting, size: metrics.activitySize)
             .fixedSize()
     }
@@ -151,7 +169,7 @@ struct SidebarSpaceTile: View {
                 label.branchLine
             }.frame(maxWidth: .infinity, alignment: .leading)
             if let mixedHost { mixedGlyph(mixedHost) }
-            AgentActivityGlyph(tabIDs: space.tabs.flatMap(\.surfaceIDs), connecting: connecting, size: metrics.activitySize)
+            AgentActivityGlyph(tabIDs: entry.surfaceIDs, connecting: connecting, size: metrics.activitySize)
                 .fixedSize()
             shortcutLabel.fixedSize()
         }
@@ -159,7 +177,7 @@ struct SidebarSpaceTile: View {
 
     var body: some View {
         if metrics.cards {
-            SidebarSpaceCard(space: space, host: host, mixedHost: mixedHost, selected: selected, pending: pending,
+            SidebarSpaceCard(entry: entry, host: host, mixedHost: mixedHost, selected: selected, pending: pending,
                              shortcut: shortcut, connecting: connecting, branch: branch, showBranch: showBranch,
                              metrics: metrics, selection: selection)
         } else {
@@ -212,7 +230,7 @@ struct SidebarSpaceTile: View {
 /// own glass, the selected one interactive and tinted with its host with a soft glow of that color; without it the
 /// same card is drawn with translucent fills and a specular edge. The selection slides between cards as rows' does.
 struct SidebarSpaceCard: View {
-    let space: Space
+    let entry: SidebarEntry
     let host: HostRecord
     let mixedHost: HostRecord?
     let selected: Bool
@@ -233,12 +251,12 @@ struct SidebarSpaceCard: View {
     private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: metrics.cornerRadius, style: .continuous) }
 
     var body: some View {
-        let activity = AgentActivity(tabIDs: space.tabs.flatMap(\.surfaceIDs), connecting: connecting)
+        let activity = AgentActivity(tabIDs: entry.surfaceIDs, connecting: connecting)
         HStack(spacing: 11) {
             orb
             VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(space.name)
+                    Text(entry.name)
                         .font(Font(AppFont.native(size: metrics.nameSize, semibold: selected)))
                         .foregroundStyle(selected ? Chrome.ink : Chrome.palette.secondary)
                         .lineLimit(1).truncationMode(.middle)
@@ -306,10 +324,10 @@ struct SidebarSpaceCard: View {
         }
     }
 
-    /// Another host's name (and one a terminal reaches besides it), the branch, and how many tabs; the host's name
-    /// outlasts the branch.
+    /// Another host's name (and one a terminal reaches besides it), the branch, and how many tabs (a space's); the
+    /// host's name outlasts the branch.
     private func details(tabs: Bool) -> some View {
-        let count = space.tabs.count
+        let count = entry.tabCount
         return HStack(spacing: 5) {
             if host.id != .local {
                 Text(host.name).foregroundStyle(hue ?? detailColor).lineLimit(1).truncationMode(.middle)
@@ -322,10 +340,10 @@ struct SidebarSpaceCard: View {
             }
             if showBranch, branch != nil {
                 if host.id != .local { separator }
-                SpaceBranchName(space: space, showBranch: true, fontSize: metrics.nameSize,
+                SpaceBranchName(id: entry.id, name: entry.name, showBranch: true, fontSize: metrics.nameSize,
                                 branchFontSize: metrics.detailSize, branch: branch, branchColor: detailColor).branchLine
             }
-            if tabs {
+            if tabs, let count {
                 if host.id != .local || (showBranch && branch != nil) { separator }
                 Text(count == 1 ? "1 tab" : "\(count) tabs").foregroundStyle(detailColor).fixedSize()
             }
@@ -344,7 +362,7 @@ struct SidebarSpaceCard: View {
         let color = activity.reconnecting ? Chrome.palette.warning : activity.offline ? Chrome.muted
             : activity.blocked || activity.failed ? Chrome.palette.warning : activity.finished ? Chrome.accent : Chrome.ink
         return HStack(spacing: 4) {
-            AgentActivityGlyph(tabIDs: space.tabs.flatMap(\.surfaceIDs), connecting: connecting, size: metrics.activitySize)
+            AgentActivityGlyph(tabIDs: entry.surfaceIDs, connecting: connecting, size: metrics.activitySize)
                 .fixedSize()
             if let label { Text(label).foregroundStyle(color).lineLimit(1) }
         }

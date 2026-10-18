@@ -86,6 +86,7 @@ final class TerminalView: NSView {
         scrollbar.changed = { [weak self] row in self?.scrollToRow(row) }
         TerminalRuntime.shared.configureBackground(self)
         addSubview(scrollbar)
+        registerDropTypes()
         setAccessibilityIdentifier("terminal-\(id)")
         setAccessibilityLabel("Terminal")
         setAccessibilityRole(.group)

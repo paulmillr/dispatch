@@ -55,7 +55,14 @@ final class TmuxPresentationTests: XCTestCase {
         XCTAssertGreaterThan(button.midY, try terminalRect(first).maxY, "The switch belongs above the terminal, in the tab bar")
         try click(button)
         try await app.wait { firstSession.showChat }
-        app.runtime.chat.chooseChat(false, session: firstSession)
+        // From chat the same switch names the terminal next, and goes there; files stays a menu or ⇧⌘F step.
+        func terminalButtons() -> [NSRect] {
+            PresentationTestSupport.accessibilityFrames("chat-mode-switch", label: "Show Terminal", in: app.window).filter { !$0.isEmpty }
+        }
+        try await app.wait { terminalButtons().count == 1 }
+        try click(try XCTUnwrap(terminalButtons().first))
+        try await app.wait { !firstSession.showChat }
+        XCTAssertEqual(app.runtime.files.mode(for: first.id), .terminal)
 
         // Windowed title-row tabs stay visible; full screen hides a lone window's bar.
         app.window.delegate = app.controller

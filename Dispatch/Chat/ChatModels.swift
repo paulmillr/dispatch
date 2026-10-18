@@ -100,6 +100,13 @@ struct ChatItem: Identifiable, Equatable, Sendable {
     }
 }
 
+extension ChatItem {
+    /// The transcript merge rules (`matches`, `merging`) for a transcript kept outside `ChatSession`: the iPhone's
+    /// (Mobile/Chat/MobileTranscript.swift) until the `ChatSession` split lands (docs/ios.md).
+    func continues(_ previous: Self) -> Bool { matches(previous) }
+    func merged(over previous: Self, historical: Bool) -> Self { merging(previous, historical: historical) }
+}
+
 struct ChatTurn: Identifiable, Sendable {
     var id: String { didSet { invalidatePresentation() } }
     var started = Date() { didSet { invalidatePresentation() } }
@@ -187,7 +194,9 @@ struct ChatTranscriptRow: Identifiable {
 struct ChatQueuedMessage: Identifiable {
     let id = System.uuid()
     var text: String
+    #if canImport(AppKit)
     var process: AgentProcess?
+    #endif
     var binding: HelperTopology.Binding? = nil
     var host: String? = nil
     var delivery: ChatDraftDelivery? = nil
@@ -202,6 +211,7 @@ struct ChatQueuedMessage: Identifiable {
     var held: Bool { native == nil }
     var editable: Bool { native?.editable ?? true }
 
+    #if canImport(AppKit)
     @MainActor func matches(_ session: ChatSession) -> Bool {
         process == session.process && host == session.host
             && (binding == nil || (binding?.pid == session.binding?.pid
@@ -210,6 +220,7 @@ struct ChatQueuedMessage: Identifiable {
             && (generation == nil || generation == session.queueGeneration)
             && (conversation == nil || conversation == session.sessionID)
     }
+    #endif
 }
 
 enum ChatQueuePause: Equatable {
@@ -331,6 +342,8 @@ actor ChatSearch {
     }
 }
 
+// The Mac app's per-surface session and its view state (docs/ios.md: the ChatSession split is deferred).
+#if canImport(AppKit)
 @MainActor @Observable
 final class ChatSession: Identifiable {
     struct Presentation {
@@ -887,9 +900,11 @@ final class ChatSession: Identifiable {
             scrollPosition: scrollPosition.visibleAnchor() ?? scrollPosition.saved, atBottom: atBottom)
     }
 
-    func restorePresentation(_ saved: Presentation) {
+    /// `view` false keeps the shown view as it is (a files view covers the tab) and restores the rest.
+    func restorePresentation(_ saved: Presentation, view: Bool = true) {
         // Drafts restore from their conversation collection, independently of presentation.
-        setView(saved.showChat, reason: "conversation-restored"); manualViewChoice = saved.manualViewChoice
+        if view { setView(saved.showChat, reason: "conversation-restored") }
+        manualViewChoice = saved.manualViewChoice
         expanded = saved.expanded; expandedToolGroups = saved.expandedToolGroups
         // Reconciled groups may use an identity from a later child. Retain
         // that mapping with disclosure choices when SSH recreates the session.
@@ -1285,6 +1300,7 @@ final class ChatSession: Identifiable {
         approvals.forEach { $0.resolve(.terminal) }
     }
 }
+#endif
 
 /// Cumulative agent-reported usage. Missing counters remain unknown.
 struct ChatUsage: Sendable, Equatable {

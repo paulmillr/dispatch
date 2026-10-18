@@ -8,7 +8,9 @@ struct HostID: Hashable, Codable, Sendable {
     static let local = HostID(rawValue: "local")
     static func authenticated(_ identity: String) -> Self { .init(rawValue: "ssh:" + identity) }
     static func provisional(_ generation: UUID) -> Self { .init(rawValue: "pending:" + generation.uuidString) }
+    #if canImport(AppKit)
     static func login(_ scope: SSHIntegrationScope) -> Self { .init(rawValue: "login:" + scope.key) }
+    #endif
     var isProvisional: Bool { rawValue.hasPrefix("pending:") || rawValue.hasPrefix("login:") }
 }
 
@@ -49,6 +51,9 @@ struct TerminalHostContext: Equatable, Codable, Sendable {
     var authenticated: Bool
 }
 
+// The iPhone app has its own `HostRecord` (Mobile/Store/HostRecord.swift): a host the user entered, with its address
+// and authentication. It answers `system` as this one does, so `HostGlyph` draws either.
+#if canImport(AppKit)
 struct HostRecord: Identifiable, Equatable, Codable, Sendable {
     let id: HostID
     var name: String
@@ -65,7 +70,9 @@ struct HostRecord: Identifiable, Equatable, Codable, Sendable {
         ([hostname, system?.label].compactMap { $0 } + destinations).joined(separator: " · ")
     }
 }
+#endif
 
+#if canImport(AppKit)
 /// Contains presentation metadata and terminal associations, never connection
 /// credentials, SSH control paths, or ownership of tmux/herdr sessions.
 @MainActor @Observable
@@ -336,3 +343,4 @@ final class HostRegistry {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
+#endif

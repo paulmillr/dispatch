@@ -1,5 +1,9 @@
 import XCTest
+#if canImport(AppKit)
 @testable import DispatchApp
+#else
+@testable import DispatchMobile
+#endif
 
 @MainActor
 final class ChatOperationsTests: XCTestCase {
