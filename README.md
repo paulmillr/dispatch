@@ -65,6 +65,21 @@ All deps are downloaded into `build`.
 
 Official website (redirects to GitHub): https://dispatch.yachts
 
+## Dispatch for iPhone
+
+A thin client for your Macs and Linux machines: Spaces (tmux/herdr tabs and a real terminal) and Agents (chat with
+approvals, queue and diffs) over SSH. The same Rust helper does the work on each host; nothing leaves the phone but
+your SSH connections. Needs iOS 26+, Xcode 27, and on each host tmux 3.7+ or herdr 0.9.3+. Sideloaded, no App Store.
+
+```sh
+./run.sh --ios                                         # try it in the simulator
+python3 scripts/ios-signing.py TEAMID --suffix .you    # once: your team from Xcode, Settings, Accounts
+# on the phone: pair it by cable, turn on Developer Mode
+./run.sh --ios-device --prod                           # build, install, launch; again weekly on a free Apple ID
+```
+
+See [docs/ios.md](docs/ios.md).
+
 ## Architecture
 
 Dispatch is two things: Swift macOS app and Rust helper.

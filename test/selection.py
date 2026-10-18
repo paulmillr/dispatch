@@ -109,7 +109,8 @@ def resolve(tests=(), skips=(), suite=None, benchmarks=False, root=ROOT):
     manifest = json.loads((root / 'test/suites.json').read_text())
     if manifest.get('version') != 1 or not isinstance(manifest.get('cases'), dict):
         raise ValueError('Invalid suite manifest')
-    classifications = manifest['cases']
+    # Other test bundles' entries (DispatchMobileTests/...: test/ios.py) are classified and checked by their runners.
+    classifications = {case: tier for case, tier in manifest['cases'].items() if case.split('/')[0] == TARGET}
     for case, tier in classifications.items():
         if case not in cases or tier not in SUITES:
             raise ValueError('Stale or invalid suite manifest entry: ' + case)

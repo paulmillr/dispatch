@@ -1,0 +1,7 @@
+// Signing for Dispatch for iPhone (docs/ios.md). The team stays out of the repository: put
+//   DEVELOPMENT_TEAM = <your team id>
+// and optionally
+//   DISPATCH_BUNDLE_ID_SUFFIX = .<something unique>
+// in build/signing.xcconfig (git-ignored). Simulator builds need neither.
+DISPATCH_BUNDLE_ID_SUFFIX =
+#include? "../../build/signing.xcconfig"

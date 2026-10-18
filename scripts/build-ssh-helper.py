@@ -168,11 +168,13 @@ def install(target_dir, helper="helper"):
     compatibility = ROOT / "build" / helper
     destination = Path(os.environ.get("TARGET_BUILD_DIR", ROOT / "build")) / os.environ.get(
         "UNLOCALIZED_RESOURCES_FOLDER_PATH", "ssh-helper-resources") / helper
+    # The iPhone app runs no helper itself: all three binaries are plain resources it uploads to hosts.
+    phone = os.environ.get("PLATFORM_NAME", "").startswith("iphone")
     for directory in (compatibility, destination):
         directory.mkdir(parents=True, exist_ok=True)
         for name in (*NAMES, "version", "protocol-version"):
-            # The app's darwin-universal links to the one signed dispatch-helper (scripts/bundle-helper.sh).
-            if directory == destination and name == "darwin-universal":
+            # The Mac app's darwin-universal links to the one signed dispatch-helper (scripts/bundle-helper.sh).
+            if directory == destination and name == "darwin-universal" and not phone:
                 continue
             replace_if_changed(output / name, directory / name)
 

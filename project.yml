@@ -2,6 +2,7 @@ name: Dispatch
 options:
   deploymentTarget:
     macOS: "14.0"
+    iOS: "26.0"
 settings:
   base:
     SWIFT_VERSION: "6.0"
@@ -23,6 +24,18 @@ settings:
     Release:
       CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
 settingGroups:
+  # Every iOS target. The project's ARCHS (the Mac's native architecture, arm64e on Apple silicon) matches no
+  # simulator or iPhone run destination.
+  ios:
+    ARCHS: "$(ARCHS_STANDARD)"
+    ENABLE_HARDENED_RUNTIME: NO
+  # The iPhone app and its test bundles: iPhone only, signed automatically for a device (the team comes from
+  # build/signing.xcconfig through Mobile/Config/Signing.xcconfig), ad hoc in the simulator.
+  mobileApp:
+    TARGETED_DEVICE_FAMILY: "1"
+    CODE_SIGN_STYLE: Automatic
+    CODE_SIGN_IDENTITY: Apple Development
+    "CODE_SIGN_IDENTITY[sdk=iphonesimulator*]": "-"
   # The Swift terminal (Vendor/Term) is optimized with whole-module optimization in every
   # configuration: built like the app's Debug code (unoptimized, or file by file) it consumes
   # output 3-80x slower and blocks the programs writing to it.
@@ -31,6 +44,11 @@ settingGroups:
     SWIFT_OPTIMIZATION_LEVEL: -O
     SWIFT_COMPILATION_MODE: wholemodule
     ENABLE_TESTABILITY: NO
+# The iPhone app's SSH transport (Mobile/Transport, docs/ios-ssh-spike.md): a local package over the Rust engine that
+# scripts/build-mobile-ssh.py builds into build/mobile-ssh (run it with --fetch once before the first Xcode build).
+packages:
+  MobileTransport:
+    path: Mobile/Transport
 targets:
   # Static: the hardened runtime's library validation refuses ad-hoc signed
   # frameworks embedded in an ad-hoc signed app (local Release builds would not launch).
@@ -54,6 +72,33 @@ targets:
       groups: [term]
       base:
         PRODUCT_BUNDLE_IDENTIFIER: yachts.dispatch.termapple
+        SWIFT_VERSION: "5.0"
+        SWIFT_STRICT_CONCURRENCY: minimal
+  # The terminal for Dispatch for iPhone (docs/ios.md): the same sources as Term and TermApple, built for iOS.
+  # Their products keep the module names Term and TermApple, so shared sources import them unchanged.
+  TermMobile:
+    type: framework.static
+    platform: iOS
+    sources: [Vendor/Term/Sources/Term]
+    settings:
+      groups: [term, ios]
+      base:
+        PRODUCT_NAME: Term
+        PRODUCT_BUNDLE_IDENTIFIER: yachts.dispatch.mobile.term
+  # Process launching, the pty, the AppKit view and its display link stay on the Mac (docs/ios.md).
+  TermAppleMobile:
+    type: framework.static
+    platform: iOS
+    sources:
+      - path: Vendor/Term/Sources/TermApple
+        excludes: [Resources, Launch.swift, Pty.swift, Frames.swift, Session.swift, TerminalView.swift]
+    dependencies:
+      - target: TermMobile
+    settings:
+      groups: [term, ios]
+      base:
+        PRODUCT_NAME: TermApple
+        PRODUCT_BUNDLE_IDENTIFIER: yachts.dispatch.mobile.termapple
         SWIFT_VERSION: "5.0"
         SWIFT_STRICT_CONCURRENCY: minimal
   # Zstandard (Vendor/Zstd/PROVENANCE.md): Debug app journals are written and read with it. Only Debug code
@@ -160,10 +205,187 @@ targets:
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Dispatch.app/Contents/MacOS/Dispatch"
         BUNDLE_LOADER: "$(TEST_HOST)"
         ENABLE_HARDENED_RUNTIME: NO
+  # Dispatch for iPhone (docs/ios.md). iOS-only sources live in Mobile/; the Foundation and SwiftUI sources it
+  # shares with the Mac app are listed below by path and stay in Dispatch/.
+  DispatchMobile:
+    type: application
+    platform: iOS
+    configFiles:
+      Debug: Mobile/Config/Signing.xcconfig
+      Release: Mobile/Config/Signing.xcconfig
+    postBuildScripts:
+      # The licences: the shared folder (the helpers, fonts and themes the phone ships too) and the SSH engine's
+      # crates, which only the phone links (Mobile/ThirdPartyLicenses: kept out of the Mac app's bundle).
+      - name: Bundle licences
+        script: |
+          set -euo pipefail
+          destination="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/ThirdPartyLicenses"
+          mkdir -p "$destination"
+          rsync -a --delete "$SRCROOT/ThirdPartyLicenses/" "$SRCROOT/Mobile/ThirdPartyLicenses/" "$destination/"
+        basedOnDependencyAnalysis: false
+      # The terminal's fonts, where TermApple's FontCollection looks for them on iOS (TermFonts: an iOS bundle
+      # cannot have a top-level Resources folder).
+      - name: Bundle terminal fonts
+        script: |
+          set -euo pipefail
+          destination="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/TermFonts"
+          mkdir -p "$destination"
+          cp "$SRCROOT"/Vendor/Term/Sources/TermApple/Resources/*.ttf "$SRCROOT"/Vendor/Term/Sources/TermApple/Resources/*.txt "$destination/"
+        inputFiles: ["$(SRCROOT)/Vendor/Term/Sources/TermApple/Resources/JetBrainsMono-Variable.ttf", "$(SRCROOT)/Vendor/Term/Sources/TermApple/Resources/JetBrainsMono-Italic-Variable.ttf", "$(SRCROOT)/Vendor/Term/Sources/TermApple/Resources/SymbolsNerdFont-Regular.ttf"]
+        outputFiles: ["$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/JetBrainsMono-Variable.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/JetBrainsMono-Italic-Variable.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/SymbolsNerdFont-Regular.ttf"]
+    preBuildScripts:
+      - name: Build SSH engine
+        script: python3 "$SRCROOT/scripts/build-mobile-ssh.py"
+        basedOnDependencyAnalysis: false
+      - name: Install SSH helpers
+        # The phone uploads every helper (the Mac one too) to hosts: all three are plain resources in helper/.
+        script: python3 "$SRCROOT/scripts/build-ssh-helper.py" --install-only
+        inputFiles: ["$(SRCROOT)/build/helper-rust/bin/darwin-universal", "$(SRCROOT)/build/helper-rust/bin/linux-aarch64", "$(SRCROOT)/build/helper-rust/bin/linux-x86_64", "$(SRCROOT)/build/helper-rust/bin/version", "$(SRCROOT)/build/helper-rust/bin/protocol-version"]
+        outputFiles: ["$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/darwin-universal", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/linux-aarch64", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/linux-x86_64", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/version", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/protocol-version"]
+    sources:
+      - path: Mobile
+        # Tests: DispatchMobileTests. Transport: its own Swift package; its Integration folder (the app's SSH driver)
+        # is app code.
+        excludes: [App/Info.plist, Config, Tests, UITests, Transport, ThirdPartyLicenses]
+      - path: Mobile/Transport/Integration
+      # The Dispatch themes (TerminalConfiguration reads them from the app's ghostty folder).
+      - path: extras/ghostty
+        type: folder
+        buildPhase: resources
+      # Shared with the Mac app (docs/ios.md, Shared sources).
+      - Dispatch/Attention.swift
+      - Dispatch/Chat/AgentModelMenu.swift
+      - Dispatch/Chat/ChatCommands.swift
+      - Dispatch/Chat/ChatDrafts.swift
+      - Dispatch/Chat/ChatModelChoicesCache.swift
+      - Dispatch/Chat/ChatModels.swift
+      - Dispatch/Chat/ChatOperations.swift
+      - Dispatch/Chat/ChatPatch.swift
+      - Dispatch/Chat/ChatSideConversation.swift
+      - Dispatch/Chat/ChatSideQuestion.swift
+      - Dispatch/Chat/ClaudeQuestions.swift
+      - Dispatch/Chat/HelperChat.swift
+      - Dispatch/Chat/ToolCommandPresentation.swift
+      - Dispatch/Chat/ToolCommandWords.swift
+      - Dispatch/Chat/ToolDocument.swift
+      - Dispatch/Chat/ToolOrchestration.swift
+      - Dispatch/Chat/ToolOutput.swift
+      - Dispatch/Chat/ToolPresentation.swift
+      - Dispatch/Chat/ToolPresentationCache.swift
+      - Dispatch/Chat/ToolReadCommand.swift
+      - Dispatch/Helper/AppReplay.swift
+      - Dispatch/Helper/HelperBackend.swift
+      - Dispatch/Helper/HelperBinary.swift
+      - Dispatch/Helper/HelperClient.swift
+      - Dispatch/Helper/HelperConnection.swift
+      - Dispatch/Helper/HelperDescriptors.swift
+      - Dispatch/Helper/HelperSession.swift
+      - Dispatch/Helper/HelperTopology.swift
+      - Dispatch/Helper/HelperTransport.swift
+      - Dispatch/Helper/HelperWire.swift
+      - Dispatch/Herdr/HerdrModels.swift
+      - Dispatch/Hosts/HostRegistry.swift
+      - Dispatch/Hosts/TerminalHistoryStore.swift
+      - Dispatch/SSH/SSHInvocation.swift
+      - Dispatch/Terminal/ProgramStatusStore.swift
+      - Dispatch/Terminal/TerminalMachine.swift
+      - Dispatch/Terminal/TerminalScrollState.swift
+      - Dispatch/Views/Chrome.swift
+      - Dispatch/Views/ComposerFences.swift
+      - Dispatch/Views/HostGlyph.swift
+      - Dispatch/Views/HostTint.swift
+      - Dispatch/WorkspaceModels.swift
+    settings:
+      groups: [ios, mobileApp]
+      base:
+        PRODUCT_NAME: DispatchMobile
+        PRODUCT_MODULE_NAME: DispatchMobile
+        # No CZstd: only the Mac's Debug journals (AppReplay) compress captures (docs/ios.md).
+        SWIFT_INCLUDE_PATHS: ""
+        PRODUCT_BUNDLE_IDENTIFIER: yachts.dispatch.mobile$(DISPATCH_BUNDLE_ID_SUFFIX)
+        INFOPLIST_FILE: Mobile/App/Info.plist
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        # iPhone only (iPad later): TARGETED_DEVICE_FAMILY in mobileApp.
+        SUPPORTS_MACCATALYST: NO
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
+        SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        ENABLE_PREVIEWS: YES
+      configs:
+        # Release is what goes on a phone (docs/ios.md, Release builds and app size): the executable is stripped once
+        # its dSYM is made (half of it is symbols). The iPhone tests never run against Release: they need @testable and
+        # the Debug demos.
+        Release:
+          DEPLOYMENT_POSTPROCESSING: YES
+          STRIP_INSTALLED_PRODUCT: YES
+    dependencies:
+      - package: MobileTransport
+      - target: SSHHelpers
+      - target: TermMobile
+        embed: false
+      - target: TermAppleMobile
+        embed: false
+      - sdk: CoreText.framework
+      - sdk: Metal.framework
+      - sdk: QuartzCore.framework
+  DispatchMobileTests:
+    type: bundle.unit-test
+    platform: iOS
+    configFiles:
+      Debug: Mobile/Config/Signing.xcconfig
+      Release: Mobile/Config/Signing.xcconfig
+    sources:
+      - path: Mobile/Tests
+      # The Mac's Foundation-only tests, shared by path (docs/ios.md). HelperClient's fixtures load from the checkout.
+      - DispatchTests/HelperClient/HelperClientTests.swift
+      - DispatchTests/ProgramStatusTests.swift
+      - DispatchTests/ChatDraftTests.swift
+      - DispatchTests/ChatSideQuestionTests.swift
+      - DispatchTests/ChatOperationsTests.swift
+      - DispatchTests/PortableTestSupport.swift
+    dependencies:
+      - target: DispatchMobile
+      - target: TermMobile
+        link: false
+        embed: false
+      - target: TermAppleMobile
+        link: false
+        embed: false
+    settings:
+      groups: [ios, mobileApp]
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: yachts.dispatch.mobile.tests$(DISPATCH_BUNDLE_ID_SUFFIX)
+        SWIFT_INCLUDE_PATHS: ""
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/DispatchMobile.app/DispatchMobile"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+  # Taps the running app (docs/ios.md, Testing): its own scheme, so the unit test runs never start it.
+  DispatchMobileUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    configFiles:
+      Debug: Mobile/Config/Signing.xcconfig
+      Release: Mobile/Config/Signing.xcconfig
+    sources:
+      - path: Mobile/UITests
+    dependencies:
+      - target: DispatchMobile
+    settings:
+      groups: [ios, mobileApp]
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: yachts.dispatch.mobile.uitests$(DISPATCH_BUNDLE_ID_SUFFIX)
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: DispatchMobile
 aggregateTargets:
   # The Rust helper depends on nothing in Xcode, so this target builds alongside Term/TermApple
   # instead of serially inside the app target.
   SSHHelpers:
+    # Dispatch for iPhone depends on it too: a simulator or device destination needs every target in the build to
+    # list its platform. The script builds for macOS and Linux whatever the destination (scripts/build-ssh-helper.py).
+    settings:
+      SUPPORTED_PLATFORMS: macosx iphonesimulator iphoneos
     buildScripts:
       - name: Build portable SSH helpers
         script: bash "$SRCROOT/scripts/build-ssh-helper.sh" --build-only
@@ -179,3 +401,16 @@ schemes:
       targets: [DispatchTests]
       environmentVariables:
         DISPATCH_TESTING: "1"
+  DispatchMobile:
+    build:
+      targets:
+        DispatchMobile: all
+    test:
+      targets: [DispatchMobileTests]
+  DispatchMobileUITests:
+    build:
+      targets:
+        DispatchMobile: all
+        DispatchMobileUITests: [test]
+    test:
+      targets: [DispatchMobileUITests]

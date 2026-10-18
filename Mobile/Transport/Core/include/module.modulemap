@@ -1,0 +1,4 @@
+module DispatchMobileSSHCore {
+    header "dispatch_mobile_ssh.h"
+    export *
+}

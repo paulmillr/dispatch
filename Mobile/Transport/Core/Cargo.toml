@@ -1,0 +1,35 @@
+# The iPhone SSH engine: russh behind a C ABI (include/dispatch_mobile_ssh.h), wrapped by the
+# MobileTransport Swift package. Its own workspace: third-party Rust enters here, never under helper/.
+[workspace]
+members = ["."]
+resolver = "3"
+
+[package]
+name = "dispatch-mobile-ssh"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+publish = false
+
+[lib]
+name = "dispatch_mobile_ssh"
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+# ring rather than aws-lc-rs: no cmake, and cc cross-compiles it for iOS with Xcode's clang.
+russh = { version = "=0.64.1", default-features = false, features = ["ring", "rsa"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync", "time", "macros"] }
+libc = "0.2"
+# Wipes the copies of passphrases and passwords the C ABI makes (russh's key types wipe themselves).
+zeroize = "1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+debug = false
+strip = "debuginfo"
+
+[profile.dev]
+panic = "abort"

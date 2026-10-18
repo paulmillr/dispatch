@@ -7,9 +7,11 @@ Rules every integration follows: server jobs and agent processes belong to their
 Launch with `tmux -CC new-session -A -s work`, or `herdr` (`--session NAME`, `session attach NAME`). tmux windows become tabs that keep their server splits; herdr workspaces/tabs become spaces/tabs. A tab moved to another space keeps its splits on both (herdr has no tab move between workspaces: the helper moves its panes one by one as one move, and puts them back if a step fails).
 
 - **Close tab** terminates only if every pane is verified idle (foreground, background, and stopped jobs). Otherwise, or if inspection is unavailable (e.g. disconnected), it detaches. Close space, Detach, and quit always detach.
+- A client without a shell of its own (the iPhone app) creates a space with `backends.create`: for tmux it starts the server with one detached session when none is running. Opening (`backends.open`, every reconnect) never starts one.
 - **Detached** sidebar items reattach to the original client or session, never a replacement. The list lasts only for the current run.
 - Layout presets rearrange tabs locally; they never touch server processes or nested splits. Tabs move only between spaces on the same backend connection.
 - A successful handoff closes the launching tab, over SSH too. Settings no longer offers to keep it; `closeLaunching` stays in the preferences for settings files that turned it off and for tests that keep the tab as a shell to reattach from. The tmux gateway lives while native panes need it, and remote herdr keeps its SSH connection until the last native view detaches. A failed attach leaves the terminal usable.
+- Installing (what Dispatch for iPhone's hint shows; Dispatch never installs either): tmux from the system's packages (`brew install tmux`, `sudo apt install tmux`, `sudo dnf install tmux`); herdr as a release binary, e.g. `curl -fL -o ~/.local/bin/herdr https://github.com/herdrdev/herdr/releases/download/v0.9.3/herdr-macos-aarch64 && chmod +x ~/.local/bin/herdr` (`herdr-macos-x86_64`, `herdr-linux-$(uname -m)`).
 - Versions: herdr validated on 0.9.3, and its CLI forms pass through. tmux ≥ 3.7 reports bracketed-paste state. Older servers fall back to paste markers, with a Chat warning that readiness can't be verified. Ownership, copy-mode, disabled-input, and synchronized-pane checks still apply.
 
 ## SSH

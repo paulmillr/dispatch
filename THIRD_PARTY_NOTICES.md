@@ -72,3 +72,14 @@ helper compresses the archives that carry copied files between hosts, and the te
 corpus (the app's Debug replays and the helper's capture tool).
 `Vendor/Zstd/` holds the unmodified library sources and license (see `Vendor/Zstd/PROVENANCE.md`). The license is
 bundled in `ThirdPartyLicenses/Zstandard-BSD.txt`. Source: https://github.com/facebook/zstd/tree/v1.5.7.
+
+## iPhone SSH transport
+
+Dispatch for iPhone's SSH engine (`Mobile/Transport/Core`, static library `DispatchMobileSSHCore`) links
+russh 0.64.1 (Apache 2.0) and its dependency tree, pinned in `Mobile/Transport/Core/Cargo.lock`: 125 crates
+under MIT, Apache 2.0, BSD-3-Clause, ISC, Unlicense and Unicode-3.0 terms, among them ring 0.17.14
+(Apache 2.0 and ISC, with BoringSSL-derived code), tokio, and the RustCrypto crates (ssh-key, rsa, p256,
+p384, p521, ed25519-dalek, aes, chacha20, bcrypt-pbkdf, Blowfish and others). Their license files are
+reproduced in `Mobile/ThirdPartyLicenses/MobileTransport/Dependencies.txt`, written by
+`scripts/mobile-transport-licenses.py`; the Rust standard library's attribution is the one in
+`ThirdPartyLicenses/RustSSHHelper/`.
