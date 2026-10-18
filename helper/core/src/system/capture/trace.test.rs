@@ -52,7 +52,7 @@ fn round_trip(start: Start) {
         assert_eq!(read, records);
         // A checkpoint ends one zstd frame; the zstd tool reads the frames as one stream, as our decoder does.
         let mut raw = Vec::new();
-        super::super::zstd::Decoder::new(Cursor::new(&compressed), 1 << 24).unwrap().read_to_end(&mut raw).unwrap();
+        crate::system::zstd::Decoder::new(Cursor::new(&compressed), 1 << 24).unwrap().read_to_end(&mut raw).unwrap();
         let Ok(mut command) = std::process::Command::new("zstd")
             .args(["-dc", "--long=27"])
             .stdin(std::process::Stdio::piped())

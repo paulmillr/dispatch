@@ -67,7 +67,8 @@ Source: https://github.com/ibireme/yyjson/tree/0.12.0.
 
 ## Zstandard
 
-Dispatch's test tooling uses Zstandard 1.5.7, copyright Meta Platforms, Inc. and affiliates, under the BSD license,
-to compress the replay corpus (the app's Debug replays and the helper's capture tool; no Release build includes it).
+Dispatch uses Zstandard 1.5.7, copyright Meta Platforms, Inc. and affiliates, under the BSD license: the bundled
+helper compresses the archives that carry copied files between hosts, and the test tooling compresses the replay
+corpus (the app's Debug replays and the helper's capture tool).
 `Vendor/Zstd/` holds the unmodified library sources and license (see `Vendor/Zstd/PROVENANCE.md`). The license is
 bundled in `ThirdPartyLicenses/Zstandard-BSD.txt`. Source: https://github.com/facebook/zstd/tree/v1.5.7.

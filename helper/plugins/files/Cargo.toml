@@ -10,5 +10,5 @@ autotests = false
 dispatch-helper-core = { path = "../../core" }
 
 [lib]
-test = false
+test = true
 path = "src/lib.rs"

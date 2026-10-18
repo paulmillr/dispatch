@@ -317,13 +317,15 @@ impl Multiplexer for Native {
             self.finish(io, done, Err(failure));
             return;
         }
-        let command = command.unwrap_or_else(|| {
+        let mut command = command.unwrap_or_else(|| {
             let mut command = Command::new(&self.shell);
             command
                 .arg("-l")
                 .current_dir(self.root.cwd.as_ref().unwrap());
             command
         });
+        // The launch's name is the multiplexer's (launch.names), never the program's environment.
+        strip_launch_name(&mut command);
         let title = command.get_program().to_string_lossy().into_owned();
         let cwd = command
             .get_current_dir()

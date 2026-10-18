@@ -44,11 +44,12 @@ never builds; everything else is upstream's code, so the compressed and decompre
 
 Captures are zstd. The replay corpus (`replays/`) is level 9 with long-distance matching (`--long=27`), whose 128 MiB
 window finds the same large payload recorded again and again (a helper binary uploaded many times). Live captures are
-level 1 (the `fast` strategy): quick, in a small window; `capture store` compresses them again for the corpus. Only test
-tooling uses it, never a Release build:
+level 1 (the `fast` strategy): quick, in a small window; `capture store` compresses them again for the corpus. The
+files plugin's copy archives are level 1 too, so the helper links it in every build, Release included:
 
-- The helper (`helper/core/build.rs`) compiles all three parts into every helper with its `capture` feature, macOS and
-  Linux: live captures and the capture tool write it, every replay reads it. Linux helpers are built on macOS with the
+- The helper (`helper/core/build.rs`, FFI in `helper/core/src/system/zstd.rs`) compiles all three parts into every
+  helper, macOS and Linux: copied files travel as zstd archives; with the `capture` feature, live captures and the
+  capture tool write it and every replay reads it. Linux helpers are built on macOS with the
   same clang, for `*-unknown-linux-musl` and freestanding (macOS has no Linux libc headers): `freestanding/`, ours and
   not upstream's, declares the libc functions zstd calls (`memcpy`, `memmove`, `memset`, `memcmp`, `malloc`, `calloc`,
   `free`), which the static musl libc of Rust's musl targets supplies.

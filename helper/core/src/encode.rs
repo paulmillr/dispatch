@@ -313,6 +313,53 @@ records! {
         total,
         available
     };
+    Entry {
+        name,
+        kind,
+        size,
+        modified_ns,
+        target,
+        mark
+    };
+    Listing {
+        path,
+        entries,
+        truncated
+    };
+    FolderSummary {
+        files,
+        folders,
+        bytes,
+        truncated
+    };
+    Packed {
+        archive,
+        entries,
+        files,
+        folders,
+        bytes,
+        size,
+        skipped
+    };
+    Transfer {
+        transfer,
+        staging
+    };
+    Progress {
+        bytes
+    };
+    Unpacked {
+        entries,
+        bytes,
+        replaced,
+        kept,
+        skipped
+    };
+    Git {
+        status,
+        output,
+        truncated
+    };
     Install {
         edits,
         restart,

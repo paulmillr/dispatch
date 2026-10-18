@@ -565,32 +565,11 @@ fn removal(mut records: Vec<trace::Record>) -> io::Result<Vec<trace::Record>> {
         let (value, lost) = rows(value);
         lost.then(|| body::encode_plain(&value).map_err(|error| io::Error::other(error.message))).transpose()
     };
-    let mut streams: BTreeMap<String, Vec<usize>> = BTreeMap::new();
-    for index in 0..records.len() {
-        let record = &mut records[index];
+    for record in &mut records {
         if let Some(bytes) = plain(&record.args)? { record.args = bytes }
         if let Some(bytes) = plain(&record.output)? { record.output = bytes }
-        // A closed descriptor's number can come back for another stream.
-        if matches!(record.op.as_str(), "close" | "hangup") && let Ok(fd) = body::decode_plain(&record.args) && let Some(fd) = fd.signed() {
-            let ended: Vec<String> = streams.keys().filter(|key| key.starts_with(&format!("fd {fd} "))).cloned().collect();
-            for key in ended {
-                let indices = streams.remove(&key).unwrap();
-                streams.insert(format!("{key} #{index}"), indices);
-            }
-        }
-        if matches!(body::decode_plain(&record.output), Ok(Data::Bytes(_))) {
-            streams.entry(stream(record)).or_default().push(index);
-        }
     }
-    for indices in streams.into_values() {
-        let pieces: Vec<Vec<u8>> = indices.iter().map(|&index| match body::decode_plain(&records[index].output) {
-            Ok(Data::Bytes(bytes)) => bytes.to_vec(),
-            _ => unreachable!(),
-        }).collect();
-        let joined = pieces.concat();
-        if wire::Decoder::new(wire::LIMIT).feed(&joined, |_| {}).is_err() {
-            continue;
-        }
+    restream(&mut records, &[1], &mut |joined| {
         // Our frames, each whole, as their lengths cut them; the changed ones (old range, new bytes).
         let (mut at, mut edits) = (0, Vec::new());
         for _ in 0.. {
@@ -607,6 +586,46 @@ fn removal(mut records: Vec<trace::Record>) -> io::Result<Vec<trace::Record>> {
             }
             at = end;
         }
+        Ok(edits)
+    })?;
+    Ok(records)
+}
+
+/// The records with `edit`'s changes made to every stream of our frames: the bytes a stream's records read or wrote
+/// (`parts`: 0 args, an app's `out.wire`; 1 output, a read's or a helper's write), joined, go to `edit`, which returns
+/// its changes (old range, new bytes; in order). The changed stream is cut into its records again: each keeps its
+/// share (`moved`), and a write asks for the new length of what it writes.
+fn restream(records: &mut [trace::Record], parts: &[usize],
+            edit: &mut dyn FnMut(&[u8]) -> io::Result<Vec<(Range<usize>, Vec<u8>)>>) -> io::Result<()> {
+    let bytes = |record: &trace::Record, part: usize| match body::decode_plain([&record.args, &record.output][part]) {
+        Ok(Data::Bytes(bytes)) => Some(bytes.to_vec()),
+        _ => None,
+    };
+    let mut streams: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for index in 0..records.len() {
+        let record = &records[index];
+        // A closed descriptor's number can come back for another stream.
+        if matches!(record.op.as_str(), "close" | "hangup") && let Ok(fd) = body::decode_plain(&record.args) && let Some(fd) = fd.signed() {
+            let ended: Vec<String> = streams.keys().filter(|key| key.starts_with(&format!("fd {fd} "))).cloned().collect();
+            for key in ended {
+                let indices = streams.remove(&key).unwrap();
+                streams.insert(format!("{key} #{index}"), indices);
+            }
+        }
+        for &part in parts {
+            if bytes(record, part).is_some() {
+                streams.entry(format!("{} {}", stream(record), ["args", "output"][part])).or_default().push(index);
+            }
+        }
+    }
+    for (key, indices) in streams {
+        let part = usize::from(key.ends_with(" output") || key.contains(" output #"));
+        let pieces: Vec<Vec<u8>> = indices.iter().map(|&index| bytes(&records[index], part).unwrap()).collect();
+        let joined = pieces.concat();
+        if wire::Decoder::new(wire::LIMIT).feed(&joined, |_| {}).is_err() {
+            continue;
+        }
+        let edits = edit(&joined)?;
         if edits.is_empty() {
             continue;
         }
@@ -618,10 +637,11 @@ fn removal(mut records: Vec<trace::Record>) -> io::Result<Vec<trace::Record>> {
         let mut start = 0;
         for (&index, &end) in indices.iter().zip(&ends) {
             let record = &mut records[index];
-            record.output = body::encode_plain(&Data::Bytes(&stream[moved(&edits, &ends, start)..moved(&edits, &ends, end)]))
+            let cut = body::encode_plain(&Data::Bytes(&stream[moved(&edits, &ends, start)..moved(&edits, &ends, end)]))
                 .map_err(|error| io::Error::other(error.message))?;
+            *[&mut record.args, &mut record.output][part] = cut;
             // A write asks for what is left of what it writes (a frame, or a chunk read before), to its end.
-            if record.op == "write" && let Ok(Data::Object(fields)) = body::decode_plain(&record.args) {
+            if part == 1 && record.op == "write" && let Ok(Data::Object(fields)) = body::decode_plain(&record.args) {
                 let length = fields.iter().find_map(|(key, value)| (*key == "length").then(|| value.unsigned()).flatten());
                 if let Some(length) = length.map(|length| length as usize) {
                     let new = moved(&edits, &ends, start + length) - moved(&edits, &ends, start);
@@ -632,7 +652,345 @@ fn removal(mut records: Vec<trace::Record>) -> io::Result<Vec<trace::Record>> {
             start = end;
         }
     }
-    Ok(records)
+    Ok(())
+}
+
+/// What converting one capture did: frames encoded again, streamed values among them, streamed values left as recorded
+/// (their new body needs another number of chunks), frames of the old schema that did not decode, and records still
+/// holding the old schema's id afterwards (bytes no stream of our frames carried).
+#[derive(Default, Debug)]
+struct Converted {
+    frames: usize,
+    streamed: usize,
+    rechunk: usize,
+    undecoded: usize,
+    left: usize,
+    versions: usize,
+    edited: usize,
+}
+
+/// A schema's dictionary as the corpus keeps it (`replays/wire/<schema id in hex>.json`, written by `capture dictionary`).
+fn dictionary(path: &Path) -> io::Result<(u64, body::Names)> {
+    let bad = || io::Error::other(format!("{}: not a wire dictionary", path.display()));
+    let json = Json::parse(&std::fs::read(path)?).map_err(|_| bad())?;
+    let root = json.root();
+    let leak = |text: &str| -> &'static str { Box::leak(text.to_owned().into_boxed_str()) };
+    let schema: Vec<u8> = root.get("schema").and_then(|v| v.array()).ok_or_else(bad)?
+        .map(|v| v.unsigned().and_then(|v| u8::try_from(v).ok())).collect::<Option<_>>().ok_or_else(bad)?;
+    let symbols: Vec<&'static str> = root.get("symbols").and_then(|v| v.array()).ok_or_else(bad)?
+        .map(|v| v.string().map(leak)).collect::<Option<_>>().ok_or_else(bad)?;
+    let records: Vec<&'static [&'static str]> = root.get("records").and_then(|v| v.array()).ok_or_else(bad)?
+        .map(|record| record.array().and_then(|fields| fields.map(|v| v.string().map(leak)).collect::<Option<Vec<_>>>())
+            .map(|fields| &*Box::leak(fields.into_boxed_slice())))
+        .collect::<Option<_>>().ok_or_else(bad)?;
+    let schema: [u8; 8] = schema.try_into().map_err(|_| bad())?;
+    Ok((u64::from_le_bytes(schema), body::Names { schema, symbols: Box::leak(symbols.into_boxed_slice()), records: Box::leak(records.into_boxed_slice()) }))
+}
+
+/// This helper's dictionary as JSON (`capture dictionary`): the schema id, its symbols and its records, in order.
+fn dictionary_json() -> String {
+    let quote = |text: &str| {
+        let mut out = String::from("\"");
+        for c in text.chars() {
+            match c {
+                '"' | '\\' => { out.push('\\'); out.push(c) }
+                c if (c as u32) < 0x20 => { let _ = write!(out, "\\u{:04x}", c as u32); }
+                c => out.push(c),
+            }
+        }
+        out + "\""
+    };
+    let symbols: Vec<String> = body::SYMBOLS.iter().map(|symbol| format!("  {}", quote(symbol))).collect();
+    let records: Vec<String> = body::RECORDS.iter()
+        .map(|fields| format!("  [{}]", fields.iter().map(|field| quote(field)).collect::<Vec<_>>().join(", "))).collect();
+    format!("{{\"schema\": {:?},\n\"symbols\": [\n{}\n],\n\"records\": [\n{}\n]}}\n", body::SCHEMA, symbols.join(",\n"), records.join(",\n"))
+}
+
+/// A wire body's value as its encoder wrote it: which names were the schema's symbols and which were written out. A plain
+/// value embedded in a wire body (`encode::Raw`: a helper identity, a job's value) keeps its names written out even where
+/// the schema has them, so a body is written again token by token, not from its decoded value.
+enum Token<'a> {
+    /// Null, a boolean, a number or bytes: the tag and its payload as recorded.
+    Scalar(Vec<u8>),
+    Text { text: &'a str, symbol: bool },
+    Array(Vec<Token<'a>>),
+    Object { record: bool, keys: Vec<(&'a str, bool)>, values: Vec<Token<'a>> },
+}
+
+/// One value of a wire body of the schema `names`.
+fn token<'a>(bytes: &'a [u8], at: &mut usize, names: &body::Names, depth: usize) -> io::Result<Token<'a>> {
+    let bad = || io::Error::new(io::ErrorKind::InvalidData, "invalid wire body");
+    if depth == 0 {
+        return Err(bad());
+    }
+    let tag = bytes[take(bytes, at, 1)?];
+    let symbol = |at: &mut usize| -> io::Result<u16> { let start = take(bytes, at, 2)?; Ok(u16::from_le_bytes([bytes[start], bytes[start + 1]])) };
+    let text = |at: &mut usize| -> io::Result<&'a str> {
+        let length = count(bytes, at)?;
+        let start = take(bytes, at, length)?;
+        std::str::from_utf8(&bytes[start..start + length]).map_err(|_| bad())
+    };
+    let scalar = |at: &mut usize, length: usize| -> io::Result<Token<'a>> {
+        let start = take(bytes, at, length)?;
+        Ok(Token::Scalar([&[tag][..], &bytes[start..start + length]].concat()))
+    };
+    Ok(match tag {
+        0..=2 => Token::Scalar(vec![tag]),
+        3..=5 => scalar(at, 8)?,
+        11 => { let length = count(bytes, at)?; *at -= 4; scalar(at, 4 + length)? }
+        6 => Token::Text { text: text(at)?, symbol: false },
+        9 => Token::Text { text: names.symbols.get(usize::from(symbol(at)?)).ok_or_else(bad)?, symbol: true },
+        7 => {
+            let length = count(bytes, at)?;
+            Token::Array((0..length).map(|_| token(bytes, at, names, depth - 1)).collect::<io::Result<_>>()?)
+        }
+        8 => {
+            let length = count(bytes, at)?;
+            let (mut keys, mut values) = (Vec::new(), Vec::new());
+            for _ in 0..length {
+                let index = symbol(at)?;
+                keys.push(if index == u16::MAX { (text(at)?, false) } else { (*names.symbols.get(usize::from(index)).ok_or_else(bad)?, true) });
+                values.push(token(bytes, at, names, depth - 1)?);
+            }
+            Token::Object { record: false, keys, values }
+        }
+        10 => {
+            let fields = names.records.get(usize::from(symbol(at)?)).ok_or_else(bad)?;
+            let values = fields.iter().map(|_| token(bytes, at, names, depth - 1)).collect::<io::Result<_>>()?;
+            Token::Object { record: true, keys: fields.iter().map(|field| (*field, true)).collect(), values }
+        }
+        _ => return Err(bad()),
+    })
+}
+
+/// A wire body of the schema `names`, as tokens (its schema id checked).
+fn tokens<'a>(bytes: &'a [u8], names: &body::Names) -> io::Result<Token<'a>> {
+    if !bytes.starts_with(&names.schema) {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "another schema"));
+    }
+    let mut at = names.schema.len();
+    let value = token(bytes, &mut at, names, body::DEPTH)?;
+    if at != bytes.len() {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid wire body"));
+    }
+    Ok(value)
+}
+
+/// Whether a value was written plain (Some(true): a name written out that the old schema has as a symbol, or an object
+/// written with keys that are one of its records), by the schema (Some(false): a symbol or a record), or cannot tell.
+fn plain(token: &Token<'_>, old: &body::Names) -> Option<bool> {
+    let known = |name: &str| old.symbols.binary_search(&name).is_ok();
+    match token {
+        Token::Text { symbol: true, .. } | Token::Object { record: true, .. } => Some(false),
+        Token::Text { text, symbol: false } => known(text).then_some(true),
+        Token::Object { keys, .. } if keys.iter().any(|(_, symbol)| *symbol) => Some(false),
+        Token::Object { keys, .. } => (keys.iter().any(|(key, _)| known(key))
+            || old.records.iter().any(|fields| fields.iter().copied().eq(keys.iter().map(|(key, _)| *key)))).then_some(true),
+        _ => None,
+    }
+}
+
+/// `token` written in this helper's schema: as its old encoder wrote it, plain inside a plain value (one a parent or the
+/// value itself shows plain), else with this schema's symbols and records; a value that cannot tell is its parent's kind.
+fn written(token: &Token<'_>, parent: bool, old: &body::Names, out: &mut Vec<u8>) {
+    let plain = parent || plain(token, old) == Some(true);
+    let name = |out: &mut Vec<u8>, name: &str| match body::SYMBOLS.binary_search(&name) {
+        Ok(index) if !plain => out.extend_from_slice(&(index as u16).to_le_bytes()),
+        _ => {
+            out.extend_from_slice(&u16::MAX.to_le_bytes());
+            out.extend_from_slice(&(name.len() as u32).to_le_bytes());
+            out.extend_from_slice(name.as_bytes());
+        }
+    };
+    match token {
+        Token::Scalar(bytes) => out.extend_from_slice(bytes),
+        Token::Text { text, .. } => match body::SYMBOLS.binary_search(text) {
+            Ok(index) if !plain => {
+                out.push(9);
+                out.extend_from_slice(&(index as u16).to_le_bytes());
+            }
+            _ => {
+                out.push(6);
+                out.extend_from_slice(&(text.len() as u32).to_le_bytes());
+                out.extend_from_slice(text.as_bytes());
+            }
+        },
+        Token::Array(items) => {
+            out.push(7);
+            out.extend_from_slice(&(items.len() as u32).to_le_bytes());
+            for item in items {
+                written(item, plain, old, out);
+            }
+        }
+        Token::Object { keys, values, .. } => {
+            let record = body::RECORDS.iter().position(|fields| fields.iter().copied().eq(keys.iter().map(|(key, _)| *key))).filter(|_| !plain);
+            match record {
+                Some(index) => {
+                    out.push(10);
+                    out.extend_from_slice(&(index as u16).to_le_bytes());
+                }
+                None => {
+                    out.push(8);
+                    out.extend_from_slice(&(keys.len() as u32).to_le_bytes());
+                }
+            }
+            for ((key, _), value) in keys.iter().zip(values) {
+                if record.is_none() {
+                    name(out, key);
+                }
+                written(value, plain, old, out);
+            }
+        }
+    }
+}
+
+/// `token` with each `version` field naming the wire version `old` (hello's: the version a helper speaks) naming this one.
+fn versioned(token: &mut Token<'_>, old: u64, tally: &mut Converted) {
+    match token {
+        Token::Object { keys, values, .. } => {
+            for ((key, _), value) in keys.iter().zip(values.iter_mut()) {
+                match value {
+                    Token::Scalar(bytes) if *key == "version" && bytes[..] == [&[3u8][..], &old.to_le_bytes()].concat()[..] => {
+                        *bytes = [&[3u8][..], &wire::VERSION.to_le_bytes()].concat();
+                        tally.versions += 1;
+                    }
+                    value => versioned(value, old, tally),
+                }
+            }
+        }
+        Token::Array(items) => items.iter_mut().for_each(|item| versioned(item, old, tally)),
+        _ => {}
+    }
+}
+
+/// The operations 9bfa9611 added after `files.read` (dispatch/table.rs order), for `--edit hello-files-ops`.
+const FILES_OPS: [&str; 9] = ["files.list", "files.summary", "files.write", "files.pack", "files.pack.drop", "files.unpack.open",
+    "files.unpack.write", "files.unpack.close", "files.git"];
+
+/// `token` with a reviewed behavior change made as the new helper makes it (`capture convert --edit NAME`):
+/// `hello-files-ops`, a hello result's `ops` list the files operations after `files.read`.
+fn edited(token: &mut Token<'_>, edits: &[String], tally: &mut Converted) {
+    if !edits.iter().any(|edit| edit == "hello-files-ops") {
+        return;
+    }
+    let Token::Object { keys, values, .. } = token else { return };
+    let hello = keys.iter().any(|(key, _)| *key == "version");
+    for ((key, _), value) in keys.iter().zip(values.iter_mut()) {
+        match value {
+            Token::Array(ops) if hello && *key == "ops" => {
+                let read = ops.iter().position(|op| matches!(op, Token::Text { text: "files.read", .. }));
+                if let Some(read) = read.filter(|_| !ops.iter().any(|op| matches!(op, Token::Text { text: "files.list", .. }))) {
+                    tally.edited += 1;
+                    for (offset, op) in FILES_OPS.iter().enumerate() {
+                        ops.insert(read + 1 + offset, Token::Text { text: op, symbol: true });
+                    }
+                }
+            }
+            value => edited(value, edits, tally),
+        }
+    }
+}
+
+/// A wire body of the schema `names` written in this helper's, with its version fields and `accepted` edits made.
+fn rewritten(bytes: &[u8], names: &body::Names, accepted: &[String], tally: &mut Converted) -> io::Result<Vec<u8>> {
+    let mut value = tokens(bytes, names)?;
+    versioned(&mut value, u64::from_le_bytes(names.schema), tally);
+    edited(&mut value, accepted, tally);
+    let mut out = body::SCHEMA.to_vec();
+    written(&value, false, names, &mut out);
+    Ok(out)
+}
+
+/// The changes that write a stream's frames of schema `names` in this helper's (`rewritten`); a streamed value's chunks
+/// joined, rewritten and cut again (CHUNK each), its end frame counting them.
+fn reencoded(joined: &[u8], names: &body::Names, accepted: &[String], tally: &mut Converted) -> io::Result<Vec<(Range<usize>, Vec<u8>)>> {
+    let invalid = |error: wire::Error| io::Error::other(format!("{error:?}"));
+    let (mut at, mut edits, mut chunks) = (0, Vec::new(), HashMap::<u64, Vec<Range<usize>>>::new());
+    for _ in 0.. {
+        let Some(header) = joined.get(at..at + 13) else { break };
+        let header = wire::Header::decode(header.try_into().unwrap(), wire::LIMIT).map_err(invalid)?;
+        let end = at + 13 + header.len as usize;
+        let Some(frame) = joined.get(at + 13..end) else { break };
+        match header.kind {
+            wire::Kind::Chunk => chunks.entry(header.id).or_default().push(at..end),
+            wire::Kind::Cancel => {}
+            _ if !frame.starts_with(&names.schema) => {}
+            _ => {
+                let streamed = body::decode_as(frame, names).ok()
+                    .and_then(|value| value.get("stream").and_then(|stream| stream.get("encoding")).and_then(Data::string).map(str::to_owned));
+                let pending = chunks.remove(&header.id);
+                match (streamed.as_deref(), pending) {
+                    (Some("value"), Some(ranges)) => {
+                        let inner: Vec<u8> = ranges.iter().flat_map(|range| joined[range.start + 21..range.end].iter().copied()).collect();
+                        let Ok(inner) = rewritten(&inner, names, accepted, tally) else {
+                            tally.undecoded += 1;
+                            at = end;
+                            continue;
+                        };
+                        let pieces: Vec<&[u8]> = inner.chunks(wire::CHUNK).collect();
+                        if pieces.len() != ranges.len() {
+                            tally.rechunk += 1;
+                            at = end;
+                            continue;
+                        }
+                        for (sequence, (range, piece)) in ranges.iter().zip(&pieces).enumerate() {
+                            let body = [&(sequence as u64).to_le_bytes()[..], piece].concat();
+                            edits.push((range.clone(), wire::packet(wire::Kind::Chunk, header.id, &body).map_err(invalid)?));
+                        }
+                        // The end frame counts the chunks and their bytes (both unchanged in number of chunks).
+                        let mut value = tokens(frame, names)?;
+                        if let Token::Object { keys, values, .. } = &mut value {
+                            for ((key, _), value) in keys.iter().zip(values.iter_mut()) {
+                                if *key == "stream" && let Token::Object { keys, values, .. } = value {
+                                    for ((key, _), value) in keys.iter().zip(values.iter_mut()) {
+                                        if *key == "bytes" {
+                                            *value = Token::Scalar([&[3u8][..], &(inner.len() as u64).to_le_bytes()].concat());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        let mut out = body::SCHEMA.to_vec();
+                        written(&value, false, names, &mut out);
+                        edits.push((at..end, wire::packet(header.kind, header.id, &out).map_err(invalid)?));
+                        tally.streamed += 1;
+                    }
+                    _ => match rewritten(frame, names, accepted, tally) {
+                        Ok(out) => edits.push((at..end, wire::packet(header.kind, header.id, &out).map_err(invalid)?)),
+                        Err(_) => {
+                            tally.undecoded += 1;
+                            at = end;
+                            continue;
+                        }
+                    },
+                }
+                tally.frames += 1;
+            }
+        }
+        at = end;
+    }
+    edits.sort_by_key(|(range, _)| range.start);
+    Ok(edits)
+}
+
+/// `file` written to `target` in this helper's wire schema (`capture convert`): its frames of the schema it was recorded
+/// with (a dictionary in `names`) encoded again, its header naming this wire version.
+fn convert(file: &Path, target: &Path, names: &HashMap<u64, body::Names>, edits: &[String]) -> io::Result<Converted> {
+    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(target.parent().unwrap())?;
+    let (mut header, mut records) = trace::read(File::open(file)?, usize::MAX)?;
+    let mut tally = Converted::default();
+    if header.wire != wire::VERSION {
+        let old = names.get(&header.wire).ok_or_else(|| io::Error::other(format!("{}: no dictionary for wire {}", file.display(), schema(header.wire))))?;
+        restream(&mut records, &[0, 1], &mut |joined| reencoded(joined, old, edits, &mut tally))?;
+        tally.left = records.iter().filter(|record| [&record.args, &record.output].iter().any(|bytes| bytes.windows(8).any(|window| window == old.schema))).count();
+        header.wire = wire::VERSION;
+    }
+    let mut writer = trace::Writer::corpus(File::options().write(true).create_new(true).mode(0o600).open(target)?, &header)?;
+    for record in &records {
+        writer.push(record)?;
+    }
+    writer.finish()?;
+    Ok(tally)
 }
 
 /// `file` written to `target` with its statistics process lists cut to their allowed rows (`removal`) when it names
@@ -2664,6 +3022,12 @@ fn store(stage: &Path, replays: &Path, failed: bool) -> io::Result<bool> {
     Ok(complete)
 }
 
+/// A wire version as people read it: the schema id in hex, the eight bytes every wire body starts with
+/// (wire::VERSION is them read little-endian; build/schema.rs hashes the schema into them).
+fn schema(version: u64) -> String {
+    version.to_le_bytes().iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 /// Replays every helper capture in the corpus on this helper; one that does not replay is dropped (listed;
 /// --dry-run only lists). App journals are the app replay's to judge, except one of another protocol
 /// version (the app reads only its own): dropped too.
@@ -2672,7 +3036,8 @@ fn prune(replays: &Path, dry: bool) -> io::Result<()> {
     for file in captures(&replays)? {
         let (_, header) = trace::Reader::new(File::open(&file)?, usize::MAX)?;
         if header.layer == trace::Layer::App && header.wire != dispatch_helper_core::wire::VERSION {
-            println!("{} {}: app journal of protocol {} (now {})", if dry { "would drop" } else { "drop" }, file.display(), header.wire, dispatch_helper_core::wire::VERSION);
+            println!("{} {}: app journal of protocol {} (now {})", if dry { "would drop" } else { "drop" }, file.display(), schema(header.wire),
+                schema(dispatch_helper_core::wire::VERSION));
             if !dry {
                 std::fs::remove_file(&file)?;
             }
@@ -2792,7 +3157,7 @@ pub fn run(arguments: &[std::ffi::OsString]) -> io::Result<()> {
             let from = number("--from", option(&mut args, "--from")?)?.unwrap_or(0);
             let [file] = &args[..] else { return Err(usage()) };
             let (mut reader, header) = trace::Reader::new(File::open(file)?, usize::MAX)?;
-            println!("{:?} wire {}", header.layer, header.wire);
+            println!("{:?} wire {}", header.layer, schema(header.wire));
             let mut streams = HashMap::new();
             for index in 0.. {
                 let Some(record) = reader.next()? else {
@@ -2901,6 +3266,62 @@ pub fn run(arguments: &[std::ffi::OsString]) -> io::Result<()> {
             }
             Ok(())
         }
+        "dictionary" => {
+            let [directory] = &args[..] else { return Err(usage()) };
+            std::fs::DirBuilder::new().recursive(true).create(directory)?;
+            let path = Path::new(directory).join(format!("{}.json", schema(wire::VERSION)));
+            std::fs::write(&path, dictionary_json())?;
+            println!("{}", path.display());
+            Ok(())
+        }
+        "convert" => {
+            let jobs = jobs(&mut args)?;
+            let dictionaries = option(&mut args, "--dictionaries")?;
+            let mut edits = Vec::new();
+            for _ in 0..args.len() {
+                let Some(edit) = option(&mut args, "--edit")? else { break };
+                edits.push(edit);
+            }
+            let [directory, out] = &args[..] else { return Err(usage()) };
+            let dictionaries = dictionaries.map_or_else(|| Path::new(directory).join("wire"), PathBuf::from);
+            let mut names = HashMap::new();
+            for entry in std::fs::read_dir(&dictionaries)? {
+                let path = entry?.path();
+                if path.extension().is_some_and(|extension| extension == "json") {
+                    let (version, dictionary) = dictionary(&path)?;
+                    names.insert(version, dictionary);
+                }
+            }
+            let (input, root) = (Path::new(directory), Path::new(out));
+            let files = captures(input)?;
+            let results = parallel(&files, jobs, |file| convert(file, &root.join(file.strip_prefix(input).unwrap_or(file)), &names, &edits));
+            let (mut total, mut failed) = (Converted::default(), 0);
+            for (file, result) in files.iter().zip(results) {
+                match result {
+                    Ok(tally) => {
+                        if tally.rechunk + tally.undecoded + tally.left > 0 {
+                            println!("partial\t{}\t{tally:?}", file.display());
+                        }
+                        total.frames += tally.frames;
+                        total.streamed += tally.streamed;
+                        total.rechunk += tally.rechunk;
+                        total.undecoded += tally.undecoded;
+                        total.left += tally.left;
+                        total.versions += tally.versions;
+                        total.edited += tally.edited;
+                    }
+                    Err(error) => {
+                        failed += 1;
+                        println!("error\t{}\t{error}", file.display());
+                    }
+                }
+            }
+            println!("{} captures, {failed} failed; {total:?}", files.len());
+            if failed > 0 {
+                return Err(io::Error::other("some captures were not converted"));
+            }
+            Ok(())
+        }
         "replace" => {
             let list = option(&mut args, "--needles")?.map(|path| needles(&path)).transpose()?.unwrap_or_default();
             let jobs = jobs(&mut args)?;
@@ -2913,7 +3334,7 @@ pub fn run(arguments: &[std::ffi::OsString]) -> io::Result<()> {
     }
 }
 
-const USAGE: &str = "usage: dispatch-helper capture replay DIR [--output DIR] [--timeout SECONDS] [--completion required] | inspect FILE [--from N] [--limit N] | diff A B [--limit N] [--jobs N] | value FILE | grep NEEDLE PATH... [--limit N] [--jobs N] | grep PATH... [--needles FILE] [--values SHAPE]... [--limit N] [--jobs N] | replace DIR OUT [--needles FILE] [--uuids] [--ips] [--jobs N] | key PATH... | check PATH... | store STAGE REPLAYS [--failed] | prune REPLAYS [--dry-run]   (options go anywhere after the command)";
+const USAGE: &str = "usage: dispatch-helper capture replay DIR [--output DIR] [--timeout SECONDS] [--completion required] | inspect FILE [--from N] [--limit N] | diff A B [--limit N] [--jobs N] | value FILE | grep NEEDLE PATH... [--limit N] [--jobs N] | grep PATH... [--needles FILE] [--values SHAPE]... [--limit N] [--jobs N] | replace DIR OUT [--needles FILE] [--uuids] [--ips] [--jobs N] | key PATH... | check PATH... | store STAGE REPLAYS [--failed] | prune REPLAYS [--dry-run] | dictionary DIR | convert REPLAYS OUT [--dictionaries DIR] [--edit NAME]... [--jobs N]   (options go anywhere after the command)";
 
 #[cfg(test)]
 #[path = "capture.test.rs"]

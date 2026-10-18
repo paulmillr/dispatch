@@ -194,6 +194,12 @@ impl Tmux {
                         ("-F".into(), false),
                         ("#{pane_id}".into(), true),
                     ]);
+                    // A launch's own name for its new window (no automatic rename after the
+                    // launcher process); a split keeps its window's name.
+                    let name = command.as_ref().and_then(launch_name);
+                    if let Some(name) = name.filter(|_| !split) {
+                        request.extend([("-n".into(), false), (name.replace('#', "##"), true)]);
+                    }
                     if !cwd.is_empty() {
                         request.extend([("-c".into(), false), (cwd.replace('#', "##"), true)]);
                     }
@@ -202,7 +208,7 @@ impl Tmux {
                         (format!("DISPATCH_TMUX_CREATION={creation}"), true),
                     ]);
                     if let Some(command) = &command {
-                        for (name, value) in command.get_envs() {
+                        for (name, value) in command.get_envs().filter(|(name, _)| *name != LAUNCH_NAME) {
                             if let Some(value) = value {
                                 let name = name
                                     .to_str()
@@ -217,7 +223,7 @@ impl Tmux {
                             }
                         }
                         request.extend([("--".into(), false), ("env".into(), false)]);
-                        for (name, value) in command.get_envs() {
+                        for (name, value) in command.get_envs().filter(|(name, _)| *name != LAUNCH_NAME) {
                             if value.is_none() {
                                 request.extend([
                                     ("-u".into(), false),

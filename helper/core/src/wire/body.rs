@@ -418,6 +418,34 @@ pub fn decode(bytes: &[u8]) -> Result<Data<'_>, Error> {
     Ok(data)
 }
 
+/// Another schema's names (an older helper's, from the corpus's dictionaries): what its wire bodies abbreviate.
+pub struct Names {
+    pub schema: [u8; 8],
+    pub symbols: &'static [&'static str],
+    pub records: &'static [&'static [&'static str]],
+}
+
+/// A wire body of the schema `names` describes (capture convert); borrows its strings and bytes.
+pub fn decode_as<'a>(bytes: &'a [u8], names: &Names) -> Result<Data<'a>, Error> {
+    let mut reader = Reader {
+        bytes,
+        at: 0,
+        names: Dictionary {
+            symbols: names.symbols,
+            records: names.records,
+        },
+        values: VALUES,
+    };
+    if reader.take(names.schema.len())? != names.schema {
+        return Err(error());
+    }
+    let data = reader.value(DEPTH)?;
+    if reader.at != bytes.len() {
+        return Err(error());
+    }
+    Ok(data)
+}
+
 #[cfg(test)]
 #[path = "body.test.rs"]
 mod tests;

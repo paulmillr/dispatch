@@ -23,7 +23,7 @@ operations! {
         ("mux", Unsigned),
         ("key", Text),
     ]),
-        mux open(text(p, "key")?) id;
+        mux start(text(p, "key")?) id;
     "multiplexers.list" => Object(&[]),
         core multiplexers() value;
     "launches.list" => Object(&[]),
@@ -396,6 +396,83 @@ operations! {
         ("revision", Nullable(&Object(params::REVISION))),
     ]),
         core read() value;
+    "files.list" => Object(&[
+        ("plugin", Text),
+        ("path", Text),
+        ("hidden", Boolean),
+        ("limit", Unsigned),
+        ("git", Boolean),
+    ]),
+        plugin list(
+        Path::new(text(p, "path")?),
+        flag(p, "hidden"),
+        optional(p, "limit").unwrap_or(0),
+        flag(p, "git")
+    ) value;
+    "files.summary" => Object(&[
+        ("plugin", Text),
+        ("path", Text),
+        ("limit", Unsigned),
+    ]),
+        plugin summary(Path::new(text(p, "path")?), optional(p, "limit").unwrap_or(0)) value;
+    "files.write" => Object(&[
+        ("plugin", Text),
+        ("path", Text),
+        ("bytes", Bytes),
+        ("mode", Nullable(&Unsigned)),
+        ("replace", Boolean),
+    ]),
+        plugin write(Path::new(text(p, "path")?), bytes(p)?, permissions(p)?, flag(p, "replace")) value;
+    "files.pack" => Object(&[
+        ("plugin", Text),
+        ("transfer", Text),
+        ("base", Text),
+        ("paths", Array(&Text)),
+        ("limit", Unsigned),
+    ]),
+        plugin pack(
+        text(p, "transfer")?,
+        Path::new(text(p, "base")?),
+        &paths(p, "paths")?,
+        optional(p, "limit").unwrap_or(0)
+    ) value;
+    "files.pack.drop" => Object(&[
+        ("plugin", Text),
+        ("transfer", Text),
+    ]),
+        plugin pack_drop(text(p, "transfer")?) value;
+    "files.unpack.open" => Object(&[
+        ("plugin", Text),
+        ("transfer", Text),
+        ("target", Text),
+        ("policy", Text),
+        ("names", Array(&Text)),
+    ]),
+        plugin unpack_open(
+        text(p, "transfer")?,
+        Path::new(text(p, "target")?),
+        text(p, "policy")?,
+        &strings(p, "names")?
+    ) value;
+    "files.unpack.write" => Object(&[
+        ("plugin", Text),
+        ("transfer", Text),
+        ("bytes", Bytes),
+    ]),
+        plugin unpack_write(text(p, "transfer")?, bytes(p)?) value;
+    "files.unpack.close" => Object(&[
+        ("plugin", Text),
+        ("transfer", Text),
+        ("commit", Boolean),
+    ]),
+        plugin unpack_close(text(p, "transfer")?, flag(p, "commit")) value;
+    "files.git" => Object(&[
+        ("plugin", Text),
+        ("path", Text),
+        ("args", Array(&Text)),
+        ("limit", Unsigned),
+    ]),
+        plugin git(Path::new(text(p, "path")?), &strings(p, "args")?, optional(p, "limit").unwrap_or(0)) value;
     "stats.sample" => Object(&[
         ("plugin", Text),
     ]),

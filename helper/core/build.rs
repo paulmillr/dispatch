@@ -5,11 +5,14 @@ mod schema;
 fn main() {
     let manifest = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
-    schema::generate(&manifest, &out);
-    // Captures are zstd (Vendor/Zstd/PROVENANCE.md): every helper with the capture tool reads and writes them.
-    if env::var_os("CARGO_FEATURE_CAPTURE").is_some() {
-        zstd(&manifest.join("../../Vendor/Zstd"), &out);
+    // `ar` writes its temporary file in TMPDIR, which .cargo/config.toml points at helper/target: a checkout that
+    // never ran cargo there (Xcode builds use build/helper-rust) has no such directory.
+    if let Some(temporary) = env::var_os("TMPDIR") {
+        let _ = std::fs::create_dir_all(temporary);
     }
+    schema::generate(&manifest, &out);
+    // Captures and the files plugin's archives are zstd (Vendor/Zstd/PROVENANCE.md): every helper links it.
+    zstd(&manifest.join("../../Vendor/Zstd"), &out);
 }
 
 /// Vendor/Zstd's common, compress and decompress sources as one static library, for the target: macOS with its SDK,
@@ -35,7 +38,7 @@ fn zstd(vendor: &Path, out: &Path) {
             "-isystem".into(),
             vendor.join("freestanding").display().to_string(),
         ],
-        other => panic!("captures (zstd) are built for macOS and Linux helpers, not {other}"),
+        other => panic!("zstd is built for macOS and Linux helpers, not {other}"),
     };
     let objects = out.join("zstd");
     std::fs::create_dir_all(&objects).unwrap();

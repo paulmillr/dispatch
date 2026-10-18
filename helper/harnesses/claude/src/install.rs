@@ -91,6 +91,10 @@ impl Setup {
                 ..Install::default()
             }));
         }
+        // Turning hooks off where Claude has no settings file removes nothing: it never creates one.
+        if self.enabled == Some(false) && self.before.is_none() {
+            return Ok(Next::Done(Install::default()));
+        }
         self.after = match (self.remote, self.enabled) {
             (true, _) => settings::installation(self.before.as_deref(), &self.command)?
                 .unwrap_or_else(|| self.before.clone().unwrap_or_default()),

@@ -151,6 +151,19 @@ impl Tmux {
         }
         command
     }
+    /// A tmux client for the server `key` names ("tmux": the default socket, which honours
+    /// TMUX_TMPDIR; else a socket path) outside any enclosing tmux. `existing`: never start one.
+    pub(crate) fn server(&self, key: &str, existing: bool) -> Command {
+        let mut command = Command::new(&self.executable);
+        command.arg("-u").env_remove("TMUX").env_remove("TMUX_PANE");
+        if existing {
+            command.arg("-N");
+        }
+        if key != "tmux" {
+            command.args(["-S", key]);
+        }
+        command
+    }
     pub(crate) fn controls(&self, process: &Process) -> bool {
         if process.executable != self.executable
             && process.executable.file_name() != Some(std::ffi::OsStr::new("tmux"))

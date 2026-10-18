@@ -2,6 +2,7 @@
 #[cfg(target_os = "macos")]
 mod darwin;
 mod ffi;
+pub(super) use ffi::available;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]

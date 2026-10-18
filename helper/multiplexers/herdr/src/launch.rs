@@ -41,6 +41,8 @@ impl Herdr {
             done,
         } = launch;
         let environment = self.config.environment.clone();
+        // A launch's own name for its new tab (feature launch.names); never the program's.
+        let name = beside.is_none().then(|| launch_name(&command).map(str::to_owned)).flatten();
         let mut argv = Vec::new();
         let removed: Vec<_> = command
             .get_envs()
@@ -63,7 +65,7 @@ impl Herdr {
             }
         };
         // Prepared launches carry their harness route; inherited context gets the mux route.
-        for (name, value) in command.get_envs() {
+        for (name, value) in command.get_envs().filter(|(name, _)| *name != LAUNCH_NAME) {
             if let Some(value) = value {
                 environment.insert(
                     name.to_string_lossy().into_owned(),
@@ -111,11 +113,19 @@ impl Herdr {
                         return;
                     }
                 };
+                let named = pane.clone();
                 let finish: Action = Box::new(move |mux, io, result| {
                     if let Err(e) = result {
                         mux.defer(io, done, Err(e));
                         return;
                     }
+                    let done: Done<Id> = match name {
+                        None => done,
+                        Some(name) => {
+                            mux.label(io, &named, &name);
+                            done
+                        }
+                    };
                     if let Some(close) = close {
                         mux.mutation(
                             io,
@@ -151,6 +161,23 @@ impl Herdr {
                     finish(mux, io, Ok(json));
                 }
             }),
+        );
+    }
+}
+
+impl Herdr {
+    /// Names the tab holding `pane` (a launch's new tab), best effort: the launch succeeded
+    /// either way, and herdr publishes the rename as tab.renamed.
+    pub(super) fn label(&mut self, io: &mut dyn Io, pane: &str, name: &str) {
+        let tab = self.snapshot.panes.iter().find(|p| p.key == pane).map(|p| p.parent.clone());
+        let Some(tab) = tab.filter(|_| native::label(name)) else {
+            return;
+        };
+        self.mutation(
+            io,
+            "tab.rename",
+            D::Object(vec![("tab_id", D::String(&tab)), ("label", D::String(name))]),
+            Box::new(|_, _, _| {}),
         );
     }
 }

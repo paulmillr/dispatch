@@ -23,13 +23,18 @@ pub(crate) fn required(method: &str) -> &'static str {
     let capability = match method {
         "hello" | "echo" | "permissions.reduce" => "",
         "plugins.reset" => "stats.sample",
-        "files.text" | "files.read" => "file.text",
+        "files.text" | "files.read" | "files.list" | "files.summary" | "files.pack"
+        | "files.pack.drop" => "file.text",
+        "files.write" | "files.unpack.open" | "files.unpack.write" | "files.unpack.close" => {
+            "file.write"
+        }
+        "files.git" => "git.read",
         "installation.install" | "installation.audit" => "hooks.configure",
         // Public agent keys need submission authority; internal process-checked keys also
         // carry an admitted multiplexer controller's protocol, independently of Chat.
         "terminals.keys" => "agent.submit",
         "chat.open" | "chat.state" | "chat.page" | "chat.models" | "chat.settings"
-        | "chat.tools" | "queue.list" | "launches.list" => "agent.inspect",
+        | "chat.tools" | "queue.list" | "launches.list" | "chat.list" | "projects.recent" => "agent.inspect",
         method if method.starts_with("stats.") => "stats.sample",
         method
             if method.starts_with("chat.")

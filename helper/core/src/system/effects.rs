@@ -2,6 +2,12 @@
 use super::*;
 use crate::json::Data;
 
+/// Job::Collect's workers: two slow commands run at once and the rest wait their turn on these, never on the
+/// shared workers.
+const COLLECTS: usize = 2;
+/// Collects submitted and not yet answered, running or waiting; past it a collect is refused (WouldBlock).
+const COLLECTS_QUEUED: usize = 16;
+
 impl Io for System {
     fn observe(&mut self, pid: u32) -> io::Result<u64> {
         if let Some(result) = self.replay("process.observe", Data::Unsigned(pid.into()), |v| v.unsigned()) {
@@ -333,12 +339,47 @@ impl Io for System {
                 Job::Remove { path: at, expected } => {
                     object("remove", vec![("path", Data::from(at.as_path())), ("expected", capture::expected(expected)?)])
                 }
+                Job::Pack(crate::api::PackJob { base, paths, archive, limit, stop: _ }) => object(
+                    "pack",
+                    vec![
+                        ("base", Data::from(base.as_path())),
+                        ("paths", Data::Array(paths.iter().map(|p| Data::from(p.as_path())).collect())),
+                        ("archive", Data::from(archive.as_path())),
+                        ("limit", Data::Unsigned(*limit)),
+                    ],
+                ),
+                Job::Append(at, bytes) => {
+                    object("append", vec![("path", Data::from(at.as_path())), ("bytes", Data::Bytes(bytes))])
+                }
+                Job::Unpack(crate::api::UnpackJob { archive, staging, policy, names, stop: _ }) => object(
+                    "unpack",
+                    vec![
+                        ("archive", Data::from(archive.as_path())),
+                        ("staging", capture::staging(staging)),
+                        ("policy", Data::String(capture::policy(*policy))),
+                        ("names", Data::Array(names.iter().map(|name| Data::Bytes(name)).collect())),
+                    ],
+                ),
+                Job::Stage(at) => object("stage", vec![("path", Data::from(at.as_path()))]),
+                Job::Discard(staging) => object("discard", vec![("staging", capture::staging(staging))]),
+                Job::RemoveTree(at) => object("remove_tree", vec![("path", Data::from(at.as_path()))]),
+                Job::Sweep(prefix, age) => object(
+                    "sweep",
+                    vec![("prefix", Data::String(prefix)), ("age", Data::Unsigned(age.as_secs()))],
+                ),
                 Job::List { path: at } => object("list", vec![("path", Data::from(at.as_path()))]),
                 Job::Read { path: at, offset, length } => object(
                     "read",
                     vec![("path", Data::from(at.as_path())), ("offset", Data::Unsigned(*offset)), ("length", Data::Unsigned(*length))],
                 ),
                 Job::Stat { path: at, follow } => object("stat", vec![("path", Data::from(at.as_path())), ("follow", Data::Bool(*follow))]),
+                Job::Entries(at) => object(
+                    "entries",
+                    vec![("path", Data::from(at.path.as_path())), ("hidden", Data::Bool(at.hidden)), ("limit", Data::Unsigned(at.limit))],
+                ),
+                Job::Summary(at) => {
+                    object("summary", vec![("path", Data::from(at.path.as_path())), ("limit", Data::Unsigned(at.limit))])
+                }
                 Job::Write { path: at, bytes, mode, expected } => object(
                     "write",
                     vec![
@@ -358,6 +399,15 @@ impl Io for System {
                 Job::Run { command, input, .. } => {
                     object("run", vec![("command", capture::command(command)), ("input", Data::Bytes(input))])
                 }
+                // The timeout is never recorded (like Run's deadline); the bounds decide the answer.
+                Job::Collect(at) => object(
+                    "collect",
+                    vec![
+                        ("command", capture::command(&at.command)),
+                        ("stdout", Data::Unsigned(at.stdout as u64)),
+                        ("stderr", Data::Unsigned(at.stderr as u64)),
+                    ],
+                ),
             };
             capture::value(&args)?
         };
@@ -407,7 +457,19 @@ impl Io for System {
             } else {
                 None
             };
-            self.workers
+            let executor = if matches!(job, Job::Collect(_)) {
+                match &mut self.collects {
+                    Some(collects) => collects,
+                    None => {
+                        let collects = work::Executor::new(COLLECTS, COLLECTS_QUEUED)?;
+                        self.reactor.interest(collects.as_raw_fd(), true, false)?;
+                        self.collects.insert(collects)
+                    }
+                }
+            } else {
+                &mut self.workers
+            };
+            executor
                 .submit(id, move || {
                     let _pin = pin;
                     match job {
@@ -477,7 +539,9 @@ impl Io for System {
                     }
                 }
             }
-            let cancelled = released || self.workers.cancel(work);
+            let cancelled = released
+                || self.workers.cancel(work)
+                || self.collects.as_mut().is_some_and(|collects| collects.cancel(work));
             if let Err(error) =
                 self.record("cancel", Data::Unsigned(work), &Ok(()), Data::Bool(cancelled))
             {

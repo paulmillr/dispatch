@@ -47,7 +47,7 @@ Most work needs no full live run. Replaying every recording takes about 15 minut
     "$HELPER" capture replay replays --completion required --output results/my-change
     ```
 
-  - Rust unit tests: `cd helper && cargo test --offline --features dispatch-helper/capture` (the capture tests need zstd, which only the `capture` feature builds).
+  - Rust unit tests: `cd helper && cargo test --offline --features dispatch-helper/capture` (the capture and replay tests need the `capture` feature).
   - Helper replays passing means the helper answers every recorded request as before, so the app's recordings still hold.
   - A capture that fails: the helper now does something else for that request (`report.jsonl` names the record). If that is the change you meant, the test that recorded it is stale: record that app test again. Helper captures are only recorded through app tests (`--capture`).
 

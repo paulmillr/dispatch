@@ -1,5 +1,5 @@
-//! The capture files' compression: Zstandard (Vendor/Zstd, compiled by build.rs into every helper with the capture
-//! tool). A live capture is level 1 (zstd's fast strategy: recording never waits on it); the replay corpus is level 9
+//! Zstandard (Vendor/Zstd, compiled by build.rs into every helper): capture files and the files plugin's archives.
+//! A live capture or an archive is level 1 (zstd's fast strategy: neither waits on it); the replay corpus is level 9
 //! with long-distance matching over a 128 MiB window, so a payload recorded again and again (a helper binary uploaded
 //! many times) is stored once. Each frame ends with a checksum of its content, which refuses a damaged file. A
 //! checkpoint ends a frame and later records continue in the next; the decoder reads frames one after another.
@@ -57,7 +57,7 @@ fn check(code: usize) -> io::Result<usize> {
     Err(io::Error::new(io::ErrorKind::InvalidData, format!("zstd: {}", name.to_string_lossy())))
 }
 
-pub struct Encoder<W: Write> {
+pub(crate) struct Encoder<W: Write> {
     output: Option<W>,
     stream: *mut c_void,
     buffer: Vec<u8>,
@@ -65,7 +65,7 @@ pub struct Encoder<W: Write> {
     pending: bool,
 }
 impl<W: Write> Encoder<W> {
-    /// A live capture: fast, in level 1's own small window (a helper process holds one while it runs).
+    /// A live capture or an archive: fast, in level 1's own small window (a helper process holds one while it runs).
     pub fn live(output: W) -> io::Result<Self> {
         Self::new(output, &[(COMPRESSION_LEVEL, LIVE), (CHECKSUM, 1)])
     }
@@ -132,7 +132,7 @@ impl<W: Write> Drop for Encoder<W> {
     }
 }
 
-pub struct Decoder<R: Read> {
+pub(crate) struct Decoder<R: Read> {
     input: R,
     stream: *mut c_void,
     buffer: Vec<u8>,
@@ -144,17 +144,28 @@ pub struct Decoder<R: Read> {
     limit: usize,
     produced: usize,
 }
+/// The largest window an archive decoder accepts: level 1 uses at most 2^19 bytes, and a frame asking for more
+/// is refused rather than allocated.
+const ARCHIVE_WINDOW_LOG: c_int = 23;
+
 impl<R: Read> Decoder<R> {
-    /// `limit` bounds the expanded bytes.
+    /// `limit` bounds the expanded bytes; frames may use the corpus encoder's window.
     pub fn new(input: R, limit: usize) -> io::Result<Self> {
+        Self::with_window(input, limit, WINDOW_LOG)
+    }
+    /// A files.pack archive: level 1's window, `limit` expanded bytes.
+    pub fn archive(input: R, limit: usize) -> io::Result<Self> {
+        Self::with_window(input, limit, ARCHIVE_WINDOW_LOG)
+    }
+    fn with_window(input: R, limit: usize, window: c_int) -> io::Result<Self> {
         // SAFETY: allocates a context, freed once in Drop.
         let stream = unsafe { ZSTD_createDStream() };
         if stream.is_null() {
             return Err(io::Error::other("zstd decoder"));
         }
         let decoder = Self { input, stream, buffer: vec![0; 1 << 17], start: 0, end: 0, exhausted: false, ended: true, limit, produced: 0 };
-        // SAFETY: the context is live. The corpus encoder's window: a larger one is refused rather than allocated.
-        check(unsafe { ZSTD_DCtx_setParameter(decoder.stream, WINDOW_MAX, WINDOW_LOG) })?;
+        // SAFETY: the context is live. A frame asking for a larger window is refused rather than allocated.
+        check(unsafe { ZSTD_DCtx_setParameter(decoder.stream, WINDOW_MAX, window) })?;
         Ok(decoder)
     }
 }
@@ -183,12 +194,12 @@ impl<R: Read> Read for Decoder<R> {
             if target.pos > 0 {
                 self.produced += target.pos;
                 if self.produced > self.limit {
-                    return Err(io::Error::new(io::ErrorKind::InvalidData, "zstd capture exceeds its expansion limit"));
+                    return Err(io::Error::new(io::ErrorKind::InvalidData, "zstd stream exceeds its expansion limit"));
                 }
                 return Ok(target.pos);
             }
             if self.start == self.end && self.exhausted && !self.ended {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, "zstd capture is cut"));
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "zstd stream is cut"));
             }
         }
         unreachable!()

@@ -1,5 +1,17 @@
 use super::*;
 
+impl Herdr {
+    /// The herdr program in the helper's directory and environment.
+    fn program_command(&self) -> Command {
+        let mut command = Command::new(&self.config.executable);
+        command
+            .current_dir(&self.config.directory)
+            .env_clear()
+            .envs(&self.config.environment);
+        command
+    }
+}
+
 impl Multiplexer for Herdr {
     /// herdr opens sessions that already exist as spaces, like tmux (c1654cc
     /// NewSpaceButton.swift:24-36: tmux and herdr are the external space backends).
@@ -679,6 +691,24 @@ impl Multiplexer for Herdr {
     fn program(&self) -> Option<String> {
         Some("herdr".into())
     }
+    /// `herdr status server` reports the configured socket's server and never starts one.
+    fn server_probe(&self) -> Option<Command> {
+        let mut command = self.program_command();
+        command.args(["status", "server"]);
+        if !self.config.socket.as_os_str().is_empty() {
+            command.env("HERDR_SOCKET_PATH", &self.config.socket);
+        }
+        Some(command)
+    }
+    fn running(&self, status: Option<i32>, stdout: &[u8]) -> bool {
+        status == Some(0)
+            && String::from_utf8_lossy(stdout).lines().any(|line| line.trim() == "status: running")
+    }
+    fn version(&self) -> Option<Command> {
+        let mut command = self.program_command();
+        command.arg("--version");
+        Some(command)
+    }
     fn resize(&mut self, io: &mut dyn Io, terminal: Id, size: Grid, done: Done<()>) {
         if let Some(endpoint) = self.endpoint(terminal) {
             endpoint.resize(io, terminal, size, done);
@@ -774,3 +804,7 @@ impl Multiplexer for Herdr {
         self.route(io, ui, event);
     }
 }
+
+#[cfg(test)]
+#[path = "ops.test.rs"]
+mod tests;

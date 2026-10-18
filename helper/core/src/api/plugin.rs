@@ -132,6 +132,136 @@ pub trait Plugin {
             }),
         )
     }
+    /// One directory level, no symlink followed; `limit` 0 is the plugin's own bound. `git` asks
+    /// for marks (reserved).
+    fn list(
+        &mut self,
+        io: &mut dyn Io,
+        _path: &Path,
+        _hidden: bool,
+        _limit: u64,
+        _git: bool, done: Done<Listing>) {
+        done(
+            io,
+            Err(Error {
+                code: "unsupported",
+                message: String::new(),
+            }),
+        )
+    }
+    /// Totals of a bounded recursive walk under `path`, no symlink followed.
+    fn summary(&mut self, io: &mut dyn Io, _path: &Path, _limit: u64, done: Done<FolderSummary>) {
+        done(
+            io,
+            Err(Error {
+                code: "unsupported",
+                message: String::new(),
+            }),
+        )
+    }
+    /// A whole new file at `path` (temp name beside it, then rename); `replace` allows an
+    /// existing one. `mode` None is the default file mode under the umask. `bytes` is the
+    /// request's own buffer, moved on to the job that writes it rather than copied again.
+    fn write(
+        &mut self,
+        io: &mut dyn Io,
+        _path: &Path,
+        _bytes: Vec<u8>,
+        _mode: Option<u32>,
+        _replace: bool, done: Done<Metadata>) {
+        done(
+            io,
+            Err(Error {
+                code: "unsupported",
+                message: String::new(),
+            }),
+        )
+    }
+    /// `paths` (inside `base`) packed into a temporary archive named relative to `base`;
+    /// `transfer` is the client's id for it.
+    fn pack(
+        &mut self,
+        io: &mut dyn Io,
+        _transfer: &str,
+        _base: &Path,
+        _paths: &[PathBuf],
+        _limit: u64, done: Done<Packed>) {
+        done(
+            io,
+            Err(Error {
+                code: "unsupported",
+                message: String::new(),
+            }),
+        )
+    }
+    /// Removes a packed archive, or the one a running pack is still writing when it ends.
+    fn pack_drop(&mut self, io: &mut dyn Io, _transfer: &str, done: Done<()>) {
+        done(
+            io,
+            Err(Error {
+                code: "unsupported",
+                message: String::new(),
+            }),
+        )
+    }
+    /// Stages an incoming archive beside `target`; `names` are the archive's only allowed
+    /// top-level entries, and `policy` (replace, keep, skip) settles their conflicts at commit.
+    fn unpack_open(
+        &mut self,
+        io: &mut dyn Io,
+        _transfer: &str,
+        _target: &Path,
+        _policy: &str,
+        _names: &[String], done: Done<Transfer>) {
+        done(
+            io,
+            Err(Error {
+                code: "unsupported",
+                message: String::new(),
+            }),
+        )
+    }
+    /// Appends archive bytes to an open transfer's staging archive.
+    fn unpack_write(&mut self, io: &mut dyn Io, _transfer: &str, _bytes: Vec<u8>, done: Done<Progress>) {
+        done(
+            io,
+            Err(Error {
+                code: "unsupported",
+                message: String::new(),
+            }),
+        )
+    }
+    /// Ends a transfer whose client disconnected: drops a pack's archive (`unpack` false) or closes an unpack
+    /// without commit, removing only what the helper made. The helper calls it with no capability check, so a
+    /// client whose grants were reduced still leaves nothing behind.
+    fn release(&mut self, io: &mut dyn Io, _transfer: &str, _unpack: bool, done: Done<()>) {
+        deferred(done)(io, Ok(()))
+    }
+    /// Extracts and moves in (`commit`), or discards the staging directory.
+    fn unpack_close(&mut self, io: &mut dyn Io, _transfer: &str, _commit: bool, done: Done<Unpacked>) {
+        done(
+            io,
+            Err(Error {
+                code: "unsupported",
+                message: String::new(),
+            }),
+        )
+    }
+    /// A read-only git command in `path`, output bounded by `limit` (reserved).
+    fn git(
+        &mut self,
+        io: &mut dyn Io,
+        _path: &Path,
+        _args: &[String],
+        _limit: u64, done: Done<Git>) {
+        done(
+            io,
+            Err(Error {
+                code: "unsupported",
+                message: String::new(),
+            }),
+        )
+    }
     /// Completion of IO this plugin submitted.
     fn event(&mut self, io: &mut dyn Io, ui: &mut dyn Ui, event: Event);
 }

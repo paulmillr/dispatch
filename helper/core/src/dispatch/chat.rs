@@ -350,6 +350,7 @@ pub(crate) fn follow(io: &mut dyn Io, archives: &Archives, replies: &Replies, ke
         &source,
         Box::new(move |io, result: Result<Archive, Error>| {
             let mut changed = false;
+            let mut behind = false;
             let again = {
                 let mut all = archives.borrow_mut();
                 let Some(followed) = all.get_mut(&key) else {
@@ -359,6 +360,11 @@ pub(crate) fn follow(io: &mut dyn Io, archives: &Archives, replies: &Replies, ke
                 match &result {
                     Ok(archive) => {
                         followed.source.later = archive.snapshot.later.clone();
+                        // One read returns one chunk; a burst larger than it needs more reads than
+                        // change events, so read on until the archive reports it caught up. A file
+                        // still to be created or invalidated waits for its watch instead.
+                        let snapshot = &archive.snapshot;
+                        behind = !snapshot.caught_up && !snapshot.invalidated && !snapshot.awaiting_creation;
                         changed = followed.state.as_ref() != Some(&archive.state);
                         followed.state = Some(archive.state.clone());
                     }
@@ -379,7 +385,7 @@ pub(crate) fn follow(io: &mut dyn Io, archives: &Archives, replies: &Replies, ke
             {
                 reply(io, result);
             }
-            if again {
+            if again || behind {
                 follow(io, &archives, &replies, key);
             }
         }),

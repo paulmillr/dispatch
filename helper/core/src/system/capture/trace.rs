@@ -1,11 +1,11 @@
-//! The capture file: zstd (capture/zstd.rs) around length-prefixed frames. A header names the layer (helper or app)
+//! The capture file: zstd (system/zstd.rs) around length-prefixed frames. A header names the layer (helper or app)
 //! and the helper wire version; each record is one I/O row; a footer counts the records.
 //! zstd's checksums refuse a damaged file and the footer a cut one: a file is whole only when it
 //! ends with a footer that counts every record before it. A checkpoint (before exec) writes a
 //! footer and ends the zstd frame; later records continue in a new one.
 //! Args and output are wire values without the schema's names (wire::body::encode_plain):
 //! nothing inside is JSON, hex or base64.
-use super::zstd;
+use crate::system::zstd;
 use std::io::{self, Read, Write};
 
 const MAGIC: &[u8; 8] = b"DCAPTURE";
@@ -287,7 +287,6 @@ impl<'a> Cursor<'a> {
     }
 }
 
-// Captures need zstd, which only a helper with the capture feature links.
-#[cfg(all(test, feature = "capture"))]
+#[cfg(test)]
 #[path = "trace.test.rs"]
 mod tests;

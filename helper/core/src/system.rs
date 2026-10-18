@@ -6,11 +6,13 @@ pub(crate) use file::{copy, errno};
 
 pub(crate) mod hooks;
 mod inspect;
+mod listing;
 pub mod launch;
 pub mod login;
 mod native;
 mod observe;
 mod process;
+pub mod search;
 pub mod queue;
 pub mod reactor;
 pub mod renderer;
@@ -21,6 +23,10 @@ pub mod startup;
 mod stats;
 mod watch;
 mod work;
+pub(crate) mod zstd;
+// The files plugin's transfer jobs and their archive layout.
+mod archive;
+mod tar;
 
 use crate::api::{
     Address, Event, Expected, FileKind, Grid, Io, Job, Metadata, Output, Spawned, Work,
@@ -77,6 +83,9 @@ pub struct System {
     parent: Option<(u32, reactor::Exit, Option<String>)>,
     reactor: reactor::Reactor,
     workers: work::Executor<file::Completion>,
+    /// Job::Collect's own workers, made for the first collect: a command such as `git status` on a large tree
+    /// takes seconds, and two of them on the shared workers would hold every file job behind them.
+    collects: Option<work::Executor<file::Completion>>,
     descriptors: BTreeMap<RawFd, File>,
     locks: BTreeMap<Work, File>,
     listeners: BTreeMap<RawFd, socket::Listener>,
@@ -507,6 +516,7 @@ impl System {
         Ok(Self {
             reactor,
             workers,
+            collects: None,
             descriptors: BTreeMap::new(),
             locks: BTreeMap::new(),
             listeners: BTreeMap::new(),
@@ -1041,9 +1051,14 @@ impl System {
             if !self.ready.is_empty() {
                 continue;
             }
-            if ready.fd == self.workers.as_raw_fd() {
+            let collects = self.collects.as_mut().filter(|collects| ready.fd == collects.as_raw_fd());
+            if ready.fd == self.workers.as_raw_fd() || collects.is_some() {
                 let (jobs, events, locks) = (&self.jobs, &mut self.ready, &mut self.locks);
-                self.workers.drain(|completion| {
+                let executor = match collects {
+                    Some(collects) => collects,
+                    None => &mut self.workers,
+                };
+                executor.drain(|completion| {
                     let work = completion.id;
                     let (section, _) = jobs.get(&work).unwrap();
                     let mut completion = completion.value.unwrap_or_else(|| file::Completion {
@@ -1264,6 +1279,17 @@ fn execute(job: Job) -> io::Result<Output> {
             native::remove(&parent, name)?;
             Ok(Output::Written)
         }
+        Job::Pack(job) => archive::pack(&job.base, &job.paths, &job.archive, job.limit, &job.stop).map(Output::Packed),
+        Job::Append(path, bytes) => archive::append(&path, &bytes).map(Output::Appended),
+        Job::Unpack(job) => {
+            archive::unpack(&job).map(Output::Unpacked)
+        }
+        Job::RemoveTree(path) => archive::remove_tree(&path).map(|()| Output::Removed),
+        Job::Stage(path) => archive::stage(&path).map(|folder| Output::Metadata(metadata(folder))),
+        Job::Discard(staging) => archive::discard(&staging).map(|()| Output::Removed),
+        Job::Sweep(prefix, age) => {
+            archive::sweep(&prefix, age).map(|(directory, removed)| Output::Swept(directory, removed))
+        }
         Job::List { path } => {
             let mut entries = Vec::new();
             for entry in std::fs::read_dir(path)? {
@@ -1277,6 +1303,8 @@ fn execute(job: Job) -> io::Result<Output> {
             entries.sort_by(|a, b| a.0.cmp(&b.0));
             Ok(Output::List(entries))
         }
+        Job::Entries(job) => listing::entries(&job.path, job.hidden, job.limit),
+        Job::Summary(job) => listing::summary(&job.path, job.limit),
         Job::Process { pid } => inspect::process(pid).map(Output::Process),
         Job::Native { name, value } => native(name, &value).map(Output::Value),
         Job::Isolated {
@@ -1311,6 +1339,15 @@ fn execute(job: Job) -> io::Result<Output> {
                 stdout,
             })
         }
+        Job::Collect(job) => {
+            let ran = process::collect(job.command, Instant::now() + job.timeout, job.stdout, job.stderr)?;
+            Ok(Output::Collected(crate::api::Collected {
+                status: ran.status.code(),
+                stdout: ran.stdout,
+                stderr: ran.stderr,
+                truncated: ran.truncated,
+            }))
+        }
     }
 }
 
@@ -1322,6 +1359,13 @@ fn checked(
 ) -> io::Result<Option<std::fs::Metadata>> {
     if expected == Expected::Any {
         return Ok(None);
+    }
+    // Anything there, whatever it is, is not absent: opening it would fail on a symlink or socket instead.
+    if expected == Expected::Absent {
+        return match native::exists(parent, name)? {
+            true => Err(io::Error::from_raw_os_error(native::EEXIST)),
+            false => Ok(None),
+        };
     }
     let current = match native::open(parent, name, None).and_then(|file| file.metadata()) {
         Ok(m) => Some(m),

@@ -1,10 +1,5 @@
 //! Capture writes use one bounded disk queue; they never block the reactor. The file is the
 //! binary capture format (capture/trace.rs): typed values in zstd, certified by its footer.
-#[cfg(feature = "capture")]
-mod zstd;
-#[cfg(not(feature = "capture"))]
-#[path = "capture/without_zstd.rs"]
-mod zstd;
 pub mod trace;
 pub mod screen;
 pub mod views;
@@ -458,6 +453,28 @@ pub(super) fn expected(expected: &crate::api::Expected) -> io::Result<Data<'stat
         ("modified_ns", time(guard.modified_ns)?),
         ("changed_ns", time(guard.changed_ns)?),
     ]))
+}
+
+/// Job::Unpack's conflict policy as recorded.
+pub(super) fn policy(policy: crate::api::Policy) -> &'static str {
+    match policy {
+        crate::api::Policy::Replace => "replace",
+        crate::api::Policy::Keep => "keep",
+        crate::api::Policy::Skip => "skip",
+    }
+}
+
+/// A staging folder as Job::Unpack and Job::Discard record it.
+pub(super) fn staging(staging: &crate::api::Staging) -> Data<'_> {
+    let identity = |at: crate::api::FileIdentity| {
+        Data::Object(vec![("device", Data::Unsigned(at.device)), ("inode", Data::Unsigned(at.inode))])
+    };
+    Data::Object(vec![
+        ("path", Data::from(staging.path.as_path())),
+        ("target", Data::from(staging.target.as_path())),
+        ("folder", identity(staging.folder)),
+        ("parent", identity(staging.parent)),
+    ])
 }
 
 /// Recorded values back as the effects' own types.

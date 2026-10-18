@@ -56,11 +56,38 @@ impl Drop for Owned {
 /// `limit` bytes of stdout until EOF and exit. A child that exits without reading (EPIPE) is not
 /// an error: its status says what happened.
 pub fn run(
-    mut command: Command,
+    command: Command,
     input: Vec<u8>,
     deadline: Option<Instant>,
     limit: usize,
 ) -> io::Result<(ExitStatus, Vec<u8>)> {
+    let ran = execute(command, input, deadline, limit, None)?;
+    Ok((ran.status, ran.stdout))
+}
+
+/// A one-shot command's result (`collect`).
+pub struct Ran {
+    pub status: ExitStatus,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+    pub truncated: bool,
+}
+
+/// Job::Collect: stdin closed, the first `limit` bytes of stdout (more: the group is killed and the result
+/// is `truncated`), at most `errors` bytes of stderr (the rest drained and dropped).
+pub fn collect(command: Command, deadline: Instant, limit: usize, errors: usize) -> io::Result<Ran> {
+    execute(command, Vec::new(), deadline.into(), limit, Some(errors))
+}
+
+/// `errors` None: stderr goes to /dev/null and stdout past `limit` is an error (InvalidData);
+/// Some: stderr is kept up to that many bytes and stdout past `limit` cuts the run short.
+fn execute(
+    mut command: Command,
+    input: Vec<u8>,
+    deadline: Option<Instant>,
+    limit: usize,
+    errors: Option<usize>,
+) -> io::Result<Ran> {
     if deadline.is_some_and(|at| at <= Instant::now()) {
         return Err(io::ErrorKind::TimedOut.into());
     }
@@ -70,7 +97,7 @@ pub fn run(
         .process_group(0)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(if errors.is_some() { Stdio::piped() } else { Stdio::null() })
         .spawn()?;
     let mut owned = Owned {
         child,
@@ -97,14 +124,22 @@ pub fn run(
     };
     let mut stdin = owned.child.stdin.take();
     let mut output = owned.child.stdout.take().unwrap();
+    // Some only when `errors` asked for it (piped above).
+    let mut diagnostics = owned.child.stderr.take();
     let mut status = None;
     let mut observed = false;
     let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let mut truncated = false;
     let result = (|| {
         reactor::nonblocking(stdin.as_ref().unwrap().as_raw_fd())?;
         reactor::nonblocking(output.as_raw_fd())?;
+        if let Some(pipe) = &diagnostics {
+            reactor::nonblocking(pipe.as_raw_fd())?;
+        }
         let mut written = 0;
         let mut closed = false;
+        let mut quiet = diagnostics.is_none();
         let mut buffer = [0; 65_536];
         loop {
             if deadline.is_some_and(|at| at <= Instant::now()) {
@@ -132,10 +167,24 @@ pub fn run(
                 match output.read(&mut buffer) {
                     Ok(count) => {
                         if count > limit - stdout.len() {
-                            return Err(io::ErrorKind::InvalidData.into());
+                            if errors.is_none() {
+                                return Err(io::ErrorKind::InvalidData.into());
+                            }
+                            stdout.extend_from_slice(&buffer[..limit - stdout.len()]);
+                            truncated = true;
+                            closed = true;
+                            // Enough: stop the group, then wait for its exit like any other. A child that
+                            // already exited (Darwin: EPERM for its zombie group, before it can be reaped)
+                            // still delivers that exit below.
+                            if let Err(error) = owned.cancel(false)
+                                && error.raw_os_error() != Some(1)
+                            {
+                                return Err(error);
+                            }
+                        } else {
+                            stdout.extend_from_slice(&buffer[..count]);
+                            closed = count == 0;
                         }
-                        stdout.extend_from_slice(&buffer[..count]);
-                        closed = count == 0;
                     }
                     Err(error)
                         if matches!(
@@ -145,13 +194,33 @@ pub fn run(
                     Err(error) => return Err(error),
                 }
             }
-            if status.is_some() && closed {
+            if let (Some(pipe), Some(bound)) = (&mut diagnostics, errors)
+                && !quiet
+            {
+                match pipe.read(&mut buffer) {
+                    Ok(count) => {
+                        let kept = count.min(bound.saturating_sub(stderr.len()));
+                        stderr.extend_from_slice(&buffer[..kept]);
+                        quiet = count == 0;
+                    }
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                        ) => {}
+                    Err(error) => return Err(error),
+                }
+            }
+            if status.is_some() && closed && quiet {
                 return Ok(());
             }
             if let Some(pipe) = &stdin {
                 reactor.interest(pipe.as_raw_fd(), false, true)?;
             }
             reactor.interest(output.as_raw_fd(), !closed, false)?;
+            if let Some(pipe) = &diagnostics {
+                reactor.interest(pipe.as_raw_fd(), !quiet, false)?;
+            }
             let ready = match deadline {
                 Some(at) => reactor.until(at)?.ok_or(io::ErrorKind::TimedOut)?,
                 None => reactor.wait()?,
@@ -170,7 +239,10 @@ pub fn run(
         let _ = reactor.interest(pipe.as_raw_fd(), false, false);
     }
     let _ = reactor.interest(output.as_raw_fd(), false, false);
-    drop((stdin, output));
+    if let Some(pipe) = &diagnostics {
+        let _ = reactor.interest(pipe.as_raw_fd(), false, false);
+    }
+    drop((stdin, output, diagnostics));
     let cleanup = (|| -> io::Result<()> {
         owned.cancel(observed)?;
         if status.is_none() {
@@ -209,5 +281,14 @@ pub fn run(
         ));
     }
     result?;
-    Ok((status.unwrap(), stdout))
+    Ok(Ran {
+        status: status.unwrap(),
+        stdout,
+        stderr,
+        truncated,
+    })
 }
+
+#[cfg(test)]
+#[path = "process.test.rs"]
+mod tests;

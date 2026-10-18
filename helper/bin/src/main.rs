@@ -109,6 +109,8 @@ fn main() -> std::io::Result<()> {
                 "herdr.rpc",
                 "herdr.terminal",
                 "file.text",
+                "file.write",
+                "git.read",
             ]
             .map(str::to_owned)
             .into_iter()
@@ -214,9 +216,41 @@ fn main() -> std::io::Result<()> {
         .or_else(|| std::env::var_os("SHELL"))
         .unwrap_or("/bin/sh".into());
     let (uid, home) = System::account()?;
+    // The login environment's HOME for clients that shorten paths to "~": the login shell's when
+    // it is asked below, else this process's.
+    let mut login_home = std::env::var_os("HOME").map(PathBuf::from);
+    // A plain exec channel (the iPhone app: `--remote … --stdio` with no login wrapper) has only
+    // sshd's PATH. Take the login shell's before any thread exists, so the multiplexers, their
+    // servers and agent launches find programs where the user's shell would
+    // (system/search.rs). Not for the Mac's greeting probe, whose empty grant runs nothing.
+    if remote
+        && mode.is_none()
+        && socket.is_none()
+        && std::env::var_os("DISPATCH_REPLAY").is_none()
+        && permissions.as_ref().is_none_or(|grants: &std::collections::BTreeSet<String>| {
+            ["backend.register", "tmux.pane", "herdr.start", "agent.submit", "hooks.configure"]
+                .iter()
+                .any(|grant| grants.contains(*grant))
+        })
+    {
+        let directory = std::env::var_os("HOME").map_or(home.clone(), PathBuf::from);
+        let (path, shell_home) = dispatch_helper_core::system::search::resolve(
+            &shell,
+            &directory,
+            dispatch_helper_core::system::search::DEADLINE,
+        );
+        if let Some(shell_home) = shell_home {
+            login_home = Some(shell_home.into());
+        }
+        // SAFETY: no other thread reads the environment: the helper has not started any (the
+        // search's pipe reader only reads its pipe).
+        unsafe { std::env::set_var("PATH", path) };
+    }
     let mut helper = DispatchHelper::new();
     *helper.permissions.borrow_mut() = permissions;
     helper.shell = shell.clone().into();
+    helper.remote = remote;
+    helper.login_home = login_home;
     let harnesses = [
         (
             "claude",

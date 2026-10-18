@@ -18,6 +18,7 @@ use super::native::{self as os, getuid};
 #[cfg(target_os = "macos")]
 mod darwin;
 mod identity;
+mod projects;
 mod image;
 mod listeners;
 #[cfg(target_os = "macos")]
@@ -311,6 +312,20 @@ fn piped(pid: u32) -> bool {
 }
 
 /// c1654cc process.rs:639-654: foreground-only checks miss background/stopped TTY work.
+/// Arguments of a plain interactive shell: a login or interactive flag only. bash also takes
+/// `--posix` and `--noprofile`, which the helper's own shell startup passes (system/startup.rs
+/// BASH_LAUNCH: bash before 4.2, e.g. macOS /bin/bash, runs as `sh --noprofile -il`).
+pub(super) fn interactive(name: Option<&str>, arguments: &[String]) -> bool {
+    !arguments.is_empty()
+        && arguments.iter().skip(1).all(|arg| {
+            matches!(arg.as_str(), "--login" | "--interactive")
+                || (name == Some("bash") && matches!(arg.as_str(), "--posix" | "--noprofile"))
+                || arg
+                    .strip_prefix('-')
+                    .is_some_and(|v| !v.is_empty() && v.bytes().all(|c| matches!(c, b'i' | b'l')))
+        })
+}
+
 fn idle(shell: &Process) -> io::Result<bool> {
     let name = shell.executable.file_name().and_then(|v| v.to_str());
     if !matches!(
@@ -320,14 +335,7 @@ fn idle(shell: &Process) -> io::Result<bool> {
         || shell.foreground != shell.group
         || shell.tty == 0
         || shell.tty == u32::MAX as u64
-        || shell.arguments.is_empty()
-        || !shell.arguments.iter().skip(1).all(|arg| {
-            matches!(arg.as_str(), "--login" | "--interactive")
-                || (name == Some("bash") && arg == "--posix")
-                || arg
-                    .strip_prefix('-')
-                    .is_some_and(|v| !v.is_empty() && v.bytes().all(|c| matches!(c, b'i' | b'l')))
-        })
+        || !interactive(name, &shell.arguments)
     {
         return Ok(false);
     }
@@ -447,6 +455,7 @@ pub fn native(name: &str, input: &[u8]) -> io::Result<Vec<u8>> {
             )]))
         }
         "host.identity" => identity::collect(),
+        "projects.recent" => projects::collect(root),
         "process.listeners" => listeners::collect(root),
         "process.same_image" => {
             write(&Data::Bool(image::compare(root)?))
@@ -727,3 +736,7 @@ fn cwd(pid: u32) -> io::Result<std::path::PathBuf> {
     }
     Ok(cwd)
 }
+
+#[cfg(test)]
+#[path = "inspect.test.rs"]
+mod tests;
