@@ -31,9 +31,14 @@ pub(super) fn on(section: &str, record: trace::Record) -> trace::Record {
     trace::Record { section: section.into(), ..record }
 }
 
-/// A stats.processes reply listing `names`, as the helper's plugin sends it (request id 4).
-fn reply(names: &[&str]) -> Vec<u8> {
-    let rows = names.iter().map(|name| Data::Object(vec![("pid", Data::Unsigned(pid(name))), ("start", Data::Null),
+/// `names` as the rows of a list: each with its pid.
+fn named(names: &[&'static str]) -> Vec<(u64, &'static str)> {
+    names.iter().map(|name| (pid(name), *name)).collect()
+}
+
+/// A stats.processes reply listing `rows`, as the helper's plugin sends it (request id 4).
+fn reply(rows: &[(u64, &str)]) -> Vec<u8> {
+    let rows = rows.iter().map(|(pid, name)| Data::Object(vec![("pid", Data::Unsigned(*pid)), ("start", Data::Null),
         ("name", Data::String(name)), ("cpu", Data::Real(0.5)), ("rss", Data::Unsigned(4096))])).collect();
     frame(4, &Data::Object(vec![("result", Data::Array(vec![Data::Array(rows), Data::Bool(false)]))]))
 }
@@ -42,10 +47,10 @@ fn reply(names: &[&str]) -> Vec<u8> {
 /// reply the helper writes (a frame per write); a remote bridge reading it and writing it on, cut `bridge` bytes into the
 /// reply; the app reading it cut `app` bytes into it, after another frame in the same read. Beside them a lookup of one
 /// process (a pid, no rss): no list.
-fn lists(names: &[&str], bridge: usize, app: usize) -> Vec<trace::Record> {
-    let (reply, other) = (reply(names), frame(9, &Data::Object(vec![("result", Data::Bool(true))])));
+fn lists(rows: &[(u64, &str)], bridge: usize, app: usize) -> Vec<trace::Record> {
+    let (reply, other) = (reply(rows), frame(9, &Data::Object(vec![("result", Data::Bool(true))])));
     let request = wire::packet(wire::Kind::Request, 4, &body::encode(&Data::Object(vec![("method", Data::String("stats.processes"))])).unwrap()).unwrap();
-    let native = names.iter().map(|name| Data::Object(vec![("pid", Data::Unsigned(pid(name))), ("name", Data::String(name)),
+    let native = rows.iter().map(|(pid, name)| Data::Object(vec![("pid", Data::Unsigned(*pid)), ("name", Data::String(name)),
         ("cpu", Data::Real(0.5)), ("rss", Data::Unsigned(4096))])).collect();
     let job = Data::Object(vec![("job", Data::String("isolated")), ("name", Data::String("stats.processes")),
         ("value", Data::Object(vec![("local", Data::Bool(true))]))]);
@@ -118,33 +123,78 @@ fn only(dir: &Path) -> Result<Vec<trace::Record>, String> {
     Ok(files.remove(0).1)
 }
 
-#[test]
-fn removal_keeps_only_allowed_process_rows_and_every_record_around_them() {
-    let kept = ["zsh", "tmux", "yes"];
-    let (old, new) = (reply(&ROWS).len(), reply(&kept).len());
-    // The app's cut, in the first row (gone), stays as far into the reply; the bridge's, in the last row (gone), moves
-    // back to the new reply's last byte: every record keeps a byte, and a write asks for what is left of its reply.
-    let removed = removal(lists(&ROWS, old - 5, 30)).map_err(|error| error.to_string());
-    assert_eq!(removed, Ok(lists(&kept, new - 1, 30)));
+/// `name` masked: an `x` for each of its bytes.
+fn masked(name: &str) -> &'static str {
+    Box::leak("x".repeat(name.len()).into_boxed_str())
+}
+
+/// The made-up lists' rows as a scrub leaves them: every row, the names not allowed masked.
+fn masked_rows() -> Vec<(u64, &'static str)> {
+    named(&ROWS).into_iter().map(|(pid, name)| (pid, if ALLOWED.contains(&name) { name } else { masked(name) })).collect()
 }
 
 #[test]
-fn replace_removes_process_rows_and_masks_no_process_name() {
+fn removal_masks_the_names_not_allowed_and_keeps_every_row_and_record_as_long() {
+    // The same lengths: every record, the bridge's and the app's cuts included, stays as recorded but for the names.
+    let old = reply(&named(&ROWS)).len();
+    assert_eq!(reply(&masked_rows()).len(), old);
+    let removed = removal(lists(&named(&ROWS), old - 5, 30)).map_err(|error| error.to_string());
+    assert_eq!(removed, Ok(lists(&masked_rows(), old - 5, 30)));
+    assert_eq!(masked_rows().iter().map(|(_, name)| *name).collect::<Vec<_>>(),
+               ["xxxxxxx", "zsh", "xxxxxxxxxxxxxxxx", "tmux", "yes", "xxxxxxxx"]);
+}
+
+#[test]
+fn removal_keeps_a_process_named_like_one_of_our_words() {
+    // The helper sends `route` (a macOS process, and one of our words) as its number: masked where it read it, it would
+    // write text, longer than recorded.
+    assert!(body::symbol("route").is_some());
+    let list = |name: &str| body::encode_plain(&Data::Array(vec![Data::Object(vec![("pid", Data::Unsigned(1)),
+        ("name", Data::String(name)), ("rss", Data::Unsigned(4096))])])).unwrap();
+    let done = |name: &str| vec![on("plugin/1", record("file.done", &Data::Null, &Data::Null))]
+        .into_iter().map(|record| trace::Record { output: list(name), ..record }).collect::<Vec<_>>();
+    assert_eq!(removal(done("route")).map_err(|error| error.to_string()), Ok(done("route")));
+    assert_eq!(removal(done("loginwindow")).map_err(|error| error.to_string()), Ok(done("xxxxxxxxxxx")));
+}
+
+#[test]
+fn removal_masks_a_list_that_comes_in_chunks() {
+    // A list over 64 KiB, as the helper sends it (chunks of raw bytes, then its final frame), written in two writes
+    // that cut a chunk: each keeps its length, the names are masked where the chunks carry them.
+    let reply = |rows: &[(u64, &str)]| -> Vec<u8> {
+        let list = rows.iter().map(|(pid, name)| Data::Object(vec![("pid", Data::Unsigned(*pid)), ("start", Data::Null),
+            ("name", Data::String(name)), ("cpu", Data::Real(0.5)), ("rss", Data::Unsigned(4096))])).collect();
+        let body = body::encode(&Data::Object(vec![("result", Data::Array(vec![Data::Array(list), Data::Bool(false)]))])).unwrap();
+        wire::Message::value(wire::Kind::Response, 4, body[body::SCHEMA.len()..].to_vec()).flatten().collect()
+    };
+    let many = |rows: Vec<(u64, &'static str)>| (0..800).flat_map(|round| rows.iter().map(move |(pid, name)| (pid + round * 1000, *name)))
+        .collect::<Vec<_>>();
+    let (original, masked) = (reply(&many(named(&ROWS))), reply(&many(masked_rows())));
+    assert!(original.len() > 2 * wire::CHUNK && original.len() == masked.len());
+    let write = |bytes: &[u8]| on("startup", record("write", &Data::Object(vec![("fd", Data::Unsigned(19)),
+        ("length", Data::Unsigned(bytes.len() as u64))]), &Data::Bytes(bytes)));
+    let written = |bytes: &[u8]| vec![write(&bytes[..70_000]), write(&bytes[70_000..])];
+    assert_ne!(original, masked);
+    assert_eq!(removal(written(&original)).map_err(|error| error.to_string()), Ok(written(&masked)));
+}
+
+#[test]
+fn replace_masks_process_names_before_the_needles() {
     let root = scratch("rows");
-    let journal = |names: &[&str], fakeco: &str| -> Vec<trace::Record> {
-        lists(names, 40, 30).into_iter().filter(|record| record.section == "app/3" || record.section == "mux/1")
+    let journal = |rows: &[(u64, &str)], fakeco: &str| -> Vec<trace::Record> {
+        lists(rows, 40, 30).into_iter().filter(|record| record.section == "app/3" || record.section == "mux/1")
             .map(|record| trace::Record { output: bytes_replaced(&record.output, b"fakeco", fakeco.as_bytes()), ..record })
             .collect()
     };
-    write(&root.join("in/T/a/x.rpl.zst"), &journal(&ROWS, "fakeco"));
+    write(&root.join("in/T/a/x.rpl.zst"), &journal(&named(&ROWS), "fakeco"));
     std::fs::write(root.join("needles.txt"), "fakeco\n").unwrap();
     let path = |name: &str| root.join(name).to_str().unwrap().to_string();
     let replaced = run(&["replace", &path("in"), &path("out"), "--needles", &path("needles.txt")].map(Into::into))
         .map_err(|error| error.to_string()).and_then(|_| only(&root.join("out/T/a")));
     std::fs::remove_dir_all(&root).unwrap();
-    // Only the needle changes the lookup: no process name is masked any more.
+    // The process name holding the needle is masked whole first; the needle changes the lookup.
     let fakeco = String::from_utf8(replacements(&[(b"fakeco".to_vec(), None)]).unwrap().0.remove(0)).unwrap();
-    assert_eq!(replaced, Ok(journal(&["zsh", "tmux", "yes"], &fakeco)));
+    assert_eq!(replaced, Ok(journal(&masked_rows(), &fakeco)));
 }
 
 /// `bytes` with every `from` replaced by `to` (of its length).
@@ -321,7 +371,7 @@ fn only_terminals_have_screens_and_grep_lists_those_of_no_size() {
 fn replace_names_every_output_file_at_random() {
     let root = scratch("names");
     // Named as store names them: by their content's key.
-    for (dir, records) in [("in/T/a", lists(&ROWS, 40, 30)), ("in/T/a", lists(&ROWS, 40, 30)[..2].to_vec()), ("in/T/b", socket("fakeco"))] {
+    for (dir, records) in [("in/T/a", lists(&named(&ROWS), 40, 30)), ("in/T/a", lists(&named(&ROWS), 40, 30)[..2].to_vec()), ("in/T/b", socket("fakeco"))] {
         let file = root.join(dir).join("new.rpl.zst");
         write(&file, &records);
         std::fs::rename(&file, root.join(dir).join(format!("{}.rpl.zst", key(&file).unwrap()))).unwrap();

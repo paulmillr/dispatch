@@ -183,9 +183,18 @@ def validate_summary(summary):
 def corpus(root, stage, replays, helper, failed=False):
     """A run's passed tests into the replay corpus (the helper's capture tool: helper replays on that helper and
     app<->helper checks first); `failed`: its failed tests too, as recorded (a run's own replay reproduces them).
-    Prints what it did not store. False: a passed test was not stored."""
-    stored = subprocess.run([str(helper), 'capture', 'store', str(stage), str(replays)] + (['--failed'] if failed else []),
-                            stdout=subprocess.PIPE, text=True)
+    Prints what it did not store. False: a passed test was not stored. The corpus (replays/, public) gets them scrubbed
+    (test/scrub.py: this Mac's private values replaced, checked again); a run's own scratch corpus as recorded."""
+    if Path(replays).resolve() == (root / 'replays').resolve():
+        import scrub
+        try:
+            stored = scrub.store(stage, replays, helper, failed)
+        except SystemExit as error:
+            print(error, file=sys.stderr, flush=True)
+            return False
+    else:
+        stored = subprocess.run([str(helper), 'capture', 'store', str(stage), str(replays)] + (['--failed'] if failed else []),
+                                stdout=subprocess.PIPE, text=True)
     for line in stored.stdout.splitlines():
         if not line.startswith('pass\t'):
             print(line, flush=True)

@@ -533,61 +533,90 @@ impl Matcher {
     }
 }
 
-/// The processes a statistics list keeps (`removal`), by name: the rows carry no path. The agents (which harness a pane
-/// runs), ripgrep (Claude's process match skips its `rg` children), the multiplexers, ours (PlanOneTests checks the app's
-/// name), ssh and the shells (a terminal's own), yes (the statistics tests' CPU load, found by name in the list).
+/// The processes a statistics list names (`removal`); every other row's name is masked. The rows carry no path. The
+/// agents (which harness a pane runs), ripgrep (Claude's process match skips its `rg` children), the multiplexers, ours
+/// (PlanOneTests checks the app's name), ssh and the shells (a terminal's own), yes (the statistics tests' CPU load,
+/// found by name in the list).
 const ALLOWED: &[&str] = &["codex", "claude", "pi", "rg", "tmux", "herdr", "Dispatch", "dispatch-helper", "ssh", "zsh", "bash", "sh", "yes"];
 
-/// `value` without the process rows whose name is not allowed, and whether it lost any. A process row is an object with a
-/// pid, a name and an rss: a statistics list's (a lookup of one process, an agent binding, have no rss).
-fn rows(value: Data<'_>) -> (Data<'_>, bool) {
+/// Where `bytes`, `value` decoded from them, hold the name of a process row not allowed: ranges into `bytes`, masked in
+/// place with `x` (`mask`). The same length keeps every frame, and so every write, read and readiness wait of the
+/// recording, as it was: a list without its rows is a shorter reply, which a helper writing a large one writes in fewer
+/// rounds than it recorded. In place, not encoded again: an older recording need not encode as this helper would. A name
+/// that is one of our schema's words (`route`) stays in every copy: the helper sends it as its number, so masked in what
+/// the helper read it would come out as text and longer than recorded. A process row is an
+/// object with a pid, a name and an rss: a statistics list's (a lookup of one process, an agent binding, have no rss).
+fn names(value: &Data<'_>, bytes: &[u8]) -> Vec<Range<usize>> {
     let row = |item: &Data<'_>| ["pid", "name", "rss"].iter().all(|key| item.get(key).is_some());
-    let mut lost = false;
-    let value = match value {
-        Data::Array(items) if !items.is_empty() && items.iter().all(row) => {
-            let count = items.len();
-            let kept: Vec<_> = items.into_iter().filter(|item| item.get("name").and_then(Data::string).is_some_and(|name| ALLOWED.contains(&name))).collect();
-            lost = kept.len() < count;
-            Data::Array(kept)
-        }
-        Data::Array(items) => Data::Array(items.into_iter().map(|item| { let (item, less) = rows(item); lost |= less; item }).collect()),
-        Data::Object(fields) => Data::Object(fields.into_iter().map(|(key, item)| { let (item, less) = rows(item); lost |= less; (key, item) }).collect()),
-        value => value,
-    };
-    (value, lost)
+    match value {
+        Data::Array(items) if !items.is_empty() && items.iter().all(row) => items.iter()
+            .filter_map(|item| item.get("name").and_then(Data::string))
+            .filter(|name| !ALLOWED.contains(name) && body::symbol(name).is_none())
+            .filter_map(|name| {
+                let at = (name.as_ptr() as usize).checked_sub(bytes.as_ptr() as usize)?;
+                (at + name.len() <= bytes.len()).then_some(at..at + name.len())
+            })
+            .collect(),
+        Data::Array(items) => items.iter().flat_map(|item| names(item, bytes)).collect(),
+        Data::Object(fields) => fields.iter().flat_map(|(_, item)| names(item, bytes)).collect(),
+        _ => Vec::new(),
+    }
 }
 
-/// The records with every statistics process list cut to its allowed rows: in values, and in our frames on the streams
-/// (a stream's bytes are cut into its records again: each keeps its share, see `moved`). A list in chunks (a reply over
-/// 64 KiB) stays as recorded.
+/// `bytes` with `ranges` masked (`names`).
+fn mask(bytes: &[u8], ranges: &[Range<usize>]) -> Vec<u8> {
+    let mut out = bytes.to_vec();
+    for range in ranges {
+        out[range.clone()].fill(b'x');
+    }
+    out
+}
+
+/// The records with every statistics process list's names masked but the allowed ones: in values, and in our frames on
+/// the streams, a list in chunks (a reply over 64 KiB) too (a stream's bytes are cut into its records again: each keeps
+/// its share, see `moved`).
 fn removal(mut records: Vec<trace::Record>) -> io::Result<Vec<trace::Record>> {
-    let invalid = |error: wire::Error| io::Error::other(format!("{error:?}"));
-    let plain = |bytes: &[u8]| -> io::Result<Option<Vec<u8>>> {
-        let Ok(value) = body::decode_plain(bytes) else { return Ok(None) };
-        let (value, lost) = rows(value);
-        lost.then(|| body::encode_plain(&value).map_err(|error| io::Error::other(error.message))).transpose()
+    let plain = |bytes: &[u8]| -> Option<Vec<u8>> {
+        let ranges = names(&body::decode_plain(bytes).ok()?, bytes);
+        (!ranges.is_empty()).then(|| mask(bytes, &ranges))
     };
     for record in &mut records {
-        if let Some(bytes) = plain(&record.args)? { record.args = bytes }
-        if let Some(bytes) = plain(&record.output)? { record.output = bytes }
+        if let Some(bytes) = plain(&record.args) { record.args = bytes }
+        if let Some(bytes) = plain(&record.output) { record.output = bytes }
     }
+    let invalid = |error: wire::Error| io::Error::other(format!("{error:?}"));
     restream(&mut records, &[1], &mut |joined| {
-        // Our frames, each whole, as their lengths cut them; the changed ones (old range, new bytes).
-        let (mut at, mut edits) = (0, Vec::new());
+        // Our frames, each whole, as their lengths cut them; the changed ones (old range, new bytes). A reply over 64 KiB
+        // comes in chunks (`u64 sequence | raw bytes`, then a frame of the original kind): its raw bytes joined are one
+        // body, whose names are masked where each chunk carries them.
+        let (mut at, mut edits, mut chunks) = (0, Vec::new(), std::collections::HashMap::<u64, Vec<Range<usize>>>::new());
         for _ in 0.. {
             let Some(header) = joined.get(at..at + 13) else { break };
             let header = wire::Header::decode(header.try_into().unwrap(), wire::LIMIT).map_err(invalid)?;
             let end = at + 13 + header.len as usize;
             let Some(body) = joined.get(at + 13..end) else { break };
-            if !matches!(header.kind, wire::Kind::Chunk | wire::Kind::Cancel) && let Ok(value) = body::decode(body) {
-                let (value, lost) = rows(value);
-                if lost {
-                    edits.push((at..end, wire::packet(header.kind, header.id, &body::encode(&value).map_err(|error| io::Error::other(error.message))?)
-                        .map_err(invalid)?));
+            if header.kind == wire::Kind::Chunk {
+                chunks.entry(header.id).or_default().push((at + 13 + 8).min(end)..end);
+            } else if let Some(parts) = chunks.remove(&header.id) {
+                let whole: Vec<u8> = parts.iter().flat_map(|part| joined[part.clone()].iter().copied()).collect();
+                let Ok(value) = body::decode(&whole) else { at = end; continue };
+                let masked = mask(&whole, &names(&value, &whole));
+                let mut from = 0;
+                for part in parts {
+                    if masked[from..from + part.len()] != whole[from..from + part.len()] {
+                        edits.push((part.clone(), masked[from..from + part.len()].to_vec()));
+                    }
+                    from += part.len();
+                }
+            } else if header.kind != wire::Kind::Cancel && let Ok(value) = body::decode(body) {
+                let ranges = names(&value, body);
+                if !ranges.is_empty() {
+                    edits.push((at + 13..end, mask(body, &ranges)));
                 }
             }
             at = end;
         }
+        edits.sort_by_key(|(range, _): &(Range<usize>, Vec<u8>)| range.start);
         Ok(edits)
     })?;
     Ok(records)
@@ -1028,7 +1057,7 @@ fn convert(file: &Path, target: &Path, names: &HashMap<u64, body::Names>, edits:
     Ok(tally)
 }
 
-/// `file` written to `target` with its statistics process lists cut to their allowed rows (`removal`) when it names
+/// `file` written to `target` with its statistics process lists' names masked (`removal`) when it names
 /// `stats.processes` (a job's name in text, a request's method as our schema's symbol); linked as it is otherwise. True
 /// when it was rewritten.
 fn rows_of(file: &Path, target: &Path) -> io::Result<bool> {
@@ -2609,10 +2638,10 @@ fn replace(directory: &str, out: &str, list: Vec<(Vec<u8>, Option<Vec<u8>>)>, pa
     let (replacements, mut taken) = replacements(&list)?;
     let matcher = Matcher::new(list.iter().map(|(needle, _)| needle.clone()).collect());
     let original = replays(directory, &format!("{out}.replay-original"))?;
-    // First the process lists: everything after reads the captures with only their allowed rows.
+    // First the process lists: everything after reads the captures with only their allowed names.
     let root = &PathBuf::from(format!("{out}.rows"));
     let lists = parallel(&captures(input)?, jobs, |file| rows_of(file, &root.join(file.strip_prefix(input).unwrap_or(file))));
-    println!("process lists cut to their allowed rows in {} captures", lists.into_iter().collect::<io::Result<Vec<bool>>>()?.into_iter().filter(|cut| *cut).count());
+    println!("process names masked in the lists of {} captures", lists.into_iter().collect::<io::Result<Vec<bool>>>()?.into_iter().filter(|cut| *cut).count());
     let files = captures(root)?;
     // The pattern values in the order met (file by file), then their replacements.
     let (mut found, mut order) = (HashMap::new(), Vec::new());

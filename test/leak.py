@@ -161,16 +161,16 @@ def banners(directories):
     return [f'{time}\t{value}' for time, value in zip(sorted(times), values)]
 
 
-def emit(where, candidates, context, seen):
-    """Prints each value once in the whole output, under the first group that has it. Loopback names no machine."""
+def emit(where, candidates, context, seen, out):
+    """Adds each value once in the whole output, under the first group that has it. Loopback names no machine."""
     for title, values in candidates:
         fresh = [value for value in dict.fromkeys(values) if value and value not in seen and not value.startswith('127.') and value != '::1']
         seen.update(fresh)
         if fresh:
-            print(f'# {where}: {title}', *fresh, sep='\n')
+            out.append((where, title, fresh, False))
     for title, values in context:
         if values:
-            print(f'# {where}: {title} (context: copy the private parts as needles)', *['# ' + value for value in dict.fromkeys(values)], sep='\n')
+            out.append((where, title, list(dict.fromkeys(values)), True))
 
 
 def run(command):
@@ -178,17 +178,15 @@ def run(command):
     return result.stdout.splitlines()
 
 
-def main():
-    parser = xcode.arguments(__doc__)
-    parser.add_argument('--captures', action='append', type=Path, default=[], metavar='DIR',
-                        help='Also list the login banner times the captures under DIR show (repeatable)')
-    args = parser.parse_args()
-    print('# test/leak.py ' + shlex.join(sys.argv[1:]))
-    seen = set()
+def collect(captures=(), name=None):
+    """Every group of values a run may record, as (where, title, values, context): this Mac's, then each SSH test host's
+    (context groups are process lists). `captures`: directories whose login banners to add; `name`: a capture run name.
+    test/scrub.py reads the same groups."""
+    out, seen = [], set()
     facts, _ = probe(['sh', '-s'])
     candidates, context = groups(facts)
     checkout = [('this checkout and its parts', parts(str(ROOT.resolve()), '/'))]
-    run_name = [('capture run name (recorded in paths)', [args.capture or args.replay])] if args.capture or args.replay else []
+    run_name = [('capture run name (recorded in paths)', [name])] if name else []
     agent = [('SSH agent keys: fingerprints and comments', keys(run(['ssh-add', '-l'])))]
     # The login session's agent socket (/var/run/com.apple.launchd.<random>/Listeners; /private/tmp on older macOS), what
     # an app launchd starts (Xcode's test host) inherits as SSH_AUTH_SOCK even when a shell points it elsewhere (a gpg
@@ -197,8 +195,8 @@ def main():
                if path.lstat().st_uid == os.getuid()]
     socket = list(dict.fromkeys(re.findall(r'com\.apple\.launchd\.([A-Za-z0-9]+)', ' '.join([os.environ.get('SSH_AUTH_SOCK', '')] + sockets))))
     agent.append(('SSH agent socket: launchd\'s per-session folder name', [f'{name}\t{"X" * len(name)}' for name in socket]))
-    banner = [('"Last login" banner times in ' + ', '.join(map(str, args.captures)), banners(args.captures))] if args.captures else []
-    emit('local', candidates + checkout + run_name + agent + banner, context, seen)
+    banner = [('"Last login" banner times in ' + ', '.join(map(str, captures)), banners(captures))] if captures else []
+    emit('local', candidates + checkout + run_name + agent + banner, context, seen, out)
     # The SSH tests' hosts (DispatchTests SSHLinuxTestProfile.url): the checkout's profiles, else the test VM's.
     for name in ('linux-ssh.json', 'host-linux-ssh.json'):
         path = ROOT / 'build' / name if (ROOT / 'build' / name).exists() else Path('/Users/admin/dispatch-tests') / name
@@ -217,11 +215,25 @@ def main():
         emit(where, [('destination, resolved user and host', ssh),
                      ('key and known hosts files', files + [file for value in config.get('userknownhostsfile', []) for file in value.split()]),
                      ('key fingerprints and comments', keys([line for file in files if Path(file + '.pub').exists()
-                                                             for line in run(['ssh-keygen', '-lf', file + '.pub'])]))], [], seen)
+                                                             for line in run(['ssh-keygen', '-lf', file + '.pub'])]))], [], seen, out)
         facts, error = probe(['ssh', *options, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', destination, 'sh -s'])
         if error:
-            print(f'# {where}: NOT REACHED, its account, host names, ids and addresses are missing here: {error}')
-        emit(where, *groups(facts), seen)
+            out.append((where, f'NOT REACHED, its account, host names, ids and addresses are missing here: {error}', [], False))
+        emit(where, *groups(facts), seen, out)
+    return out
+
+
+def main():
+    parser = xcode.arguments(__doc__)
+    parser.add_argument('--captures', action='append', type=Path, default=[], metavar='DIR',
+                        help='Also list the login banner times the captures under DIR show (repeatable)')
+    args = parser.parse_args()
+    print('# test/leak.py ' + shlex.join(sys.argv[1:]))
+    for where, title, values, context in collect(args.captures, args.capture or args.replay):
+        if context:
+            print(f'# {where}: {title} (context: copy the private parts as needles)', *['# ' + value for value in values], sep='\n')
+        else:
+            print(f'# {where}: {title}', *values, sep='\n')
     return 0
 
 
