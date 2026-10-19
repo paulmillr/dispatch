@@ -1,7 +1,7 @@
 import SwiftUI
 import CoreText
 
-/// Compact settings grouped into Appearance, Keys, General, and Agents & Hosts.
+/// Compact settings grouped into Appearance, Keys, General, Features, and Agents & Hosts.
 struct SettingsView: View {
     // Keep the controls stable while the user adjusts content typography.
     private let typography = AppTypography()
@@ -84,6 +84,7 @@ struct SettingsView: View {
                 case .appearance: appearanceSettings
                 case .keys: keySettings
                 case .general: generalSettings
+                case .features: featureSettings
                 case .hosts: agentsAndHosts
                 }
             }.id(selectedTab)
@@ -153,6 +154,7 @@ struct SettingsView: View {
         case appearance = "Appearance"
         case keys = "Keys"
         case general = "General"
+        case features = "Features"
         case hosts = "Agents & Hosts"
     }
 
@@ -257,8 +259,9 @@ struct SettingsView: View {
                             .frame(width: typography.expanded(60), alignment: .trailing)
                     }.frame(width: pickerWidth)
                 }
-                row("Show git branch", detail: "Beside each space’s name") {
+                row("Show git branch", detail: draft.gitEnabled ? "Beside each space’s name" : "Needs Git, in Features") {
                     settingToggle("Show git branch", isOn: $draft.showGitBranches)
+                        .disabled(!draft.gitEnabled)
                         .accessibilityIdentifier("show-git-branch")
                 }
                 row(draft.tabsOnly ? "Hide sidebar with one tab" : "Hide sidebar with one space") {
@@ -274,7 +277,7 @@ struct SettingsView: View {
     }
 
     /// What opens at launch and where new spaces start, how terminals behave, attention notifications, and
-    /// diagnostics for troubleshooting.
+    /// diagnostics for troubleshooting. Whole features and their options are under Features.
     private var generalSettings: some View {
         VStack(spacing: 8) {
             settingsGroup("Startup") {
@@ -300,6 +303,82 @@ struct SettingsView: View {
                 }
             }
             settingsGroup("Terminal") {
+                row("Kitty graphics", detail: "Lets terminal programs display images") {
+                    settingToggle("Kitty graphics", isOn: $draft.enableKittyGraphics)
+                }
+                row("Automatic tab names") {
+                    settingToggle("Automatic tab names", isOn: $draft.automaticTabNames)
+                    .help("An agent's conversation title, a running program's own title, or the folder at an idle prompt. Off shows the terminal title. Renamed tabs keep their names.")
+                }
+            }
+            settingsGroup("Notifications") {
+                row("Notify", detail: "when a pane needs input or finishes a response") {
+                    settingToggle("Attention notifications", isOn: $draft.attentionNotifications)
+                }
+                row("Dock badge", detail: "count of panes waiting for input") {
+                    settingToggle("Attention Dock badge", isOn: $draft.attentionDockBadge)
+                }
+                row("Sound", detail: "play a sound for new background attention") {
+                    settingToggle("Attention sound", isOn: $draft.attentionSound)
+                }
+                if draft.appTheme == .nautical {
+                    row("Ship's bell", detail: "two bells when an agent finishes in the background") {
+                        settingToggle("Ship's bell", isOn: $draft.shipsBell)
+                            .accessibilityIdentifier("settings-ships-bell")
+                    }
+                }
+                if let error = TerminalRuntime.shared.workspace === workspace ? (NSApp.delegate as? AppDelegate)?.attention.notificationError : nil {
+                    Text(error).font(typography.font(offset: -1)).foregroundStyle(Chrome.muted)
+                        .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
+                }
+            }
+            settingsGroup("Troubleshooting") {
+                let setup = SSHSetupLog.shared
+                if !setup.fallbacks.isEmpty {
+                    // Why SSH integration fell back to a plain shell since Dispatch started; the system log has each one.
+                    row("SSH integration fallbacks", detail: setup.fallbacks.sorted { $0.value > $1.value || ($0.value == $1.value && $0.key < $1.key) }
+                        .map { "\($0.key) ×\($0.value)" }.joined(separator: " · ")) {
+                        Text(verbatim: "\(setup.fallbacks.values.reduce(0, +))").foregroundStyle(Chrome.muted)
+                    }
+                    .accessibilityIdentifier("settings-ssh-fallbacks")
+                }
+                row("Diagnostics", detail: "Anonymous app diagnostics saved on this Mac") {
+                    settingToggle("Enable diagnostics", isOn: $draft.enableDiagnostics)
+                        .accessibilityIdentifier("enable-diagnostics")
+                        .help("No host details, personal information, or conversation content.")
+                }
+                if store.values.enableDiagnostics {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(diagnostics.directory.path)
+                            .font(typography.font(offset: -1.5, design: .monospaced))
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("diagnostics-log-path")
+                        Button("Copy path") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(diagnostics.directory.path, forType: .string)
+                        }.accessibilityIdentifier("diagnostics-copy-path")
+                        if let error = diagnostics.error {
+                            Text(error).font(typography.font(offset: -1.5)).foregroundStyle(.red)
+                        }
+                    }.frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 8)
+                }
+            }
+        }
+    }
+
+    /// Whole features, each with its options: Chat mode and its agents, tmux and herdr sessions as spaces, files mode,
+    /// and git.
+    private var featureSettings: some View {
+        VStack(spacing: 8) {
+            integrationCard("Chat mode", detail: "coding agent CLIs as chat", enabled: chatEnabled) {
+                ForEach(TerminalRuntime.shared.chat.listedLaunches, id: \.key) { agentRow($0) }
+            }
+            if let chatError = TerminalRuntime.shared.chat.error {
+                Text(chatError).font(typography.font(offset: -1.5)).foregroundStyle(.red).textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            settingsGroup("tmux & herdr") {
                 ForEach(multiplexers, id: \.self) { name in
                     row("Open \(name) sessions as spaces", detail: sessionDetail(name)) {
                         settingToggle("Open \(name) sessions as spaces", isOn: $draft.spaces[on: name])
@@ -308,13 +387,6 @@ struct SettingsView: View {
                 Text("The original tab closes after attach.")
                     .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 9)
-                row("Kitty graphics", detail: "Lets terminal programs display images") {
-                    settingToggle("Kitty graphics", isOn: $draft.enableKittyGraphics)
-                }
-                row("Automatic tab names") {
-                    settingToggle("Automatic tab names", isOn: $draft.automaticTabNames)
-                    .help("An agent's conversation title, a running program's own title, or the folder at an idle prompt. Off shows the terminal title. Renamed tabs keep their names.")
-                }
             }
             settingsGroup("Files") {
                 row("Drag and drop", detail: "Copy files in from Finder, out to Finder, or onto a terminal as paths") {
@@ -340,51 +412,10 @@ struct SettingsView: View {
                         .accessibilityIdentifier("settings-files-ask-before-replacing")
                 }
             }
-            settingsGroup("Notifications") {
-                row("Notify", detail: "when a pane needs input or finishes a response") {
-                    settingToggle("Attention notifications", isOn: $draft.attentionNotifications)
-                }
-                row("Dock badge", detail: "count of panes waiting for input") {
-                    settingToggle("Attention Dock badge", isOn: $draft.attentionDockBadge)
-                }
-                row("Sound", detail: "play a sound for new background attention") {
-                    settingToggle("Attention sound", isOn: $draft.attentionSound)
-                }
-                if draft.appTheme == .nautical {
-                    row("Ship's bell", detail: "two bells when an agent finishes in the background") {
-                        settingToggle("Ship's bell", isOn: $draft.shipsBell)
-                            .accessibilityIdentifier("settings-ships-bell")
-                    }
-                }
-                if let error = TerminalRuntime.shared.workspace === workspace ? (NSApp.delegate as? AppDelegate)?.attention.notificationError : nil {
-                    Text(error).font(typography.font(offset: -1)).foregroundStyle(Chrome.muted)
-                        .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
-                }
-            }
-            settingsGroup("Troubleshooting") {
-                row("Diagnostics", detail: "Anonymous app diagnostics saved on this Mac") {
-                    settingToggle("Enable diagnostics", isOn: $draft.enableDiagnostics)
-                        .accessibilityIdentifier("enable-diagnostics")
-                        .help("No host details, personal information, or conversation content.")
-                }
-                if store.values.enableDiagnostics {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(diagnostics.directory.path)
-                            .font(typography.font(offset: -1.5, design: .monospaced))
-                            .textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .accessibilityIdentifier("diagnostics-log-path")
-                        Button("Copy path") {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(diagnostics.directory.path, forType: .string)
-                        }.accessibilityIdentifier("diagnostics-copy-path")
-                        if let error = diagnostics.error {
-                            Text(error).font(typography.font(offset: -1.5)).foregroundStyle(.red)
-                        }
-                    }.frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 8)
-                }
-            }
-        }
+            integrationCard("Git", detail: "Changes and Commits in files mode, file marks and branch names",
+                            enabled: $draft.gitEnabled, hasOptions: false) {}
+                .accessibilityIdentifier("settings-git")
+        }.task { TerminalRuntime.shared.chat.loadLaunches() }
     }
 
     /// The modifiers that go with the digit keys. Recording one another group already uses swaps the two.
@@ -473,17 +504,10 @@ struct SettingsView: View {
         .help("Click, then hold the modifiers for \(title.lowercased()) and release them. ⌫ removes the shortcut; Esc cancels.")
     }
 
-    /// Chat mode's agents, then how SSH connections behave and each machine's choices, this Mac first: an agent
-    /// switch and the host lines it affects share the page.
+    /// How SSH connections behave and each machine's choices, this Mac first, with its agent hooks; Chat mode itself
+    /// is under Features.
     private var agentsAndHosts: some View {
         VStack(spacing: 8) {
-            integrationCard("Chat mode", detail: "coding agent CLIs as chat", enabled: chatEnabled) {
-                ForEach(TerminalRuntime.shared.chat.listedLaunches, id: \.key) { agentRow($0) }
-            }
-            if let chatError = TerminalRuntime.shared.chat.error {
-                Text(chatError).font(typography.font(offset: -1.5)).foregroundStyle(.red).textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
             SSHHostsSettings(workspace: workspace, permissions: sshPermissions, policy: $draft.newHostPolicy,
                              clipboard: $draft.allowRemoteClipboardWrites, reconnect: $draft.autoReconnectSSH,
                              resetting: resettingSSH) {
@@ -523,7 +547,9 @@ struct SettingsView: View {
     private func restoreDefaults() {
         draft = Preferences()
         keyError = nil
-        if selectedTab == .hosts {
+        // Chat mode (Features) and this Mac's agent hooks (Hosts) restore together: the agents install their hooks here
+        // again.
+        if selectedTab == .hosts || selectedTab == .features {
             // This Mac's agent hooks first, so restoring the agents installs them here again.
             let chat = TerminalRuntime.shared.chat
             chat.localHooks = [:]

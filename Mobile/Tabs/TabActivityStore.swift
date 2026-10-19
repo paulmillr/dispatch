@@ -1,11 +1,18 @@
 import Foundation
 
-/// The last change the phone saw in each terminal, per host and pane key, kept lightly on the device: a small JSON file
-/// in Application Support, written a moment after a change, holding at most `limit` panes per host and nothing older
-/// than `age`. It orders the Tabs list by activity (M2a) and gives rows their time. Losing it costs only those times.
+/// The last activity known in each terminal and tab, per host and topology key, kept lightly on the device: the changes
+/// the phone saw (by pane key) and the server's own times (`terminals.activity`, by the key it names, a tmux window's).
+/// A small JSON file in Application Support, written a moment after a change, holding at most `limit` keys per host and
+/// nothing older than `age`. It orders the Tabs list by activity (M2a) and gives rows their time, also before the host
+/// connects. Losing it costs only those times.
 @MainActor
 final class TabActivityStore {
-    static let shared = TabActivityStore(url: Home.support.appendingPathComponent("tab-activity.json"))
+    /// `tab-activity.json` held the times the phone noticed changes, also those found after a reconnect (any time
+    /// before), so most rows showed the last launch: it is dropped, and only times something happened go in this one.
+    static let shared: TabActivityStore = {
+        try? FileManager.default.removeItem(at: Home.support.appendingPathComponent("tab-activity.json"))
+        return TabActivityStore(url: Home.support.appendingPathComponent("tab-activity-2.json"))
+    }()
 
     private let url: URL?
     private var dates: [UUID: [String: Date]] = [:]

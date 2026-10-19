@@ -229,6 +229,18 @@ final class GitQueriesTests: XCTestCase {
         XCTAssertEqual(GitQueries.lineCount(Data()), 0)
     }
 
+    /// The page queries a run made, apart from the raw query each page reads beside it (the signatures), which must
+    /// mirror its page: the same range in the raw format.
+    private func pageCalls(_ source: FakeFilesSource, file: StaticString = #filePath, line: UInt = #line) -> [String] {
+        let calls = source.gitCalls.map { String($0.dropFirst(api.count + 1)) }
+        let pages = calls.filter { !$0.contains("--pretty=raw") }
+        let mirrored = pages.map { $0.replacingOccurrences(of: GitQueries.format, with: "--pretty=raw")
+            .replacingOccurrences(of: " --date=unix", with: "") }
+        XCTAssertEqual(calls.filter { $0.contains("--pretty=raw") }.sorted(), mirrored.sorted(),
+                       "every page reads its signatures", file: file, line: line)
+        return pages
+    }
+
     func testLogPagesScopesAndFilters() async throws {
         let source = FakeFilesSource.mockupAPI()
         let format = GitQueries.format
@@ -254,7 +266,7 @@ final class GitQueriesTests: XCTestCase {
         source.gitAnswers["log -n 200 --skip=200 \(format) --date=unix --grep=Retry --regexp-ignore-case --fixed-strings \(tip)"] = ok("")
         _ = try await queries.log(scope: .branch, match: .message("Retry"), skip: 200, count: 200, from: tip)
         _ = try await queries.log(scope: .all, match: .author("ivan"), skip: 0, count: 200, from: tip)
-        XCTAssertEqual(source.gitCalls.map { String($0.dropFirst(api.count + 1)) }, [
+        XCTAssertEqual(pageCalls(source), [
             "log -n 200 --skip=0 \(format) --date=unix",
             "log -n 1 --skip=0 \(format) --date=unix --all",
             "log -n 200 --skip=0 \(format) --date=unix --grep=Retry --regexp-ignore-case --fixed-strings",
@@ -348,7 +360,7 @@ final class GitQueriesTests: XCTestCase {
         try await pages.fill(3, with: GitQueries(source: source, root: api))
         XCTAssertEqual(pages.commits.count, 2)
         XCTAssertTrue(pages.exhausted, "The second page came back short")
-        XCTAssertEqual(source.gitCalls.count, 2, "A page the bound cut is followed by the rest")
+        XCTAssertEqual(pageCalls(source).count, 2, "A page the bound cut is followed by the rest")
     }
 
     func testFillAsksAPageAtATimeFromItsTipAndKeepsEachCommitOnce() async throws {
@@ -367,7 +379,7 @@ final class GitQueriesTests: XCTestCase {
         source.gitAnswers["log -n 60 --skip=600 \(format) --date=unix \(tip)"] = ok(records(590..<650))
         var pages = GitLogPages(scope: .branch, filter: "", tip: tip)
         try await pages.fill(650, with: GitQueries(source: source, root: api))
-        XCTAssertEqual(source.gitCalls.map { String($0.dropFirst(api.count + 1)) }, [
+        XCTAssertEqual(pageCalls(source), [
             "log -n 200 --skip=0 \(format) --date=unix \(tip)",
             "log -n 200 --skip=200 \(format) --date=unix \(tip)",
             "log -n 200 --skip=400 \(format) --date=unix \(tip)",

@@ -192,6 +192,19 @@ def corpus(root, stage, replays, helper, failed=False):
     return stored.returncode == 0
 
 
+def migrate(root, helper):
+    """Brings replays/ up to the code before anything replays it (docs/replay.md, Migrations): the pending migrations in
+    test/replay-migrations, applied by the helper this build bundled. False when one did not apply."""
+    replays, migrations = root / 'replays', root / 'test/replay-migrations'
+    if not migrations.is_dir() or not Path(helper).exists() or not next(replays.rglob('*.rpl.zst'), None):
+        return True
+    result = subprocess.run([str(helper), 'capture', 'migrate', str(replays), str(migrations)], stdout=subprocess.PIPE, text=True)
+    for line in result.stdout.splitlines():
+        if line.startswith(('migration\t', 'rerecord\t', 'error\t')):
+            print('Replay corpus ' + line.replace('\t', ': ', 1), flush=True)
+    return result.returncode == 0
+
+
 def corpus_missing(root):
     """None, or why the corpus in replays/ (a git submodule) is absent: without it every test would run live, unnoticed."""
     replays = root / 'replays'
@@ -248,6 +261,8 @@ def execute(root, tests, skips=(), recheck=False, benchmarks=False, selection=No
     try:
         # The old SSH helper's portable preflight went with it; the helper builds in the Xcode phase.
         plan = ensure_build(root, profile, force=recheck)
+        if not live and not replay and not migrate(root, root / 'build/Build/Products/Debug/Dispatch.app/Contents/Resources/dispatch-helper'):
+            raise RuntimeError('A replay migration did not apply (test/replay-migrations): fix it before the corpus replays')
         if replay:
             # Replaying the capture in build/captures: its tests into a corpus of their own (failed ones too: they
             # reproduce their failure), stored by the helper this build just bundled, then nothing but replay.

@@ -79,6 +79,8 @@ final class ScriptedHostSessionDriver: HostSessionDriver {
     static func connects(_ host: HostRecord, latency: Duration) -> [Step] {
         [.event(.link(.connecting)), .sleep(.milliseconds(30)), .event(.link(.authenticating)), .sleep(.milliseconds(25)),
          .event(.link(.bootstrapping)), .sleep(.milliseconds(35)),
+         // As the SSH driver's follower names its choice while the first topology is awaited.
+         .event(.following("tmux")),
          .ready(hello: HostFixture.hello(), multiplexers: HostFixture.multiplexers(["tmux"]), versions: ["tmux": "3.7"],
                 topology: HostFixture.topology()),
          .event(.latency(latency)), .hold]

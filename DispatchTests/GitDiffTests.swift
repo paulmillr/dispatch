@@ -380,14 +380,15 @@ final class GitDiffTests: XCTestCase {
         let status = status(mockup)
         XCTAssertEqual(GitChangesText.branch(status), "main")
         XCTAssertEqual(GitChangesText.branch(self.status([], branch: nil)), "detached at 3f2c1a0")
-        XCTAssertEqual(GitChangeArea.allCases.map { GitChangesText.count(status, $0) },
-                       ["1 staged", "2 unstaged", "1 untracked"])
         XCTAssertEqual(status.additions, 26)
         XCTAssertEqual(status.deletions, 5)
-        XCTAssertEqual(GitChangesText.repositoryPath("/Users/ivan/src/api", home: "/Users/ivan", host: nil), "~/src/api")
-        XCTAssertEqual(GitChangesText.repositoryPath("/srv/app/", home: "/home/ivan", host: "homelab"), "homelab:/srv/app")
-        XCTAssertEqual(GitChangesText.repositoryPath("/Users/ivan", home: "/Users/ivan", host: nil), "~")
-        XCTAssertEqual(GitChangesText.repositoryPath("/Users/ivanka/x", home: "/Users/ivan", host: nil), "/Users/ivanka/x")
+        // The header's search on Changes: any case, by path or a rename's old path.
+        XCTAssertEqual(status.matching("").changes, status.changes)
+        XCTAssertEqual(status.matching(" ROUTES ").changes.map(\.path), status.changes.map(\.path).filter { $0.contains("routes") })
+        var renamed = status
+        renamed.changes = [GitChange(path: "new.ts", oldPath: "lib/old.ts", kind: .renamed, area: .staged)]
+        XCTAssertEqual(renamed.matching("old").changes.count, 1)
+        XCTAssertTrue(status.matching("nothing-like-this").changes.isEmpty)
     }
 
     func testRowWords() {

@@ -419,3 +419,31 @@ fn check_links_a_relay_whatever_the_order_of_its_files() {
     std::fs::remove_dir_all(&root).unwrap();
     assert_eq!(orders, [(); 4].map(|_| Ok((false, Vec::<PathBuf>::new()))));
 }
+
+#[test]
+fn write_parent_names_no_parent_in_every_recorded_write_and_leaves_other_jobs() {
+    let write = |parent: bool| {
+        let mut fields = vec![("job", Data::String("write")), ("path", Data::Bytes(b"/h/.zshenv")), ("mode", Data::Unsigned(0o600))];
+        if parent {
+            fields.extend([("parent_device", Data::Null), ("parent_inode", Data::Null)]);
+        }
+        Data::Object(fields)
+    };
+    let read = || Data::Object(vec![("job", Data::String("read")), ("path", Data::Bytes(b"/h/.zshenv"))]);
+    let written = Data::Object(vec![("kind", Data::String("written"))]);
+    let records = |parent: bool| vec![
+        record("submit", &write(parent), &Data::Unsigned(3)),
+        record("file.done", &Data::Array(vec![Data::Unsigned(0), write(parent)]), &written),
+        record("submit", &read(), &Data::Unsigned(4)),
+        record("file.done", &Data::Array(vec![Data::Unsigned(1), read()]), &written),
+    ];
+    let (mut converted, mut tally) = (records(false), Converted::default());
+    amended(&mut converted, &["write-parent".into()], &mut tally).unwrap();
+    assert_eq!(converted, records(true));
+    assert_eq!(tally.edited, 2);
+    amended(&mut converted, &["write-parent".into()], &mut tally).unwrap();
+    assert_eq!((converted, tally.edited), (records(true), 2), "a converted capture stays as it is");
+    let mut untouched = records(false);
+    amended(&mut untouched, &[], &mut tally).unwrap();
+    assert_eq!(untouched, records(false), "only when asked");
+}

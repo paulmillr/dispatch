@@ -90,6 +90,7 @@ final class GitLoadingTests: XCTestCase {
     }
 
     private func fixture(_ source: FakeFilesSource, directory: String?, visible: Bool = true,
+                         preferences: @escaping @MainActor () -> FilesLoader.Preferences = { .init() },
                          resolve: (@MainActor (UUID, Date?) -> FilesAvailability)? = nil) -> Fixture {
         let coordinator = FilesCoordinator { nil }
         let tab = Tab(directory), sleeper = Sleeper(), delay = Sleeper(), clock = Clock()
@@ -100,7 +101,7 @@ final class GitLoadingTests: XCTestCase {
             resolve: resolve ?? { _, _ in .available(source) },
             directory: { _ in tab.directory },
             track: { _ in },
-            preferences: { .init() },
+            preferences: preferences,
             sleep: { try await sleeper.sleep($0) },
             now: { clock.now })
         coordinator.git.environment = GitLoader.Environment(sleep: { try await delay.sleep($0) }, now: { clock.now })
@@ -377,6 +378,86 @@ final class GitLoadingTests: XCTestCase {
         XCTAssertEqual(f.session.log?.exhausted, true)
     }
 
+    /// Coming to Commits, the log's reads go ahead of the status read the tab also wants: the helper runs a host's git
+    /// two at a time, and a status of a large tree would hold the log back for seconds.
+    func testCommitsReadsTheLogBeforeTheStatus() async throws {
+        let source = FakeFilesSource.mockupAPI()
+        repository(source)
+        let f = fixture(source, directory: api)
+        try await TestSupport.eventually { f.session.status != nil }
+        try await f.idle()
+        let before = source.gitCalls.count
+        f.session.tab = .commits
+        try await TestSupport.eventually { f.session.log != nil }
+        try await f.idle()
+        let after = Array(source.gitCalls[before...])
+        let log = try XCTUnwrap(after.firstIndex { $0.contains(" log -n ") }, "\(after)")
+        let status = try XCTUnwrap(after.firstIndex { $0.contains(" status ") }, "the status follows: \(after)")
+        XCTAssertLessThan(log, status, "\(after)")
+        XCTAssertLessThan(after.firstIndex { $0.contains(" for-each-ref ") } ?? .max, log)
+    }
+
+    /// The log marks signed commits from their raw headers; selecting one checks it once, with the verdict kept by hash.
+    func testSignedCommitsAreMarkedAndTheSelectedOneChecked() async throws {
+        let source = FakeFilesSource.mockupAPI()
+        repository(source)
+        source.gitAnswers["log -n 200 --skip=0 --pretty=raw \(Self.hash)"] = ok(
+            "commit \(Self.hash)\ntree 1111111111111111111111111111111111111111\nparent \(Self.parent)\n"
+            + "gpgsig -----BEGIN PGP SIGNATURE-----\n \n iQEz\n -----END PGP SIGNATURE-----\n\n    Make webhook retries idempotent\n")
+        source.gitAnswers["show --numstat -z \(Self.format) \(Self.hash)"] = ok(
+            Self.record(Self.hash, parents: [Self.parent], subject: "Make webhook retries idempotent", at: 1_760_000_000)
+                .dropLast() + "\0\n1\t0\tCHANGELOG.md\0")
+        source.gitAnswers["show --name-status -z \(Self.format) \(Self.hash)"] = ok(
+            Self.record(Self.hash, parents: [Self.parent], subject: "Make webhook retries idempotent", at: 1_760_000_000)
+                .dropLast() + "\0\nM\0CHANGELOG.md\0")
+        source.gitAnswers["show --format= -U3 \(Self.hash) -- CHANGELOG.md"] = ok(Self.diff("CHANGELOG.md"))
+        source.gitAnswers["verify-commit --raw \(Self.hash)"] = ok(
+            "[GNUPG:] GOODSIG 697079DA6878B89B Paul Miller <paul@example.com>\n[GNUPG:] TRUST_ULTIMATE 0 pgp\n")
+        let f = fixture(source, directory: api)
+        try await TestSupport.eventually { f.session.status != nil }
+        f.session.tab = .commits
+        try await TestSupport.eventually { f.session.log != nil }
+        XCTAssertEqual(f.session.log?.commits.first?.signature, .gpg)
+        XCTAssertTrue(calls(source, "verify-commit").isEmpty, "nothing is checked until a commit is selected")
+        f.session.selectedCommit = Self.hash
+        try await TestSupport.eventually { f.session.signatureChecks[Self.hash] != nil }
+        XCTAssertEqual(f.session.signatureChecks[Self.hash]?.verdict, .good(certified: true))
+        try await f.idle()
+        try await f.tick()
+        XCTAssertEqual(calls(source, "verify-commit").count, 1, "a verdict is kept, not asked again")
+    }
+
+    /// Settings › Features › Git off: the git tabs and marks go and nothing more is asked of git until it is on again.
+    @MainActor final class Switch { var on = true }
+
+    func testGitTurnedOffAsksNothingAndLeavesFilesOnly() async throws {
+        let source = FakeFilesSource.mockupAPI()
+        repository(source)
+        let git = Switch()
+        let f = fixture(source, directory: api, preferences: { FilesLoader.Preferences(git: git.on) })
+        try await TestSupport.eventually { f.session.status != nil }
+        f.session.tab = .commits
+        try await TestSupport.eventually { f.session.log != nil }
+        try await f.idle()
+
+        git.on = false
+        try await f.tick()
+        XCTAssertEqual(f.session.git, .off)
+        XCTAssertEqual(f.session.tab, .files, "the git tabs go with git")
+        XCTAssertFalse(f.session.showsGitTabs)
+        XCTAssertNil(f.session.status)
+        XCTAssertNil(f.session.log)
+        XCTAssertNil(FilesFooter.gitSummary(f.session.git), "the footer says nothing of git")
+        XCTAssertFalse(f.session.listings.values.contains { $0.entries.contains { $0.mark != nil } }, "no marks")
+        let asked = source.gitCalls.count
+        try await f.tick()
+        XCTAssertEqual(source.gitCalls.count, asked, "nothing is asked while git is off")
+
+        git.on = true
+        try await f.tick()
+        try await TestSupport.eventually { f.session.git == .repository(GitRepository(root: api)) && f.session.status != nil }
+    }
+
     // MARK: Selections
 
     func testSelectionsLoadTheirDiffsAndDetail() async throws {
@@ -421,6 +502,15 @@ final class GitLoadingTests: XCTestCase {
         f.session.commitFile = "src/routes/billing.ts"
         try await TestSupport.eventually { f.session.commitDiff?.diff != nil }
         XCTAssertEqual(f.session.commitDiff?.key, Self.hash + ":src/routes/billing.ts")
+
+        // Source shows the file as the commit left it: the commit's patch with the whole file as context.
+        source.gitAnswers["show --format= -U\(GitChangesText.sourceLimit) \(Self.hash) -- src/routes/billing.ts"] = ok(
+            "diff --git a/src/routes/billing.ts b/src/routes/billing.ts\nindex 1111111..2222222 100644\n"
+            + "--- a/src/routes/billing.ts\n+++ b/src/routes/billing.ts\n@@ -1,3 +1,3 @@\n import a\n-old()\n+retry()\n done\n")
+        let queries = GitQueries(source: source, root: api)
+        let commit = detail.commit
+        let text = try await queries.commitSource(commit, path: "src/routes/billing.ts", oldPath: nil)
+        XCTAssertEqual(text, "import a\nretry()\ndone\n")
 
         f.session.selectedCommit = nil
         try await TestSupport.eventually { f.session.commitDetail == nil && f.session.commitDiff == nil }

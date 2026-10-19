@@ -97,7 +97,20 @@ enum TabsSample {
                              tint: Color(red: 0xa9 / 255, green: 0x8a / 255, blue: 0xe0 / 255),
                              system: HostSystem(os: "Linux", distribution: "ubuntu", name: "Ubuntu 24.04"), home: "/home/alex", order: 2)
 
-    static func model(now: Date = Date()) -> MobileTabs {
+    /// A connected host with no spaces yet (`-DispatchTabsEmptyHost YES`): M2b's New space line.
+    static let vps = TabsHost(id: UUID(uuidString: "00000000-0000-0000-0000-00000000A004")!, name: "vps",
+                              tint: Color(red: 0x8f / 255, green: 0xc9 / 255, blue: 0x9b / 255),
+                              system: HostSystem(os: "Linux", distribution: "ubuntu", name: "Ubuntu 24.04"), home: "/root", order: 3)
+
+    /// The sample's multiplexers: herdr shown where its keys say so, tmux beside it on mba2 and ai.
+    static func multiplexers(_ names: [String]) -> [MultiplexerChoice] {
+        names.map { name in
+            let mux: UInt64 = name == "herdr" ? 2 : 0
+            return MultiplexerChoice(mux: mux, name: name, route: .init(mux: mux, key: name), version: name == "herdr" ? "0.9.5" : "3.7")
+        }
+    }
+
+    static func model(now: Date = Date(), emptyHost: Bool = UserDefaults.standard.bool(forKey: "DispatchTabsEmptyHost")) -> MobileTabs {
         let defaults = UserDefaults(suiteName: "tabs-sample")!
         defaults.removePersistentDomain(forName: "tabs-sample")
         let store = TabActivityStore(url: nil)
@@ -152,9 +165,17 @@ enum TabsSample {
         urgency["p:curves:claude"] = .unseen; status["p:curves:claude"] = "fable-5.1 · finished"
         status["p:billing:codex"] = "astra-6 · idle"
         var keys: [UInt64: String] = [:]
-        for (host, sketch) in [(mba2, mbaSketch), (studio, studioSketch), (ai, aiSketch)] {
+        let installed = [mba2.id: ["herdr", "tmux"], studio.id: ["tmux"], ai.id: ["herdr", "tmux"], vps.id: ["tmux"]]
+        var hosts = [(mba2, mbaSketch), (studio, studioSketch), (ai, aiSketch)]
+        if emptyHost { hosts.append((vps, TopologySketch(backend: 1, first: 300, spaces: []))) }
+        for (sample, sketch) in hosts {
+            // The multiplexer each host shows: tmux on studio and vps, herdr on the others.
+            var host = sample
+            host.multiplexer = sample.id == studio.id || sample.id == vps.id ? "tmux" : "herdr"
             let workspace = MobileWorkspace(host: host, client: sampleClient, activity: store, now: { now })
             workspace.features = ["projects.recent", "multiplexers.versions"]
+            workspace.multiplexers = multiplexers(installed[host.id] ?? [])
+            workspace.choice = workspace.multiplexers.first { $0.name == host.multiplexer }
             workspace.apply(sketch.topology)
             model.insert(workspace)
             for (key, id) in sketch.ids { keys[id] = key }

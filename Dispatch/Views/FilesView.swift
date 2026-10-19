@@ -45,7 +45,7 @@ struct FilesView: View {
 
     private func browser(_ root: String?, offline: (host: String, since: Date?)?) -> some View {
         VStack(spacing: 0) {
-            FilesHeader(session: session, root: root, settingHidden: Self.hiddenSetting)
+            FilesHeader(session: session, root: root)
             if let offline { FilesOfflineBar(session: session, host: offline.host, since: offline.since) }
             // The tabs change as the modes do: the old body fades down and out, the new one in. The animation is this
             // body's alone; the header (its segments included) and the strip never animate with it.
@@ -115,7 +115,7 @@ struct FilesSplit<List: View, Detail: View>: View {
         GeometryReader { geometry in
             let width = geometry.size.width
             let preference = TerminalRuntime.shared.files.previewPreference(for: session)
-            let columns = FilesView.layout(width: width, preference: preference, hidden: session.previewHidden)
+            let columns = FilesView.layout(width: width, preference: preference, hidden: session.previewOff)
             // The list stays the HStack's first child whatever the preview does, so its outline keeps its identity
             // (and its scroll and selection) when the pane hides, shows or collapses.
             HStack(spacing: 0) {

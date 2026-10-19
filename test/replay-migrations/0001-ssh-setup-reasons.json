@@ -1,0 +1,50 @@
+{
+  "kind": "rewrite",
+  "why": "SSH setup scripts create folders, then check them (no check-then-create race), and every failure names its reason. On the paths these recordings took the new scripts answer as the old ones did (no output, the same status), so the commands the app sent are rewritten; recordings of failures (a release saying why) are rerecorded by 0002.",
+  "ops": [
+    "open.command",
+    "open.helper"
+  ],
+  "replace": [
+    {
+      "old": "umask 077\nowner=$(id -u) || exit 1\nif test \"$(uname -s)\" = Darwin; then\n  metadata() { stat -f '%u %Lp %l' \"$1\"; }\nelse\n  metadata() { stat -c '%u %a %h' \"$1\"; }\nfi\nprivate_directory() {\n  test ! -L \"$1\" && test -d \"$1\" || return 1\n  set -- $(metadata \"$1\")\n  test \"$#\" = 3 && test \"$1\" = \"$owner\" && test \"$2\" = 700\n}\nsafe_file() {\n  test ! -L \"$1\" && test -f \"$1\" || return 1\n  set -- $(metadata \"$1\")\n  test \"$#\" = 3 && test \"$1\" = \"$owner\" && test \"$3\" = 1 || return 1\n  case \"$2\" in 600|700) return 0;; *) return 1;; esac\n}\nenter_private() {\n  test -e \"$1\" || test -L \"$1\" || mkdir \"$1\" || return 1\n  private_directory \"$1\" && cd -P \"$1\"\n}\ncd -P \"$HOME\" || exit 1\nset -- $(metadata .)\ntest \"$#\" = 3 && test \"$1\" = \"$owner\" && test \"$((0$2 & 022))\" = 0 || exit 1\ntest ! -L .dispatch || exit 1\nenter_private .dispatch || exit 1",
+      "new": "umask 077\nfail() {\n  printf 'dispatch-setup: %s\\n' \"$*\"\n  printf 'dispatch-setup: %s\\n' \"$*\" >&2\n  exit 1\n}\nowner=$(id -u) || fail \"cannot read the account id\"\nif test \"$(uname -s)\" = Darwin; then\n  metadata() { stat -f '%u %Lp %l' \"$1\"; }\nelse\n  metadata() { stat -c '%u %a %h' \"$1\"; }\nfi\nprivate_directory() {\n  test ! -L \"$1\" && test -d \"$1\" || return 1\n  set -- $(metadata \"$1\")\n  test \"$#\" = 3 && test \"$1\" = \"$owner\" && test \"$2\" = 700\n}\nsafe_file() {\n  test ! -L \"$1\" && test -f \"$1\" || return 1\n  set -- $(metadata \"$1\")\n  test \"$#\" = 3 && test \"$1\" = \"$owner\" && test \"$3\" = 1 || return 1\n  case \"$2\" in 600|700) return 0;; *) return 1;; esac\n}\nenter_private() {\n  mkdir \"$1\" 2>/dev/null\n  if ! private_directory \"$1\"; then\n    if test -e \"$1\" || test -L \"$1\"; then fail \"unsafe folder $1\"; else fail \"cannot create folder $1\"; fi\n  fi\n  cd -P \"$1\" || fail \"cannot enter folder $1\"\n}\ncd -P \"$HOME\" || fail \"no home folder\"\nset -- $(metadata .)\ntest \"$#\" = 3 && test \"$1\" = \"$owner\" && test \"$((0$2 & 022))\" = 0 || fail \"home folder writable by others\"\nenter_private .dispatch"
+    },
+    {
+      "old": "enter_private bin && enter_private versions && enter_private '{{digest}}' || exit 1",
+      "new": "enter_private bin && enter_private versions && enter_private '{{digest}}'\ncommand -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 || fail \"no sha256sum or shasum\""
+    },
+    {
+      "old": "test ! -e dispatch-helper && test ! -L dispatch-helper || safe_file dispatch-helper || exit 1",
+      "new": "test ! -e dispatch-helper && test ! -L dispatch-helper || safe_file dispatch-helper || fail \"unsafe cached helper\""
+    },
+    {
+      "old": "mkdir '{{staging}}' || exit 1",
+      "new": "mkdir '{{staging}}' || fail \"cannot create the upload folder\""
+    },
+    {
+      "old": "(set -C; cat > '{{staging}}/dispatch-helper') || exit 1",
+      "new": "(set -C; cat > '{{staging}}/dispatch-helper') || fail \"upload interrupted\""
+    },
+    {
+      "old": "test \"$(wc -c < '{{staging}}/dispatch-helper' | tr -d ' ')\" = '{{size}}' || exit 1",
+      "new": "test \"$(wc -c < '{{staging}}/dispatch-helper' | tr -d ' ')\" = '{{size}}' || fail \"upload incomplete\""
+    },
+    {
+      "old": "test \"$(checksum '{{staging}}/dispatch-helper')\" = '{{digest}}' || exit 1",
+      "new": "test \"$(checksum '{{staging}}/dispatch-helper')\" = '{{digest}}' || fail \"upload checksum mismatch\""
+    },
+    {
+      "old": "chmod 700 '{{staging}}/dispatch-helper' || exit 1",
+      "new": "chmod 700 '{{staging}}/dispatch-helper' || fail \"cannot make the helper executable\""
+    },
+    {
+      "old": "mv -f '{{staging}}/dispatch-helper' dispatch-helper || exit 1\nsafe_file dispatch-helper && test -x dispatch-helper && test \"$(wc -c < dispatch-helper | tr -d ' ')\" = '{{size}}' && test \"$(checksum dispatch-helper)\" = '{{digest}}'",
+      "new": "mv -f '{{staging}}/dispatch-helper' dispatch-helper || fail \"cannot install the helper\"\nsafe_file dispatch-helper && test -x dispatch-helper && test \"$(wc -c < dispatch-helper | tr -d ' ')\" = '{{size}}' && test \"$(checksum dispatch-helper)\" = '{{digest}}' || fail \"installed helper does not verify\""
+    },
+    {
+      "old": "enter_private sessions || exit 1\nenter_private '{{session}}' || exit 1\ntest ! -e ready && test ! -L ready || exit 1\n(set -C; printf '%s\\n' '.dispatch/bin/versions/{{digest}}/dispatch-helper' > ready.pending) || exit 1\nmv -f ready.pending ready",
+      "new": "enter_private sessions\nenter_private '{{session}}'\ntest ! -e ready && test ! -L ready || fail \"session already released\"\n(set -C; printf '%s\\n' '.dispatch/bin/versions/{{digest}}/dispatch-helper' > \"ready.$$\") || fail \"cannot write the ready file\"\nmv -f \"ready.$$\" ready || fail \"cannot release the session\""
+    }
+  ]
+}

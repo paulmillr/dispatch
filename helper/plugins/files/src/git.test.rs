@@ -506,6 +506,9 @@ fn named_formats_and_signature_checks_never_run_gpg() {
             assert_eq!(error.code, "invalid_request", "{args:?}");
             assert!(error.message.contains(args[1]), "{args:?}: {}", error.message);
         }
+        // The raw format names the signature without checking it.
+        let raw = ok(files, root, &["log", "--pretty=raw", "-n", "1"]);
+        assert!(raw.contains("\ngpgsig -----BEGIN PGP SIGNATURE-----"), "{raw}");
         // No format: the built-in default, never `format.pretty`.
         let log = ok(files, root, &["log", "-n", "1"]);
         assert!(log.starts_with(&format!("commit {hash}")), "{log}");
@@ -616,7 +619,7 @@ fn git_lookup_never_uses_a_relative_path_or_home() {
         ]),
         ..Settings::default()
     };
-    let sanitized = command(&settings, Path::new("/tmp"), &[], &["status"]);
+    let sanitized = command(&settings, Path::new("/tmp"), &[], &[], &["status"]);
     assert!(Path::new(sanitized.get_program()).is_absolute());
     let environment: std::collections::BTreeMap<_, _> = sanitized
         .get_envs()
@@ -638,7 +641,7 @@ fn git_lookup_never_uses_a_relative_path_or_home() {
         environment: Some(vec![("PATH".into(), format!("{}:/usr/bin:/bin", fake.parent().unwrap().display()).into())]),
         ..Settings::default()
     };
-    let unsafe_command = command(&settings, Path::new("/tmp"), &[], &["status"]);
+    let unsafe_command = command(&settings, Path::new("/tmp"), &[], &[], &["status"]);
     assert_ne!(Path::new(unsafe_command.get_program()), std::fs::canonicalize(fake).unwrap());
 }
 
@@ -883,4 +886,62 @@ fn a_status_past_the_bound_ends_at_a_whole_record() {
         assert!(untracked.clone().count() > 1_000);
         assert!(untracked.clone().all(|name| folder.join(name).is_file()));
     }
+}
+
+#[test]
+fn a_signature_check_runs_only_the_programs_the_helper_trusts() {
+    let repo = Repo::new("git-verify");
+    let root = &repo.root;
+    let marker = repo.tree.root.join("repository-gpg-ran");
+    let evil = script(&repo, "evil.sh", &format!("touch '{}'\nexit 0\n", marker.display()));
+    let raw = repo.git(&["cat-file", "commit", "HEAD"]);
+    let (headers, message) = raw.split_once("\n\n").unwrap();
+    let signed = format!(
+        "{headers}\ngpgsig -----BEGIN PGP SIGNATURE-----\n \n iQEzBAABCAAdFiEEAAAA\n \
+         -----END PGP SIGNATURE-----\n\n{message}"
+    );
+    let path = repo.tree.file("signed-commit", signed.as_bytes());
+    let hash = repo.git(&["hash-object", "-w", "-t", "commit", path.to_str().unwrap()]).trim().to_owned();
+    // The repository names its own programs and signers: none of them may count.
+    for key in ["gpg.program", "gpg.openpgp.program", "gpg.ssh.program"] {
+        repo.git(&["config", key, &evil]);
+    }
+    repo.git(&["config", "gpg.minTrustLevel", "ultimate"]);
+    // The gpg the helper finds on PATH answers for the check; git passes it `--status-fd=1`.
+    let bin = repo.tree.root.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let gpg = script(&repo, "bin/gpg", "echo '[GNUPG:] NEWSIG'\necho '[GNUPG:] GOODSIG 0123456789ABCDEF Test <test@example.com>'\n\
+         echo '[GNUPG:] VALIDSIG 00112233445566778899AABBCCDDEEFF00112233 2026-01-01 0 4 0 1 10 00'\nexit 0\n");
+    assert!(gpg.ends_with("bin/gpg"));
+    let mut path_value = OsString::from(&bin);
+    path_value.push(":");
+    path_value.push(std::env::var_os("PATH").unwrap_or_default());
+    for mut files in repo.plugins() {
+        let mut environment = repo.environment();
+        environment.retain(|(name, _)| name != "PATH");
+        environment.push(("PATH".into(), path_value.clone()));
+        files.git.environment = Some(environment);
+        let files = &mut files;
+        let git = run(files, root, &["verify-commit", "--raw", &hash], 0).unwrap();
+        assert_eq!(git.status, 0, "{}", git.output);
+        assert!(git.output.contains("GOODSIG 0123456789ABCDEF Test <test@example.com>"), "{}", git.output);
+        assert!(!marker.exists(), "the repository's gpg ran");
+        for args in [&["verify-commit", "--verbose", &hash][..], &["verify-commit", "--raw", "HEAD"]] {
+            assert_eq!(run(files, root, args, 0).unwrap_err().code, "invalid_request", "{args:?}");
+        }
+    }
+    // A repository's signers file would vouch for its own key: only the user's, else none.
+    let config = signing(&OsString::from("/nonexistent-path"), None).join(" ");
+    assert!(config.contains("gpg.ssh.allowedSignersFile=/dev/null"), "{config}");
+    assert!(config.contains("gpg.x509.program=/nonexistent"), "{config}");
+    let config = signing(&OsString::from("/nonexistent-path"), Some("/Users/me/.ssh/allowed_signers")).join(" ");
+    assert!(config.contains("gpg.ssh.allowedSignersFile=/Users/me/.ssh/allowed_signers"), "{config}");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn administrators_are_the_admin_groups_members() {
+    // root is in macOS's admin group; no account has this uid.
+    assert!(administrator(0));
+    assert!(!administrator(3_999_999_999));
 }

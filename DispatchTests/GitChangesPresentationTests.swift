@@ -158,7 +158,7 @@ final class GitChangesPresentationTests: XCTestCase {
         let window = try window(session)
         // OCR reads the middle dot as "•", "-" or nothing, "−" as "-", and "handleWebhook" now and then lowercase.
         let snapshot = try await read([
-            ["main"], ["1 staged"], ["2 unstaged"], ["1 untracked"], ["~/src/api"], ["+26"],
+            ["api"], ["main"], ["+26"],
             ["Staged"], ["Unstaged"], ["Untracked"],
             ["chat.ts"], ["billing.ts"], ["db.ts"], ["idempotency.test.ts"], ["src/routes"], ["+14"],
             ["src/routes/billing.ts"], ["unstaged · +8 −5 · 3 hunks", "unstaged • +8 -5 • 3 hunks", "+8 -5", "+8 −5"],
@@ -171,19 +171,20 @@ final class GitChangesPresentationTests: XCTestCase {
             ["git add -p"],
         ], in: window, named: "git-changes-mockup")
 
-        // The line shares the files header's 34 pt row, after the segments; the list starts right under it.
+        // The files header's 34 pt row as on every tab: the path to the repository and its branch after the segments,
+        // the search and the diff's toggle at the end; the counts are the groups' and the totals the footer's.
         let header = try await frame("files-header", in: window)
-        let line = try await frame("git-changes-header-line", in: window)
+        let branch = try await frame("files-branch", in: window)
         let commits = try await frame("files-segment-commits", in: window)
         let list = try await frame("git-changes-list", in: window)
         XCTAssertEqual(header.height, 34, accuracy: 0.5)
-        XCTAssertEqual(line.midY, header.midY, accuracy: 1)
-        XCTAssertGreaterThan(line.minX, commits.maxX)
+        XCTAssertEqual(branch.midY, header.midY, accuracy: 1)
+        XCTAssertGreaterThan(branch.minX, commits.maxX)
         XCTAssertEqual(list.maxY, header.minY, accuracy: 1.5, "no second bar between the header and the list")
-        XCTAssertTrue(PresentationTestSupport.accessibilityFrames("files-filter", in: window).isEmpty,
-                      "the list's filter is the Files tab's")
-        XCTAssertTrue(PresentationTestSupport.accessibilityFrames("files-preview-toggle", in: window).isEmpty,
-                      "the preview toggle is the Files tab's")
+        let totals = try await frame("git-changes-totals", in: window)
+        XCTAssertLessThan(totals.maxY, list.minY + 30, "the totals sit in the list's footer")
+        _ = try await frame("files-search", in: window)
+        XCTAssertTrue(PresentationTestSupport.accessibilityLabels("files-preview-toggle", in: window).contains("Hide diff"))
 
         // The badges: amber M on the modified rows, green U on the untracked one.
         let labels = PresentationTestSupport.accessibilityLabels("git-change-untracked-tests/idempotency.test.ts", in: window)
@@ -216,15 +217,15 @@ final class GitChangesPresentationTests: XCTestCase {
         let session = mockupSession()
         let inset: CGFloat = 70
         let window = try window(session, inset: inset)
-        try await read([["~/src/api"], ["+26"]], in: window, named: "git-changes-header-wide")
+        try await read([["api"], ["main"]], in: window, named: "git-changes-header-wide")
         let wide = try await frame("files-segment-changes", in: window)
         for width: CGFloat in [600, 480, 360] {
             window.setContentSize(NSSize(width: width, height: 700))
             try await TestSupport.eventually(diagnostic: "the header did not settle at \(width) pt") {
                 window.contentView?.layoutSubtreeIfNeeded()
                 let commits = PresentationTestSupport.accessibilityFrames("files-segment-commits", in: window).first
-                let totals = PresentationTestSupport.accessibilityFrames("git-changes-totals", in: window).first
-                return commits.flatMap { commits in totals.map { commits.maxX < $0.minX } } ?? false
+                let toggle = PresentationTestSupport.accessibilityFrames("files-preview-toggle", in: window).first
+                return commits.flatMap { commits in toggle.map { commits.maxX < $0.minX } } ?? false
             }
             if width == 360 {
                 // At last the segments drop their names (the line has clipped all it can).
@@ -233,14 +234,14 @@ final class GitChangesPresentationTests: XCTestCase {
             }
             let files = try await frame("files-segment-files", in: window)
             let commits = try await frame("files-segment-commits", in: window)
-            let totals = try await frame("git-changes-totals", in: window)
+            let toggle = try await frame("files-preview-toggle", in: window)
             XCTAssertGreaterThanOrEqual(files.minX, 11.5, "nothing spills past the leading edge at \(width) pt")
-            XCTAssertLessThan(commits.maxX, totals.minX, "at \(width) pt")
-            XCTAssertLessThanOrEqual(totals.maxX, width - 12 - inset + 0.5, "the totals stay out of the switch's room at \(width) pt")
+            XCTAssertLessThan(commits.maxX, toggle.minX, "at \(width) pt")
+            XCTAssertLessThanOrEqual(toggle.maxX, width - 12 - inset + 0.5, "the toggle stays out of the switch's room at \(width) pt")
             // Narrowed to glyphs, the segment keeps its name for VoiceOver and its count in sight.
             XCTAssertTrue(PresentationTestSupport.accessibilityLabels("files-segment-changes", in: window).contains("Changes 4"))
         }
-        try await read([["+26"]], in: window, named: "git-changes-header-narrow")
+        _ = try await PresentationTestSupport.capture(window, named: "git-changes-header-narrow", in: "files-audit")
     }
 
     func testClickingARowSelectsItAndArrowsMoveTheSelection() async throws {
@@ -331,10 +332,24 @@ final class GitChangesPresentationTests: XCTestCase {
         session.changesDiff = nil
         let window = try window(session)
         // OCR reads the UI font's dotted zero as "O".
-        try await read([["No changes"], ["the working tree matches HEAD"], ["0 staged", "O staged"]], in: window,
-                       named: "git-changes-empty")
-        XCTAssertTrue(PresentationTestSupport.accessibilityLabels("git-changes-count-staged", in: window).contains("0 staged"))
+        try await read([["No changes"], ["the working tree matches HEAD"]], in: window, named: "git-changes-empty")
         XCTAssertTrue(PresentationTestSupport.accessibilityFrames("git-diff", in: window).isEmpty, "No diff for no change")
+    }
+
+    /// The header's search narrows the list by path; nothing matching says so.
+    func testSearchNarrowsTheChangedFiles() async throws {
+        let session = mockupSession()
+        let window = try window(session)
+        _ = try await frame("git-change-unstaged-src/lib/db.ts", in: window)
+        session.changesFilter = "ROUTES"
+        try await TestSupport.eventually(diagnostic: "db.ts still listed") {
+            PresentationTestSupport.accessibilityFrames("git-change-unstaged-src/lib/db.ts", in: window).isEmpty
+                && !PresentationTestSupport.accessibilityFrames("git-change-unstaged-src/routes/billing.ts", in: window).isEmpty
+        }
+        XCTAssertFalse(PresentationTestSupport.accessibilityFrames("git-changes-filter", in: window).isEmpty,
+                       "a search with text stays open")
+        session.changesFilter = "nothing-like-this"
+        _ = try await frame("git-changes-no-match", in: window)
     }
 
     func testAddPatchWithoutATerminalSaysSo() async throws {

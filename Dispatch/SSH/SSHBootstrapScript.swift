@@ -46,25 +46,38 @@ enum SSHBootstrapScript {
         precondition(staging.utf8.allSatisfy { (48...57).contains($0) || (97...122).contains($0) || $0 == 45 })
         return """
         \(cachePreamble(digest: digest))
-        test ! -e dispatch-helper && test ! -L dispatch-helper || safe_file dispatch-helper || exit 1
-        mkdir '\(staging)' || exit 1
+        test ! -e dispatch-helper && test ! -L dispatch-helper || safe_file dispatch-helper || fail "unsafe cached helper"
+        mkdir '\(staging)' || fail "cannot create the upload folder"
         trap 'rm -f \(staging)/dispatch-helper; rmdir \(staging) 2>/dev/null' EXIT HUP INT TERM
-        (set -C; cat > '\(staging)/dispatch-helper') || exit 1
-        test "$(wc -c < '\(staging)/dispatch-helper' | tr -d ' ')" = '\(size)' || exit 1
-        test "$(checksum '\(staging)/dispatch-helper')" = '\(digest)' || exit 1
-        chmod 700 '\(staging)/dispatch-helper' || exit 1
-        test ! -e dispatch-helper && test ! -L dispatch-helper || safe_file dispatch-helper || exit 1
-        mv -f '\(staging)/dispatch-helper' dispatch-helper || exit 1
-        \(verify(size: size, digest: digest))
+        (set -C; cat > '\(staging)/dispatch-helper') || fail "upload interrupted"
+        test "$(wc -c < '\(staging)/dispatch-helper' | tr -d ' ')" = '\(size)' || fail "upload incomplete"
+        test "$(checksum '\(staging)/dispatch-helper')" = '\(digest)' || fail "upload checksum mismatch"
+        chmod 700 '\(staging)/dispatch-helper' || fail "cannot make the helper executable"
+        test ! -e dispatch-helper && test ! -L dispatch-helper || safe_file dispatch-helper || fail "unsafe cached helper"
+        mv -f '\(staging)/dispatch-helper' dispatch-helper || fail "cannot install the helper"
+        \(verify(size: size, digest: digest)) || fail "installed helper does not verify"
         """
     }
 
     /// Every child is reached from an already checked working directory. Keeping
     /// cwd inside it prevents replacement of an ancestor redirecting an upload.
     /// Same-account processes are outside the helper's security boundary.
+    ///
+    /// Folders are created, then checked: other Dispatch commands create the same ones at the same moment (a login and
+    /// the publish step releasing it, two first connections to a host, the Mac and the iPhone), so a folder that
+    /// already exists is not a failure, and whatever is there must pass the same owner and mode check. Never "check,
+    /// then create": that loses those races (`SSHBootstrapScriptTests` keeps the pattern out).
+    ///
+    /// Every failure says why with `fail`: one `dispatch-setup: <reason>` line on stdout, which the app and the login
+    /// read, and on stderr, which the iPhone and a person read.
     static let privateDirectoryScript = """
     umask 077
-    owner=$(id -u) || exit 1
+    fail() {
+      printf 'dispatch-setup: %s\\n' "$*"
+      printf 'dispatch-setup: %s\\n' "$*" >&2
+      exit 1
+    }
+    owner=$(id -u) || fail "cannot read the account id"
     if test "$(uname -s)" = Darwin; then
       metadata() { stat -f '%u %Lp %l' "$1"; }
     else
@@ -82,21 +95,46 @@ enum SSHBootstrapScript {
       case "$2" in 600|700) return 0;; *) return 1;; esac
     }
     enter_private() {
-      test -e "$1" || test -L "$1" || mkdir "$1" || return 1
-      private_directory "$1" && cd -P "$1"
+      mkdir "$1" 2>/dev/null
+      if ! private_directory "$1"; then
+        if test -e "$1" || test -L "$1"; then fail "unsafe folder $1"; else fail "cannot create folder $1"; fi
+      fi
+      cd -P "$1" || fail "cannot enter folder $1"
     }
-    cd -P "$HOME" || exit 1
+    cd -P "$HOME" || fail "no home folder"
     set -- $(metadata .)
-    test "$#" = 3 && test "$1" = "$owner" && test "$((0$2 & 022))" = 0 || exit 1
-    test ! -L .dispatch || exit 1
-    enter_private .dispatch || exit 1
+    test "$#" = 3 && test "$1" = "$owner" && test "$((0$2 & 022))" = 0 || fail "home folder writable by others"
+    enter_private .dispatch
     """
+
+    /// The reason a setup command gave (`dispatch-setup: <reason>`, its last such line), if it gave one.
+    static func reason(_ output: String) -> String? {
+        output.split(whereSeparator: \.isNewline).last { $0.hasPrefix("dispatch-setup: ") }
+            .map { String($0.dropFirst("dispatch-setup: ".count)) }
+    }
+
+    /// Reasons another attempt can fix: the upload broke off or the file changed under it. Everything else (an unsafe
+    /// or uncreatable folder, no checksum tool) fails the same way again. A failure that gave no reason (the SSH
+    /// channel dropped, a signal) is worth one more attempt too.
+    static func transient(_ reason: String?) -> Bool {
+        guard let reason else { return true }
+        return ["upload interrupted", "upload incomplete", "upload checksum mismatch", "cannot install the helper",
+                "installed helper does not verify", "cannot create the upload folder"].contains(reason)
+    }
+
+    /// A reason as it may travel to the login and onto the terminal: letters, digits and plain punctuation, bounded.
+    static func printable(_ reason: String) -> String {
+        let allowed = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .,:;_/()-")
+        let kept = String(reason.filter { allowed.contains($0) }.prefix(160)).trimmingCharacters(in: .whitespaces)
+        return kept.isEmpty ? "unknown reason" : kept
+    }
 
     static func cachePreamble(digest: String) -> String {
         precondition(digest.utf8.count == 64 && digest.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) })
         return privateDirectoryScript + """
 
-        enter_private bin && enter_private versions && enter_private '\(digest)' || exit 1
+        enter_private bin && enter_private versions && enter_private '\(digest)'
+        command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 || fail "no sha256sum or shasum"
         checksum() {
           if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d ' ' -f 1
           elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | cut -d ' ' -f 1

@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The 24 pt line under the list (`.lfoot`): how many items the shown folder holds and how many rows are selected, and
-/// at the right where the folder stands in git ("main · 4 changed", "not a repository", why git cannot run; F2a, F2e). The Changes and
+/// at the right why git has nothing to show ("not a repository", why git cannot run; F2a, F2e). The Changes and
 /// Commits tabs have footers of their own.
 struct FilesFooter: View {
     let session: FilesSession
@@ -18,7 +18,7 @@ struct FilesFooter: View {
             Text(Self.summary(items: itemCount, selected: selected))
                 .accessibilityIdentifier("files-footer-summary")
             Spacer(minLength: 12)
-            if let git = Self.gitSummary(session.git, status: session.status) {
+            if let git = Self.gitSummary(session.git) {
                 Text(verbatim: git)
                     .truncationMode(.middle)
                     .help(git)
@@ -37,18 +37,14 @@ struct FilesFooter: View {
         .accessibilityIdentifier("files-footer")
     }
 
-    /// "main · 4 changed" inside a repository ("detached at 3f2c1a0 · 4 changed" on a detached HEAD), "not a
-    /// repository" outside one, and where git cannot run why ("git is not installed on this host"; the Changes and
-    /// Commits segments do not show there, so this is the one place that says it); nil while the repository or its
-    /// status is still loading.
-    static func gitSummary(_ git: GitState, status: GitStatus?) -> String? {
+    /// "not a repository" outside one, and where git cannot run why ("git is not installed on this host"; the Changes
+    /// and Commits segments do not show there, so this is the one place that says it). Nothing inside a repository: the
+    /// header's branch and the Changes count say it there.
+    static func gitSummary(_ git: GitState) -> String? {
         switch git {
-        case .none: return "not a repository"
-        case .unavailable(let message): return message
-        case .loading: return nil
-        case .repository:
-            guard let status else { return nil }
-            return "\(GitChangesText.branch(status)) · \(FilesFormatting.count(status.changedFiles)) changed"
+        case .none: "not a repository"
+        case .unavailable(let message): message
+        case .loading, .off, .repository: nil
         }
     }
 

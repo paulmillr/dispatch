@@ -202,6 +202,7 @@ impl<T: Multiplexer> Multiplexer for Registered<T> {
         fn screen(terminal: Id, changed: bool) -> Screen;
         fn prefix(node: Id) -> Prefix;
         fn command(node: Id, command: &str) -> ();
+        fn activity() -> Vec<(Id, u64)>;
     }
     fn stream(&mut self, io: &mut dyn Io, id: Id, event: Control) -> Result<(), Error> {
         if !(self.permitted)("stream") {

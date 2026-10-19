@@ -56,13 +56,16 @@ struct TabsEntry: Identifiable {
     let space: MobileSpace?
     let host: TabsHost
     let urgency: TabUrgency?
+    /// Its time (`MobileTabs.activity(of:)`); nil: the tab's own.
+    let activity: Date?
     let id: TabRef
 
-    @MainActor init(tab: MobileTab, space: MobileSpace?, host: TabsHost, urgency: TabUrgency?) {
+    @MainActor init(tab: MobileTab, space: MobileSpace?, host: TabsHost, urgency: TabUrgency?, activity: Date? = nil) {
         self.tab = tab
         self.space = space
         self.host = host
         self.urgency = urgency
+        self.activity = activity ?? tab.activity
         id = tab.ref
     }
 
@@ -84,16 +87,16 @@ enum TabsOrdering {
         entries.sorted { a, b in
             switch sort {
             case .activity:
-                if let order = activity(a.tab.activity, b.tab.activity) { return order }
+                if let order = activity(a.activity, b.activity) { return order }
                 if let order = text(a.tab.name, b.tab.name) { return order }
             case .name:
                 if let order = text(a.tab.name, b.tab.name) { return order }
                 if let order = text(a.space?.name ?? "", b.space?.name ?? "") { return order }
-                if let order = activity(a.tab.activity, b.tab.activity) { return order }
+                if let order = activity(a.activity, b.activity) { return order }
             case .host:
                 if let order = text(a.host.name, b.host.name) { return order }
                 if a.host.id != b.host.id { return a.host.id.uuidString < b.host.id.uuidString }
-                if let order = activity(a.tab.activity, b.tab.activity) { return order }
+                if let order = activity(a.activity, b.activity) { return order }
                 if let order = text(a.tab.name, b.tab.name) { return order }
             }
             if a.host.id != b.host.id { return a.host.id.uuidString < b.host.id.uuidString }
@@ -106,11 +109,12 @@ enum TabsOrdering {
     }
 
     /// Spaces (M2b) by the same sort: a space's activity is its latest tab's.
-    static func sorted(spaces: [(space: MobileSpace, host: TabsHost)], by sort: TabsQuery.Sort) -> [(space: MobileSpace, host: TabsHost)] {
+    static func sorted(spaces: [(space: MobileSpace, host: TabsHost)], by sort: TabsQuery.Sort,
+                       activity time: (MobileSpace) -> Date? = { $0.activity }) -> [(space: MobileSpace, host: TabsHost)] {
         spaces.sorted { a, b in
             switch sort {
             case .activity:
-                if let order = activity(a.space.activity, b.space.activity) { return order }
+                if let order = activity(time(a.space), time(b.space)) { return order }
                 if let order = text(a.space.name, b.space.name) { return order }
             case .name:
                 if let order = text(a.space.name, b.space.name) { return order }
@@ -118,7 +122,7 @@ enum TabsOrdering {
             case .host:
                 if let order = text(a.host.name, b.host.name) { return order }
                 if a.host.id != b.host.id { return a.host.id.uuidString < b.host.id.uuidString }
-                if let order = activity(a.space.activity, b.space.activity) { return order }
+                if let order = activity(time(a.space), time(b.space)) { return order }
             }
             if a.host.id != b.host.id { return a.host.id.uuidString < b.host.id.uuidString }
             return a.space.ref.key < b.space.ref.key

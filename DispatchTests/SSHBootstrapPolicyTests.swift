@@ -116,6 +116,42 @@ final class SSHBootstrapPolicyTests: XCTestCase {
         XCTAssertFalse(script.contains("/tmp/dispatch-ssh-"))
     }
 
+    /// The app publishes the session while the login starts: when the publish's `mkdir` of the session folder wins,
+    /// the login's own fails with "File exists". The login checks that folder as one already there and goes on to the
+    /// helper, never to the plain shell. A shim plays the winner: it creates the folder and publishes, then fails.
+    func testLoginThatLosesTheSessionFolderRaceStillStartsTheHelper() async throws {
+        let root = try temporary(); defer { try? FileManager.default.removeItem(at: root) }
+        let session = "0123456789abcdef01234567", other = "76543210fedcba9876543210"
+        let helper = Data("#!/bin/sh\nprintf '%s\\n' \"$@\"\nexit 0\n".utf8)
+        let digest = SHA256.hash(data: helper).map { String(format: "%02x", $0) }.joined()
+        let prepared = try await run(SSHBootstrap.cachePreamble(digest: digest), home: root)
+        XCTAssertEqual(prepared.status, 0)
+        let relative = ".dispatch/bin/versions/" + digest + "/dispatch-helper"
+        try System.write(helper, to: root.appendingPathComponent(relative), permissions: 0o700)
+        // `sessions` exists from an earlier connection; this session's folder does not yet.
+        let earlier = try await run(SSHBootstrap.publish(sessionID: other, relativePath: nil), home: root)
+        XCTAssertEqual(earlier.status, 0)
+        let bin = root.appendingPathComponent("bin")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: false)
+        let publish = HerdrLaunch.quote(SSHBootstrap.publish(sessionID: session, relativePath: relative))
+        try System.write(Data("""
+        #!/bin/sh
+        PATH=/usr/bin:/bin /bin/sh -c \(publish) >/dev/null 2>&1
+        echo "mkdir: cannot create directory '$1': File exists" >&2
+        exit 1
+
+        """.utf8), to: bin.appendingPathComponent("mkdir"), permissions: 0o700)
+        let script = SSHLauncherCommand.remoteCommand(sessionID: session, grant: .init(profile: .statistics), command: nil)
+        let result = try await SSHCommand.run(executable: "/bin/sh", arguments: ["-c",
+            "HOME=" + HerdrLaunch.quote(root.path) + "; PATH=" + HerdrLaunch.quote(bin.path) + ":/usr/bin:/bin; export HOME PATH; " + script],
+            timeout: 10)
+        let output = String(decoding: result.output, as: UTF8.self)
+        XCTAssertEqual(result.status, 0, output)
+        XCTAssertEqual(output.split(separator: "\n").map(String.init).filter { !$0.contains("File exists") },
+                       ["login", "statistics", "--session", session], output)
+        XCTAssertFalse(output.contains("integration unavailable"), output)
+    }
+
     func testUnverifiedBinaryAndPlantedReadyLinkAreNeverExecuted() async throws {
         let root = try temporary(); defer { try? FileManager.default.removeItem(at: root) }
         let digest = String(repeating: "b", count: 64), session = "0123456789abcdef01234567"

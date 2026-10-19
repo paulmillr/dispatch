@@ -436,10 +436,27 @@ struct FilePreviewButtonStyle: ButtonStyle {
                 .fixedSize()
                 .padding(.horizontal, 10)
                 .frame(height: 22)
-                .background(prominent ? theme.ink.opacity(configuration.isPressed ? 0.14 : 0.07) : .clear,
-                            in: RoundedRectangle(cornerRadius: 5))
-                .contentShape(RoundedRectangle(cornerRadius: 5))
+                .modifier(Ground(prominent: prominent, pressed: configuration.isPressed))
                 .opacity(enabled ? 1 : 0.5)
+        }
+    }
+}
+
+extension FilePreviewButtonStyle {
+    /// A prominent button is a glass capsule with Liquid Glass (as the chat's reply buttons are), else a faint well.
+    fileprivate struct Ground: ViewModifier {
+        @Environment(\.chatTheme) private var theme
+        let prominent: Bool
+        let pressed: Bool
+
+        func body(content: Content) -> some View {
+            if LiquidGlassStore.shared.active {
+                content.liquidGlass(in: Capsule(), interactive: true, enabled: prominent).contentShape(Capsule())
+            } else {
+                content.background(prominent ? theme.ink.opacity(pressed ? 0.14 : 0.07) : .clear,
+                                   in: RoundedRectangle(cornerRadius: 5))
+                    .contentShape(RoundedRectangle(cornerRadius: 5))
+            }
         }
     }
 }
@@ -464,8 +481,11 @@ struct FilePreviewIconButtonStyle: ButtonStyle {
                 .fixedSize()
                 .padding(.horizontal, 5)
                 .frame(minWidth: 22, minHeight: 22)
-                .background(on || configuration.isPressed ? theme.ink.opacity(0.08) : .clear, in: RoundedRectangle(cornerRadius: 4))
-                .contentShape(RoundedRectangle(cornerRadius: 4))
+                .background {
+                    let fill = on || configuration.isPressed ? theme.ink.opacity(0.08) : Color.clear
+                    if LiquidGlassStore.shared.active { Capsule().fill(fill) } else { RoundedRectangle(cornerRadius: 4).fill(fill) }
+                }
+                .contentShape(Capsule())
         }
     }
 }

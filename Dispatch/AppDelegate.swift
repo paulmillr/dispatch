@@ -544,7 +544,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             return filesTabMenuEnabled(workspace.activeTab, tab, showing: item.action == #selector(showFilesTab(_:)))
         case #selector(togglePreview):
             let files = workspace.activeSurfaceID.flatMap { TerminalRuntime.shared.files.existing($0) }
-            item.title = files?.previewHidden == true ? "Show Preview" : "Hide Preview"
+            item.title = files?.previewOff == true ? "Show Preview" : "Hide Preview"
             return NSApp.keyWindow === window && files?.visible == true
         case #selector(nextPane), #selector(previousPane):
             return (workspace.current?.layout.paneIDs.count ?? 0) > 1

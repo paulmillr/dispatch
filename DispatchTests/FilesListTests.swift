@@ -269,6 +269,11 @@ final class FilesListTests: XCTestCase {
         XCTAssertEqual(FilesPath.parent("/Users/ivan/"), "/Users")
         XCTAssertEqual(FilesPath.parent("/Users"), "/")
         XCTAssertNil(FilesPath.parent("/"))
+        // The header's right-click menu, as Finder's title menu: the shown folder down to the disk.
+        XCTAssertEqual(FilesPath.ancestors("/Users/ivan/src/api/"), ["/Users/ivan/src/api", "/Users/ivan/src", "/Users/ivan", "/Users", "/"])
+        XCTAssertEqual(FilesPath.ancestors("/"), ["/"])
+        XCTAssertEqual(FilesHeader.menuTitle("/Users/ivan", local: false, host: "homelab"), "ivan")
+        XCTAssertEqual(FilesHeader.menuTitle("/", local: false, host: "homelab"), "homelab")
         XCTAssertEqual(FilesPath.join("/", "etc"), "/etc")
         XCTAssertEqual(FilesPath.join("/etc/", "nginx"), "/etc/nginx")
         XCTAssertTrue(FilesPath.isWithin("/a/b", "/a"))
@@ -314,8 +319,14 @@ final class FilesListTests: XCTestCase {
         let rows = session.rows(root: root, settingHidden: true)
         let readme = try row("README.md", in: rows), package = try row("package.json", in: rows)
         let src = try row("src", in: rows)
+        XCTAssertTrue(session.previewOff, "Files starts without the pane; a double click brings it")
         XCTAssertFalse(session.previewHidden)
+        session.tab = .changes
+        XCTAssertFalse(session.previewOff, "the git tabs' diffs show from the start")
+        session.tab = .files
         XCTAssertNil(session.previewWidth)
+        session.togglePreview()
+        XCTAssertFalse(session.previewOff, "⌥⌘P asks for it")
 
         session.previewWidth = 420
         session.togglePreview()
@@ -645,20 +656,13 @@ final class FilesListTests: XCTestCase {
         ], loadedAt: now)
     }
 
-    func testFooterSaysWhereTheFolderStandsInGit() {
-        let repository = GitState.repository(GitRepository(root: root))
-        XCTAssertEqual(FilesFooter.gitSummary(repository, status: mockupStatus()), "main · 4 changed")
-        XCTAssertEqual(FilesFooter.gitSummary(repository, status: mockupStatus(branch: nil)), "detached at 4f1c2e9 · 4 changed",
-                       "worded as the Changes and Commits headers word it")
-        var clean = mockupStatus(); clean.changes = []
-        XCTAssertEqual(FilesFooter.gitSummary(repository, status: clean), "main · 0 changed")
-        XCTAssertEqual(FilesFooter.gitSummary(.none, status: nil), "not a repository")
-        // Still resolving, or the status not in yet: nothing rather than a guess.
-        XCTAssertNil(FilesFooter.gitSummary(.loading, status: nil))
-        XCTAssertNil(FilesFooter.gitSummary(repository, status: nil))
+    func testFooterSaysWhyGitHasNothingToShow() {
+        // Inside a repository the header's branch and the Changes count say it; still resolving, nothing to guess.
+        XCTAssertNil(FilesFooter.gitSummary(.repository(GitRepository(root: root))))
+        XCTAssertNil(FilesFooter.gitSummary(.loading))
+        XCTAssertEqual(FilesFooter.gitSummary(.none), "not a repository")
         // Where git cannot run the segments do not show: the footer is where the tab says why.
-        XCTAssertEqual(FilesFooter.gitSummary(.unavailable("git is not installed on homelab"), status: nil),
-                       "git is not installed on homelab")
+        XCTAssertEqual(FilesFooter.gitSummary(.unavailable("git is not installed on homelab")), "git is not installed on homelab")
     }
 
     func testSegmentsShowTheGitTabsInsideARepository() {

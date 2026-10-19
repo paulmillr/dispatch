@@ -145,51 +145,55 @@ final class GitCommitsPresentationTests: XCTestCase {
     func testMockupHeaderRowsAndDetail() async throws {
         let session = mockupSession()
         let window = try window(session)
-        try await read(["main", "origin/main", "11 commits", "all branches", "Filter commits"], in: window,
-                       named: "git-commits-header")
+        // OCR reads "↑2" as "12": the chip's label below says it.
+        try await read(["api", "main", "All branches"], in: window, named: "git-commits-header")
         try await read(["Uncommitted changes", "4 files", "Keep the retry queue bounded", "Bump stripe to 14.2",
                         "Initial billing route", "feat/webhook-signatures", "v2.4.0"], in: window, named: "git-commits-rows")
         try await read(["CHANGED FILES", "src/routes/billing.ts", "CHANGELOG.md", "Paul Miller", "35 min ago", "git show"],
                        in: window, named: "git-commit-detail")
         try await says("Make webhook retries idempotent", "git-commit-subject", in: window)
         try await says("c28855c", "git-commit-hash", in: window)
-        try await says("↑2", "git-commits-summary", in: window)
-        try await says("11 commits · all branches", "git-commits-summary", in: window)
+        try await says("main · 2 ahead of origin/main · Commits ⌃⌘3", "files-branch", in: window)
         try await says("11 loaded · all", "git-commits-footer-summary", in: window)
-        try await says("all branches ▾", "git-log-scope", in: window)
         XCTAssertFalse(PresentationTestSupport.accessibilityFrames("git-commit-file-src/lib/db.ts", in: window).isEmpty)
         // The commit opens on its first file, as the mockup shows it.
         XCTAssertEqual(session.commitFile, "src/routes/billing.ts")
 
-        // The line shares the files header's 34 pt row after the segments, its filter at the trailing end; the list
-        // starts right under it.
+        // The files header's 34 pt row as on every tab: the branch after the path, then the scope menu, the search and
+        // the details' toggle at the trailing end; the list starts right under it.
         let header = try await frame("files-header", in: window)
-        let line = try await frame("git-commits-header", in: window)
+        let branch = try await frame("files-branch", in: window)
         let segment = try await frame("files-segment-commits", in: window)
-        let filter = try await frame("git-commits-filter", in: window)
+        let scope = try await frame("git-log-scope", in: window)
+        let search = try await frame("files-search", in: window)
+        let toggle = try await frame("files-preview-toggle", in: window)
         let list = try await frame("git-commits-list", in: window)
         XCTAssertEqual(header.height, 34, accuracy: 0.5)
-        XCTAssertEqual(line.midY, header.midY, accuracy: 1)
-        XCTAssertGreaterThan(line.minX, segment.maxX)
-        XCTAssertEqual(filter.midY, header.midY, accuracy: 1)
-        XCTAssertGreaterThan(filter.maxX, header.maxX - 12 - 200, "the filter sits at the trailing end")
+        XCTAssertEqual(branch.midY, header.midY, accuracy: 1)
+        XCTAssertGreaterThan(branch.minX, segment.maxX)
+        XCTAssertLessThanOrEqual(scope.maxX, search.minX)
+        XCTAssertLessThanOrEqual(search.maxX, toggle.minX)
+        XCTAssertGreaterThan(toggle.maxX, header.maxX - 12 - 40, "the toggle sits at the trailing end")
         XCTAssertEqual(list.maxY, header.minY, accuracy: 1.5, "no second bar between the header and the list")
-        XCTAssertTrue(PresentationTestSupport.accessibilityFrames("files-preview-toggle", in: window).isEmpty,
-                      "the preview toggle is the Files tab's")
+        XCTAssertTrue(PresentationTestSupport.accessibilityLabels("files-preview-toggle", in: window).contains("Hide details"))
+
+        // The scope menu now lives in the header, not the footer; the search opens from its glyph.
+        session.logFilter = "paul"
+        _ = try await frame("git-commits-filter", in: window)
     }
 
-    func testNarrowHeaderKeepsTheFilterBesideGlyphSegments() async throws {
+    func testNarrowHeaderKeepsTheControlsBesideGlyphSegments() async throws {
         let session = mockupSession()
         let inset: CGFloat = 70
         let window = try window(session, inset: inset)
-        try await read(["Filter commits"], in: window, named: "git-commits-header-wide")
+        try await read(["All branches"], in: window, named: "git-commits-header-wide")
         let wide = try await frame("files-segment-changes", in: window)
         for width: CGFloat in [600, 480, 360] {
             window.setContentSize(NSSize(width: width, height: 700))
             try await TestSupport.eventually(diagnostic: "the header did not settle at \(width) pt") {
                 window.contentView?.layoutSubtreeIfNeeded()
                 let commits = PresentationTestSupport.accessibilityFrames("files-segment-commits", in: window).first
-                let filter = PresentationTestSupport.accessibilityFrames("git-commits-filter", in: window).first
+                let filter = PresentationTestSupport.accessibilityFrames("files-preview-toggle", in: window).first
                 return commits.flatMap { commits in filter.map { commits.maxX < $0.minX } } ?? false
             }
             if width == 360 {
@@ -199,10 +203,10 @@ final class GitCommitsPresentationTests: XCTestCase {
             }
             let files = try await frame("files-segment-files", in: window)
             let commits = try await frame("files-segment-commits", in: window)
-            let filter = try await frame("git-commits-filter", in: window)
+            let filter = try await frame("files-preview-toggle", in: window)
             XCTAssertGreaterThanOrEqual(files.minX, 11.5, "nothing spills past the leading edge at \(width) pt")
             XCTAssertLessThan(commits.maxX, filter.minX, "at \(width) pt")
-            XCTAssertLessThanOrEqual(filter.maxX, width - 12 - inset + 0.5, "the filter stays out of the switch's room at \(width) pt")
+            XCTAssertLessThanOrEqual(filter.maxX, width - 12 - inset + 0.5, "the toggle stays out of the switch's room at \(width) pt")
         }
         _ = try await PresentationTestSupport.capture(window, named: "git-commits-header-narrow", in: "files-audit")
     }
@@ -239,6 +243,48 @@ final class GitCommitsPresentationTests: XCTestCase {
         session.commitDiff = GitDiffState(key: GitCommitsText.diffKey(hash: head.hash, path: "src/routes/billing.ts"),
                                           diff: GitDiff(path: "src/routes/billing.ts", text: text))
         try await says("src/routes/billing.ts", "git-diff-path", in: window)
+    }
+
+    /// A signed commit's seal in the log, and its verdict under the selected commit's hash and author.
+    func testSignedCommitsShowTheirSealAndTheSelectedVerdict() async throws {
+        let session = mockupSession()
+        let head = mockupCommits[0]
+        session.log?.commits[0].signature = .gpg
+        session.log?.commits[1].signature = .ssh
+        let window = try window(session)
+        try await says("Checking the GPG signature…", "git-commit-signature", in: window)
+        session.signatureChecks[head.hash] = GitSignatureCheck(verdict: .good(certified: true), kind: .gpg,
+                                                               signer: "Paul Miller <paul@example.com>", key: "697079DA6878B89B")
+        try await says("Good GPG signature · Paul Miller <paul@example.com> · 697079DA6878B89B", "git-commit-signature",
+                       in: window)
+        try await read(["Good GPG signature"], in: window, named: "git-commit-signature")
+        // Each row reads as one element for VoiceOver, its seal's words among its own.
+        let ssh = PresentationTestSupport.accessibilityLabels("git-commit-\(mockupCommits[1].short)", in: window)
+        XCTAssertTrue(ssh.contains { $0.contains("Signed with SSH") }, "\(ssh)")
+        let gpg = PresentationTestSupport.accessibilityLabels("git-commit-\(head.short)", in: window)
+        XCTAssertTrue(gpg.contains { $0.contains("Good GPG signature") }, "\(gpg)")
+    }
+
+    /// Source shows the whole file as the commit left it, not only the lines its diff holds: git's patch of the file
+    /// with all of it as context.
+    func testSourceShowsTheFileAsTheCommitLeftIt() async throws {
+        let session = mockupSession()
+        let source = try XCTUnwrap(session.source as? FakeFilesSource)
+        let head = mockupCommits[0], path = "src/routes/billing.ts"
+        let header = "diff --git a/\(path) b/\(path)\n--- a/\(path)\n+++ b/\(path)\n"
+        let whole = (1...40).map { $0 == 30 ? "-old line\n+changed line 30\n" : " unchanged line \($0)\n" }.joined()
+        source.gitAnswers["show --format= -U\(GitChangesText.sourceLimit) \(head.hash) -- \(path)"] =
+            GitOutput(status: 0, output: header + "@@ -1,40 +1,40 @@\n" + whole, truncated: false)
+        session.commitFile = path
+        session.commitDiff = GitDiffState(key: GitCommitsText.diffKey(hash: head.hash, path: path), diff: GitDiff(
+            path: path, text: header + "@@ -27,7 +27,7 @@\n unchanged line 27\n unchanged line 28\n unchanged line 29\n"
+                + "-old line\n+changed line 30\n unchanged line 31\n unchanged line 32\n unchanged line 33\n"))
+        let window = try window(session)
+        try await click("git-diff-mode-source", in: window, until: { session.diffMode == .source })
+        try await TestSupport.eventually(diagnostic: "Source shows only the diff's lines") {
+            !PresentationTestSupport.accessibilityFrames("git-diff-source-line-1", in: window).isEmpty
+        }
+        try await read(["unchanged line 1", "unchanged line 2"], in: window, named: "git-commit-source")
     }
 
     func testDetailErrorOffersARetryInsteadOfLoading() async throws {

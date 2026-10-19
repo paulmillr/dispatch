@@ -167,4 +167,153 @@ final class TabsSpacesTreeTests: XCTestCase {
         XCTAssertEqual(model.workspace(ai.id)?.host.state, .offline)
         XCTAssertEqual(model.sections[0].spaces.map(\.space.name), ["curves"], "last-known spaces stay listed")
     }
+
+    /// The whole host row toggles (not only its disclosure): outside edit mode it is one VoiceOver button named after
+    /// the host, a heading whose value is its state and the unread it rolls up; activating it toggles.
+    func testTheWholeHostRowToggles() async throws {
+        AccessibilityLabelTests.enableAccessibility()
+        XCTAssertEqual(SpacesHostHeader.value(collapsed: false, unread: 3), "Expanded")
+        XCTAssertEqual(SpacesHostHeader.value(collapsed: true, unread: 3), "Collapsed, 3 unread")
+        XCTAssertEqual(SpacesHostHeader.value(collapsed: true, unread: 0), "Collapsed")
+        XCTAssertEqual(SpacesHostHeader.value(collapsed: true, unread: 2, multiplexer: "tmux"), "tmux, Collapsed, 2 unread",
+                       "where its spaces come from, when known")
+        let found = await TestSupport.windowScene()
+        let scene = try XCTUnwrap(found)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 402, height: 200)
+        let section = SpacesSection(host: ai, spaces: [], unread: 2, collapsed: true)
+        var toggled = 0
+        window.rootViewController = UIHostingController(rootView: SpacesHostHeader(section: section, editing: false,
+                                                                                   toggle: { toggled += 1 }, remove: {}))
+        window.isHidden = false
+        defer { window.isHidden = true }
+        var row: NSObject?
+        try await TestSupport.eventually {
+            row = AccessibilityLabelTests.elements(in: window).first { $0.accessibilityLabel == "ai" }
+            return row != nil
+        }
+        let element = try XCTUnwrap(row)
+        XCTAssertEqual(AccessibilityLabelTests.elements(in: window).count, 1, "one element: the disclosure is not a second button")
+        XCTAssertEqual(element.accessibilityValue, "Collapsed, 2 unread")
+        XCTAssertTrue(element.accessibilityTraits.contains(.button))
+        XCTAssertTrue(element.accessibilityTraits.contains(.header))
+        _ = element.accessibilityActivate()
+        try await TestSupport.eventually { toggled == 1 }
+    }
+
+    /// A connected host whose spaces are known to be none offers New space below it, unless collapsed, filtered or in
+    /// edit mode; not while its spaces are the cache's, or a multiplexer switch is on its way, or it is offline.
+    func testZeroSpaceHostsOfferNewSpace() {
+        let empty = SpacesSection(host: ai, spaces: [], unread: 0, collapsed: false)
+        XCTAssertTrue(empty.offersNewSpace(editing: false, filter: .all))
+        XCTAssertFalse(empty.offersNewSpace(editing: true, filter: .all))
+        XCTAssertFalse(empty.offersNewSpace(editing: false, filter: .needsYou))
+        XCTAssertFalse(SpacesSection(host: ai, spaces: [], unread: 0, collapsed: true).offersNewSpace(editing: false, filter: .all))
+        var stale = ai
+        stale.live = false
+        XCTAssertFalse(SpacesSection(host: stale, spaces: [], unread: 0, collapsed: false).offersNewSpace(editing: false, filter: .all))
+        var offline = ai
+        offline.state = .offline
+        XCTAssertFalse(SpacesSection(host: offline, spaces: [], unread: 0, collapsed: false).offersNewSpace(editing: false, filter: .all))
+        let model = model()
+        XCTAssertFalse(model.sections[0].offersNewSpace(editing: false, filter: .all), "a host with spaces")
+        model.sync([TabsHostInput(host: ai, client: nil, topology: TopologySketch(backend: 1, first: 5, spaces: []).topology)])
+        XCTAssertTrue(model.sections[0].offersNewSpace(editing: false, filter: .all), "its last space went")
+    }
+
+    /// The quick menu's entries: connected hosts only, in host order, each with its installed multiplexers, the one it
+    /// shows first; another one switches the host. A host's own menu has only its own.
+    func testQuickMenuEntries() {
+        let helper = ScriptedHelper.scripted { _ in nil }
+        defer { helper.close() }
+        let herdr = MultiplexerChoice(mux: 2, name: "herdr", route: .init(mux: 2, key: "herdr"))
+        let tmux = MultiplexerChoice(mux: 1, name: "tmux", route: .init(mux: 1, key: "tmux"))
+        let mba2 = MobileWorkspace(host: TabsFixtures.host, client: helper.client, activity: TabActivityStore(url: nil))
+        mba2.multiplexers = [herdr, tmux]
+        mba2.choice = tmux
+        let studio = MobileWorkspace(host: ai, client: helper.client, activity: TabActivityStore(url: nil))
+        studio.choice = herdr
+        let offline = MobileWorkspace(host: TabsHost(id: UUID(), name: "vps", tint: .green), activity: TabActivityStore(url: nil))
+        offline.multiplexers = [tmux]
+        offline.choice = tmux
+        let all = NewSpaceDestination.all([mba2, studio, offline])
+        XCTAssertEqual(all.map(\.id), ["\(mba2.id.uuidString):tmux", "\(mba2.id.uuidString):herdr", "\(ai.id.uuidString):herdr"])
+        XCTAssertEqual(all.map(\.switches), [false, true, false])
+        XCTAssertEqual(all.map { $0.title(host: nil) }, ["mba2", "mba2", "ai"])
+        XCTAssertEqual(all.map { $0.subtitle(host: nil) }, ["tmux", "Switches mba2 to herdr", "herdr"])
+        XCTAssertEqual(all[1].spoken(host: nil), "New space on mba2, Switches mba2 to herdr")
+        let own = NewSpaceDestination.all([mba2, studio, offline], host: mba2.id)
+        XCTAssertEqual(own.map { $0.title(host: mba2.id) }, ["New tmux space", "New herdr space"])
+        XCTAssertEqual(own.map { $0.subtitle(host: mba2.id) }, [nil, "Switches mba2 to herdr"])
+        XCTAssertEqual(NewSpaceDestination.all([offline], host: offline.id), [], "nothing to make a space on offline")
+    }
+
+    /// The Mac's naming rule: a new space is called after its folder's last component ("/" for the root); "~" is the
+    /// host's home, and nothing is guessed while the home is unknown.
+    func testNewSpacesAreNamedAfterTheirFolder() {
+        let host = TabsFixtures.host
+        XCTAssertEqual(NewSpaceName.automatic("~", host: host), "alex")
+        XCTAssertEqual(NewSpaceName.automatic(nil, host: host), "alex", "no folder: home")
+        XCTAssertEqual(NewSpaceName.automatic("~/src/billing", host: host), "billing")
+        XCTAssertEqual(NewSpaceName.automatic("/srv/billing/", host: host), "billing")
+        XCTAssertEqual(NewSpaceName.automatic("/", host: host), "/")
+        var homeless = host
+        homeless.home = nil
+        XCTAssertNil(NewSpaceName.automatic("~/src", host: homeless))
+        XCTAssertEqual(NewSpaceName.automatic("/srv/app", host: homeless), "app")
+    }
+
+    /// The quick menu makes its space without a name (the server names it after its folder) and the host's New space
+    /// rows wait meanwhile; one at a time per host.
+    func testQuickSpacesAreMadeWithoutAName() async throws {
+        let fresh = TopologySketch(backend: 7, first: 300, spaces: [
+            .init(key: "herdr:new", name: "alex", tabs: [.init(key: "herdr:new:1", name: "zsh", panes: [.init(key: "p:fresh", cwd: "/Users/alex")])]),
+        ])
+        let helper = ScriptedHelper.scripted { request in
+            switch request.method {
+            case "backends.create": .value(UInt64(7))
+            case "terminals.create": .value(fresh.ids["p:fresh"]!)
+            default: nil
+            }
+        }
+        defer { helper.close() }
+        let model = model()
+        let workspace = MobileWorkspace(host: TabsFixtures.host, client: helper.client, activity: TabActivityStore(url: nil))
+        let herdr = MultiplexerChoice(mux: 2, name: "herdr", route: .init(mux: 2, key: "herdr"))
+        workspace.multiplexers = [herdr]
+        workspace.choice = herdr
+        model.insert(workspace)
+        let navigator = SpacesNavigator(model: model)
+        let destination = try XCTUnwrap(NewSpaceDestination.all(model.workspaces, host: workspace.id).first)
+        async let made = navigator.makeSpace(destination)
+        try await TestSupport.eventually { helper.methods.contains("terminals.create") }
+        XCTAssertEqual(navigator.creatingSpace, [workspace.id])
+        do {
+            _ = try await navigator.makeSpace(destination)
+            XCTFail("a second one while the first is being made")
+        } catch { XCTAssertNotNil(error as? TabsFailure) }
+        workspace.apply(fresh.topology)
+        let tab = try await made
+        XCTAssertEqual(tab.space, SpaceRef(host: workspace.id, key: "herdr:new"))
+        XCTAssertEqual(navigator.creatingSpace, [])
+        XCTAssertEqual(helper.methods, ["backends.create", "terminals.create"], "no entities.rename")
+    }
+
+    /// New space's Multiplexer: the host's installed ones, the shown one picked; another one says Create switches the host.
+    func testTheFormsMultiplexerChoice() {
+        let herdr = MultiplexerChoice(mux: 2, name: "herdr", route: .init(mux: 2, key: "herdr"))
+        let tmux = MultiplexerChoice(mux: 1, name: "tmux", route: .init(mux: 1, key: "tmux"), version: "3.6a",
+                                     warning: MultiplexerChoice.tmuxWarning)
+        let options = NewSpaceMultiplexers(choices: [herdr, tmux], shown: tmux)
+        XCTAssertEqual(options.chosen(nil), tmux, "the one the host shows")
+        XCTAssertEqual(options.chosen("herdr"), herdr)
+        XCTAssertEqual(options.chosen("native"), tmux, "never offered, so never picked")
+        XCTAssertNil(options.note(for: tmux, host: "mba2"))
+        XCTAssertEqual(options.note(for: herdr, host: "mba2"),
+                       "mba2 shows one multiplexer’s spaces at a time. Create switches it from tmux to herdr, as Multiplexer in its details does.")
+        let workspace = MobileWorkspace(host: ai, activity: TabActivityStore(url: nil))
+        workspace.choice = herdr
+        XCTAssertEqual(NewSpaceMultiplexers(workspace).choices, [herdr], "detected before the list was kept")
+        XCTAssertEqual(NewSpaceMultiplexers(nil).choices, [])
+    }
 }

@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// Host detail (M1f), pushed from Spaces (Info in edit mode, or a host section's long-press menu): identity and live
-/// status, Connection (what the user entered, editable), the multiplexer, the host's spaces, and Remove host last,
-/// in red. The spaces rows come from Tabs (`spaces`); without them the topology's workspaces are listed.
+/// status, Connection (what the user entered, editable), the multiplexer, the host's spaces (their header marks the
+/// multiplexer they come from), and Remove host last, in red. The spaces rows come from Tabs (`spaces`); without them the topology's workspaces are listed.
 struct HostDetail<Spaces: View>: View {
     let hostID: UUID
     /// The rows of the Spaces section, for this session.
@@ -52,7 +52,13 @@ struct HostDetail<Spaces: View>: View {
 
             let count = summary.spaces.count
             if count > 0 {
-                Section { spaces(session) } header: { MobileSectionHeader("Spaces · \(count)") }
+                Section { spaces(session) } header: {
+                    // The multiplexer they come from, as Spaces' host header marks it.
+                    HStack(spacing: 8) {
+                        MobileSectionHeader("Spaces · \(count)")
+                        if let multiplexer = session.spacesMultiplexer { MultiplexerMark(name: multiplexer) }
+                    }
+                }
             }
 
             Section {

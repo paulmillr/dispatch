@@ -1,0 +1,26 @@
+{
+  "kind": "rerecord",
+  "why": "SSH setup that fails now says why: the release a failed setup publishes carries its reason (\"unavailable: <reason>\") and a failed step is tried again, so recordings of failing setups (and of tests asserting the old failure behaviour) hold answers the new code does not get. Found by replaying the corpus after 0001.",
+  "tests": [
+    "HostDisconnectTests/testHostHeadingShowsInformationAndDisconnectsAllVerifiedConnectionsOnly",
+    "HostDisconnectTests/testNewStatisticsSSHTabsReuseTheSidebarHost",
+    "SSHBootstrapFallbackIntegrationTests/testFailedUploadPreservesShellTmuxAndCommandStatus",
+    "SSHBootstrapFallbackIntegrationTests/testInvalidGreetingPreservesShellTmuxAndCommandStatus",
+    "SSHBootstrapFallbackIntegrationTests/testUnsupportedPlatformPreservesShellTmuxAndCommandStatus",
+    "SSHBootstrapPolicyTests/testFailureRunsOriginalCommandOnceWithExactQuotingAndStatus",
+    "SSHBootstrapPolicyTests/testStartedHelperFailureNeverReplaysCommandAndPublicSessionHasNoCredential",
+    "SSHBootstrapPolicyTests/testUnverifiedBinaryAndPlantedReadyLinkAreNeverExecuted",
+    "SSHReconnectIntegrationTests/testDisconnectedShellClosesWithoutConfirmationButOtherCommandsRemainProtected",
+    "SSHReconnectIntegrationTests/testOfflineTmuxPaneClosureAndMissingServerNeverRecreateCommands",
+    "SSHReconnectIntegrationTests/testPermissionRevocationDuringReplacementShellStartupCanRetry",
+    "SSHReconnectIntegrationTests/testShellRecoveryPreservesSurfacesAndHealthyConnectionsAcrossSpaces",
+    "SSHReconnectIntegrationTests/testStoppingDisconnectedTmuxClearsRetainedSessionsWithoutKillingServer",
+    "SSHTransportTests/testBootstrapConcurrentUploadsRepairCorruptCacheAndRecoverFromPartialUpload",
+    "SSHTransportTests/testBootstrapRequiresChecksumsAndRejectsLinkedCachePaths",
+    "SSHTransportTests/testBootstrapUsesAuthenticatedMasterAndNeverRedialsAfterLoss",
+    "TabCloseSelectionTests/testSSHCloseSelection"
+  ],
+  "fingerprints": {
+    "ssh-setup": "c79feda68d3ccc5f92f7ac402d5e4fb7b219bdf49c10da7e57e697aafce8cbbc"
+  }
+}

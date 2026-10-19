@@ -46,6 +46,8 @@ protocol SecretVault: Sendable {
     func remove(_ account: String) throws
     /// Every secret of this vault (Settings' Remove all data).
     func removeAll() throws
+    /// Every secret but the accounts `keeping` accepts (Settings' Remove all data except SSH keys).
+    func removeAll(keeping: (String) -> Bool) throws
 }
 
 extension SecretVault {
@@ -111,6 +113,19 @@ struct KeychainVault: SecretVault {
         let status = SecItemDelete(all as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else { throw SecretVaultError.keychain(status) }
     }
+
+    func removeAll(keeping: (String) -> Bool) throws {
+        // Attributes only: listing never reads a secret, so no item behind Face ID prompts.
+        var request: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
+                                      kSecAttrSynchronizable as String: false]
+        request[kSecReturnAttributes as String] = true
+        request[kSecMatchLimit as String] = kSecMatchLimitAll
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(request as CFDictionary, &result)
+        guard status == errSecSuccess || status == errSecItemNotFound else { throw SecretVaultError.keychain(status) }
+        let accounts = (result as? [[String: Any]] ?? []).compactMap { $0[kSecAttrAccount as String] as? String }
+        for account in accounts where !keeping(account) { try remove(account) }
+    }
 }
 
 /// Secrets in memory, remembering each one's protection for tests.
@@ -137,4 +152,6 @@ final class MemoryVault: SecretVault {
     func remove(_ account: String) throws { _ = items.withLock { $0.removeValue(forKey: account) } }
 
     func removeAll() throws { items.withLock { $0.removeAll() } }
+
+    func removeAll(keeping: (String) -> Bool) throws { items.withLock { $0 = $0.filter { keeping($0.key) } } }
 }

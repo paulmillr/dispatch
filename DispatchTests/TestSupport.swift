@@ -28,6 +28,33 @@ enum TestSupport {
         }
     }
 
+    /// `live` for a process fed `input`, its standard error kept apart, and stopped past `timeout` (`timedOut`).
+    nonisolated static func live(_ process: Process, input: Data, timeout: TimeInterval)
+        throws -> (status: Int32, output: Data, errors: Data, timedOut: Bool) {
+        try AppReplay.live {
+            let stdin = Pipe(), stdout = Pipe(), stderr = Pipe()
+            process.standardInput = stdin; process.standardOutput = stdout; process.standardError = stderr
+            try process.run()
+            stdout.fileHandleForWriting.closeFile(); stderr.fileHandleForWriting.closeFile()
+            try? stdin.fileHandleForWriting.write(contentsOf: input)
+            try? stdin.fileHandleForWriting.close()
+            // Both pipes drain at once, so a chatty child never blocks on a full one before the deadline.
+            final class Drained: @unchecked Sendable { var data = Data() }
+            let output = Drained(), errors = Drained(), collected = DispatchGroup()
+            for (pipe, into) in [(stdout, output), (stderr, errors)] {
+                collected.enter()
+                DispatchQueue.global().async { into.data = pipe.fileHandleForReading.readDataToEndOfFile(); collected.leave() }
+            }
+            let deadline = Date().addingTimeInterval(timeout)
+            while process.isRunning && Date() < deadline { usleep(10_000) }
+            let timedOut = process.isRunning
+            if timedOut { process.terminate() }
+            process.wait()
+            collected.wait()
+            return (process.terminationStatus, output.data, errors.data, timedOut)
+        }
+    }
+
     /// A process a test starts beside itself (a fixture server, a profiler). One the app's recording depends on starts
     /// inside a recorded body (TestSupport.fixture, AppReplay.query), so replay starts nothing; else only in capture.
     nonisolated static func start(_ process: Process) throws { try process.run() }

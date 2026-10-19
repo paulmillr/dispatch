@@ -464,6 +464,53 @@ final class HostSessionTests: XCTestCase {
         XCTAssertFalse(session.topologyIsLive)
     }
 
+    /// A switch of the followed multiplexer drops the old one's snapshot and leaves the host's spaces unknown until the
+    /// new one answers, with a snapshot or with no server (Spaces offers New space only once they are known to be none).
+    func testAMultiplexerSwitchIsUnknownUntilItAnswers() async throws {
+        let ready = Step.ready(hello: HostFixture.hello(), multiplexers: HostFixture.multiplexers(["herdr", "tmux"]), versions: [:],
+                               topology: HostFixture.topology())
+        let driver = steps([.event(.following("tmux")), ready, .awaitRetry, .event(.following("herdr")), .awaitRetry,
+                            .event(.noBackend), .awaitRetry, .event(.following("tmux")), .awaitRetry,
+                            .event(.topology(HostFixture.topology())), .hold])
+        let session = registry(driver, hosts: [host()]).ordered[0]
+        // Spaces' tmux or herdr mark, as each change is observed: never the multiplexer the spaces are leaving.
+        let marks = Recorder { session.spacesMultiplexer }
+        session.connect()
+        try await TestSupport.eventually { session.link == .connected }
+        XCTAssertFalse(session.switchingMultiplexer)
+        XCTAssertEqual(TabsHost(session).multiplexer, "tmux")
+        session.retryNow()
+        try await TestSupport.eventually { session.following == "herdr" }
+        XCTAssertNil(session.topology)
+        XCTAssertTrue(session.switchingMultiplexer)
+        XCTAssertFalse(TabsHost(session).live, "Spaces does not know the host's spaces yet")
+        XCTAssertNil(TabsHost(session).multiplexer, "nor where they come from")
+        session.retryNow()
+        try await TestSupport.eventually { !session.switchingMultiplexer }
+        XCTAssertTrue(TabsHost(session).live, "known now: herdr has no server")
+        XCTAssertEqual(TabsHost(session).multiplexer, "herdr")
+        session.retryNow()
+        try await TestSupport.eventually { session.following == "tmux" }
+        XCTAssertTrue(session.switchingMultiplexer)
+        session.retryNow()
+        try await TestSupport.eventually { session.topology != nil }
+        XCTAssertFalse(session.switchingMultiplexer)
+        XCTAssertEqual(session.spacesMultiplexer, "tmux")
+        let seen = marks.seen.reduce(into: [String?]()) { seen, mark in if seen.last != .some(mark) { seen.append(mark) } }
+        XCTAssertEqual(seen, [nil, "tmux", nil, "herdr", nil, "tmux"])
+    }
+
+    /// The mark comes from the launch cache's followed multiplexer at once (with its cached spaces), and a host that
+    /// follows none shows none.
+    func testTheSpacesMarkStartsFromTheCache() {
+        let session = registry(steps([.hold]), hosts: [host()]).ordered[0]
+        XCTAssertNil(session.spacesMultiplexer)
+        session.restore(hello: HostFixture.hello(), multiplexers: HostFixture.multiplexers(["herdr", "tmux"]), versions: [:],
+                        following: "herdr", topology: HostFixture.topology())
+        XCTAssertEqual(session.spacesMultiplexer, "herdr")
+        XCTAssertEqual(TabsHost(session).multiplexer, "herdr")
+    }
+
     /// Unreadable trusted host keys refuse every connection with a clear state, without running the driver, until the
     /// user resets (or the file reads again); a write failure of the trusted keys reaches Spaces' save notice.
     func testUnreadableKnownHostsRefuseToConnectUntilReset() async throws {

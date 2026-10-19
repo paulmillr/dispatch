@@ -20,6 +20,7 @@ enum SyntaxHighlight {
         case "html", "xml", "svg": return "html"
         case "sql": return "sql"
         case "diff", "patch": return "diff"
+        case "md", "markdown", "mdx": return "markdown"
         default: return "text"
         }
     }
@@ -55,7 +56,10 @@ enum SyntaxHighlight {
             return result
         }
         guard let regex = expressions[lang] else { return result }
-        let colors: [Color] = [theme.comment, theme.string, theme.number, theme.keyword, theme.blue, theme.blue]
+        let colors: [Color] = lang == "markdown"
+            // Code, comments and rules, headings, links, emphasis, then list and quote markers.
+            ? [theme.string, theme.comment, theme.keyword, theme.blue, theme.number, theme.number]
+            : [theme.comment, theme.string, theme.number, theme.keyword, theme.blue, theme.blue]
         for match in regex.matches(in: code, range: NSRange(code.startIndex..., in: code)) {
             for group in 1...colors.count where match.range(at: group).location != NSNotFound {
                 result.append(Token(range: match.range, color: colors[group - 1]))
@@ -68,13 +72,15 @@ enum SyntaxHighlight {
     /// Immutable, bounded cache: only normalized supported languages become
     /// keys. Themes remain per-call values and never affect lexical precedence.
     private static let expressions: [String: NSRegularExpression] = {
-        let languages = ["shell", "python", "yaml", "javascript", "typescript", "swift", "json", "code", "css", "html", "sql"]
+        let languages = ["shell", "python", "yaml", "javascript", "typescript", "swift", "json", "code", "css", "html", "sql",
+                         "markdown"]
         return languages.reduce(into: [:]) { result, language in
             result[language] = try? NSRegularExpression(pattern: pattern(language))
         }
     }()
 
     private static func pattern(_ lang: String) -> String {
+        if lang == "markdown" { return markdownPattern }
         let hashComments = ["shell", "python", "yaml"].contains(lang)
         let comments = lang == "json" ? #"(?!)"# : (hashComments ? #"(?m)(?<!\S)#[^\n]*"# : (lang == "sql" ? #"--[^\n]*|/\*[\s\S]*?(?:\*/|$)"# : #"//[^\n]*|/\*[\s\S]*?(?:\*/|$)|<!--[\s\S]*?(?:-->|$)"#))
         let strings = #""""[\s\S]*?(?:"""|$)|'''[\s\S]*?(?:'''|$)|"(?:\\[\s\S]|[^"\\])*(?:"|$)|'(?:\\[\s\S]|[^'\\])*(?:'|$)|`(?:\\[\s\S]|[^`\\])*(?:`|$)"#
@@ -83,6 +89,18 @@ enum SyntaxHighlight {
         let variables = lang == "shell" ? #"\$\{[^}\n]*\}|\$[a-zA-Z_][a-zA-Z_0-9]*|(?<!\S)--?[a-zA-Z][a-zA-Z0-9-]*"# : #"\b[A-Z][a-zA-Z0-9_]*\b"#
         return "(" + comments + ")|(" + strings + ")|(" + #"\b(?:0x[\da-fA-F]+|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\b"# + ")|(" + keywords + ")|(" + variables + ")|(" + #"\b[a-zA-Z_][a-zA-Z0-9_]*(?=\s*\()"# + ")"
     }
+
+    /// Block-level spans first, so a fence or an inline code span keeps its text from being read as headings or
+    /// emphasis; one group per color in `tokens`.
+    private static let markdownPattern: String = {
+        let code = #"(?m)^[ \t]{0,3}(?:```[\s\S]*?(?:^[ \t]{0,3}```[^\n]*|(?![\s\S]))|~~~[\s\S]*?(?:^[ \t]{0,3}~~~[^\n]*|(?![\s\S])))|`+[^`\n]+`+"#
+        let quiet = #"<!--[\s\S]*?(?:-->|$)|(?m)^[ \t]{0,3}(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$"#
+        let headings = #"(?m)^[ \t]{0,3}#{1,6}(?:[ \t][^\n]*)?$|(?m)^[ \t]{0,3}=+[ \t]*$"#
+        let links = #"!?\[[^\]\n]*\]\([^)\n]*\)|!?\[[^\]\n]*\]\[[^\]\n]*\]|<(?:https?|mailto):[^>\s]+>|(?m)^[ \t]{0,3}\[[^\]\n]+\]:[^\n]*"#
+        let emphasis = #"\*\*[^*\n]+\*\*|__[^_\n]+__|~~[^~\n]+~~|\*[^*\s][^*\n]*\*|(?<![\w_])_[^_\s][^_\n]*_(?![\w_])"#
+        let markers = #"(?m)^[ \t]*(?:[-*+]|\d{1,9}[.)])(?=[ \t])(?:[ \t]+\[[ xX]\])?|(?m)^[ \t]{0,3}>[> \t]*"#
+        return [code, quiet, headings, links, emphasis, markers].map { "(" + $0 + ")" }.joined(separator: "|")
+    }()
 
     static func lines(_ code: String, language: String, theme: ChatTheme = .standard) -> [AttributedString] {
         let highlighted = text(code, language: language, theme: theme)

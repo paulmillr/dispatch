@@ -25,6 +25,9 @@ extension FilesCoordinator {
     /// A diff answering within this keeps the previous one on screen instead of flashing a loading state.
     static let loadingDelay: Duration = .milliseconds(150)
     nonisolated static let page = 200
+    /// A log read the helper refused as busy is asked again after this, up to `logRetries` times before the tick.
+    static let logRetryDelay: Duration = .milliseconds(300)
+    static let logRetries = 3
     /// Untracked files whose lines are counted for the Changes list, per status.
     nonisolated static let countedUntracked = 50
     /// An untracked file bigger than this shows no line count: counting it would read it whole.
@@ -52,8 +55,21 @@ extension FilesCoordinator {
     /// A files loader pass: what the session shows through (`source` nil while hidden or offline), its root, and
     /// whether the pass is the 2 s tick, a refresh or a prompt, on which the status (or, on Commits, the refs) is read
     /// again.
-    func pass(_ session: FilesSession, source: (any FilesSource)?, folder: String?, tick: Bool) {
+    func pass(_ session: FilesSession, source: (any FilesSource)?, folder: String?, tick: Bool, enabled: Bool = true) {
         let watch = self.watch(for: session)
+        // Git turned off: nothing in flight, nothing kept, and nothing resolved until it is on again.
+        guard enabled else {
+            // Not shown either: a session change waking `sync` meanwhile starts nothing.
+            watch.shows = false
+            reset(session, watch)
+            watch.resolved = nil
+            watch.answered = nil
+            watch.host = nil
+            if session.git != .off { session.git = .off }
+            if session.gitResolving { session.gitResolving = false }
+            return
+        }
+        if session.git == .off { session.git = .loading }
         if let source {
             let host = (source.endpoint.isLocal ? "local:" : "remote:") + (source.hostLabel ?? "")
             // Another host's repository is not this one: start over as never resolved (the views treat `.loading` as
@@ -73,7 +89,7 @@ extension FilesCoordinator {
         if tick || watch.prompted {
             watch.failed = nil
             // A detail or diff that failed is asked for again, once a tick rather than on every change.
-            for job in [watch.changes, watch.detail, watch.commit] {
+            for job in [watch.changes, watch.detail, watch.commit, watch.signature] {
                 guard let job, job.failed else { continue }
                 job.failed = false
                 job.input = nil
@@ -160,10 +176,12 @@ extension FilesCoordinator {
         // While another folder resolves, the last answer stays shown and nothing new starts.
         guard watch.resolved == Key(source, folder), let repository = session.git.repository else { return }
         let queries = GitQueries(source: source, root: repository.root)
-        status(session, watch, queries, repository)
+        // The log first: every tab's git reads share the helper's two git workers, so what is asked first runs first.
         log(session, watch, queries, repository)
+        status(session, watch, queries, repository)
         changesDiff(session, watch, queries, repository)
         detail(session, watch, queries, repository)
+        signature(session, watch, queries, repository)
         commitDiff(session, watch, queries, repository)
     }
 
@@ -199,13 +217,14 @@ extension FilesCoordinator {
         watch.logTask?.cancel()
         watch.logTask = nil
         watch.logAttempt = nil
-        for job in [watch.changes, watch.detail, watch.commit] {
+        for job in [watch.changes, watch.detail, watch.commit, watch.signature] {
             job?.task?.cancel()
             job?.timer?.cancel()
         }
         watch.changes = nil
         watch.detail = nil
         watch.commit = nil
+        watch.signature = nil
     }
 
     /// A different repository (or none): everything read from the last one goes, selections included.
@@ -226,6 +245,7 @@ extension FilesCoordinator {
         if session.selectedCommit != nil { session.selectedCommit = nil }
         if session.commitDetail != nil { session.commitDetail = nil }
         if session.commitDetailError != nil { session.commitDetailError = nil }
+        if !session.signatureChecks.isEmpty { session.signatureChecks = [:] }
         if session.commitFile != nil { session.commitFile = nil }
         if session.commitDiff != nil { session.commitDiff = nil }
         if session.logWanted != Self.page { session.logWanted = Self.page }
@@ -345,6 +365,9 @@ extension FilesCoordinator {
     private func status(_ session: FilesSession, _ watch: Watch, _ queries: GitQueries, _ repository: GitRepository) {
         let due = watch.statusDue || watch.statusAttempt != repository
         guard due else { return }
+        // On Commits the log is what shows: its first read goes ahead of a status read, which on a large tree holds a
+        // git worker for seconds. The status follows as the log answers (its task's end syncs again).
+        if session.tab == .commits, session.log == nil, watch.logTask != nil { return }
         // A tick or prompt during a read leaves `statusDue` set: the next read starts when this one ends, so what the
         // shell changed after it began is still read.
         guard watch.statusTask == nil else { return }
@@ -582,7 +605,19 @@ extension FilesCoordinator {
                 }
             case .failure(let error):
                 self.failed(error, session, watch)
+                // A busy helper (its git queue full of other tabs' status reads) or a dropped request: ask again
+                // shortly rather than on the next tick, a few times.
+                guard case .source(let reason) = error, reason != .cancelled, watch.logRetries < Self.logRetries else { return }
+                watch.logRetries += 1
+                Task { [weak self, weak watch] in
+                    try? await self?.environment.sleep(Self.logRetryDelay)
+                    guard let self, let watch, watch.logTask == nil, watch.logAttempt == target else { return }
+                    watch.logAttempt = nil
+                    self.sync(watch)
+                }
+                return
             }
+            watch.logRetries = 0
         }
     }
 
@@ -598,8 +633,10 @@ extension FilesCoordinator {
     private nonisolated static func readLog(_ queries: GitQueries, target: LogTarget, base: GitLogPages?, refs: [GitRefRecord],
                                             head: String?, checkRefs: Bool, wanted: Int) async -> Result<LogRead, GitError> {
         do throws(GitError) {
-            let current = checkRefs ? try await queries.refs() : refs
-            let tip = checkRefs ? try await queries.head() : head
+            // The refs and HEAD side by side: each is a git run (and its filter probe) through the helper's queue.
+            async let refsRead = checkRefs ? Self.attempt { () throws(GitError) in try await queries.refs() } : .success(refs)
+            async let headRead = checkRefs ? Self.attempt { () throws(GitError) in try await queries.head() } : .success(head)
+            let current = try await refsRead.get(), tip = try await headRead.get()
             var pages: GitLogPages
             if let base, current == refs, tip == head {
                 pages = base
@@ -612,6 +649,12 @@ extension FilesCoordinator {
         } catch {
             return .failure(error)
         }
+    }
+
+    /// A read's failure as a value, for an `async let` (whose errors are untyped).
+    private nonisolated static func attempt<T: Sendable>(_ read: @Sendable () async throws(GitError) -> T) async
+        -> Result<T, GitError> {
+        do throws(GitError) { return .success(try await read()) } catch { return .failure(error) }
     }
 
     // MARK: Selections
@@ -640,6 +683,31 @@ extension FilesCoordinator {
         let fresh = watch.changes?.key != id || session.changesDiff?.key != id
         load(.changes, watch, key: id, input: change, fresh: fresh, repository: repository, source: queries.source) {
             () async throws(GitError) -> GitDiff in try await queries.diff(change)
+        }
+    }
+
+    /// The selected commit's signature, checked once it is known to carry one (the log says so), beside its detail:
+    /// gpg can take a moment, so the files and diff never wait for it. Kept by hash; a failed source asks on the tick.
+    private func signature(_ session: FilesSession, _ watch: Watch, _ queries: GitQueries, _ repository: GitRepository) {
+        guard session.tab == .commits, let hash = session.selectedCommit,
+              session.log?.commits.first(where: { $0.hash == hash })?.signature != nil,
+              session.signatureChecks[hash] == nil else { return }
+        if let job = watch.signature, job.key == hash, job.input != nil { return }
+        cancel(&watch.signature)
+        let source = queries.source
+        let job = Job(key: hash, input: hash)
+        watch.signature = job
+        job.task = Task { [weak self, weak watch, weak job] in
+            let check = await queries.verify(hash)
+            guard self != nil, let watch, let job, watch.signature === job else { return }
+            job.task = nil
+            guard watch.shows, watch.source === source, let session = watch.session, session.git.repository == repository
+            else { return }
+            guard let check else {
+                job.failed = true
+                return
+            }
+            session.signatureChecks[hash] = check
         }
     }
 
@@ -868,10 +936,13 @@ extension FilesCoordinator {
         var logTarget: LogTarget?
         var logTask: Task<Void, Never>?
         var logToken = 0
+        /// Quick retries since the last log read that answered.
+        var logRetries = 0
 
         var changes: Job?
         var detail: Job?
         var commit: Job?
+        var signature: Job?
 
         init(session: FilesSession) {
             self.session = session

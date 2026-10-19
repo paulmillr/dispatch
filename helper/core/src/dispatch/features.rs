@@ -23,10 +23,20 @@ pub(crate) const LAUNCH_NAMES: &str = "launch.names";
 pub(crate) const STDIO_LIVENESS: &str = "stdio.liveness";
 /// terminal.output notifications of one stream are coalesced for a few milliseconds.
 pub(crate) const TERMINALS_COALESCE: &str = "terminals.coalesce";
+/// The `terminals.activity` operation: when the server last saw activity in each node.
+pub(crate) const TERMINALS_ACTIVITY: &str = "terminals.activity";
 
 /// The features this helper offers.
-pub(crate) const KNOWN: &[&str] =
-    &[INTERACTION_OPTIONS, CHAT_LIST, PROJECTS_RECENT, MULTIPLEXER_VERSIONS, TERMINALS_COALESCE, LAUNCH_NAMES, STDIO_LIVENESS];
+pub(crate) const KNOWN: &[&str] = &[
+    INTERACTION_OPTIONS,
+    CHAT_LIST,
+    PROJECTS_RECENT,
+    MULTIPLEXER_VERSIONS,
+    TERMINALS_COALESCE,
+    LAUNCH_NAMES,
+    STDIO_LIVENESS,
+    TERMINALS_ACTIVITY,
+];
 
 /// Choice ids only interaction.options clients see, appended after a producer's ordinary
 /// choices so the ordinary indices stay what they were (Claude's session-scoped allow).
@@ -55,7 +65,7 @@ pub(crate) fn legacy(interaction: &Interaction) -> Option<Interaction> {
     })
 }
 /// Operations that exist only for a client that named their feature.
-pub(crate) const OPERATIONS: &[&str] = &[CHAT_LIST, PROJECTS_RECENT];
+pub(crate) const OPERATIONS: &[&str] = &[CHAT_LIST, PROJECTS_RECENT, TERMINALS_ACTIVITY];
 
 /// The features each client connection asked for and got.
 pub(crate) type Features = Rc<RefCell<BTreeMap<RawFd, BTreeSet<&'static str>>>>;
@@ -120,6 +130,9 @@ impl Request<'_> {
         }
         if method == PROJECTS_RECENT {
             return self.projects_recent(params);
+        }
+        if method == TERMINALS_ACTIVITY {
+            return self.terminals_activity(params);
         }
         Err(Error {
             code: "unsupported",

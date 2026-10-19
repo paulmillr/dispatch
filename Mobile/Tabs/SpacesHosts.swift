@@ -78,6 +78,12 @@ struct SpacesSection: Identifiable {
     let unread: Int
     let collapsed: Bool
     var id: UUID { host.id }
+
+    /// Whether the section shows New space below the host: a connected host whose spaces are known to be none (live:
+    /// not the cache's, not a multiplexer switch still on its way), expanded, unfiltered and outside edit mode.
+    func offersNewSpace(editing: Bool, filter: TabsQuery.Filter) -> Bool {
+        spaces.isEmpty && !host.stale && !collapsed && !editing && filter == .all
+    }
 }
 
 /// One space row of the tree: the tabs that need you (Mail's unread count) and the amber dot when something works.

@@ -1584,6 +1584,13 @@ pub trait Multiplexer {
     fn running(&self, status: Option<i32>, _stdout: &[u8]) -> bool {
         status == Some(0)
     }
+    /// When the server last saw activity in this multiplexer's published nodes: (node, Unix
+    /// milliseconds) as the native program reports it (feature terminals.activity). Asked only
+    /// for a client that named the feature, so no other client's native traffic changes.
+    /// Defaults know no times (herdr 0.9.5 reports none).
+    fn activity(&mut self, io: &mut dyn Io, done: Done<Vec<(Id, u64)>>) {
+        deferred(done)(io, Ok(Vec::new()));
+    }
     /// Active screen text now, or after its next change when `changed`; c1654cc Dispatch/Chat/ChatModelPicker.swift:72, 231-248.
     fn screen(&mut self, io: &mut dyn Io, terminal: Id, changed: bool, done: Done<Screen>);
     /// Screen text the app publishes for a terminal it renders itself; c1654cc Dispatch/Chat/ChatCoordinator.swift:2098-2100.

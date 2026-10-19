@@ -256,11 +256,12 @@ extension FilesSession {
     }
 
     /// ⌥⌘P and the header's button.
-    func togglePreview() { setPreviewHidden(!previewHidden) }
+    func togglePreview() { setPreviewHidden(!previewOff) }
 
     /// Hiding keeps `previewWidth` for when the pane returns. A preview that had the keyboard is unmounted with it, so
-    /// the list takes the keyboard rather than leaving the window with no responder.
+    /// the list takes the keyboard rather than leaving the window with no responder. Showing it counts as asking for it.
     func setPreviewHidden(_ hidden: Bool) {
+        if !hidden, !previewRequested { previewRequested = true }
         guard hidden != previewHidden else { return }
         previewHidden = hidden
         if hidden, previewFocused {

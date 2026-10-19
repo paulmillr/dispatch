@@ -210,6 +210,10 @@ struct GitQueries: Sendable {
         case .author(let text): args += ["--author=\(text)", "--regexp-ignore-case", "--fixed-strings"]
         }
         if scope == .branch, let tip { args.append(try Self.checked(tip)) }
+        // Which of them are signed: the same range in the raw format, whose headers name a signature without checking
+        // it, read beside the page. A page without it shows no seals rather than failing.
+        let rawArgs = args.map { $0 == Self.format ? "--pretty=raw" : $0 }.filter { $0 != "--date=unix" }
+        async let raw = try? self.output(rawArgs)
         let output: GitOutput
         do throws(GitError) {
             output = try await self.output(args)
@@ -217,9 +221,21 @@ struct GitQueries: Sendable {
             // A repository before its first commit has an empty log.
             return GitLogPage(commits: [], exhausted: true)
         }
-        let commits = GitParsers.log(output.output)
+        var commits = GitParsers.log(output.output)
+        if let raw = await raw {
+            let signed = GitParsers.signatures(raw.output)
+            for index in commits.indices { commits[index].signature = signed[commits[index].hash] }
+        }
         // A page the bound cut is short without being the end; one the bound cut to nothing can never advance.
         return GitLogPage(commits: commits, exhausted: output.truncated ? commits.isEmpty : commits.count < count)
+    }
+
+    /// The commit's signature checked with the user's own keys and allowed signers (`verify-commit --raw`, with the
+    /// programs the helper trusts). Nil when the source did not answer.
+    func verify(_ hash: String) async -> GitSignatureCheck? {
+        guard let hash = try? Self.checked(hash),
+              let output = try? await source.git(root, args: ["verify-commit", "--raw", hash], limit: 0) else { return nil }
+        return GitParsers.signatureCheck(output.output, status: output.status)
     }
 
     /// HEAD's commit (`rev-parse --verify HEAD`), nil before the first commit. With the refs it tells a moved HEAD,
@@ -281,6 +297,28 @@ struct GitQueries: Sendable {
             diff.newSize = sizes.new
         }
         return diff
+    }
+
+    /// The file as `commit` left it, for the Commits tab's Source: `files.git` reads no `<rev>:<path>`, so this is the
+    /// commit's diff of the file with the whole file as context (one hunk), its new side. Over `sourceLimit`, a binary
+    /// file or a commit that changed only the file's mode answers why instead.
+    func commitSource(_ commit: GitCommit, path: String, oldPath: String?) async throws(GitError) -> String {
+        guard GitChange.representable(path), oldPath.map(GitChange.representable) ?? true else {
+            throw GitError.failed(GitChange.unrepresentable)
+        }
+        let hash = try Self.checked(commit.hash)
+        let paths = Self.paths(path, old: oldPath)
+        // More context than a file within the limit has lines: the patch is one hunk holding all of it.
+        let whole = "-U\(GitChangesText.sourceLimit)"
+        let args = commit.parents.count > 1
+            ? ["diff", whole, try Self.checked(commit.parents[0]), hash, "--"] + paths
+            : ["show", "--format=", whole, hash, "--"] + paths
+        let output = try await output(args, limit: GitChangesText.sourceLimit * 2)
+        if output.truncated { throw GitError.failed("Over 2 MB · the terminal shows the rest") }
+        guard let text = GitParsers.newSide(output.output) else {
+            throw GitError.failed("git shows no lines of this file in the commit")
+        }
+        return text
     }
 
     // MARK: Running

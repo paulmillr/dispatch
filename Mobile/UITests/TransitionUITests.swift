@@ -66,8 +66,84 @@ final class TransitionUITests: XCTestCase {
             app.swipeUp()
             rest()
         }
+        // Held: the quick menu of hosts to make a space on without the form.
+        newSpace.press(forDuration: 1)
+        rest()
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'studio'")).firstMatch.waitForExistence(timeout: 3),
+                      "the quick menu")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.08)).tap()
+        rest()
         tap(newSpace)
         XCTAssertTrue(app.staticTexts["New space"].exists)
+        tap(app.buttons["Cancel"])
+    }
+
+    /// M2b: a host's whole row (not only its disclosure) hides and shows its spaces; a host without spaces offers New
+    /// space, which opens the form for it, and held, the quick menu of its multiplexers.
+    func testHostRowsAndNewSpaceLine() {
+        let app = launch(arguments: Self.sample + ["-DispatchTabsTree", "YES", "-DispatchTabsEmptyHost", "YES"])
+        rest()
+        let host = app.buttons["mba2"]
+        XCTAssertTrue(host.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["e2e"].exists)
+        for _ in 0..<2 {
+            // On the name, away from the disclosure.
+            host.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.5)).tap()
+            rest()
+            XCTAssertFalse(app.buttons["e2e"].exists, "collapsed")
+            XCTAssertEqual(host.value as? String, "herdr, Collapsed, 1 unread")
+            host.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.5)).tap()
+            rest()
+            XCTAssertTrue(app.buttons["e2e"].exists, "expanded")
+        }
+        let line = app.buttons["New space on vps"]
+        if !line.waitForExistence(timeout: 2) || !line.isHittable {
+            app.swipeUp()
+            rest()
+        }
+        tap(line)
+        XCTAssertTrue(app.staticTexts["New space"].exists)
+        XCTAssertTrue(app.staticTexts["vps"].exists, "the form is for the row's host")
+        tap(app.buttons["Cancel"])
+        line.press(forDuration: 1)
+        rest()
+        XCTAssertTrue(app.buttons["New tmux space"].waitForExistence(timeout: 3), "the quick menu")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.15)).tap()
+        rest()
+    }
+
+    /// New chat's Space pull-down: "New space…" and the "New space on" submenu, the quick menu's hosts and
+    /// multiplexers (a pull-down's items cannot be held); the form opens over New chat.
+    func testNewChatNewSpace() {
+        let app = launch(arguments: Self.sample)
+        rest()
+        tap(app.buttons["Agents"])
+        tap(app.buttons["New chat"])
+        tap(app.buttons["Space"])
+        tap(app.buttons["New space on"])
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'studio'")).firstMatch.waitForExistence(timeout: 3),
+                      "the quick menu's hosts")
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS 'Switches mba2 to tmux'")).firstMatch.exists)
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.08)).tap()
+        rest()
+        tap(app.buttons["Space"])
+        tap(app.buttons["New space…"])
+        XCTAssertTrue(app.staticTexts["New space"].exists)
+        tap(app.buttons["Cancel"])
+        XCTAssertTrue(app.staticTexts["New chat"].exists, "back in New chat")
+        tap(app.buttons["Close"])
+    }
+
+    /// New space's Multiplexer: the host's installed ones, the one it shows picked; the other one says Create switches.
+    func testNewSpaceMultiplexer() {
+        let app = launch(arguments: Self.sample + ["-DispatchTabsShow", "new-space"])
+        rest()
+        XCTAssertTrue(app.staticTexts["MULTIPLEXER"].exists || app.staticTexts["Multiplexer"].exists)
+        XCTAssertTrue(app.buttons["herdr"].isSelected, "the one ai shows")
+        tap(app.buttons["tmux"])
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'ai shows one multiplexer'")).firstMatch.exists)
+        tap(app.buttons["herdr"])
+        XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'ai shows one multiplexer'")).firstMatch.exists)
         tap(app.buttons["Cancel"])
     }
 

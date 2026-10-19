@@ -49,6 +49,11 @@ import Foundation
     /// ⌥⌘P or the header's button: the list spans the view and the pane is not mounted, so selections load nothing.
     /// `preview` still follows the selection, so showing the pane again loads what is selected.
     var previewHidden = false
+    /// Files shows no preview until one is asked for on this tab: a double click or ⏎ on a file, or ⌥⌘P. The Changes and
+    /// Commits tabs' diffs, in the same place, are what those tabs are for and show from the start.
+    var previewRequested = false
+    /// The pane is off for the tab shown: hidden, or on Files not yet asked for.
+    var previewOff: Bool { previewHidden || (tab == .files && !previewRequested) }
 
     // Transfers under the list (F2b, F2c).
     var transfers: [FileTransfer] = []
@@ -67,6 +72,8 @@ import Foundation
     /// The `GitChange.id` selected in the Changes list, and its diff.
     var changesSelection: String?
     var changesDiff: GitDiffState?
+    /// The header's search on Changes: the list shows the changes whose path holds it (any case).
+    var changesFilter = ""
     var diffMode: GitDiffMode = .diff
     var log: GitLog?
     var logScope: GitLogScope = .branch
@@ -81,6 +88,9 @@ import Foundation
     var commitDetailError: String?
     var commitFile: String?
     var commitDiff: GitDiffState?
+    /// Signatures checked so far, by commit hash: the selected signed commit is checked once, and the log's rows keep
+    /// what was found.
+    var signatureChecks: [String: GitSignatureCheck] = [:]
 
     /// Bumped when the files view should take keyboard focus.
     var focusRequest: UUID?
@@ -128,7 +138,7 @@ import Foundation
     func canShow(_ tab: FilesTab) -> Bool {
         switch git {
         case .repository, .loading: true
-        case .none, .unavailable: tab == .files
+        case .none, .unavailable, .off: tab == .files
         }
     }
 

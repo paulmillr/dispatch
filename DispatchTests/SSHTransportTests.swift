@@ -269,7 +269,9 @@ final class SSHTransportTests: XCTestCase {
         defer { missing.remove() }
         let outcome5 = await missing.bootstrap()
         XCTAssertTrue(BootstrapFixture.installFailed(outcome5), "Unverifiable upload bytes must never become an installed helper")
-        XCTAssertEqual(try missing.uploadCount(), 1)
+        // The cache check says so before a byte is sent, and names why: no attempt can fix it, so none is retried.
+        XCTAssertEqual((outcome5 as? SSHSetupFailure)?.reason, "no sha256sum or shasum")
+        XCTAssertEqual(try missing.uploadCount(), 0)
         let fixture = try BootstrapFixture()
         defer { fixture.remove() }
         let outcome6 = await fixture.bootstrap()
@@ -297,6 +299,7 @@ final class SSHTransportTests: XCTestCase {
         try System.link(directory, to: elsewhere)
         let outcome9 = await fixture.bootstrap()
         XCTAssertTrue(BootstrapFixture.installFailed(outcome9), "Symlinked cache directory must fail")
+        XCTAssertEqual((outcome9 as? SSHSetupFailure)?.reason, "unsafe folder " + fixture.payload.digest)
         XCTAssertEqual(try System.read(sentinel), Data("preserve me".utf8))
     }
 
@@ -581,7 +584,8 @@ private struct BootstrapFixture: Sendable {
         do { _ = try await SSHBootstrap.startHelper(master: master, resources: resources, sessionID: Self.session, publish: false); return nil }
         catch { return error }
     }
-    static func installFailed(_ error: (any Error)?) -> Bool { error?.localizedDescription.contains("install") == true }
+    /// The helper cache refused or failed the install (`connect`, which finds no login here, fails after a good one).
+    static func installFailed(_ error: (any Error)?) -> Bool { (error as? SSHSetupFailure)?.message.contains("cache") == true }
 
     func uploadCount() throws -> Int {
         let path = root.appendingPathComponent("uploads")

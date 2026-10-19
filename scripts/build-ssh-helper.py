@@ -189,6 +189,16 @@ def verify(target_dir):
         return
     output = target_dir / ("replay-results-" + str(os.getpid()))
     helper = target_dir / "bin/darwin-universal"
+    # The corpus first comes up to the code (docs/replay.md, Migrations): what a change did to recordings ships as a
+    # migration in test/replay-migrations, applied here once; the corpus's own git status shows it, ledger included.
+    migrations = ROOT / "test/replay-migrations"
+    if migrations.is_dir():
+        migrated = subprocess.run([str(helper), "capture", "migrate", str(corpus), str(migrations)], stdout=subprocess.PIPE, text=True)
+        for line in migrated.stdout.splitlines():
+            if line.startswith(("migration\t", "rerecord\t", "error\t")):
+                print("replay corpus " + line.replace("\t", ": ", 1), flush=True)
+        if migrated.returncode != 0:
+            raise SystemExit("A replay migration did not apply (" + str(migrations) + "): fix it before the corpus replays")
     result = subprocess.run([str(helper), "capture", "replay", str(corpus), "--completion", "required", "--output", str(output)],
                             stdout=subprocess.PIPE, text=True)
     lines = result.stdout.splitlines()

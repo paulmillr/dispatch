@@ -224,7 +224,8 @@ final class SSHCoordinator {
             && request.integrationGrant.map({ $0.reduced(to: grant) != $0 }) == true {
             connections[id]?.launchTask?.cancel()
             Task { _ = try? await SSHCommand.run(executable: request.master.executable,
-                arguments: request.master.arguments(command: SSHBootstrap.publish(sessionID: request.sessionID, relativePath: nil)), timeout: 3) }
+                arguments: request.master.arguments(command: SSHBootstrap.publish(sessionID: request.sessionID, relativePath: nil,
+                                                                  reason: "integration permission changed")), timeout: 3) }
         }
     }
 
@@ -296,8 +297,10 @@ final class SSHCoordinator {
                 guard activeRequest(request.connectionID) != nil, !Task.isCancelled else { return }
                 TerminalRuntime.shared.hosts.failed(request.connectionID)
                 // Release a remote login waiting for bootstrap. It falls back
-                // to the requested shell/command without repeating login.
-                let release = SSHBootstrap.publish(sessionID: request.sessionID, relativePath: nil)
+                // to the requested shell/command without repeating login, saying why.
+                let reason = SSHSetupFailure.reason(error)
+                SSHSetupLog.shared.fellBack(reason)
+                let release = SSHBootstrap.publish(sessionID: request.sessionID, relativePath: nil, reason: reason)
                 _ = try? await SSHCommand.run(executable: request.master.executable, arguments: request.master.arguments(command: release), timeout: 3)
             }
         }

@@ -40,7 +40,7 @@ CAPABILITIES = ','.join(FULL)
 # The opt-in features the phone names in hello (helper/core/src/dispatch/features.rs). A client that
 # names none (the Mac app) gets exactly the replies its replay corpus recorded.
 FEATURES = ['interaction.options', 'chat.list', 'projects.recent', 'multiplexers.versions', 'terminals.coalesce',
-            'launch.names', 'stdio.liveness']
+            'launch.names', 'stdio.liveness', 'terminals.activity']
 # With stdio.liveness the helper ends after 45 s without traffic; the phone pings this often.
 PING = 15
 # sshd's PATH for a non-login exec channel (macOS; Linux adds /usr/local/bin and /usr/games).
@@ -639,7 +639,8 @@ class Fixture:
                    f'export PATH="{prepend + ":" if prepend else ""}$HOME/.local/bin:$PATH"\n', 0o644)
         host.mkdir(self.root / 't')
         self.tmux_socket = self.root / 't' / f'tmux-{host.uid}' / 'default'
-        self.herdr_socket = self.root / 'hd.sock'
+        # herdr's default under XDG_CONFIG_HOME: the phone's exec channel names no socket.
+        self.herdr_socket = self.root / 'x/herdr/herdr.sock'
         host.mkdir(self.root / 'x')
         if host.remote:
             # The fixture scripts the cases run, next to the root (they import each other).
@@ -665,8 +666,8 @@ class Fixture:
         self.sessions = []  # local ssh clients and helper children
         self.sshd = None
         # What sshd gives a non-PTY exec channel, plus the isolation this test needs.
-        self.isolation = {'TMUX_TMPDIR': str(self.root / 't'), 'HERDR_SOCKET_PATH': str(self.herdr_socket),
-                          'XDG_CONFIG_HOME': str(self.root / 'x'), 'DISPATCH_TEST_ROOT': str(self.home)}
+        self.isolation = {'TMUX_TMPDIR': str(self.root / 't'), 'XDG_CONFIG_HOME': str(self.root / 'x'),
+                          'DISPATCH_TEST_ROOT': str(self.home)}
         self.codec = Codec()
 
     @property
@@ -982,7 +983,7 @@ class Live(unittest.TestCase):
                 self.assertNotEqual(hello['account']['home'], str(self.fixture.home))
                 self.assertEqual(hello['account'].get('login_home'), str(self.fixture.home))
                 self.assertTrue(set(hello['features']) <= set(FEATURES))
-                self.assertEqual(plain['ops'], [op for op in hello['ops'] if op not in ('chat.list', 'projects.recent')])
+                self.assertEqual(plain['ops'], [op for op in hello['ops'] if op not in ('chat.list', 'projects.recent', 'terminals.activity')])
                 with self.assertRaises(HelperError):
                     await session.request('hello', {'features': 'chat.list'})
                 self.assertEqual(hello['version'], self.fixture.codec.version, 'schema id = HelperBinary.version')
@@ -1688,6 +1689,75 @@ print(json.dumps(pi_fixture.environment(state, {port}, home)))
                 await asyncio.sleep(5)
                 self.assertFalse(quiet.closed.done())
                 await quiet.close()
+        run(self.closing(case()))
+
+    # -- 12. terminals.activity: tmux's own window activity times --------------------------------
+    def test_12_terminals_activity(self):
+        async def case():
+            fixture = self.fixture
+            session = await fixture.connect('ssh', 'activity')
+            hello, _ = await self.hello(session)
+            self.assertIn('terminals.activity', hello['features'])
+            self.assertIn('terminals.activity', hello['ops'])
+            # Cases run by name: test_2 (after this one) expects no tmux server, so one started here is stopped.
+            started_server = not fixture.host.exists(fixture.tmux_socket)
+            backend, _ = await self.opened(session, TMUX, 'tmux', create=True)
+            work = fixture.root / 'work-activity'
+            fixture.host.mkdir(work)
+            terminal, _ = await self.window(session, TMUX, backend, work)
+            await self.typed(session, TMUX, terminal, "printf 'HS_%s_ONE\\n' act\r")
+            await session.until(lambda: b'HS_act_ONE' in session.output.get(terminal, b''), what='first output')
+            tab = self.node(session, backend, terminal)['parent']
+            tab_key = next(n['key'] for n in session.nodes(backend) if n['id'] == tab)
+            window = tab_key.rsplit(':', 1)[1]
+
+            async def times():
+                started = time.monotonic()
+                rows = await session.request('terminals.activity', {})
+                metric('terminals.activity', (time.monotonic() - started) * 1000, 'ms')
+                return rows
+
+            def native():
+                return int(fixture.tmux('display', '-p', '-t', window, '#{window_activity}').stdout.strip()) * 1000
+
+            # Between tmux's own value before and after the request (a late prompt redraw may move it).
+            before = native()
+            rows = await times()
+            print('terminals.activity', json.dumps(rows)[:400], flush=True)
+            self.assertTrue(all(row['key'].startswith('tmux:') for row in rows), 'herdr and native report no times')
+            row = next(row for row in rows if row['node'] == tab)
+            self.assertEqual((row['key'], row['kind']), (tab_key, 'tab'))
+            self.assertTrue(before <= row['time_ms'] <= native(), (before, row['time_ms']))
+            self.assertFalse(any(r['node'] == terminal for r in rows), 'tmux has no per-pane time')
+            # tmux counts whole seconds: the next output lands in a later one.
+            first = row['time_ms']
+            await asyncio.sleep(2.2)
+            await self.typed(session, TMUX, terminal, "printf 'HS_%s_TWO\\n' act\r")
+            await session.until(lambda: b'HS_act_TWO' in session.output.get(terminal, b''), what='second output')
+            before = native()
+            later = next(row for row in await times() if row['node'] == tab)['time_ms']
+            self.assertGreaterEqual(later - first, 2000, 'typing moved the window activity')
+            self.assertTrue(before <= later <= native(), (before, later))
+            with self.assertRaises(HelperError):
+                await session.request('terminals.activity', {'node': tab})
+            await session.request('close.request', {'mux': TMUX, 'node': tab, 'policy': 'prompt'})
+            await session.close()
+            # A client that did not name the feature (the Mac) has no such operation.
+            plain = await fixture.connect('ssh', 'activity-plain')
+            plain_hello, _ = await self.hello(plain, features=False)
+            self.assertNotIn('terminals.activity', plain_hello['ops'])
+            with self.assertRaises(HelperError) as refused:
+                await plain.request('terminals.activity', {})
+            self.assertEqual(refused.exception.code, 'unsupported')
+            await plain.close()
+            if started_server:
+                pid = int(fixture.tmux('display', '-p', '#{pid}').stdout.strip())
+                fixture.host.kill(pid)
+                deadline = time.monotonic() + 10
+                while fixture.host.alive(pid) and time.monotonic() < deadline:
+                    await asyncio.sleep(0.1)
+                self.assertFalse(fixture.host.alive(pid), 'the tmux server this case started ended')
+                fixture.host.sh('rm -f "$1"', fixture.tmux_socket)
         run(self.closing(case()))
 
 

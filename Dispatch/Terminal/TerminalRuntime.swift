@@ -143,7 +143,10 @@ final class TerminalRuntime {
         let next = SwiftEngine.parse(text, dark: dark)
         config = next
         ChatThemeStore.shared.current = ChatTheme(config: next, preferences: preferences)
+        let gitChanged = self.preferences.gitEnabled != preferences.gitEnabled
         self.preferences = preferences
+        // Files views drop or resolve their repositories now rather than on the next tick.
+        if gitChanged { for id in files.sessions.keys { files.refresh(id) } }
         workspace?.closeLaunching = preferences.closeLaunching
         workspace?.tabsOnly = preferences.tabsOnly
         hosts.reconnect.automatic = preferences.autoReconnectSSH

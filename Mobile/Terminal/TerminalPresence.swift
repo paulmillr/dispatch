@@ -43,7 +43,7 @@ final class TerminalPresence {
     @ObservationIgnored let session: TerminalSession
     @ObservationIgnored private(set) var feed: any TerminalFeed
     @ObservationIgnored var scroll: TerminalScrollModel
-    @ObservationIgnored let scrollback: TerminalScrollback
+    @ObservationIgnored private(set) var scrollback: TerminalScrollback
     private(set) var configuration: TerminalConfiguration
     /// The window title (OSC 0/2) and working directory (OSC 7, a path) the program last set.
     private(set) var title: String?
@@ -65,9 +65,11 @@ final class TerminalPresence {
     @ObservationIgnored private let publishQueued = TerminalFlag()
 
     nonisolated static let batchLimit = 256 * 1024
-    /// Enough for a short rendering stall, but never an unbounded claim on the phone's memory. Overflow ends the
-    /// attachment: dropping terminal bytes would leave its parser in a state different from the remote terminal.
-    nonisolated static let inboxLimit = 8 * 1024 * 1024
+    /// One whole helper reply (an attach replays a tmux pane's entire history as one `terminal.output`, up to the
+    /// connection's own bound) arriving before the parse task takes any of it, plus 8 MiB for a rendering stall; never
+    /// an unbounded claim on the phone's memory. Overflow ends the attachment: dropping terminal bytes would leave its
+    /// parser in a state different from the remote terminal. (8 MiB alone ended every attach of a long history.)
+    nonisolated static let inboxLimit = HelperConnection.replyLimit + 8 * 1024 * 1024
     nonisolated static let publishInterval = Duration.milliseconds(33)
 
     private struct Publication {
@@ -142,9 +144,8 @@ final class TerminalPresence {
                     case .queued: break
                     case .overflow:
                         signal.finish()
-                        feed.detach()
                         await MainActor.run {
-                            self?.handle(.failed("Terminal output exceeded the device buffer limit."), attachment: attachment)
+                            self?.end(attachment, feed: feed, "Terminal output exceeded the device buffer limit.")
                         }
                         return
                     }
@@ -155,11 +156,7 @@ final class TerminalPresence {
             signal.finish()
             // A producer that ends without an exit/failure event overflowed its bounded event queue or broke its
             // subscription. Cancel it and make the loss visible; continuing after dropped terminal bytes is unsafe.
-            feed.detach()
-            await MainActor.run {
-                guard let self, self.attached, attachment == self.attachments else { return }
-                self.handle(.failed("Terminal output stream ended unexpectedly."), attachment: attachment)
-            }
+            await MainActor.run { self?.end(attachment, feed: feed, "Terminal output stream ended unexpectedly.") }
         }
     }
 
@@ -189,10 +186,28 @@ final class TerminalPresence {
         if wasAttached { start() }
     }
 
+    /// The backend kind, when the presence was made without it (Chat opens presences knowing only the node): a tmux
+    /// terminal shown later in the Terminal segment scrolls its own history at once instead of asking the server first.
+    func learn(_ scrollback: TerminalScrollback) {
+        guard self.scrollback == .unknown, scrollback != .unknown else { return }
+        self.scrollback = scrollback
+        scroll.learn(scrollback)
+    }
+
     func configure(_ configuration: TerminalConfiguration) {
         guard configuration != self.configuration else { return }
         self.configuration = configuration
         session.configure(configuration)
+    }
+
+    /// Attachment number `attachment` lost output: its feed is detached and the end shown, unless it is gone already.
+    /// A stream that ended because of `stop` is not a loss, and detaching then would end the next attachment of the
+    /// same feed (a segment shown again started it meanwhile): the terminal stayed on screen, but nothing typed reached
+    /// it and nothing new was drawn.
+    private func end(_ attachment: Int, feed: any TerminalFeed, _ message: String) {
+        guard attached, attachment == attachments else { return }
+        feed.detach()
+        handle(.failed(message), attachment: attachment)
     }
 
     /// An event of attachment number `attachment`: one that reaches the main actor after `stop` or a reattach (its
@@ -326,6 +341,7 @@ final class TerminalPresences {
     func open(_ key: Key, feed: @autoclosure () -> any TerminalFeed, terminal: UInt64? = nil, client: HelperClient? = nil,
               scrollback: TerminalScrollback = .unknown, grid: (columns: Int, rows: Int)? = nil) -> TerminalPresence {
         if let existing = presences[key] {
+            existing.learn(scrollback)
             let current = existing.feed as? HelperTerminalFeed
             if terminal.map({ $0 != current?.terminal }) == true || client.map({ $0 !== current?.client }) == true {
                 existing.reattach(feed())

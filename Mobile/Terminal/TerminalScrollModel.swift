@@ -102,11 +102,15 @@ struct TerminalScrollModel: Equatable, Sendable {
     }
 
     /// The backend kind decides it up front when known (tmux: the client's, herdr: the server's).
-    init(scrollback: TerminalScrollback = .unknown) {
+    init(scrollback: TerminalScrollback = .unknown) { learn(scrollback) }
+
+    /// The backend kind, known after the model was made: decides who owns history unless an answer already did.
+    mutating func learn(_ scrollback: TerminalScrollback) {
+        guard server == .unknown else { return }
         switch scrollback {
         case .client: server = .appOwned
         case .server: server = .available
-        case .unknown: server = .unknown
+        case .unknown: break
         }
     }
 

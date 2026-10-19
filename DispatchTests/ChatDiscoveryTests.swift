@@ -83,6 +83,41 @@ final class ChatDiscoveryTests: XCTestCase {
         XCTAssertFalse(session.manualViewChoice)
     }
 
+    /// Return on an agent's launch line covers the terminal until discovery opens Chat, in the same turn, so the
+    /// agent's first terminal frames never show; lines that print and exit, or a tab kept on its terminal, do not.
+    func testAgentLaunchLineCoversTheTerminalUntilChatOpens() {
+        let programs = ["claude": "claude", "codex": "codex"]
+        for (line, agent) in [("claude", "claude"), ("codex", "codex"), ("  claude --resume  ", "claude"),
+                              ("/opt/bin/codex resume --last", "codex"), ("CLAUDE_DEBUG=1 claude \"fix it\"", "claude"),
+                              ("codex -m gpt-5", "codex")] {
+            XCTAssertEqual(ChatCoordinator.launchedAgent(line, programs: programs), agent, line)
+        }
+        for line in ["claude -p hi", "claude --version", "codex exec ls", "claude mcp list", "codex --help", "claudette",
+                     "echo claude", "git log", ""] {
+            XCTAssertNil(ChatCoordinator.launchedAgent(line, programs: programs), line)
+        }
+
+        let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
+        let session = chat.session(for: System.uuid())
+        defer { chat.close(session.id) }
+        chat.terminalSubmitted("ls -la", tab: session.id)
+        XCTAssertNil(session.launchingAgent)
+        chat.terminalSubmitted("claude", tab: session.id)
+        XCTAssertEqual(session.launchingAgent, "claude")
+        session.helper = HelperChat(terminal: 0); session.sessionID = "launched"
+        chat.receiveHelper(.state(.init(busy: false, activity: "idle", model: nil, model_label: nil, effort: nil, usage: nil,
+                                        goal: nil, draft: nil, attention: nil, dialog: nil, title: nil, compacting: false,
+                                        service_tier: nil)), session: session)
+        XCTAssertTrue(session.showChat)
+        XCTAssertNil(session.launchingAgent, "Chat lifts the cover in the turn it opens")
+
+        // A tab the user put on its terminal stays on it, so nothing covers it.
+        chat.chooseChat(false, session: session)
+        session.active = false
+        chat.terminalSubmitted("claude", tab: session.id)
+        XCTAssertNil(session.launchingAgent)
+    }
+
     /// A helper chat failure blocks the chat like this.
     func testDiscoveryFailureRetainsChatAndDurableDraftWithoutAllowingInput() throws {
         let store = ChatDraftMemoryStore()

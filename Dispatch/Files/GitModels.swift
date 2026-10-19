@@ -26,6 +26,8 @@ enum GitState: Hashable, Sendable {
     case none
     /// git is missing on the host, or the connection's grant lacks git.
     case unavailable(String)
+    /// Settings › Features turned git off: no segments, no marks, and the footer says nothing of git.
+    case off
 
     var repository: GitRepository? {
         if case .repository(let repository) = self { return repository }
@@ -97,6 +99,17 @@ struct GitStatus: Hashable, Sendable {
     func changes(in area: GitChangeArea) -> [GitChange] { changes.filter { $0.area == area } }
     var additions: Int { changes.reduce(0) { $0 + ($1.additions ?? 0) } }
     var deletions: Int { changes.reduce(0) { $0 + ($1.deletions ?? 0) } }
+
+    /// The changes whose path (or a rename's old path) holds `query`, in any case; all of them for an empty query.
+    func matching(_ query: String) -> GitStatus {
+        let query = query.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else { return self }
+        var matched = self
+        matched.changes = changes.filter {
+            $0.path.localizedCaseInsensitiveContains(query) || $0.oldPath?.localizedCaseInsensitiveContains(query) == true
+        }
+        return matched
+    }
 }
 
 enum GitRefKind: Hashable, Sendable {
@@ -119,9 +132,49 @@ struct GitCommit: Hashable, Sendable, Identifiable {
     var email: String
     var date: Date
     var refs: [GitRef]
+    /// How the commit is signed, as its headers say (nothing checked); nil unsigned or not read yet.
+    var signature: GitSignatureKind? = nil
 
     var id: String { hash }
     var short: String { String(hash.prefix(7)) }
+}
+
+/// The kind of signature a commit carries (its `gpgsig` header's armor).
+enum GitSignatureKind: String, Hashable, Sendable {
+    case gpg, ssh, x509
+
+    var title: String {
+        switch self {
+        case .gpg: "GPG"
+        case .ssh: "SSH"
+        case .x509: "X.509"
+        }
+    }
+}
+
+/// What `verify-commit` made of a commit's signature, with the user's own keys and allowed signers.
+struct GitSignatureCheck: Hashable, Sendable {
+    enum Verdict: Hashable, Sendable {
+        /// `certified`: the key is trusted (gpg's full or ultimate validity, or an allowed SSH signer).
+        case good(certified: Bool)
+        case bad
+        /// No such public key, or no allowed signer for it.
+        case unknownKey
+        case expiredSignature
+        case expiredKey
+        case revokedKey
+        /// No signature at all.
+        case unsigned
+        /// The check did not run to a verdict (gpg missing, no allowed signers configured): what was said.
+        case unchecked(String)
+    }
+
+    var verdict: Verdict
+    var kind: GitSignatureKind?
+    /// "Paul Miller <paul@example.com>", or an SSH principal.
+    var signer: String?
+    /// gpg's fingerprint (else its key id), or an SSH key's SHA256 fingerprint.
+    var key: String?
 }
 
 /// What the detail pane shows for the selected commit: its files with their counts.

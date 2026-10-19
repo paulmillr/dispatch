@@ -20,7 +20,7 @@ Tests replay recorded I/O by default: a test with a recording in `replays/` runs
 
 Replaying every recording takes about 15 minutes, one class seconds. Run live only what you changed on purpose, record it, and replay the rest.
 
-**Recording everything again is the last resort**, for when no recording can replay at all (a new wire version, below). After any change, yours or merged, replay the corpus first: the replays that fail are exactly what changed. Read each failure, then record again only those tests, and only once you know why each one changed. A fresh recording passes by construction, so recording everything hides exactly what the replay would have shown. When the recording format itself changes, convert the recordings (`capture convert`) instead of recording them again.
+**Recording everything again is the last resort**, for when no recording can replay at all (a new wire version, below). After any change, yours or merged, replay the corpus first: the replays that fail are exactly what changed. Read each failure, then record again only those tests, and only once you know why each one changed. A fresh recording passes by construction, so recording everything hides exactly what the replay would have shown. When the recording format itself changes, or only the text of what the app sends, migrate the recordings ([Migrations](#migrations)) instead of recording them again.
 
 **Prefer changes that touch few recordings.** A change to what many tests do (a startup request every test sends, a timer every test runs, common helper behavior) changes many recordings, each to be checked and recorded again, and recordings that passed are what tells us the rest still works. Look for a narrower change; when the wide one is needed, make it on its own, not mixed with other work.
 
@@ -43,7 +43,7 @@ Replaying every recording takes about 15 minutes, one class seconds. Run live on
 
 - **I fix a bug.** Reproduce it from a recording first: a live failure recorded with `--capture` replays with `--replay` the same way every time ([a test that fails live sometimes](#a-test-that-fails-live-sometimes)). App fix: replay the test's class, then every app recording; the tests that now fail are exactly the ones whose recorded behavior the fix changed, so check each is the intended change and record those again. Helper fix: replay every helper capture; the failing captures name the tests to record again (live, `--capture`), then replay them in the app. Both: helper first, then record the affected tests and replay all app recordings.
 
-- **I change the protocol** (the wire schema in `helper/core/src/wire`). Avoid it when you can: the protocol should become stable. Names are numbered by their place in the schema's sorted symbol table, so one new name renumbers every name after it and nearly every recorded message encodes differently (upstream's one new field, `agents`, did that to the 490 recordings that carry helper messages), and the wire version is a hash of the schema, so no app journal of the old version replays (the test fails and names `capture prune`). Ask first whether an existing message, field or request already carries this, and if not, what shape makes further changes unnecessary (one general field instead of one per feature). When it is needed: replay the helper captures first (they show which recorded behavior changed beyond the encoding), then record everything again: the one change that needs a full live run.
+- **I change the protocol** (the wire schema in `helper/core/src/wire`). Avoid it when you can: the protocol should become stable. Names are numbered by their place in the schema's sorted symbol table, so one new name renumbers every name after it and nearly every recorded message encodes differently (upstream's one new field, `agents`, did that to the 490 recordings that carry helper messages), and the wire version is a hash of the schema, so no app journal of the old version replays (the test fails and names `capture prune`). Ask first whether an existing message, field or request already carries this, and if not, what shape makes further changes unnecessary (one general field instead of one per feature). When it is needed: write the new schema's dictionary and a `wire` migration ([Migrations](#migrations)), which converts every recording; then replay, and record again only what changed beyond the encoding.
 
 - **I want to know the recordings are not stale** (rare): record everything again into a fresh corpus and replay it. Tests that fail the second command are stale in a way the first run did not reveal (UI timing it decided differently): read their failure.
 
@@ -53,6 +53,7 @@ Replaying every recording takes about 15 minutes, one class seconds. Run live on
   python3 test/xcode.py --replay --suite exhaustive
   ```
 
+- **I change what the app sends** (a setup script's text, a git argument, a default that decides what it lists): `ReplayMigrationTests` fails with the fingerprint to name. Add a migration ([Migrations](#migrations)): a rewrite where every recorded answer still holds, else a rerecord of the tests whose answers changed.
 - **I want to check that a test's app and helper recordings belong together**: `capture check` ([The three checks](#the-three-checks)).
 - **I want to know the recordings hold no private data**: [scrubbing](#scrub-captures-before-sharing-them).
 - **I write a test that replays and does not flake**: [Writing tests that replay](#writing-tests-that-replay). In short: all I/O and machine facts through `System`, waits through `TestSupport.eventually`, timers named, ids from `System.uuid()`, nothing left behind for the next test.
@@ -104,6 +105,21 @@ Replaying every recording takes about 15 minutes, one class seconds. Run live on
 
   It pairs app lifetimes with helper stdio, spawned children with their helpers, socket connects with accepts, and hook senders with the hook server's messages (by pid, or by the datagram's bytes); prints each pair (`equal`, `stopped reading`, or `DIFFERENT from byte N`) and `linked to the app journal: X of Y captures`; and exits non-zero on a difference or an unlinked capture. `question 1 answered without a record by the hook server` is a known gap: the hook server answers "does this helper own the asking process" without recording it.
 
+## Migrations
+
+The corpus is test data generated by the code, so a change to what recordings hold ships with a migration, as a schema change ships with a database migration. `test/replay-migrations/` holds them in order (`NNNN-name.json`), with the wire dictionary of every schema the corpus was recorded with (`wire/<schema>.json`, written by `dispatch-helper capture dictionary`). The corpus lists the ones it has had in `replays/MIGRATIONS`; a corpus without that ledger has had the baseline only. `dispatch-helper capture migrate replays test/replay-migrations` applies the pending ones in order (`--check` lists them, `--dry-run` reports what each would change); the Debug build and `test/xcode.py` run it before they replay, so the corpus's own `git status` shows what a migration did, to commit with it.
+
+Every migration says `why`, and is one of:
+
+- **`wire`**: the helper's schema changed. Every capture of an older schema is written in the current one from its dictionary (`capture convert`), with reviewed `edits` for what a token rewrite cannot express (`write-parent`).
+- **`rewrite`**: what the app sends changed in text only (a setup script's wording, an argument's spelling). In the inputs the app recorded (`open.*` records: commands, helper launches) each `old` template becomes its `new` one, as written and as shell-quoted inside `'…'`; `{{name}}` slots carry a digest, a session, a staging folder or a size across. Recorded results are never rewritten. A rewrite is right only where the new code would get the answers the old one got, which replay then checks: an input no template matched still differs, and its test fails until it is recorded again.
+- **`rerecord`**: the answers changed (a new or reordered request, a failure that now says why, a default that lists other files). The listed tests' recordings move out of the corpus (to `build/retired-replays/<migration>/`), so they run live until `test/run.sh --capture` records them again; nothing is deleted.
+- **`baseline`**: the corpus as migrations found it.
+
+A migration's `fingerprints` name what the code generates for recorded inputs once it applies. Two tests hold the code to them: `ReplayMigrationTests` fingerprints the SSH setup scripts, every git request the files data layer makes, and the defaults that decide what files mode lists; `the_current_schema_has_its_dictionary_and_migration` (capture tool) checks that the code's wire schema has its dictionary and the last migration naming `wire` names it. Changing any of them without a migration fails there, with the fingerprint the new migration should name, instead of failing case by case at replay.
+
+Writing one: decide which kind the change is by what the recordings held (a rewrite when every recorded answer still holds; otherwise the tests whose answers changed are rerecorded), add the file with the next number, apply it to the corpus, replay the affected classes (`test/vm.py test <classes>` replays them from the corpus) and add what still fails to a `rerecord`. Commit the migration with the change, and the corpus with its ledger.
+
 ## The capture tool
 
 `dispatch-helper capture <command>` exists only in a helper built with the `capture` feature (Debug builds: `build/helper-rust/bin/<platform>` and the app's bundled `dispatch-helper`). Its replays run the same executable, one process per capture, so the tool and the helper it checks are always one build. A helper built without the feature has no `capture` command and refuses to start with `DISPATCH_REPLAY`. Options (`--limit N`, `--output DIR`, `--dry-run`, ...) go anywhere after the command.
@@ -125,6 +141,7 @@ HELPER="$PWD/target/debug/dispatch-helper"
 
 - **Search** every text and bytes value, keys included, for a literal, case-sensitive substring: `"$HELPER" capture grep '/Users/' replays`, `"$HELPER" capture grep 'Authorization' --limit 50 build/captures`.
 - **Replay helper captures**: `"$HELPER" capture replay replays --completion required --output results/replay-01`. `report.jsonl` has one row per capture: `status` (pass, fail, timeout, or skip: nothing to replay), the replay's exit, its completion receipt, a diagnostic and, on a mismatch, the expected and actual operation as a value.
+- **Migrate**: `migrate REPLAYS MIGRATIONS [--check] [--dry-run]` ([Migrations](#migrations)); `dictionary DIR` writes this helper's wire dictionary.
 - **Store, prune, check, scrub**: `store STAGE REPLAYS --tests DispatchTests`, `prune REPLAYS [--dry-run]`, `check PATH...` (above), `grep PATH... --needles FILE [--jobs N]` and `replace DIR OUT [--needles FILE] [--ips] [--uuids] [--jobs N]` ([scrubbing](#scrub-captures-before-sharing-them)).
 
 ## Reading a failed app replay

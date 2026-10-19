@@ -26,6 +26,8 @@ final class FilesPresentationTests: XCTestCase {
         session.availability = .available(source)
         session.pinnedRoot = root
         session.showHidden = true
+        // The mockup shows the preview, which a tab otherwise opens on a double click.
+        session.previewRequested = true
         for path in [root, root + "/src", root + "/src/lib", root + "/src/routes"] { try await load(source, session, path) }
         session.expanded = [root + "/src", root + "/src/lib", root + "/src/routes"]
         session.selection = [root + "/src/routes/billing.ts"]
@@ -94,7 +96,10 @@ final class FilesPresentationTests: XCTestCase {
         XCTAssertEqual(outline.selectedRowIndexes, IndexSet(integer: 7))
         XCTAssertEqual(outline.level(forRow: 7), 2)
         XCTAssertEqual(outline.rowHeight, 24)
-        try await read(["Files", "src", "api", "Filter", "Name", "Modified", "Size"], in: window, named: "files-header")
+        try await read(["Files", "src", "api", "Name", "Modified", "Size"], in: window, named: "files-header")
+        XCTAssertFalse(PresentationTestSupport.accessibilityFrames("files-search", in: window).isEmpty, "search shows as its glyph")
+        XCTAssertTrue(PresentationTestSupport.accessibilityFrames("files-hidden-toggle", in: window).isEmpty,
+                      "hidden files have no button: ⇧⌘. and Settings")
         try await read(["billing.ts", "health.ts", "pnpm-lock.yaml", "35m"], in: window, named: "files-rows")
         // Sizes hold zeros, which OCR misreads in the UI font: the size column's cell says what it draws.
         let lock = try XCTUnwrap((0..<outline.numberOfRows).first {
@@ -109,6 +114,72 @@ final class FilesPresentationTests: XCTestCase {
         session.filter = "bill"
         try await TestSupport.eventually { outline.numberOfRows == 3 }
         XCTAssertEqual(outline.selectedRowIndexes, IndexSet(integer: 2), "the selection follows its path through the filter")
+    }
+
+    /// With Liquid Glass the bar is the app's other glass chrome: the tabs on a glass track with the shown one's pill,
+    /// the branch on a glass chip, the tab's control, search and pane toggle on one glass pill; the same places as flat.
+    func testHeaderIsGlassOnEveryTab() async throws {
+        try XCTSkipUnless(LiquidGlassStore.supported, "Liquid Glass needs macOS 26")
+        let original = LiquidGlassStore.shared.enabled
+        LiquidGlassStore.shared.enabled = true
+        defer { LiquidGlassStore.shared.enabled = original }
+        let (session, _) = try await mockupSession()
+        repository(session)
+        let window = window(session)
+        _ = try await outlineView(in: window)
+        for tab in [FilesTab.files, .changes, .commits] {
+            session.tab = tab
+            try await TestSupport.eventually(diagnostic: "the glass header did not settle on \(tab)") {
+                let commits = PresentationTestSupport.accessibilityFrames("files-segment-commits", in: window).first
+                let chip = PresentationTestSupport.accessibilityFrames("files-branch", in: window).first
+                let search = PresentationTestSupport.accessibilityFrames("files-search", in: window).first
+                let pane = PresentationTestSupport.accessibilityFrames("files-preview-toggle", in: window).first
+                guard let commits, let chip, let search, let pane else { return false }
+                return commits.maxX < chip.minX && search.maxX <= pane.minX && pane.maxX <= 1_180 - 12 + 0.5
+            }
+            _ = try await PresentationTestSupport.capture(window, named: "files-header-glass-\(tab)", in: "files-audit")
+        }
+    }
+
+    /// The link button: lit while the view follows the shell; a click stays in the folder shown, another follows again.
+    func testFollowShellButtonPinsAndFollowsAgain() async throws {
+        let (session, _) = try await mockupSession()
+        session.pinnedRoot = nil
+        let window = window(session)
+        _ = try await outlineView(in: window)
+        func click() async throws {
+            let button = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-follow-shell", in: window).first)
+            try await PresentationTestSupport.hoverAndClick(window, at: NSPoint(x: button.midX, y: button.midY))
+        }
+        try await click()
+        try await TestSupport.eventually(diagnostic: "the click did not pin the folder") { !session.followsShell }
+        try await click()
+        try await TestSupport.eventually(diagnostic: "the click did not follow the shell again") { session.followsShell }
+    }
+
+    /// The search glyph opens the field with the keyboard in it; esc clears and folds it back to the glyph.
+    func testSearchOpensFromItsGlyphAndFoldsBackWhenCleared() async throws {
+        let (session, _) = try await mockupSession()
+        let window = window(session)
+        _ = try await outlineView(in: window)
+        let glyph = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-search", in: window).first)
+        XCTAssertTrue(PresentationTestSupport.accessibilityFrames("files-filter", in: window).isEmpty)
+        try await PresentationTestSupport.hoverAndClick(window, at: NSPoint(x: glyph.midX, y: glyph.midY))
+        try await TestSupport.eventually(diagnostic: "the field did not open with the keyboard") {
+            !PresentationTestSupport.accessibilityFrames("files-filter", in: window).isEmpty
+                && window.firstResponder is NSTextView
+        }
+        try await read(["Search"], in: window, named: "files-search-open")
+        session.filter = "bill"
+        session.focusRequest = System.uuid()
+        try await TestSupport.eventually(diagnostic: "a search with text stays open") {
+            !(window.firstResponder is NSTextView) && !PresentationTestSupport.accessibilityFrames("files-filter", in: window).isEmpty
+        }
+        session.filter = ""
+        try await TestSupport.eventually(diagnostic: "an empty search without the keyboard folds back") {
+            PresentationTestSupport.accessibilityFrames("files-filter", in: window).isEmpty
+                && !PresentationTestSupport.accessibilityFrames("files-search", in: window).isEmpty
+        }
     }
 
     /// F2a's repository: four changed files (one staged and changed again, an ignored folder that counts for nothing).
@@ -128,11 +199,13 @@ final class FilesPresentationTests: XCTestCase {
         let (session, _) = try await mockupSession()
         repository(session)
         let window = window(session)
-        try await read(["Files", "Changes", "Commits", "src", "Filter"], in: window, named: "files-header-repository")
+        try await read(["Files", "Changes", "Commits", "src"], in: window, named: "files-header-repository")
         try await says("Changes 4", "files-segment-changes", in: window)
         try await says("Commits", "files-segment-commits", in: window)
-        try await read(["main", "4 changed"], in: window, named: "files-footer-repository")
-        try await says("main · 4 changed", "files-footer-git", in: window)
+        // The branch sits after the path; the footer leaves git to it.
+        try await read(["api", "main"], in: window, named: "files-header-branch")
+        try await says("main · up to date with origin/main · Commits ⌃⌘3", "files-branch", in: window)
+        XCTAssertTrue(PresentationTestSupport.accessibilityFrames("files-footer-git", in: window).isEmpty)
         try await says("10 items · 1 selected", "files-footer-summary", in: window)
         // The segments sit left of the crumbs, in the mockup's order.
         let files = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-segment-files", in: window).first)
@@ -141,9 +214,23 @@ final class FilesPresentationTests: XCTestCase {
         let crumbs = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-crumbs", in: window).first)
         XCTAssertLessThan(files.maxX, changes.minX); XCTAssertLessThan(changes.maxX, commits.minX)
         XCTAssertLessThan(commits.maxX, crumbs.minX)
+        let branch = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-branch", in: window).first)
+        XCTAssertLessThan(crumbs.maxX, branch.minX)
+        // The same place on every tab: the controls keep their order at the trailing end.
+        for tab in [FilesTab.files, .changes, .commits] {
+            session.tab = tab
+            try await TestSupport.eventually(diagnostic: "the header did not settle on \(tab)") {
+                let search = PresentationTestSupport.accessibilityFrames("files-search", in: window).first
+                let pane = PresentationTestSupport.accessibilityFrames("files-preview-toggle", in: window).first
+                let chip = PresentationTestSupport.accessibilityFrames("files-branch", in: window).first
+                guard let search, let pane, let chip else { return false }
+                return search.maxX <= pane.minX && pane.maxX <= 1_180 - 12 + 0.5 && chip.minX > commits.maxX
+            }
+        }
+        session.tab = .files
 
         session.status?.branch = nil
-        try await says("detached at 4f1c2e9 · 4 changed", "files-footer-git", in: window)
+        try await says("detached at 4f1c2e9 · up to date with origin/main · Commits ⌃⌘3", "files-branch", in: window)
 
         // git missing on the host: no git segments, and the footer says why.
         session.git = .unavailable("git is not installed on homelab")
@@ -161,7 +248,7 @@ final class FilesPresentationTests: XCTestCase {
                 && PresentationTestSupport.accessibilityFrames("files-segment-commits", in: window).isEmpty
         }
         XCTAssertFalse(PresentationTestSupport.accessibilityFrames("files-segment-files", in: window).isEmpty)
-        let snapshot = try await read(["Files", "Filter", "not a repository"], in: window, named: "files-header-none")
+        let snapshot = try await read(["Files", "not a repository"], in: window, named: "files-header-none")
         XCTAssertFalse(try snapshot.reads(["Commits"]), "no Commits segment outside a repository")
     }
 
@@ -176,7 +263,7 @@ final class FilesPresentationTests: XCTestCase {
             try await TestSupport.eventually(diagnostic: "the header did not settle at \(width) pt") {
                 window.contentView?.layoutSubtreeIfNeeded()
                 return PresentationTestSupport.accessibilityFrames("files-segment-commits", in: window).first.map {
-                    $0.maxX <= (PresentationTestSupport.accessibilityFrames("files-filter", in: window).first?.minX ?? 0)
+                    $0.maxX <= (PresentationTestSupport.accessibilityFrames("files-search", in: window).first?.minX ?? 0)
                 } ?? false
             }
             let segment = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-segment-files", in: window).first)
@@ -229,8 +316,10 @@ final class FilesPresentationTests: XCTestCase {
             !outlineShows() && PresentationTestSupport.accessibilityFrames("files-footer", in: window).isEmpty
         }
         try await says("Changes 4", "files-segment-changes", in: window)
-        XCTAssertTrue(PresentationTestSupport.accessibilityFrames("files-filter", in: window).isEmpty,
-                      "the list's filter is the Files tab's")
+        XCTAssertTrue(PresentationTestSupport.accessibilityFrames("files-follow-shell", in: window).isEmpty,
+                      "following the shell is the Files tab's")
+        XCTAssertFalse(PresentationTestSupport.accessibilityFrames("files-search", in: window).isEmpty,
+                       "every tab searches from the same place")
         _ = try await PresentationTestSupport.capture(window, named: "files-tab-changes", in: "files-audit")
         // ⌃⌘3: Commits; ⌃⌘1: Files again, the list back.
         XCTAssertTrue(press(20, "3", [.control, .command]))
@@ -238,7 +327,7 @@ final class FilesPresentationTests: XCTestCase {
         XCTAssertTrue(press(18, "1", [.control, .command]))
         XCTAssertEqual(session.tab, .files)
         try await TestSupport.eventually(diagnostic: "the list did not come back") { outlineShows() }
-        try await says("main · 4 changed", "files-footer-git", in: window)
+        XCTAssertFalse(PresentationTestSupport.accessibilityFrames("files-branch", in: window).isEmpty)
 
         // ⇧⌘U and ⇧⌘L open files on their tab from the terminal.
         runtime.files.switchMode(tab.id, to: .terminal)
@@ -413,10 +502,10 @@ final class FilesPresentationTests: XCTestCase {
             self.divider(in: window) == nil && PresentationTestSupport.accessibilityFrames("file-preview", in: window).isEmpty
         }
         XCTAssertEqual(listWidth(outline), 1_180, accuracy: 1)
-        // The header keeps the toggle clear of the sort menu and inside the view.
+        // The header keeps the toggle clear of the search and inside the view.
         let shown = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-preview-toggle", in: window).first)
-        let sort = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-sort", in: window).first)
-        XCTAssertLessThanOrEqual(sort.maxX, shown.minX)
+        let search = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-search", in: window).first)
+        XCTAssertLessThanOrEqual(search.maxX, shown.minX)
         XCTAssertLessThanOrEqual(shown.maxX, 1_180 - 12 + 0.5)
 
         // A selection while hidden sets the preview and reads nothing until the pane shows.
@@ -444,24 +533,24 @@ final class FilesPresentationTests: XCTestCase {
         try await dividerSits(at: 320.5, in: window)
         try await says("Hide preview", "files-preview-toggle", in: window)
         let toggle = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-preview-toggle", in: window).first)
-        let sort = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-sort", in: window).first)
-        let filter = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-filter", in: window).first)
-        XCTAssertLessThanOrEqual(filter.maxX, sort.minX)
-        XCTAssertLessThanOrEqual(sort.maxX, toggle.minX)
+        let follow = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-follow-shell", in: window).first)
+        let search = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-search", in: window).first)
+        XCTAssertLessThanOrEqual(follow.maxX, search.minX)
+        XCTAssertLessThanOrEqual(search.maxX, toggle.minX)
         XCTAssertLessThanOrEqual(toggle.maxX, 600 - 12 - inset + 0.5, "the toggle stays out of the switch's room")
-        try await read(["Files", "Filter", "Name"], in: window, named: "files-header-narrow")
+        try await read(["Files", "Name"], in: window, named: "files-header-narrow")
         // Under 600 pt the preview gives way and the crumbs, then the filter, give the buttons their room.
         for width: CGFloat in [560, 480] {
             window.setContentSize(NSSize(width: width, height: 740))
             try await TestSupport.eventually { self.divider(in: window) == nil }
             let toggle = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-preview-toggle", in: window).first)
-            let sort = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-sort", in: window).first)
+            let search = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-search", in: window).first)
             let segment = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-segment-files", in: window).first)
-            XCTAssertLessThanOrEqual(sort.maxX, toggle.minX, "at \(width) pt")
+            XCTAssertLessThanOrEqual(search.maxX, toggle.minX, "at \(width) pt")
             XCTAssertLessThanOrEqual(toggle.maxX, width - 12 - inset + 0.5, "at \(width) pt")
             XCTAssertGreaterThanOrEqual(segment.minX, 11.5, "nothing spills past the leading edge at \(width) pt")
         }
-        try await read(["Files", "Filter"], in: window, named: "files-header-narrowest")
+        try await read(["Files"], in: window, named: "files-header-narrowest")
         XCTAssertFalse(session.previewHidden, "a collapsed preview is not a hidden one")
     }
 }

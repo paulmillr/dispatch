@@ -533,7 +533,7 @@ final class FilesModeTests: XCTestCase {
 
         // A tab's own width wins over the last one chosen elsewhere.
         let second = files.session(for: System.uuid())
-        second.togglePreview()
+        second.setPreviewHidden(true)
         files.choosePreviewWidth(300, for: second)
         XCTAssertEqual(files.previewPreference(for: first), 420, "other tabs keep theirs")
         XCTAssertEqual(files.previewPreference(for: earlier), 300)
@@ -545,5 +545,6 @@ final class FilesModeTests: XCTestCase {
         XCTAssertNil(files.previewPreference(for: earlier))
         XCTAssertEqual(files.previewPreference(for: first), 420)
         XCTAssertFalse(files.session(for: System.uuid()).previewHidden, "hiding is per tab")
+        XCTAssertTrue(files.session(for: System.uuid()).previewOff, "and each tab's Files waits for a file to be opened")
     }
 }

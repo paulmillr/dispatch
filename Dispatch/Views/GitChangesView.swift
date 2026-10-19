@@ -2,10 +2,9 @@ import AppKit
 import SwiftUI
 
 /// The Changes tab: the working tree against HEAD, read-only. The changes grouped Staged,
-/// Unstaged, Untracked on the left; the selected change's diff where the Files tab shows its preview (the same divider
-/// and ⌥⌘P). Its header line (`GitChangesHeaderLine`) sits in `FilesHeader`'s row after the segments. The git data
-/// layer fills `status` and loads `changesDiff` for `changesSelection`; this view only reads them and moves the
-/// selection.
+/// Unstaged, Untracked on the left (as the header's search narrows them); the selected change's diff where the Files
+/// tab shows its preview (the same divider and ⌥⌘P); the totals in the footer. The git data layer fills `status` and
+/// loads `changesDiff` for `changesSelection`; this view only reads them and moves the selection.
 struct GitChangesView: View {
     let session: FilesSession
     let focused: Bool
@@ -39,7 +38,8 @@ struct GitChangesView: View {
                     GitCentredNote(text: "No changes · the working tree matches HEAD", identifier: "git-changes-empty")
                 } else {
                     FilesSplit(session: session,
-                               list: GitChangesList(session: session, status: status, repository: repository,
+                               list: GitChangesList(session: session, status: status,
+                                                    shown: status.matching(session.changesFilter), repository: repository,
                                                     focused: focused, focusRequest: listFocus,
                                                     openDiff: { diffFocus = System.uuid() }),
                                detail: GitChangesDetail(session: session, status: status, repository: repository,
@@ -59,6 +59,8 @@ struct GitChangesView: View {
 private struct GitChangesList: View {
     let session: FilesSession
     let status: GitStatus
+    /// What the header's search leaves of `status`.
+    let shown: GitStatus
     let repository: GitRepository
     let focused: Bool
     let focusRequest: UUID?
@@ -67,13 +69,20 @@ private struct GitChangesList: View {
     @FocusState private var listFocused: Bool
 
     var body: some View {
-        let ordered = GitChangesText.ordered(status)
+        let ordered = GitChangesText.ordered(shown)
         VStack(spacing: 0) {
             ScrollViewReader { proxy in
                 ScrollView(.vertical) {
                     LazyVStack(alignment: .leading, spacing: 0) {
+                        if shown.changes.isEmpty {
+                            Text("No changed file matches “\(session.changesFilter)”")
+                                .font(AppFont.ui(size: typography.size(offset: -1)))
+                                .foregroundStyle(Chrome.palette.detail)
+                                .padding(.leading, FilesColumns.leading).padding(.top, 14)
+                                .accessibilityIdentifier("git-changes-no-match")
+                        }
                         ForEach(GitChangeArea.allCases, id: \.self) { area in
-                            let changes = status.changes(in: area)
+                            let changes = shown.changes(in: area)
                             if !changes.isEmpty {
                                 group(area, count: changes.count)
                                 ForEach(changes) { change in
@@ -110,7 +119,7 @@ private struct GitChangesList: View {
                 }
             }
             .frame(maxHeight: .infinity)
-            GitChangesFooter(session: session, repository: repository)
+            GitChangesFooter(session: session, status: status, repository: repository)
         }
         // ⌘C while the list has the keyboard: the selected change's repository-relative path.
         .gitCopyShortcut(active: listFocused) {
@@ -200,9 +209,11 @@ private struct GitChangeRow: View {
     }
 }
 
-/// The line under the list (`.lfoot`): what the tab cannot do, and the terminal for doing it.
+/// The line under the list (`.lfoot`): what the tab cannot do (or that the helper cut the status short), the totals, and
+/// the terminal for doing it.
 private struct GitChangesFooter: View {
     let session: FilesSession
+    let status: GitStatus
     let repository: GitRepository
     @Environment(\.appTypography) private var typography
 
@@ -212,10 +223,19 @@ private struct GitChangesFooter: View {
         HStack(spacing: 8) {
             if let notice {
                 Text(verbatim: notice).foregroundStyle(palette.warning).accessibilityIdentifier("git-changes-notice")
+            } else if status.truncated {
+                // The helper cut the status at its bound: the counts are of what arrived.
+                Text(verbatim: GitChangesText.truncated(status))
+                    .foregroundStyle(palette.warning)
+                    .help("The status was cut at the helper’s bound; the shell has the rest")
+                    .accessibilityIdentifier("git-changes-truncated")
             } else {
                 Text("Read-only · stage and commit in the shell")
             }
-            Spacer(minLength: 0)
+            Spacer(minLength: 8)
+            GitCounts(additions: status.additions, deletions: status.deletions, totals: true)
+                .layoutPriority(1)
+                .accessibilityIdentifier("git-changes-totals")
             Button {
                 FilesEditor.runGit("add -p", repository: repository.root, tab: session.id, files: TerminalRuntime.shared.files)
             } label: {

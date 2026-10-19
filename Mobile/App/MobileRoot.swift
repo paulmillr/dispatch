@@ -46,7 +46,7 @@ enum MobileSheet: Hashable, Identifiable {
 struct MobileRoot: View {
     @State private var section = MobileRoot.initialSection
     @State private var sheet: MobileSheet?
-    /// Runs once the presented sheet is gone (New chat's "New space…" opens New space then).
+    /// Runs once the presented sheet is gone (New chat's Start opens the thread then).
     @State private var afterSheet: (() -> Void)?
     private let composition: MobileComposition
     @Bindable private var navigator: SpacesNavigator
@@ -184,10 +184,8 @@ struct MobileRoot: View {
                 switch sheet {
                 case .newHost: composition.hostViews.newHost { _ in self.sheet = nil }
                 case .newChat:
-                    NewChatSheet(conversations: conversations, memory: composition.modelMemory, look: composition.look, newSpace: {
-                        afterSheet = { navigator.newSpace = NewSpaceRequest(host: tabs.recentSpace?.ref.host) }
-                        self.sheet = nil
-                    }, started: { key in
+                    NewChatSheet(conversations: conversations, memory: composition.modelMemory, look: composition.look,
+                                 spaceMaker: composition.newChatSpaces, started: { key in
                         afterSheet = { composition.openChat(key, keyboard: true) }
                         self.sheet = nil
                     })

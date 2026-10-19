@@ -705,8 +705,14 @@ final class ChatSession: Identifiable {
     private static let viewLog = Logger(subsystem: "yachts.dispatch.app", category: "ChatPresentation")
     private(set) var viewTransitions: [ViewTransition] = []
     private(set) var hasOpenedChat = false
+    /// The tab's terminal just ran a line that starts an agent Chat follows (`ChatCoordinator.terminalSubmitted`), by
+    /// launch key: the tab shows a quiet cover instead of the agent's first terminal frames until Chat opens (in the
+    /// same turn, `setView`) or the wait runs out.
+    var launchingAgent: String?
+    /// Which launch the cover's timer belongs to, so an earlier timer never lifts a later cover.
+    @ObservationIgnored var launchCover: UUID?
     func setView(_ chat: Bool, reason: String) {
-        if chat { hasOpenedChat = true }
+        if chat { hasOpenedChat = true; launchingAgent = nil; launchCover = nil }
         focusRequest = System.uuid()
         guard showChat != chat else { return }
         Self.viewLog.info("Chat view changed: chat=\(chat) reason=\(reason, privacy: .public) surface=\(self.id.uuidString, privacy: .public)")

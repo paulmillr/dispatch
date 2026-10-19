@@ -92,14 +92,14 @@ extension HostSessions {
             switch host.name {
             case "vps": return [.event(.link(.connecting)), .sleep(.milliseconds(100)), .event(.link(.failed("Connection timed out")))]
             case "ai":
-                return [.event(.link(.connecting)), .sleep(.milliseconds(85)),
+                return [.event(.link(.connecting)), .sleep(.milliseconds(85)), .event(.following("herdr")),
                         .ready(hello: HostFixture.hello(identity: "demo-ai", hostname: "ai"), multiplexers: HostFixture.multiplexers(["herdr", "tmux"]),
                                versions: ["herdr": "0.9.3", "tmux": "3.7"],
                                topology: HostFixture.topology([.init(name: "dispatch", cwd: "/Users/alex/src/dispatch", tabs: 2, agents: 2),
                                                                .init(name: "notes", cwd: "/Users/alex/notes", tabs: 1, agents: 0)])),
                         .event(.latency(.milliseconds(24))), .hold]
             case "mba2":
-                return [.event(.link(.connecting)), .sleep(.milliseconds(95)),
+                return [.event(.link(.connecting)), .sleep(.milliseconds(95)), .event(.following("tmux")),
                         .ready(hello: HostFixture.hello(identity: "demo-mba2", hostname: "mba2"), multiplexers: HostFixture.multiplexers(["tmux"]),
                                versions: ["tmux": "3.7"],
                                topology: HostFixture.topology([.init(name: "web", cwd: "/Users/alex/src/web", tabs: 3, agents: 1),

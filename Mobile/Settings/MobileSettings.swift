@@ -50,15 +50,9 @@ final class MobileSettings {
         backgroundRefresh = defaults.bool(forKey: Self.backgroundRefreshKey)
     }
 
-    /// The sizes Settings offers: whole points within the terminal's zoom range.
-    static let fontSizes: [Double] = Array(stride(from: 8.0, through: 20.0, by: 1.0))
-
-    /// The sizes the picker lists: the whole points, plus the current size when a pinch chose another (13.5, 24), so the
-    /// picker always shows a selection.
-    var fontSizeChoices: [Double] {
-        let current = terminalFontSize
-        return Self.fontSizes.contains(current) ? Self.fontSizes : (Self.fontSizes + [current]).sorted()
-    }
+    /// The slider's range in whole points: the terminal's zoom range. A pinch may leave a half point (13.5); the
+    /// slider shows it until the user moves it.
+    static let fontSizeRange = TerminalConfiguration.fontSizes.lowerBound.rounded(.up)...TerminalConfiguration.fontSizes.upperBound.rounded(.down)
 
     /// "12 pt", "13.5 pt".
     static func fontSizeLabel(_ size: Double) -> String {

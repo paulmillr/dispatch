@@ -6,7 +6,8 @@ import XCTest
 /// Adds the Mac as a host with a new key (M8a, trust on first use), sees its session in Spaces, makes a space (M7a)
 /// and types into its terminal, starts a chat (M9a), answers an approval (M4b), sees the banner while the sshd is down
 /// (M4c) and the thread resume. `TEST_RUNNER_DISPATCH_LIVE_LINUX` (JSON: host, port, user, key, root) adds a Linux
-/// host by importing its key file. Timings print as MEASURE lines; screenshots are attachments.
+/// host by importing its key file. A second case types into a tab with a long tmux history. Timings print as MEASURE
+/// lines; screenshots are attachments.
 @MainActor
 final class MobileLiveTests: XCTestCase {
     struct Live: Decodable {
@@ -218,6 +219,53 @@ final class MobileLiveTests: XCTestCase {
         shot("M4a-resumed")
 
         if let linux = linux() { try linuxHost(app, linux) }
+    }
+
+    /// A tab whose tmux history is longer than 8 MiB: its attach replays all of it as one output, which used to
+    /// overflow the phone's buffers and end the attachment silently (the screen froze mid-history, keys went nowhere).
+    /// The window is made from the fixture's own shell, so only its private server is touched; it closes at the end.
+    func testALongTmuxHistoryStaysAttached() throws {
+        guard let path = ProcessInfo.processInfo.environment["DISPATCH_LIVE_FIXTURE"] else {
+            throw XCTSkip("No live fixture (TEST_RUNNER_DISPATCH_LIVE_FIXTURE)")
+        }
+        let live = try JSONDecoder().decode(Live.self, from: Data(contentsOf: URL(fileURLWithPath: path)))
+        let app = XCUIApplication()
+        app.launchEnvironment["DISPATCH_MOBILE_STORE"] = "memory"
+        app.launchEnvironment["DISPATCH_MOBILE_AUTHORIZE_KEYS"] = live.root + "/authorized_keys"
+        app.launch()
+        wait(app.staticTexts["No hosts yet"], 15, "M1d")
+        app.buttons["Add host"].tap()
+        wait(app.navigationBars["New host"], 5, "M8a")
+        addHost(app, name: "this-mac", host: live.host, port: live.port, user: live.user) {
+            app.buttons["Create key…"].tap()
+            wait(app.navigationBars["Create key"], 5, "Create key")
+            app.navigationBars["Create key"].buttons["Create"].tap()
+            waitGone(app.navigationBars["Create key"])
+        }
+        let first = app.buttons.matching(NSPredicate(format: "label CONTAINS 'this-mac'")).firstMatch
+        wait(first, 20, "the fixture's tab in Spaces")
+        first.tap()
+        let terminal = app.textViews["Terminal"]
+        wait(terminal, 20, "the terminal")
+        wait(for: [expectation(for: NSPredicate(format: "value CONTAINS '%'"), evaluatedWith: terminal)], timeout: 20)
+        terminal.tap()
+        // About 13 MiB of history in a new window "big" (the fixture shell's $TMUX is the private server).
+        app.typeText("\ntmux set -g history-limit 250000 && tmux new-window -d -n big " +
+                     "\"seq -f '%08g lorem ipsum dolor sit amet consectetur adipiscing elit' 1 220000; exec zsh\"\n")
+        back(app).tap()
+        let big = app.buttons.matching(NSPredicate(format: "label CONTAINS 'big'")).firstMatch
+        wait(big, 20, "the big window's tab")
+        Thread.sleep(forTimeInterval: 5)
+        let opened = Date()
+        big.tap()
+        wait(terminal, 20, "the big window's terminal")
+        wait(for: [expectation(for: NSPredicate(format: "value CONTAINS '%'"), evaluatedWith: terminal)], timeout: 60)
+        measure("long_history.tab_to_prompt", since: opened)
+        terminal.tap()
+        app.typeText("\nprintf 'LONG_%s\\n' OK\n")
+        wait(for: [expectation(for: NSPredicate(format: "value CONTAINS 'LONG_OK'"), evaluatedWith: terminal)], timeout: 20)
+        shot("M6a-long-history")
+        app.typeText("exit\n")
     }
 
     private func linux() -> Linux? {

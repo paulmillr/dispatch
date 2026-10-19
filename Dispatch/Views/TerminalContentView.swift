@@ -105,21 +105,31 @@ struct TerminalContentView: View {
         let session = chat.session(for: tab.id)
         let search = session.terminalSearch
         let mode = runtime.files.mode(for: tab.id)
-        let covered = mode != .terminal
+        // An agent's launch line covers the terminal until Chat opens; the terminal keeps the keyboard meanwhile, so
+        // what is typed reaches the agent (and moves to the Chat draft once it opens).
+        let launching = mode == .terminal ? session.launchingAgent : nil
+        let covered = mode != .terminal || launching != nil
         // Chat's and the terminal's find bars each cover the floating switch's corner; files has none of its own.
         let searchShown = mode == .chat ? session.search.visible : mode == .terminal && search.visible
         VStack(spacing: 0) {
             SSHReconnectOverlay(surface: tab.id, workspace: workspace).padding(.top, glassInset)
             ZStack(alignment: .topTrailing) {
                 TerminalHost(tab: tab, spaceID: spaceID, windowTabID: windowTabID, paneID: paneID, focusRequest: workspace.focusRequest,
-                             focused: focused && !covered,
-                             visible: isPresented && !covered)
+                             focused: focused && mode == .terminal,
+                             visible: isPresented && mode == .terminal)
                     .padding(.top, glassInset)
                     .opacity(covered ? 0 : 1)
                     .offset(y: covered && !reduceMotion ? -8 : 0)
                     .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: InterfaceMotion.modeSwitchDuration), value: covered)
                     .allowsHitTesting(!covered)
                     .accessibilityHidden(covered)
+                if let launching {
+                    // Up at once; Chat fades in over it on the same ground, so no frame shows the terminal between.
+                    AgentLaunchCover(title: chat.launchTitle(launching))
+                        .padding(.top, glassInset)
+                        .transition(reduceMotion ? .identity : .asymmetric(insertion: .identity, removal: .opacity))
+                        .zIndex(1)
+                }
                 if mode == .chat {
                     ChatView(session: session, coordinator: chat, focused: focused,
                              floatingSwitch: floatingSwitch, workspace: workspace, topInset: glassInset)
@@ -208,5 +218,33 @@ private struct PrefixIndicatorSurface: ViewModifier {
             content.background(RoundedRectangle(cornerRadius: 5).fill(Chrome.sidebar))
                 .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Chrome.accent.opacity(0.5)))
         }
+    }
+}
+
+/// What a tab shows from Return on an agent's launch line until Chat opens: Chat's ground, then after a beat the
+/// agent's name and a spinner; never the agent's first terminal frames.
+private struct AgentLaunchCover: View {
+    let title: String
+    @State private var waiting = false
+
+    var body: some View {
+        let theme = ChatThemeStore.shared.current
+        ZStack {
+            theme.terminal
+            if waiting {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Starting \(title)…").font(theme.typography.detail).foregroundStyle(theme.muted)
+                }
+                .transition(.opacity)
+            }
+        }
+        .task {
+            // A Chat that opens at once never shows the label.
+            try? await Task.sleep(for: .milliseconds(500))
+            withAnimation(.easeOut(duration: 0.2)) { waiting = true }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("agent-launch-cover")
     }
 }

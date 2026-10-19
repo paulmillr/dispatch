@@ -47,6 +47,9 @@ final class HostSession: Identifiable {
     /// nothing that sends them (terminal presences, tab commands, chat) may use a snapshot that is not live, and its
     /// rows show as stale. The client stays usable for what needs no node id (`backends.create`, `backends.open`).
     private(set) var topologyIsLive = false
+    /// The followed multiplexer changed on this connection and has not answered yet (a snapshot, or no server): the host's
+    /// spaces are not known, though no snapshot is kept (Spaces offers no New space row meanwhile).
+    private(set) var switchingMultiplexer = false
     private(set) var latency: Duration?
     /// Set when the server's key differs from the trusted one: a hard stop until the user removes it and retries.
     private(set) var hostKeyMismatch: HostKeyOffer?
@@ -183,6 +186,7 @@ final class HostSession: Identifiable {
             if let topology { self.topology = topology }
             // Without a first snapshot the one kept is the cache's or the last helper's: stale until a live one comes.
             if topologyIsLive != (topology != nil) { topologyIsLive = topology != nil }
+            if switchingMultiplexer { switchingMultiplexer = false }
             link = .connected
             helloReceived?(self, hello)
             postConnectTask?.cancel()
@@ -200,16 +204,21 @@ final class HostSession: Identifiable {
             guard client != nil else { return }
             if topology != snapshot { topology = snapshot }
             if !topologyIsLive { topologyIsLive = true }
+            if switchingMultiplexer { switchingMultiplexer = false }
         case .noBackend:
             guard client != nil else { return }
             // No server: the kept snapshot's spaces are not there any more (or never were on this connection).
             if topology != nil { topology = nil }
             if !topologyIsLive { topologyIsLive = true }
+            if switchingMultiplexer { switchingMultiplexer = false }
         case .following(let name):
             guard following != name else { return }
             // Another multiplexer's spaces (the preference changed): the old one's snapshot is not this host's spaces any
             // more. A first choice (nil before) keeps the snapshot it had, cached or from the last connection.
-            if following != nil, name != nil { topology = nil }
+            if following != nil, name != nil {
+                topology = nil
+                if client != nil { switchingMultiplexer = true }
+            }
             following = name
         case .latency(let value):
             guard link == .connected else { return }
@@ -238,6 +247,7 @@ final class HostSession: Identifiable {
         }
         if latency != nil { latency = nil }
         if topologyIsLive { topologyIsLive = false }
+        if switchingMultiplexer { switchingMultiplexer = false }
     }
 }
 
@@ -252,6 +262,11 @@ extension HostSession {
         }
         return installed.first { $0.name == "herdr" } ?? installed.first { $0.name == "tmux" }
     }
+
+    /// The multiplexer the host's spaces come from (Spaces' tmux or herdr mark): the followed one, whose snapshot the
+    /// spaces are (live, cached or kept over a reconnect). Nil before one is followed, and while a switch has not
+    /// answered: the spaces are unknown then, and the mark never names the one they are leaving.
+    var spacesMultiplexer: String? { switchingMultiplexer ? nil : following }
 
     /// "herdr 0.9.3", "tmux 3.7", "tmux", or "none" (M1f); nil before the host has been reached.
     var multiplexerLine: String? {

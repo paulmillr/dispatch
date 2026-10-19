@@ -635,8 +635,7 @@ struct GitDiffModePicker: View {
             segment("Diff", .diff, help: "Show the changes")
             segment("Source", .source, help: "Show the whole file")
         }
-        .padding(1)
-        .background(RoundedRectangle(cornerRadius: 5).fill(Chrome.palette.control))
+        .glassSegmentTrack(fallback: Chrome.palette.control, corner: 5, inset: 1)
         .fixedSize()
     }
 
@@ -649,7 +648,7 @@ struct GitDiffModePicker: View {
                 .foregroundStyle(on ? palette.ink : palette.muted)
                 .padding(.horizontal, 8)
                 .frame(height: 20)
-                .background { if on { RoundedRectangle(cornerRadius: 4).fill(palette.selectedControl) } }
+                .glassSegmentPill(on, fallback: palette.selectedControl)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

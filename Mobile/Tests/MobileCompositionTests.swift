@@ -64,6 +64,28 @@ final class MobileCompositionTests: XCTestCase {
                        "the followed one wins until the driver follows another")
     }
 
+    /// Spaces marks where a host's spaces come from (the followed multiplexer, `TabsHost.multiplexer`), and New chat's
+    /// quick menu offers the connected hosts' multiplexers, the shown one first, as holding New space does in Spaces.
+    func testTheSpacesMarkAndNewChatsQuickMenu() async throws {
+        let studio = host("studio")
+        let app = composition(hosts: [studio])
+        let session = try XCTUnwrap(app.hosts.session(studio.id))
+        try await TestSupport.eventually { session.link == .connected }
+        let workspace = try XCTUnwrap(app.tabs.workspace(studio.id))
+        XCTAssertEqual(workspace.host.multiplexer, "tmux")
+        let tmux = MultiplexerChoice(mux: 1, name: "tmux", route: .init(mux: 1, key: "tmux"))
+        let herdr = MultiplexerChoice(mux: 2, name: "herdr", route: .init(mux: 2, key: "herdr"))
+        workspace.multiplexers = [herdr, tmux]
+        workspace.choice = tmux
+        let entries = app.newChatSpaces.destinations()
+        XCTAssertEqual(entries.map(\.id), ["\(studio.id.uuidString):tmux", "\(studio.id.uuidString):herdr"])
+        XCTAssertEqual(entries.map { $0.title(host: nil) }, ["studio", "studio"])
+        XCTAssertEqual(entries.map { $0.subtitle(host: nil) }, ["tmux", "Switches studio to herdr"])
+        session.disconnect()
+        XCTAssertEqual(app.newChatSpaces.destinations(), [], "nothing to make a space on offline")
+        XCTAssertEqual(workspace.host.multiplexer, "tmux", "the spaces kept offline are still tmux's")
+    }
+
     func testSpacesRemovesAndReordersHostsThroughTheStore() async throws {
         let a = host("a", order: 0), b = host("b", order: 1), c = host("c", order: 2)
         let app = composition(hosts: [a, b, c], active: false)

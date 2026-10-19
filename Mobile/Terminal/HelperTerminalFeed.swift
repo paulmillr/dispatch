@@ -8,11 +8,16 @@ import Synchronization
 ///
 /// Outgoing calls run one at a time in the order they were made, like the Mac's per-tab input chain
 /// (`HelperWorkspace`): input made while a call is in flight is sent as one batch after it, resizes made meanwhile
-/// collapse into the latest, and so do publications. A detach drops what its attachment had not sent yet. Nothing is retried.
+/// collapse into the latest, and so do publications. Scroll steps made meanwhile join into one step (a finger makes
+/// one per line, and each waited a round trip: over a real link a swipe trailed the finger by seconds and held the
+/// keys behind it). A detach drops what its attachment had not sent yet. Nothing is retried.
 final class HelperTerminalFeed: TerminalFeed {
     /// The AsyncStream is count-bounded, so split untrusted output first to make its memory bound meaningful.
     private static let outputChunk = 64 * 1024
-    private static let eventBufferCount = 128
+    /// A whole reply the connection accepts (its aggregate bound), split into chunks, plus the small events around
+    /// it: a reply is yielded in one go, faster than the presence takes it, and an event the stream drops ends the
+    /// attachment.
+    private static let eventBufferCount = HelperConnection.replyLimit / outputChunk + 128
 
     let client: HelperClient
     let terminal: UInt64
@@ -21,7 +26,8 @@ final class HelperTerminalFeed: TerminalFeed {
         case attach(TerminalFeedSize)
         case input(Data)
         case resize(TerminalFeedSize)
-        case scroll(TerminalScrollRequest, CheckedContinuation<TerminalScrollResult, Never>)
+        /// One step for the server, answering every scroll call it joined.
+        case scroll(TerminalScrollRequest, [CheckedContinuation<TerminalScrollResult, Never>])
         case publish(TerminalScreen)
     }
 
@@ -107,8 +113,8 @@ final class HelperTerminalFeed: TerminalFeed {
     /// Empties the queue; the scroll steps in it, to be answered `failed` outside the lock.
     private static func drop(_ queue: inout [(generation: Int, operation: Operation)]) -> [ScrollReply] {
         defer { queue.removeAll() }
-        return queue.compactMap { item in
-            if case .scroll(_, let reply) = item.operation { reply } else { nil }
+        return queue.flatMap { item -> [ScrollReply] in
+            if case .scroll(_, let replies) = item.operation { replies } else { [] }
         }
     }
 
@@ -128,7 +134,7 @@ final class HelperTerminalFeed: TerminalFeed {
         await withCheckedContinuation { reply in
             let queued = shared.state.withLock { state -> Bool in
                 guard state.attached else { return false }
-                state.queue.append((state.generation, .scroll(request, reply)))
+                state.queue.append((state.generation, .scroll(request, [reply])))
                 return true
             }
             if queued { wake.yield() } else { reply.resume(returning: .failed) }
@@ -144,14 +150,15 @@ final class HelperTerminalFeed: TerminalFeed {
         if queued { wake.yield() }
     }
 
-    /// The next call to make: consecutive input joins into one batch, consecutive resizes keep the latest. Work of
-    /// an older attachment is dropped (its scroll steps answer `failed`).
+    /// The next call to make: consecutive input joins into one batch, consecutive resizes keep the latest, consecutive
+    /// scroll steps of the same kind add up (at the latest cell). Work of an older attachment is dropped (its scroll
+    /// steps answer `failed`).
     private static func next(_ shared: Shared) -> (Int, Operation)? {
         let (item, dropped) = shared.state.withLock { state -> ((Int, Operation)?, [CheckedContinuation<TerminalScrollResult, Never>]) in
             var dropped: [CheckedContinuation<TerminalScrollResult, Never>] = []
             while let first = state.queue.first, first.generation != state.generation {
                 state.queue.removeFirst()
-                if case .scroll(_, let reply) = first.operation { dropped.append(reply) }
+                if case .scroll(_, let replies) = first.operation { dropped += replies }
             }
             guard !state.queue.isEmpty else { return (nil, dropped) }
             var (generation, operation) = state.queue.removeFirst()
@@ -160,6 +167,10 @@ final class HelperTerminalFeed: TerminalFeed {
                 case (.input(let a), .input(let b)): operation = .input(a + b)
                 case (.resize, .resize(let latest)): operation = .resize(latest)
                 case (.publish, .publish(let latest)): operation = .publish(latest)
+                case (.scroll(let a, let first), .scroll(let b, let second)) where a.page == b.page && a.modifiers == b.modifiers:
+                    var joined = b
+                    joined.lines = a.lines + b.lines
+                    operation = .scroll(joined, first + second)
                 default: return ((generation, operation), dropped)
                 }
                 state.queue.removeFirst()
@@ -250,17 +261,18 @@ final class HelperTerminalFeed: TerminalFeed {
             } catch {
                 print("Terminal publish failed: terminal=\(terminal), error=\(message(error))")
             }
-        case .scroll(let request, let reply):
-            guard current(shared, generation) else { reply.resume(returning: .failed); return }
+        case .scroll(let request, let replies):
+            let answer = { (result: TerminalScrollResult) in for reply in replies { reply.resume(returning: result) } }
+            guard current(shared, generation) else { answer(.failed); return }
             let at = { (value: Int?) in value.map { UInt16(clamping: max(0, $0)) } }
             do {
                 try await client.scroll(.init(terminal: terminal, lines: Int64(request.lines), page: request.page,
                                               column: at(request.column), row: at(request.row), modifiers: request.modifiers))
-                reply.resume(returning: .server)
+                answer(.server)
             } catch let failure as HelperFailure where failure.code == "scrollback_app_owned" {
-                reply.resume(returning: .appOwned)
+                answer(.appOwned)
             } catch {
-                reply.resume(returning: .failed)
+                answer(.failed)
             }
         }
     }

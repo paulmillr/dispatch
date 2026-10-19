@@ -770,9 +770,9 @@ struct SpaceSidebar: View {
                              grouped: !flat, selected: selected, pending: pending, shortcut: shortcut,
                              connecting: surfaces.contains { workspace.hostMoveMotion.connecting.contains($0) },
                              branch: branch,
-                             showBranch: settings.values.showGitBranches, metrics: metrics, selection: selection)
+                             showBranch: settings.values.showsGitBranches, metrics: metrics, selection: selection)
         }
-        .background(SpaceBranchObserver(space: space, enabled: settings.values.showGitBranches))
+        .background(SpaceBranchObserver(space: space, enabled: settings.values.showsGitBranches))
         .accessibilityHint(hover.summary)
         .accessibilityIdentifier("space-\(space.id)")
         .overlay {
@@ -828,10 +828,10 @@ struct SpaceSidebar: View {
             SidebarSpaceTile(entry: SidebarEntry(id: tab.id, name: name, surfaceIDs: tab.surfaceIDs), host: host,
                              mixedHost: nil, grouped: !flat, selected: selected, pending: pending, shortcut: shortcut,
                              connecting: tab.surfaceIDs.contains { workspace.hostMoveMotion.connecting.contains($0) },
-                             branch: branch, showBranch: settings.values.showGitBranches, metrics: metrics, selection: selection)
+                             branch: branch, showBranch: settings.values.showsGitBranches, metrics: metrics, selection: selection)
         }
         .background {
-            if let owner, let terminal { SpaceBranchObserver(space: owner, tab: terminal, enabled: settings.values.showGitBranches) }
+            if let owner, let terminal { SpaceBranchObserver(space: owner, tab: terminal, enabled: settings.values.showsGitBranches) }
         }
         .accessibilityHint(hover?.summary ?? "")
         .accessibilityIdentifier("sidebar-tab-\(tab.id)")
@@ -909,7 +909,7 @@ struct SpaceSidebar: View {
         // Each space's (tabs only: tab's) key is its number, the first digit of its tabs' channels.
         let order = tabsOnly ? workspace.sidebarTabs.map(\.id) : workspace.presentationSpaces.map(\.id)
         let numbers = Dictionary(order.enumerated().map { ($1, "\($0 + 1)") }, uniquingKeysWith: { first, _ in first })
-        let heading = settings.values.showGitBranches
+        let heading = settings.values.showsGitBranches
         let vessels = tabsOnly ? tabs.map { tab in
             HarbourVessel.make(id: tab.id, name: label(tab), host: workspace.hosts.record(tab.host), surfaceIDs: tab.surfaceIDs,
                                selected: workspace.selectedSidebarTab == tab.id, pending: attention.contains(tab.id),

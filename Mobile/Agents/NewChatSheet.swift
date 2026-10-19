@@ -57,28 +57,45 @@ extension ChatConversations {
     }
 }
 
+/// What Tabs lends New chat to make a space (it owns New space, M7a): the form, and the quick menu's places and maker.
+/// A space made here becomes the chat's, rather than opening in Terminal as it does from Spaces.
+struct NewChatSpaceMaker {
+    /// The quick menu's places: every connected host's multiplexers (`NewSpaceDestination.all`).
+    var destinations: @MainActor () -> [NewSpaceDestination]
+    /// A space with New space's defaults there (`SpacesNavigator.makeSpace`): its host and key.
+    var quick: @MainActor (NewSpaceDestination) async throws -> SpaceRef
+    /// New space's form over New chat; `created` gets the space made with it.
+    var form: @MainActor (_ created: @escaping (SpaceRef) -> Void) -> AnyView
+}
+
 /// M9a: New chat, from the New button on Agents (`MobileSheet.newChat`). Space is a pull-down of existing spaces with
-/// "New space…" at the end; agent, model and effort follow, defaulting to the last used. Start opens the thread in
-/// Chat with the keyboard up.
+/// "New space…" at the end (the form over this sheet) and, as holding New space does in Spaces, a "New space on" menu
+/// of hosts and multiplexers that makes one at once with the form's defaults (a pull-down's items cannot be held, so
+/// the quick menu is a submenu here). Either way the new space becomes the chat's, its field showing the making in
+/// place of a name until the space is listed. Agent, model and effort follow, defaulting to the last used. Start opens
+/// the thread in Chat with the keyboard up.
 struct NewChatSheet: View {
     let conversations: ChatConversations
     var memory: ChatModelMemory = .shared
     var look = ChatHostLook()
-    /// Tabs owns New space (M7a).
-    var newSpace: () -> Void
+    /// Tabs' New space; nil (the Chat demo): "New space…" does nothing and there is no quick menu.
+    var spaceMaker: NewChatSpaceMaker?
     /// The conversation started: open its thread with the keyboard up.
     var started: (ChatConversationKey) -> Void
 
     @State private var space: ChatSpaceChoice?
     @State private var launches: [HelperClient.Launch] = []
+    /// A space being made for the chat: its host, then its key once made, until `spaces` lists it.
+    @State private var making: (host: UUID, hostName: String, made: SpaceRef?)?
+    @State private var showingForm = false
 
     /// The first space is chosen before the first frame, so the field never shows "Choose a space" first.
     init(conversations: ChatConversations, memory: ChatModelMemory = .shared, look: ChatHostLook = ChatHostLook(),
-         newSpace: @escaping () -> Void, started: @escaping (ChatConversationKey) -> Void) {
+         spaceMaker: NewChatSpaceMaker? = nil, started: @escaping (ChatConversationKey) -> Void) {
         self.conversations = conversations
         self.memory = memory
         self.look = look
-        self.newSpace = newSpace
+        self.spaceMaker = spaceMaker
         self.started = started
         _space = State(initialValue: conversations.spaces.first)
     }
@@ -110,7 +127,7 @@ struct NewChatSheet: View {
                 }
                 .buttonStyle(.glassProminent)
                 .tint(Color.dispatchPink)
-                .disabled(space == nil || selectedLaunch == nil || starting)
+                .disabled(space == nil || selectedLaunch == nil || starting || making != nil)
             }
             .overlay {
                 Text("New chat").font(.headline)
@@ -132,16 +149,25 @@ struct NewChatSheet: View {
                                 Button("\(choice.name)  \(choice.hostName)") { space = choice }
                             }
                             Divider()
-                            Button("New space…", systemImage: "plus") { newSpace() }
+                            Button("New space…", systemImage: "plus") { showingForm = spaceMaker != nil }
+                            let destinations = spaceMaker?.destinations() ?? []
+                            if !destinations.isEmpty {
+                                Menu {
+                                    NewSpaceQuickMenu(destinations: destinations, create: quick)
+                                } label: {
+                                    Label("New space on", systemImage: "plus.square.on.square")
+                                }
+                            }
                         } label: {
                             HStack(spacing: 10) {
-                                if let space {
-                                    look.glyph(space.host)
-                                        .accessibilityHidden(true)
-                                        .frame(width: 15, height: 15)
-                                        .foregroundStyle(look.tint(space.host))
-                                        .frame(width: 28, height: 28)
-                                        .background(look.tint(space.host).opacity(0.15), in: Circle())
+                                if let making {
+                                    // Being made: no name yet (the server gives it), so none is shown.
+                                    hostDisc(making.host)
+                                    ProgressView()
+                                    Text("New space").foregroundStyle(.secondary)
+                                    Text(making.hostName).foregroundStyle(.tertiary)
+                                } else if let space {
+                                    hostDisc(space.host)
                                     Text(space.name).foregroundStyle(.primary)
                                     Text(space.hostName).foregroundStyle(.tertiary)
                                 } else {
@@ -158,7 +184,9 @@ struct NewChatSheet: View {
                         }
                         .tint(.primary)
                         .accessibilityLabel("Space")
-                        .accessibilityValue(space.map { "\($0.name) on \($0.hostName)" } ?? "None")
+                        .accessibilityValue(making.map { "Making a new space on \($0.hostName)" }
+                                            ?? space.map { "\($0.name) on \($0.hostName)" } ?? "None")
+                        .disabled(making != nil)
                     }
                     if !launches.isEmpty {
                         field("Agent") {
@@ -212,11 +240,68 @@ struct NewChatSheet: View {
         .tint(Color.dispatchPink)
         // M9a draws the sheet's grabber, as New space's (M7a) does.
         .presentationDragIndicator(.visible)
-        .onChange(of: spaces) { _, spaces in if space == nil { space = spaces.first } }
+        .onChange(of: spaces) { _, spaces in
+            if let made = making?.made { adopt(made) } else if space == nil { space = spaces.first }
+        }
+        .sheet(isPresented: $showingForm) {
+            spaceMaker?.form { made in
+                showingForm = false
+                making = (made.host, conversations.hosts[made.host]?.name ?? "", made)
+                adopt(made)
+                expire(made)
+            }
+        }
         .task(id: space?.host) { await loadLaunches() }
     }
 
     private var selectedLaunch: HelperClient.Launch? { launches.first { $0.key == agent } }
+
+    /// The host's glyph on its tinted disc, as the field shows a space's host.
+    private func hostDisc(_ host: UUID) -> some View {
+        look.glyph(host)
+            .accessibilityHidden(true)
+            .frame(width: 15, height: 15)
+            .foregroundStyle(look.tint(host))
+            .frame(width: 28, height: 28)
+            .background(look.tint(host).opacity(0.15), in: Circle())
+    }
+
+    /// The quick menu's entry: a space with New space's defaults, which becomes the chat's once listed.
+    private func quick(_ destination: NewSpaceDestination) {
+        guard let spaceMaker, making == nil else { return }
+        making = (destination.host, destination.hostName, nil)
+        error = nil
+        Task {
+            do {
+                let made = try await spaceMaker.quick(destination)
+                making?.made = made
+                adopt(made)
+                expire(made)
+            } catch {
+                making = nil
+                self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            }
+        }
+    }
+
+    /// The made space as the chat's, once `spaces` lists it (Chat's topology can come a turn after Tabs'); the field
+    /// shows the making until then, never the space chosen before.
+    private func adopt(_ made: SpaceRef) {
+        guard let choice = conversations.spaces.first(where: { $0.host == made.host && $0.key == made.key }) else { return }
+        space = choice
+        making = nil
+    }
+
+    /// A made space Chat never lists (its host dropped meanwhile) stops the making after a while, with a word.
+    private func expire(_ made: SpaceRef) {
+        guard making != nil else { return }
+        Task {
+            try? await Task.sleep(for: .seconds(10))
+            guard making?.made == made else { return }
+            making = nil
+            error = "The space was made, but \(conversations.hosts[made.host]?.name ?? "its host") has not listed it yet."
+        }
+    }
 
     private func field<Content: View>(_ title: String, note: String? = nil, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 7) {

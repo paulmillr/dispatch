@@ -31,6 +31,12 @@ final class MobileTabs {
     @ObservationIgnored var urgency: @MainActor (UUID, UInt64) -> TabUrgency? = { _, _ in nil }
     /// (host, terminal) → what a chat tab is doing, for line two of its row. Chat sets it.
     @ObservationIgnored var status: @MainActor (UUID, UInt64) -> String? = { _, _ in nil }
+    /// (host, terminal) → when an agent's conversation last moved (its newest record, the time Agents shows). Chat sets
+    /// it; a chat tab's time is the later of this and the last change the phone saw in the tab.
+    @ObservationIgnored var agentActivity: @MainActor (UUID, UInt64) -> Date? = { _, _ in nil }
+    /// (host, multiplexer name) → the host follows that multiplexer from now on (its saved preference, as Host detail
+    /// sets it): New space on another multiplexer than the one shown. The composition sets it.
+    @ObservationIgnored var follow: @MainActor (UUID, String) -> Void = { _, _ in }
 
     @ObservationIgnored private let activity: TabActivityStore
     @ObservationIgnored private let defaults: UserDefaults
@@ -186,7 +192,7 @@ final class MobileTabs {
     var sections: [SpacesSection] {
         workspaces.map { workspace in
             let rows = orderedSpaces(workspace).compactMap { space -> SpacesSpaceRow? in
-                let entries = space.tabs.map { TabsEntry(tab: $0, space: space, host: workspace.host, urgency: urgency(of: $0)) }
+                let entries = space.tabs.map { entry($0, space: space, host: workspace.host) }
                 guard query.filter == .all || entries.contains(where: { $0.matches(query.filter) }) else { return nil }
                 return SpacesSpaceRow(space: space, unread: entries.filter { $0.urgency?.unread == true }.count,
                                       working: entries.contains { $0.urgency == .working }, id: space.ref)
@@ -194,6 +200,16 @@ final class MobileTabs {
             return SpacesSection(host: workspace.host, spaces: rows, unread: rows.map(\.unread).reduce(0, +),
                                  collapsed: collapsed.contains(workspace.id))
         }
+    }
+
+    /// New space (M7a's Create, and the quick menu's entries) on `multiplexer` (nil: the one the host shows): its first
+    /// tab once the host shows it. Another multiplexer than the one shown becomes the host's (`follow`).
+    func createSpace(on host: UUID, name: String, directory: String?, multiplexer: MultiplexerChoice? = nil) async throws -> MobileTab {
+        guard let workspace = workspace(host) else { throw TabsFailure.disconnected }
+        // Not detected yet (just connected): where the host's spaces are, as `sync` would detect it.
+        if workspace.choice == nil { try await workspace.detect(override: detected[host] ?? nil) }
+        let follow = follow
+        return try await workspace.createSpace(name: name, directory: directory, on: multiplexer, follow: { follow(host, $0) })
     }
 
     /// Adds a workspace directly (previews, tests).
@@ -210,6 +226,20 @@ final class MobileTabs {
     func urgency(of tab: MobileTab) -> TabUrgency? { tab.panes.compactMap { urgency(tab.ref.host, $0.id) }.max() }
     func urgency(of space: MobileSpace) -> TabUrgency? { space.tabs.compactMap { urgency(of: $0) }.max() }
 
+    /// A tab's time (its row's, and the Activity sort's): the server's last-activity time for it (`terminals.activity`,
+    /// tmux windows) or the last change the phone saw in it live, whichever is later, and for a chat tab its agent's
+    /// newest record when that is later still. Nil until one is known: the topology carries no times, and a helper too
+    /// old for the feature (or herdr, which keeps none) leaves only what the phone saw.
+    func activity(of tab: MobileTab) -> Date? {
+        let agent = tab.panes.filter { $0.agent != nil }.compactMap { agentActivity(tab.ref.host, $0.id) }.max()
+        return [tab.activity, agent].compactMap { $0 }.max()
+    }
+    func activity(of space: MobileSpace) -> Date? { space.tabs.compactMap { activity(of: $0) }.max() }
+
+    private func entry(_ tab: MobileTab, space: MobileSpace?, host: TabsHost) -> TabsEntry {
+        TabsEntry(tab: tab, space: space, host: host, urgency: urgency(of: tab), activity: activity(of: tab))
+    }
+
     /// Chat's count of conversations waiting for the user, but `excluding`'s (the back pill); nil: counted from the rows.
     @ObservationIgnored var needsYouCount: (@MainActor (TabRef?) -> Int)?
 
@@ -222,7 +252,7 @@ final class MobileTabs {
     var entries: [TabsEntry] {
         workspaces.flatMap { workspace in
             workspace.spaces.flatMap { space in
-                space.tabs.map { TabsEntry(tab: $0, space: space, host: workspace.host, urgency: urgency(of: $0)) }
+                space.tabs.map { entry($0, space: space, host: workspace.host) }
             }
         }
     }
@@ -236,16 +266,16 @@ final class MobileTabs {
             workspace.spaces.map { (space: $0, host: workspace.host) }
         }.filter { item in
             query.filter == .all || item.space.tabs.contains { tab in
-                TabsEntry(tab: tab, space: item.space, host: item.host, urgency: urgency(of: tab)).matches(query.filter)
+                entry(tab, space: item.space, host: item.host).matches(query.filter)
             }
         }
-        return TabsOrdering.sorted(spaces: spaces, by: query.sort)
+        return TabsOrdering.sorted(spaces: spaces, by: query.sort, activity: activity(of:))
     }
 
     /// M2c's rows: a space's tabs under the same menu.
     func rows(in space: MobileSpace) -> [TabsEntry] {
         guard let host = workspace(space.ref.host)?.host else { return [] }
-        return TabsOrdering.query(space.tabs.map { TabsEntry(tab: $0, space: space, host: host, urgency: urgency(of: $0)) }, query)
+        return TabsOrdering.query(space.tabs.map { entry($0, space: space, host: host) }, query)
     }
 
     /// The segment each tab showed last in this run (Create and New tab open theirs in Terminal).
@@ -255,7 +285,7 @@ final class MobileTabs {
     var recentSpace: MobileSpace? {
         let connected = workspaces.filter { $0.client != nil }
         if let recent, let space = connected.first(where: { $0.id == recent.host })?.space(recent.key) { return space }
-        return connected.flatMap(\.spaces).max { a, b in (a.activity ?? .distantPast) < (b.activity ?? .distantPast) }
+        return connected.flatMap(\.spaces).max { a, b in (activity(of: a) ?? .distantPast) < (activity(of: b) ?? .distantPast) }
     }
 
     func visited(_ space: SpaceRef) {

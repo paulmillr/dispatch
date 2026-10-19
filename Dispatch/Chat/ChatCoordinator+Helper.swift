@@ -245,6 +245,65 @@ extension ChatCoordinator {
         }
     }
 
+    /// How long a launch line keeps the terminal covered waiting for Chat; then the terminal shows, as it would have.
+    static let launchCoverLimit: Duration = .seconds(3)
+
+    /// Return in a tab's terminal with `line` typed: a line that starts an agent Chat follows covers the terminal until
+    /// Chat opens, so the agent's first second of terminal output never flashes before it. Only where discovery would
+    /// open Chat by itself: never over files, an agent already attached, or a tab the user put on its terminal.
+    func terminalSubmitted(_ line: String, tab: UUID) {
+        guard enabled, let session = sessions[tab], !session.showChat, !session.active, !session.manualViewChoice,
+              !session.exitRequested, !filesShowing(session), session.launchingAgent == nil,
+              let agent = Self.launchedAgent(line, programs: launchPrograms) else { return }
+        let cover = System.uuid()
+        session.launchingAgent = agent
+        session.launchCover = cover
+        Task { @MainActor [weak session] in
+            try? await Task.sleep(for: Self.launchCoverLimit)
+            guard let session, session.launchCover == cover else { return }
+            session.launchCover = nil
+            session.launchingAgent = nil
+        }
+    }
+
+    /// The commands that start each agent Chat is on for, to their launch keys: the helper's list once loaded, else
+    /// the two it ships.
+    private var launchPrograms: [String: String] {
+        let disabled = disabledIntegrations
+        let listed = (helperLaunches ?? []).filter { !disabled.contains($0.key) }
+            .map { (($0.program ?? $0.key).split(separator: " ").first.map(String.init) ?? $0.key, $0.key) }
+        let known = listed.isEmpty && helperLaunches?.isEmpty != false
+            ? [("claude", "claude"), ("codex", "codex")].filter { !disabled.contains($0.1) } : listed
+        return Dictionary(known, uniquingKeysWith: { first, _ in first })
+    }
+
+    /// The agent's name for the launch cover, as Settings lists it.
+    func launchTitle(_ key: String) -> String {
+        helperLaunches?.first { $0.key == key }?.label ?? key.prefix(1).uppercased() + key.dropFirst()
+    }
+
+    /// Subcommands that run and exit rather than open the agent's conversation.
+    nonisolated private static let exitingSubcommands: [String: Set<String>] = [
+        "claude": ["auth", "config", "doctor", "install", "login", "logout", "mcp", "migrate-installer", "plugin",
+                   "plugins", "setup-token", "update", "upgrade"],
+        "codex": ["a", "app-server", "apply", "cloud", "completion", "debug", "e", "exec", "features", "generate-ts",
+                  "help", "login", "logout", "mcp", "mcp-server", "proto", "sandbox"]]
+
+    /// The agent `line` starts, by launch key: its program (by name or path, after any VAR=value words) alone or with
+    /// options, a prompt or a resume; nil for a subcommand or an option that prints and exits (`claude -p`,
+    /// `codex exec`, `--version`).
+    nonisolated static func launchedAgent(_ line: String, programs: [String: String]) -> String? {
+        var words = line.split(whereSeparator: \.isWhitespace).map(String.init)
+        while let first = words.first, !first.hasPrefix("-"), first.contains("="), !first.hasPrefix("=") { words.removeFirst() }
+        guard let first = words.first, let key = programs[(first as NSString).lastPathComponent] else { return nil }
+        let rest = words.dropFirst()
+        if rest.contains(where: ["-p", "--print", "-h", "--help", "-v", "-V", "--version"].contains) { return nil }
+        if let command = rest.first(where: { !$0.hasPrefix("-") }), exitingSubcommands[key]?.contains(command) == true {
+            return nil
+        }
+        return key
+    }
+
     /// Text typed in Terminal after the launch command, before Chat opened, sits in Claude's own
     /// prompt, where it would refuse every Chat send. When Claude's composer shows exactly that
     /// text, it moves to the Chat draft ahead of anything typed there since.

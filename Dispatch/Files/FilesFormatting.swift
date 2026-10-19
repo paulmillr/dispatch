@@ -206,6 +206,11 @@ enum FilesPath {
         return slash == path.startIndex ? "/" : String(path[..<slash])
     }
 
+    /// `path`, then each folder enclosing it down to "/", as Finder's title menu lists them.
+    static func ancestors(_ path: String) -> [String] {
+        Array(sequence(first: normalized(path), next: parent))
+    }
+
     /// Whether `path` is `ancestor` or lies below it.
     static func isWithin(_ path: String, _ ancestor: String) -> Bool {
         let path = normalized(path), ancestor = normalized(ancestor)

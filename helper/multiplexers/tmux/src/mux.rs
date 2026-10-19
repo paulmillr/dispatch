@@ -668,6 +668,10 @@ impl Multiplexer for Tmux {
         command.args(["list-sessions", "-F", "#{session_id}"]);
         Some(command)
     }
+    /// Each published window's `#{window_activity}` (feature terminals.activity).
+    fn activity(&mut self, io: &mut dyn Io, done: Done<Vec<(Id, u64)>>) {
+        Tmux::activity(self, io, done);
+    }
     fn invalidate(&mut self, io: &mut dyn Io, process: &Process) {
         let mut changed = false;
         for (&id, (_, binding)) in &self.agents {

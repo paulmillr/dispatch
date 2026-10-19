@@ -18,6 +18,8 @@ struct TabsHost: Identifiable, Equatable {
     /// The spaces come from the connected helper (`HostSession.topologyIsLive`); false while they are the cache's or a
     /// previous connection's, whose node ids the current helper does not know.
     var live = true
+    /// "tmux" or "herdr": where the spaces come from (`HostSession.spacesMultiplexer`); nil while unknown.
+    var multiplexer: String? = nil
 
     /// The rows show last-known data: the host is not connected, or its spaces are not this connection's yet.
     var stale: Bool { state != .connected || !live }
@@ -74,7 +76,9 @@ final class MobileTab: Identifiable {
     private(set) var focused: UInt64?
     /// The pane the phone picked in the switcher (by key, so it survives reconnects).
     private(set) var picked: String?
-    /// The last change seen in any of its panes; nil until one was seen.
+    /// When it last had activity: the server's own time when its helper reports one (`terminals.activity`: a tmux
+    /// window's), or the last change the phone saw happen in any of its panes (between two live snapshots, or the
+    /// phone's own), whichever is later; nil until one is known.
     private(set) var activity: Date?
 
     init(ref: TabRef, node: UInt64, space: SpaceRef, name: String, renamed: Bool, panes: [MobilePane], focused: UInt64?, activity: Date?) {
@@ -177,8 +181,12 @@ final class MobileWorkspace: Identifiable {
     /// Commands need it; nil while the host is not connected (the last-known tabs stay listed).
     private(set) var client: HelperClient?
     private(set) var spaces: [MobileSpace] = []
-    /// The multiplexer this host's new spaces go to (`MultiplexerChoice.choose`); nil before detection.
+    /// The multiplexer this host's new spaces go to (`MultiplexerChoice.choose`): the one the host follows, whose spaces
+    /// it shows. Nil before detection.
     var choice: MultiplexerChoice?
+    /// Every installed multiplexer a new space can go to (`MultiplexerChoice.available`), herdr first; empty before
+    /// detection.
+    var multiplexers: [MultiplexerChoice] = []
     /// The opt-in helper features this connection's hello accepted (`HelperSession.Info.features`).
     var features: Set<String> = []
     /// The host's recent project folders (`recentProjects`), newest first.
@@ -192,10 +200,24 @@ final class MobileWorkspace: Identifiable {
     @ObservationIgnored private var spaceObjects: [String: MobileSpace] = [:]
     /// What each pane looked like in the last snapshot, to see it change.
     @ObservationIgnored private var seen: [String: PaneSignature] = [:]
-    @ObservationIgnored private var applied = false
+    /// The backends whose last snapshot came live on this connection: a change in their next one happened just now.
+    /// Whatever changed across a gap (the launch cache against the live data, a reconnect, a newly followed
+    /// multiplexer) happened at a time nobody knows, so it moves no time.
+    @ObservationIgnored private var watched: Set<UInt64> = []
+    /// The backend whose changes the running rebuild dates (`apply` of a watched backend's snapshot).
+    @ObservationIgnored private var stamping: UInt64?
     @ObservationIgnored private var waiters: [Waiter] = []
     /// Nodes a close is on its way for: hidden at once, shown again if the close fails.
     private(set) var closing: Set<UInt64> = []
+    /// The running `terminals.activity` read, the periodic one, and whether another was asked for meanwhile.
+    @ObservationIgnored private var activityRead: Task<Void, Never>?
+    @ObservationIgnored private var activityPoll: Task<Void, Never>?
+    @ObservationIgnored private var activityAgain = false
+
+    /// The hello feature whose operation reports the server's last-activity times.
+    static let activityFeature = "terminals.activity"
+    /// How often a connected host's server times are read again while its topology stays the same.
+    static let activityInterval: Duration = .seconds(30)
 
     private struct PaneSignature: Equatable {
         let name: String
@@ -219,10 +241,17 @@ final class MobileWorkspace: Identifiable {
     func space(of tab: MobileTab) -> MobileSpace? { spaces.first { $0.ref == tab.space } }
     func tab(containing terminal: UInt64) -> MobileTab? { tabs.first { $0.panes.contains { $0.id == terminal } } }
 
-    func update(host: TabsHost) { if self.host != host { self.host = host } }
+    func update(host: TabsHost) {
+        if self.host != host { self.host = host }
+        if !host.live { watched = [] }
+    }
 
     func connect(_ client: HelperClient?) {
-        if self.client !== client { self.client = client }
+        if self.client !== client {
+            self.client = client
+            watched = []
+            pollActivity()
+        }
         if client == nil, !closing.isEmpty {
             closing = []
             rebuild()
@@ -243,13 +272,19 @@ final class MobileWorkspace: Identifiable {
         }
         if !order.contains(topology.backend) { order.append(topology.backend) }
         snapshots[topology.backend] = topology
+        stamping = host.live && watched.contains(topology.backend) ? topology.backend : nil
         rebuild()
+        stamping = nil
+        if host.live { watched.insert(topology.backend) } else { watched = [] }
+        // A live snapshot names this connection's nodes: their server times can be read now.
+        scheduleActivity()
     }
 
     /// A backend the helper no longer serves (its open ended).
     func remove(backend: UInt64) {
         guard snapshots.removeValue(forKey: backend) != nil else { return }
         order.removeAll { $0 == backend }
+        watched.remove(backend)
         rebuild()
     }
 
@@ -259,6 +294,56 @@ final class MobileWorkspace: Identifiable {
         let date = date ?? now()
         activity.note(host: host.id, key: pane.key, at: date)
         tab.touch(date)
+    }
+
+    /// Reads the server's last-activity times (`terminals.activity`) into the activity store, by topology key, and shows
+    /// them. Nothing is asked of a helper without the feature (too old: the rows keep only what the phone saw), a host
+    /// not connected, or spaces that are not this connection's yet. False when nothing was read.
+    @discardableResult
+    func refreshActivity() async -> Bool {
+        guard features.contains(Self.activityFeature), let client, host.live else { return false }
+        guard let rows = try? await TabCommands(client: client).serverActivity(), self.client === client else { return false }
+        applyServerActivity(rows)
+        return true
+    }
+
+    /// Server times by topology key: a tab's own (a tmux window) or one of its panes'. Kept in the store, so the next
+    /// launch shows them before the host connects.
+    func applyServerActivity(_ rows: [TabsServerActivity]) {
+        for row in rows where row.time_ms > 0 {
+            activity.note(host: host.id, key: row.key, at: row.time)
+            tabs.first { $0.ref.key == row.key || $0.panes.contains { $0.key == row.key } }?.touch(row.time)
+        }
+    }
+
+    /// One read at a time; asked again while one runs, it runs once more after it.
+    private func scheduleActivity() {
+        guard features.contains(Self.activityFeature), client != nil, host.live else { return }
+        guard activityRead == nil else {
+            activityAgain = true
+            return
+        }
+        activityRead = Task { [weak self] in
+            repeat {
+                self?.activityAgain = false
+                await self?.refreshActivity()
+            } while self?.activityAgain == true
+            self?.activityRead = nil
+        }
+    }
+
+    /// While connected, the times are read every `activityInterval`: output moves them without changing the topology.
+    private func pollActivity() {
+        activityPoll?.cancel()
+        activityPoll = nil
+        guard client != nil else { return }
+        activityPoll = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: Self.activityInterval)
+                guard !Task.isCancelled, let self else { return }
+                self.scheduleActivity()
+            }
+        }
     }
 
     /// The tabs a close request is pending for leave the lists at once.
@@ -310,14 +395,16 @@ final class MobileWorkspace: Identifiable {
                 for pane in panes {
                     let signature = PaneSignature(name: pane.name, cwd: pane.cwd, agent: pane.agent, window: window.name)
                     signatures[pane.key] = signature
-                    // A change seen, or a pane that appeared while this host was already listed, is activity now.
-                    if let before = seen[pane.key], before != signature {
+                    // A change between two live snapshots, or a pane that appeared between them, is activity now.
+                    if backend == stamping, let before = seen[pane.key], before != signature {
                         activity.note(host: host.id, key: pane.key, at: stamp)
-                    } else if seen[pane.key] == nil, applied, activity.date(host: host.id, key: pane.key) == nil {
+                    } else if backend == stamping, seen[pane.key] == nil, activity.date(host: host.id, key: pane.key) == nil {
                         activity.note(host: host.id, key: pane.key, at: stamp)
                     }
                     if let date = activity.date(host: host.id, key: pane.key), latest.map({ $0 < date }) ?? true { latest = date }
                 }
+                // The server's own time for the tab (`terminals.activity`, kept by its key).
+                if let date = activity.date(host: host.id, key: window.key), latest.map({ $0 < date }) ?? true { latest = date }
                 let focused = focus(of: window.id) ?? topology.focus.flatMap { id in panes.contains { $0.id == id } ? id : nil }
                 let ref = TabRef(host: host.id, key: window.key)
                 liveTabs.insert(window.key)
@@ -362,7 +449,6 @@ final class MobileWorkspace: Identifiable {
         tabObjects = tabObjects.filter { liveTabs.contains($0.key) }
         spaceObjects = spaceObjects.filter { liveSpaces.contains($0.key) }
         seen = signatures
-        applied = true
         if self.spaces.map(ObjectIdentifier.init) != spaces.map(ObjectIdentifier.init) { self.spaces = spaces }
         resumeWaiters()
     }

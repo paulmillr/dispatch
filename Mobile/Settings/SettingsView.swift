@@ -8,7 +8,8 @@ struct SettingsView: View {
     @Bindable var settings: MobileSettings
     @Environment(HostSessions.self) private var sessions
     @Environment(\.dismiss) private var dismiss
-    @State private var confirmingRemoval = false
+    /// The removal waiting for confirmation: everything, or everything but the SSH keys.
+    @State private var confirmingRemoval: MobileComposition.Removal?
     /// Why background refresh stayed off (notifications not allowed).
     @State private var refreshNote: String?
 
@@ -29,8 +30,16 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    Picker("Font size", selection: $settings.terminalFontSize) {
-                        ForEach(settings.fontSizeChoices, id: \.self) { Text(MobileSettings.fontSizeLabel($0)).tag($0) }
+                    VStack(alignment: .leading, spacing: 4) {
+                        LabeledContent("Font size") { Text(MobileSettings.fontSizeLabel(settings.terminalFontSize)).monospacedDigit() }
+                        Slider(value: $settings.terminalFontSize, in: MobileSettings.fontSizeRange, step: 1) {
+                            Text("Font size")
+                        } minimumValueLabel: {
+                            Image(systemName: "textformat.size.smaller")
+                        } maximumValueLabel: {
+                            Image(systemName: "textformat.size.larger")
+                        }
+                        .accessibilityValue(MobileSettings.fontSizeLabel(settings.terminalFontSize))
                     }
                 } header: {
                     Text("Terminal")
@@ -73,17 +82,21 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    Button("Remove all data", role: .destructive) { confirmingRemoval = true }
-                        .confirmationDialog("Remove all data?", isPresented: $confirmingRemoval, titleVisibility: .visible) {
-                            Button("Remove all data", role: .destructive) {
-                                composition.removeAllData()
-                                dismiss()
-                            }
-                        } message: {
-                            Text(MobileComposition.removeAllMessage)
-                        }
+                    ForEach(MobileComposition.Removal.allCases) { removal in
+                        Button(removal.title, role: .destructive) { confirmingRemoval = removal }
+                    }
                 } footer: {
-                    Text(MobileComposition.removeAllMessage)
+                    Text(MobileComposition.removeAllMessage + " Except SSH keys keeps your SSH keys and their passphrases.")
+                }
+                .confirmationDialog(confirmingRemoval.map { $0.title + "?" } ?? "", isPresented: Binding(
+                    get: { confirmingRemoval != nil }, set: { if !$0 { confirmingRemoval = nil } }
+                ), titleVisibility: .visible, presenting: confirmingRemoval) { removal in
+                    Button(removal.title, role: .destructive) {
+                        composition.removeAllData(keepingKeys: removal == .keepingKeys)
+                        dismiss()
+                    }
+                } message: { removal in
+                    Text(removal.message)
                 }
             }
             .navigationTitle("Settings")
@@ -131,21 +144,42 @@ struct HostSettingsView: View {
 }
 
 extension MobileComposition {
-    static let removeAllMessage = "Removes every host, the keys and passwords in the Keychain, trusted host keys, read markers, cached lists, drafts, queued messages and remembered models from this iPhone. Nothing changes on your hosts."
+    static let removeAllMessage = Removal.everything.message
+
+    /// Settings' two removals.
+    enum Removal: String, CaseIterable, Identifiable {
+        case everything, keepingKeys
+        var id: Self { self }
+        var title: String {
+            switch self { case .everything: "Remove all data"; case .keepingKeys: "Remove all data except SSH keys" }
+        }
+        var message: String {
+            switch self {
+            case .everything: "Removes every host, the keys and passwords in the Keychain, trusted host keys, read markers, cached lists, drafts, queued messages and remembered models from this iPhone. Nothing changes on your hosts."
+            case .keepingKeys: "Removes every host, their passwords, trusted host keys, read markers, cached lists, drafts, queued messages and remembered models from this iPhone. Your SSH keys and their passphrases stay, for new hosts. Nothing changes on your hosts."
+            }
+        }
+    }
 
     /// Settings' Remove all data: every host (its session ends, its password goes), every key and Keychain secret, the
     /// trusted host keys, the seen markers and mutes, the cache, drafts and the outbox, the remembered agents and models
     /// (`chat-models.json`) and Spaces' per-host values (recent space, collapsed hosts, space order: `spaces.json`, and
     /// any left in UserDefaults by an older build); background refresh turns off and its notifications go. Appearance,
-    /// the font sizes and Spaces' menu stay.
-    func removeAllData() {
+    /// the font sizes and Spaces' menu stay. `keepingKeys`: the SSH keys, their Keychain items (private keys and
+    /// passphrases) stay too; host passwords still go.
+    func removeAllData(keepingKeys: Bool = false) {
         settings.backgroundRefresh = false
         refresh?.schedule()
         refresh?.notifier.removeAll()
         for record in hosts.store.hosts { hosts.remove(record.id) }
         hosts.knownHosts.removeAll()
-        for key in hosts.keys.keys { hosts.keys.delete(key.id) }
-        try? hosts.keys.vault.removeAll()
+        if keepingKeys {
+            let kept = Set(hosts.keys.keys.flatMap { [KeyStore.privateAccount($0.id), KeyStore.passphraseAccount($0.id)] })
+            try? hosts.keys.vault.removeAll(keeping: kept.contains)
+        } else {
+            for key in hosts.keys.keys { hosts.keys.delete(key.id) }
+            try? hosts.keys.vault.removeAll()
+        }
         conversations.markers.removeAll()
         conversations.outbox.removeAll()
         for key in conversations.drafts.buckets.keys { conversations.drafts.remove(key) }

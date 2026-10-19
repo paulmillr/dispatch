@@ -30,6 +30,8 @@ final class SpacesNavigator {
     var editing = false
     var picking = false
     var newSpace: NewSpaceRequest?
+    /// Hosts a space from the quick menu (holding New space) is being made on: their New space rows wait.
+    var creatingSpace: Set<UUID> = []
     let model: MobileTabs
     let actions: TabsActions
 
@@ -52,6 +54,28 @@ final class SpacesNavigator {
                 actions.failure = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             }
         }
+    }
+
+    /// The quick menu's entry (holding New space): a space with New space's defaults on that host and multiplexer,
+    /// without the form; its first tab opens in Terminal, as Create's does.
+    func quickSpace(_ destination: NewSpaceDestination) {
+        guard !creatingSpace.contains(destination.host) else { return }
+        Task {
+            do { open(try await makeSpace(destination), terminal: true) } catch {
+                actions.failure = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            }
+        }
+    }
+
+    /// A space with New space's defaults (home, no name: the server names it after its folder, as the Mac's new spaces
+    /// are named, `NewSpaceName`) on that host and multiplexer: its first tab. The host's New space rows wait meanwhile.
+    /// Spaces' quick menu opens the tab; New chat's makes the space the chat's.
+    func makeSpace(_ destination: NewSpaceDestination) async throws -> MobileTab {
+        guard creatingSpace.insert(destination.host).inserted else {
+            throw TabsFailure(message: "A space is already being made on \(destination.hostName).")
+        }
+        defer { creatingSpace.remove(destination.host) }
+        return try await model.createSpace(on: destination.host, name: "", directory: "~", multiplexer: destination.multiplexer)
     }
 
     /// Pushes a tab's screen; New tab and Create open theirs in Terminal.
@@ -201,6 +225,9 @@ private struct SpacesPresentations: ViewModifier {
                 }, newSpace: {
                     navigator.picking = false
                     navigator.newSpace = NewSpaceRequest(host: navigator.model.recentSpace?.ref.host)
+                }, quickSpace: { destination in
+                    navigator.picking = false
+                    navigator.quickSpace(destination)
                 })
                 .tint(.dispatchPink)
             }
@@ -226,8 +253,7 @@ struct SpacesRoot: View {
     var settings: (() -> Void)? = nil
 
     var body: some View {
-        SpacesHome(model: navigator.model, actions: navigator.actions, hostActions: hostActions, editing: $navigator.editing,
-                   addHost: addHost, settings: settings)
+        SpacesHome(navigator: navigator, hostActions: hostActions, addHost: addHost, settings: settings)
             .safeAreaInset(edge: .bottom) {
                 VStack(spacing: 0) { ForEach(Array(SpacesNotice.notices(hostActions).enumerated()), id: \.offset) { $1 } }
             }
@@ -244,24 +270,24 @@ struct NewSpaceRequest: Identifiable {
 
 /// M1d / M2a / M2b / M1e: the tab's top level.
 private struct SpacesHome: View {
-    @Bindable var model: MobileTabs
-    let actions: TabsActions
+    @Bindable var navigator: SpacesNavigator
     let hostActions: SpacesHostActions
-    @Binding var editing: Bool
     let addHost: () -> Void
     let settings: (() -> Void)?
 
     var body: some View {
+        let model = navigator.model
         Group {
             if model.workspaces.isEmpty {
                 MobileEmptyState(section: .spaces, add: addHost)
-            } else if model.tree || editing {
-                SpacesTree(model: model, hostActions: hostActions, editing: editing, addHost: addHost, settings: settings)
+            } else if model.tree || navigator.editing {
+                SpacesTree(navigator: navigator, hostActions: hostActions, editing: navigator.editing, addHost: addHost,
+                           settings: settings)
             } else {
-                SpacesFlatList(model: model, actions: actions)
+                SpacesFlatList(model: model, actions: navigator.actions)
             }
         }
-        .onChange(of: model.workspaces.isEmpty) { _, empty in if empty { editing = false } }
+        .onChange(of: model.workspaces.isEmpty) { _, empty in if empty { navigator.editing = false } }
     }
 }
 
@@ -385,7 +411,7 @@ struct TabsTabRow: View {
         let tab = entry.tab
         MobileRow(dot: entry.urgency?.rowDot, tint: entry.host.tint, name: tab.name,
                   detail: detail ? [entry.space?.name, entry.host.name].compactMap { $0 }.joined(separator: " · ") : nil,
-                  time: TabsTime.label(tab.activity, now: now), subtitle: Self.line(tab, host: entry.host, status: model.status),
+                  time: TabsTime.label(entry.activity, now: now), subtitle: Self.line(tab, host: entry.host, status: model.status),
                   separator: !last, disc: detail, stale: entry.host.stale) {
             HostGlyph(host: entry.host.glyphRecord, size: MobileRow<HostGlyph>.glyphSize)
         }
@@ -405,14 +431,17 @@ struct TabsTabRow: View {
 /// M2b and M1e: each host a section (name, glyph, disclosure; collapsed, the unread inside rolls up by the toggle),
 /// its spaces in an inset grouped card, one line each with the unread count and an amber dot while something works.
 /// Editing: a red remove control and Info on each host, drag handles on hosts and spaces (spaces stay in their host),
-/// and Add host at the end.
+/// and Add host at the end. A connected host without spaces offers New space in their place (holding it, the quick
+/// menu of its multiplexers).
 private struct SpacesTree: View {
-    let model: MobileTabs
+    let navigator: SpacesNavigator
     let hostActions: SpacesHostActions
     let editing: Bool
     let addHost: () -> Void
     var settings: (() -> Void)? = nil
     @State private var removing: (host: UUID, question: HostRemovalConfirmation)?
+
+    private var model: MobileTabs { navigator.model }
 
     var body: some View {
         List {
@@ -425,6 +454,13 @@ private struct SpacesTree: View {
                         .onMove { source, destination in
                             model.moveSpaces(of: section.host.id, visible: section.spaces.map(\.id.key), from: source, to: destination)
                         }
+                    }
+                    if section.offersNewSpace(editing: editing, filter: model.query.filter) {
+                        SpacesNewSpaceLine(host: section.host,
+                                           destinations: NewSpaceDestination.all(model.workspaces, host: section.host.id),
+                                           creating: navigator.creatingSpace.contains(section.host.id),
+                                           open: { navigator.newSpace = NewSpaceRequest(host: section.host.id) },
+                                           quick: { navigator.quickSpace($0) })
                     }
                 } header: {
                     SpacesHostHeader(section: section, editing: editing, toggle: { model.toggle(section.host.id) },
@@ -491,14 +527,42 @@ private struct SpacesTree: View {
     }
 }
 
-/// A host's section header (M2b, M1e).
-private struct SpacesHostHeader: View {
+/// A host's section header (M2b, M1e): the name, the host glyph and the multiplexer its spaces come from
+/// (`MultiplexerMark`; none while that is unknown). The whole row shows or hides the host's spaces, not only its
+/// disclosure: outside edit mode it is one button (VoiceOver: the host's name, a heading, the multiplexer and "Expanded"
+/// or "Collapsed" with the unread it rolls up); in edit mode its remove, Info and reorder controls keep their own taps
+/// and the rest of the row toggles.
+struct SpacesHostHeader: View {
     let section: SpacesSection
     let editing: Bool
     let toggle: () -> Void
     let remove: () -> Void
 
     var body: some View {
+        if editing {
+            row
+                .contentShape(Rectangle())
+                .onTapGesture(perform: toggle)
+        } else {
+            // A button reads its label as one element: the name replaces it (the glyph and the count would be read).
+            Button(action: toggle) { row.contentShape(Rectangle()) }
+                .buttonStyle(.plain)
+                .accessibilityLabel(section.host.name)
+                .accessibilityValue(Self.value(collapsed: section.collapsed, unread: section.unread,
+                                               multiplexer: section.host.multiplexer))
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityHint(section.collapsed ? "Shows its spaces" : "Hides its spaces")
+        }
+    }
+
+    /// "tmux, Collapsed, 3 unread", "Expanded": where the spaces come from when known, the row's state, and the unread
+    /// a collapsed host rolls up.
+    static func value(collapsed: Bool, unread: Int, multiplexer: String? = nil) -> String {
+        [multiplexer, collapsed ? "Collapsed" : "Expanded", collapsed && unread > 0 ? "\(unread) unread" : nil]
+            .compactMap { $0 }.joined(separator: ", ")
+    }
+
+    private var row: some View {
         HStack(spacing: 8) {
             if editing {
                 Button(action: remove) {
@@ -516,11 +580,13 @@ private struct SpacesHostHeader: View {
                 .foregroundStyle(Color(uiColor: .label))
                 .lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
                 .accessibilityAddTraits(.isHeader)
-                .accessibilityValue(!editing && section.collapsed && section.unread > 0 ? "\(section.unread) unread" : "")
             HostGlyph(host: section.host.glyphRecord, size: 18)
                 .foregroundStyle(section.host.tint)
                 .opacity(section.host.state == .offline ? 0.5 : 1)
                 .accessibilityHidden(true)
+            if let multiplexer = section.host.multiplexer {
+                MultiplexerMark(name: multiplexer)
+            }
             Spacer(minLength: 0)
             if !editing, section.collapsed, section.unread > 0 {
                 Text("\(section.unread)")
@@ -538,34 +604,72 @@ private struct SpacesHostHeader: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("\(section.host.name) details")
-            }
-            Button(action: toggle) {
-                Image(systemName: section.collapsed ? "chevron.right" : "chevron.down")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .frame(width: 28, height: 28)
-                    .background(Color.chipFill, in: Circle())
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(section.collapsed ? "Show \(section.host.name)" : "Hide \(section.host.name)")
-            if editing {
+                Button(action: toggle) { disclosure }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(section.collapsed ? "Show \(section.host.name)" : "Hide \(section.host.name)")
                 Image(systemName: "line.3.horizontal")
                     .font(.system(size: 17))
                     .foregroundStyle(.tertiary)
                     .frame(width: 28, height: 28)
                     .contentShape(Rectangle())
+                    // The handle drags; a tap on it is not the row's.
+                    .onTapGesture {}
                     .draggable(section.host.id.uuidString) {
                         Text(section.host.name).font(.title3.bold()).padding(8)
                     }
                     .accessibilityLabel("Reorder \(section.host.name)")
+            } else {
+                disclosure
             }
         }
         .textCase(nil)
         .padding(.bottom, 2)
     }
 
+    private var disclosure: some View {
+        Image(systemName: section.collapsed ? "chevron.right" : "chevron.down")
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(.primary)
+            .frame(width: 28, height: 28)
+            .background(Color.chipFill, in: Circle())
+            .contentShape(Circle())
+    }
+
     @Environment(\.dynamicTypeSize) private var typeSize
+}
+
+/// M2b's line for a connected host without spaces: New space, which opens the form for this host; held, the quick
+/// menu of its multiplexers makes one at once (New space's defaults), as a row's context menu (Close, Rename) is held.
+/// VoiceOver offers the menu's entries as actions.
+struct SpacesNewSpaceLine: View {
+    let host: TabsHost
+    let destinations: [NewSpaceDestination]
+    let creating: Bool
+    let open: () -> Void
+    let quick: (NewSpaceDestination) -> Void
+
+    var body: some View {
+        Button(action: open) {
+            HStack(spacing: 8) {
+                Image(systemName: "plus").accessibilityHidden(true)
+                Text("New space").font(.body).lineLimit(2)
+                Spacer(minLength: 0)
+                if creating { ProgressView() }
+            }
+            .foregroundStyle(Color.dispatchPink)
+            .contentShape(Rectangle())
+        }
+        .disabled(creating)
+        .contextMenu { NewSpaceQuickMenu(destinations: destinations, host: host.id, create: quick) }
+        .accessibilityLabel("New space on \(host.name)")
+        .accessibilityValue(creating ? "Creating" : "")
+        .accessibilityHint(destinations.isEmpty ? "" : "Hold for a space with the defaults")
+        .accessibilityActions {
+            ForEach(destinations) { destination in
+                Button(destination.spoken(host: host.id)) { quick(destination) }
+            }
+        }
+    }
 }
 
 /// A space in the tree: its name, the amber dot while something works, the unread count, a chevron.

@@ -87,7 +87,18 @@ final class MobileComposition {
                   let row = conversations.conversations.first(where: { $0.key == key }) else { return nil }
             return Self.status(row, session: conversations.sessions[key])
         }
-        let tabs = tabs
+        tabs.agentActivity = { host, terminal in
+            guard let key = conversations.key(host: host, terminal: terminal) else { return nil }
+            return conversations.conversations.first { $0.key == key }?.summary.lastActivity
+        }
+        let tabs = tabs, hosts = hosts
+        // New space on a multiplexer the host does not show: the host follows it from now on, as Host detail's choice.
+        tabs.follow = { id, name in
+            guard var record = hosts.session(id)?.host,
+                  let preference = HostRecord.MultiplexerPreference(rawValue: name), record.multiplexer != preference else { return }
+            record.multiplexer = preference
+            hosts.update(record)
+        }
         tabs.needsYouCount = { excluding in
             let here = excluding.flatMap { tabs.tab($0) }.map { tabs.urgency(of: $0) == .needsYou } ?? false
             return max(0, conversations.needsYouCount - (here ? 1 : 0))
@@ -100,6 +111,7 @@ final class MobileComposition {
         let client: ObjectIdentifier?
         let topology: HelperTopology?
         let live: Bool
+        let switching: Bool
         let features: [String]
         let following: String?
         let home: String?
@@ -113,6 +125,7 @@ final class MobileComposition {
         for session in sessions {
             let signature = Signature(record: session.host, link: session.link, client: session.client.map(ObjectIdentifier.init),
                                       topology: session.topology, live: session.topologyIsLive,
+                                      switching: session.switchingMultiplexer,
                                       features: session.hello?.features ?? [],
                                       following: session.following, home: session.hello?.account?.home)
             if synced[session.id] != signature {
@@ -346,6 +359,19 @@ final class MobileComposition {
                 AnyView(hosts.hostDetail(id) { HostSpacesList(session: $0) }.environment(\.hostSpaceOpening, navigator))
             })
     }
+
+    /// New space for New chat (M9a): its form over New chat (for the recent space's host, as from New tab's picker), or
+    /// the quick menu's places on the connected hosts; either way the space becomes the chat's.
+    var newChatSpaces: NewChatSpaceMaker {
+        let tabs = tabs, navigator = navigator, hostViews = hostViews
+        return NewChatSpaceMaker(
+            destinations: { NewSpaceDestination.all(tabs.workspaces) },
+            quick: { try await navigator.makeSpace($0).space },
+            form: { created in
+                AnyView(NewSpaceSheet(model: tabs, host: tabs.recentSpace?.ref.host, hostViews: hostViews) { created($0.space) }
+                    .tint(.dispatchPink))
+            })
+    }
 }
 
 /// A tab's Terminal segment: its node's presence (shared with Chat), attached through the host's current client.
@@ -437,12 +463,14 @@ extension TerminalPresences {
 }
 
 extension TabsHost {
-    /// A host session as Spaces draws it: name, tint (gray offline), glyph system, the hello account's home, state, order.
+    /// A host session as Spaces draws it: name, tint (gray offline), glyph system, the hello account's home, state, order,
+    /// and the multiplexer its spaces come from.
     @MainActor init(_ session: HostSession) {
         let record = session.host
         self.init(id: record.id, name: record.name, tint: HostSummary(session: session).tint, system: record.system,
                   home: session.hello?.account?.home, loginHome: session.hello?.account?.login_home,
-                  state: SpacesHostState(session.link), order: record.order, live: session.topologyIsLive)
+                  state: SpacesHostState(session.link), order: record.order,
+                  live: session.topologyIsLive && !session.switchingMultiplexer, multiplexer: session.spacesMultiplexer)
     }
 }
 

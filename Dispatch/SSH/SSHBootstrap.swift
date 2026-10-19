@@ -3,6 +3,46 @@ import CryptoKit
 import os
 import Darwin
 
+/// A setup step that failed: what the app says, and the short reason the login prints as it falls back (and the
+/// setup log records). `given` is the reason a remote script gave; a failure without one (the channel dropped) may
+/// pass on another attempt.
+struct SSHSetupFailure: LocalizedError, Sendable {
+    let message: String
+    let reason: String
+    let given: String?
+    /// Fails the same way again whatever is retried.
+    var permanent = false
+
+    init(_ message: String, reason: String, given: String?) {
+        self.message = message
+        self.reason = SSHBootstrapScript.printable(reason)
+        self.given = given
+    }
+
+    static func permanent(_ message: String, reason: String) -> Self {
+        var failure = Self(message, reason: reason, given: reason)
+        failure.permanent = true
+        return failure
+    }
+
+    var errorDescription: String? { message + " (" + reason + ")" }
+
+    /// The reason any error gives the login: a setup step's own, else the error's words.
+    static func reason(_ error: Error) -> String {
+        if let failure = error as? SSHSetupFailure { return failure.reason }
+        if error is CancellationError { return "setup was cancelled" }
+        return SSHBootstrapScript.printable((error as? LocalizedError)?.errorDescription ?? String(describing: error))
+    }
+
+    /// Whether one more attempt may pass: a script's transient reason, a failure that gave none, or an error from the
+    /// channel itself; never a cancellation or a permanent failure.
+    static func transient(_ error: Error) -> Bool {
+        if error is CancellationError { return false }
+        guard let failure = error as? SSHSetupFailure else { return true }
+        return !failure.permanent && SSHBootstrapScript.transient(failure.given)
+    }
+}
+
 enum SSHBootstrap {
     /// Identifies the host platform, then places `resource/<platform>` in the digest-addressed private
     /// cache (`~/.dispatch/bin/versions/<sha256>/`) unless an identical copy is already there.
@@ -11,12 +51,16 @@ enum SSHBootstrap {
                                 run: (String, Data) async throws -> SSHCommand.Result) async throws
         -> (relativePath: String, preamble: String, verify: String) {
         let probe = try await run(SSHBootstrapScript.probe, Data())
-        guard probe.status == 0 else { throw HerdrFailure("Could not use the authenticated SSH connection.") }
+        guard probe.status == 0 else {
+            throw SSHSetupFailure("Could not use the authenticated SSH connection.", reason: "the host refused commands (\(probe.status))",
+                                  given: nil)
+        }
         let name: String
         switch SSHBootstrapScript.platform(String(decoding: probe.output, as: UTF8.self)) {
         case .helper(let helper): name = helper
-        case .unidentified: throw HerdrFailure("Could not identify the SSH host platform.")
-        case .unsupported: throw HerdrFailure("SSH integration requires Linux or macOS on ARM64 or x86-64.")
+        case .unidentified: throw SSHSetupFailure.permanent("Could not identify the SSH host platform.", reason: "unknown host platform")
+        case .unsupported:
+            throw SSHSetupFailure.permanent("SSH integration requires Linux or macOS on ARM64 or x86-64.", reason: "unsupported host platform")
         }
         // The bundled file is read like any other: its identity is observed (a replay answers the recorded one, whatever
         // the build bundles now), its bytes are read only to upload them.
@@ -26,17 +70,28 @@ enum SSHBootstrap {
             let binary = try Data(contentsOf: url)
             return Payload(digest: SHA256.hash(data: binary).map { String(format: "%02x", $0) }.joined(), size: binary.count)
         }
-        guard payload.size > 0, payload.size <= SSHBootstrapScript.maximumSize else { throw HerdrFailure("SSH helper is missing or invalid.") }
+        guard payload.size > 0, payload.size <= SSHBootstrapScript.maximumSize else {
+            throw SSHSetupFailure.permanent("SSH helper is missing or invalid.", reason: "the bundled helper is missing")
+        }
         let digest = payload.digest
         let relativePath = SSHBootstrapScript.relativePath(digest: digest)
         let preamble = cachePreamble(digest: digest)
         let verify = SSHBootstrapScript.verify(size: payload.size, digest: digest)
         let existing = try await run(preamble + "\n" + verify, Data())
         if existing.status != 0 {
+            // A cache that is unsafe or cannot be made says why; a helper that is only missing (or another version) does
+            // not, and is uploaded.
+            if let reason = SSHBootstrapScript.reason(String(decoding: existing.output, as: UTF8.self)) {
+                throw SSHSetupFailure("Could not use the SSH helper cache.", reason: reason, given: reason)
+            }
             let staging = "upload-" + System.uuid().uuidString.lowercased()
             let upload = SSHBootstrapScript.upload(digest: digest, size: payload.size, staging: staging)
             let installed = try await run(upload, try System.read(url))
-            guard installed.status == 0 else { throw HerdrFailure("Could not install the SSH helper in the remote cache.") }
+            guard installed.status == 0 else {
+                let given = SSHBootstrapScript.reason(String(decoding: installed.output, as: UTF8.self))
+                throw SSHSetupFailure("Could not install the SSH helper in the remote cache.",
+                                      reason: given ?? "the upload failed (\(installed.status))", given: given)
+            }
         }
         return (relativePath, preamble, verify)
     }
@@ -49,40 +104,57 @@ enum SSHBootstrap {
         guard validSessionID(sessionID),
               (try? String(contentsOf: resources.appendingPathComponent("helper/protocol-version"), encoding: .utf8))?
                 .trimmingCharacters(in: .whitespacesAndNewlines) == String(HelperBinary.version) else {
-            throw HerdrFailure("The SSH helper is unavailable.")
+            throw SSHSetupFailure.permanent("The SSH helper is unavailable.", reason: "the bundled helper is unavailable")
         }
         let deadline = ContinuousClock.now.advanced(by: .seconds(60))
+        /// A step once more when it failed for a reason another attempt can fix (the channel dropped, the upload broke
+        /// off: `SSHSetupFailure.transient`) and the deadline leaves room; the login waits for the whole setup.
+        func attempt<T>(_ name: String, _ step: () async throws -> T) async throws -> T {
+            do { return try await step() } catch {
+                guard SSHSetupFailure.transient(error), ContinuousClock.now < deadline, !Task.isCancelled else { throw error }
+                SSHSetupLog.retried(name, SSHSetupFailure.reason(error))
+                return try await step()
+            }
+        }
         func run(_ command: String, input: Data = Data()) async throws -> SSHCommand.Result {
             let remaining = ContinuousClock.now.duration(to: deadline)
-            guard remaining > .zero else { throw HerdrFailure("SSH integration setup timed out.") }
+            guard remaining > .zero else {
+                throw SSHSetupFailure.permanent("SSH integration setup timed out.", reason: "setup timed out")
+            }
             let seconds = Double(remaining.components.seconds) + Double(remaining.components.attoseconds) / 1e18
             return try await SSHCommand.run(executable: master.executable, arguments: master.arguments(command: command), input: input, timeout: seconds)
         }
-        let (relativePath, preamble, verify) = try await install(resource: "helper", resources: resources, run: run)
+        let (relativePath, preamble, verify) = try await attempt("install") {
+            try await install(resource: "helper", resources: resources, run: run)
+        }
+        /// A helper process over the master, started afresh for each attempt.
+        func helper(_ name: String, _ arguments: String) async throws -> HelperSession {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: master.executable)
+            process.arguments = master.arguments(command: preamble + "\n" + verify + " || exit 1\n" + captureExport + "exec ./dispatch-helper " + arguments)
+            let remaining = ContinuousClock.now.duration(to: deadline)
+            guard remaining > .zero else { throw SSHSetupFailure.permanent("SSH integration setup timed out.", reason: "setup timed out") }
+            return try await SSHTimeout.run(remaining, name) { try await HelperSession(process: process) }
+        }
         // Verify the greeting before releasing the login: after its user command starts, a bad
         // helper channel cannot safely fall back by starting that command again.
         if publish || prepare != nil {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: master.executable)
-            process.arguments = master.arguments(command: preamble + "\n" + verify + " || exit 1\n" + captureExport + "exec ./dispatch-helper --remote --capabilities '' --stdio")
-            let remaining = ContinuousClock.now.duration(to: deadline)
-            guard remaining > .zero else { throw HerdrFailure("SSH integration setup timed out.") }
-            let probe = try await SSHTimeout.run(remaining, "probe") { try await HelperSession(process: process) }
+            let probe = try await attempt("probe") { try await helper("probe", "--remote --capabilities '' --stdio") }
             defer { probe.close() }
             try Task.checkCancellation()
             try await prepare?(relativePath, probe.info)
         }
         if publish {
-            guard try await run(self.publish(sessionID: sessionID, relativePath: relativePath)).status == 0 else {
-                throw HerdrFailure("Could not finish setting up the remote shell.")
+            try await attempt("publish") {
+                let result = try await run(self.publish(sessionID: sessionID, relativePath: relativePath))
+                guard result.status == 0 else {
+                    let given = SSHBootstrapScript.reason(String(decoding: result.output, as: UTF8.self))
+                    throw SSHSetupFailure("Could not finish setting up the remote shell.",
+                                          reason: given ?? "could not release the login (\(result.status))", given: given)
+                }
             }
         }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: master.executable)
-        process.arguments = master.arguments(command: preamble + "\n" + verify + " || exit 1\n" + captureExport + "exec ./dispatch-helper connect --session '" + sessionID + "'")
-        let remaining = ContinuousClock.now.duration(to: deadline)
-        guard remaining > .zero else { throw HerdrFailure("SSH integration setup timed out.") }
-        let session = try await SSHTimeout.run(remaining, "session") { try await HelperSession(process: process) }
+        let session = try await attempt("connect") { try await helper("session", "connect --session '" + sessionID + "'") }
         return (relativePath, session)
     }
 
@@ -118,16 +190,18 @@ enum SSHBootstrap {
 
     static func cachePreamble(digest: String) -> String { SSHBootstrapScript.cachePreamble(digest: digest) }
 
-    static func publish(sessionID: String, relativePath: String?) -> String {
+    /// Releases the waiting login: the helper's path, or (`relativePath` nil) why the app's setup failed, which the
+    /// login shows as it falls back. A per-process pending name: a retry never trips over an earlier attempt's file.
+    static func publish(sessionID: String, relativePath: String?, reason: String? = nil) -> String {
         precondition(validSessionID(sessionID))
-        let value = relativePath ?? "unavailable"
+        let value = relativePath ?? "unavailable: " + SSHBootstrapScript.printable(reason ?? "setup did not finish")
         return privateDirectoryScript + """
 
-        enter_private sessions || exit 1
-        enter_private '\(sessionID)' || exit 1
-        test ! -e ready && test ! -L ready || exit 1
-        (set -C; printf '%s\\n' \(HerdrLaunch.quote(value)) > ready.pending) || exit 1
-        mv -f ready.pending ready
+        enter_private sessions
+        enter_private '\(sessionID)'
+        test ! -e ready && test ! -L ready || fail "session already released"
+        (set -C; printf '%s\\n' \(HerdrLaunch.quote(value)) > "ready.$$") || fail "cannot write the ready file"
+        mv -f "ready.$$" ready || fail "cannot release the session"
         """
     }
 }
@@ -271,3 +345,25 @@ enum SSHTimeout {
         }
     }
 }
+
+/// Why SSH integration fell back to a plain shell, and which setup steps needed a second attempt: counted for
+/// Settings › Troubleshooting, and written to the system log (subsystem yachts.dispatch.app, category SSHSetup).
+/// Reasons only, as the scripts and the app word them; never a host or an account.
+@MainActor @Observable final class SSHSetupLog {
+    static let shared = SSHSetupLog()
+    /// This run's fallbacks by reason.
+    private(set) var fallbacks: [String: Int] = [:]
+    private(set) var retries = 0
+    nonisolated private static let logger = Logger(subsystem: "yachts.dispatch.app", category: "SSHSetup")
+
+    func fellBack(_ reason: String) {
+        fallbacks[reason, default: 0] += 1
+        Self.logger.error("SSH integration fell back to a plain shell: \(reason, privacy: .public)")
+    }
+
+    nonisolated static func retried(_ step: String, _ reason: String) {
+        logger.notice("SSH integration setup step \(step, privacy: .public) failed once (\(reason, privacy: .public)); trying again")
+        Task { @MainActor in shared.retries += 1 }
+    }
+}
+

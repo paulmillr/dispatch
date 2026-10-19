@@ -35,17 +35,24 @@ struct MultiplexerChoice: Equatable, Sendable {
     static let tmuxWarning = "This tmux server cannot report bracketed-paste state. Use the terminal to send input."
 
     static func choose(multiplexers: [TabsMultiplexer], backends: [HelperBackend], override: String? = nil) -> MultiplexerChoice? {
-        let available = multiplexers.filter { kind in
-            kind.external && kind.installed != false && backends.contains { $0.mux == kind.mux }
-        }
-        let ranked = available.sorted { rank($0.name) < rank($1.name) }
-        guard let kind = override.flatMap({ name in available.first { $0.name == name } }) ?? ranked.first else { return nil }
-        let candidates = backends.filter { $0.mux == kind.mux }
-        guard let backend = candidates.first(where: { $0.isDefault == true }) ?? candidates.first else { return nil }
-        // The helper's own answer first; a version alone (older feature rows) is read the same way.
-        let pasteState = kind.paste_state ?? kind.version.map(tmuxSupported)
-        let warning = kind.name == "tmux" && pasteState == false ? tmuxWarning : nil
-        return MultiplexerChoice(mux: kind.mux, name: kind.name, route: backend.route, version: kind.version, warning: warning)
+        let ranked = available(multiplexers: multiplexers, backends: backends)
+        return override.flatMap { name in ranked.first { $0.name == name } } ?? ranked.first
+    }
+
+    /// Every multiplexer a new space can go to (New space's Multiplexer), herdr first. The helper's native one is never
+    /// offered: its sessions belong to the helper, which ends with the phone's connection (every trip to the
+    /// background), and Spaces never lists them.
+    static func available(multiplexers: [TabsMultiplexer], backends: [HelperBackend]) -> [MultiplexerChoice] {
+        multiplexers.filter { $0.external && $0.installed != false }
+            .sorted { rank($0.name) < rank($1.name) }
+            .compactMap { kind in
+                let candidates = backends.filter { $0.mux == kind.mux }
+                guard let backend = candidates.first(where: { $0.isDefault == true }) ?? candidates.first else { return nil }
+                // The helper's own answer first; a version alone (older feature rows) is read the same way.
+                let pasteState = kind.paste_state ?? kind.version.map(tmuxSupported)
+                let warning = kind.name == "tmux" && pasteState == false ? tmuxWarning : nil
+                return MultiplexerChoice(mux: kind.mux, name: kind.name, route: backend.route, version: kind.version, warning: warning)
+            }
     }
 
     private static func rank(_ name: String) -> Int { preference.firstIndex(of: name) ?? preference.count }
@@ -87,6 +94,17 @@ struct TabsRecentProject: Decodable, Equatable, Sendable {
     }
 
     var time: Date? { time_ms.map { Date(timeIntervalSince1970: Double($0) / 1000) } }
+}
+
+/// A `terminals.activity` row (the `terminals.activity` hello feature): when the server last saw activity in a node of
+/// the topology, by its key (node ids are per connection). tmux reports its windows (`#{window_activity}`, whole
+/// seconds); herdr reports nothing.
+struct TabsServerActivity: Decodable, Equatable, Sendable {
+    let node: UInt64
+    let key: String
+    let time_ms: UInt64
+
+    var time: Date { Date(timeIntervalSince1970: Double(time_ms) / 1000) }
 }
 
 /// The three ways to close, with the Mac's names (its tab and space menus: Close Tab, Detach, Terminate…).
@@ -138,6 +156,12 @@ struct TabCommands: Sendable {
     func recentProjects(limit: Int = 30) async throws -> [TabsRecentProject] {
         struct Limit: Encodable { let limit: Int }
         return try await client.connection.request("projects.recent", params: Limit(limit: limit))
+    }
+
+    /// `terminals.activity {}` (needs the `terminals.activity` hello feature). A row this build cannot read is left out.
+    func serverActivity() async throws -> [TabsServerActivity] {
+        let rows: [Lenient<TabsServerActivity>] = try await client.connection.request("terminals.activity", params: [String: String]())
+        return rows.compactMap(\.value)
     }
 
     /// `backends.create`: makes sure the multiplexer's server is up and returns its backend id.
@@ -227,8 +251,11 @@ extension MobileWorkspace {
     @discardableResult
     func detect(override: String? = nil) async throws -> MultiplexerChoice? {
         let found = try await commands(nodes: false).detect()
-        choice = MultiplexerChoice.choose(multiplexers: found.multiplexers, backends: found.backends, override: override)
-        return choice
+        let available = MultiplexerChoice.available(multiplexers: found.multiplexers, backends: found.backends)
+        if multiplexers != available { multiplexers = available }
+        let chosen = override.flatMap { name in available.first { $0.name == name } } ?? available.first
+        if choice != chosen { choice = chosen }
+        return chosen
     }
 
     /// M7a's recent project folders: existing ones, newest first; none when the helper lacks the `projects.recent`
@@ -252,34 +279,68 @@ extension MobileWorkspace {
         })
     }
 
-    /// M7a: a new space named `name` in `directory` (absolute or `~/…`): `backends.create` for the chosen multiplexer
-    /// (its server starts when none runs), a first terminal under that backend as the new herdr workspace or tmux
-    /// session, then `entities.rename` once the topology shows it. Returns its first tab, which Create opens.
-    func createSpace(name: String, directory: String?, timeout: Duration = .seconds(10)) async throws -> MobileTab {
+    /// M7a: a new space in `directory` (absolute or `~/…`) on `multiplexer` (nil: `choice`, the followed one):
+    /// `backends.create` for it (its server starts when none runs), a first terminal under that backend as the new
+    /// herdr workspace or tmux space, then, when `name` is not empty, `entities.rename` once the topology shows it.
+    /// Without a name the server names it as the Mac's new spaces are named (`NewSpaceName`): after its folder, following
+    /// it until renamed. Returns its first tab, which Create opens. The host shows one multiplexer's spaces at a time: on
+    /// another one, `follow` switches the host to it (its saved preference) once its server runs, so the new space shows
+    /// up.
+    func createSpace(name: String, directory: String?, on multiplexer: MultiplexerChoice? = nil,
+                     follow: @MainActor (String) -> Void = { _ in }, timeout: Duration = .seconds(10)) async throws -> MobileTab {
         let commands = try commands(nodes: false)
-        guard let choice else { throw TabsFailure.noMultiplexer }
+        guard let target = multiplexer ?? choice else { throw TabsFailure.noMultiplexer }
         // The backend's id whether its server already runs or starts now; the host session's open of the same route
         // brings the new space's topology.
-        let backend = try await commands.createBackend(choice.route)
+        let backend = try await commands.createBackend(target.route)
+        let switching = target.name != choice?.name
+        if switching {
+            follow(target.name)
+            choice = target
+        }
         let cwd = directory.map(host.expand).flatMap { $0.isEmpty ? nil : $0 }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let terminal: UInt64
-        var named = false
+        /// The space the first window was made in before it was placed into its own.
+        var placedFrom: SpaceRef?
         do {
             terminal = try await commands.createTerminal(parent: backend, cwd: cwd)
         } catch let failure as HelperFailure {
             // tmux makes a new space under its backend only while one session is attached ("needs an unambiguous
-            // session"). Otherwise: a window in one of its spaces, placed into a new space with the name.
+            // session"). Otherwise: a window in one of its spaces, placed into a new space. The helper names a placed
+            // space after its folder too (the label only while the folder is unknown), so a name the user gave is set
+            // after. After a switch its spaces arrive with the first snapshot of the newly followed multiplexer.
+            if switching { await waitForSpaces(on: backend, timeout: timeout) }
             guard host.live, let anchor = spaces.first(where: { $0.backend == backend }) else { throw failure }
             terminal = try await commands.createTerminal(parent: anchor.node, cwd: cwd)
-            try await commands.place(terminal: terminal, space: trimmed.isEmpty ? "space" : trimmed, in: self, timeout: timeout)
-            named = true
+            let label = trimmed.isEmpty ? NewSpaceName.automatic(directory, host: host) ?? "space" : trimmed
+            try await commands.place(terminal: terminal, space: label, in: self, timeout: timeout)
+            placedFrom = anchor.ref
         }
-        guard let tab = await tab(for: terminal, timeout: timeout), let space = space(of: tab) else {
+        guard let tab = await tab(for: terminal, timeout: timeout), space(of: tab) != nil else {
             throw TabsFailure(message: "The space was created, but the host has not shown it yet.")
         }
-        if !named, !trimmed.isEmpty, trimmed != space.name { try await commands.rename(space.node, to: trimmed) }
+        guard !trimmed.isEmpty else { return tab }
+        // A placed window's space is renamed once the topology shows it moved (by key: the move may land a snapshot
+        // later), even when its label already reads the same: the rename is what stops it following the folder.
+        if let placedFrom { await waitUntil(timeout: timeout) { tab.space != placedFrom } }
+        if let space = space(of: tab), space.ref != placedFrom, placedFrom != nil || trimmed != space.name {
+            try await commands.rename(space.node, to: trimmed)
+        }
         return tab
+    }
+
+    /// Until `done` holds of a live snapshot, at most `timeout`.
+    private func waitUntil(timeout: Duration, _ done: () -> Bool) async {
+        let deadline = ContinuousClock.now + timeout
+        while !(host.live && done()), ContinuousClock.now < deadline, !Task.isCancelled {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+    }
+
+    /// Until a live snapshot lists spaces of `backend`, at most `timeout`.
+    private func waitForSpaces(on backend: UInt64, timeout: Duration) async {
+        await waitUntil(timeout: timeout) { spaces.contains { $0.backend == backend } }
     }
 
     /// New tab in a space: a new window (tmux) or tab (herdr) in the directory the space's active tab is in.

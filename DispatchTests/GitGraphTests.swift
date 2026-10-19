@@ -131,22 +131,26 @@ final class GitGraphTests: XCTestCase {
             GitChange(path: "a.ts", kind: .modified, area: .unstaged),
             GitChange(path: "b.ts", kind: .untracked, area: .untracked),
         ], loadedAt: now)
-        // One wording for the checkout in the Changes and Commits headers and the Files footer.
+        // One wording for the checkout: the header's branch chip.
         XCTAssertEqual(GitChangesText.branch(status), "main")
         let detached = GitStatus(head: "c28855c", changes: [], loadedAt: now)
         XCTAssertEqual(GitChangesText.branch(detached), "detached at c28855c")
-        XCTAssertEqual(FilesFooter.gitSummary(.repository(GitRepository(root: "/r")), status: detached), "detached at c28855c · 0 changed")
+        XCTAssertEqual(FilesHeader.branchHelp(detached), "detached at c28855c · Commits ⌃⌘3")
+        var tracking = status
+        tracking.upstream = "origin/main"
+        tracking.ahead = 0
+        tracking.behind = 0
+        XCTAssertEqual(FilesHeader.branchHelp(tracking), "main · up to date with origin/main · Commits ⌃⌘3")
+        tracking.ahead = 2
+        tracking.behind = 1
+        XCTAssertEqual(FilesHeader.branchHelp(tracking), "main · 2 ahead, 1 behind of origin/main · Commits ⌃⌘3")
         XCTAssertEqual(status.changedFiles, 2, "the uncommitted row counts a file staged and unstaged once")
         XCTAssertEqual(GitCommitsText.files(1), "1 file")
         let page = GitLog(commits: log(["b: a", "a"]), exhausted: false, scope: .all, filter: "", loadedAt: now)
-        XCTAssertEqual(GitCommitsText.commits(page, scope: .all), "2+ commits · all branches", "more pages follow")
-        XCTAssertEqual(GitCommitsText.commits(nil, scope: .branch), "this branch")
         XCTAssertEqual(GitCommitsText.footer(page), "2 loaded · scroll for more")
         var all = page
         all.exhausted = true
-        XCTAssertEqual(GitCommitsText.commits(all, scope: .branch), "2 commits · this branch")
         all.commits.removeLast()
-        XCTAssertEqual(GitCommitsText.commits(all, scope: .branch), "1 commit · this branch")
         XCTAssertEqual(GitCommitsText.footer(all), "1 loaded · all")
         XCTAssertEqual(GitCommitsText.ago(now.addingTimeInterval(-35 * 60), at: now), "35 min ago")
         XCTAssertEqual(GitCommitsText.ago(now.addingTimeInterval(-3_600), at: now), "1 hour ago")

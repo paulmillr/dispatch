@@ -322,25 +322,11 @@ enum GitChangesText {
         return status.head.map { "detached at \(String($0.prefix(7)))" } ?? "detached HEAD"
     }
 
-    /// "1 staged", "2 unstaged", "1 untracked".
-    static func count(_ status: GitStatus, _ area: GitChangeArea) -> String {
-        "\(FilesFormatting.count(status.changes(in: area).count)) \(area.rawValue)"
-    }
-
     /// "showing the first 2,000" after the counts of a status cut at the helper's bound.
     static func truncated(_ status: GitStatus) -> String {
         "showing the first \(FilesFormatting.count(status.changes.count))"
     }
 
-    /// The repository as the header names it: "~/src/api" below home, "homelab:~/src/api" on a remote tab.
-    static func repositoryPath(_ root: String, home: String?, host: String?) -> String {
-        let root = FilesPath.normalized(root)
-        var path = root
-        if let home = home.map(FilesPath.normalized), home != "/", FilesPath.isWithin(root, home) {
-            path = "~" + root.dropFirst(home.count)
-        }
-        return host.map { "\($0):\(path)" } ?? path
-    }
 
     /// "Staged", "Unstaged", "Untracked".
     static func title(_ area: GitChangeArea) -> String {

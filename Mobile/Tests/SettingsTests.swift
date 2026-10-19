@@ -29,24 +29,23 @@ final class SettingsTests: XCTestCase {
         settings.terminalFontSize = 15
         XCTAssertEqual(store.double(forKey: TerminalController.fontSizeKey), 15, "the key pinch zoom writes and terminals read")
         XCTAssertEqual(MobileSettings(defaults: store).terminalFontSize, 15)
-        XCTAssertTrue(MobileSettings.fontSizes.allSatisfy { TerminalConfiguration.fontSizes.contains($0) })
+        XCTAssertEqual(MobileSettings.fontSizeRange.lowerBound, TerminalConfiguration.fontSizes.lowerBound.rounded(.up))
+        XCTAssertEqual(MobileSettings.fontSizeRange.upperBound, TerminalConfiguration.fontSizes.upperBound.rounded(.down))
     }
 
-    /// A pinch writes the size behind Settings' back, in half points up to 28: Settings shows that size (the picker
-    /// lists it, so it has a selection), and picking the size it showed before the pinch is saved.
-    func testTheFontSizeFollowsAPinchAndAPickAlwaysSaves() {
+    /// A pinch writes the size behind Settings' back, in half points up to 28: the slider shows that size, and
+    /// sliding back to the size it showed before the pinch is saved.
+    func testTheFontSizeFollowsAPinchAndASlideAlwaysSaves() {
         let store = defaults()
         let settings = MobileSettings(defaults: store)
         XCTAssertEqual(settings.terminalFontSize, 12)
         store.set(13.5, forKey: TerminalController.fontSizeKey)
         XCTAssertEqual(settings.terminalFontSize, 13.5)
-        XCTAssertTrue(settings.fontSizeChoices.contains(13.5))
-        XCTAssertEqual(settings.fontSizeChoices, settings.fontSizeChoices.sorted())
+        XCTAssertTrue(MobileSettings.fontSizeRange.contains(13.5))
         XCTAssertEqual(MobileSettings.fontSizeLabel(13.5), "13.5 pt")
         XCTAssertEqual(MobileSettings.fontSizeLabel(12), "12 pt")
         settings.terminalFontSize = 12
-        XCTAssertEqual(store.double(forKey: TerminalController.fontSizeKey), 12, "The pick replaced the pinch's size")
-        XCTAssertEqual(settings.fontSizeChoices, MobileSettings.fontSizes)
+        XCTAssertEqual(store.double(forKey: TerminalController.fontSizeKey), 12, "The slide replaced the pinch's size")
     }
 
     /// Chat off: the helper runs without hooks and agent capabilities, and the host's agents are terminals only.
@@ -194,5 +193,28 @@ final class SettingsTests: XCTestCase {
         XCTAssertNil(tabs.recent)
         XCTAssertNil(defaults.object(forKey: "tabs.collapsed"), "an older build's per-host keys")
         XCTAssertEqual(defaults.string(forKey: "appearance"), "light", "appearance stays")
+    }
+
+    /// Remove all data except SSH keys: the same removal, but the keys, their private halves and passphrases stay;
+    /// host passwords go with the hosts.
+    func testRemoveAllDataExceptSSHKeys() async throws {
+        let vault = MemoryVault()
+        let known = KnownHostStore(url: nil)
+        let studio = ResilienceFixture.host("studio")
+        let hosts = ResilienceFixture.sessions([studio], vault: vault, knownHosts: known)
+        try hosts.keys.setPassword("secret", for: studio.id)
+        let key = try hosts.keys.generateED25519(label: "phone")
+        try vault.set(Data("words".utf8), for: KeyStore.passphraseAccount(key.id), protection: .none)
+        try vault.set(Data("orphan".utf8), for: KeyStore.privateAccount(UUID()), protection: .none)
+        known.trust(host: "studio.local", port: 22, algorithm: "ssh-ed25519", key: Data([1]))
+        let app = ResilienceFixture.composition(hosts)
+
+        app.removeAllData(keepingKeys: true)
+        XCTAssertTrue(hosts.store.hosts.isEmpty)
+        XCTAssertTrue(known.entries.isEmpty)
+        XCTAssertEqual(hosts.keys.keys.map(\.id), [key.id], "the key stays")
+        XCTAssertEqual(vault.accounts, [KeyStore.privateAccount(key.id), KeyStore.passphraseAccount(key.id)],
+                       "only the kept key's secrets: the host password and a secret of no key go")
+        XCTAssertNotNil(try vault.secret(for: KeyStore.privateAccount(key.id), reason: ""))
     }
 }

@@ -83,6 +83,83 @@ final class GitParsersTests: XCTestCase {
         XCTAssertEqual(GitParsers.porcelain("").changes, [])
     }
 
+    /// `log --pretty=raw`: which commits carry a signature header, and its kind; a message line can't pose as one.
+    func testRawLogNamesSignedCommitsAndTheirKind() {
+        let a = String(repeating: "a", count: 40), b = String(repeating: "b", count: 40), c = String(repeating: "c", count: 40)
+        let raw = """
+        commit \(a)
+        tree 1111111111111111111111111111111111111111
+        author P <p@x> 1 +0000
+        committer P <p@x> 1 +0000
+        gpgsig -----BEGIN PGP SIGNATURE-----
+         
+         iQEzBAABCAAdFiEE
+         -----END PGP SIGNATURE-----
+
+            Signed with gpg
+
+        commit \(b)
+        tree 1111111111111111111111111111111111111111
+        gpgsig -----BEGIN SSH SIGNATURE-----
+         U1NIU0lH
+         -----END SSH SIGNATURE-----
+
+            Signed with ssh
+
+        commit \(c)
+        tree 1111111111111111111111111111111111111111
+
+            gpgsig -----BEGIN PGP SIGNATURE----- in a message is not a header
+        """
+        XCTAssertEqual(GitParsers.signatures(raw), [a: .gpg, b: .ssh])
+    }
+
+    /// `verify-commit --raw`: gpg's status lines (as this Mac's gpg 2.5 printed them) and ssh-keygen's words.
+    func testSignatureChecksReadGpgAndSshVerdicts() {
+        let good = """
+        [GNUPG:] NEWSIG paul@paulmillr.com
+        [GNUPG:] KEY_CONSIDERED 78A89CD10959782E23FF8447697079DA6878B89B 0
+        [GNUPG:] GOODSIG 697079DA6878B89B Paul Miller <paul@paulmillr.com>
+        [GNUPG:] VALIDSIG 78A89CD10959782E23FF8447697079DA6878B89B 2026-10-18 1792363575 0 4 0 22 10 00 78A89CD10959782E23FF8447697079DA6878B89B
+        [GNUPG:] TRUST_ULTIMATE 0 pgp paul@paulmillr.com
+        """
+        let check = GitParsers.signatureCheck(good, status: 0)
+        XCTAssertEqual(check, GitSignatureCheck(verdict: .good(certified: true), kind: .gpg,
+                                                signer: "Paul Miller <paul@paulmillr.com>",
+                                                key: "78A89CD10959782E23FF8447697079DA6878B89B"))
+        XCTAssertEqual(GitSignatureText.line(check, kind: .gpg),
+                       "Good GPG signature · Paul Miller <paul@paulmillr.com> · 78A89CD10959782E23FF8447697079DA6878B89B")
+        XCTAssertEqual(GitParsers.signatureCheck(good.replacingOccurrences(of: "TRUST_ULTIMATE", with: "TRUST_UNDEFINED"),
+                                                 status: 0).verdict, .good(certified: false))
+        XCTAssertEqual(GitParsers.signatureCheck("[GNUPG:] NEWSIG\n[GNUPG:] BADSIG 697079DA6878B89B Paul <p@x>", status: 1).verdict, .bad)
+        XCTAssertEqual(GitParsers.signatureCheck("[GNUPG:] ERRSIG 697079DA6878B89B 22 10 00 1 9 -\n[GNUPG:] NO_PUBKEY 697079DA6878B89B",
+                                                 status: 1),
+                       GitSignatureCheck(verdict: .unknownKey, kind: .gpg, key: "697079DA6878B89B"))
+        XCTAssertEqual(GitParsers.signatureCheck("[GNUPG:] EXPKEYSIG 6978 Paul <p@x>", status: 1).verdict, .expiredKey)
+        XCTAssertEqual(GitParsers.signatureCheck("[GNUPG:] REVKEYSIG 6978 Paul <p@x>", status: 1).verdict, .revokedKey)
+
+        let ssh = GitParsers.signatureCheck("Good \"git\" signature for paul@x.com with ED25519 key SHA256:abcDEF", status: 0)
+        XCTAssertEqual(ssh, GitSignatureCheck(verdict: .good(certified: true), kind: .ssh, signer: "paul@x.com", key: "SHA256:abcDEF"))
+        XCTAssertEqual(GitParsers.signatureCheck("No principal matched.", status: 1).verdict, .unknownKey)
+        XCTAssertEqual(GitParsers.signatureCheck("", status: 1).verdict, .unsigned)
+        let unchecked = GitParsers.signatureCheck("error: cannot run /nonexistent: No such file or directory", status: 1)
+        XCTAssertEqual(unchecked.verdict, .unchecked("cannot run /nonexistent: No such file or directory"))
+        XCTAssertEqual(GitSignatureText.line(unchecked, kind: .gpg),
+                       "Signed with GPG · couldn’t check: cannot run /nonexistent: No such file or directory")
+    }
+
+    /// A commit's file for Source: the new side of its one-hunk patch, without the removed lines or git's markers.
+    func testNewSideReadsTheWholeFileFromAOneHunkPatch() {
+        let patch = "diff --git a/a.ts b/a.ts\nindex 1..2 100644\n--- a/a.ts\n+++ b/a.ts\n@@ -1,3 +1,3 @@\n keep\n-gone\n+new\n"
+            + " +plus kept\n"
+        XCTAssertEqual(GitParsers.newSide(patch), "keep\nnew\n+plus kept\n")
+        let noNewline = "@@ -1 +1 @@\n-old\n\\ No newline at end of file\n+new\n\\ No newline at end of file\n"
+        XCTAssertEqual(GitParsers.newSide(noNewline), "new")
+        XCTAssertEqual(GitParsers.newSide("@@ -0,0 +1,2 @@\n+a\n+b\n"), "a\nb\n", "an added file")
+        XCTAssertNil(GitParsers.newSide("diff --git a/x b/x\nold mode 100644\nnew mode 100755\n"), "a mode change has no lines")
+        XCTAssertNil(GitParsers.newSide("Binary files a/x and b/x differ\n"))
+    }
+
     func testNumstatReadsCountsBinariesAndRenames() {
         XCTAssertEqual(GitParsers.numstat(Recorded.unstagedNumstat), [
             GitNumstat(path: "CHANGELOG.md", additions: 0, deletions: 1),

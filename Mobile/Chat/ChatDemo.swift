@@ -246,7 +246,7 @@ struct ChatDemoRoot: View {
             .task { await conversations.refresh(host: ChatDemo.host) }
         case "M9a":
             Color.canvas.sheet(isPresented: .constant(true)) {
-                NewChatSheet(conversations: conversations, memory: ChatDemo.memory, look: ChatDemo.look, newSpace: {}, started: { _ in })
+                NewChatSheet(conversations: conversations, memory: ChatDemo.memory, look: ChatDemo.look, started: { _ in })
                     .presentationDetents([.large])
             }
         case "M5d":

@@ -6,7 +6,7 @@ final class FilesSettingsTests: XCTestCase {
         let decoded = try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8))
         XCTAssertTrue(decoded.filesDragAndDrop, "Drag and drop is on by default")
         XCTAssertTrue(decoded.filesFollowShell)
-        XCTAssertFalse(decoded.filesShowHidden, "Hidden files stay hidden until chosen")
+        XCTAssertTrue(decoded.filesShowHidden, "Hidden files show until hidden")
         XCTAssertEqual(decoded.filesOpenWith, .editorInTab)
         XCTAssertTrue(decoded.filesAskBeforeReplacing)
         XCTAssertEqual(decoded, Preferences())
@@ -16,13 +16,13 @@ final class FilesSettingsTests: XCTestCase {
         var changed = Preferences()
         changed.filesDragAndDrop = false
         changed.filesFollowShell = false
-        changed.filesShowHidden = true
+        changed.filesShowHidden = false
         changed.filesAskBeforeReplacing = false
         let decoded = try JSONDecoder().decode(Preferences.self, from: JSONEncoder().encode(changed))
         XCTAssertEqual(decoded, changed)
         XCTAssertFalse(decoded.filesDragAndDrop)
         XCTAssertFalse(decoded.filesFollowShell)
-        XCTAssertTrue(decoded.filesShowHidden)
+        XCTAssertFalse(decoded.filesShowHidden)
         XCTAssertFalse(decoded.filesAskBeforeReplacing)
         for choice in FilesOpenWith.allCases {
             var preferences = changed
@@ -33,10 +33,10 @@ final class FilesSettingsTests: XCTestCase {
     }
 
     func testUnknownOpenWithChoiceKeepsTheOtherSettings() throws {
-        let json = #"{"filesOpenWith":"unknownEditor","filesShowHidden":true,"filesDragAndDrop":false,"fontFamily":"0xProto"}"#
+        let json = #"{"filesOpenWith":"unknownEditor","filesShowHiddenFiles":false,"filesDragAndDrop":false,"fontFamily":"0xProto"}"#
         let decoded = try JSONDecoder().decode(Preferences.self, from: Data(json.utf8))
         XCTAssertEqual(decoded.filesOpenWith, .editorInTab)
-        XCTAssertTrue(decoded.filesShowHidden)
+        XCTAssertFalse(decoded.filesShowHidden)
         XCTAssertFalse(decoded.filesDragAndDrop)
         XCTAssertEqual(decoded.fontFamily, "0xProto")
     }

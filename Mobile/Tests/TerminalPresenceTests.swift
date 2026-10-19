@@ -91,6 +91,63 @@ final class TerminalPresenceTests: XCTestCase {
         XCTAssertEqual(herdr.server, .available, "Who owns history survives a reattach")
     }
 
+    /// Chat opens a presence knowing only its node; the Terminal segment's open names the backend, so a tmux terminal
+    /// scrolls its own history from the first line instead of sending every step of the first swipe to the server.
+    func testAPresenceMadeWithoutItsBackendLearnsItFromTheSegment() {
+        let presences = TerminalPresences()
+        let key = TerminalPresences.Key(host: UUID(), node: "app:%5")
+        let presence = presences.open(key, feed: ScriptedTerminalFeed(output: Data()))
+        XCTAssertEqual(presence.scroll.server, .unknown)
+        XCTAssertTrue(presences.open(key, feed: ScriptedTerminalFeed(output: Data()), scrollback: .client) === presence)
+        XCTAssertEqual(presence.scrollback, .client)
+        XCTAssertEqual(presence.scroll.route(5, local: .init(above: 2, below: 0, programTakesWheel: true)), .init(local: 5))
+        var answered = TerminalScrollModel()
+        _ = answered.answered(.server, for: .init(server: 1))
+        answered.learn(.client)
+        XCTAssertEqual(answered.server, .available, "What the server answered stays")
+        presences.close(key)
+    }
+
+    /// A long tmux history is replayed as one output larger than the old 8 MiB inbox: the attachment survives it.
+    func testALongHistoryReplayKeepsTheAttachment() async throws {
+        let feed = ControlledFeed()
+        let presence = TerminalPresence(feed: feed, grid: (columns: 80, rows: 24), configuration: TerminalConfiguration())
+        presence.start()
+        let replay = Data(String(repeating: "00012345 lorem ipsum dolor sit amet\r\n", count: 300_000).utf8)
+        XCTAssertGreaterThan(replay.count, 10 * 1024 * 1024)
+        feed.events?.yield(.output(replay))
+        feed.events?.yield(.output(Data("\u{1B}[H\u{1B}[2Jlive".utf8)))
+        try await TestSupport.eventually(timeout: .seconds(30)) { presence.session.frameStats().bytesFed == replay.count + 11 }
+        XCTAssertNil(presence.ended)
+        XCTAssertTrue(presence.attached)
+        presence.stop()
+    }
+
+    /// A terminal shown again right after it was left (release, then retain) attaches the same feed again. The ended
+    /// attachment's task must not detach the new one: the screen stayed, but nothing typed reached the program and
+    /// nothing new was drawn.
+    func testShowingATerminalAgainKeepsItsNewAttachment() async throws {
+        let peer = ScriptedHelper.terminal()
+        defer { peer.close() }
+        let presences = TerminalPresences()
+        let key = TerminalPresences.Key(host: UUID(), node: "app:%7")
+        let presence = presences.open(key, feed: HelperTerminalFeed(client: peer.client, terminal: 7), terminal: 7,
+                                      client: peer.client, scrollback: .client)
+        presences.retain(key)
+        _ = try await peer.wait(for: "terminals.attach")
+        presences.release(key)
+        presences.retain(key)
+        let attaches = try await peer.wait(for: "terminals.attach", count: 2)
+        // The first attachment's task ends meanwhile.
+        try await Task.sleep(for: .milliseconds(200))
+        presence.feed.send(Data("x".utf8))
+        _ = try await peer.wait(for: "terminals.input")
+        XCTAssertFalse(peer.cancellations.contains(attaches[1].id), "The new attachment was cancelled")
+        XCTAssertTrue(presence.attached)
+        XCTAssertNil(presence.ended)
+        presences.close(key)
+    }
+
     /// Chat and Terminal share one presence per node; a reconnect's new terminal id reattaches it with the new feed.
     func testPresencesAreSharedByKeyAndReattachAfterAReconnect() async throws {
         let first = ScriptedHelper.terminal(), second = ScriptedHelper.terminal()

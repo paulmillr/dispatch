@@ -27,6 +27,8 @@ extension FilesCoordinator {
     struct Preferences: Equatable {
         var followShell = true
         var showHidden = false
+        /// Settings › Features › Git.
+        var git = true
     }
 
     /// Everything the loader reads from the app, replaceable in tests.
@@ -79,7 +81,7 @@ extension FilesCoordinator {
     /// Settings › Files › Follow the shell’s directory and Show hidden files.
     static func preferences() -> Preferences {
         let values = TerminalRuntime.shared.preferences
-        return Preferences(followShell: values.filesFollowShell, showHidden: values.filesShowHidden)
+        return Preferences(followShell: values.filesFollowShell, showHidden: values.filesShowHidden, git: values.gitEnabled)
     }
 
     // MARK: Entry points
@@ -134,7 +136,8 @@ extension FilesCoordinator {
             let tick = watch.full
             let plan = prepare(session, watch)
             arm(session, watch)
-            git.pass(session, source: Self.shows(session) ? session.availability.source : nil, folder: watch.root, tick: tick)
+            git.pass(session, source: Self.shows(session) ? session.availability.source : nil, folder: watch.root, tick: tick,
+                     enabled: environment.preferences().git)
             if let plan { await load(plan, session, watch) }
             guard let session = watch.session else { return }
             switch await watch.next(poll: Self.shows(session) ? Self.interval : nil, sleep: environment.sleep) {

@@ -12,6 +12,7 @@
 //!                          sent are the bytes the other side read; every capture linked)
 //! capture store STAGE REPLAYS [--failed]   (a capture's passed tests into the corpus; --failed: its failed ones too, unchecked)
 //! capture prune REPLAYS [--dry-run]   (drop corpus helper captures that no longer replay)
+//! capture migrate REPLAYS MIGRATIONS [--check] [--dry-run] [--retired DIR]   (the corpus brought up to the code: capture/migrate.rs)
 //! Options go anywhere after the command.
 use dispatch_helper_core::{
     hash::Sha256,
@@ -33,6 +34,7 @@ use std::{
 };
 
 mod diff;
+mod migrate;
 
 /// A value or a frame of ours as inspect reads it: inspect prints it, diff (capture/diff.rs) compares two. Only for
 /// reading, never stored.
@@ -891,6 +893,38 @@ fn edited(token: &mut Token<'_>, edits: &[String], tally: &mut Converted) {
     }
 }
 
+/// `records` with a reviewed recording change made as the new helper records it (`capture convert --edit NAME`):
+/// `write-parent`, a write job's `parent_device` and `parent_inode` (b8e1cd26) in its submit and its file.done, null
+/// for the internal writes every earlier recording made (only files.write names a parent).
+fn amended(records: &mut [trace::Record], edits: &[String], tally: &mut Converted) -> io::Result<()> {
+    if !edits.iter().any(|edit| edit == "write-parent") {
+        return Ok(());
+    }
+    let parented = |job: &mut Data<'_>| {
+        let Data::Object(fields) = job else { return false };
+        let write = fields.iter().any(|(key, value)| *key == "job" && value.string() == Some("write"));
+        if !write || fields.iter().any(|(key, _)| *key == "parent_device") {
+            return false;
+        }
+        fields.extend([("parent_device", Data::Null), ("parent_inode", Data::Null)]);
+        true
+    };
+    for record in records.iter_mut() {
+        let Ok(mut args) = body::decode_plain(&record.args) else { continue };
+        let changed = match (record.op.as_str(), &mut args) {
+            ("submit", job) => parented(job),
+            ("file.done", Data::Array(done)) => done.get_mut(1).is_some_and(parented),
+            _ => false,
+        };
+        if changed {
+            let args = body::encode_plain(&args).map_err(|error| io::Error::other(error.message))?;
+            record.args = args;
+            tally.edited += 1;
+        }
+    }
+    Ok(())
+}
+
 /// A wire body of the schema `names` written in this helper's, with its version fields and `accepted` edits made.
 fn rewritten(bytes: &[u8], names: &body::Names, accepted: &[String], tally: &mut Converted) -> io::Result<Vec<u8>> {
     let mut value = tokens(bytes, names)?;
@@ -985,6 +1019,7 @@ fn convert(file: &Path, target: &Path, names: &HashMap<u64, body::Names>, edits:
         tally.left = records.iter().filter(|record| [&record.args, &record.output].iter().any(|bytes| bytes.windows(8).any(|window| window == old.schema))).count();
         header.wire = wire::VERSION;
     }
+    amended(&mut records, edits, &mut tally)?;
     let mut writer = trace::Writer::corpus(File::options().write(true).create_new(true).mode(0o600).open(target)?, &header)?;
     for record in &records {
         writer.push(record)?;
@@ -3322,6 +3357,7 @@ pub fn run(arguments: &[std::ffi::OsString]) -> io::Result<()> {
             }
             Ok(())
         }
+        "migrate" => migrate::run(args),
         "replace" => {
             let list = option(&mut args, "--needles")?.map(|path| needles(&path)).transpose()?.unwrap_or_default();
             let jobs = jobs(&mut args)?;
@@ -3334,7 +3370,7 @@ pub fn run(arguments: &[std::ffi::OsString]) -> io::Result<()> {
     }
 }
 
-const USAGE: &str = "usage: dispatch-helper capture replay DIR [--output DIR] [--timeout SECONDS] [--completion required] | inspect FILE [--from N] [--limit N] | diff A B [--limit N] [--jobs N] | value FILE | grep NEEDLE PATH... [--limit N] [--jobs N] | grep PATH... [--needles FILE] [--values SHAPE]... [--limit N] [--jobs N] | replace DIR OUT [--needles FILE] [--uuids] [--ips] [--jobs N] | key PATH... | check PATH... | store STAGE REPLAYS [--failed] | prune REPLAYS [--dry-run] | dictionary DIR | convert REPLAYS OUT [--dictionaries DIR] [--edit NAME]... [--jobs N]   (options go anywhere after the command)";
+const USAGE: &str = "usage: dispatch-helper capture replay DIR [--output DIR] [--timeout SECONDS] [--completion required] | inspect FILE [--from N] [--limit N] | diff A B [--limit N] [--jobs N] | value FILE | grep NEEDLE PATH... [--limit N] [--jobs N] | grep PATH... [--needles FILE] [--values SHAPE]... [--limit N] [--jobs N] | replace DIR OUT [--needles FILE] [--uuids] [--ips] [--jobs N] | key PATH... | check PATH... | store STAGE REPLAYS [--failed] | prune REPLAYS [--dry-run] | dictionary DIR | convert REPLAYS OUT [--dictionaries DIR] [--edit NAME]... [--jobs N] | migrate REPLAYS MIGRATIONS [--check] [--dry-run] [--retired DIR] [--jobs N]   (options go anywhere after the command)";
 
 #[cfg(test)]
 #[path = "capture.test.rs"]

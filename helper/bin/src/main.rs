@@ -223,7 +223,7 @@ fn main() -> std::io::Result<()> {
     // sshd's PATH. Take the login shell's before any thread exists, so the multiplexers, their
     // servers and agent launches find programs where the user's shell would
     // (system/search.rs). Not for the Mac's greeting probe, whose empty grant runs nothing.
-    if remote
+    let plain = remote
         && mode.is_none()
         && socket.is_none()
         && std::env::var_os("DISPATCH_REPLAY").is_none()
@@ -231,8 +231,20 @@ fn main() -> std::io::Result<()> {
             ["backend.register", "tmux.pane", "herdr.start", "agent.submit", "hooks.configure"]
                 .iter()
                 .any(|grant| grants.contains(*grant))
-        })
-    {
+        });
+    // Nor does such a channel name a herdr socket: follow herdr's own default for its session,
+    // so the server the user runs (`herdr` in any shell) is the one opened and started.
+    let herdr = plain.then(|| {
+        let session = std::env::var("HERDR_SESSION")
+            .ok()
+            .filter(|session| !session.is_empty() && !session.contains('/'))
+            .unwrap_or("default".into());
+        let directory = std::env::var_os("HOME").map_or(home.clone(), PathBuf::from);
+        let config = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from);
+        let socket = dispatch_helper_herdr::Config::default_socket(&session, &directory, config.as_deref());
+        (socket, session)
+    });
+    if plain {
         let directory = std::env::var_os("HOME").map_or(home.clone(), PathBuf::from);
         let (path, shell_home) = dispatch_helper_core::system::search::resolve(
             &shell,
@@ -345,10 +357,12 @@ fn main() -> std::io::Result<()> {
                 .cloned()
                 .or_else(|| std::env::var_os("HERDR_SOCKET_PATH"))
                 .map(PathBuf::from)
+                .or_else(|| herdr.as_ref().map(|(socket, _)| socket.clone()))
                 .unwrap_or_default(),
             session: options
                 .get(std::ffi::OsStr::new("--herdr-session"))
                 .map(|s| s.to_string_lossy().into_owned())
+                .or_else(|| herdr.map(|(_, session)| session))
                 .unwrap_or("main".into()),
             directory: cwd.clone(),
             environment: std::env::vars().collect(),

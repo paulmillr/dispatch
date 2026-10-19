@@ -1,8 +1,8 @@
 import AppKit
 import SwiftUI
 
-/// The Commits tab: the log as a graph with the selected commit beside it, read-only (F4a). Its header line
-/// (`GitCommitsHeaderLine`) sits in `FilesHeader`'s row after the segments. The git data layer fills `log`,
+/// The Commits tab: the log as a graph with the selected commit beside it, read-only (F4a). `FilesHeader` carries its
+/// branch, scope menu and search. The git data layer fills `log`,
 /// `commitDetail` and `commitDiff`; this view asks through `logWanted`, `logScope`, `logFilter`, `selectedCommit` and
 /// `commitFile`.
 struct GitCommitsView: View {
@@ -90,26 +90,11 @@ enum GitCommitsFocus: Hashable {
 
 /// The tab's texts, apart from the views so the fast tests read them.
 enum GitCommitsText {
-    /// The header's "148 commits · all branches": the commits loaded, "148+ commits" while more pages follow.
-    static func commits(_ log: GitLog?, scope: GitLogScope) -> String {
-        guard let log else { return scopeTitle(scope) }
-        let count = log.commits.count
-        let number = FilesFormatting.count(count) + (log.exhausted ? "" : "+")
-        return "\(number) \(count == 1 && log.exhausted ? "commit" : "commits") · \(scopeTitle(scope))"
-    }
-
     /// The footer's "200 loaded · scroll for more", "148 loaded · all".
     static func footer(_ log: GitLog?) -> String {
         guard let log else { return "Loading the log…" }
         let count = FilesFormatting.count(log.commits.count)
         return log.exhausted ? "\(count) loaded · all" : "\(count) loaded · scroll for more"
-    }
-
-    static func scopeTitle(_ scope: GitLogScope) -> String {
-        switch scope {
-        case .branch: "this branch"
-        case .all: "all branches"
-        }
     }
 
     static func files(_ count: Int) -> String {
@@ -141,58 +126,15 @@ enum GitCommitsText {
     }
 }
 
-// MARK: Header
+// MARK: Search
 
-/// The Commits tab's part of the 34 pt files header (F4a's `.fh` after the segments): the branch, ahead and behind its
-/// upstream, how much of the log is loaded and in which scope, and the filter. No bar of its own: `FilesHeader` lays
-/// it out after the segments, so it takes the row's height and leaves the trailing inset to the header.
-struct GitCommitsHeaderLine: View {
-    @Bindable var session: FilesSession
-    @Environment(\.appTypography) private var typography
-
-    var body: some View {
-        let palette = Chrome.palette
-        HStack(spacing: 12) {
-            HStack(spacing: 8) {
-                if let status = session.status {
-                    let branch = GitChangesText.branch(status)
-                    HStack(spacing: 5) {
-                        Image(systemName: "arrow.triangle.branch").font(.system(size: typography.size(offset: -2.5)))
-                        Text(verbatim: branch)
-                    }
-                    .foregroundStyle(palette.secondary)
-                    if status.upstream != nil || status.ahead > 0 || status.behind > 0 {
-                        Text("·").foregroundStyle(palette.faint)
-                        if status.ahead > 0 { Text(verbatim: "↑\(status.ahead)").foregroundStyle(palette.green) }
-                        if status.behind > 0 { Text(verbatim: "↓\(status.behind)").foregroundStyle(palette.warning) }
-                        if let upstream = status.upstream { Text(verbatim: upstream).foregroundStyle(palette.detail) }
-                    }
-                    Text("·").foregroundStyle(palette.faint)
-                }
-                Text(verbatim: GitCommitsText.commits(session.log, scope: session.logScope))
-                    .foregroundStyle(palette.detail)
-            }
-            .font(AppFont.ui(size: typography.size(offset: -0.5)))
-            .lineLimit(1)
-            .fixedSize()
-            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
-            .clipped()
-            .accessibilityElement(children: .combine)
-            .accessibilityIdentifier("git-commits-summary")
-            GitCommitsFilterField(session: session)
-                .layoutPriority(1)
-        }
-        .font(AppFont.ui(size: typography.size(offset: -1)))
-        .foregroundStyle(palette.muted)
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("git-commits-header")
-    }
-}
-
-/// "Filter commits": the git data layer runs it as `--grep` and `--author` on the tab's host, so what is typed
-/// applies after a 300 ms pause rather than on every key.
+/// The header's search on Commits: the git data layer runs it as `--grep` and `--author` on the tab's host, so what is
+/// typed applies after a 300 ms pause rather than on every key. Opened from the search glyph it takes the keyboard;
+/// empty and left, it folds back (`fold`).
 struct GitCommitsFilterField: View {
     @Bindable var session: FilesSession
+    var focusOnAppear = false
+    var fold: () -> Void = {}
     @Environment(\.appTypography) private var typography
     /// What is typed, as typed; nil shows the session's filter. Applying it trims it into `logFilter` and leaves the
     /// draft alone, so a space typed before the next word stays in the field.
@@ -204,7 +146,7 @@ struct GitCommitsFilterField: View {
         let text = Binding(get: { draft ?? session.logFilter }, set: { draft = $0 })
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass").font(.system(size: typography.size(offset: -2.5)))
-            TextField("Filter commits", text: text, prompt: Text("Filter commits").foregroundStyle(palette.detail))
+            TextField("Search commits", text: text, prompt: Text("Search commits").foregroundStyle(palette.detail))
                 .textFieldStyle(.plain)
                 .foregroundStyle(palette.ink)
                 .focused($fieldFocused)
@@ -224,7 +166,7 @@ struct GitCommitsFilterField: View {
             if !text.wrappedValue.isEmpty {
                 Button { finish("") } label: { Image(systemName: "xmark.circle.fill") }
                     .buttonStyle(.plain)
-                    .help("Clear the filter · esc")
+                    .help("Clear the search · esc")
                     .accessibilityIdentifier("git-commits-filter-clear")
             }
         }
@@ -232,18 +174,27 @@ struct GitCommitsFilterField: View {
         .padding(.horizontal, 8)
         .frame(minWidth: typography.expanded(110), maxWidth: typography.expanded(170), minHeight: typography.expanded(22),
                maxHeight: typography.expanded(22))
-        .background(RoundedRectangle(cornerRadius: 5).fill(palette.control))
-        .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(palette.controlBorder))
-        .help("Filter by message or author · ⌘F")
+        // On the header's glass pill the field is the pill's; flat, it is its own well.
+        .background(RoundedRectangle(cornerRadius: 5).fill(LiquidGlassStore.shared.active ? .clear : palette.control))
+        .overlay { if !LiquidGlassStore.shared.active { RoundedRectangle(cornerRadius: 5).strokeBorder(palette.controlBorder) } }
+        .help("Search messages and authors · ⌘F")
         .task(id: draft) {
             // A key typed within the pause cancels this task and starts the next.
             guard GitCommitsFilter.applied(draft, filter: session.logFilter) != nil else { return }
             do { try await System.sleep(for: .milliseconds(300), "git.log-filter") } catch { return }
             if let value = GitCommitsFilter.applied(draft, filter: session.logFilter) { apply(value) }
         }
-        .onChange(of: fieldFocused) { _, _ in settle() }
-        .onChange(of: session.logFilter) { _, _ in settle() }
+        .onChange(of: fieldFocused) { _, focused in
+            settle()
+            if !focused, text.wrappedValue.isEmpty { fold() }
+        }
+        .onChange(of: session.logFilter) { _, filter in
+            settle()
+            if filter.isEmpty, !fieldFocused, draft?.isEmpty ?? true { fold() }
+        }
         .onChange(of: session.findRequest) { _, _ in fieldFocused = true }
+        // Mounted by a click on the glyph or ⌘F: the keyboard comes once the field is in the window.
+        .onAppear { if focusOnAppear { DispatchQueue.main.async { fieldFocused = true } } }
     }
 
     /// ⏎, esc and the clear button: `value` applies now and the field shows the filter again.
@@ -308,7 +259,7 @@ private struct GitCommitsList: View {
                             // A button, not a tap gesture: in the focusable scroll view a tap gesture never saw the
                             // click (as in the Changes list).
                             Button { select(commit.hash) } label: {
-                                GitCommitRow(commit: commit, row: index < layout.rows.count ? layout.rows[index] : nil,
+                                GitCommitRow(commit: commit, check: session.signatureChecks[commit.hash], row: index < layout.rows.count ? layout.rows[index] : nil,
                                              selected: commit.hash == session.selectedCommit, graphWidth: graphWidth,
                                              height: rowHeight)
                             }
@@ -425,6 +376,8 @@ private struct GitUncommittedButton: View {
 /// One commit: the graph, the subject, its refs, its age at the right.
 private struct GitCommitRow: View {
     let commit: GitCommit
+    /// The signature's check, once the commit was selected and checked.
+    var check: GitSignatureCheck?
     let row: GitGraph.Row?
     let selected: Bool
     let graphWidth: CGFloat
@@ -443,6 +396,9 @@ private struct GitCommitRow: View {
                     .truncationMode(.tail)
                 ForEach(GitRefChip.ordered(commit.refs), id: \.self) { ref in
                     GitRefChip(ref: ref).fixedSize()
+                }
+                if let kind = commit.signature {
+                    GitSignatureSeal(kind: kind, check: check)
                 }
                 Spacer(minLength: 8)
                 // The age moves on by the minute with nothing reloaded.
@@ -599,27 +555,7 @@ private struct GitCommitsFooter: View {
         HStack(spacing: 0) {
             Text(verbatim: GitCommitsText.footer(session.log))
                 .accessibilityIdentifier("git-commits-footer-summary")
-            Spacer(minLength: 8)
-            Menu {
-                Picker("Show", selection: Binding(get: { session.logScope }, set: { scope in
-                    guard scope != session.logScope else { return }
-                    session.logScope = scope
-                    // Another query starts again from one page.
-                    session.logWanted = GitLoader.page
-                })) {
-                    Text("This branch").tag(GitLogScope.branch)
-                    Text("All branches").tag(GitLogScope.all)
-                }
-                .pickerStyle(.inline)
-            } label: {
-                Text(verbatim: "\(GitCommitsText.scopeTitle(session.logScope)) ▾")
-                    .font(AppFont.ui(size: typography.size(offset: -2)))
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("Show this branch’s history or all branches")
-            .accessibilityIdentifier("git-log-scope")
+            Spacer(minLength: 0)
         }
         .lineLimit(1)
         .padding(.leading, 14)
@@ -746,6 +682,10 @@ private struct GitCommitSummary: View {
             .font(AppFont.ui(size: typography.size(offset: -1)))
             .foregroundStyle(palette.muted)
             .lineLimit(1)
+            // The log read which commits are signed; the detail's own copy of the commit does not say.
+            if let kind = session.log?.commits.first(where: { $0.hash == commit.hash })?.signature {
+                GitSignatureLine(kind: kind, check: session.signatureChecks[commit.hash])
+            }
             if !commit.body.isEmpty {
                 Text(verbatim: commit.body)
                     .font(.system(size: typography.size(offset: -0.5)))
@@ -910,6 +850,21 @@ private struct GitCommitDiff: View {
         return state
     }
 
+    /// Source and the lines between hunks read the file as the commit left it; a file the commit deleted has none.
+    private func reader(_ diff: GitDiff) -> (@Sendable () async throws -> String)? {
+        guard let source = session.source, let root = session.git.repository?.root,
+              let detail = session.commitDetail, detail.commit.hash == session.selectedCommit,
+              let file = detail.files.first(where: { $0.path == diff.path }), file.kind != .deleted else { return nil }
+        let queries = GitQueries(source: source, root: root), commit = detail.commit, oldPath = file.oldPath
+        return {
+            do throws(GitError) {
+                return try await queries.commitSource(commit, path: diff.path, oldPath: oldPath)
+            } catch {
+                throw GitSourceError(message: error.message)
+            }
+        }
+    }
+
     var body: some View {
         let palette = Chrome.palette
         let state = Self.shown(session)
@@ -918,7 +873,7 @@ private struct GitCommitDiff: View {
             if session.commitFile == nil {
                 Color.clear
             } else if let state, let diff = state.diff {
-                GitDiffView(diff: diff, mode: $session.diffMode)
+                GitDiffView(diff: diff, mode: $session.diffMode, source: reader(diff))
                     // Each commit's file gets its own folds, scroll and cursor.
                     .id(state.key)
             } else if let error = state?.error {
@@ -932,3 +887,86 @@ private struct GitCommitDiff: View {
         .accessibilityIdentifier("git-commit-diff")
     }
 }
+
+// MARK: Signatures
+
+/// A signed commit's seal in the log: the kind of signature until it is checked (selecting the commit checks it), then
+/// the verdict's glyph and color.
+struct GitSignatureSeal: View {
+    let kind: GitSignatureKind
+    let check: GitSignatureCheck?
+    @Environment(\.appTypography) private var typography
+
+    var body: some View {
+        let look = GitSignatureText.look(check)
+        Image(systemName: look.symbol)
+            .font(.system(size: typography.size(offset: -1.5)))
+            .foregroundStyle(look.color)
+            .help(check.map { GitSignatureText.line($0, kind: kind) } ?? "Signed with \(kind.title) · select to verify")
+            .accessibilityLabel(check.map { GitSignatureText.line($0, kind: kind) } ?? "Signed with \(kind.title)")
+            .accessibilityIdentifier("git-commit-seal")
+    }
+}
+
+/// The selected commit's signature under its hash and author: checking, then the verdict, the signer and the key.
+struct GitSignatureLine: View {
+    let kind: GitSignatureKind
+    let check: GitSignatureCheck?
+    @Environment(\.appTypography) private var typography
+
+    var body: some View {
+        let look = GitSignatureText.look(check)
+        HStack(spacing: 6) {
+            if check == nil {
+                ProgressView().controlSize(.mini)
+                Text(verbatim: "Checking the \(kind.title) signature…").foregroundStyle(Chrome.palette.detail)
+            } else if let check {
+                Image(systemName: look.symbol).foregroundStyle(look.color)
+                Text(verbatim: GitSignatureText.line(check, kind: kind)).foregroundStyle(look.color)
+                    .textSelection(.enabled)
+            }
+        }
+        .font(AppFont.ui(size: typography.size(offset: -1)))
+        .lineLimit(1)
+        .truncationMode(.middle)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("git-commit-signature")
+    }
+}
+
+/// The signature's words and look, apart from the views so the fast tests read them.
+enum GitSignatureText {
+    struct Look {
+        let symbol: String
+        let color: Color
+    }
+
+    @MainActor static func look(_ check: GitSignatureCheck?) -> Look {
+        let palette = Chrome.palette
+        switch check?.verdict {
+        case nil, .unsigned?, .unchecked?: return Look(symbol: "seal", color: palette.detail)
+        case .good(let certified)?: return Look(symbol: "checkmark.seal.fill", color: certified ? palette.green : palette.secondary)
+        case .bad?, .revokedKey?: return Look(symbol: "xmark.seal.fill", color: ChatThemeStore.shared.current.red)
+        case .unknownKey?, .expiredSignature?, .expiredKey?: return Look(symbol: "exclamationmark.triangle.fill", color: palette.warning)
+        }
+    }
+
+    /// "Good GPG signature · Paul Miller <paul@example.com> · 697079DA6878B89B".
+    static func line(_ check: GitSignatureCheck, kind: GitSignatureKind) -> String {
+        let name = (check.kind ?? kind).title
+        let verdict = switch check.verdict {
+        case .good(true): "Good \(name) signature"
+        case .good(false): "Good \(name) signature, key not certified"
+        case .bad: "Bad \(name) signature"
+        case .unknownKey: (check.kind ?? kind) == .ssh ? "\(name) signature from a key not in your allowed signers"
+                                                       : "\(name) signature from a key not in your keyring"
+        case .expiredSignature: "Expired \(name) signature"
+        case .expiredKey: "\(name) signature from an expired key"
+        case .revokedKey: "\(name) signature from a revoked key"
+        case .unsigned: "Not signed"
+        case .unchecked(let reason): "Signed with \(name) · couldn’t check: \(reason)"
+        }
+        return ([verdict] + [check.signer, check.key].compactMap { $0 }).joined(separator: " · ")
+    }
+}
+

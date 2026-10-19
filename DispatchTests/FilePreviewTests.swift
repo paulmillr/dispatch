@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import XCTest
 @testable import DispatchApp
 
@@ -233,7 +234,7 @@ final class FilePreviewTests: XCTestCase {
         let languages = ["billing.ts": "typescript", "App.TSX": "typescript", "index.mjs": "javascript", "build.sh": "shell",
                          "main.py": "python", "View.swift": "swift", "package.json": "json", "ci.yml": "yaml",
                          "lib.rs": "code", "main.go": "code", "site.css": "css", "page.html": "html", "query.sql": "sql",
-                         "fix.patch": "diff", "README.md": "text", "notes.txt": "text", "Makefile": "text"]
+                         "fix.patch": "diff", "README.md": "markdown", "notes.txt": "text", "Makefile": "text"]
         for (name, language) in languages {
             XCTAssertEqual(SyntaxHighlight.language(name), language, name)
         }
@@ -243,6 +244,21 @@ final class FilePreviewTests: XCTestCase {
             XCTAssertEqual(FilesFormatting.kindName(name), kind, name)
         }
         XCTAssertNil(FilesFormatting.kindName("LICENSE"))
+    }
+
+    func testMarkdownSourceHighlightsStructureButNotCodeOrWords() {
+        let theme = ChatTheme.standard
+        let source = "# Title\nSome *em* and **bold** with `# code` and [a link](https://x.y) in snake_case_name.\n"
+            + "- item\n1. first\n> quote\n<!-- note -->\n```swift\nlet x = \"# not a heading\"\n```\n"
+        let tokens = SyntaxHighlight.tokens(source, language: "README.md", theme: theme).map {
+            ((source as NSString).substring(with: $0.range), $0.color)
+        }
+        let expected: [(String, Color)] = [
+            ("# Title", theme.keyword), ("*em*", theme.number), ("**bold**", theme.number), ("`# code`", theme.string),
+            ("[a link](https://x.y)", theme.blue), ("-", theme.number), ("1.", theme.number), ("> ", theme.number),
+            ("<!-- note -->", theme.comment), ("```swift\nlet x = \"# not a heading\"\n```", theme.string)]
+        XCTAssertEqual(tokens.map(\.0), expected.map(\.0))
+        XCTAssertEqual(tokens.map(\.1), expected.map(\.1))
     }
 
     func testHeaderMetaNamesFolderSizeAgeAndLanguage() async throws {

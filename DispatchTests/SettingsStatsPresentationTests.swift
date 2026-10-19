@@ -703,8 +703,9 @@ final class SettingsStatsPresentationTests: XCTestCase {
         for (tab, labels) in [
             ("Appearance", ["Terminal font", "Chat font", "Size", "Theme", "Host colors", "Custom terminal", "Liquid Glass", "Sidebar & tabs", "Space size", "Show git branch", "Hide sidebar with one space"]),
             ("Keys", ["Number keys", "Spaces", "Tabs", "Splits", "Keyboard", "Use Option as Alt"]),
-            ("General", ["Startup", "Starting folder", "Reopen spaces on launch", "Restore tab history", "Terminal", "Open tmux sessions as spaces", "tmux -CC attach", "Open herdr sessions as spaces", "Kitty graphics", "Automatic tab names", "Files", "Drag and drop", "Ask before replacing", "Notifications", "Notify", "Dock badge", "Sound", "Troubleshooting", "Diagnostics"]),
-            ("Agents & Hosts", ["Chat mode", "coding agent CLIs as chat", "Codex", "Claude", "Pi", "Connections", "On new hosts", "Ask", "This Mac"])
+            ("General", ["Startup", "Starting folder", "Reopen spaces on launch", "Restore tab history", "Terminal", "Kitty graphics", "Automatic tab names", "Notifications", "Notify", "Dock badge", "Sound", "Troubleshooting", "Diagnostics"]),
+            ("Features", ["Chat mode", "coding agent CLIs as chat", "Codex", "Claude", "Pi", "tmux & herdr", "Open tmux sessions as spaces", "tmux -CC attach", "Open herdr sessions as spaces", "Files", "Drag and drop", "Show hidden files", "Ask before replacing", "Git", "Changes and Commits in files mode"]),
+            ("Agents & Hosts", ["Connections", "On new hosts", "Ask", "This Mac"])
         ] {
             if tab != "Appearance" { try await PresentationTestSupport.selectSettingsTab(tab, in: window) }
             var snapshots = [try await capture(window, "settings-\(tab)")]
@@ -728,6 +729,13 @@ final class SettingsStatsPresentationTests: XCTestCase {
                 XCTAssertFalse(text.contains("Use Option as Alt"), "Keyboard behaviour lives under Keys")
                 XCTAssertFalse(text.contains("Remote hosts"), "Hosts have their own page")
                 XCTAssertFalse(text.contains("Improve text contrast"), "Custom colors start collapsed")
+            }
+            if tab == "General" {
+                XCTAssertFalse(text.contains("Open tmux sessions"), "Whole features live under Features")
+                XCTAssertFalse(text.contains("Drag and drop"), "Files settings live under Features")
+            }
+            if tab == "Agents & Hosts" {
+                XCTAssertFalse(text.contains("coding agent CLIs as chat"), "Chat mode lives under Features")
             }
             if tab == "Keys" {
                 // OCR misreads ⌃ and ⌘; the recorders report their shortcuts to accessibility.

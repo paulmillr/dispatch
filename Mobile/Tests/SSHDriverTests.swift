@@ -161,7 +161,8 @@ final class SSHDriverTests: XCTestCase {
     /// ends after 45 s without a frame, so the latency ping keeps it alive at most every 15 s.
     func testHelloFeaturesAndTheLivenessPing() {
         XCTAssertEqual(SSHHostSessionDriver.features, ["interaction.options", "chat.list", "projects.recent", "multiplexers.versions",
-                                                       "terminals.coalesce", "launch.names", "stdio.liveness"])
+                                                       "terminals.coalesce", "launch.names", "stdio.liveness",
+                                                       "terminals.activity"])
         XCTAssertLessThanOrEqual(SSHHostSessionDriver().pingInterval, SSHHostSessionDriver.livenessPing)
         XCTAssertEqual(SSHHostSessionDriver.livenessPing, .seconds(15))
     }

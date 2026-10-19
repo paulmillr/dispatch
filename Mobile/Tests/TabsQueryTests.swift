@@ -66,6 +66,51 @@ final class TabsQueryTests: XCTestCase {
         XCTAssertFalse(model.query.filtering)
     }
 
+    /// A chat tab's time is its agent's newest record (what Agents shows) when that is later than the last change the
+    /// phone saw in the tab; a terminal tab's is only what the phone saw. The rows and the Activity sort use it.
+    func testChatTabsTakeTheirAgentsTime() throws {
+        let (model, keys) = model()
+        let base = Date(timeIntervalSince1970: 1_800_000_000)
+        let agents = ["p:codex": base, "p:claude": base.addingTimeInterval(-600), "p:dev": base]
+        model.agentActivity = { _, terminal in keys[terminal].flatMap { agents[$0] } }
+        XCTAssertEqual(model.rows.map(\.tab.ref.key),
+                       ["herdr:curves:1", "herdr:app:1", "herdr:app:2", "herdr:app:3", "herdr:docs:1", "herdr:curves:2"])
+        XCTAssertEqual(model.rows.first?.activity, base, "codex's newest record")
+        let claude = try XCTUnwrap(model.tab(TabRef(host: TabsFixtures.host.id, key: "herdr:app:1")))
+        XCTAssertEqual(model.activity(of: claude), base.addingTimeInterval(-60), "the later of the two")
+        let dev = try XCTUnwrap(model.tab(TabRef(host: TabsFixtures.host.id, key: "herdr:app:2")))
+        XCTAssertEqual(model.activity(of: dev), base.addingTimeInterval(-300), "no agent: what the phone saw")
+        XCTAssertEqual(model.activity(of: model.space(claude.space)!), base.addingTimeInterval(-60))
+    }
+
+    /// With `terminals.activity` a terminal tab's time is the server's (a tmux window's activity) when that is later than
+    /// what the phone saw; a chat tab takes the later of that and its agent's newest record. The Activity sort follows.
+    func testServerTimesDateTerminalTabsAndAgentsTakeTheLater() throws {
+        let (model, keys) = model()
+        let base = Date(timeIntervalSince1970: 1_800_000_000)
+        let ms = { (date: Date) in UInt64(date.timeIntervalSince1970 * 1000) }
+        let mine = try XCTUnwrap(model.workspace(TabsFixtures.host.id))
+        let theirs = try XCTUnwrap(model.workspaces.first { $0.id != TabsFixtures.host.id })
+        mine.applyServerActivity([
+            TabsServerActivity(node: 1, key: "herdr:app:3", time_ms: ms(base)),
+            TabsServerActivity(node: 2, key: "herdr:app:1", time_ms: ms(base.addingTimeInterval(-120))),
+            TabsServerActivity(node: 3, key: "herdr:app:2", time_ms: ms(base.addingTimeInterval(-3600))),
+            TabsServerActivity(node: 4, key: "herdr:gone:1", time_ms: ms(base)),
+        ])
+        theirs.applyServerActivity([TabsServerActivity(node: 5, key: "herdr:curves:2", time_ms: ms(base.addingTimeInterval(-30)))])
+        model.agentActivity = { _, terminal in keys[terminal] == "p:claude" ? base.addingTimeInterval(-10) : nil }
+        let tab = { (key: String) in model.tab(TabRef(host: TabsFixtures.host.id, key: key)) }
+        XCTAssertEqual(model.activity(of: try XCTUnwrap(tab("herdr:app:3"))), base, "the server's time")
+        XCTAssertEqual(model.activity(of: try XCTUnwrap(tab("herdr:app:2"))), base.addingTimeInterval(-300),
+                       "an older server time leaves what the phone saw")
+        XCTAssertEqual(model.activity(of: try XCTUnwrap(tab("herdr:app:1"))), base.addingTimeInterval(-10), "the agent's, later")
+        XCTAssertEqual(model.rows.map(\.tab.ref.key),
+                       ["herdr:app:3", "herdr:app:1", "herdr:curves:2", "herdr:curves:1", "herdr:app:2", "herdr:docs:1"])
+        // A later snapshot keeps the server's time (it is kept by key, not on the row).
+        mine.apply(TabsFixtures.app(first: 40).topology)
+        XCTAssertEqual(model.activity(of: try XCTUnwrap(tab("herdr:app:3"))), base)
+    }
+
     /// The tree's spaces follow the same menu: a filter keeps the spaces with a matching tab.
     func testSpaceRowsFollowTheMenu() {
         let (model, _) = model(["p:codex": .needsYou])

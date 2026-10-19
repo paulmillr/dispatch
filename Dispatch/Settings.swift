@@ -117,6 +117,8 @@ struct Preferences: Codable, Equatable {
     }
     /// Branch names beside each space; used to come with large sidebar items.
     var showGitBranches = false
+    /// Branch names show only while git is on.
+    var showsGitBranches: Bool { showGitBranches && gitEnabled }
     /// macOS 26 Liquid Glass for the chat input, tab strips and sidebar, the same in a window and full screen.
     /// On by default; earlier systems ignore it and keep the flat chrome.
     var liquidGlass = true
@@ -186,10 +188,13 @@ struct Preferences: Codable, Equatable {
     /// Files mode opens at the tab's shell directory and follows cd until the user navigates.
     var filesFollowShell = true
     /// Each tab's ⇧⌘. overrides this for that tab only (FilesSession.showHidden).
-    var filesShowHidden = false
+    var filesShowHidden = true
     var filesOpenWith = FilesOpenWith.editorInTab
     /// Off keeps both files instead of asking when a copy would overwrite.
     var filesAskBeforeReplacing = true
+    /// Git in files mode (the Changes and Commits tabs, the list's marks) and the sidebar's branch names. Off, Dispatch
+    /// reads nothing of any repository.
+    var gitEnabled = true
 
     func resolvedTheme(systemIsDark: Bool) -> String {
         let selected = appTheme.isDark(systemIsDark: systemIsDark) ? theme : lightTheme
@@ -217,7 +222,10 @@ struct Preferences: Codable, Equatable {
         case sidebarStyle, showGitBranches, liquidGlass, hostColors, showHostColors
         case improveTextContrast
         case spaces, closeLaunching, enableKittyGraphics
-        case filesDragAndDrop, filesFollowShell, filesShowHidden, filesOpenWith, filesAskBeforeReplacing
+        case filesDragAndDrop, filesFollowShell, filesOpenWith, filesAskBeforeReplacing, gitEnabled
+        // Stored under a new name since hidden files show by default: every save wrote the old key, so its `false`
+        // was usually the old default rather than a choice.
+        case filesShowHidden = "filesShowHiddenFiles"
     }
 
     private enum LegacyCodingKeys: String, CodingKey {
@@ -294,6 +302,7 @@ struct Preferences: Codable, Equatable {
         // A choice a later build no longer offers falls back without discarding the other settings.
         filesOpenWith = try fields.decodeIfPresent(String.self, forKey: .filesOpenWith).flatMap(FilesOpenWith.init(rawValue:)) ?? filesOpenWith
         filesAskBeforeReplacing = try fields.decodeIfPresent(Bool.self, forKey: .filesAskBeforeReplacing) ?? filesAskBeforeReplacing
+        gitEnabled = try fields.decodeIfPresent(Bool.self, forKey: .gitEnabled) ?? gitEnabled
     }
 }
 

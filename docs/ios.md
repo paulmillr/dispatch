@@ -132,7 +132,12 @@ ECDSA fix), and ring over aws-lc-rs needs no cmake. Third-party Rust enters only
 - Foreground connects every host, background disconnects.
 - **Which multiplexer.** Connecting never starts a server. herdr's `backends.open` starts one, so herdr is followed
   only while its server runs (`running`) or the host asks for it; otherwise tmux, retried every 2 s. A preference
-  change switches live without reconnecting.
+  change switches live without reconnecting; until the new one answers (a snapshot or no server) the host's spaces
+  are unknown (`switchingMultiplexer`). New space on the other multiplexer sets that preference after its
+  `backends.create`, so the new space shows up (one multiplexer's spaces per host). The exec channel names no herdr
+  socket, so the helper uses herdr's own default (`HERDR_SESSION` or `default`, under `$XDG_CONFIG_HOME/herdr` or
+  `~/.config/herdr`), as `herdr` typed in a shell does; only variables the login shell's `-c` exports (`.zshenv`)
+  reach it.
 
 ## Helper contract
 
@@ -144,7 +149,8 @@ exec "$HOME/.dispatch/bin/versions/<sha256>/dispatch-helper" --remote --capabili
 
 The grant is the Mac's full profile with hooks (`HelperGrant`; Chat off drops `hooks.configure` and `agent.*`). The
 phone-only hello features (`interaction.options`, `chat.list`, `projects.recent`, `multiplexers.versions`,
-`terminals.coalesce`, `launch.names`, `stdio.liveness`) are specified in `helper/PROTOCOL.md`; what they let the helper
+`terminals.coalesce`, `launch.names`, `stdio.liveness`, `terminals.activity`) are specified in `helper/PROTOCOL.md`;
+what they let the helper
 do on the host, and the login-shell PATH probe, are in [security](security.md#dispatch-for-iphone). The client must:
 
 - **Ping.** With `stdio.liveness` the helper exits after 45 s without a frame; send `echo` at least every 15 s. A
@@ -184,14 +190,43 @@ race (replay sees a second ownership ask).
   pane; the phone never splits. The helper's native multiplexer never counts (its sessions die with the connection).
   Close follows the Mac's policy: `close.request` `check`, terminate only verified idle work, otherwise detach.
   Paths shorten to `~` by `hello.account.home` and `login_home` (longest match wins), never by guessing
-  `/Users/<name>`.
+  `/Users/<name>`. In the tree the whole host row shows or hides its spaces; a connected host known to have none
+  offers New space below it. A host shows one multiplexer's spaces at a time: its header (and host detail's Spaces
+  header, New space's host field) marks which, "tmux" or "herdr" in a grey chip, from `HostSession.spacesMultiplexer`
+  (the followed one; no chip before one is followed or while a switch has not answered). New space offers the host's
+  installed multiplexers (never native: its sessions belong to the helper, which ends with the connection, so with
+  every trip to the background). Holding New space (that row, or New tab's picker) gives a system menu of hosts and
+  multiplexers that makes a space at once with the form's defaults (home, no name) and opens it as Create does; in New
+  chat the same entries are a "New space on" submenu of the Space pull-down (a pull-down's items cannot be held), and
+  a space made there (or with "New space…", whose form opens over New chat) becomes the chat's instead of opening.
+- **Space names.** As on the Mac (`Space.usesDirectoryName`), a new space is named after its folder ("/" for the root)
+  and follows it until renamed. On tmux and herdr the server keeps that name, so the Mac and the phone agree: the
+  helper names a tmux space after its first window's folder while the windows' `@dispatch-window` option has
+  `usesDirectoryName` (`entities.rename` clears it), and herdr labels an unlabelled workspace after its pane's folder.
+  The phone sends no name for a space made without one (New space's Name left empty, whose placeholder shows the
+  name, and the quick menu); a typed name is set with `entities.rename`. tmux's fallback for a server with several
+  sessions (`memberships.place` of a window, which needs a label) labels it with the folder's name and renames a
+  typed name once the window shows in its new space.
+- **Times.** A tab's own time is when it last had activity: the server's time for it (`terminals.activity`: a tmux
+  window's `#{window_activity}`, the last output in any of its panes, whole seconds) or the last change the phone
+  saw between two live snapshots of one connection (name, program, folder, binding, a new tab), whichever is later,
+  or nil. A chat tab's row time is the later of that and its agent's newest record (`chat.list` `time_ms`, the
+  Agents time); the Activity sort uses the same value. Server times are read on each live snapshot and every 30 s
+  while connected, and kept per host and topology key (`TabActivityStore`, never node ids), so the next launch shows
+  them before the host connects. herdr 0.9.5 reports no times and an older helper lacks the feature: those tabs
+  keep only what the phone saw. Changes found across a gap (the launch cache against live data, a reconnect, a
+  newly followed multiplexer) happened at an unknown time and move none.
 - **Chat.** `chat.open` only for a bound terminal; the conversation is accepted once `chat.history` names the same
   process. Answers go on the subscription that delivered the request. Losing link or binding pauses input and keeps
   transcript and drafts. Dots follow Mail: blue for needs you or unseen, amber for working; a conversation's first
   sight is its baseline.
-- **Terminal.** Output is coalesced (up to 256 KiB per parse) because tmux sends one notification per line. A
-  reattach's first output repaints over the old screen so it never shows empty. The terminal stays `dispatch-black`
-  in light mode.
+- **Terminal.** Output is coalesced (up to 256 KiB per parse) because tmux sends one notification per line. An
+  attach's tmux history replay is one notification; the presence holds a whole helper reply (64 MiB) unparsed, since
+  overflow ends the attachment. Only a lost stream of the current attachment detaches the feed, never one that ended
+  because the presence stopped. A reattach's first output repaints over the old screen so it never shows empty.
+  Calls go out one at a time; scroll steps made meanwhile join into one (a swipe is a step per line, a round trip
+  each). A presence Chat opened learns its scrollback owner when the Terminal segment opens it. The terminal stays
+  `dispatch-black` in light mode.
 - **Code.** The diff viewer reads current files with `files.text`. There is no Revert: the helper has no operation to
   reverse a patch.
 - **Resilience.** `host-cache.json` (last hello, multiplexers, topology, Agents rows with ≤280-character previews) is
@@ -210,7 +245,7 @@ race (replay sees a second ownership ask).
 `DISPATCH_MOBILE_SCRIPTED=1|empty|trust|mismatch|nomux`, `DISPATCH_MOBILE_CHAT_DEMO=<screen>` (via `SIMCTL_CHILD_`),
 `DISPATCH_MOBILE_CHAT_DEMO_LINK=cycle`, `DISPATCH_MOBILE_AUTHORIZE_KEYS`, `DISPATCH_MOBILE_HOST_ENV`, and launch
 arguments `-DispatchTabsSample`, `-DispatchTabsShow`, `-DispatchTabsTree`, `-DispatchTabsFilter`,
-`-DispatchTabsCollapse`, `-DispatchTabsScript` (one step every 1.5 s, for recordings). To force a background refresh,
+`-DispatchTabsCollapse`, `-DispatchTabsEmptyHost` (a fourth, connected host without spaces), `-DispatchTabsScript` (one step every 1.5 s, for recordings). To force a background refresh,
 pause in lldb and run:
 
 ```
@@ -278,5 +313,6 @@ Release build on a real iPhone, by hand. Nothing below has been run on a device 
 - Keyboard-interactive is untested against a real multi-round server (OTP, PAM).
 - The app's live runs cover tmux; herdr only through the helper harness and scripted tests. Linux is covered on one
   arm64 Ubuntu VM; x86-64, other distributions and a real remote Mac with Homebrew tmux are untested.
-- A tab's time moves with topology changes only: `MobileWorkspace.noteActivity` has no caller yet.
+- herdr tabs have no server time (herdr 0.9.5's API carries none): their time is only what the phone saw
+  (`MobileWorkspace.noteActivity` has no caller yet). tmux times are whole seconds and per window, not per pane.
 - Codex offers no "This session" approval: Codex 0.162 rejects `updatedPermissions` in PermissionRequest hooks.

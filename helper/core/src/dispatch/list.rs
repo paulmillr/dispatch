@@ -160,9 +160,6 @@ impl Request<'_> {
     }
 }
 
-#[cfg(test)]
-#[path = "list.test.rs"]
-mod tests;
 
 impl Request<'_> {
     /// Protocol result: Vec of {path, time_ms, agents, exists}, newest first (feature
@@ -212,3 +209,83 @@ impl Request<'_> {
         Ok(())
     }
 }
+
+/// A `terminals.activity` row; encoded field by field (no wire record, no schema change).
+#[derive(Debug, PartialEq)]
+pub(crate) struct Seen {
+    node: Id,
+    key: String,
+    kind: Kind,
+    time_ms: u64,
+}
+
+impl crate::encode::Encode for Seen {
+    fn encode(&self, out: &mut Vec<u8>) {
+        crate::encode::object(
+            out,
+            &[("node", &self.node), ("key", &self.key), ("kind", &self.kind), ("time_ms", &self.time_ms)],
+        );
+    }
+}
+
+/// Multiplexer `mux`'s (local node, Unix ms) times as rows of the nodes core published, by node.
+/// A node core no longer knows (closed meanwhile) or holds detached has no row.
+pub(crate) fn seen(mux: usize, times: Vec<(Id, u64)>, nodes: &BTreeMap<Id, (usize, Node)>) -> Vec<Seen> {
+    let mut rows: Vec<Seen> = times
+        .into_iter()
+        .filter_map(|(local, time_ms)| {
+            let node = super::reference(mux, local);
+            let (_, published) = nodes.get(&node).filter(|(module, published)| *module == mux && !published.detached)?;
+            Some(Seen { node, key: published.key.clone(), kind: published.kind, time_ms })
+        })
+        .collect();
+    rows.sort_by_key(|row| row.node);
+    rows.dedup_by_key(|row| row.node);
+    rows
+}
+
+impl Request<'_> {
+    /// Protocol result: Vec of {node, key, kind, time_ms} (feature terminals.activity): when the
+    /// server last saw activity in each published node whose multiplexer reports one (tmux: its
+    /// windows), by node.
+    pub(super) fn terminals_activity(&mut self, p: &Data<'_>) -> Result<(), Error> {
+        if p.object().is_some_and(|mut fields| fields.next().is_some()) {
+            return Err(invalid("params"));
+        }
+        let multiplexers = self.helper.multiplexers.clone();
+        let done = Rc::new(RefCell::new(Some(self.done::<Vec<Seen>>(None))));
+        let collected: Rc<RefCell<Vec<Seen>>> = Rc::default();
+        let remaining = Rc::new(Cell::new(multiplexers.len()));
+        if multiplexers.is_empty() {
+            let done = done.borrow_mut().take().unwrap();
+            deferred(done)(self.io, Ok(Vec::new()));
+            return Ok(());
+        }
+        for (index, mux) in multiplexers.into_iter().enumerate() {
+            let (nodes, collected, remaining, done) =
+                (self.helper.nodes.clone(), collected.clone(), remaining.clone(), done.clone());
+            mux.borrow_mut().activity(
+                self.io,
+                deferred(Box::new(move |io, result| {
+                    // A multiplexer that cannot tell (its server is gone) gives no times.
+                    if let Ok(times) = result {
+                        collected.borrow_mut().extend(seen(index, times, &nodes.borrow()));
+                    }
+                    remaining.set(remaining.get() - 1);
+                    if remaining.get() == 0
+                        && let Some(done) = done.borrow_mut().take()
+                    {
+                        let mut rows = std::mem::take(&mut *collected.borrow_mut());
+                        rows.sort_by_key(|row| row.node);
+                        done(io, Ok(rows));
+                    }
+                })),
+            );
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+#[path = "list.test.rs"]
+mod tests;

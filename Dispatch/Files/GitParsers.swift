@@ -534,3 +534,115 @@ struct GitMarks: Hashable, Sendable {
         return listing
     }
 }
+
+extension GitParsers {
+    /// The new side of a one-file patch: its context and added lines after the first hunk header, ending in a newline
+    /// unless git marked the last of them "\ No newline at end of file". Nil without a hunk (a binary file, a mode
+    /// change) or for a patch of more than one file.
+    static func newSide(_ patch: String) -> String? {
+        var lines: [Substring] = []
+        var inHunk = false, endsWithNewline = true, last: Character?
+        for line in patch.split(separator: "\n", omittingEmptySubsequences: false) {
+            if line.hasPrefix("diff --git ") {
+                if inHunk { return nil }
+                continue
+            }
+            if line.hasPrefix("@@") { inHunk = true; continue }
+            guard inHunk, let first = line.first else { continue }
+            switch first {
+            case " ", "+":
+                lines.append(line.dropFirst())
+                endsWithNewline = true
+            case "\\":
+                if last == " " || last == "+" { endsWithNewline = false }
+            default: break
+            }
+            last = first
+        }
+        guard inHunk else { return nil }
+        return lines.joined(separator: "\n") + (endsWithNewline && !lines.isEmpty ? "\n" : "")
+    }
+}
+
+// MARK: Signatures
+
+extension GitParsers {
+    /// `log --pretty=raw`: each commit that carries a signature header, by hash. Headers sit between a `commit` line
+    /// and the first blank line; message lines are indented, so no message can pose as one.
+    static func signatures(_ raw: String) -> [String: GitSignatureKind] {
+        var result: [String: GitSignatureKind] = [:]
+        var hash: String?, inHeaders = false, signature = false
+        for line in raw.split(separator: "\n", omittingEmptySubsequences: false) {
+            if line.hasPrefix("commit "), let word = line.dropFirst(7).split(separator: " ").first,
+               isObjectName(String(word)) {
+                hash = String(word); inHeaders = true; signature = false
+                continue
+            }
+            guard inHeaders, let current = hash else { continue }
+            if line.isEmpty { inHeaders = false; continue }
+            if line.hasPrefix("gpgsig ") || line.hasPrefix("gpgsig-sha256 ") {
+                signature = true
+                let armor = line.split(separator: " ", maxSplits: 1).last.map(String.init) ?? ""
+                result[current] = armor.contains("SSH SIGNATURE") ? .ssh : armor.contains("SIGNED MESSAGE") ? .x509 : .gpg
+            } else if signature, line.hasPrefix(" ") {
+                continue
+            } else {
+                signature = false
+            }
+        }
+        return result
+    }
+
+    /// `verify-commit --raw`'s answer: gpg's status lines (`[GNUPG:] GOODSIG …`) or ssh-keygen's words, and git's
+    /// status (0 for a signature good enough).
+    static func signatureCheck(_ output: String, status: Int64) -> GitSignatureCheck {
+        let lines = output.split(separator: "\n").map { String($0).trimmingCharacters(in: .whitespaces) }
+        let gnupg = lines.compactMap { $0.hasPrefix("[GNUPG:] ") ? String($0.dropFirst(9)) : nil }
+        if !gnupg.isEmpty {
+            var check = GitSignatureCheck(verdict: .unchecked(lines.first { !$0.hasPrefix("[GNUPG:]") } ?? "gpg gave no verdict"),
+                                          kind: .gpg)
+            var certified = false
+            for line in gnupg {
+                let words = line.split(separator: " ", maxSplits: 2).map(String.init)
+                let rest = words.count > 2 ? words[2] : nil
+                switch words.first {
+                case "GOODSIG": check.verdict = .good(certified: false); check.key = check.key ?? words[safe: 1]; check.signer = rest
+                case "BADSIG": check.verdict = .bad; check.key = words[safe: 1]; check.signer = rest
+                case "EXPSIG": check.verdict = .expiredSignature; check.key = words[safe: 1]; check.signer = rest
+                case "EXPKEYSIG": check.verdict = .expiredKey; check.key = words[safe: 1]; check.signer = rest
+                case "REVKEYSIG": check.verdict = .revokedKey; check.key = words[safe: 1]; check.signer = rest
+                case "ERRSIG", "NO_PUBKEY":
+                    if case .unchecked = check.verdict { check.verdict = .unknownKey; check.key = check.key ?? words[safe: 1] }
+                case "VALIDSIG": check.key = words[safe: 1]
+                case "TRUST_FULLY", "TRUST_ULTIMATE": certified = true
+                default: break
+                }
+            }
+            if case .good = check.verdict { check.verdict = .good(certified: certified) }
+            return check
+        }
+        // ssh-keygen: `Good "git" signature for <principal> with <type> key SHA256:…`.
+        if let good = lines.first(where: { $0.hasPrefix("Good \"git\" signature") }) {
+            var check = GitSignatureCheck(verdict: .good(certified: good.contains(" for ")), kind: .ssh)
+            if let range = good.range(of: " for "), let with = good.range(of: " with ", range: range.upperBound..<good.endIndex) {
+                check.signer = String(good[range.upperBound..<with.lowerBound])
+            }
+            check.key = good.split(separator: " ").last.map(String.init).flatMap { $0.hasPrefix("SHA256:") ? $0 : nil }
+            return check
+        }
+        if lines.contains(where: { $0.contains("No principal matched") }) {
+            return GitSignatureCheck(verdict: .unknownKey, kind: .ssh)
+        }
+        if lines.contains(where: { $0.contains("Could not verify signature") || $0.contains("Signature verification failed") }) {
+            return GitSignatureCheck(verdict: .bad, kind: .ssh)
+        }
+        if status != 0, lines.isEmpty { return GitSignatureCheck(verdict: .unsigned) }
+        let said = lines.first.map { $0.hasPrefix("error: ") ? String($0.dropFirst(7)) : $0 } ?? "git gave no verdict"
+        return GitSignatureCheck(verdict: status == 0 ? .good(certified: false) : .unchecked(said))
+    }
+}
+
+private extension Array {
+    subscript(safe index: Int) -> Element? { indices.contains(index) ? self[index] : nil }
+}
+

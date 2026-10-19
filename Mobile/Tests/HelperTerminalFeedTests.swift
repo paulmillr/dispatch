@@ -65,6 +65,66 @@ final class HelperTerminalFeedTests: XCTestCase {
         XCTAssertEqual(chunks.reduce(into: Data()) { $0.append($1) }, sent)
     }
 
+    /// An attach replays a tmux pane's whole history as one `terminal.output`; a long one is more chunks than the old
+    /// 128-event bound (8 MiB), which ended the attachment mid-replay: the screen froze and keys went nowhere.
+    func testALongHistoryReplayArrivesWhole() async throws {
+        let peer = ScriptedHelper.terminal()
+        defer { peer.close() }
+        let feed = HelperTerminalFeed(client: peer.client, terminal: 7)
+        let stream = feed.attach(TerminalFeedSize(columns: 80, rows: 24))
+        let attach = try await peer.wait(for: "terminals.attach")[0]
+        // Within one unchunked frame of the scripted helper (the real one chunks larger replies).
+        let sent = Data(String(repeating: "00012345 lorem ipsum dolor sit amet\r\n", count: 300_000).utf8)
+        XCTAssertGreaterThan(sent.count, 10 * 1024 * 1024)
+        peer.notify(attach.id, .output(.init(terminal: 7, bytes: sent)), method: "terminal.output")
+        peer.notify(attach.id, .exit(.init(terminal: 7, status: 0)), method: "terminal.exit")
+        // The reply is yielded while nobody takes events yet, as when the presence's task is busy.
+        try await Task.sleep(for: .seconds(1))
+        var received = Data(), last: TerminalFeedEvent?
+        for await event in stream {
+            if case .output(let bytes) = event { received.append(bytes) } else { last = event }
+        }
+        XCTAssertEqual(received.count, sent.count)
+        XCTAssertEqual(last, .exited(0), "The replay did not end the attachment")
+    }
+
+    /// A finger makes a scroll step per line or two; steps made while a call is in flight go out as one step, at the
+    /// latest cell, and every caller gets the answer. One round trip per step made a swipe over a real link trail the
+    /// finger by seconds, with typing queued behind it.
+    @MainActor
+    func testScrollStepsMadeDuringACallJoinIntoOneStep() async throws {
+        let peer = ScriptedHelper { request in
+            switch request.method {
+            case "terminals.attach", "terminals.input": .open
+            case "terminals.scroll": .error(code: "scrollback_app_owned", message: "")
+            default: .empty
+            }
+        }
+        defer { peer.close() }
+        let feed = HelperTerminalFeed(client: peer.client, terminal: 7)
+        _ = feed.attach(TerminalFeedSize(columns: 80, rows: 24))
+        _ = try await peer.wait(for: "terminals.attach")
+        // An unanswered input call holds the worker while the steps queue.
+        feed.send(Data("x".utf8))
+        let input = try await peer.wait(for: "terminals.input")[0]
+        let answers = Answers()
+        for (index, step) in [(lines: 2, row: 3), (lines: 3, row: 4), (lines: 1, row: 5)].enumerated() {
+            Task { answers.append(await feed.scroll(TerminalScrollRequest(lines: step.lines, column: 1, row: step.row))) }
+            try await TestSupport.eventually { feed.queuedCount == index + 1 }
+        }
+        feed.send(Data("y".utf8))
+        peer.reply(input.id, .empty)
+        let scroll = try await peer.wait(for: "terminals.scroll")[0]
+        let sent = try params(Scroll.self, scroll)
+        XCTAssertEqual(sent.lines, 6)
+        XCTAssertEqual(sent.row, 5)
+        try await TestSupport.eventually(diagnostic: "Every joined step is answered") { answers.all.count == 3 }
+        XCTAssertEqual(answers.all, [.appOwned, .appOwned, .appOwned])
+        let after = try await peer.wait(for: "terminals.input", count: 2)
+        XCTAssertEqual(try params(Input.self, after[1]).bytes, Data("y".utf8), "Input after the steps keeps its place")
+        XCTAssertEqual(peer.requests("terminals.scroll").count, 1)
+    }
+
     /// A scroll step still queued when the attachment ends (a detach, or a reattach) answers `failed`: its caller (the
     /// pan gesture's task, which holds the feed) never stays suspended.
     @MainActor

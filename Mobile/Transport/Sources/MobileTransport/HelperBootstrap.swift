@@ -42,6 +42,19 @@ public enum HelperBootstrap: Sendable {
     if try await connection.run(shell(SSHBootstrapScript.cachePreamble(digest: digest) + "\n" + verify)).status == 0 {
       return installed(false)
     }
+    // An upload that broke off (or a cache the Mac was filling at the same moment) is tried once more; a failure the
+    // script calls permanent (an unsafe folder, no checksum tool) is not.
+    do {
+      try await upload(binary, digest: digest, on: connection, shell: shell)
+    } catch SSHTransportError.bootstrap(let message) where SSHBootstrapScript.transient(SSHBootstrapScript.reason(message)) {
+      try await upload(binary, digest: digest, on: connection, shell: shell)
+    }
+    return installed(true)
+  }
+
+  /// One upload into a fresh staging folder; its failure carries the script's `dispatch-setup:` reason.
+  private static func upload(_ binary: Data, digest: String, on connection: SSHConnection,
+                             shell: (String) -> String) async throws {
     let staging = "upload-" + UUID().uuidString.lowercased()
     let exec = try await connection.exec(shell(SSHBootstrapScript.upload(digest: digest, size: binary.count, staging: staging)))
     async let output = collect(exec)
@@ -61,9 +74,8 @@ public enum HelperBootstrap: Sendable {
     let stderr = try await output
     let status = try await exec.exitStatus()
     guard status == 0 else {
-      throw SSHTransportError.bootstrap("Could not install the SSH helper in the remote cache (\(status)): " + stderr)
+      throw SSHTransportError.bootstrap("Could not install the SSH helper in the remote cache (\(status)):\n" + stderr)
     }
-    return installed(true)
   }
 
   /// The helper's stdio command: re-verifies the cached file, then execs it from its directory, with

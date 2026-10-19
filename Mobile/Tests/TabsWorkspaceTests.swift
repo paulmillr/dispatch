@@ -93,6 +93,44 @@ final class TabsWorkspaceTests: XCTestCase {
         XCTAssertEqual(workspace.space("herdr:app")?.activity, clock.now)
     }
 
+    /// Times say when something happened: a change found across a gap happened at an unknown time and moves none. The
+    /// launch cache against the live data, a reconnect (a new client), and a newly followed multiplexer are baselines;
+    /// only a change between two live snapshots of one connection is dated.
+    func testChangesFoundAcrossAGapMoveNoTime() {
+        let clock = TestClock()
+        var cachedHost = TabsFixtures.host
+        cachedHost.live = false
+        let workspace = MobileWorkspace(host: cachedHost, activity: TabActivityStore(url: nil), now: { clock.now })
+        workspace.apply(TabsFixtures.app().topology)
+        clock.advance(60)
+        workspace.update(host: TabsFixtures.host)
+        workspace.apply(TabsFixtures.app(devName: "server", extraTab: true).topology)
+        XCTAssertNil(workspace.tab("herdr:app:2")?.activity, "renamed while the phone was away")
+        XCTAssertNil(workspace.tab("herdr:app:4")?.activity, "made while the phone was away")
+        clock.advance(60)
+        workspace.apply(TabsFixtures.app(devName: "build", extraTab: true).topology)
+        let seen = clock.now
+        XCTAssertEqual(workspace.tab("herdr:app:2")?.activity, seen, "renamed between two live snapshots")
+
+        let first = ScriptedHelper.scripted { _ in nil }, second = ScriptedHelper.scripted { _ in nil }
+        defer { first.close(); second.close() }
+        workspace.connect(first.client)
+        workspace.apply(TabsFixtures.app(backend: 2, first: 500, devName: "build", extraTab: true).topology)
+        clock.advance(60)
+        workspace.connect(nil)
+        workspace.connect(second.client)
+        workspace.apply(TabsFixtures.app(backend: 3, first: 900, devName: "deploy", extraTab: true, focus: 0).topology)
+        XCTAssertEqual(workspace.tab("herdr:app:2")?.activity, seen, "renamed while reconnecting")
+
+        // Another multiplexer followed: its tabs were there all along, none of them is new.
+        workspace.remove(backend: 3)
+        let tmux = TopologySketch(backend: 4, first: 1200, spaces: [
+            .init(key: "tmux:work", name: "work", tabs: [.init(key: "tmux:work:@1", name: "vim", panes: [.init(key: "%1", cwd: "/srv")])]),
+        ])
+        workspace.apply(tmux.topology)
+        XCTAssertNil(workspace.tab("tmux:work:@1")?.activity)
+    }
+
     /// Detached nodes are running but dismissed on this connection: they leave the lists.
     func testDetachedNodesAreHidden() {
         let workspace = TabsFixtures.workspace()
