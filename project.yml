@@ -235,7 +235,7 @@ targets:
         outputFiles: ["$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/JetBrainsMono-Variable.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/JetBrainsMono-Italic-Variable.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/SymbolsNerdFont-Regular.ttf"]
     preBuildScripts:
       - name: Build SSH engine
-        script: python3 "$SRCROOT/scripts/build-mobile-ssh.py"
+        script: python3 "$SRCROOT/scripts/build-mobile-ssh.py" --platform "$PLATFORM_NAME"
         basedOnDependencyAnalysis: false
       - name: Install SSH helpers
         # The phone uploads every helper (the Mac one too) to hosts: all three are plain resources in helper/.

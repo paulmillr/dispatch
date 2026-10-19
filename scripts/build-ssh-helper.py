@@ -19,15 +19,72 @@ import tempfile
 
 ROOT = Path(os.environ.get("SRCROOT", Path(__file__).resolve().parent.parent))
 NAMES = ("darwin-universal", "linux-aarch64", "linux-x86_64")
+ARTIFACTS = (*NAMES, "version", "protocol-version")
 # Remote helpers bundled for SSH hosts: protocol marker the app checks (helper: its generated wire schema
 # version).
 HELPERS = {
     "helper": {"protocol": None, "codec": ROOT / "Dispatch/Helper/HelperBinary.swift"},
 }
+# What a helper build reads besides the crate itself, Cargo's caches and the pinned toolchain.
+INPUTS = ("Vendor/Zstd", "scripts/build-ssh-helper.py", "scripts/setup-ssh-rust.py")
+# The wire registry: the build appends to it (helper/core/build/schema.rs `registered`), so it may differ after a build.
+REGISTRY = "helper/core/src/wire/registry.txt"
+# The last corpus replay that passed (verify): the helper and corpus it passed on.
+REPLAY_STAMP = "replay-verified.json"
 
 
 def run(*arguments, **kwargs):
     return subprocess.run(arguments, check=True, **kwargs)
+
+
+def digest_file(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def tree(*tops, skip=()):
+    """Every file under `tops` (relative to ROOT), sorted by relative path; `skip`: relative directories left out."""
+    paths = []
+    for top in tops:
+        top = ROOT / top
+        if top.is_file() or top.is_symlink():
+            paths.append(top)
+            continue
+        for directory, names, files in os.walk(top):
+            names[:] = [name for name in names if name not in ("__pycache__", ".git")
+                        and str((Path(directory) / name).relative_to(ROOT)) not in skip]
+            paths += [Path(directory) / name for name in files if name not in (".DS_Store", ".git")]
+    return sorted((str(path.relative_to(ROOT)), path) for path in paths)
+
+
+def sources(helper, codec):
+    """The build's inputs by content, not mtime: a VM given the same sources computes the same digests, so it
+    reuses a helper the host built (test/vm.py syncs it) instead of building and replaying the corpus again."""
+    inputs = (helper, *INPUTS) + ((str(codec.relative_to(ROOT)),) if codec else ())
+    return {name: "link:" + os.readlink(path) if path.is_symlink() else digest_file(path)
+            for name, path in tree(*inputs, skip=(helper + "/target",))}
+
+
+def inputs_key(parameters, files):
+    return hashlib.sha256(json.dumps([parameters, files], sort_keys=True).encode()).hexdigest() + "\n"
+
+
+def corpus_state(corpus, migrations, version, content):
+    """The corpus replay's inputs: the helper's version, the corpus and its migrations. `content` hashes every file
+    (~1 s for the whole corpus); otherwise path, size, mtime, ctime and inode stand for it (ctime: a tool that
+    restores mtimes still changes it)."""
+    digest = hashlib.sha256(version.encode())
+    for name, path in tree(corpus.relative_to(ROOT), migrations.relative_to(ROOT)):
+        if content:
+            value = digest_file(path)
+        else:
+            status = path.stat()
+            value = f"{status.st_size} {status.st_mtime_ns} {status.st_ctime_ns} {status.st_ino}"
+        digest.update(f"{name}\0{value}\n".encode())
+    return digest.hexdigest()
 
 
 def replace_if_changed(source, destination):
@@ -105,16 +162,19 @@ def build(profile, target_dir, helper="helper", dry_run=False, capture=None):
             except BlockingIOError:
                 print("Waiting for another SSH helper build: " + str(target_dir), flush=True)
                 fcntl.flock(lock, fcntl.LOCK_EX)
+        rustc = subprocess.check_output([str(toolchain / "bin/rustc"), "-vV"], env=env, text=True)
+        host = next(line.removeprefix("host: ") for line in rustc.splitlines() if line.startswith("host: "))
+        darwin = ["aarch64-apple-darwin", "x86_64-apple-darwin"]
+        if not universal(profile) and host in darwin:
+            darwin = [host]
         print(("Planning " if dry_run else "Building ") + helper +
               " (" + profile + (", capture" if capture else ", without capture") +
-              ", four targets in parallel)", flush=True)
-        host = next(line.removeprefix("host: ") for line in
-                    subprocess.check_output([str(toolchain / "bin/rustc"), "-vV"], env=env, text=True).splitlines()
-                    if line.startswith("host: "))
+              f", {len(darwin) + 2} targets in parallel" +
+              ("" if len(darwin) > 1 else ", Mac " + host.split("-")[0] + " only") + ")", flush=True)
         linker = toolchain / "lib/rustlib" / host / "bin/rust-lld"
         linux_flags = ["-C", "linker=" + str(linker), "-C", "linker-flavor=ld.lld", "-C", "target-feature=+crt-static"]
         # One Cargo scheduler shares host dependencies and the CPU job budget
-        # across all four targets. Separate Cargo processes would lock this cache.
+        # across all targets. Separate Cargo processes would lock this cache.
         command = [cargo, "build", "--offline", "--frozen", "--profile", profile, "--message-format=json-render-diagnostics"]
         if capture:
             command += ["--features", "dispatch-" + helper + "/capture"]
@@ -126,7 +186,7 @@ def build(profile, target_dir, helper="helper", dry_run=False, capture=None):
             mac_flags = encoded_flags.split("\x1f") if encoded_flags else []
         else:
             mac_flags = rustflags.split() if rustflags is not None else None
-        for target in ("aarch64-apple-darwin", "x86_64-apple-darwin"):
+        for target in darwin:
             command += ["--target", target]
             if mac_flags is not None:
                 command += ["--config", "target." + target + ".rustflags=" + json.dumps(mac_flags)]
@@ -139,30 +199,66 @@ def build(profile, target_dir, helper="helper", dry_run=False, capture=None):
                                   setup=["python3", str(ROOT / "scripts/setup-ssh-rust.py"), "--offline"],
                                   outputs=[str(output / name) for name in NAMES]), indent=2))
             return
+        # Each variant keeps its last build, published to bin/ from there: switching between Debug and Release, or
+        # building unchanged sources (a Swift edit, a VM given the host's build), runs neither Cargo nor lipo.
+        variant = target_dir / "variants" / (profile + ("-capture" if capture else ""))
+        stamp = variant / "inputs"
+        parameters = [helper, profile, capture, darwin, mac_flags, rustc]
+        before = sources(helper, settings.get("codec"))
+        if (stamp.is_file() and stamp.read_text() == inputs_key(parameters, before)
+                and all((variant / name).is_file() for name in ARTIFACTS)):
+            print("Reusing the " + variant.name + " helper build: its inputs are unchanged", flush=True)
+            publish(variant, output)
+            return
+        stamp.unlink(missing_ok=True)
         messages = run(*command, cwd=crate, env=env, stdout=subprocess.PIPE, text=True).stdout
         if settings.get("codec"):
             protocol = codec(messages, settings["codec"])
-        output.mkdir(parents=True, exist_ok=True)
+        variant.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="package-", dir=target_dir) as directory:
             stage = Path(directory)
             native = stage / "darwin-universal"
-            run("xcrun", "lipo", "-create", str(cache / "aarch64-apple-darwin" / profile / binary),
-                str(cache / "x86_64-apple-darwin" / profile / binary), "-output", str(native))
+            # Named universal even when it is this Mac's architecture only (Debug: universal()).
+            run("xcrun", "lipo", "-create", *(str(cache / target / profile / binary) for target in darwin),
+                "-output", str(native))
             run("codesign", "--force", "--sign", "-", "--identifier", "yachts.dispatch." + helper, str(native))
             for arch in ("aarch64", "x86_64"):
                 shutil.copyfile(cache / (arch + "-unknown-linux-musl") / profile / binary, stage / ("linux-" + arch))
             for name in NAMES:
                 (stage / name).chmod(0o755)
-                replace_if_changed(stage / name, output / name)
-            version = hashlib.sha256(b"".join(hashlib.sha256((output / name).read_bytes()).digest() for name in NAMES)).hexdigest()
-            write_if_changed(output / "version", version + "\n")
-            write_if_changed(output / "protocol-version", protocol)
+                replace_if_changed(stage / name, variant / name)
+            version = hashlib.sha256(b"".join(hashlib.sha256((variant / name).read_bytes()).digest() for name in NAMES)).hexdigest()
+            write_if_changed(variant / "version", version + "\n")
+            write_if_changed(variant / "protocol-version", protocol)
+        publish(variant, output)
+        # Sources edited during the build may not be in it; only the registry's own appends are.
+        after = sources(helper, settings.get("codec"))
+        changed = sorted(name for name in before.keys() | after.keys() if before.get(name) != after.get(name))
+        if set(changed) <= {REGISTRY}:
+            write_if_changed(stamp, inputs_key(parameters, after))
+        else:
+            print("Helper inputs changed during the build (" + ", ".join(changed[:3]) + "): the next build runs Cargo again", flush=True)
+
+
+def universal(profile):
+    """Whether the Mac helper gets both architectures. Debug builds make this Mac's only: a quarter less Rust work
+    after each helper edit, and a Debug helper serves this Mac and arm64 test VMs (an Intel SSH host needs
+    DISPATCH_HELPER_UNIVERSAL=1). Release configurations, archives and the release profile ship both
+    (test/ios-release.py checks)."""
+    return (profile == "release" or os.environ.get("CONFIGURATION") == "Release"
+            or os.environ.get("ACTION") == "install" or os.environ.get("DISPATCH_HELPER_UNIVERSAL") == "1")
+
+
+def publish(variant, output):
+    output.mkdir(parents=True, exist_ok=True)
+    for name in ARTIFACTS:
+        replace_if_changed(variant / name, output / name)
 
 
 def install(target_dir, helper="helper"):
     """Copy built binaries into the portable-test cache and the app's resources."""
     output = target_dir.resolve() / "bin"
-    if not all((output / name).is_file() for name in (*NAMES, "version", "protocol-version")):
+    if not all((output / name).is_file() for name in ARTIFACTS):
         raise SystemExit(f"{helper} is not built: {output}. Run scripts/build-ssh-helper.sh first.")
     # Retain portable-test cache names; Cargo owns its incremental output.
     compatibility = ROOT / "build" / helper
@@ -172,7 +268,7 @@ def install(target_dir, helper="helper"):
     phone = os.environ.get("PLATFORM_NAME", "").startswith("iphone")
     for directory in (compatibility, destination):
         directory.mkdir(parents=True, exist_ok=True)
-        for name in (*NAMES, "version", "protocol-version"):
+        for name in ARTIFACTS:
             # The Mac app's darwin-universal links to the one signed dispatch-helper (scripts/bundle-helper.sh).
             if directory == destination and name == "darwin-universal" and not phone:
                 continue
@@ -192,6 +288,23 @@ def verify(target_dir):
     # The corpus first comes up to the code (docs/replay.md, Migrations): what a change did to recordings ships as a
     # migration in test/replay-migrations, applied here once; the corpus's own git status shows it, ledger included.
     migrations = ROOT / "test/replay-migrations"
+    # The same helper on the same corpus replays alike: a build that changed neither (a Swift edit) skips the replay.
+    # A VM gets the host's stamp with its helper (test/vm.py) and matches it by content.
+    stamp = target_dir / REPLAY_STAMP
+    version = (target_dir / "bin/version").read_text()
+    try:
+        passed = json.loads(stamp.read_text())
+    except (OSError, ValueError):
+        passed = {}
+    state = corpus_state(corpus, migrations, version, content=False)
+    if passed.get("state") != state and passed.get("content"):
+        if passed["content"] == corpus_state(corpus, migrations, version, content=True):
+            passed["state"] = state
+            write_if_changed(stamp, json.dumps(passed) + "\n")
+    if passed.get("state") == state:
+        print("Corpus replay skipped: neither the helper nor replays/ changed since it passed (" + passed.get("summary", "") + ")", flush=True)
+        return
+    stamp.unlink(missing_ok=True)
     if migrations.is_dir():
         migrated = subprocess.run([str(helper), "capture", "migrate", str(corpus), str(migrations)], stdout=subprocess.PIPE, text=True)
         for line in migrated.stdout.splitlines():
@@ -199,6 +312,7 @@ def verify(target_dir):
                 print("replay corpus " + line.replace("\t", ": ", 1), flush=True)
         if migrated.returncode != 0:
             raise SystemExit("A replay migration did not apply (" + str(migrations) + "): fix it before the corpus replays")
+    state = corpus_state(corpus, migrations, version, content=False)
     result = subprocess.run([str(helper), "capture", "replay", str(corpus), "--completion", "required", "--output", str(output)],
                             stdout=subprocess.PIPE, text=True)
     lines = result.stdout.splitlines()
@@ -209,6 +323,11 @@ def verify(target_dir):
     if result.returncode != 0:
         raise SystemExit("The helper does not replay the corpus (results: " + str(output) + "); fix it, or drop what no longer applies: " + str(helper) + " capture prune " + str(corpus))
     shutil.rmtree(output)
+    # A corpus edited during the replay passed only in part.
+    if corpus_state(corpus, migrations, version, content=False) == state:
+        summary = lines[-1].split("; report:")[0] if lines else ""
+        write_if_changed(stamp, json.dumps(dict(state=state, summary=summary,
+                                                content=corpus_state(corpus, migrations, version, content=True))) + "\n")
 
 
 def default_capture():

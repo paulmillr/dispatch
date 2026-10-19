@@ -3203,7 +3203,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "python3 \"$SRCROOT/scripts/build-mobile-ssh.py\"";
+			shellScript = "python3 \"$SRCROOT/scripts/build-mobile-ssh.py\" --platform \"$PLATFORM_NAME\"";
 		};
 		6EC0311928B14EB41D1B4895 /* Bundle licences */ = {
 			isa = PBXShellScriptBuildPhase;

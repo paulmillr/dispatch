@@ -456,6 +456,27 @@ def test(vm, tests, recheck=False, benchmarks=False, selection=None, **shard):
     return test_guest(vm, tests, recheck=recheck, benchmarks=benchmarks, **extra)
 
 
+def sync_helper(vm):
+    """Give the guest the host's last Debug helper build and corpus replay stamp (scripts/build-ssh-helper.py): a guest
+    whose helper sources match them by content reuses both instead of building the helper (1-3 min) and replaying the
+    corpus in every VM. Other sources make the guest build its own, as before."""
+    helper = ROOT / "build/helper-rust"
+    variant = helper / "variants/local-capture"
+    if not (variant / "inputs").is_file():
+        return
+    destination = GUEST + "/workspace/build/helper-rust/"
+    with (helper / ".build.lock").open("a") as lock:
+        try:
+            # A host helper build in progress: let the guest build its own.
+            fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return
+        guest(vm, "/bin/mkdir", "-p", destination + "variants")
+        synchronize(vm, [str(variant)], destination + "variants/")
+        if (helper / "replay-verified.json").is_file():
+            synchronize(vm, [str(helper / "replay-verified.json")], destination)
+
+
 def prepare_test_inputs(vm, profile, needs_codex=True):
     def sync_sources():
         with profile.stage("source_sync") as stage:
@@ -468,6 +489,7 @@ def prepare_test_inputs(vm, profile, needs_codex=True):
             if not corpus:
                 # A corpus left from an earlier run would replay recordings this checkout does not have.
                 shell(vm, 'rm -rf "$1/workspace/' + CORPUS + '"', GUEST)
+            sync_helper(vm)
 
     def sync_cli():
         with profile.stage("codex_sync"):
