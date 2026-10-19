@@ -4,6 +4,8 @@
 //! applied. Each pending one runs in order:
 //!
 //! - `baseline`: the corpus as it was when migrations began; applied to every corpus without a ledger.
+//! - `encode`: every capture written again as the corpus writes captures now (trace::Writer::corpus), its records
+//!   unchanged: a storage change only (rsyncable zstd, zstd.rs).
 //! - `wire`: every capture of another schema written in this helper's, with the named reviewed `edits` (`convert`).
 //! - `rewrite`: in the inputs the app recorded (`open.*` records' arguments) only, each `old` template replaced by its
 //!   `new` one, as written and as shell-quoted inside `'…'`. Recorded results are never touched: a rewrite is right only
@@ -19,12 +21,15 @@ use super::*;
 pub(super) struct Migration {
     pub id: String,
     pub kind: Kind,
+    /// Read by the tests that hold the code to its migrations.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fingerprints: Vec<(String, String)>,
 }
 
 #[derive(Debug)]
 pub(super) enum Kind {
     Baseline,
+    Encode,
     Wire { edits: Vec<String> },
     Rewrite { ops: Vec<String>, pairs: Vec<(Template, Template)> },
     Rerecord { tests: Vec<String> },
@@ -248,6 +253,7 @@ fn parse(path: &Path) -> io::Result<Migration> {
     };
     let kind = match root.get("kind").and_then(|kind| kind.string()) {
         Some("baseline") => Kind::Baseline,
+        Some("encode") => Kind::Encode,
         Some("wire") => Kind::Wire { edits: strings("edits")? },
         Some("rewrite") => {
             let ops = strings("ops")?;
@@ -277,7 +283,7 @@ fn parse(path: &Path) -> io::Result<Migration> {
             }
             Kind::Rerecord { tests }
         }
-        _ => return Err(bad("kind is baseline, wire, rewrite or rerecord")),
+        _ => return Err(bad("kind is baseline, encode, wire, rewrite or rerecord")),
     };
     Ok(Migration { id, kind, fingerprints })
 }
@@ -363,6 +369,9 @@ pub(super) fn run(mut args: Vec<String>) -> io::Result<()> {
         };
         match &migration.kind {
             Kind::Baseline => {}
+            Kind::Encode => {
+                tally(parallel(&files, jobs, |file| rewrite_file(file, dry, &|_, records| Ok(records.len().max(1)))));
+            }
             Kind::Wire { edits } => {
                 let mut names = HashMap::new();
                 for entry in std::fs::read_dir(directory.join("wire"))? {

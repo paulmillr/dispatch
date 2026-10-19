@@ -781,7 +781,7 @@ fn tokens<'a>(bytes: &'a [u8], names: &body::Names) -> io::Result<Token<'a>> {
 /// Whether a value was written plain (Some(true): a name written out that the old schema has as a symbol, or an object
 /// written with keys that are one of its records), by the schema (Some(false): a symbol or a record), or cannot tell.
 fn plain(token: &Token<'_>, old: &body::Names) -> Option<bool> {
-    let known = |name: &str| old.symbols.binary_search(&name).is_ok();
+    let known = |name: &str| old.symbols.contains(&name);
     match token {
         Token::Text { symbol: true, .. } | Token::Object { record: true, .. } => Some(false),
         Token::Text { text, symbol: false } => known(text).then_some(true),
@@ -796,8 +796,8 @@ fn plain(token: &Token<'_>, old: &body::Names) -> Option<bool> {
 /// value itself shows plain), else with this schema's symbols and records; a value that cannot tell is its parent's kind.
 fn written(token: &Token<'_>, parent: bool, old: &body::Names, out: &mut Vec<u8>) {
     let plain = parent || plain(token, old) == Some(true);
-    let name = |out: &mut Vec<u8>, name: &str| match body::SYMBOLS.binary_search(&name) {
-        Ok(index) if !plain => out.extend_from_slice(&(index as u16).to_le_bytes()),
+    let name = |out: &mut Vec<u8>, name: &str| match body::symbol(name) {
+        Some(index) if !plain => out.extend_from_slice(&index.to_le_bytes()),
         _ => {
             out.extend_from_slice(&u16::MAX.to_le_bytes());
             out.extend_from_slice(&(name.len() as u32).to_le_bytes());
@@ -806,10 +806,10 @@ fn written(token: &Token<'_>, parent: bool, old: &body::Names, out: &mut Vec<u8>
     };
     match token {
         Token::Scalar(bytes) => out.extend_from_slice(bytes),
-        Token::Text { text, .. } => match body::SYMBOLS.binary_search(text) {
-            Ok(index) if !plain => {
+        Token::Text { text, .. } => match body::symbol(text) {
+            Some(index) if !plain => {
                 out.push(9);
-                out.extend_from_slice(&(index as u16).to_le_bytes());
+                out.extend_from_slice(&index.to_le_bytes());
             }
             _ => {
                 out.push(6);

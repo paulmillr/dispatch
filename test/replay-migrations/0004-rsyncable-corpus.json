@@ -1,0 +1,4 @@
+{
+  "kind": "encode",
+  "why": "Corpus files are written rsyncable (zstd's threaded compressor, built into the macOS helper only; Vendor/Zstd/PROVENANCE.md): a file a later migration changes in one place compresses to mostly the same bytes, so git stores a small delta instead of a whole new file. Every capture is written again with the same records; nothing a test sees changes."
+}

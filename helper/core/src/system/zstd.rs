@@ -1,7 +1,9 @@
 //! Zstandard (Vendor/Zstd, compiled by build.rs into every helper): capture files and the files plugin's archives.
 //! A live capture or an archive is level 1 (zstd's fast strategy: neither waits on it); the replay corpus is level 9
 //! with long-distance matching over a 128 MiB window, so a payload recorded again and again (a helper binary uploaded
-//! many times) is stored once. Each frame ends with a checksum of its content, which refuses a damaged file. A
+//! many times) is stored once, and (macOS, where corpus files are written) `rsyncable`: compressed bytes resynchronize
+//! after a change, so a corpus file that changes in one place (a migration, docs/replay.md) is mostly the same bytes,
+//! which git stores as a small delta instead of a whole new file. Each frame ends with a checksum of its content, which refuses a damaged file. A
 //! checkpoint ends a frame and later records continue in the next; the decoder reads frames one after another.
 use std::ffi::{CStr, c_char, c_int, c_uint, c_void};
 use std::io::{self, Read, Write};
@@ -16,6 +18,11 @@ const COMPRESSION_LEVEL: c_int = 100;
 const WINDOW: c_int = 101;
 const LONG_DISTANCE: c_int = 160;
 const CHECKSUM: c_int = 201;
+// zstd.h's ZSTD_c_nbWorkers and ZSTD_c_rsyncable (ZSTD_c_experimentalParam1): only a multithreaded build knows them.
+#[cfg(target_os = "macos")]
+const WORKERS: c_int = 400;
+#[cfg(target_os = "macos")]
+const RSYNCABLE: c_int = 500;
 const WINDOW_MAX: c_int = 100;
 const CONTINUE: c_int = 0;
 const FLUSH: c_int = 1;
@@ -69,9 +76,14 @@ impl<W: Write> Encoder<W> {
     pub fn live(output: W) -> io::Result<Self> {
         Self::new(output, &[(COMPRESSION_LEVEL, LIVE), (CHECKSUM, 1)])
     }
-    /// A corpus file: level 9 over the long window.
+    /// A corpus file: level 9 over the long window; on macOS rsyncable, through zstd's one-worker threaded compressor
+    /// (the same bytes whatever the number of workers).
     pub fn corpus(output: W) -> io::Result<Self> {
-        Self::new(output, &[(COMPRESSION_LEVEL, CORPUS), (WINDOW, WINDOW_LOG), (LONG_DISTANCE, 1), (CHECKSUM, 1)])
+        let base = [(COMPRESSION_LEVEL, CORPUS), (WINDOW, WINDOW_LOG), (LONG_DISTANCE, 1), (CHECKSUM, 1)];
+        #[cfg(target_os = "macos")]
+        return Self::new(output, &[&base[..], &[(WORKERS, 1), (RSYNCABLE, 1)]].concat());
+        #[cfg(not(target_os = "macos"))]
+        return Self::new(output, &base);
     }
     fn new(output: W, parameters: &[(c_int, c_int)]) -> io::Result<Self> {
         // SAFETY: allocates a context, freed once in Drop.

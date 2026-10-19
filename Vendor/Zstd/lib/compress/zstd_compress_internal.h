@@ -20,6 +20,9 @@
 ***************************************/
 #include "../common/zstd_internal.h"
 #include "zstd_cwksp.h"
+#ifdef ZSTD_MULTITHREAD
+#  include "zstdmt_compress.h"
+#endif
 #include "../common/bits.h" /* ZSTD_highbit32, ZSTD_NbCommonBytes */
 #include "zstd_preSplit.h" /* ZSTD_SLIPBLOCK_WORKSPACESIZE */
 
@@ -525,6 +528,9 @@ struct ZSTD_CCtx_s {
     ZSTD_prefixDict prefixDict;   /* single-usage dictionary */
 
     /* Multi-threading */
+#ifdef ZSTD_MULTITHREAD
+    ZSTDMT_CCtx* mtctx;
+#endif
 
     /* Tracing */
 

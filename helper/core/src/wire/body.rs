@@ -35,22 +35,39 @@ fn text(out: &mut Vec<u8>, value: &str) -> Result<(), Error> {
 /// Names the wire abbreviates (the generated schema); captures use none, so they do not depend on it.
 #[derive(Clone, Copy)]
 struct Dictionary {
+    /// In number order (src/wire/registry.txt): a name's number is its place.
     symbols: &'static [&'static str],
+    /// The numbers of `symbols` in the names' sorted order, for lookup.
+    order: &'static [u16],
     records: &'static [&'static [&'static str]],
 }
 const WIRE: Dictionary = Dictionary {
     symbols: SYMBOLS,
+    order: SYMBOL_ORDER,
     records: RECORDS,
 };
 const PLAIN: Dictionary = Dictionary {
     symbols: &[],
+    order: &[],
     records: &[],
 };
 
+impl Dictionary {
+    /// `name`'s number, if the table has it.
+    fn number(&self, name: &str) -> Option<u16> {
+        self.order.binary_search_by(|number| self.symbols[usize::from(*number)].cmp(name)).ok().map(|at| self.order[at])
+    }
+}
+
+/// `name`'s number in this helper's wire table (src/wire/registry.txt), if it has one.
+pub fn symbol(name: &str) -> Option<u16> {
+    WIRE.number(name)
+}
+
 fn key(out: &mut Vec<u8>, name: &str, names: Dictionary) -> Result<(), Error> {
-    match names.symbols.binary_search(&name) {
-        Ok(index) => out.extend_from_slice(&(index as u16).to_le_bytes()),
-        Err(_) => {
+    match names.number(name) {
+        Some(index) => out.extend_from_slice(&index.to_le_bytes()),
+        None => {
             out.extend_from_slice(&u16::MAX.to_le_bytes());
             text(out, name)?;
         }
@@ -82,9 +99,9 @@ fn value(out: &mut Vec<u8>, item: &Data<'_>, depth: usize, names: Dictionary) ->
         }
         Data::Real(_) => return Err(error()),
         Data::String(v) => {
-            if let Ok(index) = names.symbols.binary_search(v) {
+            if let Some(index) = names.number(v) {
                 out.push(9);
-                out.extend_from_slice(&(index as u16).to_le_bytes());
+                out.extend_from_slice(&index.to_le_bytes());
             } else {
                 out.push(6);
                 text(out, v)?;
@@ -430,8 +447,10 @@ pub fn decode_as<'a>(bytes: &'a [u8], names: &Names) -> Result<Data<'a>, Error> 
     let mut reader = Reader {
         bytes,
         at: 0,
+        // Decoding reads numbers only: no lookup order is needed.
         names: Dictionary {
             symbols: names.symbols,
+            order: &[],
             records: names.records,
         },
         values: VALUES,

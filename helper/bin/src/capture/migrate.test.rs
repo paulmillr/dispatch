@@ -117,6 +117,22 @@ fn migrate_rewrites_inputs_retires_changed_tests_and_keeps_a_ledger() {
     std::fs::remove_dir_all(&root).unwrap();
 }
 
+/// A storage migration writes every capture again with the same records.
+#[test]
+fn encode_rewrites_every_capture_and_keeps_its_records() {
+    let root = temporary("encode");
+    let replays = corpus(&root);
+    let file = replays.join("SSHTests/testOne/app.rpl.zst");
+    let before = trace::read(File::open(&file).unwrap(), usize::MAX).unwrap();
+    let migrations = root.join("migrations");
+    migration(&migrations, "0000-baseline", r#"{"kind": "baseline", "why": "the corpus as it was"}"#);
+    migration(&migrations, "0001-encode", r#"{"kind": "encode", "why": "rsyncable"}"#);
+    run(vec![replays.display().to_string(), migrations.display().to_string()]).unwrap();
+    assert_eq!(trace::read(File::open(&file).unwrap(), usize::MAX).unwrap(), before);
+    assert_eq!(std::fs::read_to_string(replays.join("MIGRATIONS")).unwrap(), "0000-baseline\n0001-encode\n");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
 #[test]
 fn a_migration_must_say_why_and_rewrite_inputs_only() {
     let root = temporary("parse");
@@ -128,17 +144,29 @@ fn a_migration_must_say_why_and_rewrite_inputs_only() {
     std::fs::remove_dir_all(&root).unwrap();
 }
 
-/// The code's schema has its dictionary checked in, and the last migration naming the wire names this schema: a schema
-/// change ships with the migration that converts the corpus (docs/replay.md, Migrations).
+/// The code's wire generation has its dictionary checked in, which the current table only extends (names and layouts
+/// are appended, never moved: src/wire/registry.txt), and the last migration naming the wire names this generation: a
+/// breaking change ships with the migration that converts the corpus (docs/replay.md, Migrations).
 #[test]
 fn the_current_schema_has_its_dictionary_and_migration() {
     let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test/replay-migrations");
     let current = schema(wire::VERSION);
     let snapshot = directory.join("wire").join(format!("{current}.json"));
-    let checked = std::fs::read_to_string(&snapshot).unwrap_or_default();
-    assert!(checked == dictionary_json(), "the wire schema changed: write its dictionary with `dispatch-helper capture dictionary {}` \
-        and add a wire migration naming fingerprint wire = {current}", directory.join("wire").display());
+    let (version, checked) = dictionary(&snapshot).unwrap_or_else(|_| panic!("no dictionary for this generation: write it with \
+        `dispatch-helper capture dictionary {}` and add a wire migration naming fingerprint wire = {current}", directory.join("wire").display()));
+    assert_eq!(version, wire::VERSION);
+    assert!(body::SYMBOLS.starts_with(checked.symbols), "a wire name moved or went: src/wire/registry.txt is append-only");
+    assert!(body::RECORDS.starts_with(checked.records), "a record layout moved or went: src/wire/registry.txt is append-only");
     let declared = load(&directory).unwrap().into_iter().rev()
         .find_map(|migration| migration.fingerprints.into_iter().find(|(name, _)| name == "wire").map(|(_, hash)| hash));
-    assert_eq!(declared.as_deref(), Some(current.as_str()), "the last migration naming the wire names another schema");
+    assert_eq!(declared.as_deref(), Some(current.as_str()), "the last migration naming the wire names another generation");
+}
+
+/// Names keep their numbers whatever is appended: the table is in number order, and lookups go through the sorted order.
+#[test]
+fn every_wire_name_encodes_as_its_permanent_number() {
+    for (number, name) in body::SYMBOLS.iter().enumerate() {
+        assert_eq!(body::symbol(name), Some(number as u16), "{name}");
+    }
+    assert_eq!(body::symbol("not a wire name"), None);
 }

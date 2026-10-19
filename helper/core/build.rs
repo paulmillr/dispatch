@@ -26,7 +26,10 @@ fn zstd(vendor: &Path, out: &Path) {
         "macos" => {
             let deployment = env::var("MACOSX_DEPLOYMENT_TARGET").unwrap_or_else(|_| "11.0".into());
             let arch = if arch == "aarch64" { "arm64".into() } else { arch };
-            vec!["--sdk".into(), "macosx".into(), "clang".into(), "-arch".into(), arch, format!("-mmacosx-version-min={deployment}")]
+            // Multithreaded on macOS only: the capture tool writes the replay corpus there, `rsyncable`, which zstd
+            // implements in its threaded compressor (zstd.rs, CORPUS). Linux helpers only read corpus files.
+            vec!["--sdk".into(), "macosx".into(), "clang".into(), "-arch".into(), arch, format!("-mmacosx-version-min={deployment}"),
+                 "-DZSTD_MULTITHREAD".into()]
         }
         // clang's own stddef.h defers to the system's on musl (`__musl__`); freestanding, it defines size_t itself.
         "linux" => vec![

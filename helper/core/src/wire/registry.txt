@@ -1,0 +1,416 @@
+# The wire's permanent numbers (docs/replay.md, Protocol): a name's number is its place among the `s` lines, a
+# record layout's its place among the `r` lines. Append only: the build (helper/core/build/schema.rs) appends what new
+# code encodes and warns; never reorder or delete a line, or every recording made before reads other names. A
+# breaking change (a removed name reused, the value grammar) starts a new generation: a new `schema` id and table, and
+# a wire migration in test/replay-migrations.
+schema	ffb555cb07505319
+s	:
+s	activity
+s	add
+s	additions
+s	after
+s	agent
+s	agents
+s	answers
+s	approval
+s	archive
+s	args
+s	at
+s	attention
+s	available
+s	awaiting_creation
+s	axis
+s	backend
+s	backends.claim
+s	backends.command
+s	backends.create
+s	backends.list
+s	backends.open
+s	backends.prefix
+s	backup
+s	base
+s	before
+s	beside
+s	binding
+s	bindings
+s	blocking
+s	blocks
+s	boot
+s	busy
+s	bytes
+s	capabilities
+s	caught_up
+s	cell_height
+s	cell_width
+s	changed
+s	changed_ns
+s	chat.command
+s	chat.models
+s	chat.open
+s	chat.page
+s	chat.send
+s	chat.settings
+s	chat.settings.set
+s	chat.side
+s	chat.side.close
+s	chat.state
+s	chat.stop
+s	chat.tools
+s	check
+s	children
+s	choice
+s	choices
+s	chunks
+s	clipboard.request
+s	close.request
+s	code
+s	column
+s	columns
+s	command
+s	commit
+s	compacting
+s	completed
+s	confirmed_result
+s	container
+s	containers.create
+s	cores
+s	cpu
+s	cpu_present
+s	credit
+s	current
+s	cursor
+s	custom
+s	cwd
+s	deadline
+s	default
+s	deletions
+s	detached
+s	detail
+s	device
+s	dialog
+s	diff
+s	directory
+s	documents
+s	draft
+s	earlier
+s	echo
+s	edit
+s	editable
+s	editing
+s	edits
+s	effort
+s	enabled
+s	encoding
+s	end
+s	entities.focus
+s	entities.rename
+s	entries
+s	environment
+s	error
+s	event
+s	exit_code
+s	expected
+s	failed
+s	faint_tail
+s	fd
+s	file
+s	files
+s	files.branch
+s	files.git
+s	files.list
+s	files.pack
+s	files.pack.drop
+s	files.read
+s	files.summary
+s	files.text
+s	files.unpack.close
+s	files.unpack.open
+s	files.unpack.write
+s	files.write
+s	filters
+s	focus
+s	folders
+s	follow
+s	full
+s	generation
+s	git
+s	goal
+s	header
+s	held
+s	hello
+s	hidden
+s	hold
+s	id
+s	identity
+s	initial
+s	inline_reasoning
+s	inode
+s	input
+s	installation.audit
+s	installation.install
+s	installed
+s	interaction
+s	interactions.answer
+s	interactions.dismiss
+s	invalidated
+s	item
+s	items
+s	kept
+s	key
+s	keys
+s	kind
+s	label
+s	language
+s	launch
+s	launches.list
+s	layouts
+s	layouts.resize
+s	layouts.zoom
+s	leaf
+s	length
+s	limit
+s	lines
+s	list
+s	load
+s	mark
+s	max
+s	may_have_sent
+s	memberships.move
+s	memberships.place
+s	memberships.reorder
+s	memory
+s	message
+s	method
+s	mode
+s	model
+s	model_label
+s	modified_ns
+s	modifiers
+s	multiple
+s	multiplexers.list
+s	mux
+s	name
+s	names
+s	node
+s	nodes
+s	offset
+s	optional
+s	options
+s	orchestration
+s	output
+s	page
+s	params
+s	parent
+s	patch
+s	path
+s	paths
+s	pattern
+s	paused
+s	peer
+s	pending
+s	permissions.reduce
+s	pid
+s	place
+s	plugin
+s	plugins.reset
+s	policy
+s	position
+s	preview
+s	process
+s	question
+s	questions
+s	queue.add
+s	queue.edit
+s	queue.hold
+s	queue.list
+s	queue.remove
+s	queue.reorder
+s	queue.restore
+s	queue.start
+s	queue.update
+s	ratio
+s	read
+s	read_only
+s	reason
+s	received_per_second
+s	record
+s	records
+s	reload
+s	remove
+s	renamed
+s	renderer.request
+s	reorder
+s	repeat
+s	repeat_ms
+s	replace
+s	replaced
+s	replacements
+s	reply
+s	reset
+s	restart
+s	restore
+s	result
+s	revision
+s	route
+s	row
+s	rows
+s	rss
+s	search
+s	secret
+s	selection
+s	sent_per_second
+s	service_tier
+s	session
+s	shell
+s	size
+s	skipped
+s	snapshot
+s	source
+s	staging
+s	standard_input
+s	start
+s	state
+s	stats.disks
+s	stats.processes
+s	stats.sample
+s	status
+s	stdout
+s	stream
+s	subscription
+s	summary
+s	swap
+s	swift_tests
+s	symbol
+s	takeover
+s	target
+s	terminal
+s	terminals.attach
+s	terminals.control
+s	terminals.create
+s	terminals.history
+s	terminals.input
+s	terminals.keys
+s	terminals.observe
+s	terminals.publish
+s	terminals.ready
+s	terminals.release
+s	terminals.resize
+s	terminals.scroll
+s	terminals.seek
+s	text
+s	time_ms
+s	title
+s	tool
+s	topics
+s	total
+s	transcript
+s	transfer
+s	truncated
+s	trust
+s	tty
+s	turn
+s	update
+s	uptime
+s	usage
+s	value
+s	version
+s	viewport
+s	visible
+s	waiting
+s	watch
+s	work
+s	workdir
+s	workspace
+s	write
+s	written
+s	zoomed
+r	page	snapshot	state
+r	session	transcript	process
+r	language	text
+r	id	label	detail
+r	identity	paths	total	available
+r	path	kind	diff	workdir
+r	path	before	after	backup
+r	name	kind	size	modified_ns	device	inode	target	mark
+r	code	message
+r	watch	reset
+r	reply
+r	work	result	:
+r	pid	status
+r	peer	route	message	reply
+r	watch	pid
+r	fd	read	write
+r	at
+r	device	inode
+r	file	offset
+r	files	folders	bytes	truncated
+r	status	output	truncated
+r	title	choice
+r	model
+r	model	effort
+r	text	mode	command
+r	columns	rows
+r	terminal	credit
+r	edits	restart	installed	optional	reload	trust
+r	id	key	approval	blocking	questions	turn	record
+r	name	value	deadline
+r	path
+r	path	deadline
+r	path	mode
+r	name	value
+r	pid
+r	path	offset	length
+r	path	expected
+r	command	input	deadline
+r	path	follow
+r	path	bytes	mode	expected	parent
+r	container	full	visible	focus
+r	path	entries	truncated	device	inode
+r	choices	current	default
+r	kind	size	device	inode	modified_ns	changed_ns
+r	id	key	parent	kind	name	renamed	cwd	size	agent	tty	detached
+r	title	text
+r	command	output	exit_code
+r	status	stdout
+r	before	after	bytes
+r	archive	entries	files	folders	bytes	size	skipped
+r	records	earlier
+r	parent	before
+r	target	axis	ratio
+r	workspace	label
+r	label
+r	key	repeat_ms	bindings
+r	key	command	repeat
+r	bytes
+r	id	header	text	secret	options	multiple	custom	blocks
+r	id	mode	revision	preview	editable	editing	paused	error
+r	start	end
+r	id	turn	kind	text	title	output	blocks	completed	exit_code	patch	documents	tool	inline_reasoning	time_ms	position
+r	pid	start	name	cpu	rss
+r	boot	cpu_present	cpu	cores	load	memory	swap	received_per_second	sent_per_second	uptime
+r	text	cursor	faint_tail
+r	written	may_have_sent	reason
+r	generation	session	version	initial	caught_up	invalidated	awaiting_creation	file
+r	id	axis	children
+r	busy	activity	model	model_label	effort	usage	goal	draft	attention	leaf	dialog	title	version	pending	compacting	service_tier	mode	agents
+r	waiting	busy	activity	revision
+r	kind	title	symbol	summary	input	language	directory	failed	read	search	shell	children	orchestration	patch	confirmed_result	additions	deletions
+r	path	selection	source
+r	pattern	paths	filters	standard_input
+r	command	kind	swift_tests
+r	transfer	staging
+r	entries	bytes	replaced	kept	skipped
+r	terminal	summary
+r	terminal	process
+r	terminal	process
+r	bytes
+r	terminal	status
+r	binding	page
+r	binding	interaction
+r	terminal	bytes
+r	binding	items	error
+r	binding	records
+r	terminal	offset	max	viewport
+r	binding	state
+r	terminal	bytes
+r	backend	key	nodes	layouts	focus

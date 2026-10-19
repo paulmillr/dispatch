@@ -6,7 +6,7 @@ Zstandard 1.5.7 library sources (`lib/common`, `lib/compress`, `lib/decompress`,
 carries upstream's release unchanged. Left out: legacy formats, the dictionary builder, deprecated code and the
 x86-64 assembly (`huf_decompress_amd64.S`).
 
-Modified to hold no assembly, no multithreading, one compression strategy, one decoder variant and no code macOS
+Modified to hold no assembly, multithreading only where the macOS helper builds it, one compression strategy, one decoder variant and no code macOS
 never builds; everything else is upstream's code, so the compressed and decompressed bytes are upstream's:
 
 - `common/xxhash.h`: XXH3 (zstd builds it with `XXH_NO_XXH3`) and the `XXH_COMPILER_GUARD` fences removed
@@ -21,10 +21,16 @@ never builds; everything else is upstream's code, so the compressed and decompre
   fence (`compress/zstd_fast.c`) and the aarch64 `prfm` prefetch fallback (`common/compiler.h`) removed:
   each had a C equivalent, which stays.
 - `ZSTD_d_disableHuffmanAssembly` stays (public API) and has no effect.
-- No multithreading (zstd builds it only with `ZSTD_MULTITHREAD`): `compress/zstdmt_compress.[ch]`,
-  `common/pool.[ch]`, `common/threading.[ch]` and `common/debug.c` (only `DEBUGLEVEL>=2` reads it) deleted, the
-  `ZSTD_MULTITHREAD` paths removed (`unifdef -UZSTD_MULTITHREAD`), and `zstd.h` loses `ZSTD_createThreadPool`
-  and `ZSTD_freeThreadPool`, whose definitions were in `pool.c`.
+- Multithreading as upstream has it, built only into the macOS helper (`helper/core/build.rs` defines
+  `ZSTD_MULTITHREAD` there): the capture tool writes the replay corpus with `rsyncable`, which zstd implements in its
+  threaded compressor, so a corpus file changed in one place (a migration, docs/replay.md) compresses to mostly the
+  same bytes and git stores a small delta. `common/pool.[ch]`, `common/threading.[ch]` and
+  `compress/zstdmt_compress.[ch]` are upstream's files unchanged, and `compress/zstd_compress.c`,
+  `compress/zstd_compress_internal.h` and `zstd.h`'s thread pool declarations keep upstream's `ZSTD_MULTITHREAD`
+  paths (restored 2026-10-19 from the same archive, checked against the SHA-256 above, after an earlier copy had
+  removed them). Without the macro (the app, Linux helpers) those files compile to upstream's single-threaded
+  fallbacks, as in upstream's own single-threaded builds. `common/debug.c` stays deleted (only `DEBUGLEVEL>=2`
+  reads it).
 - One block compressor besides `fast`: `lazy2`, what level 9 streams with (the helper never gives zstd a size, so
   the small-input tables, whose level 9 is `btlazy2`, are never used). Upstream's switches for the others compiled
   out (`unifdef` with every `ZSTD_EXCLUDE_*_BLOCK_COMPRESSOR` defined but `LAZY2`, continued `#if` lines joined
@@ -43,7 +49,8 @@ never builds; everything else is upstream's code, so the compressed and decompre
   machine code is unchanged by these.
 
 Captures are zstd. The replay corpus (`replays/`) is level 9 with long-distance matching (`--long=27`), whose 128 MiB
-window finds the same large payload recorded again and again (a helper binary uploaded many times). Live captures are
+window finds the same large payload recorded again and again (a helper binary uploaded many times), written
+`rsyncable` by the macOS capture tool (one worker; the bytes do not depend on the number of workers). Live captures are
 level 1 (the `fast` strategy): quick, in a small window; `capture store` compresses them again for the corpus. The
 files plugin's copy archives are level 1 too, so the helper links it in every build, Release included:
 

@@ -4,8 +4,6 @@ use std::{
     path::Path,
 };
 
-#[path = "../src/hash.rs"]
-mod hash;
 
 // Only public declarations and the dispatch table determine the schema.
 // Implementation locals, comments and client templates cannot change the wire IDs.
@@ -176,9 +174,10 @@ pub fn generate(root: &Path, output: &Path) {
                 records.insert(name.clone(), fields);
             }
         }
-        // Enum fields are public implicitly; collect their named variant layouts too.
+        // Enum fields are public implicitly; collect the named variant layouts of the enums core encodes. An enum that
+        // never reaches the wire (a helper's internal jobs) must not add layouts, as structs above.
         for at in 0..tokens.len().saturating_sub(3) {
-            if tokens[at] != "pub" || tokens[at + 1] != "enum" {
+            if tokens[at] != "pub" || tokens[at + 1] != "enum" || !encoded.contains(&tokens[at + 2]) {
                 continue;
             }
             let Some(start) = tokens[at + 3..]
@@ -252,45 +251,31 @@ pub fn generate(root: &Path, output: &Path) {
     for fields in records.values() {
         symbols.extend(fields.iter().cloned());
     }
+    let (schema, symbols, layouts) = registered(&root.join("src/wire/registry.txt"), &symbols, &records);
     assert!(symbols.len() < u16::MAX as usize);
-    assert!(records.len() < u16::MAX as usize);
-    let mut digest = hash::Sha256::new();
-    // The value grammar itself (wire/body.rs and its generated clients): a new tag is a new protocol.
-    digest.update(b"value grammar 2: tag 11 is raw bytes\0");
-    for symbol in &symbols {
-        digest.update(symbol.as_bytes());
-        digest.update(&[0]);
-    }
-    for (name, fields) in &records {
-        digest.update(name.as_bytes());
-        for field in fields {
-            digest.update(&[0]);
-            digest.update(field.as_bytes());
-        }
-        digest.update(&[0]);
-    }
-    let mut schema: [u8; 8] = digest.finish()[..8].try_into().unwrap();
-    // 0xFF never starts UTF-8 text, so a binary body is never mistaken for JSON by code that
-    // accepts both (a digest starting with '{' broke stats' frame adapter).
-    schema[0] = 0xFF;
+    assert!(layouts.len() < u16::MAX as usize);
+    // Names are looked up through their sorted order (body.rs `symbol`): the table itself is in number order.
+    let mut order: Vec<usize> = (0..symbols.len()).collect();
+    order.sort_by(|a, b| symbols[*a].cmp(&symbols[*b]));
+    let order = order.iter().map(|index| index.to_string()).collect::<Vec<_>>().join(", ");
     let items = symbols
         .iter()
         .map(|v| format!("{v:?}"))
         .collect::<Vec<_>>()
         .join(",\n");
-    let layouts = records
-        .values()
-        .map(|v| format!("{v:?}"))
+    let rust = layouts
+        .iter()
+        .map(|v| format!("&{v:?}"))
         .collect::<Vec<_>>()
         .join(",\n");
-    let rust = records
-        .values()
-        .map(|v| format!("&{v:?}"))
+    let layouts = layouts
+        .iter()
+        .map(|v| format!("{v:?}"))
         .collect::<Vec<_>>()
         .join(",\n");
     fs::write(
         output.join("wire-schema.rs"),
-        format!("pub const SCHEMA: [u8; 8] = {schema:?};\npub const SYMBOLS: &[&str] = &[\n{items}\n];\npub const RECORDS: &[&[&str]] = &[\n{rust}\n];\n"),
+        format!("pub const SCHEMA: [u8; 8] = {schema:?};\npub const SYMBOLS: &[&str] = &[\n{items}\n];\npub const SYMBOL_ORDER: &[u16] = &[{order}];\npub const RECORDS: &[&[&str]] = &[\n{rust}\n];\n"),
     ).unwrap();
     let version = u64::from_le_bytes(schema);
     // The app's codec; the helper and the app are the only implementations of this format.
@@ -303,4 +288,60 @@ pub fn generate(root: &Path, output: &Path) {
         ) + &fs::read_to_string(template).unwrap(),
     )
     .unwrap();
+}
+
+/// The wire's permanent numbers (src/wire/registry.txt): its generation id, then names and record layouts in number
+/// order, with what `symbols` and `records` hold that it does not appended (sorted, so every build appends alike) and
+/// written back. Numbers never move, so a recording made before an addition still reads every name it holds, and the
+/// generation id, which starts every wire body, changes only with a new table (a breaking change, made by hand).
+fn registered(path: &Path, symbols: &BTreeSet<String>, records: &BTreeMap<String, Vec<String>>)
+    -> ([u8; 8], Vec<String>, Vec<Vec<String>>) {
+    println!("cargo:rerun-if-changed={}", path.display());
+    let text = fs::read_to_string(path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    let (mut schema, mut table, mut layouts) = (None, Vec::new(), Vec::new());
+    for line in text.lines().filter(|line| !line.is_empty() && !line.starts_with('#')) {
+        let mut parts = line.split('\t');
+        match parts.next() {
+            Some("schema") => schema = parts.next().map(str::to_owned),
+            Some("s") => table.push(parts.next().unwrap_or_default().to_owned()),
+            Some("r") => layouts.push(parts.map(str::to_owned).collect::<Vec<_>>()),
+            _ => panic!("{}: unknown line {line:?}", path.display()),
+        }
+    }
+    let schema = schema.unwrap_or_else(|| panic!("{}: no schema line", path.display()));
+    let schema: Vec<u8> = (0..schema.len()).step_by(2).map(|at| u8::from_str_radix(&schema[at..at + 2], 16).unwrap()).collect();
+    let schema: [u8; 8] = schema.try_into().unwrap_or_else(|_| panic!("{}: the schema is 8 bytes of hex", path.display()));
+    // 0xFF never starts UTF-8 text, so a binary body is never mistaken for JSON by code that accepts both.
+    assert_eq!(schema[0], 0xFF, "{}: a schema starts with ff", path.display());
+    let unique: BTreeSet<&String> = table.iter().collect();
+    assert_eq!(unique.len(), table.len(), "{}: a name is listed twice", path.display());
+    let new: Vec<String> = symbols.iter().filter(|symbol| !unique.contains(symbol)).cloned().collect();
+    let mut added: Vec<Vec<String>> = Vec::new();
+    for fields in records.values() {
+        if !layouts.contains(fields) && !added.contains(fields) {
+            added.push(fields.clone());
+        }
+    }
+    if !new.is_empty() || !added.is_empty() {
+        let mut appended = text.clone();
+        if !appended.ends_with('\n') {
+            appended.push('\n');
+        }
+        for symbol in &new {
+            assert!(!symbol.contains(['\t', '\n']), "a wire name holds a tab or a newline: {symbol:?}");
+            appended.push_str(&format!("s\t{symbol}\n"));
+        }
+        for fields in &added {
+            appended.push_str(&format!("r\t{}\n", fields.join("\t")));
+        }
+        // Builds for several targets may run at once: each writes the same text, whole, by rename.
+        let temporary = path.with_extension(format!("txt.{}", std::process::id()));
+        fs::write(&temporary, appended).unwrap();
+        fs::rename(&temporary, path).unwrap();
+        println!("cargo:warning=wire registry: {} names and {} record layouts appended to {}; commit it with the change",
+                 new.len(), added.len(), path.display());
+        table.extend(new);
+        layouts.extend(added);
+    }
+    (schema, table, layouts)
 }
