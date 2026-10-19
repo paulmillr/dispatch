@@ -3,10 +3,7 @@ use dispatch_helper_core::{
     api::{Disk, Error, Row, Sample},
     json::Data,
 };
-use std::{
-    collections::{HashMap, HashSet},
-    path::Path,
-};
+use std::collections::{HashMap, HashSet};
 
 struct Cpu {
     name: String,
@@ -226,10 +223,7 @@ impl Rates {
         Ok(sample)
     }
 
-    pub fn processes(&mut self, value: &Data<'_>, local: bool) -> Result<(Vec<Row>, bool), Error> {
-        if local {
-            return Ok((ps(text(value, "ps").ok_or_else(invalid)?), false));
-        }
+    pub fn processes(&mut self, value: &Data<'_>) -> Result<(Vec<Row>, bool), Error> {
         let Some(time) = number(value, "monotonic") else {
             self.reset(1);
             return Err(invalid());
@@ -258,49 +252,66 @@ impl Rates {
                 .as_ref()
                 .filter(|(prior, at, _)| prior == boot && time > *at && (time - at).is_finite());
             let mut current = HashMap::new();
+            let mut pids = HashSet::new();
             let mut output = Vec::new();
             for row in rows {
                 let pid = count(row, "pid")
                     .filter(|p| *p > 0 && *p <= i32::MAX as u64)
                     .ok_or_else(invalid)? as u32;
-                let start = text(row, "start")
-                    .filter(|s| safe(s, 64))
-                    .ok_or_else(invalid)?;
-                let parts: Vec<&str> = start.split(':').collect();
-                if !(1..=2).contains(&parts.len())
-                    || parts.iter().any(|s| {
-                        s.is_empty()
-                            || !s.bytes().all(|b| b.is_ascii_digit())
-                            || s.parse::<u64>().is_err()
-                    })
-                    || (parts.len() == 2
-                        && parts[1].parse::<u64>().map_err(|_| invalid())? >= 1_000_000)
-                {
+                if !pids.insert(pid) || pids.len() > 4096 {
                     return Err(invalid());
+                }
+                let start = row
+                    .get("start")
+                    .map(|v| v.string().filter(|s| safe(s, 64)).ok_or_else(invalid))
+                    .transpose()?;
+                if let Some(start) = start {
+                    let parts: Vec<&str> = start.split(':').collect();
+                    if !(1..=2).contains(&parts.len())
+                        || parts.iter().any(|s| {
+                            s.is_empty()
+                                || !s.bytes().all(|b| b.is_ascii_digit())
+                                || s.parse::<u64>().is_err()
+                        })
+                        || (parts.len() == 2
+                            && parts[1].parse::<u64>().map_err(|_| invalid())? >= 1_000_000)
+                    {
+                        return Err(invalid());
+                    }
                 }
                 let name = text(row, "name")
                     .filter(|s| safe(s, 128))
                     .ok_or_else(invalid)?;
-                let nanos = count(row, "cpuNanos").ok_or_else(invalid)?;
                 let rss = count(row, "rss")
                     .filter(|r| *r <= i64::MAX as u64)
                     .ok_or_else(invalid)?;
-                let cpu = before
-                    .and_then(|(_, at, rows)| {
-                        let (birth, old) = rows.get(&pid)?;
-                        if birth != start {
-                            return None;
-                        }
-                        let delta = nanos.checked_sub(*old)?;
-                        Some(delta as f64 / 1_000_000_000.0 / (time - at) * 100.0)
-                    })
-                    .filter(|n| n.is_finite() && *n >= 0.0);
-                if current.insert(pid, (start.into(), nanos)).is_some() || current.len() > 4096 {
-                    return Err(invalid());
-                }
+                // `cpu` is the OS's own percentage (macOS ps), shown at once. Otherwise `cpuNanos`, CPU
+                // time so far (Linux): its growth since this process's previous sample, over that time.
+                let cpu = match row.get("cpu") {
+                    Some(cpu) => Some(
+                        cpu.number()
+                            .filter(|n| n.is_finite() && *n >= 0.0)
+                            .ok_or_else(invalid)?,
+                    ),
+                    None => {
+                        let start = start.ok_or_else(invalid)?;
+                        let nanos = count(row, "cpuNanos").ok_or_else(invalid)?;
+                        current.insert(pid, (start.into(), nanos));
+                        before
+                            .and_then(|(_, at, rows)| {
+                                let (birth, old) = rows.get(&pid)?;
+                                if birth != start {
+                                    return None;
+                                }
+                                let delta = nanos.checked_sub(*old)?;
+                                Some(delta as f64 / 1_000_000_000.0 / (time - at) * 100.0)
+                            })
+                            .filter(|n| n.is_finite() && *n >= 0.0)
+                    }
+                };
                 output.push(Row {
                     pid,
-                    start: Some(start.into()),
+                    start: start.map(Into::into),
                     name: name.into(),
                     cpu,
                     rss: Some(rss),
@@ -319,38 +330,6 @@ impl Rates {
             }
         }
     }
-}
-
-/// The exact three numeric columns followed by the entire command, including spaces.
-pub fn ps(value: &str) -> Vec<Row> {
-    value
-        .lines()
-        .filter_map(|line| {
-            let mut rest = line;
-            let mut fields = [""; 4];
-            for field in &mut fields[..3] {
-                rest = rest.trim_start_matches([' ', '\t']);
-                let end = rest.find([' ', '\t'])?;
-                *field = &rest[..end];
-                rest = &rest[end..];
-            }
-            fields[3] = rest.trim_start_matches([' ', '\t']);
-            if fields[3].is_empty() {
-                return None;
-            }
-            Some(Row {
-                pid: fields[0].parse().ok()?,
-                start: None,
-                name: Path::new(fields[3])
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or(fields[3])
-                    .into(),
-                cpu: Some(fields[1].parse().ok()?),
-                rss: Some(fields[2].parse::<u64>().ok()?.checked_mul(1024)?),
-            })
-        })
-        .collect()
 }
 
 pub fn disks(value: &Data<'_>) -> Result<Vec<Disk>, Error> {
@@ -388,3 +367,7 @@ pub fn disks(value: &Data<'_>) -> Result<Vec<Disk>, Error> {
         })
         .collect()
 }
+
+#[cfg(test)]
+#[path = "native.test.rs"]
+mod tests;

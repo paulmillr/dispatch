@@ -436,9 +436,11 @@ final class SSHReconnectIntegrationTests: XCTestCase {
                 let labels = try await PresentationTestSupport.capture(app.window)
                     .recognizedText(in: CGRect(x: 0, y: 0, width: 264 / root.bounds.width, height: 1))
                 guard !labels.contains(where: { $0.topCandidates(1).first?.string.contains("Unrelated archive") == true }) else { return false }
+                // macOS 26's Vision reads the monospaced "Restore all" as two observations, "Restore" and "all";
+                // the first word lies inside the button either way.
                 button = try labels.compactMap { label -> CGRect? in
                     guard let text = label.topCandidates(1).first,
-                          let range = text.string.range(of: "Restore all", options: .caseInsensitive) else { return nil }
+                          let range = text.string.range(of: "Restore", options: .caseInsensitive) else { return nil }
                     return try text.boundingBox(for: range)?.boundingBox
                 }.first
                 return button != nil
@@ -873,6 +875,121 @@ final class SSHReconnectIntegrationTests: XCTestCase {
             XCTAssertTrue(app.workspace.spaces.allSatisfy { !$0.shows("tmux") })
             XCTAssertEqual(try app.server(["list-panes", "-a", "-F", "#{pane_id}:#{pane_pid}"]), processes)
         }
+    }
+
+    func testClosingSpaceAfterFailedRelaunchRestoreDetachesItWithoutHiddenView() async throws {
+        let (app, server, missing, retained) = try await failedRelaunchRestore(); defer { app.close(); server.stop() }
+        let panes = try app.server(["list-panes", "-a", "-F", "#{pane_id}"])
+        let space = try XCTUnwrap(app.workspace.spaces.first { $0.tabs.contains { $0.id == retained.id } })
+        app.controller.closeSpace(space.id)
+        try await app.wait { !app.workspace.spaces.contains { $0.id == space.id } && app.workspace.detached.count == 1 }
+        try await app.wait { (try? app.controlClients()) == 0 }
+        XCTAssertEqual(try app.server(["list-panes", "-a", "-F", "#{pane_id}"]), panes, "Closing a saved view must not reach the server")
+        XCTAssertFalse(app.workspace.allSurfaceIDs.contains(missing.id))
+        try await newWindowAddsNoSpace(app)
+    }
+
+    func testClosingMissingTabAfterFailedRelaunchRestoreKillsNothingAndRestoresTheRest() async throws {
+        let (app, server, missing, retained) = try await failedRelaunchRestore(); defer { app.close(); server.stop() }
+        let panes = try app.server(["list-panes", "-a", "-F", "#{pane_id}"])
+        app.controller.closeTab(missing.id)
+        XCTAssertEqual(try app.server(["list-panes", "-a", "-F", "#{pane_id}"]), panes, "The missing pane's old id must not kill a live pane")
+        // Without the missing pane, a retry restores the rest.
+        let host = try XCTUnwrap(app.workspace.hosts.terminals[retained.id]?.host)
+        app.runtime.hosts.reconnect.reconnect(hostID: host, sourceSurfaceID: retained.id)
+        try await TestSupport.eventually(timeout: .seconds(45), diagnostic: app.runtime.hosts.reconnect.state(for: retained.id)?.error ?? "Retry pending") {
+            app.runtime.hosts.reconnect.state(for: retained.id) == nil
+        }
+        try await app.wait {
+            app.workspace.spaces.contains { $0.structured && $0.tabs.contains { $0.id == retained.id } }
+                && app.workspace.spaces.flatMap(\.tabs).allSatisfy { !$0.isConnecting }
+                && app.runtime.helpers.values.allSatisfy { $0.error == nil }
+        }
+        XCTAssertEqual(try app.server(["list-panes", "-a", "-F", "#{pane_id}"]), panes, "The missing pane's old id must not kill a live pane")
+        XCTAssertFalse(app.workspace.allSurfaceIDs.contains(missing.id))
+        XCTAssertEqual(app.visiblePanes.count, Set(app.visiblePanes).count)
+        try await newWindowAddsNoSpace(app)
+    }
+
+    /// The user's sequence: a relaunch restore fails on a missing pane, its tab is closed, the session is attached
+    /// again by typing in a new SSH tab, and a new tab there (Cmd+T) is a tab only: never also a space, not for a frame.
+    func testTypedAttachAfterFailedRelaunchRestoreNewTabAddsNoSpace() async throws {
+        let (app, server, missing, _) = try await failedRelaunchRestore(); defer { app.close(); server.stop() }
+        let panes = try app.server(["list-panes", "-a", "-F", "#{pane_id}"])
+        app.controller.closeTab(missing.id)
+        try await app.wait { app.runtime.helpers.values.allSatisfy { $0.operations == 0 && $0.error == nil } }
+        XCTAssertEqual(try app.server(["list-panes", "-a", "-F", "#{pane_id}"]), panes)
+        app.workspace.newLocalSpace()
+        let origin = try XCTUnwrap(app.workspace.activeSurfaceID)
+        _ = try await connect(app, server: server, surface: origin)
+        let terminal = try XCTUnwrap(app.runtime.views[origin])
+        TerminalTestSupport.send("\(HerdrLaunch.quote(TestSupport.tool("tmux"))) -u -L \(app.socket) -CC attach -t edge", to: terminal)
+        try await app.wait { app.workspace.current?.structured == true && app.workspace.current?.tabs.allSatisfy { !$0.isConnecting } == true }
+        try await app.ready()
+        let attached = try XCTUnwrap(app.workspace.current)
+        let spaces = app.workspace.spaces.map(\.id)
+        var seen: [[UUID]] = []
+        let sampler = Task { @MainActor in
+            while !Task.isCancelled {
+                let ids = app.workspace.spaces.map(\.id)
+                if seen.last != ids { seen.append(ids) }
+                try? await Task.sleep(for: .milliseconds(5))
+            }
+        }
+        app.workspace.newTab()
+        try await app.wait { (app.workspace.spaces.first { $0.id == attached.id }?.windows.count ?? 0) > attached.windows.count }
+        try await app.ready()
+        try await Task.sleep(for: .seconds(1))
+        sampler.cancel()
+        XCTAssertEqual(app.workspace.spaces.map(\.id), spaces, "The new tab must not add a space")
+        XCTAssertEqual(seen.filter { $0 != spaces }, [], "No frame may show another space")
+    }
+
+    /// A tmux space restored by a relaunch whose reconnect finds one of its panes gone: the session is attached
+    /// again (its control client is live) and the space stays offline. Returns the missing pane's tab and a kept one.
+    private func failedRelaunchRestore() async throws -> (TmuxWalkthrough, SSHTestServer, TerminalTab, TerminalTab) {
+        let app = try TmuxWalkthrough()
+        let server: SSHTestServer
+        do { server = try await SSHTestServer() } catch { app.close(); throw error }
+        do { return try await failedRelaunchRestore(app, server) } catch { app.close(); server.stop(); throw error }
+    }
+
+    private func failedRelaunchRestore(_ app: TmuxWalkthrough, _ server: SSHTestServer) async throws -> (TmuxWalkthrough, SSHTestServer, TerminalTab, TerminalTab) {
+        _ = try app.server(["split-window", "-h", "-t", "edge"])
+        _ = try app.server(["new-window", "-d", "-t", "edge", "/bin/sh"])
+        _ = try await connect(app, server: server, surface: XCTUnwrap(app.workspace.activeSurfaceID))
+        try await app.attach(); try await app.ready()
+        try await app.wait { app.workspace.current?.tabs.count == 3 && app.workspace.current?.tabs.allSatisfy { !$0.isConnecting } == true }
+        let tabs = try XCTUnwrap(app.workspace.current).tabs
+        let missing = tabs[0], retained = tabs[1]
+        let missingPane = try XCTUnwrap(app.target(missing))
+        let host = try XCTUnwrap(app.workspace.hosts.terminals[retained.id]?.host)
+        let store = HostSessionStore(url: server.root.appendingPathComponent("host-session.json"))
+        try store.save(runtime: app.runtime)
+        app.window.contentView = nil
+        await app.runtime.stop().value
+        app.workspace.spaces = []
+        _ = try app.server(["kill-pane", "-t", missingPane])
+        app.runtime.start(preferences: app.controller.settings.values)
+        XCTAssertTrue(store.restore(runtime: app.runtime))
+        app.window.contentView = NSHostingView(rootView: MainView(workspace: app.workspace, settings: app.controller.settings, controller: app.controller))
+        try await app.wait { app.runtime.views[retained.id]?.window != nil }
+        app.runtime.hosts.reconnect.reconnect(hostID: host, sourceSurfaceID: retained.id)
+        try await TestSupport.eventually(timeout: .seconds(45), diagnostic: "Failed relaunch restore") {
+            let state = app.runtime.hosts.reconnect.state(for: retained.id)
+            return state?.reconnecting == false && state?.error != nil
+        }
+        XCTAssertEqual(try app.controlClients(), 1, "The reconnect attaches the session again")
+        return (app, server, missing, retained)
+    }
+
+    /// A window made on the server later is never a new space.
+    private func newWindowAddsNoSpace(_ app: TmuxWalkthrough) async throws {
+        try await app.wait { app.runtime.helpers.values.allSatisfy { $0.operations == 0 } }
+        let spaces = app.workspace.spaces.map(\.id)
+        _ = try app.server(["new-window", "-d", "/bin/sh"])
+        try await Task.sleep(for: .seconds(2))
+        XCTAssertEqual(app.workspace.spaces.map(\.id), spaces, "A window made on the server must not become a space")
     }
 
     func testOfflineTmuxPaneClosureAndMissingServerNeverRecreateCommands() async throws {

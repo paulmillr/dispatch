@@ -103,8 +103,9 @@ public final class Session {
         hosted = view
     }
 
-    /// The view's display changed or woke (main queue): the frames get a display link from the view
-    /// again, then a whole frame. The old link can stay silent after its display went away.
+    /// The view's display changed or woke, or it joined a window again (main queue): the frames get a
+    /// display link from the view again, then a whole frame. The old link can stay silent after its
+    /// display went away, and AppKit invalidates it when the view leaves its window.
     public func relink() {
         guard let hosted, let frames else { return }
         relinks += 1

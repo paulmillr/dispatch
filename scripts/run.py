@@ -2,6 +2,7 @@
 """Build and launch Dispatch with a compact console and a complete local log."""
 import argparse
 import codecs
+import json
 from collections import deque
 from datetime import datetime
 from functools import partial
@@ -221,6 +222,83 @@ def launch_app(ui, app, env):
     ui.step('Launching Dispatch', ['open', str(app)], env)
 
 
+def ios_target(args, phone=None):
+    """The iOS run destination: (xcodebuild destination, products folder). A phone (udid, name) is the destination
+    itself, so automatic signing registers it with the team; without one a device build is generic."""
+    if args.ios_device is not None:
+        return (f'platform=iOS,id={phone[0]}' if phone else 'generic/platform=iOS'), 'iphoneos'
+    return f'platform=iOS Simulator,name={args.simulator}', 'iphonesimulator'
+
+
+def paired_iphones(document):
+    """[(udid, name)] of the real iPhones in `devicectl list devices --json-output` (Xcode 27 lists the simulators
+    there too), connected ones first. The UDID is what both xcodebuild's destination and devicectl's --device take."""
+    phones = []
+    for device in document.get('result', {}).get('devices', []):
+        properties = device.get('properties') or {}
+        hardware = properties.get('hardware') or device.get('hardwareProperties') or {}
+        if hardware.get('reality') != 'physical' or hardware.get('platform') != 'iOS':
+            continue
+        if hardware.get('deviceType', 'iPhone') != 'iPhone':
+            continue
+        name = (properties.get('state') or {}).get('name') or (device.get('deviceProperties') or {}).get('name')
+        connection = properties.get('connection') or device.get('connectionProperties') or {}
+        connected = connection.get('state') == 'connected' or connection.get('tunnelState') == 'connected'
+        phones.append((not connected, hardware.get('udid') or device.get('identifier'), name or 'iPhone'))
+    return [(udid, name) for _, udid, name in sorted(phones, key=lambda phone: phone[0]) if udid]
+
+
+def choose_iphone(phones, wanted):
+    """The phone --ios-device names (its name, any case, or its UDID), else the first; None when there is none."""
+    if not wanted:
+        return phones[0] if phones else None
+    return next((phone for phone in phones if wanted.lower() in (phone[0].lower(), phone[1].lower())), None)
+
+
+def find_iphone(ui, args, env):
+    listing, _ = ui.step('Finding a paired iPhone', ['xcrun', 'devicectl', 'list', 'devices', '--json-output', '-'],
+                         env, capture=True)
+    phone = choose_iphone(paired_iphones(json.loads(listing or '{}')), args.ios_device)
+    if phone is None and not args.just_build:
+        raise OSError(f'No paired iPhone{" named " + args.ios_device if args.ios_device else ""}: connect it by '
+                      'cable once and trust this Mac (docs/ios.md, Signing and a device)')
+    return phone
+
+
+def signing_problem(path=None):
+    """Why a device build cannot sign (build/signing.xcconfig, scripts/ios-signing.py), or None."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('ios_signing', ROOT / 'scripts/ios-signing.py')
+    signing = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(signing)
+    path = path or signing.CONFIG
+    if not path.is_file():
+        return ('no build/signing.xcconfig: write it once with python3 scripts/ios-signing.py <TEAM ID> '
+                '[--suffix .yourname] (docs/ios.md, Signing and a device)')
+    found = signing.problems(*signing.parse(path.read_text()))
+    return 'build/signing.xcconfig: ' + '; '.join(found) if found else None
+
+
+def launch_ios(ui, app, args, env, phone=None):
+    """Install and launch the iPhone app: in the simulator (booted if needed), or on a device through devicectl."""
+    bundle = subprocess.run(['/usr/libexec/PlistBuddy', '-c', 'Print :CFBundleIdentifier', str(app / 'Info.plist')],
+                            capture_output=True, text=True, check=True).stdout.strip()
+    if args.ios_device is None:
+        # Booting a booted simulator fails harmlessly ("Unable to boot device in current state: Booted").
+        ui.step(f'Booting {args.simulator}', ['xcrun', 'simctl', 'boot', args.simulator], env, allowed=(0, 149))
+        # The Simulator window, when this Xcode has the app (the simulator runs without it).
+        if subprocess.run(['open', '-b', 'com.apple.iphonesimulator'], stdout=ui.log, stderr=ui.log).returncode:
+            ui.line(ui.style('–', '33'), 'Simulator.app is not installed; the app runs headless (xcrun simctl io booted screenshot)')
+        ui.step('Installing Dispatch for iPhone', ['xcrun', 'simctl', 'install', args.simulator, str(app)], env)
+        ui.step('Launching Dispatch for iPhone', ['xcrun', 'simctl', 'launch', args.simulator, bundle], env)
+        return
+    # docs/ios.md: a paired phone with Developer Mode on, signed with build/signing.xcconfig's team.
+    device, name = phone
+    ui.step(f'Installing on {name}', ['xcrun', 'devicectl', 'device', 'install', 'app', '--device', device, str(app)], env)
+    ui.step(f'Launching on {name}', ['xcrun', 'devicectl', 'device', 'process', 'launch', '--terminate-existing',
+                                     '--device', device, bundle], env)
+
+
 def main():
     rest = sys.argv[1:]
     if rest[:1] == ['--test']:
@@ -241,7 +319,21 @@ def main():
                         help='build without launching the app (Debug or Release)')
     parser.add_argument('--clean', action='store_true',
                         help='remove local build artifacts, logs, downloaded tools and caches, then rebuild')
+    parser.add_argument('--ios', action='store_true',
+                        help='build Dispatch for iPhone (docs/ios.md) and run it in the simulator')
+    parser.add_argument('--simulator', default=os.environ.get('DISPATCH_IOS_SIMULATOR', 'iPhone 17'), metavar='NAME',
+                        help='the simulator --ios runs in (default: iPhone 17)')
+    parser.add_argument('--ios-device', nargs='?', const='', default=None, metavar='NAME',
+                        help='build Dispatch for iPhone for a device and install it there with devicectl '
+                             '(default: the first paired iPhone; needs a team in build/signing.xcconfig: '
+                             'scripts/ios-signing.py; add --prod for the build to keep on the phone)')
     args = parser.parse_args()
+    if args.ios_device is not None:
+        args.ios = True
+        problem = signing_problem()
+        if problem:
+            print(f'Cannot sign for a device: {problem}', file=sys.stderr)
+            return 1
     configuration = ('Debug' if args.debug else 'Release' if args.prod else
                      os.environ.get('CONFIGURATION', 'Debug'))
     env = dict(environment(), CONFIGURATION=configuration,
@@ -269,7 +361,7 @@ def main():
         link.symlink_to(path.name)
         link.replace(directory / 'latest.log')
         ui = BuildUI(log)
-        print(f'\n  {ui.style("Dispatch", "1")}  {ui.style(configuration, "36")}')
+        print(f'\n  {ui.style("Dispatch for iPhone" if args.ios else "Dispatch", "1")}  {ui.style(configuration, "36")}')
         hint = ('./run.sh  # to get debug build' if configuration == 'Release' else
                 './run.sh --production  # to get faster release build')
         print(f'  {ui.style(hint, "2")}\n')
@@ -279,6 +371,28 @@ def main():
             ui.step('Preparing dependencies', ['bash', 'scripts/setup.sh'], env, interactive=True)
             ui.step('Generating Xcode project',
                     ['python3', 'scripts/generate-project.py'], env)
+            if args.ios:
+                # SwiftPM resolves the SSH engine's binary target before any build script: prepare it first.
+                ui.step('Preparing the iPhone SSH engine', ['python3', 'scripts/setup_mobile.py'], env)
+                phone = find_iphone(ui, args, env) if args.ios_device is not None else None
+                destination, platform = ios_target(args, phone)
+                command = ['xcodebuild', '-project', 'Dispatch.xcodeproj', '-scheme', 'DispatchMobile',
+                           '-configuration', configuration, '-destination', destination,
+                           '-derivedDataPath', 'build', 'build']
+                if args.ios_device is not None:
+                    # Automatic signing from the command line: Xcode's account makes or renews the certificate and
+                    # the profile (7 days for a free Apple ID) and registers the phone with the team.
+                    command[-1:-1] = ['-allowProvisioningUpdates', '-allowProvisioningDeviceRegistration']
+                if env.get('DISPATCH_BUILD_JOBS'):
+                    command += ['-jobs', env['DISPATCH_BUILD_JOBS']]
+                    env['CARGO_BUILD_JOBS'] = env['DISPATCH_BUILD_JOBS']
+                ui.step('Building Dispatch for iPhone', command, env)
+                app = ROOT / 'build/Build/Products' / f'{configuration}-{platform}' / 'DispatchMobile.app'
+                if not args.just_build:
+                    launch_ios(ui, app, args, env, phone)
+                print(f'\n  {ui.style("Ready", "32")} in {time.monotonic() - started:.1f}s')
+                print(f'  App  {os.path.relpath(app)}\n')
+                return 0
             with tempfile.TemporaryDirectory(prefix='.progress-', dir=directory) as progress:
                 helper_complete = Path(progress) / 'helper-complete'
                 command = ['xcodebuild', '-project', 'Dispatch.xcodeproj',

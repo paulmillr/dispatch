@@ -80,7 +80,8 @@ private struct ContentSearchField: NSViewRepresentable {
     }
 }
 
-/// Terminal identity owns chat state even when its tab, pane, or space moves.
+/// Terminal identity owns chat and files state even when its tab, pane, or space moves. The terminal stays mounted
+/// under chat or files, hidden and out of the keyboard's way, so switching never resizes its PTY.
 struct TerminalContentView: View {
     let tab: TerminalTab
     let workspace: Workspace
@@ -95,45 +96,89 @@ struct TerminalContentView: View {
     /// the PTY; chat scrolls under it.
     @Environment(\.glassStripInset) private var glassInset
     @State private var presentationID = System.uuid()
+    /// The floating switch's width, which a files header under it leaves free.
+    @State private var floatingSwitchWidth: CGFloat = 0
 
     var body: some View {
-        let chat = TerminalRuntime.shared.chat
+        let runtime = TerminalRuntime.shared
+        let chat = runtime.chat
         let session = chat.session(for: tab.id)
         let search = session.terminalSearch
-        let canShowChat = chat.canEnterChat(session) || session.showChat
+        let mode = runtime.files.mode(for: tab.id)
+        // An agent's launch line covers the terminal until Chat opens; the terminal keeps the keyboard meanwhile, so
+        // what is typed reaches the agent (and moves to the Chat draft once it opens).
+        let launching = mode == .terminal ? session.launchingAgent : nil
+        let covered = mode != .terminal || launching != nil
+        // Chat's and the terminal's find bars each cover the floating switch's corner; files has none of its own.
+        let searchShown = mode == .chat ? session.search.visible : mode == .terminal && search.visible
         VStack(spacing: 0) {
             SSHReconnectOverlay(surface: tab.id, workspace: workspace).padding(.top, glassInset)
             ZStack(alignment: .topTrailing) {
                 TerminalHost(tab: tab, spaceID: spaceID, windowTabID: windowTabID, paneID: paneID, focusRequest: workspace.focusRequest,
-                             focused: focused && !session.showChat,
-                             visible: isPresented && !session.showChat)
+                             focused: focused && mode == .terminal,
+                             visible: isPresented && mode == .terminal)
                     .padding(.top, glassInset)
-                    .opacity(session.showChat ? 0 : 1)
-                    .offset(y: session.showChat && !reduceMotion ? -8 : 0)
-                    .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: InterfaceMotion.modeSwitchDuration), value: session.showChat)
-                    .allowsHitTesting(!session.showChat)
-                    .accessibilityHidden(session.showChat)
-                if session.showChat {
+                    .opacity(covered ? 0 : 1)
+                    .offset(y: covered && !reduceMotion ? -8 : 0)
+                    .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: InterfaceMotion.modeSwitchDuration), value: covered)
+                    .allowsHitTesting(!covered)
+                    .accessibilityHidden(covered)
+                if let launching {
+                    // Up at once; Chat fades in over it on the same ground, so no frame shows the terminal between.
+                    AgentLaunchCover(title: chat.launchTitle(launching))
+                        .padding(.top, glassInset)
+                        .transition(reduceMotion ? .identity : .asymmetric(insertion: .identity, removal: .opacity))
+                        .zIndex(1)
+                }
+                if mode == .chat {
                     ChatView(session: session, coordinator: chat, focused: focused,
-                             floatingSwitch: floatingSwitch && canShowChat, workspace: workspace, topInset: glassInset)
+                             floatingSwitch: floatingSwitch, workspace: workspace, topInset: glassInset)
                         .transition(reduceMotion ? .identity : .opacity.combined(with: .offset(y: 8)))
                         .zIndex(1)
                 }
-                if floatingSwitch && canShowChat && !(session.showChat ? session.search.visible : search.visible) { ChatModeSwitch(session: session, coordinator: chat, floating: true).padding(.top, 10 + glassInset).padding(.trailing, Chrome.paneContentInset).zIndex(3) }
-                if !session.showChat, search.visible {
+                if mode == .files {
+                    // Files sits below a glass strip like the terminal: its header must stay readable, not scroll under it.
+                    FilesView(session: runtime.files.session(for: tab.id), focused: focused)
+                        .environment(\.filesHeaderTrailingInset, floatingSwitch ? floatingSwitchWidth + Chrome.paneContentInset + 8 : 0)
+                        .padding(.top, glassInset)
+                        .transition(reduceMotion ? .identity : .opacity.combined(with: .offset(y: 8)))
+                        .zIndex(1)
+                }
+                if floatingSwitch && !searchShown {
+                    ChatModeSwitch(session: session, coordinator: chat, floating: true)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { floatingSwitchWidth = $0 }
+                        .padding(.top, 10 + glassInset).padding(.trailing, Chrome.paneContentInset).zIndex(3)
+                }
+                if mode == .terminal, search.visible {
                     ContentSearchBar(search: search, focused: focused && isPresented).padding(.top, glassInset).zIndex(4)
                 }
             }
-            .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: InterfaceMotion.modeSwitchDuration), value: session.showChat)
+            .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: InterfaceMotion.modeSwitchDuration), value: mode)
             .overlay(alignment: .bottomTrailing) {
                 if let armed = workspace.prefixKeys.armed, tab.surfaceIDs.contains(armed) { PrefixIndicator() }
             }
         }
         .clipped()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onAppear { session.setPresented(isPresented, by: presentationID) }
-        .onChange(of: isPresented) { _, visible in session.setPresented(visible, by: presentationID) }
-        .onDisappear { session.setPresented(false, by: presentationID) }
+        // Files covers the agent's output as well: what arrives meanwhile is unread (the tab's ●).
+        .onAppear {
+            session.setPresented(isPresented && mode != .files, by: presentationID)
+            runtime.files.existing(tab.id)?.setPresented(isPresented, by: presentationID)
+        }
+        .onChange(of: isPresented && mode != .files) { _, visible in session.setPresented(visible, by: presentationID) }
+        .onChange(of: isPresented) { _, presented in runtime.files.existing(tab.id)?.setPresented(presented, by: presentationID) }
+        // Files sessions are made when files first shows, after this view appeared.
+        .onChange(of: mode) { _, mode in
+            if mode == .files { runtime.files.existing(tab.id)?.setPresented(isPresented, by: presentationID) }
+        }
+        .onDisappear {
+            session.setPresented(false, by: presentationID)
+            runtime.files.existing(tab.id)?.setPresented(false, by: presentationID)
+        }
+        // Selecting the tab or its pane again: the covered terminal is not focused, so files takes the keyboard.
+        .onChange(of: focused) { _, focused in
+            if focused, mode == .files { runtime.files.existing(tab.id)?.focusRequest = System.uuid() }
+        }
         .onChange(of: search.query) { _, query in
             guard search.visible else { return }
             TerminalRuntime.shared.views[tab.id]?.performBindingAction("search:" + query)
@@ -173,5 +218,33 @@ private struct PrefixIndicatorSurface: ViewModifier {
             content.background(RoundedRectangle(cornerRadius: 5).fill(Chrome.sidebar))
                 .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Chrome.accent.opacity(0.5)))
         }
+    }
+}
+
+/// What a tab shows from Return on an agent's launch line until Chat opens: Chat's ground, then after a beat the
+/// agent's name and a spinner; never the agent's first terminal frames.
+private struct AgentLaunchCover: View {
+    let title: String
+    @State private var waiting = false
+
+    var body: some View {
+        let theme = ChatThemeStore.shared.current
+        ZStack {
+            theme.terminal
+            if waiting {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Starting \(title)…").font(theme.typography.detail).foregroundStyle(theme.muted)
+                }
+                .transition(.opacity)
+            }
+        }
+        .task {
+            // A Chat that opens at once never shows the label.
+            try? await Task.sleep(for: .milliseconds(500))
+            withAnimation(.easeOut(duration: 0.2)) { waiting = true }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("agent-launch-cover")
     }
 }

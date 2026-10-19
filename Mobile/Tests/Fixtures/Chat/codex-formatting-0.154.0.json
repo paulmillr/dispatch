@@ -1,0 +1,153 @@
+[
+ {
+  "earlier": null,
+  "records": [
+   {
+    "blocks": [],
+    "completed": false,
+    "documents": [],
+    "exit_code": null,
+    "id": "7482cb7cae551cb2a559f60c106e469e3d64d39abd03f78e67a2d2842d3ab4a5",
+    "inline_reasoning": false,
+    "kind": "turn_started",
+    "output": "",
+    "patch": null,
+    "position": null,
+    "text": "",
+    "time_ms": 946756842000,
+    "title": "",
+    "tool": null,
+    "turn": "00000000-0000-4000-8000-000000000014"
+   },
+   {
+    "blocks": [],
+    "completed": false,
+    "documents": [],
+    "exit_code": null,
+    "id": "user-d9b4aab95b4856667468b6c83effe0e2ce4bdb47a5ca7481a7374787c976de59",
+    "inline_reasoning": false,
+    "kind": "user",
+    "output": "",
+    "patch": null,
+    "position": null,
+    "text": "formatting preview",
+    "time_ms": 946684800013,
+    "title": "",
+    "tool": null,
+    "turn": "00000000-0000-4000-8000-000000000014"
+   },
+   {
+    "blocks": [
+     {
+      "kind": "code",
+      "language": "text",
+      "text": "Formatting fixture: intentional failure\n"
+     }
+    ],
+    "completed": true,
+    "documents": [],
+    "exit_code": 7,
+    "id": "tool-00000000-0000-4000-8000-000000000011",
+    "inline_reasoning": false,
+    "kind": "tool",
+    "output": "Chunk ID: fixture\nWall time: 0.0000 seconds\nProcess exited with code 7\nOriginal token count: 10\nOutput:\nFormatting fixture: intentional failure\n",
+    "patch": null,
+    "position": null,
+    "text": "{\n  \"command\" : [\n    \"\\/bin\\/zsh\",\n    \"-c\",\n    \"printf 'Formatting fixture: intentional failure\\\\n'; exit 7\"\n  ],\n  \"cwd\" : \"file:\\/\\/\\/tmp\\/project\"\n}",
+    "time_ms": 946684800018,
+    "title": "Shell",
+    "tool": {
+     "additions": 0,
+     "children": [],
+     "confirmed_result": null,
+     "deletions": 0,
+     "directory": "file:///tmp/project",
+     "failed": true,
+     "input": "printf 'Formatting fixture: intentional failure\\n'; exit 7",
+     "kind": "shell",
+     "language": "shell",
+     "orchestration": false,
+     "patch": false,
+     "read": null,
+     "search": null,
+     "shell": {
+      "command": "printf 'Formatting fixture: intentional failure\\n'; exit 7",
+      "kind": "shell",
+      "swift_tests": false
+     },
+     "summary": "printf 'Formatting fixture: intentional failure\\n'; exit 7",
+     "symbol": "terminal",
+     "title": "Shell"
+    },
+    "turn": "00000000-0000-4000-8000-000000000014"
+   },
+   {
+    "blocks": [],
+    "completed": false,
+    "documents": [],
+    "exit_code": null,
+    "id": "00000000-0000-4000-8000-000000000017",
+    "inline_reasoning": false,
+    "kind": "assistant",
+    "output": "",
+    "patch": null,
+    "position": null,
+    "text": "Local fixture reply: formatting preview\n\nTool result received.\n\n## Formatting preview\n\nThe `event.id` is **stable**.\n\n- Read the file\n- [x] Inspect the output\n\n> This command intentionally exits with code 7.\n\n```swift\n// Retry guard\nlet attempts = 3\nlet message = \"Ready\"\n```\n\n| Check | Result |\n| --- | --- |\n| Markdown | Ready |\n| Shell | Exit 7 |",
+    "time_ms": 946684800292,
+    "title": "",
+    "tool": null,
+    "turn": "00000000-0000-4000-8000-000000000014"
+   },
+   {
+    "blocks": [],
+    "completed": false,
+    "documents": [],
+    "exit_code": null,
+    "id": "b55c16b2977944d8eb15bc5129ed1ec0323f53699a7d4365f0ffcb9db04b1c1a",
+    "inline_reasoning": false,
+    "kind": "turn_ended",
+    "output": "",
+    "patch": null,
+    "position": null,
+    "text": "",
+    "time_ms": 946756842000,
+    "title": "",
+    "tool": null,
+    "turn": "00000000-0000-4000-8000-000000000014"
+   }
+  ],
+  "snapshot": {
+   "awaiting_creation": false,
+   "caught_up": true,
+   "file": {
+    "device": 1,
+    "inode": 1
+   },
+   "generation": "00000000-0000-4000-8000-0000000000ff",
+   "initial": true,
+   "invalidated": false,
+   "session": "00000000-0000-4000-8000-000000000013",
+   "version": "0.154.0"
+  },
+  "state": {
+   "activity": null,
+   "agents": [],
+   "attention": null,
+   "busy": false,
+   "compacting": false,
+   "dialog": null,
+   "draft": null,
+   "effort": null,
+   "goal": null,
+   "leaf": null,
+   "mode": null,
+   "model": "dispatch-fixture",
+   "model_label": null,
+   "pending": false,
+   "service_tier": null,
+   "title": null,
+   "usage": null,
+   "version": null
+  }
+ }
+]

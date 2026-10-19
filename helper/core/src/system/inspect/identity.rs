@@ -50,7 +50,7 @@ pub(super) fn collect() -> io::Result<Vec<u8>> {
     if host.is_empty() || boot.is_empty() {
         return Err(super::invalid());
     }
-    let (distribution, os_name) = release();
+    let release = release();
     fn text(value: &Option<String>) -> Data<'_> {
         value.as_deref().map_or(Data::Null, Data::String)
     }
@@ -66,18 +66,49 @@ pub(super) fn collect() -> io::Result<Vec<u8>> {
                 "Linux"
             }),
         ),
-        ("distribution", text(&distribution)),
-        ("os_name", text(&os_name)),
+        ("distribution", text(&release.distribution)),
+        ("os_name", text(&release.name)),
+        // Additions for clients that show "macOS 26.1" or "Ubuntu 24.04" (the iPhone app);
+        // older clients ignore unknown identity fields.
+        ("os_version", text(&release.version)),
+        ("os_label", text(&release.label)),
     ]))
     .map_err(|_| super::invalid())
 }
 
-/// Optional presentation facts from os-release: never sourced as shell code, never an identity,
+/// Optional presentation facts of the operating system; never an identity.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(super) struct Release {
+    /// os-release ID (Linux), e.g. "ubuntu".
+    pub distribution: Option<String>,
+    /// os-release PRETTY_NAME, else NAME (Linux); None on macOS, where the app says "macOS".
+    pub name: Option<String>,
+    /// os-release VERSION_ID, or the macOS product version (kern.osproductversion), e.g. "26.1".
+    pub version: Option<String>,
+    /// Short display name with version: "macOS 26.1", "Ubuntu 24.04" (NAME and VERSION_ID),
+    /// else the name alone.
+    pub label: Option<String>,
+}
+
+/// macOS: the product version from sysctl. Linux: os-release, never sourced as shell code,
 /// administrator file first, vendor file only when it is absent; c1654cc
-/// Helpers/ssh-helper/src/host_metadata.rs:17-130 (parse/value unchanged).
-fn release() -> (Option<String>, Option<String>) {
+/// Helpers/ssh-helper/src/host_metadata.rs:17-130 (value unchanged).
+fn release() -> Release {
+    #[cfg(target_os = "macos")]
+    {
+        let version = crate::system::stats::macos::sysctl(c"kern.osproductversion", 64)
+            .ok()
+            .map(|bytes| String::from_utf8_lossy(&bytes).trim_end_matches('\0').trim().to_owned())
+            .filter(|version| valid_version(version));
+        return Release {
+            label: Some(version.as_ref().map_or("macOS".into(), |version| format!("macOS {version}"))),
+            version,
+            ..Release::default()
+        };
+    }
+    #[allow(unreachable_code)]
     if !cfg!(target_os = "linux") {
-        return (None, None);
+        return Release::default();
     }
     let read = |path: &str| -> io::Result<String> {
         use std::io::Read;
@@ -103,11 +134,11 @@ fn release() -> (Option<String>, Option<String>) {
 const FILE_LIMIT: usize = 65_536;
 const VALUE_LIMIT: usize = 1024;
 
-pub(super) fn parse(text: &str) -> (Option<String>, Option<String>) {
+pub(super) fn parse(text: &str) -> Release {
     if text.len() > FILE_LIMIT {
-        return (None, None);
+        return Release::default();
     }
-    let (mut distribution, mut pretty, mut name) = (None, None, None);
+    let (mut distribution, mut pretty, mut name, mut version) = (None, None, None, None);
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -131,10 +162,23 @@ pub(super) fn parse(text: &str) -> (Option<String>, Option<String>) {
             }
             "PRETTY_NAME" => pretty = value(raw),
             "NAME" => name = value(raw),
+            "VERSION_ID" => version = value(raw).filter(|value| valid_version(value)),
             _ => {}
         }
     }
-    (distribution, pretty.or(name))
+    let label = match (&name, &version) {
+        (Some(name), Some(version)) => Some(format!("{name} {version}")),
+        _ => pretty.clone().or_else(|| name.clone()),
+    };
+    Release { distribution, name: pretty.or(name), version, label }
+}
+
+/// A short dotted version ("24.04", "26.0.1", "13", "rolling"): no spaces or punctuation that
+/// could pass for other text.
+fn valid_version(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"._-~+".contains(&byte))
 }
 
 fn value(raw: &str) -> Option<String> {
@@ -172,3 +216,7 @@ fn value(raw: &str) -> Option<String> {
     }
     (!result.is_empty() && result.len() <= VALUE_LIMIT).then_some(result)
 }
+
+#[cfg(test)]
+#[path = "identity.test.rs"]
+mod tests;

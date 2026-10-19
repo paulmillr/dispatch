@@ -6,11 +6,13 @@ enum TerminalMachine: Equatable, Codable, Sendable {
     case local
     case ssh(SSHShell)
 
+    #if canImport(AppKit)
     /// What a new terminal on this machine runs; nil = this Mac's login shell.
     func command(running remote: String? = nil) -> String? {
         guard case .ssh(let shell) = self else { return remote }
         return shell.command(running: remote)
     }
+    #endif
 }
 
 struct SSHShell: Equatable, Codable, Sendable {
@@ -27,6 +29,7 @@ struct SSHShell: Equatable, Codable, Sendable {
         // Do not duplicate listeners when cloning a connection with forwarding.
         ["-o", "RemoteCommand=none", "-o", "ClearAllForwardings=yes"] + options + ["-tt", "--", destination]
     }
+    #if canImport(AppKit)
     /// The command a terminal runs for this connection (running `remote` there instead of a shell):
     /// through the app's ssh launcher, so it is attributed like ssh typed in a terminal, with this
     /// exact ssh executable.
@@ -35,6 +38,7 @@ struct SSHShell: Equatable, Codable, Sendable {
             + arguments + (remote.map { [$0] } ?? []))
             .map(HerdrLaunch.quote).joined(separator: " ")
     }
+    #endif
 
     static func parse(executable: String, arguments: [String]) -> Self? {
         guard URL(fileURLWithPath: executable).lastPathComponent == "ssh", arguments.count > 1 else { return nil }

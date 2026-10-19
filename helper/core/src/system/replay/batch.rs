@@ -9,30 +9,36 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Every capture under `directory`, sorted: each regular `*.rpl.zst` file but the app's mismatch diagnostics. A
+/// symbolic link is not followed (listed on stderr): nothing outside the tree is read or pruned, and a loop ends.
+pub fn captures(directory: &Path) -> io::Result<Vec<PathBuf>> {
+    let mut out = Vec::new();
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        let (kind, path) = (entry.file_type()?, entry.path());
+        if kind.is_symlink() {
+            eprintln!("{}: a symbolic link, not followed", path.display());
+        } else if kind.is_dir() {
+            out.extend(captures(&path)?);
+        } else if kind.is_file() && path.to_string_lossy().ends_with(".rpl.zst") && !path.to_string_lossy().contains(".mismatch-") {
+            out.push(path);
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
 /// Every helper capture under `directory` (relative paths, sorted). App journals beside them are
 /// replayed by the app's tests; a capture that cannot be read is listed, so its own report row says why.
 pub fn helpers(directory: &Path) -> io::Result<Vec<PathBuf>> {
     let mut paths = Vec::new();
-    let mut directories = vec![directory.to_owned()];
-    for index in 0.. {
-        let Some(parent) = directories.get(index) else {
-            break;
-        };
-        let entries = fs::read_dir(parent)?.collect::<io::Result<Vec<_>>>()?;
-        for entry in entries {
-            let kind = entry.file_type()?;
-            if kind.is_dir() {
-                directories.push(entry.path());
-            } else if kind.is_file() && entry.path().to_string_lossy().ends_with(".rpl.bz2") {
-                let app = File::open(entry.path()).and_then(|file| crate::system::capture::trace::Reader::new(file, usize::MAX))
-                    .is_ok_and(|(_, header)| header.layer != crate::system::capture::trace::Layer::Native);
-                if !app {
-                    paths.push(entry.path().strip_prefix(directory).unwrap().to_owned());
-                }
-            }
+    for path in captures(directory)? {
+        let app = File::open(&path).and_then(|file| crate::system::capture::trace::Reader::new(file, usize::MAX))
+            .is_ok_and(|(_, header)| header.layer != crate::system::capture::trace::Layer::Native);
+        if !app {
+            paths.push(path.strip_prefix(directory).unwrap().to_owned());
         }
     }
-    paths.sort();
     Ok(paths)
 }
 
@@ -231,3 +237,7 @@ pub fn replay(directory: &Path, paths: &[PathBuf], output: &Path, timeout: Durat
     }
     Ok(rows)
 }
+
+#[cfg(test)]
+#[path = "batch.test.rs"]
+mod tests;

@@ -1,4 +1,4 @@
-# VM testing and profiling
+# VM testing
 
 Test selection and runner options are in [test/README.md](../test/README.md). This doc covers the machines those runners need.
 
@@ -13,7 +13,7 @@ A dedicated Tart VM (default `dispatch-tests`; override with `--vm NAME` before 
 The host needs Apple Silicon, Xcode 26 with first launch completed, Homebrew in `/opt/homebrew`, `brew install openai/tools/tart`, and `bash scripts/setup.sh`. The image download is about 69 GB, plus disk and build products. The guest gets 4 CPUs, 8 GB of RAM, and a 1920×1080 pt Retina display.
 
 `test/vm.py` copies two host binaries from **fixed paths** (finding them on `PATH` isn't enough):
-- herdr 0.9.3 at `/opt/homebrew/bin/herdr`. Re-run setup after changing it.
+- herdr 0.9.5 at `/opt/homebrew/bin/herdr`. Re-run setup after changing it.
 - Native Codex from the global npm layout: `npm install --global --prefix /opt/homebrew @openai/codex`, giving `/opt/homebrew/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex`. Any version works.
 
 The full suite also needs Claude Code on `PATH` and the pinned Pi from `./run.sh --test`. Host binaries built for a newer macOS, or linked to host libraries, are rejected before copying.
@@ -61,7 +61,7 @@ Linux servers are small Lima VMs (Lima ≥ 2.0.0; 1 CPU, 1 GiB RAM, 8 GiB disk, 
 | File | SHA-256 |
 | --- | --- |
 | `ubuntu-26.04-arm64.raw` | `7efd5db211147e80053e3e998ab232845b3c10a5aa4e76b6f2c575a84608c863` |
-| `herdr-0.9.3-linux-aarch64` | `4de7aa3e25678812e92960de64f7c2aaa1bca1f0f80a3c5e559837e231e1f5c0` |
+| `herdr-0.9.5-linux-aarch64` | `17d7536f2da50859523680ef279dffcac8e4a235f4e46fe8da6c2ec44141897c` |
 
 `ssh-vm.py` installs herdr only if it's missing. It never provisions agent CLIs, system tmux, Python, or the supported tmux 3.7c fixture (normally `/opt/dispatch-test-tools/tmux/bin/tmux`). Prepare those explicitly, keep system tmux alongside, and record versions and source hashes under `tmp/profiling/`.
 
@@ -73,46 +73,6 @@ python3 test/vm.py test SSHLinuxIntegrationTests SSHHostIsolationIntegrationTest
 ```
 
 `--agent claude|pi` with `--claude`/`--pi PATH` pairs another agent. Pairing installs only the client's test key, pins the host key, and relays through a temporary encrypted tunnel restricted to the client VM. Once paired, Linux classes join the full suite. Under QEMU emulation, three native-identity cases are excluded, so emulated runs do not establish native x86-64 coverage.
-
-## Chat and UI fixtures
-
-Fixtures run the real installed agent CLIs against a deterministic loopback model: no API key, inherited credentials removed, and personal config untouched. They are not a network firewall. Provenance: [Fixtures/README.md](../DispatchTests/Fixtures/README.md).
-
-```sh
-python3 test/codex-chat.py --keep /tmp/new-results          # empty dir; --codex PATH for another CLI
-python3 scripts/codex_fixture.py serve --no-hooks --state /tmp/demo   # manual; run the printed launch command
-python3 scripts/seed-codex-history.py --state /tmp/demo --turns 60   # then serve + launch --resume SESSION_ID
-```
-
-### Offline Codex scrolling fixture
-
-`python3 scripts/offline-codex-demo.py serve`, then `... resume` in a Dispatch terminal after "History ready". The first run creates 120 real turns in `offline-chat-state/`. `--state`, `--turns`, and `--paragraphs` change the dataset, and size options apply only at creation. This exercises local rendering, not SSH. Profiling: [chat diagnostics](chat-diagnostics.md).
-
-### Claude and Pi Messages fixture
-
-```sh
-python3 scripts/claude_fixture.py serve                # state /tmp/dispatch-claude-demo; --port, --delay
-python3 scripts/claude_fixture.py launch [--integration] [--hooks] [--resume UUID]
-python3 scripts/pi_fixture.py [--session ID] [--pi PATH]
-```
-
-Prompt keywords combine: `thinking`, `tool`, `permission tool`, `question`/`multiple questions`, `formatting`/`long`; anything else echoes. Claude runs with an isolated `CLAUDE_CONFIG_DIR`, and Pi with `STATE/pi-home` and only `bash`. Focused checks: `test/claude-chat.py [--endpoint-only]`, `test/pi-chat.py`, `test/pi-bridge.py`, each with a fresh `--keep tmp/profiling/...`. Pi RPC waits for `agent_settled`, not `agent_end`.
-
-### Native Chat validation
-
-Batch the relevant classes in one `vm.py test` run: Chat\* (discovery, drafts, queue, side, patch, presentation), Claude\*/HookTransport, Pi\*, and the SSH reconnect/recovery/lifetime classes. For remote Claude/Pi, pair with `--agent` and run `SSHClaudeIntegrationTests SSHLinuxClaudeIntegrationTests` or the Pi equivalents. Coverage is ARM64 only, so Intel macOS and Linux x86-64 agents are untested.
-
-### Process statistics checks
-
-The helper's `plugins/stats` tests (`cargo test` in `helper`) cover the native collectors. The live checks are `SSHProcessStatisticsIntegrationTests` (macOS cases in the VM). The Linux case reads `/tmp/dispatch-stats-linux.json` (`destination`, `options`) on the XCTest host and must not use a preconfigured ControlMaster.
-
-### UI checks
-
-For motion/layout changes, run `InterfaceMotionTests UIWalkthroughTests SplitSizingTests SettingsSynchronizationTests TerminalIntegrationTests`. Then check by hand: rapid sidebar reversal, divider restore, full screen, and Reduce Motion.
-
-## Build profiling
-
-Keep DerivedData. `python3 scripts/profile-build.py --label L [--clean] [--diagnostics] [--cache]` writes to `tmp/profiling/compilation/`, and `bash scripts/build.sh -showBuildTimingSummary` lists build tasks. Compiler caching (`COMPILATION_CACHE_ENABLE_CACHING=YES SWIFT_ENABLE_EXPLICIT_MODULES=YES`) speeds clean builds (about 55 s to 4 s once the cache is warm) but slows every edit (about +0.8 s for a body change, 15 s to 22 s for an interface change), so it's opt-in. Runtime benchmarks: [benchmarks](benchmarks.md).
 
 ## Existing local test resources
 

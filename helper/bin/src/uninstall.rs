@@ -1,24 +1,31 @@
-//! `dispatch-helper uninstall-hooks [--dry-run]`: removes every Dispatch hook handler from the
-//! account's Claude settings and Codex hooks.json, on this Mac or an SSH host. A handler is
-//! Dispatch's when its command runs a dispatch-helper* executable as `hook <agent>`, from any
-//! path, so stale entries of older helpers go too. Other handlers and settings stay; matcher
-//! groups and events left empty by the removal are dropped.
+//! `dispatch-helper uninstall [--dry-run]` removes Dispatch from this account, on this Mac or an
+//! SSH host: every Dispatch hook handler, Pi's Dispatch extension when unmodified, older helpers'
+//! `.dispatch-hooks.lock` files in the agents' folders, and `~/.dispatch` itself. It refuses while
+//! a helper runs here (it holds its run folder's lock and would write them again).
+//! `uninstall-hooks` removes only the hook handlers.
+//!
+//! A handler is Dispatch's when its command runs a dispatch-helper* executable as `hook <agent>`,
+//! from any path, so stale entries of older helpers go too. Other handlers and settings stay;
+//! matcher groups and events left empty by the removal are dropped.
 use dispatch_helper_core::json::{self, Data, Format, Json, Kind, Value};
 use std::{
     io::Write,
-    os::unix::fs::PermissionsExt,
+    os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
 };
 
-pub fn run(arguments: &[std::ffi::OsString]) -> std::io::Result<i32> {
+/// `everything`: `uninstall`; else `uninstall-hooks`.
+pub fn run(arguments: &[std::ffi::OsString], everything: bool) -> std::io::Result<i32> {
     let dry = match arguments {
         [] => false,
         [flag] if flag == "--dry-run" => true,
         _ => {
-            eprintln!("usage: dispatch-helper uninstall-hooks [--dry-run]");
+            let name = if everything { "uninstall" } else { "uninstall-hooks" };
+            eprintln!("usage: dispatch-helper {name} [--dry-run]");
             return Ok(2);
         }
     };
+    let verb = if dry { "would remove" } else { "removed" };
     let home = std::env::var_os("HOME").filter(|home| !home.is_empty()).map(PathBuf::from);
     let directory = |variable: &str, default: &str| {
         let mut paths: Vec<PathBuf> = std::env::var_os(variable)
@@ -30,24 +37,41 @@ pub fn run(arguments: &[std::ffi::OsString]) -> std::io::Result<i32> {
         paths.dedup();
         paths
     };
+    let (claude, codex) = (directory("CLAUDE_CONFIG_DIR", ".claude"), directory("CODEX_HOME", ".codex"));
+    // The helpers' folder, as theirs (core hooks::base): the test root, else the home.
+    let root = std::env::var_os("DISPATCH_TEST_ROOT")
+        .filter(|root| !root.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| home.clone())
+        .map(|home| home.join(".dispatch"));
+    if everything && let Some(root) = &root {
+        let running = running(root);
+        if running > 0 {
+            let helpers = match running {
+                1 => "A Dispatch helper is".to_owned(),
+                count => format!("{count} Dispatch helpers are"),
+            };
+            let advice = "Quit Dispatch, or close its SSH sessions to this host, then run this again.";
+            if !dry {
+                eprintln!("{helpers} still running here. {advice}");
+                return Ok(3);
+            }
+            println!("note: {helpers} still running here; uninstall refuses until they stop. {advice}");
+        }
+    }
     // The app writes Claude settings pretty and sorted, Codex hooks.json compact.
-    let files = directory("CLAUDE_CONFIG_DIR", ".claude")
-        .into_iter()
+    let files = claude
+        .iter()
         .map(|directory| (directory.join("settings.json"), Format::PrettySortedUnescaped))
-        .chain(
-            directory("CODEX_HOME", ".codex")
-                .into_iter()
-                .map(|directory| (directory.join("hooks.json"), Format::Compact)),
-        );
+        .chain(codex.iter().map(|directory| (directory.join("hooks.json"), Format::Compact)));
     let mut failed = false;
     for (path, format) in files {
         match clean(&path, format, dry) {
             Ok(None) => {}
             Ok(Some(0)) => println!("{}: no Dispatch hooks", path.display()),
             Ok(Some(count)) => println!(
-                "{}: {} {count} Dispatch hook{}",
+                "{}: {verb} {count} Dispatch hook{}",
                 path.display(),
-                if dry { "would remove" } else { "removed" },
                 if count == 1 { "" } else { "s" }
             ),
             Err(error) => {
@@ -56,7 +80,130 @@ pub fn run(arguments: &[std::ffi::OsString]) -> std::io::Result<i32> {
             }
         }
     }
+    if !everything {
+        return Ok(if failed { 1 } else { 0 });
+    }
+    let hooks = failed;
+    if let Some(home) = &home {
+        let pi = match std::env::var("PI_CODING_AGENT_DIR").unwrap_or_default().as_str() {
+            "" => home.join(".pi/agent"),
+            "~" => home.clone(),
+            configured => configured.strip_prefix("~/").map_or_else(|| PathBuf::from(configured), |rest| home.join(rest)),
+        };
+        if let Err(error) = extension(&pi, dry, verb) {
+            eprintln!("{}: {error}", pi.display());
+            failed = true;
+        }
+    }
+    for lock in claude.iter().chain(&codex).map(|directory| directory.join(".dispatch-hooks.lock")) {
+        if std::fs::symlink_metadata(&lock).is_ok_and(|m| m.is_file() && m.len() == 0) {
+            if !dry && let Err(error) = std::fs::remove_file(&lock) {
+                eprintln!("{}: {error}", lock.display());
+                failed = true;
+                continue;
+            }
+            println!("{}: {verb}", lock.display());
+        }
+    }
+    // Hooks that could not be removed still run the stable helper copy: keep it, so they do
+    // nothing quietly until the file is fixed and this runs again.
+    if hooks {
+        eprintln!("Kept ~/.dispatch: fix the hook settings above, then run this again.");
+        return Ok(1);
+    }
+    if let Some(root) = root {
+        match std::fs::symlink_metadata(&root) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                eprintln!("{}: {error}", root.display());
+                return Ok(1);
+            }
+            Ok(metadata) => {
+                // A link is removed itself, never its target; a folder only when it is ours.
+                let removal = if dry {
+                    Ok(())
+                } else if metadata.is_dir() && metadata.uid() == uid() {
+                    std::fs::remove_dir_all(&root)
+                } else if metadata.is_symlink() {
+                    std::fs::remove_file(&root)
+                } else {
+                    Err(std::io::Error::other("not a folder owned by you; it was kept"))
+                };
+                match removal {
+                    Ok(()) => println!("{}: {verb}", root.display()),
+                    Err(error) => {
+                        eprintln!("{}: {error}", root.display());
+                        return Ok(1);
+                    }
+                }
+            }
+        }
+    }
     Ok(if failed { 1 } else { 0 })
+}
+
+fn uid() -> u32 {
+    unsafe extern "C" {
+        fn getuid() -> u32;
+    }
+    // SAFETY: getuid observes the executing account without pointers.
+    unsafe { getuid() }
+}
+
+/// Helpers running under `root`: each holds the flock on its `run/<id>/lock` (core hooks.rs).
+fn running(root: &Path) -> usize {
+    use std::os::fd::AsRawFd;
+    unsafe extern "C" {
+        fn flock(fd: i32, operation: i32) -> i32;
+    }
+    let Ok(entries) = std::fs::read_dir(root.join("run")) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .filter(|entry| {
+            let Ok(file) = std::fs::File::open(entry.path().join("lock")) else {
+                return false;
+            };
+            // SAFETY: an open descriptor; LOCK_EX | LOCK_NB, released when the file closes.
+            unsafe { flock(file.as_raw_fd(), 2 | 4) != 0 }
+        })
+        .count()
+}
+
+/// Pi's Dispatch extension and its `dispatch/` folder (receipt, session records), only when the
+/// extension is Dispatch's own: an edited one is kept, with its folder.
+fn extension(pi: &Path, dry: bool, verb: &str) -> Result<(), String> {
+    let script = pi.join("extensions/dispatch-chat.js");
+    let folder = pi.join("dispatch");
+    let read = |path: &Path| match std::fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.to_string()),
+    };
+    if std::fs::symlink_metadata(&script).is_ok_and(|m| !m.is_file()) {
+        return Err(format!("{} is not a plain file; it was kept", script.display()));
+    }
+    if let Some(bytes) = read(&script)? {
+        let receipt = read(&folder.join("pi-chat-installation.json"))?;
+        if !dispatch_helper_pi::install::installed(&bytes, receipt.as_deref()) {
+            return Err(format!("{} was modified; it was kept", script.display()));
+        }
+        if !dry {
+            std::fs::remove_file(&script).map_err(|error| error.to_string())?;
+        }
+        println!("{}: {verb}", script.display());
+    }
+    match std::fs::symlink_metadata(&folder) {
+        Ok(metadata) if metadata.is_dir() => {
+            if !dry {
+                std::fs::remove_dir_all(&folder).map_err(|error| error.to_string())?;
+            }
+            println!("{}: {verb}", folder.display());
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 /// None = no such file; Some(count) = handlers removed (or that would be).

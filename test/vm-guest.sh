@@ -52,6 +52,12 @@ for tool in claude codex herdr pi tmux; do
     if [[ -x "$candidate" ]]; then ln -sfn "$candidate" "build/test-tools/bin/$tool"; break; fi
   done
 done
+# Codex runs code-mode tools in a companion it looks for beside the path it was started by (this link), not
+# beside the link's target; without it every code-mode exec fails and no approval is ever requested.
+codex=$(readlink build/test-tools/bin/codex || true)
+if [[ -n "$codex" && -x "$(dirname "$codex")/codex-code-mode-host" ]]; then
+  ln -sfn "$(dirname "$codex")/codex-code-mode-host" build/test-tools/bin/codex-code-mode-host
+fi
 DISPATCH_SETUP_OFFLINE=1 timed guest_dependencies bash scripts/setup.sh
 timed project_generation xcodegen generate --spec project.yml --use-cache --cache-path build/test-tools/xcodegen-cache
 exec python3 test/xcode.py "$@"

@@ -243,18 +243,40 @@ enum PresentationTestSupport {
 
     /// Frames of the accessibility elements whose identifier satisfies `matches`, e.g. a per-row identifier's prefix.
     static func accessibilityFrames(matching matches: (String) -> Bool, label: String? = nil, in window: NSWindow) -> [NSRect] {
-        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
-        let previous = NSApp.accessibilityAttributeValue(enhanced) as? Bool ?? false
-        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
-        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
-        var frames: [NSRect] = [], visited: Set<ObjectIdentifier> = []
-        // SwiftUI's elements implement the NSAccessibility methods without declaring the protocol in Swift.
-        func visit(_ element: AnyObject, depth: Int) {
-            guard depth < 64, visited.insert(ObjectIdentifier(element)).inserted else { return }
+        var frames: [NSRect] = []
+        eachAccessibilityElement(in: window) { element in
             if let identifier = element.accessibilityIdentifier?(), matches(identifier), label.map({ element.accessibilityLabel?() == $0 }) ?? true,
                let frame = element.accessibilityFrame?() {
                 frames.append(window.convertFromScreen(frame))
             }
+        }
+        return frames
+    }
+
+    /// What the accessibility elements with `identifier` say: a control's label, or static text's value. It is the
+    /// text as drawn, where OCR misreads glyphs (a dotted zero read as "•", an ellipsis as "..").
+    static func accessibilityLabels(_ identifier: String, in window: NSWindow) -> [String] {
+        var labels: [String] = []
+        eachAccessibilityElement(in: window) { element in
+            guard element.accessibilityIdentifier?() == identifier else { return }
+            // Typed: AnyObject lookup finds more than one `accessibilityValue`.
+            let readValue: (() -> Any?)? = element.accessibilityValue
+            let label: String? = element.accessibilityLabel?() ?? nil, value = readValue?() as? String
+            labels += [label, value].compactMap { $0 }.filter { !$0.isEmpty }
+        }
+        return labels
+    }
+
+    private static func eachAccessibilityElement(in window: NSWindow, _ body: (AnyObject) -> Void) {
+        let enhanced = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previous = NSApp.accessibilityAttributeValue(enhanced) as? Bool ?? false
+        NSApp.accessibilitySetValue(true, forAttribute: enhanced)
+        defer { NSApp.accessibilitySetValue(previous, forAttribute: enhanced) }
+        var visited: Set<ObjectIdentifier> = []
+        // SwiftUI's elements implement the NSAccessibility methods without declaring the protocol in Swift.
+        func visit(_ element: AnyObject, depth: Int) {
+            guard depth < 64, visited.insert(ObjectIdentifier(element)).inserted else { return }
+            body(element)
             for child in element.accessibilityChildren?() ?? [] { visit(child as AnyObject, depth: depth + 1) }
         }
         // Hosting views nested in AppKit containers (split views, representables) are not always reachable as
@@ -262,7 +284,6 @@ enum PresentationTestSupport {
         if let root = window.contentView {
             for view in [root] + views(of: NSView.self, in: root, includingNestedMatches: true) { visit(view, depth: 0) }
         }
-        return frames
     }
 
     static func views<T: NSView>(of type: T.Type, in root: NSView, includingNestedMatches: Bool = false) -> [T] {

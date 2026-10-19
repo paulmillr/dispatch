@@ -12,8 +12,8 @@ use dispatch_helper_core::{
 };
 use std::{collections::BTreeMap, path::PathBuf};
 
-/// AgentHookSetup.events (CodexHookSetup.swift:4).
-const EVENTS: [&str; 10] = [
+/// AgentHookSetup.events (CodexHookSetup.swift:4), then the subagent lifecycle (`State.agents`).
+const EVENTS: [&str; 12] = [
     "SessionStart",
     "SessionEnd",
     "UserPromptSubmit",
@@ -24,6 +24,8 @@ const EVENTS: [&str; 10] = [
     "PostCompact",
     "Stop",
     "Interrupt",
+    "SubagentStart",
+    "SubagentStop",
 ];
 
 /// No key twice in any object (c51466a hooks.rs:194-196 UniqueValue: rewriting such a file could
@@ -90,8 +92,9 @@ fn sorted(value: Value<'_>) -> Data<'_> {
 /// remove+append: Codex trust keys include event/group/handler indices, so existing groups are
 /// never removed, reordered or edited. Each event without an unfiltered synchronous group running
 /// our command gets one appended (timeout 60 for PermissionRequest, else 3). None = nothing to
-/// change: no write, no trust change. Output: compact, sorted keys, final newline.
-fn plan(before: Option<&[u8]>, command: &str) -> Result<Option<Vec<u8>>, Error> {
+/// change: no write, no trust change. Output: compact, sorted keys, final newline. Also whether
+/// PermissionRequest already runs our command: an earlier opt-in that a plan upgrades.
+fn plan(before: Option<&[u8]>, command: &str) -> Result<(Option<Vec<u8>>, bool), Error> {
     let invalid = || failure("hook", "Invalid agent hook configuration");
     if command.is_empty() || command.len() > 4096 || command.chars().any(char::is_control) {
         return Err(invalid());
@@ -142,12 +145,13 @@ fn plan(before: Option<&[u8]>, command: &str) -> Result<Option<Vec<u8>>, Error> 
                 })
             })
     };
+    let opted = installed("PermissionRequest");
     let missing: Vec<&str> = EVENTS
         .into_iter()
         .filter(|event| !installed(event))
         .collect();
     if missing.is_empty() {
-        return Ok(None);
+        return Ok((None, opted));
     }
     for event in missing {
         let timeout = if event == "PermissionRequest" { 60 } else { 3 };
@@ -182,7 +186,7 @@ fn plan(before: Option<&[u8]>, command: &str) -> Result<Option<Vec<u8>>, Error> 
     fields.sort_by(|a, b| a.0.cmp(b.0));
     let mut bytes = json::write(&Data::Object(fields))?;
     bytes.push(b'\n');
-    Ok(Some(bytes))
+    Ok((Some(bytes), opted))
 }
 
 /// One installation: the helper hook command, the Codex config directory and the request.
@@ -374,15 +378,16 @@ fn inspect(io: &mut dyn Io, setup: Setup) {
                 backup: None,
             };
             match (setup.enabled, plan) {
-                // Installed = nothing left to append (hooks.rs:150).
-                (Some(true), Ok(Some(after))) => commit(io, setup, edit(after), mode, expected),
-                (Some(true), Ok(None)) => (setup.done)(io, Ok(facts(Vec::new(), true))),
+                (Some(true), Ok((Some(after), _))) => commit(io, setup, edit(after), mode, expected),
+                (Some(true), Ok((None, _))) => (setup.done)(io, Ok(facts(Vec::new(), true))),
                 (Some(true), Err(error)) => (setup.done)(io, Err(error)),
                 // An audit shows the edit an install would make; disabling never edits the file
                 // (the old helper turned hooks off in its router, backend.rs:126-137).
+                // Installed = nothing left to append (hooks.rs:150), or an earlier opt-in whose
+                // missing events that edit appends.
                 (_, plan) => {
-                    let installed = matches!(plan, Ok(None));
-                    let edits = plan.ok().flatten().map(edit).into_iter().collect();
+                    let installed = matches!(plan, Ok((None, _)) | Ok((_, true)));
+                    let edits = plan.ok().and_then(|(after, _)| after).map(edit).into_iter().collect();
                     let edits = if setup.enabled.is_none() {
                         edits
                     } else {
@@ -424,6 +429,7 @@ fn commit(io: &mut dyn Io, setup: Setup, edit: Edit, mode: u32, expected: Expect
                 bytes,
                 mode,
                 expected,
+                parent: None,
             };
             jobs::submit(
                 &next,

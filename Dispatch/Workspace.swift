@@ -36,6 +36,8 @@ final class Workspace {
     var defaultDirectory = System.home.path
     let hosts = HostRegistry()
     var spaceOrder: SpaceOrder = .tree
+    /// Settings' tabs-only mode (Preferences.tabsOnly): the sidebar lists tabs, and tab navigation walks that list.
+    var tabsOnly = false
     @ObservationIgnored var hostPlacements: [UUID: HostPlacement] = [:]
     @ObservationIgnored var owningMachineForTab: ((TerminalTab) -> TerminalMachine)?
     @ObservationIgnored var onForgetHost: () -> Void = {}

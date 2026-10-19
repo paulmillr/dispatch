@@ -201,4 +201,16 @@ extension HostStatisticsStoreTests {
         XCTAssertTrue(snapshot.processesPartial); XCTAssertEqual(snapshot.state, .stale)
         XCTAssertTrue(snapshot.history.isEmpty)
     }
+
+    func testLocalPartialProcessListSaysSoLikeARemoteOne() {
+        // This Mac's list comes from the same helper rows, with the same 4096-row budget.
+        let local = HostStats()
+        var sample = HostSample()
+        sample.processes = [.init(id: 7, name: "worker", cpu: 12.5, memory: 4096)]
+        sample.processesPartial = true
+        local.latest = sample; local.state = .ready
+        let snapshot = HostStatisticsStore(local: local, remote: SSHStatisticsStore()).snapshot(.local)
+        XCTAssertEqual(snapshot.processes?.map(\.id), [7])
+        XCTAssertTrue(snapshot.processesPartial)
+    }
 }

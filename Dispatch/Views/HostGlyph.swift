@@ -1,10 +1,12 @@
 import SwiftUI
 
+#if canImport(AppKit)
 extension HostRecord {
     var tint: HostTint? {
         id == .local ? nil : HostTint(hostID: id.rawValue.hasPrefix("ssh:") ? String(id.rawValue.dropFirst(4)) : id.rawValue)
     }
 }
+#endif
 
 /// A host's operating system as a glyph in a square `size` frame. Every kind draws the same visible size, its longer
 /// side filling `fill` of the frame: each is drawn at the scale that brings its own artwork there.
@@ -61,6 +63,8 @@ struct HostGlyph: View {
     }
 }
 
+// The Mac app's host popovers and its AppKit secondary click.
+#if canImport(AppKit)
 struct HostInformationView: View {
     @Environment(\.appTypography) private var typography
     let host: HostRecord
@@ -536,3 +540,4 @@ final class HostSecondaryClickView: NSView {
     override func rightMouseDown(with event: NSEvent) { action() }
     override func mouseDown(with event: NSEvent) { action() }
 }
+#endif

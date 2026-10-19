@@ -1,11 +1,11 @@
-//! The capture file: bzip2 around length-prefixed frames. A header names the layer (helper or
-//! app) and the helper wire version; each record is one I/O row; a footer counts the records.
-//! bzip2's checksums refuse a damaged file and the footer a cut one: a file is whole only when it
+//! The capture file: zstd (system/zstd.rs) around length-prefixed frames. A header names the layer (helper or app)
+//! and the helper wire version; each record is one I/O row; a footer counts the records.
+//! zstd's checksums refuse a damaged file and the footer a cut one: a file is whole only when it
 //! ends with a footer that counts every record before it. A checkpoint (before exec) writes a
-//! footer and ends the bzip2 member; later records continue in a new member.
+//! footer and ends the zstd frame; later records continue in a new one.
 //! Args and output are wire values without the schema's names (wire::body::encode_plain):
 //! nothing inside is JSON, hex or base64.
-use super::bzip2::{Decoder, Encoder};
+use crate::system::zstd;
 use std::io::{self, Read, Write};
 
 const MAGIC: &[u8; 8] = b"DCAPTURE";
@@ -13,6 +13,8 @@ const VERSION: u32 = 1;
 const RECORD: u8 = 0;
 const INVALID: u8 = 254;
 const FOOTER: u8 = 255;
+/// A zstd frame's first bytes (0xFD2FB528, little-endian).
+const ZSTD: [u8; 4] = [0x28, 0xb5, 0x2f, 0xfd];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Layer {
@@ -54,15 +56,20 @@ fn blob(out: &mut Vec<u8>, bytes: &[u8]) -> io::Result<()> {
 }
 
 pub struct Writer<W: Write> {
-    output: Encoder<W>,
+    output: zstd::Encoder<W>,
     rows: u64,
 }
 impl<W: Write> Writer<W> {
+    /// A live capture.
     pub fn new(output: W, header: &Header) -> io::Result<Self> {
-        let mut writer = Self {
-            output: Encoder::new(output, 9)?,
-            rows: 0,
-        };
+        Self::start(zstd::Encoder::live(output)?, header)
+    }
+    /// A replay corpus file.
+    pub fn corpus(output: W, header: &Header) -> io::Result<Self> {
+        Self::start(zstd::Encoder::corpus(output)?, header)
+    }
+    fn start(output: zstd::Encoder<W>, header: &Header) -> io::Result<Self> {
+        let mut writer = Self { output, rows: 0 };
         let mut frame = MAGIC.to_vec();
         frame.extend_from_slice(&VERSION.to_le_bytes());
         frame.push(header.layer as u8);
@@ -94,7 +101,7 @@ impl<W: Write> Writer<W> {
         self.rows += 1;
         Ok(())
     }
-    /// Everything written so far becomes a complete capture: a footer, then the end of the member.
+    /// Everything written so far becomes a complete capture: a footer, then the end of the frame.
     pub fn checkpoint(&mut self) -> io::Result<()> {
         let mut footer = vec![FOOTER];
         footer.extend_from_slice(&self.rows.to_le_bytes());
@@ -115,8 +122,20 @@ impl<W: Write> Writer<W> {
     }
 }
 
+/// The compressed input with its first bytes, read to check its format, put back in front.
+type Peeked<R> = io::Chain<io::Cursor<Vec<u8>>, R>;
+
+fn decoder<R: Read>(mut input: R, limit: usize) -> io::Result<zstd::Decoder<Peeked<R>>> {
+    let mut magic = Vec::new();
+    (&mut input).take(4).read_to_end(&mut magic)?;
+    if magic != ZSTD {
+        return Err(invalid("not a capture: no zstd frame"));
+    }
+    zstd::Decoder::new(io::Cursor::new(magic).chain(input), limit)
+}
+
 pub struct Reader<R: Read> {
-    input: Decoder<R>,
+    input: zstd::Decoder<Peeked<R>>,
     rows: u64,
     complete: bool,
 }
@@ -124,7 +143,7 @@ impl<R: Read> Reader<R> {
     /// `limit` bounds the expanded capture; the header is checked before any record.
     pub fn new(input: R, limit: usize) -> io::Result<(Self, Header)> {
         let mut reader = Self {
-            input: Decoder::new(input, limit)?,
+            input: decoder(input, limit)?,
             rows: 0,
             complete: false,
         };
@@ -164,8 +183,11 @@ impl<R: Read> Reader<R> {
         if count > super::QUEUE {
             return Err(invalid("capture frame exceeds the queue bound"));
         }
-        let mut bytes = vec![0; count];
-        self.input.read_exact(&mut bytes)?;
+        // Grown as the bytes arrive: a declared size alone (a cut or crafted capture) allocates nothing.
+        let mut bytes = Vec::new();
+        if (&mut self.input).take(count as u64).read_to_end(&mut bytes)? != count {
+            return Err(invalid("capture frame cut"));
+        }
         Ok(Some(bytes))
     }
     /// The next record; None only after a footer that covers every record before it.

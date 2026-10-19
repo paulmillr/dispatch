@@ -154,6 +154,10 @@ impl Request<'_> {
                     .arg(harness.borrow().key())
                     .envs(environment(p)?)
                     .env("DISPATCH_HELPER_ENDPOINT", route);
+                if features::enabled(&self.helper.features, self.fd, features::LAUNCH_NAMES) {
+                    // For the multiplexer: the window or tab is the agent's, not "dispatch-helper".
+                    command.env(LAUNCH_NAME, harness.borrow().key());
+                }
                 if let Some(cwd) = p
                     .get("cwd")
                     .and_then(Data::string)
@@ -248,6 +252,7 @@ pub(crate) fn write(
                         bytes,
                         mode: 0o600,
                         expected: Expected::Absent,
+                        parent: None,
                     })
                 })
                 .transpose()

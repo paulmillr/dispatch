@@ -9,6 +9,7 @@ enum SidebarTheme: String, Codable, CaseIterable, Sendable {
     var isDark: Bool { self == .dark || self == .nautical }
     var palette: SidebarPalette { SidebarPalette(theme: self) }
 
+    #if canImport(AppKit)
     /// Default terminal colors use the app palette. Explicit Ghostty schemes bypass these overrides.
     @MainActor var defaultColorSchemeOverrides: String {
         guard self != .dark else { return "" } // Preserve dispatch-black.
@@ -37,6 +38,7 @@ enum SidebarTheme: String, Codable, CaseIterable, Sendable {
         \(colors.enumerated().map { "palette = \($0.offset)=\($0.element)" }.joined(separator: "\n"))
         """
     }
+    #endif
 }
 
 struct SidebarPalette: Sendable {
@@ -82,9 +84,11 @@ struct SidebarPalette: Sendable {
 @MainActor @Observable
 final class SidebarThemeStore {
     static let shared = SidebarThemeStore()
+    #if canImport(AppKit)
     static var systemIsDark: Bool {
         NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
     }
+    #endif
     var current = SidebarTheme.dark
     /// Typing `AppTheme.nauticalCode` in Settings sets this for the rest of the run.
     var nauticalUnlocked = false
@@ -98,11 +102,13 @@ enum Chrome {
     static let stripInset: CGFloat = 12
     /// The full-screen sidebar button's inset from the screen's leading edge.
     static let sidebarButtonInset: CGFloat = 8
+    #if canImport(AppKit)
     /// The full-screen sidebar button (a circle the host mark's size, StripHostMark.size) plus a 12-point gap. It
     /// replaces the strip's leading inset. Liquid Glass keeps 52 points.
     static func sidebarSlotWidth(_ typography: AppTypography) -> CGFloat {
         LiquidGlassStore.shared.active ? 52 : sidebarButtonInset + StripHostMark.size(typography).width + 12
     }
+    #endif
     static var palette: SidebarPalette { SidebarThemeStore.shared.current.palette }
     static var window: Color { palette.window }
     static var sidebar: Color { palette.sidebar }

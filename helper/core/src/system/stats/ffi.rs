@@ -135,6 +135,23 @@ pub(super) fn home() -> io::Result<String> {
         .into_owned())
 }
 
+/// Bytes this account may still write on the file system holding `path` (statfs's available blocks).
+pub(in crate::system) fn available(path: &std::path::Path) -> io::Result<u64> {
+    use std::os::unix::ffi::OsStrExt;
+    let name = CString::new(path.as_os_str().as_bytes()).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+    let mut value = MaybeUninit::zeroed();
+    // SAFETY: terminated path and exact statfs storage, as in disk.
+    if unsafe { statfs(name.as_ptr(), value.as_mut_ptr()) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let value = unsafe { value.assume_init() };
+    #[cfg(all(target_os = "linux", not(target_env = "musl")))]
+    let block = u64::try_from(value.block).map_err(|_| invalid())?;
+    #[cfg(any(target_os = "macos", target_env = "musl"))]
+    let block = u64::from(value.block);
+    Ok(value.available.saturating_mul(block))
+}
+
 pub(super) fn disk(path: &str) -> io::Result<Option<Disk>> {
     let name = CString::new(path).map_err(|_| invalid())?;
     let mut value = MaybeUninit::zeroed();
@@ -161,25 +178,12 @@ pub(super) fn disk(path: &str) -> io::Result<Option<Disk>> {
     }))
 }
 
-pub(super) fn units() -> io::Result<[u64; 4]> {
-    #[cfg(target_os = "linux")]
-    let names = [2, 30]; // _SC_CLK_TCK / _SC_PAGESIZE.
-    #[cfg(target_os = "macos")]
-    let names = [3, 29];
+#[cfg(target_os = "linux")]
+pub(super) fn units() -> io::Result<[u64; 2]> {
     // SAFETY: sysconf has scalar arguments only.
-    let values = names.map(|name| unsafe { sysconf(name) });
-    #[cfg(target_os = "linux")]
+    let values = [2, 30].map(|name| unsafe { sysconf(name) }); // _SC_CLK_TCK / _SC_PAGESIZE.
     if values.iter().any(|value| *value <= 0) {
         return Err(invalid());
     }
-    #[cfg(target_os = "linux")]
-    let base = [1u32; 2];
-    #[cfg(target_os = "macos")]
-    let base = super::macos::timebase()?;
-    Ok([
-        values[0].max(0) as u64,
-        values[1].max(0) as u64,
-        base[0].into(),
-        base[1].into(),
-    ])
+    Ok(values.map(|value| value as u64))
 }

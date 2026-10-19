@@ -1,5 +1,17 @@
 use super::*;
 
+impl Herdr {
+    /// The herdr program in the helper's directory and environment.
+    fn program_command(&self) -> Command {
+        let mut command = Command::new(&self.config.executable);
+        command
+            .current_dir(&self.config.directory)
+            .env_clear()
+            .envs(&self.config.environment);
+        command
+    }
+}
+
 impl Multiplexer for Herdr {
     /// herdr opens sessions that already exist as spaces, like tmux (c1654cc
     /// NewSpaceButton.swift:24-36: tmux and herdr are the external space backends).
@@ -311,6 +323,41 @@ impl Multiplexer for Herdr {
                 done,
             );
             return;
+        }
+        // A window into another workspace, or into a new one under the backend, moves whole, as a tmux window into
+        // another group does (tmux affinity.rs r#move); kept consistent with tmux: see actions::Target.
+        if let Ok((Kind::Tab, key)) = &source {
+            let tab = self
+                .snapshot
+                .tabs
+                .iter()
+                .find(|tab| &tab.key == key)
+                .unwrap();
+            let to = match &target {
+                Ok((Kind::Workspace, workspace)) if *workspace != tab.parent => {
+                    let tabs: Vec<_> = self
+                        .snapshot
+                        .tabs
+                        .iter()
+                        .filter(|other| &other.parent == workspace)
+                        .collect();
+                    let index = before
+                        .as_ref()
+                        .and_then(|(_, key)| tabs.iter().position(|other| &other.key == key));
+                    Some(actions::Target::Tab(
+                        workspace.clone(),
+                        index.unwrap_or(tabs.len()),
+                    ))
+                }
+                Err(_) if parent == self.backend => {
+                    Some(actions::Target::Workspace(tab.label.clone()))
+                }
+                _ => None,
+            };
+            if let Some(to) = to {
+                self.relocate(io, node, key.clone(), to, done);
+                return;
+            }
         }
         match (source, target) {
             (Ok((kind, key)), Ok((target, parent))) => {
@@ -644,6 +691,24 @@ impl Multiplexer for Herdr {
     fn program(&self) -> Option<String> {
         Some("herdr".into())
     }
+    /// `herdr status server` reports the configured socket's server and never starts one.
+    fn server_probe(&self) -> Option<Command> {
+        let mut command = self.program_command();
+        command.args(["status", "server"]);
+        if !self.config.socket.as_os_str().is_empty() {
+            command.env("HERDR_SOCKET_PATH", &self.config.socket);
+        }
+        Some(command)
+    }
+    fn running(&self, status: Option<i32>, stdout: &[u8]) -> bool {
+        status == Some(0)
+            && String::from_utf8_lossy(stdout).lines().any(|line| line.trim() == "status: running")
+    }
+    fn version(&self) -> Option<Command> {
+        let mut command = self.program_command();
+        command.arg("--version");
+        Some(command)
+    }
     fn resize(&mut self, io: &mut dyn Io, terminal: Id, size: Grid, done: Done<()>) {
         if let Some(endpoint) = self.endpoint(terminal) {
             endpoint.resize(io, terminal, size, done);
@@ -739,3 +804,7 @@ impl Multiplexer for Herdr {
         self.route(io, ui, event);
     }
 }
+
+#[cfg(test)]
+#[path = "ops.test.rs"]
+mod tests;

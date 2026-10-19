@@ -80,7 +80,9 @@ def prepare(offline=False, dry_run=False):
     directory = ROOT / 'build/test-tools/bin'
     directory.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='.links-', dir=directory.parent) as temporary:
-        for name, binary in binaries.items():
+        # Codex runs code-mode tools in a companion it looks for beside the path it was started by (the link).
+        companions = [Path(binaries['codex']).with_name('codex-code-mode-host')] if 'codex' in binaries else []
+        for name, binary in [*binaries.items(), *((path.name, path) for path in companions if path.is_file())]:
             link = Path(temporary) / name
             link.symlink_to(os.path.relpath(binary, directory))
             link.replace(directory / name)

@@ -124,8 +124,11 @@ final class ThinkingAnimationTests: XCTestCase {
         session.turns = [.init(id: "turn", items: [.init(id: "agent", kind: .tool, text: #"{"description":"Find the timer"}"#, title: "Agent")])]
         session.subagents = ["Explore", "general-purpose", "Explore"]
         var state = AgentWorkingState(session)
-        XCTAssertEqual(state.label, "3 agents running")
+        XCTAssertEqual(state.label, "waiting on agents")
         XCTAssertEqual(state.fragment, "Explore, general-purpose")
+        XCTAssertEqual(ChatComposerAgents.kinds(session.subagents), [.init(id: "Explore", count: 2), .init(id: "general-purpose", count: 1)],
+                       "The footer badge lists each type once, in start order")
+        XCTAssertEqual(ChatComposerAgents.title(3), "3 agents running")
         session.turns[0].items.append(.init(id: "shell", kind: .tool, text: #"{"command":"git status"}"#, title: "Bash"))
         XCTAssertEqual(AgentWorkingState(session).label, "running", "The agent's own tool work keeps its label")
         // Background agents: the turn ended and the agent is idle, but its agents still run.
@@ -133,7 +136,8 @@ final class ThinkingAnimationTests: XCTestCase {
         state = AgentWorkingState(session)
         XCTAssertTrue(state.visible)
         XCTAssertTrue(AgentWorkingState.isWorking(session))
-        XCTAssertEqual(state.label, "1 agent running")
+        XCTAssertEqual(state.label, "waiting on agents")
+        XCTAssertEqual(ChatComposerAgents.title(1), "1 agent running")
         XCTAssertEqual(state.fragment, "Explore")
         session.subagents = []
         XCTAssertFalse(AgentWorkingState(session).visible)

@@ -385,10 +385,10 @@ impl Herdr {
         self.ttys
             .retain(|id, _| nodes.iter().any(|node| node.id == *id));
         self.snapshot = snapshot;
-        let modern = matches!(
-            value.get("version").and_then(Value::string),
-            Some("0.9.2" | "0.9.3")
-        );
+        let modern = value
+            .get("version")
+            .and_then(Value::string)
+            .is_some_and(modern);
         if self.modern != modern {
             self.modern = modern;
             self.fallback = false;
@@ -725,3 +725,22 @@ impl Herdr {
         }
     }
 }
+
+/// Servers from 0.9.2 on report pane changes (the subscription and pane watch); older ones are polled.
+fn modern(version: &str) -> bool {
+    let mut parts = version.split('.').map(|part| {
+        part.chars()
+            .take_while(char::is_ascii_digit)
+            .collect::<String>()
+            .parse::<u64>()
+            .ok()
+    });
+    let (Some(Some(major)), Some(Some(minor)), patch) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    (major, minor, patch.flatten().unwrap_or(0)) >= (0, 9, 2)
+}
+
+#[cfg(test)]
+#[path = "rpc.test.rs"]
+mod tests;

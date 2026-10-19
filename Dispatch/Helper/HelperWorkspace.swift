@@ -34,12 +34,19 @@
     private var missingWindows: [UUID: HelperFailure] = [:]
     private var restoringWindows: Set<UUID> = []
     private var restoreRequests: [UUID: (route: HelperBackend.Route, node: UInt64, task: Task<Void, Never>)] = [:]
+    /// restoreRequests' routes, read where topologies are queued (off the main actor); restoreRequestsChanged() keeps it.
+    @ObservationIgnored private let restoringRoutes = OSAllocatedUnfairLock(initialState: Set<HelperBackend.Route>())
+    /// Each route's latest window restore: the next one finishes after it, so windows restored together are presented
+    /// (and the first selected) in the order they were asked for, not in the order their tasks happen to resume.
+    @ObservationIgnored private var restoreTails: [HelperBackend.Route: Task<Void, Never>] = [:]
     private var restoreSpaces: [HelperBackend.Route: UUID] = [:]
     @ObservationIgnored private var restoration = System.uuid()
     private var restoring: [HelperBackend.Route: Detached] = [:]
     private(set) var backends: [HelperBackend] = []
     private(set) var error: String?
     @ObservationIgnored private(set) var operations = 0
+    /// Moves this app already shows that their server has not answered yet (perform(moving:)).
+    @ObservationIgnored private var moves = 0
     @ObservationIgnored private var creations: [HelperBackend.Route: [UUID: Task<Void, Never>]] = [:]
     /// Shared by every endpoint; TerminalRuntime owns its lifetime.
     @ObservationIgnored private let renderer: HelperRenderer?
@@ -118,6 +125,11 @@
     @ObservationIgnored private var pendingSpaces: Set<UUID> = []
     @ObservationIgnored private var confirming: Set<UUID> = []
     @ObservationIgnored private var placing: [UUID: Task<Void, Never>] = [:]
+    /// A move this app shows is still unanswered, or its refusal not yet undone: a window into a new or another space, a
+    /// terminal out of its window or back.
+    var moving: Bool { moves > 0 || !placing.isEmpty }
+    /// Terminals on their way out of their window (relocate) -> that move.
+    @ObservationIgnored private var relocating: [UInt64: Task<Void, Never>] = [:]
     /// Terminals of a window moving to a new space -> the space node they leave (hidden there until it shows them elsewhere).
     @ObservationIgnored private var movedFrom: [UInt64: UInt64] = [:]
     /// Moving terminals the selection follows: terminal -> the space it leaves.
@@ -540,10 +552,15 @@
           }
           // Topologies are whole states: of consecutive ones still queued for the main actor only the newest
           // applies (a large server publishes a burst, e.g. one per discovered shell, and each costs a full pass).
+          // Not while a window restore on this route is pending: a restored window's space selects the server's focus
+          // of the first topology that shows it, so each one applies however the reads were batched (live, the main
+          // actor took them one by one; a replay hands them over at once, and the restore showed another window).
           let queue = OSAllocatedUnfairLock(initialState: [Result<HelperClient.Update, any Error>]())
+          let restoring = restoringRoutes
           let observer = try await client.open(.init(mux: route.mux, key: key)) { [weak self] result in
+            let ordered = restoring.withLock { $0.contains(route) }
             let first = queue.withLock { queue in
-              if case .success(.topology) = result, case .success(.topology)? = queue.last {
+              if !ordered, case .success(.topology) = result, case .success(.topology)? = queue.last {
                 queue[queue.count - 1] = result
                 return false
               }
@@ -852,11 +869,13 @@
         }
         guard restoringWindows.insert(window.id).inserted else { continue }
         placeholder(window.route, name: window.name, host: window.host)
+        let previous = restoreTails[window.route]
         let task = perform { client in
           var complete = false
           defer {
             if !Task.isCancelled {
               self.restoreRequests.removeValue(forKey: window.id)
+              self.restoreRequestsChanged()
               self.restoringWindows.remove(window.id)
               self.restored(window.route)
               if complete {
@@ -878,10 +897,13 @@
             throw error
           }
           await self.published()
+          await previous?.value
           try Task.checkCancellation()
           complete = true
         }
+        restoreTails[window.route] = task
         restoreRequests[window.id] = (window.route, window.node, task)
+        restoreRequestsChanged()
       }
       for var entry in detachedRoutes where restoring[entry.route] == nil {
         entry.presentation.removeAll { !ids.contains($0.id) }
@@ -913,8 +935,14 @@
       }
     }
 
+    private func restoreRequestsChanged() {
+      let routes = Set(restoreRequests.values.map(\.route))
+      restoringRoutes.withLock { $0 = routes }
+    }
+
     private func cancel(_ id: UUID) {
       guard let request = restoreRequests.removeValue(forKey: id) else { return }
+      restoreRequestsChanged()
       request.task.cancel()
       imports.removeValue(forKey: request.route)
       restoringWindows.remove(id)
@@ -1342,16 +1370,20 @@
         placement = placing[id]
       }
       let window = detachedWindows.first { $0.node == resolve(target) }?.id
-      let selected: UUID? = select ? source?.containers.first { container in
+      let moved = source?.containers.first { container in
         switch target {
         case .node(let node): container.node == node
         case .item(let id): container.id == id
         }
-      }?.id : nil
+      }
+      // A moved window keeps its id when its server gives it a new key (herdr rebuilds a moved tab), as in a new space:
+      // one terminal carries it (the projection takes one per window).
+      if let moved, let terminal = moved.terminals.first?.terminal { adopted[terminal] = moved.id }
+      let selected: UUID? = select ? moved?.id : nil
       let focused = workspace?.activeTab?.id
       let route = selected.flatMap { _ in source?.backend.flatMap { routes[$0] } }
       if let route { focusing[route, default: 0] += 1 }
-      perform { client in
+      perform(moving: true) { client in
         defer {
           if let window { self.restoringWindows.remove(window) }
           if let route { self.settled(route) }
@@ -1384,7 +1416,8 @@
 
     /// Partial moves are published by the owning backend; moving a leaf must not remove its whole window.
     func relocate(_ node: UInt64, to place: HelperClient.Placement.Place, optional: Bool = false) {
-      perform { client in
+      relocating[node] = perform(moving: true) { client in
+        defer { self.relocating.removeValue(forKey: node) }
         do {
           try await client.place(.init(node: node, place: place))
           await self.published()
@@ -1406,7 +1439,7 @@
         let from = origin.node ?? window.terminals.lazy.compactMap({ $0.terminal.flatMap { self.movedFrom[$0] } }).first
       else {
         let window = detachedWindows.first { $0.node == node }?.id
-        perform { client in
+        perform(moving: true) { client in
           defer { if let window { self.restoringWindows.remove(window) } }
           try await client.place(.init(node: node, place: .init(kind: "workspace", label: label)))
           await self.published()
@@ -1452,7 +1485,7 @@
       let route = origin.backend.flatMap { routes[$0] }
       if selected, let route { focusing[route, default: 0] += 1 }
       var complete = false
-      let task = perform { client in
+      let task = perform(moving: true) { client in
         await departure?.value
         try Task.checkCancellation()
         try await client.place(.init(node: node, place: .init(kind: "workspace", label: label)))
@@ -1494,9 +1527,73 @@
       }
     }
 
+    static let missingRetained = "A retained terminal no longer exists on the server. Its saved view remains offline."
+
+    /// `close` for a node of a space still restoring (`route`'s saved view): the server is never asked. The whole space
+    /// leaves for the detached list unless terminated (its work keeps running either way, as offline); a window or tab
+    /// leaves the saved view, which is then matched to the server's topology again: without a pane that is gone, the
+    /// rest of the view can come back. A route left with nothing to restore releases its server view, so no hidden view
+    /// of the session lives on (it showed every later window as a space of its own).
+    private func closeSaved(_ node: UInt64, in space: Space, route: HelperBackend.Route, policy: HelperClient.Policy) {
+      guard var entry = restoring[route], let workspace else { return }
+      // The space's roots in this server's topology, by their keys (ids of this helper): a closed space detaches there,
+      // so the session's control client ends with nothing left to show.
+      let roots = space.node == node ? (snapshots[route]?.nodes ?? []).filter { $0.kind == .workspace && entry.nodes[$0.key] == space.id }.map(\.id) : []
+      let tabs = space.node == node ? space.tabs.map(\.id) : space.tabs.filter { tab in
+        tab.terminal == node || space.containers.contains { $0.node == node && $0.terminals.contains { $0.id == tab.id } }
+      }.map(\.id)
+      let released = space.tabs.filter { tabs.contains($0.id) }.flatMap(\.surfaceIDs)
+      workspace.updateLayout { next in
+        if space.node == node, let index = next.spaces.firstIndex(where: { $0.id == space.id }) {
+          next.removeSpace(at: index)
+        } else {
+          for id in tabs { _ = next.detachTab(id) }
+        }
+      }
+      let remaining = workspace.spaces.first { $0.id == space.id }
+      entry.presentation = entry.presentation.compactMap { $0.id == space.id ? remaining : $0 }
+      if remaining == nil, policy != .terminate {
+        let detached = Detached(route: route, presentation: [space], nodes: entry.nodes, key: entry.key)
+        if let index = detachedRoutes.firstIndex(where: { $0.route == route }) {
+          detachedRoutes[index].presentation.removeAll { $0.id == space.id }
+          detachedRoutes[index].presentation.append(space)
+          detachedRoutes[index].nodes.merge(detached.nodes) { _, latest in latest }
+        } else {
+          detachedRoutes.append(detached)
+        }
+      }
+      workspace.onCloseTabs(released)
+      print("Helper saved close: node=\(node), policy=\(policy), space=\(space.id), remaining=\(remaining != nil), roots=\(roots)")
+      for root in roots { perform { try await $0.close(.init(node: root, policy: .detach)) } }
+      guard entry.presentation.isEmpty else {
+        restoring[route] = entry
+        guard let topology = snapshots[route] else { return }
+        do {
+          try apply(topology, route: route)
+          if error == Self.missingRetained { error = nil }
+        } catch { fail(error) }
+        return
+      }
+      restoring.removeValue(forKey: route)
+      subscribing.removeValue(forKey: route)?.task.cancel()
+      if let request = observations.removeValue(forKey: route) { connection?.cancel(request) }
+      restored(route)
+      if error == Self.missingRetained { error = nil }
+    }
+
     @discardableResult
     func close(_ node: UInt64, policy: HelperClient.Policy) -> Task<Void, Never> {
       if policy == .detach, let pending = dismissals[node] { return pending.task }
+      // A space still restoring shows the view saved from an earlier connection: its node ids are that connection's,
+      // not this helper's, until the restore has matched them to this server's topology. Sent here, an old id names
+      // another node (closing a missing pane's tab killed a live pane). Closing any of it changes only the saved view,
+      // as offline.
+      if let space = owned.first(where: { space in
+        space.node == node || space.containers.contains { $0.node == node } || space.tabs.contains { $0.terminal == node }
+      }), let route = restoring.first(where: { $0.value.presentation.contains { $0.id == space.id } })?.key {
+        closeSaved(node, in: space, route: route, policy: policy)
+        return Task {}
+      }
       let source = owned.first { space in
         space.node == node || space.containers.contains { $0.node == node }
           || space.tabs.contains { $0.terminal == node }
@@ -1524,6 +1621,19 @@
             container.node == node && container.terminals.contains { $0.id == tab.id }
           }
         }.map(\.id)
+      }
+      // A terminal on its way out of what closes (a host move pulls it out of its window) goes with it: once it landed
+      // elsewhere it closes the same way (tmux: closing or detaching during a host move follows the original terminals).
+      for terminal in owned.flatMap(\.tabs).filter({ terminals.contains($0.id) }).compactMap(\.terminal) {
+        guard let move = relocating[terminal] else { continue }
+        Task {
+          await move.value
+          let nodes = snapshots.values.flatMap(\.nodes)
+          guard !stopped, nodes.contains(where: { $0.id == terminal }),
+            !sequence(first: terminal, next: { id in nodes.first { $0.id == id }?.parent }).contains(node)
+          else { return }
+          close(terminal, policy: policy)
+        }
       }
       // Their output stops now, before the close request: an attach still in flight cancels itself on return (the tab
       // is no longer bound), one that returned is cancelled here. Either way the helper sees the cancel first.
@@ -1729,30 +1839,41 @@
         return
       }
       screens[screen.terminal] = screen
-      guard publishing[screen.terminal] == nil else { return }
-      publishing[screen.terminal] = Task {
-        defer { publishing.removeValue(forKey: screen.terminal) }
+      if publishing[screen.terminal] == nil { send(screen.terminal) }
+    }
+
+    /// One publication of `terminal`'s latest screen at a time, each its own task (`current` awaits one); a screen
+    /// that replaced it meanwhile goes next.
+    private func send(_ terminal: UInt64) {
+      guard let next = screens[terminal] else { return }
+      publishing[terminal] = Task {
         do {
-          let client = try await client()
-          while let next = screens[screen.terminal] {
-            try Task.checkCancellation()
-            try await client.publish(next)
-            published[screen.terminal] = next
-            if screens[screen.terminal] == next {
-              screens.removeValue(forKey: screen.terminal)
-            }
+          try Task.checkCancellation()
+          try await client().publish(next)
+          published[terminal] = next
+          if screens[terminal] == next {
+            screens.removeValue(forKey: terminal)
           }
-        } catch { if !stopped { fail(error) } }
+          try Task.checkCancellation()
+          publishing.removeValue(forKey: terminal)
+          send(terminal)
+        } catch {
+          publishing.removeValue(forKey: terminal)
+          if !stopped { fail(error) }
+        }
       }
     }
 
     /// What `terminal`'s tab shows now, as this helper has it: published at once and awaited. The helper judges some
     /// requests against the native screen (a send into Claude's composer) and publications are throttled: without this a
-    /// request right after a change (the composer just cleared) meets the screen from before it.
+    /// request right after a change (the composer just cleared) meets the screen from before it. That screen goes out
+    /// with the publication in flight or the next one; later ones (an agent that keeps redrawing) never hold the caller.
     func current(_ terminal: UInt64) async {
       guard let tab = tab(of: terminal) else { return }
       TerminalRuntime.shared.views[tab]?.publishScreen()
-      if let task = publishing[terminal] { await task.value }
+      guard let screen = screens[terminal] else { return }
+      await publishing[terminal]?.value
+      if published[terminal] != screen { await publishing[terminal]?.value }
     }
 
     func detach(_ tab: UUID) {
@@ -1807,6 +1928,8 @@
       controlEvents.removeAll()
       restoreRequests.values.forEach { $0.task.cancel() }
       restoreRequests.removeAll()
+      restoreRequestsChanged()
+      restoreTails.removeAll()
       // A queued restore may still be awaiting final detach when its transport retires.
       // Preserve its cancellation token so it can resume through authenticated recovery.
       if !retaining { restoreSpaces.removeAll() }
@@ -1874,14 +1997,20 @@
     }
 
     @discardableResult
-    private func perform(_ operation: @escaping @MainActor (HelperClient) async throws -> Void) -> Task<Void, Never> {
+    private func perform(moving: Bool = false, _ operation: @escaping @MainActor (HelperClient) async throws -> Void) -> Task<Void, Never> {
       operations += 1
+      if moving { moves += 1 }
       return Task {
         defer { operations -= 1; retire() }
         do {
           let client = try await client()
           try await operation(client)
         } catch { if !stopped && !Task.isCancelled { fail(error) } }
+        // Answered, done or refused: the topology showing it went out before the answer, and applies on this turn.
+        if moving {
+          await published()
+          moves -= 1
+        }
       }
     }
 
@@ -2282,9 +2411,7 @@
         let requested = Set(restored.presentation.flatMap(\.tabs).filter { $0.terminal != nil }.map(\.id))
         let terminals = topology.nodes.filter { $0.kind == .terminal }
         let available = Set(terminals.compactMap { restored.nodes[$0.key] })
-        guard requested.isSubset(of: available) else {
-          throw HerdrFailure("A retained terminal no longer exists on the server. Its saved view remains offline.")
-        }
+        guard requested.isSubset(of: available) else { throw HerdrFailure(Self.missingRetained) }
         let roots = Set(restored.presentation.map(\.id))
         // Closing a retained pane while offline changes only its presentation, never the server.
         for terminal in terminals {

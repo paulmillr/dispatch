@@ -151,7 +151,7 @@ final class SwiftBackend: TerminalBackend {
         defer { self.display = display }
         if let previous = self.display, previous != display { session.relink() }
     }
-    func displaysWoke() { session.relink() }
+    func relink() { session.relink() }
     func refresh() { session.refresh() }
 
     func key(_ key: TerminalKey) -> Bool {
@@ -206,6 +206,7 @@ private final class SwiftHost: SurfaceHost {
         case .scrollbar(let s): event = .scrollbar(TerminalScrollState(total: UInt64(s.total), offset: UInt64(s.offset), visible: UInt64(s.len)))
         case .colorChange(.background, let c): event = .background(r: c.r, g: c.g, b: c.b)
         case .programStatus(let records): event = .programStatus(records)
+        case .commandFinished(let code, _): event = .commandFinished(exitCode: Int(code))
         default: return false
         }
         view?.handle(event)

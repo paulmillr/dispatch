@@ -35,8 +35,11 @@ CODEX = Path("/opt/homebrew/lib/node_modules/@openai/codex/node_modules/"
 # OpenAI's quick start uses this image registry. Pin the image for reproducibility.
 IMAGE = ("ghcr.io/cirruslabs/macos-tahoe-xcode@sha256:"
          "e0721ddeae3c7c037b764c1aebd0b2d245495c16622413f5a567d7110d18d863")
-SOURCES = ["Dispatch", "DispatchTests", "helper", "Vendor", "ThirdPartyLicenses", "scripts", "test", "extras",
+SOURCES = ["Dispatch", "DispatchTests", "Mobile", "helper", "Vendor", "ThirdPartyLicenses", "scripts", "test", "extras",
            "project.yml", "run.sh"]
+# The iPhone app's prebuilt SSH engine (scripts/setup_mobile.py): Xcode resolves its package for every scheme of the
+# project, the Mac's included, so the guest needs the binary target even though it never builds the iPhone app.
+MOBILE_ENGINE = "build/mobile-ssh/DispatchMobileSSHCore.xcframework"
 # The replay corpus (a git submodule, docs/replay.md): the guest's tests replay from it, and its Debug build
 # replays the helper captures. Synchronized whenever the host has it.
 CORPUS = "replays"
@@ -453,14 +456,40 @@ def test(vm, tests, recheck=False, benchmarks=False, selection=None, **shard):
     return test_guest(vm, tests, recheck=recheck, benchmarks=benchmarks, **extra)
 
 
+def sync_helper(vm):
+    """Give the guest the host's last Debug helper build and corpus replay stamp (scripts/build-ssh-helper.py): a guest
+    whose helper sources match them by content reuses both instead of building the helper (1-3 min) and replaying the
+    corpus in every VM. Other sources make the guest build its own, as before."""
+    helper = ROOT / "build/helper-rust"
+    variant = helper / "variants/local-capture"
+    if not (variant / "inputs").is_file():
+        return
+    destination = GUEST + "/workspace/build/helper-rust/"
+    with (helper / ".build.lock").open("a") as lock:
+        try:
+            # A host helper build in progress: let the guest build its own.
+            fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return
+        guest(vm, "/bin/mkdir", "-p", destination + "variants")
+        synchronize(vm, [str(variant)], destination + "variants/")
+        if (helper / "replay-verified.json").is_file():
+            synchronize(vm, [str(helper / "replay-verified.json")], destination)
+
+
 def prepare_test_inputs(vm, profile, needs_codex=True):
     def sync_sources():
         with profile.stage("source_sync") as stage:
             corpus = (ROOT / CORPUS).is_dir()
             stage["statistics"] = synchronize(vm, SOURCES + [CORPUS] * corpus, GUEST + "/workspace/", relative=True)
+            if (ROOT / MOBILE_ENGINE).is_dir():
+                # On its own: inside the relative sync above, --delete would empty the guest's build/ (Rust, XcodeGen).
+                # Named without a trailing slash, rsync makes the folder in build/mobile-ssh/ (which it creates too).
+                synchronize(vm, [str(ROOT / MOBILE_ENGINE)], GUEST + "/workspace/" + str(Path(MOBILE_ENGINE).parent) + "/")
             if not corpus:
                 # A corpus left from an earlier run would replay recordings this checkout does not have.
                 shell(vm, 'rm -rf "$1/workspace/' + CORPUS + '"', GUEST)
+            sync_helper(vm)
 
     def sync_cli():
         with profile.stage("codex_sync"):

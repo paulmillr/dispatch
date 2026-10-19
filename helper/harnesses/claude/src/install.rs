@@ -91,9 +91,18 @@ impl Setup {
                 ..Install::default()
             }));
         }
+        // Turning hooks off where Claude has no settings file removes nothing: it never creates one.
+        if self.enabled == Some(false) && self.before.is_none() {
+            return Ok(Next::Done(Install::default()));
+        }
         self.after = match (self.remote, self.enabled) {
             (true, _) => settings::installation(self.before.as_deref(), &self.command)?
                 .unwrap_or_else(|| self.before.clone().unwrap_or_default()),
+            // A complete installation is never rewritten, so an audit shows no edit; an older
+            // opt-in missing hooks shows the upgrade an install makes.
+            (false, None | Some(true)) if settings::complete(doc.as_ref(), &self.command) => {
+                self.before.clone().unwrap_or_default()
+            }
             _ => settings::merge(doc.as_ref(), &self.command, self.enabled.unwrap_or(true))?,
         };
         // Unchanged settings are never rewritten.
@@ -235,6 +244,7 @@ impl Setup {
                     bytes: self.after.clone(),
                     mode: 0o600,
                     expected: self.expected,
+                    parent: None,
                 }))
             }
             (Stage::Write, Output::Written) => Ok(Next::Done(self.report())),

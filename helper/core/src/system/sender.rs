@@ -57,7 +57,7 @@ pub fn run(io: &mut System, harness: Shared<dyn Harness>, section: &str, endpoin
         .hook(&document)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.message))?
         .interactive;
-    let route = owner(io, &registries(section)?, endpoint, deadline)?
+    let route = owner(io, &registries(section)?, endpoint, deadline, Duration::ZERO)?
         .ok_or(io::ErrorKind::NotFound)?;
     if !interactive {
         check(io, &route, deadline)?;
@@ -123,7 +123,7 @@ pub fn run(io: &mut System, harness: Shared<dyn Harness>, section: &str, endpoin
 pub fn setup(io: &mut System, section: &str, endpoint: Option<&Path>) -> io::Result<()> {
     io.section("setup.sender");
     let deadline = io.now() + Duration::from_secs(12);
-    let Some(route) = owner(io, &registries(section)?, endpoint, deadline)? else {
+    let Some(route) = owner(io, &registries(section)?, endpoint, deadline, SETTLE)? else {
         return Ok(());
     };
     let request = body::encode_plain(&Data::Object(vec![("section", Data::String(section))]))
@@ -159,7 +159,7 @@ pub fn launch(io: &mut System, program: &str, arguments: &[String], endpoint: Op
             sections.extend(entries.into_iter().filter(|(_, kind)| *kind == FileKind::Directory).map(|(name, _)| registry.join(name)));
         }
     }
-    if let Some(route) = owner(io, &sections, endpoint, deadline)? {
+    if let Some(route) = owner(io, &sections, endpoint, deadline, Duration::ZERO)? {
         let request = body::encode_plain(&Data::Object(vec![("program", Data::String(program))]))
             .map_err(|_| io::ErrorKind::InvalidData)?;
         let response = exchange(io, &route, wire::Kind::Request, 3, &request, deadline)?;
@@ -210,11 +210,19 @@ fn registries(section: &str) -> io::Result<Vec<PathBuf>> {
     Ok(paths)
 }
 
+/// How long a named helper may take to learn a launch's new terminal's tty, and the pause
+/// between asks.
+const SETTLE: Duration = Duration::from_secs(3);
+const RETRY: Duration = Duration::from_millis(50);
+
+/// `settle`: how long to ask a live named helper again while it does not claim the process
+/// (zero for hooks: the agent's terminal is known long before its first hook).
 fn owner(
     io: &mut System,
     registries: &[PathBuf],
     endpoint: Option<&Path>,
     deadline: Instant,
+    settle: Duration,
 ) -> io::Result<Option<PathBuf>> {
     // The nearest ancestor with a tty selects its terminal's helper. A bound
     // agent wins among multiple owners; then the terminal's named endpoint.
@@ -235,30 +243,40 @@ fn owner(
     }
     let question = body::encode_plain(&Data::Object(vec![("chain", Data::Array(chain))]))
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.message))?;
-    let candidates = endpoint.map(|path| (path.to_owned(), true)).into_iter();
-    let candidates = candidates.chain(
-        routes(io, registries, deadline)
-            .into_iter()
-            .map(|r| (r, false)),
-    );
-    let (mut owners, mut asked) = (Vec::new(), Vec::new());
-    for (route, named) in candidates {
-        let Ok(helper) = check(io, &route, deadline).map(|facts| folder(&facts)) else {
-            continue;
-        };
-        if asked.contains(&helper) {
-            continue;
-        }
-        asked.push(helper);
-        let Ok(answer) = exchange(io, &route, wire::Kind::Request, 1, &question, deadline) else {
-            continue;
-        };
-        let answer = body::decode_plain(&answer).map_err(|_| io::ErrorKind::InvalidData)?;
-        let fact = |name| answer.get(name).and_then(Data::boolean) == Some(true);
-        if fact("owned") {
-            owners.push(((!fact("bound"), !named), route));
-        }
-    }
+    let registered = routes(io, registries, deadline);
+    // A helper that started this command in its own terminal names itself (the terminal's
+    // DISPATCH_HELPER_ENDPOINT), but may not know that terminal's tty yet: herdr reports a new
+    // pane's shell asynchronously. Ask the named helper again for a short while before
+    // concluding that nobody owns the process (which runs the agent without Dispatch).
+    let settle = Instant::now() + settle.min(deadline.saturating_duration_since(io.now()));
+    let mut owners = asking(
+        || {
+            let (mut owners, mut asked, mut named_live) = (Vec::new(), Vec::new(), false);
+            let candidates = endpoint.map(|path| (path.to_owned(), true)).into_iter();
+            for (route, named) in candidates.chain(registered.iter().map(|r| (r.clone(), false))) {
+                let Ok(helper) = check(io, &route, deadline).map(|facts| folder(&facts)) else {
+                    continue;
+                };
+                if asked.contains(&helper) {
+                    continue;
+                }
+                asked.push(helper);
+                let Ok(answer) = exchange(io, &route, wire::Kind::Request, 1, &question, deadline) else {
+                    continue;
+                };
+                named_live |= named;
+                let answer = body::decode_plain(&answer).map_err(|_| io::ErrorKind::InvalidData)?;
+                let fact = |name| answer.get(name).and_then(Data::boolean) == Some(true);
+                if fact("owned") {
+                    owners.push(((!fact("bound"), !named), route));
+                }
+            }
+            Ok((owners, named_live))
+        },
+        settle,
+        std::time::Instant::now,
+        std::thread::sleep,
+    )?;
     owners.sort_by_key(|(rank, _)| *rank);
     let Some((rank, route)) = owners.first() else {
         return Ok(None);
@@ -268,6 +286,22 @@ fn owner(
         io.record("hook.ambiguous", routes, &Ok(()), Data::Null)?;
     }
     Ok(Some(route.clone()))
+}
+
+/// Ask until someone owns the process, no live named helper answered, or `settle` passes.
+fn asking<T>(
+    mut ask: impl FnMut() -> io::Result<(Vec<T>, bool)>,
+    settle: Instant,
+    now: impl Fn() -> Instant,
+    sleep: impl Fn(Duration),
+) -> io::Result<Vec<T>> {
+    loop {
+        let (owners, named_live) = ask()?;
+        if !owners.is_empty() || !named_live || now() + RETRY >= settle {
+            return Ok(owners);
+        }
+        sleep(RETRY);
+    }
 }
 
 /// Every live helper's route for `section`, in registry order.
@@ -441,3 +475,7 @@ fn observe(
         _ => Err(io::ErrorKind::InvalidData.into()),
     }
 }
+
+#[cfg(test)]
+#[path = "sender.test.rs"]
+mod tests;

@@ -3,18 +3,21 @@
 //! capture replay DIR [--output DIR] [--timeout SECONDS] [--completion required]
 //! capture inspect FILE [--from N] [--limit N]   (one line per record, one per wire frame; our frames decoded; other bytes as text when UTF-8, otherwise as hex)
 //! capture value FILE                 (one encoded value, e.g. a replay's mismatch.value)
-//! capture grep NEEDLE PATH... | grep PATH... [--needles FILE] [--values SHAPE]...   [--limit N] [--jobs N]   (needles, literal, in every text/bytes value as a reader sees it (cut across records, wrapped), keys included, and in herdr's base64 and tmux's send-keys hex; warns of other text that looks encoded; --values: every distinct line of the values at places holding SHAPE, digits as #)
-//! capture replace DIR OUT [--needles FILE] [--uuids] [--ips] [--jobs N]   (scrub: docs/capture_scrub.md)
+//! capture diff A B [--limit N] [--jobs N]   (two captures, or two directories of them paired per test, compared on what
+//!                          inspect decodes: every change grouped, the most frequent first; capture/diff.rs)
+//! capture grep NEEDLE PATH... | grep PATH... [--needles FILE] [--values SHAPE]...   [--limit N] [--jobs N]   (needles, literal, in every text/bytes value as a reader sees it (cut across records, wrapped), keys included, and in herdr's base64, tmux's send-keys hex and websocket clients' masked frames; lists the helpers' environments at startup; warns of other text that looks encoded; per needle the whole tokens holding it or its replacement; --values: every distinct line of the values at places holding SHAPE, digits as #)
+//! capture replace DIR OUT [--needles FILE] [--uuids] [--ips] [--jobs N]   (scrub: docs/replay.md, Scrub captures; process rows: ALLOWED)
 //! capture key PATH...   (each capture's content key: its records without the bookkeeping clock)
 //! capture check PATH...   (one case's app journals and helper captures: the bytes each side
 //!                          sent are the bytes the other side read; every capture linked)
-//! capture store STAGE REPLAYS --tests DIR [--failed]   (a run's passed tests into the corpus; --failed: its failed ones too, unchecked)
+//! capture store STAGE REPLAYS [--failed]   (a capture's passed tests into the corpus; --failed: its failed ones too, unchecked)
 //! capture prune REPLAYS [--dry-run]   (drop corpus helper captures that no longer replay)
+//! capture migrate REPLAYS MIGRATIONS [--check] [--dry-run] [--retired DIR]   (the corpus brought up to the code: capture/migrate.rs)
 //! Options go anywhere after the command.
 use dispatch_helper_core::{
     hash::Sha256,
     json::{Data, Json},
-    system::{capture::{screen::Screen, trace, views::View}, replay::batch},
+    system::{capture::{screen::{COLS, Line, ROWS, Screen}, trace, views::View}, replay::batch},
     wire::{self, body},
 };
 use std::{
@@ -30,51 +33,85 @@ use std::{
     time::Duration,
 };
 
-/// A value for reading: the display only, never stored.
-fn show(value: &Data<'_>, out: &mut String) {
+mod diff;
+mod migrate;
+
+/// A value or a frame of ours as inspect reads it: inspect prints it, diff (capture/diff.rs) compares two. Only for
+/// reading, never stored.
+#[derive(Debug, PartialEq)]
+enum Node {
+    /// Printed as it is: null, a bool, a number, `<json>`, a frame's kind and id, its method, a note.
+    Word(String),
+    /// A string, printed quoted.
+    Text(String),
+    /// Bytes nothing here knows the structure of: printed as text when UTF-8, otherwise as hex.
+    Bytes(Vec<u8>),
+    List(Vec<Node>),
+    Fields(Vec<(String, Node)>),
+    /// Bytes that are whole frames of our protocol.
+    Frames(Vec<Node>),
+    /// One frame: its parts one after another (kind and id, method, value, ...).
+    Frame(Vec<Node>),
+}
+
+impl std::fmt::Display for Node {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let joined = |out: &mut std::fmt::Formatter<'_>, items: &[Node], gap: &str| {
+            items.iter().enumerate().try_for_each(|(index, item)| write!(out, "{}{item}", if index > 0 { gap } else { "" }))
+        };
+        match self {
+            Node::Word(word) => out.write_str(word),
+            Node::Text(text) => write!(out, "{text:?}"),
+            Node::Bytes(bytes) => match std::str::from_utf8(bytes) {
+                Ok(text) => write!(out, "b{text:?}"),
+                Err(_) => {
+                    out.write_str("hex(")?;
+                    bytes.iter().try_for_each(|byte| write!(out, "{byte:02x}"))?;
+                    out.write_str(")")
+                }
+            },
+            Node::List(items) => {
+                out.write_str("[")?;
+                joined(out, items, ", ")?;
+                out.write_str("]")
+            }
+            Node::Fields(fields) => {
+                out.write_str("{")?;
+                for (index, (key, item)) in fields.iter().enumerate() {
+                    write!(out, "{}{key}: {item}", if index > 0 { ", " } else { "" })?;
+                }
+                out.write_str("}")
+            }
+            Node::Frames(frames) => {
+                out.write_str("frames[")?;
+                joined(out, frames, ", ")?;
+                out.write_str("]")
+            }
+            Node::Frame(parts) => joined(out, parts, " "),
+        }
+    }
+}
+
+/// A value as inspect reads it.
+fn node(value: &Data<'_>) -> Node {
     match value {
-        Data::Null => out.push_str("null"),
-        Data::Bool(v) => write!(out, "{v}").unwrap(),
-        Data::Unsigned(v) => write!(out, "{v}").unwrap(),
-        Data::Signed(v) => write!(out, "{v}").unwrap(),
-        Data::Real(v) => write!(out, "{v}").unwrap(),
-        Data::String(v) => write!(out, "{v:?}").unwrap(),
+        Data::Null => Node::Word("null".into()),
+        Data::Bool(v) => Node::Word(v.to_string()),
+        Data::Unsigned(v) => Node::Word(v.to_string()),
+        Data::Signed(v) => Node::Word(v.to_string()),
+        Data::Real(v) => Node::Word(v.to_string()),
+        Data::String(v) => Node::Text(v.to_string()),
         // Frames first: a cancel or chunk frame can be all ASCII. Then text, then one of our plain values (a hook
         // question's body).
         Data::Bytes(v) => match (frames(v), std::str::from_utf8(v), body::decode_plain(v)) {
-            (Some(frames), _, _) => write!(out, "frames[{}]", frames.join(", ")).unwrap(),
-            (_, Ok(text), _) => write!(out, "b{text:?}").unwrap(),
-            (_, _, Ok(value)) if !matches!(value, Data::Bytes(_)) => show(&value, out),
-            _ => {
-                out.push_str("hex(");
-                for byte in v.iter() {
-                    write!(out, "{byte:02x}").unwrap();
-                }
-                out.push(')');
-            }
+            (Some(frames), _, _) => Node::Frames(frames),
+            (_, Ok(_), _) => Node::Bytes(v.to_vec()),
+            (_, _, Ok(value)) if !matches!(value, Data::Bytes(_)) => node(&value),
+            _ => Node::Bytes(v.to_vec()),
         },
-        Data::Array(items) => {
-            out.push('[');
-            for (index, item) in items.iter().enumerate() {
-                if index > 0 {
-                    out.push_str(", ");
-                }
-                show(item, out);
-            }
-            out.push(']');
-        }
-        Data::Object(fields) => {
-            out.push('{');
-            for (index, (key, item)) in fields.iter().enumerate() {
-                if index > 0 {
-                    out.push_str(", ");
-                }
-                write!(out, "{key}: ").unwrap();
-                show(item, out);
-            }
-            out.push('}');
-        }
-        Data::Value(_) => out.push_str("<json>"),
+        Data::Array(items) => Node::List(items.iter().map(node).collect()),
+        Data::Object(fields) => Node::Fields(fields.iter().map(|(key, item)| (key.to_string(), node(item))).collect()),
+        Data::Value(_) => Node::Word("<json>".into()),
     }
 }
 
@@ -83,20 +120,6 @@ fn field<'v, 'a>(value: &'v Data<'a>, name: &str) -> Option<&'v Data<'a>> {
     match value {
         Data::Object(fields) => fields.iter().find(|(key, _)| *key == name).map(|(_, item)| item),
         _ => None,
-    }
-}
-
-/// A message body for reading: the method and its params (a request or notification), else the whole value.
-fn message(value: &Data<'_>, text: &mut String) {
-    match (field(value, "method"), field(value, "params")) {
-        (Some(Data::String(method)), Some(params)) => {
-            write!(text, " {method} ").unwrap();
-            show(params, text);
-        }
-        _ => {
-            text.push(' ');
-            show(value, text);
-        }
     }
 }
 
@@ -211,59 +234,69 @@ impl Wire {
     }
 }
 
-/// One frame for reading: kind, id, then its message; a chunk only counts its bytes (its message prints at its end), a
-/// cancel shows its raw bytes.
-fn line(header: &wire::Header, content: Content<'_>) -> String {
-    let mut text = format!("{} {}", format!("{:?}", header.kind).to_lowercase(), header.id);
+/// One frame as inspect reads it: kind and id, then its message (a request's or notification's method and params, else the
+/// whole value); a chunk only counts its bytes (its message comes with its last frame), a cancel shows its raw bytes.
+fn framed(header: &wire::Header, content: Content<'_>) -> Node {
+    let mut parts = vec![Node::Word(format!("{} {}", format!("{:?}", header.kind).to_lowercase(), header.id))];
     match content {
-        Content::Chunk(sequence, bytes) => write!(text, " #{sequence} ({} bytes)", bytes.len()).unwrap(),
-        Content::Cancel(bytes) if !bytes.is_empty() => {
-            text.push(' ');
-            show(&Data::Bytes(bytes), &mut text);
-        }
+        Content::Chunk(sequence, bytes) => parts.push(Node::Word(format!("#{sequence} ({} bytes)", bytes.len()))),
+        Content::Cancel(bytes) if !bytes.is_empty() => parts.push(node(&Data::Bytes(bytes))),
         Content::Cancel(_) => {}
         Content::Message { value, bytes, streamed, .. } => {
-            message(value, &mut text);
+            match (field(value, "method"), field(value, "params")) {
+                (Some(Data::String(method)), Some(params)) => parts.extend([Node::Word(method.to_string()), node(params)]),
+                _ => parts.push(node(value)),
+            }
             if streamed {
-                text.push_str(" (streamed)");
+                parts.push(Node::Word("(streamed)".into()));
             }
             if let Some(bytes) = bytes {
-                text.push_str(" bytes ");
-                show(&Data::Bytes(&bytes.bytes), &mut text);
+                parts.extend([Node::Word("bytes".into()), node(&Data::Bytes(&bytes.bytes))]);
             }
         }
     }
-    text
+    Node::Frame(parts)
 }
 
 /// Bytes that are whole frames of our own protocol, one entry per frame. Only bytes nothing knows the structure of
 /// print as hex.
-fn frames(bytes: &[u8]) -> Option<Vec<String>> {
-    Wire::new().feed(bytes, &mut line).filter(|(_, unfinished)| unfinished.is_none()).map(|(frames, _)| frames)
+fn frames(bytes: &[u8]) -> Option<Vec<Node>> {
+    Wire::new().feed(bytes, &mut framed).filter(|(_, unfinished)| unfinished.is_none()).map(|(frames, _)| frames)
 }
 
-/// A record value for reading: one entry per wire frame (decoded on from where `stream` stopped), none for null.
-fn parts(bytes: &[u8], stream: &mut Wire) -> Vec<String> {
-    let value = match body::decode_plain(bytes) {
-        Ok(Data::Null) => return Vec::new(),
-        Ok(Data::Bytes(v)) => match stream.feed(v, &mut line) {
+/// A record value as inspect reads it: one entry per wire frame (decoded on from where `stream` stopped), none for null.
+fn items(bytes: &[u8], stream: &mut Wire) -> Vec<Node> {
+    match body::decode_plain(bytes) {
+        Ok(Data::Null) => Vec::new(),
+        Ok(Data::Bytes(v)) => match stream.feed(v, &mut framed) {
             Some((mut frames, unfinished)) => {
-                frames.extend(unfinished);
-                return frames;
+                frames.extend(unfinished.map(Node::Word));
+                frames
             }
-            None => Data::Bytes(v),
+            None => vec![node(&Data::Bytes(v))],
         },
-        Ok(value) => value,
-        Err(_) => return vec!["<invalid value>".into()],
-    };
-    let mut out = String::new();
-    show(&value, &mut out);
-    vec![out]
+        Ok(value) => vec![node(&value)],
+        Err(_) => vec![Node::Word("<invalid value>".into())],
+    }
 }
 
-/// The stream a record's bytes belong to, one per side of a connection: its descriptor when the record names one (a
-/// helper capture's read/write), else its section (an app journal's lifetime); per op (and record part).
-fn stream(record: &trace::Record) -> String {
+/// What a record asked and got back as inspect reads them, each stream's frames decoded across its records (`streams`
+/// keeps each one's decoder: feed every record of a capture in order).
+fn decoded(record: &trace::Record, streams: &mut HashMap<String, Wire>) -> [Vec<Node>; 2] {
+    let key = stream(record);
+    [items(&record.args, streams.entry(key.clone() + " args").or_insert_with(Wire::new)),
+        items(&record.output, streams.entry(key + " output").or_insert_with(Wire::new))]
+}
+
+/// A record's sequence and error for reading (sequence 0 and no error print nothing).
+fn suffix(record: &trace::Record) -> String {
+    format!("{}{}", if record.sequence > 0 { format!(" seq={}", record.sequence) } else { String::new() },
+        record.error.map_or(String::new(), |error| format!(" error={error}")))
+}
+
+/// What a record's bytes go through: its descriptor when the record names one (a helper capture's read/write), else
+/// its section (an app journal's lifetime).
+fn target(record: &trace::Record) -> String {
     let fd = match body::decode_plain(&record.args) {
         Ok(Data::Object(fields)) => fields.iter().find_map(|(key, value)| match value {
             Data::Unsigned(fd) if *key == "fd" => Some(*fd),
@@ -271,34 +304,118 @@ fn stream(record: &trace::Record) -> String {
         }),
         _ => None,
     };
-    format!("{} {}", fd.map_or(record.section.clone(), |fd| format!("fd {fd}")), record.op)
+    fd.map_or(record.section.clone(), |fd| format!("fd {fd}"))
+}
+
+/// The stream a record's bytes belong to, one per side of a connection: its target, per op (and record part).
+fn stream(record: &trace::Record) -> String {
+    format!("{} {}", target(record), record.op)
+}
+
+/// The terminal sizes a capture names, in record order (docs/replay.md, Scrub captures): a pty's (a helper's `spawn` gives its
+/// descriptors one, `resize` another; an app's `in.size` its section's), the helper's own terminal (`tty.start`, then
+/// `tty.grid`: its `stdio` descriptors) and each terminal's of ours (by id: an object naming a `terminal` or a topology
+/// node's `id` beside a `size`).
+#[derive(Default)]
+struct Sizes {
+    /// By target ("fd N", a section): rows, columns, and which pty (a spawn reusing a descriptor is a new terminal).
+    streams: HashMap<String, ((usize, usize), u64)>,
+    terminals: HashMap<u64, (usize, usize)>,
+    spawned: u64,
+    /// The helper's own terminal: its size and its descriptors.
+    tty: Option<(usize, usize)>,
+    stdio: Vec<u64>,
+}
+
+impl Sizes {
+    fn record(&mut self, record: &trace::Record) {
+        if !matches!(record.op.as_str(), "in.size" | "spawn" | "resize" | "tty.start" | "tty.grid" | "stdio") {
+            return;
+        }
+        let (args, output) = (body::decode_plain(&record.args).ok(), body::decode_plain(&record.output).ok());
+        let number = |value: Option<&Data<'_>>, name: &str| match value.and_then(|value| field(value, name)) {
+            Some(Data::Unsigned(number)) => Some(*number),
+            _ => None,
+        };
+        match record.op.as_str() {
+            "in.size" => {
+                if let Some(size) = output.as_ref().and_then(grid) {
+                    self.streams.insert(record.section.clone(), (size, 0));
+                }
+            }
+            "spawn" => {
+                let size = args.as_ref().and_then(|args| field(args, "pty")).and_then(grid);
+                if let Some(size) = size {
+                    self.spawned += 1;
+                    for name in ["input", "output"] {
+                        if let Some(fd) = number(output.as_ref(), name) {
+                            self.streams.insert(format!("fd {fd}"), (size, self.spawned));
+                        }
+                    }
+                }
+            }
+            "resize" => {
+                let (fd, size) = (number(args.as_ref(), "fd"), args.as_ref().and_then(|args| field(args, "grid")).and_then(grid));
+                if let (Some(fd), Some(size)) = (fd, size) {
+                    let entry = self.streams.entry(format!("fd {fd}")).or_insert((size, 0));
+                    entry.0 = size;
+                }
+            }
+            "tty.start" | "tty.grid" => self.tty = output.as_ref().and_then(grid),
+            _ => self.stdio = ["read", "write"].iter().filter_map(|name| number(output.as_ref(), name)).collect(),
+        }
+        if let Some(size) = self.tty.filter(|_| record.op.starts_with("tty.") || record.op == "stdio") {
+            for fd in &self.stdio {
+                self.streams.insert(format!("fd {fd}"), (size, 0));
+            }
+        }
+    }
+
+    fn stream(&self, target: &str) -> Option<((usize, usize), u64)> {
+        self.streams.get(target).copied()
+    }
+
+    fn terminal(&self, id: u64) -> Option<((usize, usize), u64)> {
+        self.terminals.get(&id).map(|size| (*size, id))
+    }
+}
+
+/// The terminal sizes a value of ours names: an object's `terminal` (or a topology node's `id`) beside a `size`.
+fn named(value: &Data<'_>, out: &mut Vec<(u64, (usize, usize))>) {
+    match value {
+        Data::Object(fields) => {
+            let id = fields.iter().find_map(|(key, value)| match value {
+                Data::Unsigned(id) if *key == "terminal" || *key == "id" => Some(*id),
+                _ => None,
+            });
+            if let (Some(id), Some(size)) = (id, field(value, "size").and_then(grid)) {
+                out.push((id, size));
+            }
+            fields.iter().for_each(|(_, value)| named(value, out));
+        }
+        Data::Array(items) => items.iter().for_each(|item| named(item, out)),
+        _ => {}
+    }
+}
+
+/// (rows, columns) of a size value ({rows, columns, ...}).
+fn grid(value: &Data<'_>) -> Option<(usize, usize)> {
+    match (field(value, "rows"), field(value, "columns")) {
+        (Some(Data::Unsigned(rows)), Some(Data::Unsigned(columns))) if *rows > 0 && *columns > 0 => Some((*rows as usize, *columns as usize)),
+        _ => None,
+    }
 }
 
 fn text(bytes: &[u8]) -> String {
-    let mut out = String::new();
-    match body::decode_plain(bytes) {
-        Ok(value) => show(&value, &mut out),
-        Err(_) => out.push_str("<invalid value>"),
-    }
-    out
+    body::decode_plain(bytes).map_or_else(|_| "<invalid value>".into(), |value| node(&value).to_string())
 }
 
-/// Every capture under `path` (or the file itself), sorted.
+/// Every capture under `path` (batch::captures: no symbolic link inside is followed), or the file itself.
 fn captures(path: &Path) -> io::Result<Vec<PathBuf>> {
     if path.is_file() {
         return Ok(vec![path.into()]);
     }
-    let mut out = Vec::new();
-    for entry in std::fs::read_dir(path)? {
-        let path = entry?.path();
-        if path.is_dir() {
-            out.extend(captures(&path)?);
-        } else if path.to_string_lossy().ends_with(".rpl.bz2") && !path.to_string_lossy().contains(".mismatch-") {
-            out.push(path);
-        }
-    }
-    out.sort();
-    Ok(out)
+    batch::captures(path)
 }
 
 fn take(bytes: &[u8], at: &mut usize, count: usize) -> io::Result<usize> {
@@ -366,7 +483,7 @@ fn spans(record: &trace::Record) -> io::Result<[Vec<(String, usize, usize)>; 2]>
     Ok(out)
 }
 
-/// The needles file (docs/capture_scrub.md): one needle per line, `needle<TAB>value` for a value of its own; empty
+/// The needles file (docs/replay.md, Scrub captures): one needle per line, `needle<TAB>value` for a value of its own; empty
 /// lines and lines starting with `#` hold none.
 fn needles(path: &str) -> io::Result<Vec<(Vec<u8>, Option<Vec<u8>>)>> {
     let mut out: Vec<(Vec<u8>, Option<Vec<u8>>)> = Vec::new();
@@ -414,6 +531,578 @@ impl Matcher {
     fn at(&self, bytes: &[u8], at: usize) -> Option<usize> {
         self.first[bytes[at] as usize].iter().copied().find(|&index| bytes[at..].starts_with(&self.needles[index]))
     }
+}
+
+/// The processes a statistics list names (`removal`); every other row's name is masked. The rows carry no path. The
+/// agents (which harness a pane runs), ripgrep (Claude's process match skips its `rg` children), the multiplexers, ours
+/// (PlanOneTests checks the app's name), ssh and the shells (a terminal's own), yes (the statistics tests' CPU load,
+/// found by name in the list).
+const ALLOWED: &[&str] = &["codex", "claude", "pi", "rg", "tmux", "herdr", "Dispatch", "dispatch-helper", "ssh", "zsh", "bash", "sh", "yes"];
+
+/// Where `bytes`, `value` decoded from them, hold the name of a process row not allowed: ranges into `bytes`, masked in
+/// place with `x` (`mask`). The same length keeps every frame, and so every write, read and readiness wait of the
+/// recording, as it was: a list without its rows is a shorter reply, which a helper writing a large one writes in fewer
+/// rounds than it recorded. In place, not encoded again: an older recording need not encode as this helper would. A name
+/// that is one of our schema's words (`route`) stays in every copy: the helper sends it as its number, so masked in what
+/// the helper read it would come out as text and longer than recorded. A process row is an
+/// object with a pid, a name and an rss: a statistics list's (a lookup of one process, an agent binding, have no rss).
+fn names(value: &Data<'_>, bytes: &[u8]) -> Vec<Range<usize>> {
+    let row = |item: &Data<'_>| ["pid", "name", "rss"].iter().all(|key| item.get(key).is_some());
+    match value {
+        Data::Array(items) if !items.is_empty() && items.iter().all(row) => items.iter()
+            .filter_map(|item| item.get("name").and_then(Data::string))
+            .filter(|name| !ALLOWED.contains(name) && body::symbol(name).is_none())
+            .filter_map(|name| {
+                let at = (name.as_ptr() as usize).checked_sub(bytes.as_ptr() as usize)?;
+                (at + name.len() <= bytes.len()).then_some(at..at + name.len())
+            })
+            .collect(),
+        Data::Array(items) => items.iter().flat_map(|item| names(item, bytes)).collect(),
+        Data::Object(fields) => fields.iter().flat_map(|(_, item)| names(item, bytes)).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// `bytes` with `ranges` masked (`names`).
+fn mask(bytes: &[u8], ranges: &[Range<usize>]) -> Vec<u8> {
+    let mut out = bytes.to_vec();
+    for range in ranges {
+        out[range.clone()].fill(b'x');
+    }
+    out
+}
+
+/// The records with every statistics process list's names masked but the allowed ones: in values, and in our frames on
+/// the streams, a list in chunks (a reply over 64 KiB) too (a stream's bytes are cut into its records again: each keeps
+/// its share, see `moved`).
+fn removal(mut records: Vec<trace::Record>) -> io::Result<Vec<trace::Record>> {
+    let plain = |bytes: &[u8]| -> Option<Vec<u8>> {
+        let ranges = names(&body::decode_plain(bytes).ok()?, bytes);
+        (!ranges.is_empty()).then(|| mask(bytes, &ranges))
+    };
+    for record in &mut records {
+        if let Some(bytes) = plain(&record.args) { record.args = bytes }
+        if let Some(bytes) = plain(&record.output) { record.output = bytes }
+    }
+    let invalid = |error: wire::Error| io::Error::other(format!("{error:?}"));
+    restream(&mut records, &[1], &mut |joined| {
+        // Our frames, each whole, as their lengths cut them; the changed ones (old range, new bytes). A reply over 64 KiB
+        // comes in chunks (`u64 sequence | raw bytes`, then a frame of the original kind): its raw bytes joined are one
+        // body, whose names are masked where each chunk carries them.
+        let (mut at, mut edits, mut chunks) = (0, Vec::new(), std::collections::HashMap::<u64, Vec<Range<usize>>>::new());
+        for _ in 0.. {
+            let Some(header) = joined.get(at..at + 13) else { break };
+            let header = wire::Header::decode(header.try_into().unwrap(), wire::LIMIT).map_err(invalid)?;
+            let end = at + 13 + header.len as usize;
+            let Some(body) = joined.get(at + 13..end) else { break };
+            if header.kind == wire::Kind::Chunk {
+                chunks.entry(header.id).or_default().push((at + 13 + 8).min(end)..end);
+            } else if let Some(parts) = chunks.remove(&header.id) {
+                let whole: Vec<u8> = parts.iter().flat_map(|part| joined[part.clone()].iter().copied()).collect();
+                let Ok(value) = body::decode(&whole) else { at = end; continue };
+                let masked = mask(&whole, &names(&value, &whole));
+                let mut from = 0;
+                for part in parts {
+                    if masked[from..from + part.len()] != whole[from..from + part.len()] {
+                        edits.push((part.clone(), masked[from..from + part.len()].to_vec()));
+                    }
+                    from += part.len();
+                }
+            } else if header.kind != wire::Kind::Cancel && let Ok(value) = body::decode(body) {
+                let ranges = names(&value, body);
+                if !ranges.is_empty() {
+                    edits.push((at + 13..end, mask(body, &ranges)));
+                }
+            }
+            at = end;
+        }
+        edits.sort_by_key(|(range, _): &(Range<usize>, Vec<u8>)| range.start);
+        Ok(edits)
+    })?;
+    Ok(records)
+}
+
+/// The records with `edit`'s changes made to every stream of our frames: the bytes a stream's records read or wrote
+/// (`parts`: 0 args, an app's `out.wire`; 1 output, a read's or a helper's write), joined, go to `edit`, which returns
+/// its changes (old range, new bytes; in order). The changed stream is cut into its records again: each keeps its
+/// share (`moved`), and a write asks for the new length of what it writes.
+fn restream(records: &mut [trace::Record], parts: &[usize],
+            edit: &mut dyn FnMut(&[u8]) -> io::Result<Vec<(Range<usize>, Vec<u8>)>>) -> io::Result<()> {
+    let bytes = |record: &trace::Record, part: usize| match body::decode_plain([&record.args, &record.output][part]) {
+        Ok(Data::Bytes(bytes)) => Some(bytes.to_vec()),
+        _ => None,
+    };
+    let mut streams: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for index in 0..records.len() {
+        let record = &records[index];
+        // A closed descriptor's number can come back for another stream.
+        if matches!(record.op.as_str(), "close" | "hangup") && let Ok(fd) = body::decode_plain(&record.args) && let Some(fd) = fd.signed() {
+            let ended: Vec<String> = streams.keys().filter(|key| key.starts_with(&format!("fd {fd} "))).cloned().collect();
+            for key in ended {
+                let indices = streams.remove(&key).unwrap();
+                streams.insert(format!("{key} #{index}"), indices);
+            }
+        }
+        for &part in parts {
+            if bytes(record, part).is_some() {
+                streams.entry(format!("{} {}", stream(record), ["args", "output"][part])).or_default().push(index);
+            }
+        }
+    }
+    for (key, indices) in streams {
+        let part = usize::from(key.ends_with(" output") || key.contains(" output #"));
+        let pieces: Vec<Vec<u8>> = indices.iter().map(|&index| bytes(&records[index], part).unwrap()).collect();
+        let joined = pieces.concat();
+        if wire::Decoder::new(wire::LIMIT).feed(&joined, |_| {}).is_err() {
+            continue;
+        }
+        let edits = edit(&joined)?;
+        if edits.is_empty() {
+            continue;
+        }
+        let mut stream = joined.clone();
+        for (range, bytes) in edits.iter().rev() {
+            stream.splice(range.clone(), bytes.iter().copied());
+        }
+        let ends: Vec<usize> = pieces.iter().scan(0, |end, piece| { *end += piece.len(); Some(*end) }).collect();
+        let mut start = 0;
+        for (&index, &end) in indices.iter().zip(&ends) {
+            let record = &mut records[index];
+            let cut = body::encode_plain(&Data::Bytes(&stream[moved(&edits, &ends, start)..moved(&edits, &ends, end)]))
+                .map_err(|error| io::Error::other(error.message))?;
+            *[&mut record.args, &mut record.output][part] = cut;
+            // A write asks for what is left of what it writes (a frame, or a chunk read before), to its end.
+            if part == 1 && record.op == "write" && let Ok(Data::Object(fields)) = body::decode_plain(&record.args) {
+                let length = fields.iter().find_map(|(key, value)| (*key == "length").then(|| value.unsigned()).flatten());
+                if let Some(length) = length.map(|length| length as usize) {
+                    let new = moved(&edits, &ends, start + length) - moved(&edits, &ends, start);
+                    let fields: Vec<_> = fields.into_iter().map(|(key, value)| (key, if key == "length" { Data::Unsigned(new as u64) } else { value })).collect();
+                    record.args = body::encode_plain(&Data::Object(fields)).map_err(|error| io::Error::other(error.message))?;
+                }
+            }
+            start = end;
+        }
+    }
+    Ok(())
+}
+
+/// What converting one capture did: frames encoded again, streamed values among them, streamed values left as recorded
+/// (their new body needs another number of chunks), frames of the old schema that did not decode, and records still
+/// holding the old schema's id afterwards (bytes no stream of our frames carried).
+#[derive(Default, Debug)]
+struct Converted {
+    frames: usize,
+    streamed: usize,
+    rechunk: usize,
+    undecoded: usize,
+    left: usize,
+    versions: usize,
+    edited: usize,
+}
+
+/// A schema's dictionary as the corpus keeps it (`replays/wire/<schema id in hex>.json`, written by `capture dictionary`).
+fn dictionary(path: &Path) -> io::Result<(u64, body::Names)> {
+    let bad = || io::Error::other(format!("{}: not a wire dictionary", path.display()));
+    let json = Json::parse(&std::fs::read(path)?).map_err(|_| bad())?;
+    let root = json.root();
+    let leak = |text: &str| -> &'static str { Box::leak(text.to_owned().into_boxed_str()) };
+    let schema: Vec<u8> = root.get("schema").and_then(|v| v.array()).ok_or_else(bad)?
+        .map(|v| v.unsigned().and_then(|v| u8::try_from(v).ok())).collect::<Option<_>>().ok_or_else(bad)?;
+    let symbols: Vec<&'static str> = root.get("symbols").and_then(|v| v.array()).ok_or_else(bad)?
+        .map(|v| v.string().map(leak)).collect::<Option<_>>().ok_or_else(bad)?;
+    let records: Vec<&'static [&'static str]> = root.get("records").and_then(|v| v.array()).ok_or_else(bad)?
+        .map(|record| record.array().and_then(|fields| fields.map(|v| v.string().map(leak)).collect::<Option<Vec<_>>>())
+            .map(|fields| &*Box::leak(fields.into_boxed_slice())))
+        .collect::<Option<_>>().ok_or_else(bad)?;
+    let schema: [u8; 8] = schema.try_into().map_err(|_| bad())?;
+    Ok((u64::from_le_bytes(schema), body::Names { schema, symbols: Box::leak(symbols.into_boxed_slice()), records: Box::leak(records.into_boxed_slice()) }))
+}
+
+/// This helper's dictionary as JSON (`capture dictionary`): the schema id, its symbols and its records, in order.
+fn dictionary_json() -> String {
+    let quote = |text: &str| {
+        let mut out = String::from("\"");
+        for c in text.chars() {
+            match c {
+                '"' | '\\' => { out.push('\\'); out.push(c) }
+                c if (c as u32) < 0x20 => { let _ = write!(out, "\\u{:04x}", c as u32); }
+                c => out.push(c),
+            }
+        }
+        out + "\""
+    };
+    let symbols: Vec<String> = body::SYMBOLS.iter().map(|symbol| format!("  {}", quote(symbol))).collect();
+    let records: Vec<String> = body::RECORDS.iter()
+        .map(|fields| format!("  [{}]", fields.iter().map(|field| quote(field)).collect::<Vec<_>>().join(", "))).collect();
+    format!("{{\"schema\": {:?},\n\"symbols\": [\n{}\n],\n\"records\": [\n{}\n]}}\n", body::SCHEMA, symbols.join(",\n"), records.join(",\n"))
+}
+
+/// A wire body's value as its encoder wrote it: which names were the schema's symbols and which were written out. A plain
+/// value embedded in a wire body (`encode::Raw`: a helper identity, a job's value) keeps its names written out even where
+/// the schema has them, so a body is written again token by token, not from its decoded value.
+enum Token<'a> {
+    /// Null, a boolean, a number or bytes: the tag and its payload as recorded.
+    Scalar(Vec<u8>),
+    Text { text: &'a str, symbol: bool },
+    Array(Vec<Token<'a>>),
+    Object { record: bool, keys: Vec<(&'a str, bool)>, values: Vec<Token<'a>> },
+}
+
+/// One value of a wire body of the schema `names`.
+fn token<'a>(bytes: &'a [u8], at: &mut usize, names: &body::Names, depth: usize) -> io::Result<Token<'a>> {
+    let bad = || io::Error::new(io::ErrorKind::InvalidData, "invalid wire body");
+    if depth == 0 {
+        return Err(bad());
+    }
+    let tag = bytes[take(bytes, at, 1)?];
+    let symbol = |at: &mut usize| -> io::Result<u16> { let start = take(bytes, at, 2)?; Ok(u16::from_le_bytes([bytes[start], bytes[start + 1]])) };
+    let text = |at: &mut usize| -> io::Result<&'a str> {
+        let length = count(bytes, at)?;
+        let start = take(bytes, at, length)?;
+        std::str::from_utf8(&bytes[start..start + length]).map_err(|_| bad())
+    };
+    let scalar = |at: &mut usize, length: usize| -> io::Result<Token<'a>> {
+        let start = take(bytes, at, length)?;
+        Ok(Token::Scalar([&[tag][..], &bytes[start..start + length]].concat()))
+    };
+    Ok(match tag {
+        0..=2 => Token::Scalar(vec![tag]),
+        3..=5 => scalar(at, 8)?,
+        11 => { let length = count(bytes, at)?; *at -= 4; scalar(at, 4 + length)? }
+        6 => Token::Text { text: text(at)?, symbol: false },
+        9 => Token::Text { text: names.symbols.get(usize::from(symbol(at)?)).ok_or_else(bad)?, symbol: true },
+        7 => {
+            let length = count(bytes, at)?;
+            Token::Array((0..length).map(|_| token(bytes, at, names, depth - 1)).collect::<io::Result<_>>()?)
+        }
+        8 => {
+            let length = count(bytes, at)?;
+            let (mut keys, mut values) = (Vec::new(), Vec::new());
+            for _ in 0..length {
+                let index = symbol(at)?;
+                keys.push(if index == u16::MAX { (text(at)?, false) } else { (*names.symbols.get(usize::from(index)).ok_or_else(bad)?, true) });
+                values.push(token(bytes, at, names, depth - 1)?);
+            }
+            Token::Object { record: false, keys, values }
+        }
+        10 => {
+            let fields = names.records.get(usize::from(symbol(at)?)).ok_or_else(bad)?;
+            let values = fields.iter().map(|_| token(bytes, at, names, depth - 1)).collect::<io::Result<_>>()?;
+            Token::Object { record: true, keys: fields.iter().map(|field| (*field, true)).collect(), values }
+        }
+        _ => return Err(bad()),
+    })
+}
+
+/// A wire body of the schema `names`, as tokens (its schema id checked).
+fn tokens<'a>(bytes: &'a [u8], names: &body::Names) -> io::Result<Token<'a>> {
+    if !bytes.starts_with(&names.schema) {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "another schema"));
+    }
+    let mut at = names.schema.len();
+    let value = token(bytes, &mut at, names, body::DEPTH)?;
+    if at != bytes.len() {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid wire body"));
+    }
+    Ok(value)
+}
+
+/// Whether a value was written plain (Some(true): a name written out that the old schema has as a symbol, or an object
+/// written with keys that are one of its records), by the schema (Some(false): a symbol or a record), or cannot tell.
+fn plain(token: &Token<'_>, old: &body::Names) -> Option<bool> {
+    let known = |name: &str| old.symbols.contains(&name);
+    match token {
+        Token::Text { symbol: true, .. } | Token::Object { record: true, .. } => Some(false),
+        Token::Text { text, symbol: false } => known(text).then_some(true),
+        Token::Object { keys, .. } if keys.iter().any(|(_, symbol)| *symbol) => Some(false),
+        Token::Object { keys, .. } => (keys.iter().any(|(key, _)| known(key))
+            || old.records.iter().any(|fields| fields.iter().copied().eq(keys.iter().map(|(key, _)| *key)))).then_some(true),
+        _ => None,
+    }
+}
+
+/// `token` written in this helper's schema: as its old encoder wrote it, plain inside a plain value (one a parent or the
+/// value itself shows plain), else with this schema's symbols and records; a value that cannot tell is its parent's kind.
+fn written(token: &Token<'_>, parent: bool, old: &body::Names, out: &mut Vec<u8>) {
+    let plain = parent || plain(token, old) == Some(true);
+    let name = |out: &mut Vec<u8>, name: &str| match body::symbol(name) {
+        Some(index) if !plain => out.extend_from_slice(&index.to_le_bytes()),
+        _ => {
+            out.extend_from_slice(&u16::MAX.to_le_bytes());
+            out.extend_from_slice(&(name.len() as u32).to_le_bytes());
+            out.extend_from_slice(name.as_bytes());
+        }
+    };
+    match token {
+        Token::Scalar(bytes) => out.extend_from_slice(bytes),
+        Token::Text { text, .. } => match body::symbol(text) {
+            Some(index) if !plain => {
+                out.push(9);
+                out.extend_from_slice(&index.to_le_bytes());
+            }
+            _ => {
+                out.push(6);
+                out.extend_from_slice(&(text.len() as u32).to_le_bytes());
+                out.extend_from_slice(text.as_bytes());
+            }
+        },
+        Token::Array(items) => {
+            out.push(7);
+            out.extend_from_slice(&(items.len() as u32).to_le_bytes());
+            for item in items {
+                written(item, plain, old, out);
+            }
+        }
+        Token::Object { keys, values, .. } => {
+            let record = body::RECORDS.iter().position(|fields| fields.iter().copied().eq(keys.iter().map(|(key, _)| *key))).filter(|_| !plain);
+            match record {
+                Some(index) => {
+                    out.push(10);
+                    out.extend_from_slice(&(index as u16).to_le_bytes());
+                }
+                None => {
+                    out.push(8);
+                    out.extend_from_slice(&(keys.len() as u32).to_le_bytes());
+                }
+            }
+            for ((key, _), value) in keys.iter().zip(values) {
+                if record.is_none() {
+                    name(out, key);
+                }
+                written(value, plain, old, out);
+            }
+        }
+    }
+}
+
+/// `token` with each `version` field naming the wire version `old` (hello's: the version a helper speaks) naming this one.
+fn versioned(token: &mut Token<'_>, old: u64, tally: &mut Converted) {
+    match token {
+        Token::Object { keys, values, .. } => {
+            for ((key, _), value) in keys.iter().zip(values.iter_mut()) {
+                match value {
+                    Token::Scalar(bytes) if *key == "version" && bytes[..] == [&[3u8][..], &old.to_le_bytes()].concat()[..] => {
+                        *bytes = [&[3u8][..], &wire::VERSION.to_le_bytes()].concat();
+                        tally.versions += 1;
+                    }
+                    value => versioned(value, old, tally),
+                }
+            }
+        }
+        Token::Array(items) => items.iter_mut().for_each(|item| versioned(item, old, tally)),
+        _ => {}
+    }
+}
+
+/// The operations 9bfa9611 added after `files.read` (dispatch/table.rs order), for `--edit hello-files-ops`.
+const FILES_OPS: [&str; 9] = ["files.list", "files.summary", "files.write", "files.pack", "files.pack.drop", "files.unpack.open",
+    "files.unpack.write", "files.unpack.close", "files.git"];
+
+/// `token` with a reviewed behavior change made as the new helper makes it (`capture convert --edit NAME`):
+/// `hello-files-ops`, a hello result's `ops` list the files operations after `files.read`.
+fn edited(token: &mut Token<'_>, edits: &[String], tally: &mut Converted) {
+    if !edits.iter().any(|edit| edit == "hello-files-ops") {
+        return;
+    }
+    let Token::Object { keys, values, .. } = token else { return };
+    let hello = keys.iter().any(|(key, _)| *key == "version");
+    for ((key, _), value) in keys.iter().zip(values.iter_mut()) {
+        match value {
+            Token::Array(ops) if hello && *key == "ops" => {
+                let read = ops.iter().position(|op| matches!(op, Token::Text { text: "files.read", .. }));
+                if let Some(read) = read.filter(|_| !ops.iter().any(|op| matches!(op, Token::Text { text: "files.list", .. }))) {
+                    tally.edited += 1;
+                    for (offset, op) in FILES_OPS.iter().enumerate() {
+                        ops.insert(read + 1 + offset, Token::Text { text: op, symbol: true });
+                    }
+                }
+            }
+            value => edited(value, edits, tally),
+        }
+    }
+}
+
+/// `records` with a reviewed recording change made as the new helper records it (`capture convert --edit NAME`):
+/// `write-parent`, a write job's `parent_device` and `parent_inode` (b8e1cd26) in its submit and its file.done, null
+/// for the internal writes every earlier recording made (only files.write names a parent).
+fn amended(records: &mut [trace::Record], edits: &[String], tally: &mut Converted) -> io::Result<()> {
+    if !edits.iter().any(|edit| edit == "write-parent") {
+        return Ok(());
+    }
+    let parented = |job: &mut Data<'_>| {
+        let Data::Object(fields) = job else { return false };
+        let write = fields.iter().any(|(key, value)| *key == "job" && value.string() == Some("write"));
+        if !write || fields.iter().any(|(key, _)| *key == "parent_device") {
+            return false;
+        }
+        fields.extend([("parent_device", Data::Null), ("parent_inode", Data::Null)]);
+        true
+    };
+    for record in records.iter_mut() {
+        let Ok(mut args) = body::decode_plain(&record.args) else { continue };
+        let changed = match (record.op.as_str(), &mut args) {
+            ("submit", job) => parented(job),
+            ("file.done", Data::Array(done)) => done.get_mut(1).is_some_and(parented),
+            _ => false,
+        };
+        if changed {
+            let args = body::encode_plain(&args).map_err(|error| io::Error::other(error.message))?;
+            record.args = args;
+            tally.edited += 1;
+        }
+    }
+    Ok(())
+}
+
+/// A wire body of the schema `names` written in this helper's, with its version fields and `accepted` edits made.
+fn rewritten(bytes: &[u8], names: &body::Names, accepted: &[String], tally: &mut Converted) -> io::Result<Vec<u8>> {
+    let mut value = tokens(bytes, names)?;
+    versioned(&mut value, u64::from_le_bytes(names.schema), tally);
+    edited(&mut value, accepted, tally);
+    let mut out = body::SCHEMA.to_vec();
+    written(&value, false, names, &mut out);
+    Ok(out)
+}
+
+/// The changes that write a stream's frames of schema `names` in this helper's (`rewritten`); a streamed value's chunks
+/// joined, rewritten and cut again (CHUNK each), its end frame counting them.
+fn reencoded(joined: &[u8], names: &body::Names, accepted: &[String], tally: &mut Converted) -> io::Result<Vec<(Range<usize>, Vec<u8>)>> {
+    let invalid = |error: wire::Error| io::Error::other(format!("{error:?}"));
+    let (mut at, mut edits, mut chunks) = (0, Vec::new(), HashMap::<u64, Vec<Range<usize>>>::new());
+    for _ in 0.. {
+        let Some(header) = joined.get(at..at + 13) else { break };
+        let header = wire::Header::decode(header.try_into().unwrap(), wire::LIMIT).map_err(invalid)?;
+        let end = at + 13 + header.len as usize;
+        let Some(frame) = joined.get(at + 13..end) else { break };
+        match header.kind {
+            wire::Kind::Chunk => chunks.entry(header.id).or_default().push(at..end),
+            wire::Kind::Cancel => {}
+            _ if !frame.starts_with(&names.schema) => {}
+            _ => {
+                let streamed = body::decode_as(frame, names).ok()
+                    .and_then(|value| value.get("stream").and_then(|stream| stream.get("encoding")).and_then(Data::string).map(str::to_owned));
+                let pending = chunks.remove(&header.id);
+                match (streamed.as_deref(), pending) {
+                    (Some("value"), Some(ranges)) => {
+                        let inner: Vec<u8> = ranges.iter().flat_map(|range| joined[range.start + 21..range.end].iter().copied()).collect();
+                        let Ok(inner) = rewritten(&inner, names, accepted, tally) else {
+                            tally.undecoded += 1;
+                            at = end;
+                            continue;
+                        };
+                        let pieces: Vec<&[u8]> = inner.chunks(wire::CHUNK).collect();
+                        if pieces.len() != ranges.len() {
+                            tally.rechunk += 1;
+                            at = end;
+                            continue;
+                        }
+                        for (sequence, (range, piece)) in ranges.iter().zip(&pieces).enumerate() {
+                            let body = [&(sequence as u64).to_le_bytes()[..], piece].concat();
+                            edits.push((range.clone(), wire::packet(wire::Kind::Chunk, header.id, &body).map_err(invalid)?));
+                        }
+                        // The end frame counts the chunks and their bytes (both unchanged in number of chunks).
+                        let mut value = tokens(frame, names)?;
+                        if let Token::Object { keys, values, .. } = &mut value {
+                            for ((key, _), value) in keys.iter().zip(values.iter_mut()) {
+                                if *key == "stream" && let Token::Object { keys, values, .. } = value {
+                                    for ((key, _), value) in keys.iter().zip(values.iter_mut()) {
+                                        if *key == "bytes" {
+                                            *value = Token::Scalar([&[3u8][..], &(inner.len() as u64).to_le_bytes()].concat());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        let mut out = body::SCHEMA.to_vec();
+                        written(&value, false, names, &mut out);
+                        edits.push((at..end, wire::packet(header.kind, header.id, &out).map_err(invalid)?));
+                        tally.streamed += 1;
+                    }
+                    _ => match rewritten(frame, names, accepted, tally) {
+                        Ok(out) => edits.push((at..end, wire::packet(header.kind, header.id, &out).map_err(invalid)?)),
+                        Err(_) => {
+                            tally.undecoded += 1;
+                            at = end;
+                            continue;
+                        }
+                    },
+                }
+                tally.frames += 1;
+            }
+        }
+        at = end;
+    }
+    edits.sort_by_key(|(range, _)| range.start);
+    Ok(edits)
+}
+
+/// `file` written to `target` in this helper's wire schema (`capture convert`): its frames of the schema it was recorded
+/// with (a dictionary in `names`) encoded again, its header naming this wire version.
+fn convert(file: &Path, target: &Path, names: &HashMap<u64, body::Names>, edits: &[String]) -> io::Result<Converted> {
+    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(target.parent().unwrap())?;
+    let (mut header, mut records) = trace::read(File::open(file)?, usize::MAX)?;
+    let mut tally = Converted::default();
+    if header.wire != wire::VERSION {
+        let old = names.get(&header.wire).ok_or_else(|| io::Error::other(format!("{}: no dictionary for wire {}", file.display(), schema(header.wire))))?;
+        restream(&mut records, &[0, 1], &mut |joined| reencoded(joined, old, edits, &mut tally))?;
+        tally.left = records.iter().filter(|record| [&record.args, &record.output].iter().any(|bytes| bytes.windows(8).any(|window| window == old.schema))).count();
+        header.wire = wire::VERSION;
+    }
+    amended(&mut records, edits, &mut tally)?;
+    let mut writer = trace::Writer::corpus(File::options().write(true).create_new(true).mode(0o600).open(target)?, &header)?;
+    for record in &records {
+        writer.push(record)?;
+    }
+    writer.finish()?;
+    Ok(tally)
+}
+
+/// `file` written to `target` with its statistics process lists' names masked (`removal`) when it names
+/// `stats.processes` (a job's name in text, a request's method as our schema's symbol); linked as it is otherwise. True
+/// when it was rewritten.
+fn rows_of(file: &Path, target: &Path) -> io::Result<bool> {
+    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(target.parent().unwrap())?;
+    let symbol = body::encode(&Data::String("stats.processes")).map_err(|error| io::Error::other(error.message))?.split_off(body::SCHEMA.len());
+    let listed = |record: &trace::Record| [&record.args, &record.output].iter()
+        .any(|bytes| [&b"stats.processes"[..], &symbol].iter().any(|name| bytes.windows(name.len()).any(|window| window == *name)));
+    let (mut reader, _) = trace::Reader::new(File::open(file)?, usize::MAX)?;
+    let mut named = false;
+    for _ in 0.. {
+        let Some(record) = reader.next()? else { break };
+        if listed(&record) {
+            named = true;
+            break;
+        }
+    }
+    if !named {
+        std::fs::hard_link(file, target)?;
+        return Ok(false);
+    }
+    let (header, records) = trace::read(File::open(file)?, usize::MAX)?;
+    let mut writer = trace::Writer::corpus(File::options().write(true).create_new(true).mode(0o600).open(target)?, &header)?;
+    for record in removal(records)? {
+        writer.push(&record)?;
+    }
+    writer.finish()?;
+    Ok(true)
+}
+
+/// Where stream offset `at` is once `edits` (old range, new bytes; in order) are made: as far into a changed frame as it
+/// was, but leaving one of the frame's new bytes to each record that ends after it there (`ends`: where the stream's
+/// records end), so every record keeps a byte.
+fn moved(edits: &[(Range<usize>, Vec<u8>)], ends: &[usize], at: usize) -> usize {
+    let mut shift = 0isize;
+    for (range, bytes) in edits {
+        if at <= range.start {
+            break;
+        }
+        if at < range.end {
+            let after = ends.iter().filter(|end| at < **end && **end < range.end).count();
+            return (range.start as isize + shift) as usize + (at - range.start).min(bytes.len() - 1 - after);
+        }
+        shift += bytes.len() as isize - range.len() as isize;
+    }
+    (at as isize + shift) as usize
 }
 
 /// What a scan matched: a needle (its place among the needles), or a UUID or IPv4 address.
@@ -467,7 +1156,11 @@ fn ipv4(bytes: &[u8], at: usize) -> Option<usize> {
 
 /// The length of a `kind` (UUID or IPv4 address) at `at`.
 fn pattern(bytes: &[u8], at: usize, kind: Hit) -> Option<usize> {
-    if kind == Hit::Uuid { uuid(bytes, at) } else { ipv4(bytes, at) }
+    match kind {
+        Hit::Uuid => uuid(bytes, at),
+        Hit::Ipv4 => ipv4(bytes, at),
+        _ => None,
+    }
 }
 
 /// Every match in `bytes` from left to right: at a position the longest needle, else one of `patterns`. `hit` sees each
@@ -503,27 +1196,70 @@ struct Match {
     how: &'static str,
 }
 
-/// What one capture's views match: the needles and patterns, and the first byte of every match found so far (a screen
-/// shows again what a byte view found: it is not a second match).
+impl Match {
+    /// Its first and last byte in recorded order (a screen can draw a needle's end before its start).
+    fn ends(&self) -> (Spot, Spot) {
+        (self.first.min(self.last), self.first.max(self.last))
+    }
+}
+
+/// What one capture's views match: the needles and patterns; the first byte of every match found so far (a screen
+/// shows again what a byte view found: it is not a second match); the terminal sizes named so far.
 struct Find<'a> {
     matcher: &'a Matcher,
     patterns: &'a [Hit],
     seen: HashSet<Spot>,
+    sizes: Sizes,
 }
 
-/// A stream's views (docs/capture_scrub.md): needles on its unwrapped text, patterns (UUIDs, IPv4 addresses) on its
+impl<'a> Find<'a> {
+    fn new(matcher: &'a Matcher, patterns: &'a [Hit]) -> Self {
+        Self { matcher, patterns, seen: HashSet::new(), sizes: Sizes::default() }
+    }
+}
+
+/// A stream's views (docs/replay.md, Scrub captures): needles on its unwrapped text, patterns (UUIDs, IPv4 addresses) on its
 /// bytes as recorded, and needles on the screen it draws. Joined, each keeps what a match can start in (a needle's or a
 /// UUID's bytes less one) and the screen; else every piece is matched alone.
 struct Views {
     needles: View<Spot>,
     patterns: View<Spot>,
     screen: Option<Screen<Spot>>,
+    size: Option<((usize, usize), u64)>,
+    /// Pieces with escape sequences its screen drew while of no size: where (grep's place), how many, first record.
+    sizeless: Option<(String, usize, usize)>,
 }
 
 impl Views {
     fn new(matcher: &Matcher, joined: bool) -> Self {
         let keep = |length: usize| if joined { length.saturating_sub(1) } else { 0 };
-        Self { needles: View::new(true, keep(matcher.longest)), patterns: View::new(false, keep(36)), screen: joined.then(Screen::new) }
+        Self { needles: View::new(true, keep(matcher.longest)), patterns: View::new(false, keep(36)), screen: None, size: None, sizeless: None }
+    }
+
+    /// Whether its stream draws on a terminal, the terminal's size once a record names it, and which terminal (another
+    /// starts a new screen). Only a terminal has a screen; one of no size yet draws on a screen of no size.
+    fn draws(&mut self, terminal: bool, size: Option<((usize, usize), u64)>) {
+        match (terminal, size) {
+            (false, _) => (self.screen, self.size) = (None, None),
+            (true, None) => {
+                self.screen.get_or_insert_with(Screen::new);
+            }
+            (true, Some(((rows, columns), id))) if self.size != size => {
+                match &mut self.screen {
+                    Some(screen) if self.size.is_none_or(|(_, other)| other == id) => screen.resize(rows, columns),
+                    _ => self.screen = Some(Screen::sized(rows, columns)),
+                }
+                self.size = size;
+            }
+            _ => {}
+        }
+    }
+
+    /// Counts a piece (`bytes`, of `record`) its screen draws without a size, `place` naming the stream.
+    fn note(&mut self, place: &str, bytes: &[u8], record: usize) {
+        if self.screen.as_ref().is_some_and(|screen| screen.size().is_none()) && bytes.contains(&0x1b) {
+            self.sizeless.get_or_insert_with(|| (place.to_string(), 0, record)).1 += 1;
+        }
     }
 
     /// The next piece (its bytes recorded at `at`): its matches (`cross`: only those also holding an earlier piece's
@@ -552,8 +1288,8 @@ impl Views {
         find.seen.extend(matches.iter().map(|found| found.first));
         if let Some(screen) = &mut self.screen {
             let mut write = |spot: &Spot, byte: u8| changes.push((*spot, byte));
-            for (hit, first, last) in drawn(screen, bytes, at, matcher, &mut find.seen, &|spot| *spot, hit, &mut write) {
-                matches.push(Match { hit, first, last, how: "screen" });
+            for (hit, first, last, shared) in drawn(screen, bytes, at, matcher, &mut find.seen, &|spot| *spot, hit, &mut write) {
+                matches.push(Match { hit, first, last, how: if shared { "screen, shared" } else { "screen" } });
             }
         }
         (changes, matches)
@@ -561,45 +1297,71 @@ impl Views {
 }
 
 /// The needles `screen` shows after the piece `bytes` (written at `at`) that no view found yet (`seen`, by a cell's
-/// writer `key`): each replaced by `hit` on the row, every cell's new byte given to `write` with the cell's writer.
-/// Returns each: what it matched, its first and last cell's writer.
+/// writer `key`): each replaced by `hit` on the line, every cell's new byte given to `write` with the cell's writer.
+/// Returns each: what it matched, its first and last cell's writer, and whether a cell of it shows a byte of other
+/// text (written beside bytes that are not the needle's: the program skipped a cell that text left showing).
 #[allow(clippy::too_many_arguments)]
 fn drawn<P: Clone>(screen: &mut Screen<P>, bytes: &[u8], at: &dyn Fn(usize) -> P, matcher: &Matcher, seen: &mut HashSet<Spot>,
                    key: &dyn Fn(&P) -> Spot, hit: &mut dyn FnMut(Hit, &mut [u8], Range<usize>),
-                   write: &mut dyn FnMut(&P, u8)) -> Vec<(Hit, P, P)> {
+                   write: &mut dyn FnMut(&P, u8)) -> Vec<(Hit, P, P, bool)> {
     let mut out = Vec::new();
-    for line in screen.feed(bytes, at) {
+    let mut sets = Vec::new();
+    let mut each = |line: Line<P>, sets: &mut Vec<(usize, usize, u8)>| {
         let (mut text, mut found) = (line.text.clone(), Vec::new());
         scan(&mut text, matcher, &[], &mut |kind, text, range| {
             let mut writers = line.cells[range.clone()].iter().flatten();
             let (Some(first), Some(last)) = (writers.next().cloned(), line.cells[range.clone()].iter().flatten().last().cloned()) else { return };
             if seen.insert(key(&first)) {
-                found.push((kind, range.clone(), first, last));
+                let needle = &line.text[range.clone()];
+                let shared = line.links[range.clone()].iter().enumerate().any(|(index, (before, after))| {
+                    index > 0 && before.is_some_and(|byte| byte != needle[index - 1])
+                        || index + 1 < needle.len() && after.is_some_and(|byte| byte != needle[index + 1])
+                });
+                found.push((kind, range.clone(), first, last, shared));
                 hit(kind, text, range);
             }
         });
-        for (kind, range, first, last) in found {
+        for (kind, range, first, last, shared) in found {
             for column in range.filter(|&column| text[column] != line.text[column]) {
                 if let Some(writer) = &line.cells[column] {
                     write(writer, text[column]);
                 }
                 if let Some(row) = line.row {
-                    screen.set(row, column, text[column]);
+                    sets.push((row, column, text[column]));
                 }
             }
-            out.push((kind, first, last));
+            out.push((kind, first, last, shared));
         }
+    };
+    let lines = screen.feed(bytes, at, &mut |line| each(line, &mut sets));
+    for line in lines {
+        each(line, &mut sets);
+    }
+    for (row, column, byte) in sets {
+        screen.set(row, column, byte);
     }
     out
 }
 
-/// One unit of a protocol line's encoded field (base64: 3 bytes as 4 characters; hex pairs: 1 as 2): where each of
-/// its characters was recorded, the characters as they are now, its bytes.
+/// The screen of a decoded field that draws a terminal (`key`: its stream and path), at the size the field names (a
+/// herdr frame's); a field naming no size (input sent to a terminal, a websocket's payload) draws on none.
+fn sized<'s>(screens: &'s mut HashMap<String, Screen<Coded>>, key: String, field: &Field) -> Option<&'s mut Screen<Coded>> {
+    let (rows, columns) = field.size?;
+    let screen = screens.entry(key).or_insert_with(|| Screen::sized(rows, columns));
+    if screen.size() != Some((rows, columns)) {
+        screen.resize(rows, columns);
+    }
+    Some(screen)
+}
+
+/// One unit of a protocol message's encoded field (`Coding`; `index`: its place in the field): where each of its
+/// characters was recorded, the characters as they are now, its bytes.
 struct Unit {
     spots: Vec<Spot>,
     chars: Vec<u8>,
     bytes: Vec<u8>,
-    base64: bool,
+    coding: Coding,
+    index: usize,
 }
 
 /// A decoded byte drawn on a screen: its unit and its place in it.
@@ -620,7 +1382,7 @@ impl Coded {
     fn write(&self, byte: u8, out: &mut Vec<(Spot, u8)>) {
         let mut unit = self.unit.borrow_mut();
         unit.bytes[self.index] = byte;
-        let chars = encode(unit.base64, &unit.bytes, &unit.chars);
+        let chars = encode(unit.coding, unit.index, &unit.bytes, &unit.chars);
         out.extend(unit.spots.iter().zip(&chars).zip(&unit.chars).filter(|((_, new), old)| new != old).map(|((spot, new), _)| (*spot, *new)));
         unit.chars = chars;
     }
@@ -663,12 +1425,25 @@ impl Side {
         self.reads.push((self.wire.fed, spot));
         let (mut changes, matches) = self.views.feed(bytes, &|at| (spot.0, spot.1, spot.2 + at), find, false, hit);
         let mut matches: Vec<_> = matches.into_iter().map(|found| (None, found)).collect();
-        let frames = self.wire.feed(bytes, &mut |header, content| (if placed { paths(header, content) } else { Vec::new() }, texts(header, content)));
+        let frames = self.wire.feed(bytes, &mut |header, content| {
+            let mut sizes = Vec::new();
+            if let Content::Message { value, .. } = &content {
+                named(value, &mut sizes);
+            }
+            (if placed { paths(header, content) } else { Vec::new() }, texts(header, content), sizes)
+        });
+        // A stream of our frames is no terminal: its terminals' texts are drawn on their own screens.
+        if self.wire.wire {
+            self.views.draws(false, None);
+        }
         let (mut places, mut values) = (Vec::new(), Vec::new());
-        for (frame, texts) in frames.map_or_else(Vec::new, |(frames, _)| frames) {
+        for (frame, texts, sizes) in frames.map_or_else(Vec::new, |(frames, _)| frames) {
             places.extend(frame);
-            for (path, mut piece, ranges) in texts {
+            find.sizes.terminals.extend(sizes);
+            for (path, mut piece, ranges, terminal) in texts {
                 let views = leaves.entry(format!("{name} {path}")).or_insert_with(|| Views::new(find.matcher, true));
+                views.draws(terminal.is_some(), terminal.and_then(|id| find.sizes.terminal(id)));
+                views.note(&path, &piece, spot.0);
                 let (mine, found) = views.feed(&mut piece, &|index| self.place(position(&ranges, index)), find, true, hit);
                 changes.extend(mine);
                 matches.extend(found.into_iter().map(|found| (Some(path.clone()), found)));
@@ -737,8 +1512,8 @@ fn shape(field: &str) -> String {
     }).collect()
 }
 
-/// Runs `work` on every file, `jobs` at once; the results in the files' order.
-fn parallel<T: Send>(files: &[PathBuf], jobs: usize, work: impl Fn(&Path) -> T + Sync) -> Vec<T> {
+/// Runs `work` on every item (a file, a pair of them), `jobs` at once; the results in the items' order.
+fn parallel<I: Sync, T: Send>(files: &[I], jobs: usize, work: impl Fn(&I) -> T + Sync) -> Vec<T> {
     let next = std::sync::atomic::AtomicUsize::new(0);
     let mut out: Vec<(usize, T)> = std::thread::scope(|scope| {
         let workers: Vec<_> = (0..jobs.clamp(1, files.len().max(1))).map(|_| scope.spawn(|| {
@@ -762,26 +1537,83 @@ fn around(file: &Path, record: usize, bytes: &[u8], range: Range<usize>) -> Stri
     format!("{}:{record} {text:?}", file.display())
 }
 
-/// One side of a connection as lines of the protocols the helper speaks there in text, gathered across reads: herdr's
+/// One side of a connection as messages of the protocols the helper speaks there, gathered across reads: herdr's
 /// messages (one JSON object per line, multiplexers/herdr transport.rs) and tmux control-mode commands (a batch per line,
-/// multiplexers/tmux client.rs). `reads`: where each read began (stream offset; record, part, offset in it), back to the
-/// open line.
+/// multiplexers/tmux client.rs) on a multiplexer's streams; a websocket client's frames (RFC 6455, codex channel.rs) on
+/// any. `reads`: where each read began (stream offset; record, part, offset in it), back to the open message.
 #[derive(Default)]
 struct Lines {
     line: Body,
     skip: bool,
     fed: u64,
     reads: Vec<(u64, usize, usize, usize)>,
+    carries: Carries,
+    /// A message was read: the stream is a protocol's, no terminal's.
+    decoded: bool,
+}
+
+/// What a stream carries, told by its first bytes: an HTTP request (upgrading to a websocket, then frames), else lines
+/// (a multiplexer's) or nothing of ours.
+#[derive(Default, Clone, Copy, PartialEq)]
+enum Carries {
+    #[default]
+    Unknown,
+    Request,
+    Frames,
+    Lines,
+    Nothing,
 }
 
 impl Lines {
-    /// The lines one read (of `record`'s `part`, from `start`) completes. Any other line (not a JSON object, not a tmux
-    /// `send-keys`, past herdr's 16 MiB) is dropped as it comes.
-    fn feed(&mut self, bytes: &[u8], record: usize, part: usize, start: usize) -> Vec<Body> {
+    /// Whether the stream carries none of the protocols read here (a multiplexer's lines, a websocket): plain bytes.
+    fn plain(&self) -> bool {
+        !self.decoded && !matches!(self.carries, Carries::Request | Carries::Frames)
+    }
+
+    /// The messages one read (of `record`'s `part`, from `start`) completes; lines only on a multiplexer's stream
+    /// (`lines`). Any other line (not a JSON object, not a tmux `send-keys`, past herdr's 16 MiB) is dropped as it comes,
+    /// and so is a stream starting with an HTTP request that does not upgrade to a websocket.
+    fn feed(&mut self, bytes: &[u8], lines: bool, record: usize, part: usize, start: usize) -> Vec<Body> {
         let open = self.line.at.first().map_or(self.fed, |(_, at)| *at);
         self.reads.drain(..self.reads.partition_point(|read| read.0 <= open).saturating_sub(1));
         self.reads.push((self.fed, record, part, start));
-        let mut out = Vec::new();
+        let (mut out, mut at, mut bytes) = (Vec::new(), self.fed, bytes);
+        if self.carries == Carries::Unknown && !bytes.is_empty() {
+            let request = b"GET ".iter().zip(bytes).all(|(a, b)| a == b);
+            self.carries = if request { Carries::Request } else if lines { Carries::Lines } else { Carries::Nothing };
+        }
+        if self.carries == Carries::Request {
+            // It ends at its blank line; a header `Upgrade: websocket` makes the rest frames (RFC 6455 4.1).
+            let tail = &self.line.bytes[self.line.bytes.len().saturating_sub(3)..];
+            let end = [tail, bytes].concat().windows(4).position(|window| window == b"\r\n\r\n").map(|end| end + 4 - tail.len());
+            self.line.push(&bytes[..end.unwrap_or(bytes.len())], at);
+            if let Some(end) = end {
+                let upgrade = self.line.bytes.to_ascii_lowercase().windows(20).any(|header| header == b"\nupgrade: websocket\r");
+                self.carries = if upgrade { Carries::Frames } else { Carries::Nothing };
+                (self.line, at, bytes) = (Body::default(), at + end as u64, &bytes[end..]);
+            } else if self.line.bytes.len() > 16 << 20 {
+                (self.line, self.carries) = (Body::default(), Carries::Nothing);
+            }
+        }
+        if self.carries == Carries::Frames {
+            // Each frame whole, as its header tells its length (RFC 6455 5.2).
+            for _ in 0.. {
+                if bytes.is_empty() {
+                    break;
+                }
+                let take = (frame(&self.line.bytes) - self.line.bytes.len()).min(bytes.len());
+                self.line.push(&bytes[..take], at);
+                (at, bytes) = (at + take as u64, &bytes[take..]);
+                if frame(&self.line.bytes) == self.line.bytes.len() {
+                    out.push(std::mem::take(&mut self.line));
+                }
+            }
+        }
+        if self.carries != Carries::Lines {
+            self.fed = at + bytes.len() as u64;
+            self.decoded |= !out.is_empty();
+            return out;
+        }
         for piece in bytes.split_inclusive(|byte| *byte == b'\n') {
             let (at, end) = (self.fed, piece.ends_with(b"\n"));
             self.fed += piece.len() as u64;
@@ -798,6 +1630,7 @@ impl Lines {
                 self.skip = false;
             }
         }
+        self.decoded |= !out.is_empty();
         out
     }
 
@@ -812,24 +1645,49 @@ impl Lines {
     fn close(&mut self, name: &str, record: &trace::Record) {
         let fd = matches!(record.op.as_str(), "close" | "hangup").then(|| body::decode_plain(&record.args).ok()?.signed()).flatten();
         if fd.is_some_and(|fd| name.starts_with(&format!("fd {fd} "))) {
-            (self.line, self.skip) = (Body::default(), false);
+            (self.line, self.skip, self.carries) = (Body::default(), false, Carries::Unknown);
         }
     }
 }
 
-/// A value a protocol line carries as text: its place, its bytes (or why they are not decoded), and where each unit of
-/// it is in the line: base64 (3 bytes in 4 characters) or hex pairs (a byte in 2).
+/// How many bytes the websocket frame at the start of `bytes` takes, as far as they tell (RFC 6455 5.2): its first two,
+/// then its length's (126: 2 more, 127: 8 more), then the whole header (a mask key when masked) and payload.
+fn frame(bytes: &[u8]) -> usize {
+    let Some(&second) = bytes.get(1) else { return 2 };
+    let extra = match second & 127 { 126 => 2, 127 => 8, _ => 0 };
+    let Some(length) = bytes.get(2..2 + extra) else { return 2 + extra };
+    let length = length.iter().fold(usize::from(second & 127) * usize::from(extra == 0), |sum, byte| sum << 8 | usize::from(*byte));
+    (2 + extra + 4 * usize::from(second >> 7)).saturating_add(length)
+}
+
+/// How a protocol message writes a value's bytes: base64 (3 bytes in 4 characters), hex pairs (a byte in 2, a space
+/// apart) or a websocket client's mask (a byte in 1, XOR the key's byte at its index modulo 4).
+#[derive(Clone, Copy)]
+enum Coding {
+    Base64,
+    Hex,
+    Mask([u8; 4]),
+}
+
+/// A value a protocol message carries encoded: its place, its bytes (or why they are not decoded), and where each unit of
+/// it is in the message.
 struct Field {
     path: String,
-    base64: bool,
+    coding: Coding,
     at: Vec<usize>,
     bytes: Result<Vec<u8>, String>,
+    /// The terminal size its bytes draw at (rows, columns): a herdr frame's height and width.
+    size: Option<(usize, usize)>,
 }
 
 impl Field {
     /// Bytes per unit, characters per unit.
     fn unit(&self) -> (usize, usize) {
-        if self.base64 { (3, 4) } else { (1, 2) }
+        match self.coding {
+            Coding::Base64 => (3, 4),
+            Coding::Hex => (1, 2),
+            Coding::Mask(_) => (1, 1),
+        }
     }
 
     /// Its ranges in the line: runs of units, a space apart in hex pairs (the whole line when it is not decoded).
@@ -838,7 +1696,7 @@ impl Field {
         let mut out: Vec<Range<usize>> = Vec::new();
         for &at in &self.at {
             match out.last_mut() {
-                Some(run) if at == run.end + usize::from(!self.base64) => run.end = at + chars,
+                Some(run) if at == run.end + usize::from(matches!(self.coding, Coding::Hex)) => run.end = at + chars,
                 _ => out.push(at..at + chars),
             }
         }
@@ -854,26 +1712,37 @@ impl Field {
             let spots = (at..at + chars).map(|offset| place(line.stream(offset..offset + 1)[0].start)).collect();
             let old = &line.bytes[at..at + chars];
             let decoded = self.bytes.as_ref().ok().map(|bytes| &bytes[unit * width..(unit * width + width).min(bytes.len())]);
-            let chars = if decoded == Some(now) { old.to_vec() } else { encode(self.base64, now, old) };
-            Rc::new(RefCell::new(Unit { spots, chars, bytes: now.to_vec(), base64: self.base64 }))
+            let chars = if decoded == Some(now) { old.to_vec() } else { encode(self.coding, unit, now, old) };
+            Rc::new(RefCell::new(Unit { spots, chars, bytes: now.to_vec(), coding: self.coding, index: unit }))
         }).collect()
     }
 }
 
-/// One unit of `bytes` as text again (base64, or a hex pair in the case `old` was written in).
-fn encode(base64: bool, bytes: &[u8], old: &[u8]) -> Vec<u8> {
-    if base64 {
-        return dispatch_helper_herdr::native::encode(bytes).into_bytes();
-    }
-    let text = format!("{:02x}", bytes[0]);
+/// Unit `index` of a value, `bytes`, encoded again: base64, a hex pair in the case `old` was written in, or masked.
+fn encode(coding: Coding, index: usize, bytes: &[u8], old: &[u8]) -> Vec<u8> {
+    let text = match coding {
+        Coding::Base64 => return dispatch_helper_herdr::native::encode(bytes).into_bytes(),
+        Coding::Mask(key) => return vec![bytes[0] ^ key[index % 4]],
+        Coding::Hex => format!("{:02x}", bytes[0]),
+    };
     if old.iter().any(u8::is_ascii_uppercase) { text.to_uppercase().into_bytes() } else { text.into_bytes() }
 }
 
-/// The values a protocol line carries as text. Herdr (multiplexers/herdr): base64 in `bytes` of the `terminal.frame` it
-/// sends (native.rs) and of the `terminal.input` it is sent (controller.rs). Tmux (multiplexers/tmux commands.rs
-/// `input`): `send-keys -H -t %N` and a byte per space and two hex digits, 256 bytes a command, a batch joined by " ; "
+/// The values a protocol message carries encoded. A websocket client's frame (`socket`): its payload, masked (RFC 6455
+/// 5.3; a server's frames are not). Herdr (multiplexers/herdr): base64 in `bytes` of the `terminal.frame` it sends
+/// (native.rs) and of the `terminal.input` it is sent (controller.rs). Tmux (multiplexers/tmux commands.rs `input`):
+/// `send-keys -H -t %N` and a byte per space and two hex digits, 256 bytes a command, a batch joined by " ; "
 /// (client.rs); one value per pane and line.
-fn fields(line: &[u8]) -> Vec<Field> {
+fn fields(line: &[u8], socket: bool) -> Vec<Field> {
+    if socket {
+        let start = 6 + match line[1] & 127 { 126 => 2, 127 => 8, _ => 0 };
+        if line[1] >> 7 == 0 || line.len() == start {
+            return Vec::new();
+        }
+        let key: [u8; 4] = line[start - 4..start].try_into().unwrap();
+        let bytes = line[start..].iter().enumerate().map(|(index, byte)| byte ^ key[index % 4]).collect();
+        return vec![Field { path: "websocket (masked)".into(), coding: Coding::Mask(key), at: (start..line.len()).collect(), bytes: Ok(bytes), size: None }];
+    }
     if line.starts_with(b"{") {
         let Ok(json) = Json::parse(line) else { return Vec::new() };
         let (Some(kind), Some(text)) = (json.root().get("type").and_then(|v| v.string()), json.root().get("bytes").and_then(|v| v.string())) else {
@@ -883,13 +1752,15 @@ fn fields(line: &[u8]) -> Vec<Field> {
             return Vec::new();
         }
         let path = format!("herdr {kind} bytes (base64)");
+        let number = |name| json.root().get(name).and_then(|value| value.unsigned()).filter(|number| *number > 0).map(|number| number as usize);
+        let size = number("height").zip(number("width"));
         // Base64 needs no JSON escape: the field is its own bytes between quotes, else it is not decoded (and says so).
         let at = line.windows(text.len()).position(|window| window == text.as_bytes())
             .filter(|at| *at > 0 && line[at - 1] == b'"' && line.get(at + text.len()) == Some(&b'"'));
         return vec![match at {
-            Some(at) => Field { path, base64: true, at: (at..at + text.len()).step_by(4).collect(),
-                bytes: dispatch_helper_herdr::native::decode(text).map_err(|error| error.message) },
-            None => Field { path, base64: true, at: Vec::new(), bytes: Err("escaped in its JSON".into()) },
+            Some(at) => Field { path, coding: Coding::Base64, at: (at..at + text.len()).step_by(4).collect(),
+                bytes: dispatch_helper_herdr::native::decode(text).map_err(|error| error.message), size },
+            None => Field { path, coding: Coding::Base64, at: Vec::new(), bytes: Err("escaped in its JSON".into()), size },
         }];
     }
     // Commands are separated by " ; " outside double quotes (a literal's `\"` stays inside).
@@ -913,7 +1784,7 @@ fn fields(line: &[u8]) -> Vec<Field> {
         let pane = &rest[..rest.iter().take_while(|byte| byte.is_ascii_digit()).count()];
         if !out.iter().any(|(other, _)| *other == pane) {
             let path = "tmux send-keys -H (hex pairs)".into();
-            out.push((pane, Field { path, base64: false, at: Vec::new(), bytes: Ok(Vec::new()) }));
+            out.push((pane, Field { path, coding: Coding::Hex, at: Vec::new(), bytes: Ok(Vec::new()), size: None }));
         }
         let field = &mut out.iter_mut().find(|(other, _)| *other == pane).unwrap().1;
         for at in (command.end - rest.len() + pane.len()..command.end).step_by(3) {
@@ -977,13 +1848,13 @@ fn within(source: &[u8], bytes: &[u8]) -> Option<Range<usize>> {
 
 /// The texts and bytes of a decoded value of ours that are bytes of `source`, by offset there, with their path; an
 /// object's `terminal` names the terminal its texts belong to (one view per terminal).
-fn leaves_of(value: &Data<'_>, source: &[u8], path: &str, out: &mut Vec<(Range<usize>, String)>) {
+fn leaves_of(value: &Data<'_>, source: &[u8], path: &str, inside: Option<u64>, out: &mut Vec<(Range<usize>, String, Option<u64>)>) {
     match value {
-        Data::String(text) => out.extend(within(source, text.as_bytes()).map(|range| (range, path.to_string()))),
-        Data::Bytes(bytes) => out.extend(within(source, bytes).map(|range| (range, path.to_string()))),
+        Data::String(text) => out.extend(within(source, text.as_bytes()).map(|range| (range, path.to_string(), inside))),
+        Data::Bytes(bytes) => out.extend(within(source, bytes).map(|range| (range, path.to_string(), inside))),
         Data::Array(items) => {
             for item in items {
-                leaves_of(item, source, &format!("{path}[]"), out);
+                leaves_of(item, source, &format!("{path}[]"), inside, out);
             }
         }
         Data::Object(fields) => {
@@ -993,25 +1864,28 @@ fn leaves_of(value: &Data<'_>, source: &[u8], path: &str, out: &mut Vec<(Range<u
             });
             for (key, item) in fields {
                 let path = terminal.map_or_else(|| format!("{path}.{key}"), |id| format!("{path}.{key} (terminal {id})"));
-                leaves_of(item, source, &path, out);
+                leaves_of(item, source, &path, terminal, out);
             }
         }
         _ => {}
     }
 }
 
+/// A text or bytes of a frame's message: its path, its bytes, where they were in the stream, the terminal it belongs to.
+type Leaf = (String, Vec<u8>, Vec<Range<u64>>, Option<u64>);
+
 /// The texts and bytes one whole frame's message holds (a stream's bytes beside it too), each named by the frame's kind
-/// and method and its path, with its bytes and where they were in the stream.
-fn texts(header: &wire::Header, content: Content<'_>) -> Vec<(String, Vec<u8>, Vec<Range<u64>>)> {
+/// and method and its path.
+fn texts(header: &wire::Header, content: Content<'_>) -> Vec<Leaf> {
     let Content::Message { value, body, bytes, .. } = content else { return Vec::new() };
     let mut name = format!("{:?}", header.kind).to_lowercase();
     if let Some(Data::String(method)) = field(value, "method") {
         write!(name, " {method}").unwrap();
     }
     let mut found = Vec::new();
-    leaves_of(value, &body.bytes, &name, &mut found);
-    let mut out: Vec<_> = found.into_iter().map(|(range, path)| (path, body.bytes[range.clone()].to_vec(), body.stream(range))).collect();
-    out.extend(bytes.map(|bytes| (format!("{name} stream"), bytes.bytes.clone(), bytes.stream(0..bytes.bytes.len()))));
+    leaves_of(value, &body.bytes, &name, None, &mut found);
+    let mut out: Vec<_> = found.into_iter().map(|(range, path, terminal)| (path, body.bytes[range.clone()].to_vec(), body.stream(range), terminal)).collect();
+    out.extend(bytes.map(|bytes| (format!("{name} stream"), bytes.bytes.clone(), bytes.stream(0..bytes.bytes.len()), None)));
     out
 }
 
@@ -1091,27 +1965,64 @@ fn seek(bytes: &[u8], file: &Path, record: &dyn Fn(usize) -> usize) -> Vec<(Rang
 /// record.
 fn needle(found: &Match, file: &Path, index: usize, part: usize, bytes: &[u8]) -> Option<Finding> {
     let Hit::Needle(needle) = found.hit else { return None };
-    let first = if (found.last.0, found.last.1) == (index, part) {
-        let start = if (found.first.0, found.first.1) == (index, part) { found.first.2 } else { 0 };
-        around(file, index, bytes, start..found.last.2 + 1)
+    let (first, last) = found.ends();
+    let first = if (last.0, last.1) == (index, part) {
+        let start = if (first.0, first.1) == (index, part) { first.2 } else { 0 };
+        around(file, index, bytes, start..last.2 + 1)
     } else {
-        format!("{}:{}", file.display(), found.last.0)
+        format!("{}:{}", file.display(), last.0)
     };
     Some(Finding::Needle { needle, how: found.how, first })
 }
 
 /// What grep found in one capture: per (needle, place) the matches and the first one; per (place, text that looks
-/// encoded) its kind, count and first record; per (place, line) of the values listed its count and first record; where
-/// the file is cut.
+/// encoded) its kind, count and first record; per (place, line) of the values listed its count and first record; per
+/// variable of the helper's environment its first record; per (needle, whole token holding it or its replacement) its
+/// count and first record; where the file is cut.
 #[derive(Default)]
 struct Found {
     places: BTreeMap<(usize, String), (usize, String)>,
     encoded: BTreeMap<(String, Vec<u8>), (&'static str, usize, String)>,
     values: BTreeMap<(String, String), (usize, String)>,
+    environment: BTreeMap<(String, String), String>,
+    tokens: BTreeMap<(usize, String), (usize, String)>,
+    /// Per stream (digits as #), pieces with escape sequences drawn on a screen of no size: count, first record.
+    sizeless: BTreeMap<String, (usize, String)>,
     cut: Option<String>,
 }
 
 impl Found {
+    /// The helper's environment at startup (its `startup context` record, core system.rs `context`): each variable's
+    /// name and value, escaped; a context or variable that does not decode is listed as such, never skipped.
+    fn environment(&mut self, output: &[u8], first: &str) {
+        let context = body::decode_plain(output).ok();
+        let Some(pairs) = context.as_ref().and_then(|context| field(context, "env")).and_then(Data::array) else {
+            self.environment.entry(("<startup context not decoded>".into(), String::new())).or_insert_with(|| first.into());
+            return;
+        };
+        for pair in pairs {
+            let variable = match pair.array().map(|pair| pair.map(Data::bytes).collect::<Vec<_>>()).as_deref() {
+                Some([Some(name), Some(value)]) => (String::from_utf8_lossy(name).into_owned(), format!("{:?}", String::from_utf8_lossy(value))),
+                _ => ("<variable not decoded>".into(), String::new()),
+            };
+            self.environment.entry(variable).or_insert_with(|| first.into());
+        }
+    }
+
+    /// Each whole token of `bytes` holding a needle or its replacement (`around`: the needles, then their replacements):
+    /// the match with the letters, digits, `-_.@+~%` and non-ASCII bytes beside it, as a path component, a name or a
+    /// host is read. What a mask left standing (`<mask>-collector`) shows there.
+    fn tokens(&mut self, around: &Matcher, needles: usize, bytes: &[u8], first: &dyn Fn() -> String) {
+        let part = |byte: &u8| byte.is_ascii_alphanumeric() || *byte >= 0x80 || b"-_.@+~%".contains(byte);
+        scan(&mut bytes.to_vec(), around, &[], &mut |hit, text, range| {
+            let Hit::Needle(index) = hit else { return };
+            let start = text[..range.start].iter().rposition(|byte| !part(byte)).map_or(0, |at| at + 1);
+            let end = text[range.end..].iter().position(|byte| !part(byte)).map_or(text.len(), |at| range.end + at);
+            let token = String::from_utf8_lossy(&text[start..end]).into_owned();
+            self.tokens.entry((index % needles, token)).or_insert_with(|| (0, first())).0 += 1;
+        });
+    }
+
     /// The lines of a value at `place`, when it holds one of `shapes` (`--values`; a key is a name, not a value): digit
     /// runs as `#`, so a process list's pids and counters do not make each line its own.
     fn list(&mut self, shapes: &[String], place: &str, bytes: &[u8], first: &dyn Fn() -> String) {
@@ -1149,7 +2060,7 @@ impl Found {
 /// frames, terminal wraps inside), and the values protocol lines carry as text decoded (`fields`); each finding placed
 /// as deep as the structure goes (the record's section, op and field, then inside our frames and plain values: kind,
 /// method, field; inside herdr's messages and tmux's commands: the field).
-fn search(file: &Path, matcher: &Matcher, shapes: &[String]) -> io::Result<Found> {
+fn search(file: &Path, matcher: &Matcher, around: &Matcher, shapes: &[String]) -> io::Result<Found> {
     let mut found = Found::default();
     // A cut file (its process ended mid-write) is searched up to the cut.
     let (mut reader, _) = match trace::Reader::new(File::open(file)?, usize::MAX) {
@@ -1164,7 +2075,7 @@ fn search(file: &Path, matcher: &Matcher, shapes: &[String]) -> io::Result<Found
     // later read).
     let (mut sides, mut leaves, mut held, mut later): (HashMap<String, (Side, Vec<u64>)>, HashMap<String, Views>, HashMap<String, Places>, Vec<_>) = Default::default();
     let mut texts: HashMap<String, Lines> = HashMap::new();
-    let (mut find, mut screens) = (Find { matcher, patterns: &[], seen: HashSet::new() }, HashMap::<String, Screen<Coded>>::new());
+    let (mut find, mut screens) = (Find::new(matcher, &[]), HashMap::<String, Screen<Coded>>::new());
     let none = &mut |_: Hit, _: &mut [u8], _: Range<usize>| {};
     for index in 0.. {
         let mut record = match reader.next() {
@@ -1178,9 +2089,13 @@ fn search(file: &Path, matcher: &Matcher, shapes: &[String]) -> io::Result<Found
         for (name, lines) in &mut texts {
             lines.close(name, &record);
         }
+        find.sizes.record(&record);
+        if (record.section.as_str(), record.op.as_str()) == ("startup", "context") {
+            found.environment(&record.output, &format!("{}:{index}", file.display()));
+        }
         let spans = spans(&record)?;
         let section = record.section.split('/').next().unwrap_or_default().to_string();
-        let key = stream(&record);
+        let (key, target) = (stream(&record), target(&record));
         for (part, spans) in spans.iter().enumerate() {
             let name = ["args", "output"][part];
             for (field, start, end) in spans {
@@ -1190,11 +2105,13 @@ fn search(file: &Path, matcher: &Matcher, shapes: &[String]) -> io::Result<Found
                 // The whole value is bytes (tag 11): what was read or written on a stream.
                 let whole = field == name && bytes[0] == 11;
                 let encoded = seek(&bytes[start..end], file, &|_| index);
-                if whole && section == "mux" {
+                if whole {
                     let name = format!("{key} {name}");
                     let lines = texts.entry(name.clone()).or_default();
-                    for line in lines.feed(&bytes[start..end], index, 0, 0) {
-                        for field in fields(&line.bytes) {
+                    let messages = lines.feed(&bytes[start..end], section == "mux", index, 0, 0);
+                    let socket = lines.carries == Carries::Frames;
+                    for line in messages {
+                        for field in fields(&line.bytes, socket) {
                             let (path, width) = match &field.bytes {
                                 Ok(_) => (field.path.clone(), field.unit().0),
                                 Err(why) => (format!("{} not decoded: {why}", field.path), 0),
@@ -1203,6 +2120,7 @@ fn search(file: &Path, matcher: &Matcher, shapes: &[String]) -> io::Result<Found
                                 held.entry(name.clone()).or_default().extend(line.stream(span).into_iter().map(|range| (range, true, path.clone())));
                             }
                             let Ok(mut decoded) = field.bytes.clone() else { continue };
+                            found.tokens(around, matcher.needles.len(), &decoded, &|| format!("{}:{index}", file.display()));
                             // A decoded byte's record: where its unit was read.
                             let record = |at: usize| lines.place(line.stream(field.at[at / width]..field.at[at / width] + 1)[0].start).0;
                             for (_, finding) in seek(&decoded, file, &record) {
@@ -1210,10 +2128,12 @@ fn search(file: &Path, matcher: &Matcher, shapes: &[String]) -> io::Result<Found
                             }
                             let units = field.units(&line, &decoded, &|at| lines.place(at));
                             let (_, matches) = Views::new(matcher, false).feed(&mut decoded, &|at| units[at / width].borrow().spots[0], &mut find, false, none);
-                            let screen = screens.entry(format!("{name} {path}")).or_insert_with(Screen::new);
                             let coded = |at: usize| Coded { unit: units[at / width].clone(), index: at % width };
-                            let shown = drawn(screen, &decoded, &coded, matcher, &mut find.seen, &|cell| cell.key(), none, &mut |_, _| {});
-                            let shown = shown.into_iter().map(|(hit, first, last)| Match { hit, first: first.key(), last: last.key(), how: "screen" });
+                            let shown = sized(&mut screens, format!("{name} {path}"), &field).map_or_else(Vec::new, |screen| {
+                                drawn(screen, &decoded, &coded, matcher, &mut find.seen, &|cell| cell.key(), none, &mut |_, _| {})
+                            });
+                            let shown = shown.into_iter().map(|(hit, first, last, shared)| Match { hit, first: first.key(), last: last.key(),
+                                how: if shared { "screen, shared" } else { "screen" } });
                             for m in matches.into_iter().chain(shown) {
                                 let Hit::Needle(needle) = m.hit else { continue };
                                 let first = format!("{}:{}", file.display(), m.last.0);
@@ -1225,10 +2145,17 @@ fn search(file: &Path, matcher: &Matcher, shapes: &[String]) -> io::Result<Found
                 if whole {
                     let name = format!("{key} {name}");
                     let (side, points) = sides.entry(name.clone()).or_insert_with(|| (Side::new(matcher), Vec::new()));
+                    side.views.draws(!side.wire.wire && texts[&name].plain(), find.sizes.stream(&target));
+                    side.views.note(&place, &bytes[start..end], index);
                     let at = side.wire.fed;
                     let (_, matches, places, values) = side.feed(&name, &mut bytes[start..end], (index, part, start), &mut leaves, &mut find, true, none);
+                    // Tokens on each value of our frames, else on the bytes as they came.
+                    if !side.wire.wire {
+                        found.tokens(around, matcher.needles.len(), &bytes[start..end], &|| format!("{}:{index}", file.display()));
+                    }
                     for (path, value) in values {
                         found.list(shapes, &format!("{place} -> {path}"), &value, &|| format!("{}:{index}", file.display()));
+                        found.tokens(around, matcher.needles.len(), &value, &|| format!("{}:{index}", file.display()));
                     }
                     let mut mine: Vec<u64> = encoded.iter().flat_map(|(range, _)| [at + range.start as u64, at + range.end as u64 - 1]).collect();
                     mine.extend(matches.iter().filter(|(leaf, _)| leaf.is_none()).flat_map(|(_, m)| [side.offset(m.first), side.offset(m.last)]));
@@ -1244,12 +2171,16 @@ fn search(file: &Path, matcher: &Matcher, shapes: &[String]) -> io::Result<Found
                         let Some(finding) = needle(&m, file, index, part, bytes) else { continue };
                         match leaf {
                             Some(path) => found.add(format!("{place} -> {path}"), finding),
-                            None => later.push((name.clone(), side.offset(m.first)..side.offset(m.last) + 1, place.clone(), finding)),
+                            None => {
+                                let (first, last) = m.ends();
+                                later.push((name.clone(), side.offset(first)..side.offset(last) + 1, place.clone(), finding))
+                            }
                         }
                     }
                 } else {
                     // A value of its own: a terminal can wrap a needle inside it.
                     found.list(shapes, &place, &bytes[start..end], &|| format!("{}:{index}", file.display()));
+                    found.tokens(around, matcher.needles.len(), &bytes[start..end], &|| format!("{}:{index}", file.display()));
                     let (_, matches) = Views::new(matcher, false).feed(&mut bytes[start..end], &|at| (index, part, start + at), &mut find, false, none);
                     let inner = structure(&bytes[start..end]);
                     for (range, finding) in encoded {
@@ -1265,13 +2196,19 @@ fn search(file: &Path, matcher: &Matcher, shapes: &[String]) -> io::Result<Found
             }
         }
     }
+    // Streams still drawn on a screen of no size at the end (one found to carry a protocol has none).
+    for views in sides.values().map(|(side, _)| &side.views).chain(leaves.values()) {
+        let Some((name, count, record)) = views.sizeless.as_ref().filter(|_| views.screen.is_some() && views.size.is_none()) else { continue };
+        let name: String = name.chars().map(|char| if char.is_ascii_digit() { '#' } else { char }).collect();
+        found.sizeless.entry(name).or_insert((0, format!("{}:{record}", file.display()))).0 += count;
+    }
     for places in held.values_mut() {
         sort(places);
     }
     for (name, range, place, finding) in later {
         let place = deeper(&place, held.get(&name).map_or(&[], Vec::as_slice), range);
-        // Herdr's base64 and tmux's hex pairs are understood (decoded, searched above): their text is no warning.
-        if !(matches!(finding, Finding::Encoded { .. }) && (place.ends_with("(base64)") || place.ends_with("(hex pairs)"))) {
+        // Herdr's base64, tmux's hex pairs and websocket masks are understood (decoded, searched above): no warning.
+        if !(matches!(finding, Finding::Encoded { .. }) && [" (base64)", " (hex pairs)", " (masked)"].iter().any(|end| place.ends_with(end))) {
             found.add(place, finding);
         }
     }
@@ -1280,8 +2217,10 @@ fn search(file: &Path, matcher: &Matcher, shapes: &[String]) -> io::Result<Found
 
 /// Every text that looks encoded in the captures under `paths`, as it is (never decoded: needles are not searched inside
 /// it), and every needle, literal, as `replace` reads values (views: also cut across records or wrapped); both by place
-/// (section, op, field, and inside our own frames their kind, method and field).
-fn grep(paths: &[String], needles: Vec<Vec<u8>>, shapes: &[String], limit: usize, jobs: usize) -> io::Result<()> {
+/// (section, op, field, and inside our own frames their kind, method and field); per needle every whole token holding it
+/// or its replacement (`replaced`: what `replace` makes of a needles file).
+fn grep(paths: &[String], needles: Vec<Vec<u8>>, replaced: &[Vec<u8>], shapes: &[String], limit: usize, jobs: usize) -> io::Result<()> {
+    let around = Matcher::new([&needles[..], replaced].concat());
     let matcher = Matcher::new(needles);
     let mut files = Vec::new();
     for path in paths {
@@ -1294,11 +2233,29 @@ fn grep(paths: &[String], needles: Vec<Vec<u8>>, shapes: &[String], limit: usize
     let mut cut = 0;
     // (place, line) -> count, files, first: the values `--values` lists.
     let mut values: BTreeMap<(String, String), (usize, usize, String)> = BTreeMap::new();
-    for (file, found) in files.iter().zip(parallel(&files, jobs, |file| search(file, &matcher, shapes))) {
+    // (name, value) -> files, first: the helper's environment at startup; the captures holding one.
+    let (mut environment, mut contexts): (BTreeMap<(String, String), (usize, String)>, usize) = (BTreeMap::new(), 0);
+    // (needle, token) -> count, files, first: the whole tokens holding a needle or its replacement.
+    let mut tokens: BTreeMap<(usize, String), (usize, usize, String)> = BTreeMap::new();
+    // stream -> pieces, files, first: drawn on a screen of no size.
+    let mut sizeless: BTreeMap<String, (usize, usize, String)> = BTreeMap::new();
+    for (file, found) in files.iter().zip(parallel(&files, jobs, |file| search(file, &matcher, &around, shapes))) {
         let found = found?;
+        for (key, (count, first)) in found.tokens {
+            let token = tokens.entry(key).or_insert((0, 0, first));
+            (token.0, token.1) = (token.0 + count, token.1 + 1);
+        }
+        for (key, (count, first)) in found.sizeless {
+            let entry = sizeless.entry(key).or_insert((0, 0, first));
+            (entry.0, entry.1) = (entry.0 + count, entry.1 + 1);
+        }
         if let Some(why) = found.cut {
             println!("{}: {why}", file.display());
             cut += 1;
+        }
+        contexts += usize::from(!found.environment.is_empty());
+        for (variable, first) in found.environment {
+            environment.entry(variable).or_insert((0, first)).0 += 1;
         }
         for (key, (count, first)) in found.places {
             let place = places.entry(key).or_insert((0, 0, first));
@@ -1316,6 +2273,25 @@ fn grep(paths: &[String], needles: Vec<Vec<u8>>, shapes: &[String], limit: usize
         for (key, (count, first)) in found.values {
             let entry = values.entry(key).or_insert((0, 0, first));
             (entry.0, entry.1) = (entry.0 + count, entry.1 + 1);
+        }
+    }
+    // The helper's environment, recorded whole before any scrub: no needle or shape finds a credential nobody listed.
+    // Every variable, its values the most frequent first.
+    let mut variables: BTreeMap<&str, Vec<(&String, &(usize, String))>> = BTreeMap::new();
+    for ((name, value), entry) in &environment {
+        variables.entry(name).or_default().push((value, entry));
+    }
+    println!("environment at startup (the helper's, startup context output.env): {} variables, {} distinct values in {contexts} captures. \
+        They can hold credentials: read every value, private ones are needles. The values are private: keep this output private",
+        variables.len(), environment.len());
+    for (name, mut values) in variables {
+        values.sort_by_key(|(value, (files, _))| (std::cmp::Reverse(*files), *value));
+        println!("  {name}: {} values", values.len());
+        for (value, (files, first)) in values.iter().take(limit) {
+            println!("    {value} (in {files} files, first {first})");
+        }
+        if values.len() > limit {
+            println!("    ... {} more: raise --limit", values.len() - limit);
         }
     }
     // The values listed, per place: every distinct line, the most frequent first. Judge each: private ones are needles.
@@ -1367,6 +2343,19 @@ fn grep(paths: &[String], needles: Vec<Vec<u8>>, shapes: &[String], limit: usize
     if groups.len() > limit {
         println!("  ... {} more places: raise --limit", groups.len() - limit);
     }
+    // A stream whose terminal size no record names is drawn on a screen of no size: the screen view there is not the
+    // terminal's (docs/replay.md, Scrub captures).
+    let mut streams: Vec<_> = sizeless.iter().collect();
+    streams.sort_by_key(|(_, (count, ..))| std::cmp::Reverse(*count));
+    println!("screens of no size: {} streams drew {} pieces with escape sequences on a screen of no size ({ROWS} x {COLS}, no wrap, \
+        scrolling at its last row): needles a terminal shows there only after wrapping or scrolling are not found",
+        streams.len(), streams.iter().map(|(_, (count, ..))| count).sum::<usize>());
+    for (name, (count, files, first)) in streams.iter().take(limit) {
+        println!("  {count} pieces in {files} files: {name}\n    first: {first}");
+    }
+    if streams.len() > limit {
+        println!("  ... {} more streams: raise --limit", streams.len() - limit);
+    }
     // The needles last: what a scrub must bring to 0 ends the output.
     for (index, needle) in matcher.needles.iter().enumerate() {
         let mut mine: Vec<_> = places.range((index, String::new())..(index + 1, String::new())).collect();
@@ -1378,6 +2367,17 @@ fn grep(paths: &[String], needles: Vec<Vec<u8>>, shapes: &[String], limit: usize
         }
         if mine.len() > limit {
             println!("  ... {} more places: raise --limit", mine.len() - limit);
+        }
+        // What stands beside it or its replacement: a mask leaves the rest of a name (`<mask>-collector`).
+        let mut mine: Vec<_> = tokens.range((index, String::new())..(index + 1, String::new())).collect();
+        let replacement = replaced.get(index).map_or(String::new(), |value| format!(" or {:?}", String::from_utf8_lossy(value)));
+        println!("  tokens holding it{replacement}: {} distinct", mine.len());
+        mine.sort_by_key(|(_, (count, ..))| std::cmp::Reverse(*count));
+        for ((_, token), (count, files, first)) in mine.iter().take(limit) {
+            println!("    {count} in {files} files: {} (first {first})", short(token.as_bytes()));
+        }
+        if mine.len() > limit {
+            println!("    ... {} more tokens: raise --limit", mine.len() - limit);
         }
     }
     println!("{} captures searched{}", files.len(), if cut > 0 { format!("; {cut} cut") } else { String::new() });
@@ -1431,7 +2431,7 @@ fn draw(value: &[u8], hit: Hit, seed: u64, taken: &HashSet<Vec<u8>>) -> Vec<u8> 
 /// `found` lacked, the values it could not decode, and per whole value it changed the SHA-256 (hex) before and after.
 type Rewritten = (bool, BTreeMap<Hit, usize>, Vec<(Hit, Vec<u8>)>, Vec<String>, Vec<(Vec<u8>, Vec<u8>)>);
 
-/// One capture with its matches rewritten (docs/capture_scrub.md): needles by `replacements`, values of `patterns` by
+/// One capture with its matches rewritten (docs/replay.md, Scrub captures): needles by `replacements`, values of `patterns` by
 /// `found` (a value it lacks stays and is listed, in the order met), as views read them (a stream across its records,
 /// our frames' texts across frames, terminal wraps), and in the values protocol lines carry as text (`fields`: decoded,
 /// encoded again in the same length), written to `output` when given. A match that reaches back into records already
@@ -1456,7 +2456,7 @@ fn pass(file: &Path, matcher: &Matcher, patterns: &[Hit], replacements: &[Vec<u8
     let mut writer = match output {
         Some(output) => {
             std::fs::DirBuilder::new().recursive(true).mode(0o700).create(output.parent().unwrap())?;
-            Some(trace::Writer::new(File::options().write(true).create_new(true).mode(0o600).open(output)?, &header)?)
+            Some(trace::Writer::corpus(File::options().write(true).create_new(true).mode(0o600).open(output)?, &header)?)
         }
         None => None,
     };
@@ -1476,7 +2476,7 @@ fn pass(file: &Path, matcher: &Matcher, patterns: &[Hit], replacements: &[Vec<u8
     // Records wait while a protocol line is open in one of them: a value in it can span reads.
     let (mut pending, mut texts): (std::collections::VecDeque<trace::Record>, HashMap<String, Lines>) = Default::default();
     let (mut sides, mut leaves, mut again): (HashMap<String, Side>, HashMap<String, Views>, Vec<(Spot, u8)>) = Default::default();
-    let (mut find, mut screens) = (Find { matcher, patterns, seen: HashSet::new() }, HashMap::<String, Screen<Coded>>::new());
+    let (mut find, mut screens) = (Find::new(matcher, patterns), HashMap::<String, Screen<Coded>>::new());
     for index in 0.. {
         let Some(mut record) = reader.next()? else { break };
         for (&(_, part, offset), &byte) in patches.range((index, 0, 0)..(index + 1, 0, 0)) {
@@ -1493,8 +2493,10 @@ fn pass(file: &Path, matcher: &Matcher, patterns: &[Hit], replacements: &[Vec<u8
         if named {
             return Err(io::Error::other(format!("{}: a record's section or op holds a needle or pattern", file.display())));
         }
+        find.sizes.record(&record);
         let spans = spans(&record)?;
         let (mux, key, mut lines, mut changes) = (record.section.split('/').next() == Some("mux"), stream(&record), Vec::new(), Vec::new());
+        let target = target(&record);
         for (part, spans) in spans.iter().enumerate() {
             let name = ["args", "output"][part];
             for (field, start, end) in spans {
@@ -1503,11 +2505,12 @@ fn pass(file: &Path, matcher: &Matcher, patterns: &[Hit], replacements: &[Vec<u8
                 // The whole value is bytes (tag 11): what was read or written on a stream.
                 if field == name && bytes[0] == 11 {
                     let name = format!("{key} {name}");
-                    if mux {
-                        let text = texts.entry(name.clone()).or_default();
-                        lines.extend(text.feed(&bytes[start..end], index, part, start).into_iter().map(|line| (name.clone(), line)));
-                    }
+                    let text = texts.entry(name.clone()).or_default();
+                    let messages = text.feed(&bytes[start..end], mux, index, part, start);
+                    let socket = text.carries == Carries::Frames;
+                    lines.extend(messages.into_iter().map(|line| (name.clone(), socket, line)));
                     let side = sides.entry(name.clone()).or_insert_with(|| Side::new(matcher));
+                    side.views.draws(!side.wire.wire && texts[&name].plain(), find.sizes.stream(&target));
                     changes.push(side.feed(&name, &mut bytes[start..end], (index, part, start), &mut leaves, &mut find, false, &mut hit).0);
                 } else {
                     // A value of its own (a terminal can wrap a needle inside it); a hash of it follows it.
@@ -1520,8 +2523,8 @@ fn pass(file: &Path, matcher: &Matcher, patterns: &[Hit], replacements: &[Vec<u8
             }
         }
         pending.push_back(record);
-        for (name, line) in lines {
-            for field in fields(&line.bytes) {
+        for (name, socket, line) in lines {
+            for field in fields(&line.bytes, socket) {
                 let Ok(before) = &field.bytes else {
                     undecoded.push(format!("{}:{index} {}: {}", file.display(), field.path, field.bytes.as_ref().unwrap_err()));
                     continue;
@@ -1536,11 +2539,12 @@ fn pass(file: &Path, matcher: &Matcher, patterns: &[Hit], replacements: &[Vec<u8
                     old.spots.iter().zip(&old.chars).zip(&new.chars).filter(|((_, old), new)| old != new).map(|((spot, _), new)| (*spot, *new)).collect::<Vec<_>>()
                 }).collect());
                 // Needles the pane's screen shows: their units encoded again where they were recorded.
-                let screen = screens.entry(format!("{name} {}", field.path)).or_insert_with(Screen::new);
-                let mut set = Vec::new();
-                drawn(screen, &bytes, &|at| Coded { unit: units[at / width].clone(), index: at % width }, matcher, &mut find.seen,
-                      &|cell| cell.key(), &mut hit, &mut |cell, byte| cell.write(byte, &mut set));
-                changes.push(set);
+                if let Some(screen) = sized(&mut screens, format!("{name} {}", field.path), &field) {
+                    let mut set = Vec::new();
+                    drawn(screen, &bytes, &|at| Coded { unit: units[at / width].clone(), index: at % width }, matcher, &mut find.seen,
+                          &|cell| cell.key(), &mut hit, &mut |cell, byte| cell.write(byte, &mut set));
+                    changes.push(set);
+                }
             }
         }
         // A match's bytes where they were recorded; one reaching into records already written goes, whole, to the
@@ -1588,16 +2592,14 @@ fn replays(directory: &str, output: &str) -> io::Result<Vec<batch::Replayed>> {
     batch::replay(&directory, &batch::helpers(&directory)?, Path::new(output), Duration::from_secs(20), true)
 }
 
-/// Scrub (docs/capture_scrub.md): every needle, and with `patterns` every UUID or IPv4 address, becomes a replacement
-/// of the same byte length in every text/bytes value of every capture under DIR, literally (text another program
-/// encoded stays as it is: `grep` lists it), written under OUT with the same layout. Equal length keeps every length prefix and wire frame intact. One run
-/// gives a value the same replacement in every file: an app journal and its helper captures stay linked. Every helper
-/// capture replays before and after; one the scrub broke prints why. App journals: their app replay tests.
-fn replace(directory: &str, out: &str, list: Vec<(Vec<u8>, Option<Vec<u8>>)>, patterns: &[Hit], jobs: usize) -> io::Result<()> {
-    let (root, target) = (Path::new(directory), Path::new(out));
-    if target.exists() {
-        return Err(io::Error::other("OUT must be a new directory"));
-    }
+/// How many masks `value` has: letters and digits keep their kind (KINDS), other bytes stay.
+fn space(value: &[u8]) -> u128 {
+    value.iter().filter_map(|byte| KINDS.iter().find(|kind| kind.contains(byte))).fold(1u128, |space, kind| space.saturating_mul(kind.len() as u128))
+}
+
+/// Each needle's replacement (its value, else a mask), the same for `replace` and `grep` from the same needles file, and
+/// every needle and replacement (taken: a later replacement never equals one).
+fn replacements(list: &[(Vec<u8>, Option<Vec<u8>>)]) -> io::Result<(Vec<Vec<u8>>, HashSet<Vec<u8>>)> {
     // A replacement is never a needle or another replacement; a needle given itself as its value is kept (a version
     // --ips would take for an address).
     let mut taken: HashSet<Vec<u8>> = list.iter().map(|(needle, _)| needle.clone()).collect();
@@ -1611,9 +2613,7 @@ fn replace(directory: &str, out: &str, list: Vec<(Vec<u8>, Option<Vec<u8>>)>, pa
     // checked against it. A needle with fewer possible replacements than there are needles could never get one.
     let mut replacements = Vec::new();
     for (index, (needle, value)) in list.iter().enumerate() {
-        let space = needle.iter().filter_map(|byte| KINDS.iter().find(|kind| kind.contains(byte)))
-            .fold(1u128, |space, kind| space.saturating_mul(kind.len() as u128));
-        if value.is_none() && space <= 2 * list.len() as u128 {
+        if value.is_none() && space(needle) <= 2 * list.len() as u128 {
             return Err(io::Error::other(format!("needle {} is too short for a distinct replacement: choose a longer one", index + 1)));
         }
         // A needle that is a UUID or IPv4 address is replaced by one (an address stays an address).
@@ -1622,9 +2622,27 @@ fn replace(directory: &str, out: &str, list: Vec<(Vec<u8>, Option<Vec<u8>>)>, pa
         taken.insert(replacement.clone());
         replacements.push(replacement);
     }
+    Ok((replacements, taken))
+}
+
+/// Scrub (docs/replay.md, Scrub captures): every needle, and with `patterns` every UUID or IPv4 address, becomes a replacement
+/// of the same byte length in every text/bytes value of every capture under DIR, literally (text another program
+/// encoded stays as it is: `grep` lists it), written under OUT with the same layout. Equal length keeps every length prefix and wire frame intact. One run
+/// gives a value the same replacement in every file: an app journal and its helper captures stay linked. Every helper
+/// capture replays before and after; one the scrub broke prints why. App journals: their app replay tests.
+fn replace(directory: &str, out: &str, list: Vec<(Vec<u8>, Option<Vec<u8>>)>, patterns: &[Hit], jobs: usize) -> io::Result<()> {
+    let (input, target) = (Path::new(directory), Path::new(out));
+    if target.exists() {
+        return Err(io::Error::other("OUT must be a new directory"));
+    }
+    let (replacements, mut taken) = replacements(&list)?;
     let matcher = Matcher::new(list.iter().map(|(needle, _)| needle.clone()).collect());
-    let files = captures(root)?;
     let original = replays(directory, &format!("{out}.replay-original"))?;
+    // First the process lists: everything after reads the captures with only their allowed names.
+    let root = &PathBuf::from(format!("{out}.rows"));
+    let lists = parallel(&captures(input)?, jobs, |file| rows_of(file, &root.join(file.strip_prefix(input).unwrap_or(file))));
+    println!("process names masked in the lists of {} captures", lists.into_iter().collect::<io::Result<Vec<bool>>>()?.into_iter().filter(|cut| *cut).count());
+    let files = captures(root)?;
     // The pattern values in the order met (file by file), then their replacements.
     let (mut found, mut order) = (HashMap::new(), Vec::new());
     if !patterns.is_empty() {
@@ -1644,6 +2662,7 @@ fn replace(directory: &str, out: &str, list: Vec<(Vec<u8>, Option<Vec<u8>>)>, pa
     let written = parallel(&files, jobs, |file| {
         rewrite(file, &matcher, patterns, &replacements, &found, Some(&target.join(file.strip_prefix(root).unwrap_or(file))))
     });
+    std::fs::remove_dir_all(root)?;
     let (mut undecoded, mut hashes) = (Vec::new(), BTreeMap::new());
     for result in written {
         let (app, mine, lacked, failed, changed) = result?;
@@ -1709,6 +2728,15 @@ fn replace(directory: &str, out: &str, list: Vec<(Vec<u8>, Option<Vec<u8>>)>, pa
         candidate.len() - broken - unchecked, candidate.len());
     if broken > 0 || unchecked > 0 {
         return Err(io::Error::other("not every helper capture replays before and after the scrub"));
+    }
+    // Last (the checks pair files by path): random names. A name made from content, as store's key of the original,
+    // would confirm any guess at what the scrub replaced.
+    let mut random = File::open("/dev/urandom")?;
+    for file in captures(target)? {
+        let mut bytes = [0; 32];
+        io::Read::read_exact(&mut random, &mut bytes)?;
+        let name: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+        std::fs::rename(&file, file.with_file_name(name + ".rpl.zst"))?;
     }
     Ok(())
 }
@@ -1886,12 +2914,14 @@ fn check(paths: &[PathBuf], out: &mut dyn io::Write) -> io::Result<Checked> {
             } else {
                 0
             };
-            pairs.push((score, left, right));
+            // A relay (the remote `connect`) passes bytes on unchanged: the end before it agrees with the relay's stdio and
+            // with the socket after it alike. A process's own stdio (an end with its pid) goes first, whatever the files' order.
+            pairs.push(((score, child.pid.is_some()), left, right));
         }
     }
     pairs.sort_by(|a, b| b.cmp(a));
     let (mut used, mut matched) = (vec![false; children.len()], vec![None; parents.len()]);
-    for (score, left, right) in pairs {
+    for ((score, _), left, right) in pairs {
         if score > 0 && matched[left].is_none() && !used[right] {
             (matched[left], used[right]) = (Some(right), true);
         }
@@ -1952,58 +2982,36 @@ fn check(paths: &[PathBuf], out: &mut dyn io::Write) -> io::Result<Checked> {
     Ok(Checked { different: failed, unlinked })
 }
 
+/// `file` (a live capture) written to `target` as the corpus keeps it: zstd's long window stores a payload recorded
+/// again and again (a helper binary uploaded many times) once. The same records, so the same key; one footer.
+fn corpus(file: &Path, target: &Path) -> io::Result<()> {
+    let (mut reader, header) = trace::Reader::new(File::open(file)?, usize::MAX)?;
+    let mut writer = trace::Writer::corpus(File::options().write(true).create_new(true).mode(0o600).open(target)?, &header)?;
+    for _ in 0.. {
+        let Some(record) = reader.next()? else { break };
+        writer.push(&record)?;
+    }
+    writer.finish()?.sync_all()
+}
+
 /// An app journal (its header's layer).
 fn app(file: &Path) -> bool {
     File::open(file).and_then(|file| trace::Reader::new(file, usize::MAX)).is_ok_and(|(_, header)| header.layer == trace::Layer::App)
 }
 
-/// The Swift file declaring each XCTest class (its superclass chain reaches XCTestCase), by class name.
-fn classes(tests: &Path) -> io::Result<std::collections::BTreeMap<String, String>> {
-    let mut declared = std::collections::BTreeMap::new();
-    let mut directories = vec![tests.to_owned()];
-    for index in 0.. {
-        let Some(directory) = directories.get(index).cloned() else { break };
-        for entry in std::fs::read_dir(&directory)? {
-            let path = entry?.path();
-            if path.is_dir() {
-                directories.push(path);
-                continue;
-            }
-            let (Some("swift"), Some(stem)) = (path.extension().and_then(|v| v.to_str()), path.file_stem().and_then(|v| v.to_str())) else { continue };
-            for line in std::fs::read_to_string(&path)?.lines() {
-                let Some(at) = line.find("class ").filter(|&at| at == 0 || line[..at].ends_with(' ')) else { continue };
-                let rest = &line[at + 6..];
-                let name: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
-                let Some(parent) = rest[name.len()..].trim_start().strip_prefix(':') else { continue };
-                let parent: String = parent.trim_start().chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
-                declared.insert(name, (parent, stem.to_string()));
-            }
-        }
-    }
-    let test = |class: &String| {
-        let mut name = class;
-        for _ in 0..declared.len() {
-            match declared.get(name) {
-                Some((parent, _)) if parent == "XCTestCase" => return true,
-                Some((parent, _)) => name = parent,
-                None => return false,
-            }
-        }
-        false
-    };
-    Ok(declared.iter().filter(|(name, _)| test(name)).map(|(name, (_, file))| (name.clone(), file.clone())).collect())
-}
-
-/// Stores a run's passed tests (STAGE/raw/cases.jsonl) in the corpus: REPLAYS/<TestFile>/<test>/<key>.rpl.bz2,
-/// the app journal and every helper capture of the test, once each of its helper captures replays on
-/// this helper and its files agree (`check`). Failed tests stay in the staging run only; `failed` places them
-/// too, as recorded and unchecked (a run's own replay: they reproduce their failure). False: a passed
-/// test was not stored.
-fn store(stage: &Path, replays: &Path, tests: &Path, failed: bool) -> io::Result<bool> {
+/// Stores a capture's passed tests (STAGE/cases.jsonl) in the corpus: what a test wrote in STAGE/<TestFile>/<test>/ (its
+/// app journal and every helper capture, a remote host's in a folder of its own; STAGE/tests.json names each test class's
+/// file) becomes REPLAYS/<TestFile>/<test>/<key>.rpl.zst (compressed again: `corpus`), once each of its helper captures
+/// replays on this helper and its
+/// files agree (`check`). Failed tests stay in the staging only; `failed` places them too, as recorded and unchecked (a
+/// capture's own replay: they reproduce their failure). False: a passed test was not stored.
+fn store(stage: &Path, replays: &Path, failed: bool) -> io::Result<bool> {
     let stage = std::fs::canonicalize(stage)?;
-    let classes = classes(tests)?;
+    let tests = std::fs::read(stage.join("tests.json"))?;
+    let tests = Json::parse(&tests).map_err(|_| io::Error::other("invalid tests.json"))?;
+    let classes: BTreeMap<&str, &str> = tests.root().object().into_iter().flatten().filter_map(|(class, file)| Some((class, file.string()?))).collect();
     let mut outcomes: std::collections::BTreeMap<String, Vec<bool>> = std::collections::BTreeMap::new();
-    for line in std::fs::read_to_string(stage.join("raw/cases.jsonl"))?.lines() {
+    for line in std::fs::read_to_string(stage.join("cases.jsonl"))?.lines() {
         let event = Json::parse(line.as_bytes()).map_err(|_| io::Error::other("invalid cases.jsonl line"))?;
         let event = event.root();
         if event.get("event").and_then(|v| v.string()) != Some("end") { continue }
@@ -2033,15 +3041,8 @@ fn store(stage: &Path, replays: &Path, tests: &Path, failed: bool) -> io::Result
             println!("{case}: already in the corpus");
             continue;
         }
-        let name = format!("{class}.{test}");
-        let mut files = captures(&stage.join("app").join(&name)).unwrap_or_default();
-        for entry in std::fs::read_dir(stage.join("raw"))? {
-            let path = entry?.path();
-            if path.file_name().and_then(|v| v.to_str()).is_some_and(|v| v.starts_with(&format!("{name}-")) && v.ends_with(".rpl.bz2")) {
-                files.push(path);
-            }
-        }
-        files.extend(captures(&stage.join("raw/remote").join(&name)).unwrap_or_default());
+        let name = format!("{file}.{test}");
+        let mut files = captures(&stage.join(file).join(test)).unwrap_or_default();
         // An empty capture: its helper ended before recording anything.
         files.retain(|file| file.metadata().is_ok_and(|meta| meta.len() > 0));
         let helpers: Vec<PathBuf> = files.iter().filter(|file| !app(file)).map(|file| file.strip_prefix(&stage).unwrap().to_owned()).collect();
@@ -2070,19 +3071,25 @@ fn store(stage: &Path, replays: &Path, tests: &Path, failed: bool) -> io::Result
         }
         std::fs::create_dir_all(&target)?;
         for (file, key) in files.iter().zip(&keys) {
-            let destination = target.join(format!("{key}.rpl.bz2"));
+            let destination = target.join(format!("{key}.rpl.zst"));
             if destination.exists() {
                 present += 1;
                 continue;
             }
             let partial = target.join(format!(".{}.partial", std::process::id()));
-            std::fs::copy(file, &partial)?;
+            corpus(file, &partial)?;
             std::fs::rename(&partial, &destination)?;
             placed += 1;
         }
     }
     println!("stored {placed} new captures, {present} already present; replay results: {}", results.display());
     Ok(complete)
+}
+
+/// A wire version as people read it: the schema id in hex, the eight bytes every wire body starts with
+/// (wire::VERSION is them read little-endian; build/schema.rs hashes the schema into them).
+fn schema(version: u64) -> String {
+    version.to_le_bytes().iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// Replays every helper capture in the corpus on this helper; one that does not replay is dropped (listed;
@@ -2093,7 +3100,8 @@ fn prune(replays: &Path, dry: bool) -> io::Result<()> {
     for file in captures(&replays)? {
         let (_, header) = trace::Reader::new(File::open(&file)?, usize::MAX)?;
         if header.layer == trace::Layer::App && header.wire != dispatch_helper_core::wire::VERSION {
-            println!("{} {}: app journal of protocol {} (now {})", if dry { "would drop" } else { "drop" }, file.display(), header.wire, dispatch_helper_core::wire::VERSION);
+            println!("{} {}: app journal of protocol {} (now {})", if dry { "would drop" } else { "drop" }, file.display(), schema(header.wire),
+                schema(dispatch_helper_core::wire::VERSION));
             if !dry {
                 std::fs::remove_file(&file)?;
             }
@@ -2213,16 +3221,14 @@ pub fn run(arguments: &[std::ffi::OsString]) -> io::Result<()> {
             let from = number("--from", option(&mut args, "--from")?)?.unwrap_or(0);
             let [file] = &args[..] else { return Err(usage()) };
             let (mut reader, header) = trace::Reader::new(File::open(file)?, usize::MAX)?;
-            println!("{:?} wire {}", header.layer, header.wire);
+            println!("{:?} wire {}", header.layer, schema(header.wire));
             let mut streams = HashMap::new();
             for index in 0.. {
                 let Some(record) = reader.next()? else {
                     println!("complete");
                     return Ok(());
                 };
-                let key = stream(&record);
-                let (asked, back) = (parts(&record.args, streams.entry(key.clone() + " args").or_insert_with(Wire::new)),
-                    parts(&record.output, streams.entry(key + " output").or_insert_with(Wire::new)));
+                let [asked, back] = decoded(&record, &mut streams);
                 if index < from {
                     continue;
                 }
@@ -2234,8 +3240,7 @@ pub fn run(arguments: &[std::ffi::OsString]) -> io::Result<()> {
                 // `->` what came back. A record of several wire frames prints one line per frame: grep finds a method
                 // with its record. Null values, sequence 0 and no error print nothing.
                 let prefix = format!("{index} {}.{:03} {} {}", record.clock / 1_000_000, record.clock / 1_000 % 1_000, record.section, record.op);
-                let suffix = format!("{}{}", if record.sequence > 0 { format!(" seq={}", record.sequence) } else { String::new() },
-                    record.error.map_or(String::new(), |error| format!(" error={error}")));
+                let suffix = suffix(&record);
                 let items: Vec<String> = asked.iter().map(|item| format!(" {item}")).chain(back.iter().map(|item| format!(" -> {item}"))).collect();
                 if asked.len() <= 1 && back.len() <= 1 {
                     println!("{prefix}{}{suffix}", items.concat());
@@ -2244,6 +3249,17 @@ pub fn run(arguments: &[std::ffi::OsString]) -> io::Result<()> {
                         println!("{prefix}{item}{suffix}");
                     }
                 }
+            }
+            Ok(())
+        }
+        "diff" => {
+            let limit = number("--limit", option(&mut args, "--limit")?)?.unwrap_or(200);
+            let jobs = jobs(&mut args)?;
+            let [a, b] = &args[..] else { return Err(usage()) };
+            let compared = diff::compare(Path::new(a), Path::new(b), jobs)?;
+            diff::print(&compared, limit as usize, &mut io::stdout())?;
+            if !compared.groups.is_empty() || !compared.unpaired.is_empty() {
+                return Err(io::Error::other("captures differ"));
             }
             Ok(())
         }
@@ -2261,17 +3277,24 @@ pub fn run(arguments: &[std::ffi::OsString]) -> io::Result<()> {
                 let Some(shape) = option(&mut args, "--values")? else { break };
                 shapes.push(shape);
             }
-            // One needle before the paths, or a needles file.
-            let list = match option(&mut args, "--needles")? {
-                Some(path) => needles(&path)?.into_iter().map(|(needle, _)| needle).collect(),
-                None if shapes.is_empty() && args.len() >= 2 && !args[0].is_empty() => vec![args.remove(0).into_bytes()],
-                None if !shapes.is_empty() => Vec::new(),
+            // One needle before the paths, or a needles file (and what `replace` makes of it).
+            let (list, replaced) = match option(&mut args, "--needles")? {
+                Some(path) => {
+                    let list = needles(&path)?;
+                    let replaced = replacements(&list).map_or_else(|error| {
+                        println!("no replacements, tokens hold needles only: {error}");
+                        Vec::new()
+                    }, |(replaced, _)| replaced);
+                    (list.into_iter().map(|(needle, _)| needle).collect(), replaced)
+                }
+                None if shapes.is_empty() && args.len() >= 2 && !args[0].is_empty() => (vec![args.remove(0).into_bytes()], Vec::new()),
+                None if !shapes.is_empty() => (Vec::new(), Vec::new()),
                 None => return Err(usage()),
             };
             if args.is_empty() {
                 return Err(usage());
             }
-            grep(&args, list, &shapes, limit as usize, jobs)
+            grep(&args, list, &replaced, &shapes, limit as usize, jobs)
         }
         "check" if !args.is_empty() => {
             let checked = check(&args.iter().map(PathBuf::from).collect::<Vec<_>>(), &mut io::stdout())?;
@@ -2284,10 +3307,9 @@ pub fn run(arguments: &[std::ffi::OsString]) -> io::Result<()> {
             Ok(())
         }
         "store" => {
-            let tests = option(&mut args, "--tests")?.ok_or_else(usage)?;
             let failed = flag(&mut args, "--failed");
             let [stage, replays] = &args[..] else { return Err(usage()) };
-            if !store(Path::new(stage), Path::new(replays), Path::new(&tests), failed)? {
+            if !store(Path::new(stage), Path::new(replays), failed)? {
                 return Err(io::Error::other("some passed tests were not stored"));
             }
             Ok(())
@@ -2308,19 +3330,77 @@ pub fn run(arguments: &[std::ffi::OsString]) -> io::Result<()> {
             }
             Ok(())
         }
+        "dictionary" => {
+            let [directory] = &args[..] else { return Err(usage()) };
+            std::fs::DirBuilder::new().recursive(true).create(directory)?;
+            let path = Path::new(directory).join(format!("{}.json", schema(wire::VERSION)));
+            std::fs::write(&path, dictionary_json())?;
+            println!("{}", path.display());
+            Ok(())
+        }
+        "convert" => {
+            let jobs = jobs(&mut args)?;
+            let dictionaries = option(&mut args, "--dictionaries")?;
+            let mut edits = Vec::new();
+            for _ in 0..args.len() {
+                let Some(edit) = option(&mut args, "--edit")? else { break };
+                edits.push(edit);
+            }
+            let [directory, out] = &args[..] else { return Err(usage()) };
+            let dictionaries = dictionaries.map_or_else(|| Path::new(directory).join("wire"), PathBuf::from);
+            let mut names = HashMap::new();
+            for entry in std::fs::read_dir(&dictionaries)? {
+                let path = entry?.path();
+                if path.extension().is_some_and(|extension| extension == "json") {
+                    let (version, dictionary) = dictionary(&path)?;
+                    names.insert(version, dictionary);
+                }
+            }
+            let (input, root) = (Path::new(directory), Path::new(out));
+            let files = captures(input)?;
+            let results = parallel(&files, jobs, |file| convert(file, &root.join(file.strip_prefix(input).unwrap_or(file)), &names, &edits));
+            let (mut total, mut failed) = (Converted::default(), 0);
+            for (file, result) in files.iter().zip(results) {
+                match result {
+                    Ok(tally) => {
+                        if tally.rechunk + tally.undecoded + tally.left > 0 {
+                            println!("partial\t{}\t{tally:?}", file.display());
+                        }
+                        total.frames += tally.frames;
+                        total.streamed += tally.streamed;
+                        total.rechunk += tally.rechunk;
+                        total.undecoded += tally.undecoded;
+                        total.left += tally.left;
+                        total.versions += tally.versions;
+                        total.edited += tally.edited;
+                    }
+                    Err(error) => {
+                        failed += 1;
+                        println!("error\t{}\t{error}", file.display());
+                    }
+                }
+            }
+            println!("{} captures, {failed} failed; {total:?}", files.len());
+            if failed > 0 {
+                return Err(io::Error::other("some captures were not converted"));
+            }
+            Ok(())
+        }
+        "migrate" => migrate::run(args),
         "replace" => {
             let list = option(&mut args, "--needles")?.map(|path| needles(&path)).transpose()?.unwrap_or_default();
             let jobs = jobs(&mut args)?;
             let patterns: Vec<Hit> = [(flag(&mut args, "--uuids"), Hit::Uuid), (flag(&mut args, "--ips"), Hit::Ipv4)]
                 .into_iter().filter_map(|(asked, hit)| asked.then_some(hit)).collect();
             let [directory, out] = &args[..] else { return Err(usage()) };
-            if list.is_empty() && patterns.is_empty() {
-                return Err(io::Error::other("nothing to replace: --needles FILE, --uuids or --ips"));
-            }
             replace(directory, out, list, &patterns, jobs)
         }
         _ => Err(usage()),
     }
 }
 
-const USAGE: &str = "usage: dispatch-helper capture replay DIR [--output DIR] [--timeout SECONDS] [--completion required] | inspect FILE [--from N] [--limit N] | value FILE | grep NEEDLE PATH... [--limit N] [--jobs N] | grep PATH... [--needles FILE] [--values SHAPE]... [--limit N] [--jobs N] | replace DIR OUT [--needles FILE] [--uuids] [--ips] [--jobs N] | key PATH... | check PATH... | store STAGE REPLAYS --tests DIR [--failed] | prune REPLAYS [--dry-run]   (options go anywhere after the command)";
+const USAGE: &str = "usage: dispatch-helper capture replay DIR [--output DIR] [--timeout SECONDS] [--completion required] | inspect FILE [--from N] [--limit N] | diff A B [--limit N] [--jobs N] | value FILE | grep NEEDLE PATH... [--limit N] [--jobs N] | grep PATH... [--needles FILE] [--values SHAPE]... [--limit N] [--jobs N] | replace DIR OUT [--needles FILE] [--uuids] [--ips] [--jobs N] | key PATH... | check PATH... | store STAGE REPLAYS [--failed] | prune REPLAYS [--dry-run] | dictionary DIR | convert REPLAYS OUT [--dictionaries DIR] [--edit NAME]... [--jobs N] | migrate REPLAYS MIGRATIONS [--check] [--dry-run] [--retired DIR] [--jobs N]   (options go anywhere after the command)";
+
+#[cfg(test)]
+#[path = "capture.test.rs"]
+mod tests;

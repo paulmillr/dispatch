@@ -1,6 +1,10 @@
 //! One trait adapter: native effects go back to the part that submitted them.
 use crate::api::*;
-use std::{path::Path, process::Command, rc::Rc};
+use std::{
+    path::{Path, PathBuf},
+    process::Command,
+    rc::Rc,
+};
 
 pub(crate) struct Registered<T> {
     pub part: T,
@@ -160,6 +164,15 @@ impl<T: Multiplexer> Multiplexer for Registered<T> {
     fn program(&self) -> Option<String> {
         self.part.program()
     }
+    fn version(&self) -> Option<Command> {
+        self.part.version()
+    }
+    fn server_probe(&self) -> Option<Command> {
+        self.part.server_probe()
+    }
+    fn running(&self, status: Option<i32>, stdout: &[u8]) -> bool {
+        self.part.running(status, stdout)
+    }
     calls! {
         fn control(terminal: Id) -> Process;
         fn claim(process: &Process, write: ControlWrite) -> Option<ControlTarget>;
@@ -169,6 +182,7 @@ impl<T: Multiplexer> Multiplexer for Registered<T> {
         fn launch(process: &Process) -> Option<String>;
         fn backends() -> Vec<String>;
         fn open(key: &str) -> Id;
+        fn start(key: &str) -> Id;
         fn create(parent: Id, beside: Option<Id>, command: Option<Command>, size: Option<Grid>) -> Id;
         fn rename(node: Id, name: &str) -> ();
         fn focus(node: Id) -> ();
@@ -188,6 +202,7 @@ impl<T: Multiplexer> Multiplexer for Registered<T> {
         fn screen(terminal: Id, changed: bool) -> Screen;
         fn prefix(node: Id) -> Prefix;
         fn command(node: Id, command: &str) -> ();
+        fn activity() -> Vec<(Id, u64)>;
     }
     fn stream(&mut self, io: &mut dyn Io, id: Id, event: Control) -> Result<(), Error> {
         if !(self.permitted)("stream") {
@@ -238,6 +253,12 @@ impl<T: Plugin> Plugin for Registered<T> {
     fn name(&self) -> &str {
         self.part.name()
     }
+    /// Not a client call: the helper ending what a disconnected client left open, whatever its grants now.
+    fn release(&mut self, io: &mut dyn Io, transfer: &str, unpack: bool, done: Done<()>) {
+        let caller = io.section(&self.section);
+        self.part.release(io, transfer, unpack, returned(caller.clone(), done));
+        io.section(&caller);
+    }
     calls! {
         fn reset(topics: &[String]) -> ();
         fn text(path: &Path) -> String;
@@ -245,6 +266,15 @@ impl<T: Plugin> Plugin for Registered<T> {
         fn processes() -> (Vec<Row>, bool);
         fn disks() -> Vec<Disk>;
         fn branch(cwd: &Path) -> Option<String>;
+        fn list(path: &Path, hidden: bool, limit: u64, git: bool) -> Listing;
+        fn summary(path: &Path, limit: u64) -> FolderSummary;
+        fn write(path: &Path, bytes: Vec<u8>, mode: Option<u32>, replace: bool, parent: FileIdentity, replaced: Option<FileIdentity>) -> Metadata;
+        fn pack(transfer: &str, base: &Path, paths: &[PathBuf], limit: u64) -> Packed;
+        fn pack_drop(transfer: &str) -> ();
+        fn unpack_open(transfer: &str, target: &Path, policy: &str, names: &[String], parent: FileIdentity, replacements: &[Replacement]) -> Transfer;
+        fn unpack_write(transfer: &str, bytes: Vec<u8>) -> Progress;
+        fn unpack_close(transfer: &str, commit: bool) -> Unpacked;
+        fn git(path: &Path, args: &[String], limit: u64) -> Git;
     }
     effects! { fn event(ui: &mut dyn Ui, event: Event); }
 }

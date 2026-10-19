@@ -380,6 +380,10 @@ final class NewSpacePresentationTests: XCTestCase {
         window.contentView = NSHostingView(rootView: SpaceSidebar(workspace: workspace, settings: controller.settings, controller: controller))
         window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         defer { window.close(); window.contentView = nil }
+        // The physical pointer, wherever an earlier test left it, can rest on a row and open its hover card: a child
+        // window the captures then take in, moving every sampled pixel. The header gets synthetic pointer events instead.
+        let desktop = try XCTUnwrap(NSScreen.screens.first).frame
+        XCTAssertEqual(CGWarpMouseCursorPosition(CGPoint(x: window.frame.maxX + 20, y: desktop.maxY - window.frame.midY)), .success)
         let root = try XCTUnwrap(window.contentView)
         func control(_ host: HostID) -> NewSpaceNativeButton? {
             PresentationTestSupport.views(of: NewSpaceNativeButton.self, in: root)

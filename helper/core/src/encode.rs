@@ -313,6 +313,57 @@ records! {
         total,
         available
     };
+    Entry {
+        name,
+        kind,
+        size,
+        modified_ns,
+        device,
+        inode,
+        target,
+        mark
+    };
+    Listing {
+        path,
+        entries,
+        truncated,
+        device,
+        inode
+    };
+    FolderSummary {
+        files,
+        folders,
+        bytes,
+        truncated
+    };
+    Packed {
+        archive,
+        entries,
+        files,
+        folders,
+        bytes,
+        size,
+        skipped
+    };
+    Transfer {
+        transfer,
+        staging
+    };
+    Progress {
+        bytes
+    };
+    Unpacked {
+        entries,
+        bytes,
+        replaced,
+        kept,
+        skipped
+    };
+    Git {
+        status,
+        output,
+        truncated
+    };
     Install {
         edits,
         restart,

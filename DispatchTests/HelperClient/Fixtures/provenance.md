@@ -26,6 +26,6 @@ HelperTransport, HelperBinary); the tests check that the client sends exactly th
 | live-tmux | backends.open of a private real tmux server (two sessions, four panes, both split axes), topology, cancel, echo | `test/helper-client-e2e.py` (probe + real tmux; live-native.tsv is the native list-panes oracle) |
 | notifications | first notification of each method from a real client session (the live tmux capture) | that capture |
 
-The producers above still record (`DISPATCH_CAPTURE=<dir>/capture.rpl.bz2` and a private HOME;
+The producers above still record (`DISPATCH_CAPTURE=<dir>/capture.rpl.zst` and a private HOME;
 the recorder ends the helper by EOF, not a signal: a killed helper can lose its last capture
 records); `capture inspect` reads what they recorded.

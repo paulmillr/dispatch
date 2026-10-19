@@ -64,6 +64,66 @@ impl Request<'_> {
             .identity
             .as_ref()
             .map(|value| crate::encode::Raw(value));
+        let ops = OPERATIONS
+            .iter()
+            .filter(|method| self.helper.allowed(method) && self.registered(method))
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>();
+        if features::asked(&self.document) {
+            // Only a client that named features gets this reply shape (dispatch/features.rs).
+            let login_home = features::login_home(&home, self.helper.login_home.as_deref());
+            let mut fields = vec![
+                ("uid", crate::json::Data::Unsigned(uid.into())),
+                ("home", crate::json::Data::String(&home)),
+            ];
+            if let Some(login_home) = &login_home {
+                fields.push(("login_home", crate::json::Data::String(login_home)));
+            }
+            let extended = crate::json::Data::Object(fields);
+            let accepted: Vec<String> = self
+                .helper
+                .features
+                .borrow()
+                .get(&self.fd)
+                .map(|set| set.iter().map(|s| s.to_string()).collect())
+                .unwrap_or_default();
+            let ops: Vec<String> = ops
+                .iter()
+                .cloned()
+                .chain(
+                    features::OPERATIONS
+                        .iter()
+                        .filter(|op| accepted.iter().any(|f| f == *op) && self.helper.allowed(op))
+                        .map(|s| s.to_string()),
+                )
+                .collect();
+            crate::encode::object(
+                &mut out,
+                &[
+                    ("version", &wire::VERSION),
+                    ("frame_limit", &wire::LIMIT),
+                    ("chunk_kind", &(wire::Kind::Chunk as u64)),
+                    ("chunk_limit", &(wire::CHUNK as u64)),
+                    ("os", &self.io.os()),
+                    ("arch", &self.io.arch()),
+                    ("account", &extended),
+                    ("terminal", &terminal),
+                    ("process", &process),
+                    ("identity", &identity),
+                    ("plugins", &plugins),
+                    ("unavailable_harnesses", &self.helper.unavailable),
+                    ("ops", &ops),
+                    ("features", &accepted),
+                ],
+            );
+            self.replies.borrow_mut().push_back((
+                self.fd,
+                wire::Kind::Response,
+                self.id,
+                crate::encode::value(&crate::encode::Fields(&[("result", &crate::encode::Raw(&out))])),
+            ));
+            return Ok(());
+        }
         crate::encode::object(
             &mut out,
             &[

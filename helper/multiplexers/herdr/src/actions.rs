@@ -7,14 +7,22 @@ enum Tree {
 }
 impl Tree {
     fn read(state: &Snapshot, tab: &str) -> Result<Self, Error> {
+        if state
+            .layouts
+            .iter()
+            .any(|view| view.key == tab && view.zoomed == Some(true))
+        {
+            return Err(error("A zoomed herdr layout cannot be moved."));
+        }
+        Self::layout(state, tab)
+    }
+    /// The tab's split, zoomed or not.
+    fn layout(state: &Snapshot, tab: &str) -> Result<Self, Error> {
         let view = state
             .layouts
             .iter()
             .find(|view| view.key == tab)
             .ok_or_else(|| expired("The original herdr layout is no longer available."))?;
-        if view.zoomed == Some(true) {
-            return Err(error("A zoomed herdr layout cannot be moved."));
-        }
         fn branch(
             state: &Snapshot,
             view: &native::View,
@@ -101,6 +109,96 @@ impl Tree {
             ));
             first.moves(moves);
             second.moves(moves);
+        }
+    }
+    /// The pane moves that build this tree from its terminals: the first alone, then each beside its sibling.
+    fn plan(&self) -> Vec<(String, Option<(String, String, f64)>)> {
+        let mut moves = vec![(self.first().into(), None)];
+        self.moves(&mut moves);
+        moves
+    }
+}
+
+/// Where a tab moved whole goes: a new workspace with this label, or a new tab of this workspace at this place
+/// among its other tabs.
+///
+/// Consistency: a window moves the same way on every multiplexer, and tmux is the reference. tmux moves a window
+/// in one command (tmux `place.rs` Place::Workspace, `affinity.rs` r#move): it keeps its splits, zoom, active pane,
+/// id and place, and the server's focus does not move. A herdr move must end the same; what it can't do the way
+/// tmux does (herdr has no tab move between workspaces) the helper builds from pane moves. A change to what a move
+/// does on one belongs on the other.
+pub(super) enum Target {
+    Workspace(String),
+    Tab(String, usize),
+}
+
+/// One step of a tab moved whole, on the terminals it holds.
+enum Step {
+    /// The terminal's pane zoomed or not.
+    Zoom(String, bool),
+    /// The terminal's pane into the new tab: alone at the target, or beside a terminal there (direction, ratio).
+    Move(String, Option<(String, String, f64)>),
+    /// The new tab holds the tree.
+    Check,
+    /// The new tab at its place among the target's tabs.
+    Order,
+    /// herdr's focus on this terminal, as before the move: moving panes and zooming take it elsewhere (a tmux
+    /// window keeps its active pane, and tmux's focus stays where it was).
+    Focus(String),
+}
+
+/// A tab moved whole: herdr moves no tab between workspaces, so its panes move one by one into a new tab that
+/// rebuilds its split (no new shells). The app sees one move: no topology while it runs, and when a step fails the
+/// panes go back into a tab at the origin's place before the failure answers (nothing changed), else `uncertain`.
+struct Relocation {
+    window: Option<Id>,
+    generation: u64,
+    tree: Tree,
+    label: String,
+    zoomed: Option<String>,
+    to: Target,
+    /// The origin's workspace, its place among the other tabs, and the terminals to focus at the end: the tab's
+    /// own focused pane, then the one herdr focused (herdr sets a tab's focused pane only by focusing it).
+    origin: (String, usize, Vec<String>),
+    steps: VecDeque<Step>,
+    tab: Option<String>,
+    failure: Option<Error>,
+}
+impl Relocation {
+    fn new(
+        window: Option<Id>,
+        generation: u64,
+        tree: Tree,
+        label: String,
+        zoomed: Option<String>,
+        to: Target,
+        origin: (String, usize, Vec<String>),
+    ) -> Self {
+        // herdr moves no pane out of a zoomed tab: the zoom comes off first and back on in the new tab.
+        let mut steps: VecDeque<_> = zoomed
+            .clone()
+            .map(|terminal| Step::Zoom(terminal, false))
+            .into_iter()
+            .collect();
+        steps.extend(
+            tree.plan()
+                .into_iter()
+                .map(|(terminal, split)| Step::Move(terminal, split)),
+        );
+        steps.extend([Step::Check, Step::Order]);
+        steps.extend(zoomed.clone().map(|terminal| Step::Zoom(terminal, true)));
+        steps.extend(origin.2.iter().cloned().map(Step::Focus));
+        Self {
+            window,
+            generation,
+            tree,
+            label,
+            zoomed,
+            to,
+            origin,
+            steps,
+            tab: None,
+            failure: None,
         }
     }
 }
@@ -190,8 +288,7 @@ impl Origin {
                 "The original herdr layout changed; the terminal stays separate.",
             ));
         }
-        let mut moves = vec![(self.tree.first().into(), None)];
-        self.tree.moves(&mut moves);
+        let moves = self.tree.plan();
         if moves
             .iter()
             .any(|(key, _)| !state.panes.iter().any(|pane| &pane.terminal == key))
@@ -297,6 +394,31 @@ impl Herdr {
             self.r#move(io, node, *parent, *before, done);
             return;
         }
+        if let Place::Workspace { label } = to {
+            // A window moves whole, named by its tab or any terminal of it, as a tmux pane names its window
+            // (kept consistent with tmux: see Target).
+            let tab = match self.locate(node) {
+                Ok((Kind::Tab, key)) => Ok(key),
+                Ok((Kind::Terminal, key)) => Ok(self
+                    .snapshot
+                    .panes
+                    .iter()
+                    .find(|pane| pane.key == key)
+                    .unwrap()
+                    .parent
+                    .clone()),
+                Ok(_) => Err(Error {
+                    code: "unsupported",
+                    message: "A herdr workspace does not move into another.".into(),
+                }),
+                Err(reason) => Err(reason),
+            };
+            match tab {
+                Ok(tab) => self.relocate(io, node, tab, Target::Workspace(label.clone()), done),
+                Err(reason) => self.defer(io, done, Err(reason)),
+            }
+            return;
+        }
         let source = self
             .snapshot
             .panes
@@ -391,7 +513,7 @@ impl Herdr {
                             error("The herdr terminal moved or exited before it could move.")
                         })?;
                     let destination = match &to {
-                        Place::Workspace { label } | Place::Extract(label) => D::Object(vec![
+                        Place::Extract(label) => D::Object(vec![
                             ("type", D::String("new_workspace")),
                             ("label", D::String(label)),
                         ]),
@@ -437,12 +559,11 @@ impl Herdr {
                                 ("ratio", D::Real(*ratio)),
                             ])
                         }
-                        Place::Before { .. } | Place::Restore => unreachable!(),
+                        Place::Before { .. } | Place::Restore | Place::Workspace { .. } => {
+                            unreachable!()
+                        }
                     };
-                    if let Place::Workspace { label }
-                    | Place::Extract(label)
-                    | Place::Tab { label, .. } = &to
-                    {
+                    if let Place::Extract(label) | Place::Tab { label, .. } = &to {
                         if !native::label(label) {
                             return Err(error("Invalid herdr label."));
                         }
@@ -586,5 +707,345 @@ impl Herdr {
                 mux.returning(io, node, origin, moves, tabs, mux.snapshot.clone(), done);
             }),
         );
+    }
+
+    /// Moves the tab `key` whole to `to`, ending as a tmux window move does (see Target); `node` is what the app
+    /// moves (the tab, or a terminal of it).
+    pub(super) fn relocate(
+        &mut self,
+        io: &mut dyn Io,
+        node: Id,
+        key: String,
+        to: Target,
+        done: Done<()>,
+    ) {
+        self.placements += 1;
+        let done: Action<()> = Box::new(move |mux, io, result| {
+            mux.placements -= 1;
+            if result.is_ok() {
+                mux.reveal(node);
+            }
+            mux.topology();
+            mux.defer(io, done, result);
+        });
+        self.call(
+            io,
+            "session.snapshot",
+            D::Object(Vec::new()),
+            Order::Normal,
+            Box::new(move |mux, io, result| {
+                let prepared = result.and_then(|json| mux.apply(io, &json)).and_then(|()| {
+                    let state = &mux.snapshot;
+                    let tab = state
+                        .tabs
+                        .iter()
+                        .find(|tab| tab.key == key)
+                        .ok_or_else(|| expired("This herdr tab is no longer available."))?;
+                    match &to {
+                        Target::Workspace(label) if !native::label(label) => {
+                            return Err(error("Invalid herdr label."));
+                        }
+                        Target::Tab(workspace, _)
+                            if !state.workspaces.iter().any(|w| &w.key == workspace) =>
+                        {
+                            return Err(expired("The herdr move target is no longer available."));
+                        }
+                        _ => {}
+                    }
+                    let view = state
+                        .layouts
+                        .iter()
+                        .find(|view| view.key == key)
+                        .ok_or_else(|| {
+                            expired("The original herdr layout is no longer available.")
+                        })?;
+                    let zoomed = match view.zoomed == Some(true) {
+                        true => Some(
+                            mux.pane(&view.focus)
+                                .ok_or_else(|| error("Missing zoomed herdr pane."))?
+                                .terminal,
+                        ),
+                        false => None,
+                    };
+                    let index = state
+                        .tabs
+                        .iter()
+                        .filter(|other| other.parent == tab.parent)
+                        .position(|other| other.key == key)
+                        .unwrap();
+                    let tree = Tree::layout(state, &key)?;
+                    let mut focus: Vec<_> = [Some(view.focus.as_str()), state.focus[2].as_deref()]
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|key| mux.pane(key).map(|pane| pane.terminal))
+                        .collect();
+                    focus.dedup();
+                    let origin = (tab.parent.clone(), index, focus);
+                    let window = mux.graph.ids.get(&key).copied();
+                    Ok(Relocation::new(
+                        window,
+                        mux.generation,
+                        tree,
+                        tab.label.clone(),
+                        zoomed,
+                        to,
+                        origin,
+                    ))
+                });
+                match prepared {
+                    Ok(relocation) => mux.relocation(io, relocation, done),
+                    Err(reason) => done(mux, io, Err(reason)),
+                }
+            }),
+        );
+    }
+    /// The pane holding this terminal, by pane key or terminal id.
+    fn pane(&self, key: &str) -> Option<native::Pane> {
+        self.snapshot
+            .panes
+            .iter()
+            .find(|pane| pane.key == key || pane.terminal == key)
+            .cloned()
+    }
+    fn relocation(&mut self, io: &mut dyn Io, mut r: Relocation, done: Action<()>) {
+        if r.generation != self.generation {
+            let reason = Error {
+                code: "uncertain",
+                message: "The herdr server restarted during a move.".into(),
+            };
+            return done(self, io, Err(reason));
+        }
+        let Some(step) = r.steps.pop_front() else {
+            // A rebuilt tab is the same window to the app, as a tmux window keeps its id when it moves.
+            if let (Some(window), Some(tab)) = (r.window, r.tab.take()) {
+                self.graph.ids.retain(|_, id| *id != window);
+                self.graph.ids.insert(tab, window);
+            }
+            return match r.failure.take() {
+                // Back where it was: nothing changed, whatever the failed step's reply.
+                Some(failure) if failure.code == "uncertain" => {
+                    done(self, io, Err(error(failure.message)))
+                }
+                Some(failure) => done(self, io, Err(failure)),
+                None => done(self, io, Ok(())),
+            };
+        };
+        let gone = || expired("A herdr terminal exited during a move.");
+        match step {
+            Step::Zoom(terminal, on) => {
+                let Some(pane) = self.pane(&terminal) else {
+                    return self.retreat(io, r, gone(), done);
+                };
+                let params = vec![
+                    ("pane_id", D::String(&pane.key)),
+                    ("mode", D::String(if on { "on" } else { "off" })),
+                ];
+                self.mutation(
+                    io,
+                    "pane.zoom",
+                    D::Object(params),
+                    Box::new(move |mux, io, result| match result {
+                        Ok(_) => mux.relocation(io, r, done),
+                        Err(reason) => mux.retreat(io, r, reason, done),
+                    }),
+                );
+            }
+            Step::Move(terminal, split) => {
+                let Some(source) = self.pane(&terminal) else {
+                    return self.retreat(io, r, gone(), done);
+                };
+                let tab = r.tab.clone().unwrap_or_default();
+                let beside = split.as_ref().map(|(terminal, ..)| {
+                    self.pane(terminal)
+                        .filter(|pane| pane.parent == tab)
+                        .map(|pane| pane.key)
+                });
+                let label = r.label.clone();
+                let destination = match (&split, &beside, &r.to) {
+                    (Some((_, direction, ratio)), Some(Some(beside)), _) => vec![
+                        ("type", D::String("tab")),
+                        ("tab_id", D::String(&tab)),
+                        ("target_pane_id", D::String(beside)),
+                        ("split", D::String(direction)),
+                        ("ratio", D::Real(*ratio)),
+                    ],
+                    (Some(_), _, _) => {
+                        return self.retreat(
+                            io,
+                            r,
+                            expired("The herdr move target is no longer available."),
+                            done,
+                        );
+                    }
+                    (None, _, Target::Workspace(name)) => vec![
+                        ("type", D::String("new_workspace")),
+                        ("label", D::String(name)),
+                        ("tab_label", D::String(&label)),
+                    ],
+                    (None, _, Target::Tab(workspace, _)) => vec![
+                        ("type", D::String("new_tab")),
+                        ("workspace_id", D::String(workspace)),
+                        ("label", D::String(&label)),
+                    ],
+                };
+                let params = json::write(&D::Object(vec![
+                    ("pane_id", D::String(&source.key)),
+                    ("destination", D::Object(destination)),
+                    ("focus", D::Bool(false)),
+                ]))
+                .and_then(|bytes| Json::parse(&bytes));
+                let params = match params {
+                    Ok(params) => params,
+                    Err(reason) => return self.retreat(io, r, reason, done),
+                };
+                self.mutation(
+                    io,
+                    "pane.move",
+                    D::Value(params.root()),
+                    Box::new(move |mux, io, result| {
+                        // The first pane opens the new tab: not the origin's, and in the target workspace.
+                        let landed = mux
+                            .pane(&terminal)
+                            .map(|pane| pane.parent)
+                            .filter(|parent| match &r.tab {
+                                Some(tab) => parent == tab,
+                                None => {
+                                    *parent != source.parent
+                                        && mux.snapshot.tabs.iter().any(|tab| {
+                                            &tab.key == parent
+                                                && match &r.to {
+                                                    Target::Workspace(_) => {
+                                                        tab.parent != r.origin.0
+                                                    }
+                                                    Target::Tab(workspace, _) => {
+                                                        &tab.parent == workspace
+                                                    }
+                                                }
+                                        })
+                                }
+                            });
+                        // A pane that landed moved, even when its reply was lost.
+                        if landed.is_some() {
+                            r.tab = landed.clone();
+                        }
+                        match (result, landed) {
+                            (Err(reason), _) => mux.retreat(io, r, reason, done),
+                            (Ok(_), None) => {
+                                mux.retreat(io, r, error("A herdr pane did not move."), done)
+                            }
+                            (Ok(_), Some(_)) => mux.relocation(io, r, done),
+                        }
+                    }),
+                );
+            }
+            Step::Check => {
+                let tab = r.tab.clone().unwrap_or_default();
+                if Tree::layout(&self.snapshot, &tab).ok().as_ref() == Some(&r.tree) {
+                    self.relocation(io, r, done);
+                } else {
+                    self.retreat(io, r, error("The herdr layout did not move exactly."), done);
+                }
+            }
+            Step::Focus(terminal) => {
+                let focused = self.snapshot.focus[2]
+                    .as_deref()
+                    .and_then(|key| self.pane(key));
+                match self.pane(&terminal) {
+                    // Already there, or gone: nothing to put back.
+                    Some(pane) if focused.is_none_or(|focused| focused.key != pane.key) => {
+                        let params = vec![("pane_id", D::String(&pane.key))];
+                        self.mutation(
+                            io,
+                            "pane.focus",
+                            D::Object(params),
+                            Box::new(move |mux, io, result| match result {
+                                Ok(_) => mux.relocation(io, r, done),
+                                Err(reason) => mux.retreat(io, r, reason, done),
+                            }),
+                        );
+                    }
+                    _ => self.relocation(io, r, done),
+                }
+            }
+            Step::Order => {
+                let (Target::Tab(workspace, index), Some(tab)) = (&r.to, r.tab.clone()) else {
+                    return self.relocation(io, r, done);
+                };
+                let tabs: Vec<_> = self
+                    .snapshot
+                    .tabs
+                    .iter()
+                    .filter(|other| &other.parent == workspace)
+                    .map(|other| &other.key)
+                    .collect();
+                let index = (*index).min(tabs.len().saturating_sub(1));
+                match tabs.iter().position(|other| **other == tab) {
+                    None => self.retreat(io, r, gone(), done),
+                    Some(at) if at == index => self.relocation(io, r, done),
+                    Some(at) => {
+                        // herdr inserts before the tab now at the index: past its own place, one further.
+                        let insert = if at < index { index + 1 } else { index };
+                        let params = vec![
+                            ("tab_id", D::String(&tab)),
+                            ("insert_index", D::Unsigned(insert as u64)),
+                        ];
+                        self.mutation(
+                            io,
+                            "tab.move",
+                            D::Object(params),
+                            Box::new(move |mux, io, result| match result {
+                                Ok(_) => mux.relocation(io, r, done),
+                                Err(reason) => mux.retreat(io, r, reason, done),
+                            }),
+                        );
+                    }
+                }
+            }
+        }
+    }
+    /// A step failed. Before any pane moved, only the zoom comes back; once some moved, every pane goes back into a
+    /// tab at the origin's place; once all moved, or while going back, the move answers `uncertain`.
+    fn retreat(&mut self, io: &mut dyn Io, r: Relocation, reason: Error, done: Action<()>) {
+        let (alive, gone): (Vec<_>, Vec<_>) = r
+            .tree
+            .plan()
+            .into_iter()
+            .map(|(terminal, _)| terminal)
+            .partition(|terminal| self.pane(terminal).is_some());
+        let whole = r.tab.is_some()
+            && alive
+                .iter()
+                .all(|terminal| self.pane(terminal).map(|pane| pane.parent) == r.tab);
+        if r.failure.is_some() || whole {
+            return done(
+                self,
+                io,
+                Err(Error {
+                    code: "uncertain",
+                    message: reason.message,
+                }),
+            );
+        }
+        let zoomed = r.zoomed.clone().filter(|terminal| alive.contains(terminal));
+        let mut back = if r.tab.is_none() {
+            Relocation {
+                steps: zoomed
+                    .map(|terminal| Step::Zoom(terminal, true))
+                    .into_iter()
+                    .collect(),
+                ..r
+            }
+        } else {
+            let tree = gone
+                .iter()
+                .try_fold(r.tree.clone(), |tree, terminal| tree.without(terminal));
+            let Some(tree) = tree else {
+                return done(self, io, Err(reason));
+            };
+            let to = Target::Tab(r.origin.0.clone(), r.origin.1);
+            Relocation::new(r.window, r.generation, tree, r.label, zoomed, to, r.origin)
+        };
+        back.failure = Some(reason);
+        self.relocation(io, back, done);
     }
 }

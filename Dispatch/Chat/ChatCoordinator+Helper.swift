@@ -19,7 +19,7 @@ extension ChatCoordinator {
         where session.helper.map({ $0.endpoint == endpoint && (terminal == nil || $0.route.terminal == terminal) }) == true {
             if session.exitRequested, !disabled {
                 session.exitRequested = false
-                setChatVisible(false, session: session, reason: "exit")
+                if !filesShowing(session) { setChatVisible(false, session: session, reason: "exit") }
             }
             rememberRemotePresentation(session)
             // An explicit exit can retire the subscription before its checked Return
@@ -200,7 +200,8 @@ extension ChatCoordinator {
             if let version = state.version { session.version = version }
             // A native dialog owns the terminal (e.g. Claude's startup review of changed hooks, which
             // runs after the session registers): Chat opens once it closes.
-            if session.sessionID != nil, state.dialog == nil, !session.manualViewChoice, !session.exitRequested, !session.showChat {
+            if session.sessionID != nil, state.dialog == nil, !session.manualViewChoice, !session.exitRequested, !session.showChat,
+               !filesShowing(session) {
                 setChatVisible(true, session: session)
                 adoptTerminalTypeahead(session)
             }
@@ -242,6 +243,65 @@ extension ChatCoordinator {
         case .exit:
             if let helper = session.helper { helperExited(helper.endpoint, terminal: helper.route.terminal) }
         }
+    }
+
+    /// How long a launch line keeps the terminal covered waiting for Chat; then the terminal shows, as it would have.
+    static let launchCoverLimit: Duration = .seconds(3)
+
+    /// Return in a tab's terminal with `line` typed: a line that starts an agent Chat follows covers the terminal until
+    /// Chat opens, so the agent's first second of terminal output never flashes before it. Only where discovery would
+    /// open Chat by itself: never over files, an agent already attached, or a tab the user put on its terminal.
+    func terminalSubmitted(_ line: String, tab: UUID) {
+        guard enabled, let session = sessions[tab], !session.showChat, !session.active, !session.manualViewChoice,
+              !session.exitRequested, !filesShowing(session), session.launchingAgent == nil,
+              let agent = Self.launchedAgent(line, programs: launchPrograms) else { return }
+        let cover = System.uuid()
+        session.launchingAgent = agent
+        session.launchCover = cover
+        Task { @MainActor [weak session] in
+            try? await Task.sleep(for: Self.launchCoverLimit)
+            guard let session, session.launchCover == cover else { return }
+            session.launchCover = nil
+            session.launchingAgent = nil
+        }
+    }
+
+    /// The commands that start each agent Chat is on for, to their launch keys: the helper's list once loaded, else
+    /// the two it ships.
+    private var launchPrograms: [String: String] {
+        let disabled = disabledIntegrations
+        let listed = (helperLaunches ?? []).filter { !disabled.contains($0.key) }
+            .map { (($0.program ?? $0.key).split(separator: " ").first.map(String.init) ?? $0.key, $0.key) }
+        let known = listed.isEmpty && helperLaunches?.isEmpty != false
+            ? [("claude", "claude"), ("codex", "codex")].filter { !disabled.contains($0.1) } : listed
+        return Dictionary(known, uniquingKeysWith: { first, _ in first })
+    }
+
+    /// The agent's name for the launch cover, as Settings lists it.
+    func launchTitle(_ key: String) -> String {
+        helperLaunches?.first { $0.key == key }?.label ?? key.prefix(1).uppercased() + key.dropFirst()
+    }
+
+    /// Subcommands that run and exit rather than open the agent's conversation.
+    nonisolated private static let exitingSubcommands: [String: Set<String>] = [
+        "claude": ["auth", "config", "doctor", "install", "login", "logout", "mcp", "migrate-installer", "plugin",
+                   "plugins", "setup-token", "update", "upgrade"],
+        "codex": ["a", "app-server", "apply", "cloud", "completion", "debug", "e", "exec", "features", "generate-ts",
+                  "help", "login", "logout", "mcp", "mcp-server", "proto", "sandbox"]]
+
+    /// The agent `line` starts, by launch key: its program (by name or path, after any VAR=value words) alone or with
+    /// options, a prompt or a resume; nil for a subcommand or an option that prints and exits (`claude -p`,
+    /// `codex exec`, `--version`).
+    nonisolated static func launchedAgent(_ line: String, programs: [String: String]) -> String? {
+        var words = line.split(whereSeparator: \.isWhitespace).map(String.init)
+        while let first = words.first, !first.hasPrefix("-"), first.contains("="), !first.hasPrefix("=") { words.removeFirst() }
+        guard let first = words.first, let key = programs[(first as NSString).lastPathComponent] else { return nil }
+        let rest = words.dropFirst()
+        if rest.contains(where: ["-p", "--print", "-h", "--help", "-v", "-V", "--version"].contains) { return nil }
+        if let command = rest.first(where: { !$0.hasPrefix("-") }), exitingSubcommands[key]?.contains(command) == true {
+            return nil
+        }
+        return key
     }
 
     /// Text typed in Terminal after the launch command, before Chat opened, sits in Claude's own
@@ -527,12 +587,12 @@ extension ChatCoordinator {
                 // A native turn or output may have acknowledged the command before its write reply.
                 session.optimisticPromptDelivered = true
                 session.lastInputAt = .now
-                if exits { self.setChatVisible(false, session: session, reason: "exit") }
+                if exits, !self.filesShowing(session) { self.setChatVisible(false, session: session, reason: "exit") }
                 // The picker is open: Terminal takes the keyboard, as the user's own switch would.
                 // Nothing prints back to Chat; a picked conversation arrives as a new history.
                 if opensTerminal {
                     session.observedCommand = nil
-                    self.chooseChat(false, session: session)
+                    self.showTerminal(session)
                 }
             } catch {
                 guard session.helper === helper, session.submissionID == id else { return }
@@ -547,7 +607,7 @@ extension ChatCoordinator {
                     session.submissionID = nil
                     session.queuedSubmissionID = nil
                     session.helperTask = nil
-                    self.setChatVisible(false, session: session, reason: "exit")
+                    if !self.filesShowing(session) { self.setChatVisible(false, session: session, reason: "exit") }
                     return
                 }
                 if exits { session.exitRequested = false }
@@ -855,6 +915,21 @@ extension ChatCoordinator {
         }
     }
 
+    /// The first-launch answer to whether agents run on this Mac (LocalAgentsConsent). Yes (the launch keys whose
+    /// CLIs were found) installs their integrations here; optional ones stay opt-in, as for a new SSH host. No
+    /// (nil) turns this Mac's agent hooks off, leaving the agents' settings as they are.
+    func adoptLocalAgents(_ found: Set<String>?) {
+        loadLaunches()
+        integrationWork { chat in
+            for launch in chat.helperLaunches ?? [] {
+                guard let found else { chat.setLocalHooks(launch.key, allowed: false); continue }
+                guard found.contains(launch.key), let install = chat.helperInstalls[launch.key], install.optional != true else { continue }
+                if !chat.localHooksAllowed(launch.key) { chat.localHooks[launch.key] = nil }
+                chat.setHelperIntegration(launch.key, enabled: true)
+            }
+        }
+    }
+
     /// Settings defaults: every required integration on, every optional one off.
     func restoreHelperIntegrations() {
         for launch in helperLaunches ?? [] {
@@ -898,6 +973,11 @@ extension ChatCoordinator {
                 guard var install = try? await HelperChat.setup(.local, key: launch.key, enabled: nil, terminal: nil) else { continue }
                 if off, install.status != "off", let changed = try? await HelperChat.setup(.local, key: launch.key, enabled: false, terminal: nil) {
                     install = changed
+                }
+                // An earlier opt-in missing hooks a newer helper installs (its audit shows the edit) is upgraded.
+                if !off, install.optional != true, install.installed == true, install.edits.contains(where: { $0.before != $0.after }),
+                   let upgraded = try? await HelperChat.setup(.local, key: launch.key, enabled: true, terminal: nil) {
+                    install = upgraded
                 }
                 chat.helperInstalls[launch.key] = install
             }

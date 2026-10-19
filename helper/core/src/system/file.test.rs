@@ -26,3 +26,20 @@ fn a_failure_recorded_on_the_other_system_means_the_same_error_and_reads_as_reco
     let own = io::Error::from_raw_os_error(61);
     assert_eq!(replayed(61, std::env::consts::OS), (Some(61), own.to_string(), own.kind()));
 }
+
+#[test]
+fn a_collected_run_reads_back_as_recorded() {
+    for (status, truncated) in [(Some(0), false), (Some(128), false), (None, true)] {
+        let collected = crate::api::Collected {
+            status,
+            stdout: b"a\0b\xff".to_vec(),
+            stderr: b"fatal: not a git repository\n".to_vec(),
+            truncated,
+        };
+        let bytes = encode(&Ok(Output::Collected(collected.clone()))).unwrap();
+        match decode(7, &bytes, std::env::consts::OS).unwrap().result {
+            Ok(Output::Collected(read)) => assert_eq!(read, collected),
+            other => panic!("{other:?}"),
+        }
+    }
+}

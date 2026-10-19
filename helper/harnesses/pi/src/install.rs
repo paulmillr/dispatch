@@ -382,6 +382,7 @@ fn write(runtime: &Shared, io: &mut dyn Io, setup: SharedSetup, result: Rc<Insta
             path: edit.path.clone(),
             bytes: bytes.clone(),
             mode: 0o600,
+            parent: None,
         },
         None if edit.before.is_some() => Job::Remove {
             expected: setup.borrow().expected[index],
@@ -419,3 +420,20 @@ fn write(runtime: &Shared, io: &mut dyn Io, setup: SharedSetup, result: Rc<Insta
     );
 }
 const OLD: &str = "b8ddc01d467b01e101ff76356819268dd1e5317dd01b8e3df494341f180d9761";
+
+/// `script` is Dispatch's extension as installed (its receipt's hash, or without a receipt the
+/// bundled or old bundled build), not a file the user edited: `dispatch-helper uninstall` removes
+/// only such an extension.
+pub fn installed(script: &[u8], receipt: Option<&[u8]>) -> bool {
+    if !script.starts_with(MARKER) {
+        return false;
+    }
+    match receipt.map(Json::parse) {
+        None => script == SCRIPT || digest(script) == OLD,
+        Some(Ok(receipt)) => {
+            let root = receipt.root();
+            text(root, "owner") == OWNER && digest(script) == text(root, "sha256")
+        }
+        Some(Err(_)) => false,
+    }
+}

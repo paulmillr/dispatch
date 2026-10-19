@@ -28,6 +28,33 @@ enum TestSupport {
         }
     }
 
+    /// `live` for a process fed `input`, its standard error kept apart, and stopped past `timeout` (`timedOut`).
+    nonisolated static func live(_ process: Process, input: Data, timeout: TimeInterval)
+        throws -> (status: Int32, output: Data, errors: Data, timedOut: Bool) {
+        try AppReplay.live {
+            let stdin = Pipe(), stdout = Pipe(), stderr = Pipe()
+            process.standardInput = stdin; process.standardOutput = stdout; process.standardError = stderr
+            try process.run()
+            stdout.fileHandleForWriting.closeFile(); stderr.fileHandleForWriting.closeFile()
+            try? stdin.fileHandleForWriting.write(contentsOf: input)
+            try? stdin.fileHandleForWriting.close()
+            // Both pipes drain at once, so a chatty child never blocks on a full one before the deadline.
+            final class Drained: @unchecked Sendable { var data = Data() }
+            let output = Drained(), errors = Drained(), collected = DispatchGroup()
+            for (pipe, into) in [(stdout, output), (stderr, errors)] {
+                collected.enter()
+                DispatchQueue.global().async { into.data = pipe.fileHandleForReading.readDataToEndOfFile(); collected.leave() }
+            }
+            let deadline = Date().addingTimeInterval(timeout)
+            while process.isRunning && Date() < deadline { usleep(10_000) }
+            let timedOut = process.isRunning
+            if timedOut { process.terminate() }
+            process.wait()
+            collected.wait()
+            return (process.terminationStatus, output.data, errors.data, timedOut)
+        }
+    }
+
     /// A process a test starts beside itself (a fixture server, a profiler). One the app's recording depends on starts
     /// inside a recorded body (TestSupport.fixture, AppReplay.query), so replay starts nothing; else only in capture.
     nonisolated static func start(_ process: Process) throws { try process.run() }
@@ -154,6 +181,15 @@ enum TestSupport {
         try await System.step(at: URL(fileURLWithPath: "\(file)").lastPathComponent + ":\(line)")
     }
 
+    /// What a wait's end needs besides its condition. A sidebar slide runs on wall time: what a test reads or does next
+    /// while one runs (pane widths, the terminal grids they give) would depend on how far it came. A move shows before
+    /// its server answers and goes back when refused: a wait that ended on it would pass whatever the server answers.
+    static var settled: Bool {
+        !TerminalRuntime.shared.helpers.values.contains(where: \.moving) && !NSApp.windows.contains { window in
+            window.isVisible && window.contentView.map { PresentationTestSupport.views(of: TerminalSplitView.self, in: $0).contains(where: \.sidebarAnimating) } == true
+        }
+    }
+
     static func eventually(timeout: Duration = .seconds(5), interval: Duration = .milliseconds(25),
                            file: StaticString = #filePath, line: UInt = #line,
                            diagnostic: @autoclosure () -> String = "Condition timed out",
@@ -183,11 +219,7 @@ enum TestSupport {
             checks += 1
             defer { checking += began.duration(to: clock.now) }
             guard try await AppReplay.checking({ try await System.$polling.withValue(true) { try await condition() } }) else { return false }
-            // A sidebar slide runs on wall time: what a test reads or does next while one runs (pane widths, the
-            // terminal grids they give) would depend on how far it came, so no wait ends during one.
-            return !NSApp.windows.contains { window in
-                window.isVisible && window.contentView.map { PresentationTestSupport.views(of: TerminalSplitView.self, in: $0).contains(where: \.sidebarAnimating) } == true
-            }
+            return settled
         }
         // The test continues where the recording saw it continue: replay delivers nothing recorded later first. The
         // condition holds once the app handled what it already read (capture records input when read, replay delivers
@@ -353,10 +385,20 @@ final class DispatchTestObserver: NSObject, XCTestObservation {
         return (["DispatchTests"] + parts.suffix(2).map(String.init)).joined(separator: "/")
     }
 
-    /// Case boundaries next to the helper captures (DISPATCH_CAPTURE=<dir>/helper-%p.rpl.bz2, inherited
-    /// by every helper), so the captures can be cut per case.
-    private static let cases = System.environment("DISPATCH_CAPTURE").map {
-        URL(fileURLWithPath: $0).deletingLastPathComponent().appendingPathComponent("cases.jsonl")
+    /// A capture's staging root (the runner's DISPATCH_CAPTURE=<root>/helper-%p.rpl.zst, inherited by every helper): each
+    /// case writes <TestFile>/<test>/ in it, as in replays/ (tests.json there names each test class's file), and its
+    /// boundaries in cases.jsonl.
+    private static let staging = System.environment("DISPATCH_CAPTURE").map { URL(fileURLWithPath: $0).deletingLastPathComponent() }
+    private static let cases = staging?.appendingPathComponent("cases.jsonl")
+    private static let files = staging.flatMap {
+        try? JSONDecoder().decode([String: String].self, from: Data(contentsOf: $0.appendingPathComponent("tests.json")))
+    } ?? [:]
+
+    /// Where a capture stages `testCase`: <root>/<TestFile>/<test>/.
+    private static func staged(_ testCase: XCTestCase) throws -> URL {
+        let parts = identifier(testCase).split(separator: "/").map(String.init)
+        guard let staging, let file = files[parts[1]] else { throw HelperFailure(code: "capture", message: "No test file declares \(parts[1]) (tests.json)") }
+        return staging.appendingPathComponent(file).appendingPathComponent(parts[2])
     }
 
     nonisolated(unsafe) private static var journals: [String: String] = [:]
@@ -383,12 +425,14 @@ final class DispatchTestObserver: NSObject, XCTestObservation {
     }
 
     /// The case's remote helper captures (SSHBootstrap.captureDirectory on each host it used) move to
-    /// <captures>/remote/<Class.test>/<host>/helper-<pid>-<start ns>.rpl.bz2; per case, so remote clocks never matter.
+    /// <root>/<TestFile>/<test>/<host>/helper-<pid>-<start ns>.rpl.zst; per case, so remote clocks never matter.
     private static func collectRemote(_ testCase: XCTestCase) {
         defer { SSHLinuxTestProfile.used.removeAll() }
-        guard let cases, let directory = SSHBootstrap.captureDirectory else { return }
-        let name = identifier(testCase).replacingOccurrences(of: "DispatchTests/", with: "").replacingOccurrences(of: "/", with: ".")
-        let target = cases.deletingLastPathComponent().appendingPathComponent("remote").appendingPathComponent(name)
+        guard cases != nil else { return }
+        let target: URL
+        do { target = try staged(testCase) } catch { XCTFail("\(error)"); return }
+        // Where the case's remote helpers wrote: the folder of the case's own capture path (DISPATCH_CAPTURE during it).
+        let directory = SSHBootstrap.captureDirectory(target.appendingPathComponent("helper-%p.rpl.zst").path)
         let script = System.checkout.appendingPathComponent("test/capture.py").path
         var sources: [(String, URL, [String])] = []
         // The loopback sshd runs as this account: the remote HOME is the account's, not this test's HOME.
@@ -423,10 +467,9 @@ final class DispatchTestObserver: NSObject, XCTestObservation {
         if let journal {
             // The case replays its app journal: no I/O; it fails where the app does something the journal lacks.
             do { try AppReplay.begin(url: journal, replaying: true) } catch { XCTFail("App replay setup failed: \(error)") }
-        } else if let directory = System.environment("DISPATCH_APP_CAPTURE") {
-            let name = Self.identifier(testCase).split(separator: "/").dropFirst().joined(separator: ".")
-            let path = URL(fileURLWithPath: directory).appendingPathComponent(name).appendingPathComponent(System.uuid().uuidString + ".rpl.bz2")
+        } else if System.environment("DISPATCH_TEST_CAPTURE") == "1" {
             do {
+                let path = try Self.staged(testCase).appendingPathComponent(System.uuid().uuidString + ".rpl.zst")
                 try AppReplay.begin(url: path, replaying: false)
                 Self.journals[Self.identifier(testCase)] = path.path
             } catch { XCTFail("App journal setup failed: \(error)") }
@@ -448,12 +491,11 @@ final class DispatchTestObserver: NSObject, XCTestObservation {
         }
         if journal == nil, System.environment("DISPATCH_TEST_CAPTURE") == "1" {
             if let previous = System.environment("DISPATCH_CAPTURE") {
-                let name = Self.identifier(testCase).split(separator: "/").dropFirst().joined(separator: ".")
-                let directory = URL(fileURLWithPath: previous).deletingLastPathComponent()
                 do {
+                    let directory = try Self.staged(testCase)
                     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
                                                            attributes: [.posixPermissions: 0o700])
-                    let pattern = directory.appendingPathComponent("\(name)-%p.rpl.bz2").path
+                    let pattern = directory.appendingPathComponent("helper-%p.rpl.zst").path
                     setenv("DISPATCH_CAPTURE", pattern, 1)
                     // Registered first: all case cleanup and shared-state checks finish before the helper exits.
                     testCase.addTeardownBlock {
@@ -475,7 +517,7 @@ final class DispatchTestObserver: NSObject, XCTestObservation {
     }
 }
 
-/// The replay corpus, `replays/<TestFile>/<test>/<key>.rpl.bz2` (DISPATCH_REPLAYS: another root): a test with an app
+/// The replay corpus, `replays/<TestFile>/<test>/<key>.rpl.zst` (DISPATCH_REPLAYS: another root): a test with an app
 /// journal there replays it, one without runs live (recorded when the runner captures). DISPATCH_LIVE=1 runs every test
 /// live; DISPATCH_REPLAY_REQUIRED=1 fails a test without one. A journal of another protocol version is a wrong
 /// capture: the test fails (`capture prune` drops it).
@@ -507,7 +549,7 @@ enum Corpus {
               let file = files[parts[1]] else { return nil }
         let directory = root.appendingPathComponent(file).appendingPathComponent(parts[2])
         let urls = ((try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? [])
-            .filter { $0.lastPathComponent.hasSuffix(".rpl.bz2") }.sorted { $0.path < $1.path }
+            .filter { $0.lastPathComponent.hasSuffix(".rpl.zst") }.sorted { $0.path < $1.path }
         for url in urls {
             switch try AppReplay.journal(url) {
             case true?: return url
@@ -531,12 +573,6 @@ extension AgentModelMenu {
                 + #"(?![\p{L}\p{N}._/-])"#, options: .regularExpression) != nil
         }
     }
-}
-
-@MainActor final class ChatDraftMemoryStore: ChatDraftPersistence {
-    var buckets: [String: ChatDraftBucket] = [:]
-    func load() throws -> [String: ChatDraftBucket] { buckets }
-    func save(_ buckets: [String: ChatDraftBucket]) throws { self.buckets = buckets }
 }
 
 /// A modal alert nobody answers blocks the whole run (runs 135 and 136 hung on one). A test that
@@ -729,14 +765,6 @@ extension Space {
             return ContainerTab(id: System.uuid(), node: UInt64(index + 1), name: name ?? "\(index)", arrangement: PaneArrangement(tab: tab))
         }
         selectedContainer = containers[selected].id
-    }
-}
-
-extension ChatSideQuestion {
-    /// The form for a helper interaction (its chat.interaction JSON) in conversation `session`.
-    static func helper(_ interaction: [String: Any], session: String) throws -> ChatSideQuestion {
-        let value = try JSONDecoder().decode(HelperChat.Interaction.self, from: JSONSerialization.data(withJSONObject: interaction))
-        return try XCTUnwrap(ChatSideQuestion(interaction: value, session: session))
     }
 }
 

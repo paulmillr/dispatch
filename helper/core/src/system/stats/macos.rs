@@ -1,9 +1,10 @@
 //! Native Darwin facts, copied before their OS allocations are released.
-use super::{Counter, Cpu, Disk, Host, Link, Scan, darwin::*, ffi, invalid, name};
+use super::{Cpu, Disk, Host, Link, Scan, darwin::*, ffi, invalid};
 use std::{
     ffi::CStr,
     io,
-    mem::{MaybeUninit, size_of, size_of_val},
+    mem::{MaybeUninit, size_of},
+    process::Command,
     ptr,
 };
 
@@ -36,19 +37,6 @@ pub(super) fn boot() -> io::Result<String> {
     Ok(String::from_utf8_lossy(&bytes)
         .trim_end_matches('\0')
         .into())
-}
-
-pub(super) fn timebase() -> io::Result<[u32; 2]> {
-    let mut value = MaybeUninit::zeroed();
-    // SAFETY: the kernel initializes both words in the native Mach timebase structure.
-    if unsafe { mach_timebase_info(value.as_mut_ptr()) } != 0 {
-        return Err(invalid());
-    }
-    let value = unsafe { value.assume_init() };
-    if value.numer == 0 || value.denom == 0 {
-        return Err(invalid());
-    }
-    Ok([value.numer, value.denom])
 }
 
 pub(super) fn host(host: &mut Host, local: bool) {
@@ -171,87 +159,20 @@ pub(super) fn host(host: &mut Host, local: bool) {
     }
 }
 
-fn process(pid: i32) -> Option<Process> {
-    let mut value = MaybeUninit::<Process>::zeroed();
-    let size = size_of::<Process>() as i32;
-    // SAFETY: PROC_PIDTASKALLINFO writes this exact structure; only full replies are accepted.
-    if unsafe { proc_pidinfo(pid, 2, 0, value.as_mut_ptr(), size) } != size {
-        return None;
+/// Every account's processes as /bin/ps lists them (stats.rs: why not proc_pidinfo). `cpu` is ps's %CPU,
+/// the kernel's running average of each process's recent use (it decays over seconds), 100 being one
+/// core: there at the first sample.
+pub(super) fn processes(scan: &mut Scan) -> io::Result<()> {
+    let mut command = Command::new("/bin/ps");
+    // Numbers in the C format whatever the account's locale (ssh passes on the client's LANG and LC_*).
+    command
+        .args(["-axo", "pid=,pcpu=,rss=,comm="])
+        .env_remove("LC_ALL")
+        .env("LC_NUMERIC", "C");
+    match super::super::process::run(command, Vec::new(), Some(scan.deadline()), usize::MAX)? {
+        (status, bytes) if status.success() => super::ps(scan, &bytes),
+        (status, _) => Err(io::Error::other(status.to_string())),
     }
-    let value = unsafe { value.assume_init() };
-    if value.pbsd.pbi_pid != pid as u32 || value.pbsd.pbi_start_tvusec >= 1_000_000 {
-        return None;
-    }
-    Some(value)
-}
-
-pub(super) fn processes(scan: &mut Scan, units: [u64; 4]) -> io::Result<()> {
-    let mut pids = vec![0; 4097];
-    // SAFETY: libproc receives the exact allocated buffer size in bytes.
-    let count = unsafe { proc_listallpids(pids.as_mut_ptr(), size_of_val(pids.as_slice()) as i32) };
-    if count <= 0 {
-        return Err(io::Error::last_os_error());
-    }
-    scan.truncated = count > 4096;
-    for pid in pids.into_iter().take((count as usize).min(4096)) {
-        if scan.expired() {
-            break;
-        }
-        if pid <= 0 {
-            continue;
-        }
-        let Some(before) = process(pid) else { continue };
-        if scan.expired() {
-            break;
-        }
-        let Some(after) = process(pid) else { continue };
-        let bsd = after.pbsd;
-        if (before.pbsd.pbi_start_tvsec, before.pbsd.pbi_start_tvusec)
-            != (bsd.pbi_start_tvsec, bsd.pbi_start_tvusec)
-        {
-            continue;
-        }
-        let Some(ticks) = after
-            .ptinfo
-            .pti_total_user
-            .checked_add(after.ptinfo.pti_total_system)
-        else {
-            continue;
-        };
-        if ticks
-            < before
-                .ptinfo
-                .pti_total_user
-                .saturating_add(before.ptinfo.pti_total_system)
-        {
-            continue;
-        }
-        let Some(nanos) = (u128::from(ticks) * u128::from(units[2]) / u128::from(units[3]))
-            .try_into()
-            .ok()
-        else {
-            continue;
-        };
-        let raw = if bsd.pbi_name[0] != 0 {
-            bsd.pbi_name.as_slice()
-        } else {
-            bsd.pbi_comm.as_slice()
-        };
-        let end = raw
-            .iter()
-            .position(|value| *value == 0)
-            .unwrap_or(raw.len());
-        if !scan.push(Counter {
-            pid,
-            start: format!("{}:{}", bsd.pbi_start_tvsec, bsd.pbi_start_tvusec),
-            name: name(&raw[..end]),
-            nanos,
-            rss: after.ptinfo.pti_resident_size,
-        })? {
-            break;
-        }
-    }
-    Ok(())
 }
 
 pub(super) fn disks(rows: &mut Vec<Disk>) -> io::Result<()> {

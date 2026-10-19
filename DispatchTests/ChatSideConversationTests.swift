@@ -110,7 +110,11 @@ final class ChatSideConversationTests: XCTestCase {
         try System.write(Data(config.replacingOccurrences(of: "[features]\n", with: "[features]\ndefault_mode_request_user_input = true\n").utf8),
                          to: configURL)
         let socket = fixture.state.appendingPathComponent("codex.sock")
+        // The parent (its app-server and its terminal) runs in a zone of its own: its sides must run in it too, not in
+        // the machine's.
+        let zone = "Pacific/Chatham"
         let server = Process()
+        server.environment = System.inherited.merging(["TZ": zone]) { $1 }
         server.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
         server.arguments = [CodexTestSupport.root.appendingPathComponent("scripts/codex_fixture.py").path,
             "app-server", "--state", fixture.state.path, "--codex", fixture.binary, "--remote", "unix://" + socket.path]
@@ -127,7 +131,7 @@ final class ChatSideConversationTests: XCTestCase {
         let id = try XCTUnwrap(app.workspace.activeSurfaceID)
         let terminal = try XCTUnwrap(runtime.views[id])
         let session = runtime.chat.session(for: id)
-        TerminalTestSupport.send(CodexTestSupport.command(state: fixture.state, binary: fixture.binary) + " --remote " + HerdrLaunch.quote("unix://" + socket.path), to: terminal)
+        TerminalTestSupport.send("TZ=" + zone + " " + CodexTestSupport.command(state: fixture.state, binary: fixture.binary) + " --remote " + HerdrLaunch.quote("unix://" + socket.path), to: terminal)
         try await TestSupport.eventually(timeout: .seconds(15)) {
             session.active && terminal.agentMenuScreen.contains("dispatch-fixture default")
         }
@@ -218,6 +222,14 @@ final class ChatSideConversationTests: XCTestCase {
             XCTAssertNil(session.sideConversation)
             XCTAssertTrue(side.messages.isEmpty)
         }
+        // Every request Codex sent, the parent's and both sides', names the parent's zone (its environment context).
+        func zones(_ value: Any) -> [String] {
+            if let values = value as? [Any] { return values.flatMap(zones) }
+            if let object = value as? [String: Any] { return object.values.flatMap(zones) }
+            guard let text = value as? String else { return [] }
+            return text.components(separatedBy: "<timezone>").dropFirst().compactMap { $0.components(separatedBy: "</timezone>").first }
+        }
+        XCTAssertEqual(Set(try CodexTestSupport.conversationRequests(in: fixture.state).flatMap { zones($0["body"] ?? []) }), [zone])
         try await TestSupport.eventually(timeout: .seconds(15)) { session.helper != nil && !session.busy }
         session.draft = "DISPATCH_SIDE_QUESTION main"
         runtime.chat.sendFromComposer(session)

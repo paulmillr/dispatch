@@ -235,6 +235,7 @@ final class HelperChat {
     let terminal: UInt64?
   }
 
+  #if canImport(AppKit)
   /// Audits (`enabled` nil) or installs/removes one harness integration on a helper's host, for the
   /// account or (`terminal`) for the agent running there, in its own config root (core 87af25a7);
   /// nil when that host's helper does not list the harness.
@@ -248,6 +249,7 @@ final class HelperChat {
       enabled == nil ? "installation.audit" : "installation.install",
       params: Setup(launch: launch.launch, enabled: enabled, terminal: terminal))
   }
+  #endif
 
   struct History: Decodable {
     let terminal: UInt64
@@ -468,6 +470,8 @@ final class HelperChat {
     case exit
   }
 
+  // The Mac app's live chat client, which reaches helpers through HelperApp's endpoints.
+  #if canImport(AppKit)
   private(set) var route: Route
   private let selector: String?
   /// Set for an archived conversation read from its transcript without a live terminal.
@@ -662,8 +666,10 @@ final class HelperChat {
       }
     } catch { failed?(error) }
   }
+  #endif
 }
 
+#if canImport(AppKit)
 extension HelperTopology.Binding {
   var process: AgentProcess? {
     guard let pid, let start, start.count == 2, let executable else { return nil }
@@ -672,3 +678,4 @@ extension HelperTopology.Binding {
       startedMicroseconds: start[1])
   }
 }
+#endif

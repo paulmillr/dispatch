@@ -101,6 +101,33 @@ pub(super) fn encode(result: &io::Result<Output>) -> io::Result<Vec<u8>> {
         ]),
         Ok(Output::Written) => Data::Object(vec![("kind", Data::String("written"))]),
         Ok(Output::Locked) => Data::Object(vec![("kind", Data::String("locked"))]),
+        Ok(Output::Packed(p)) => Data::Object(vec![
+            ("kind", Data::String("packed")),
+            ("archive", Data::String(&p.archive)),
+            ("entries", Data::Unsigned(p.entries)),
+            ("files", Data::Unsigned(p.files)),
+            ("folders", Data::Unsigned(p.folders)),
+            ("bytes", Data::Unsigned(p.bytes)),
+            ("size", Data::Unsigned(p.size)),
+            ("skipped", Data::Unsigned(p.skipped)),
+        ]),
+        Ok(Output::Appended(size)) => {
+            Data::Object(vec![("kind", Data::String("appended")), ("size", Data::Unsigned(*size))])
+        }
+        Ok(Output::Unpacked(u)) => Data::Object(vec![
+            ("kind", Data::String("unpacked")),
+            ("entries", Data::Unsigned(u.entries)),
+            ("bytes", Data::Unsigned(u.bytes)),
+            ("replaced", Data::Unsigned(u.replaced)),
+            ("kept", Data::Unsigned(u.kept)),
+            ("skipped", Data::Unsigned(u.skipped)),
+        ]),
+        Ok(Output::Removed) => Data::Object(vec![("kind", Data::String("removed"))]),
+        Ok(Output::Swept(directory, removed)) => Data::Object(vec![
+            ("kind", Data::String("swept")),
+            ("directory", Data::Bytes(directory.as_os_str().as_bytes())),
+            ("removed", Data::Unsigned(*removed)),
+        ]),
         Ok(Output::Exit { status, stdout }) => Data::Object(vec![
             ("kind", Data::String("exit")),
             (
@@ -108,6 +135,13 @@ pub(super) fn encode(result: &io::Result<Output>) -> io::Result<Vec<u8>> {
                 status.map_or(Data::Null, |v| Data::Signed(v.into())),
             ),
             ("stdout", Data::Bytes(stdout)),
+        ]),
+        Ok(Output::Collected(c)) => Data::Object(vec![
+            ("kind", Data::String("collected")),
+            ("status", c.status.map_or(Data::Null, |v| Data::Signed(v.into()))),
+            ("stdout", Data::Bytes(&c.stdout)),
+            ("stderr", Data::Bytes(&c.stderr)),
+            ("truncated", Data::Bool(c.truncated)),
         ]),
         Ok(Output::List(entries)) => {
             kinds = entries.iter().map(|(_, k)| format!("{k:?}")).collect();
@@ -127,6 +161,8 @@ pub(super) fn encode(result: &io::Result<Output>) -> io::Result<Vec<u8>> {
                 ),
             ])
         }
+        Ok(Output::Entries(entries, truncated, directory)) => super::listing::encode_entries(entries, *truncated, *directory)?,
+        Ok(Output::Summary(totals)) => super::listing::encode_summary(totals),
         Ok(Output::Process(p)) => Data::Object(vec![
             ("kind", Data::String("process")),
             ("pid", Data::Unsigned(p.pid.into())),
@@ -213,6 +249,28 @@ pub(super) fn decode(sequence: u64, output: &[u8], os: &str) -> io::Result<Compl
         "bytes" => Ok(Output::Bytes(field(value, "bytes", Data::bytes)?.to_vec())),
         "written" => Ok(Output::Written),
         "locked" => Ok(Output::Locked),
+        "packed" => Ok(Output::Packed(crate::api::Packed {
+            archive: field(value, "archive", Data::string)?.to_owned(),
+            entries: field(value, "entries", Data::unsigned)?,
+            files: field(value, "files", Data::unsigned)?,
+            folders: field(value, "folders", Data::unsigned)?,
+            bytes: field(value, "bytes", Data::unsigned)?,
+            size: field(value, "size", Data::unsigned)?,
+            skipped: field(value, "skipped", Data::unsigned)?,
+        })),
+        "appended" => Ok(Output::Appended(field(value, "size", Data::unsigned)?)),
+        "unpacked" => Ok(Output::Unpacked(crate::api::Unpacked {
+            entries: field(value, "entries", Data::unsigned)?,
+            bytes: field(value, "bytes", Data::unsigned)?,
+            replaced: field(value, "replaced", Data::unsigned)?,
+            kept: field(value, "kept", Data::unsigned)?,
+            skipped: field(value, "skipped", Data::unsigned)?,
+        })),
+        "removed" => Ok(Output::Removed),
+        "swept" => Ok(Output::Swept(
+            path(value.get("directory").ok_or_else(invalid)?)?,
+            field(value, "removed", Data::unsigned)?,
+        )),
         "exit" => Ok(Output::Exit {
             status: value
                 .get("status")
@@ -222,6 +280,17 @@ pub(super) fn decode(sequence: u64, output: &[u8], os: &str) -> io::Result<Compl
                 .map_err(|_| invalid())?,
             stdout: field(value, "stdout", Data::bytes)?.to_vec(),
         }),
+        "collected" => Ok(Output::Collected(crate::api::Collected {
+            status: value
+                .get("status")
+                .and_then(Data::signed)
+                .map(i32::try_from)
+                .transpose()
+                .map_err(|_| invalid())?,
+            stdout: field(value, "stdout", Data::bytes)?.to_vec(),
+            stderr: field(value, "stderr", Data::bytes)?.to_vec(),
+            truncated: field(value, "truncated", Data::boolean)?,
+        })),
         "list" => Ok(Output::List(
             field(value, "entries", Data::array)?
                 .map(|entry| {
@@ -242,6 +311,8 @@ pub(super) fn decode(sequence: u64, output: &[u8], os: &str) -> io::Result<Compl
                 })
                 .collect::<io::Result<_>>()?,
         )),
+        "entries" => super::listing::decode_entries(value),
+        "summary" => super::listing::decode_summary(value),
         "process" => {
             let start: Vec<_> = field(value, "start", Data::array)?
                 .map(|v| v.unsigned().ok_or_else(invalid))

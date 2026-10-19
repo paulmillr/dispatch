@@ -8,13 +8,23 @@ use dispatch_helper_core::{
     json::Data,
     wire::body,
 };
-use std::collections::VecDeque;
+use std::{
+    collections::VecDeque,
+    time::{Duration, Instant},
+};
+
+/// How long a kill waits for the creations in flight on its server. A creation settles only when
+/// its local tmux client answers or ends: one that hangs would hold every later close there. A slow
+/// but live creation took 12 s in a recorded test.
+const WAIT: Duration = Duration::from_secs(30);
 
 /// A server's kills in flight and the work waiting, in the order asked (`true`: a kill).
 #[derive(Default)]
 pub(crate) struct Order {
     killing: usize,
     waiting: VecDeque<(bool, Continue<()>)>,
+    /// When the kill first in line stops waiting for the creations in flight.
+    deadline: Option<Instant>,
 }
 
 impl Tmux {
@@ -22,7 +32,9 @@ impl Tmux {
     /// for the creations in flight, a creation for the kills. A creation's anchor comes from a
     /// snapshot the app relays late (it may be the window a close is killing), and a local
     /// creation's own tmux client is not ordered with the control client's commands: the kill can
-    /// overtake an earlier `new-window -a -t @N` (tmux: "can't find window").
+    /// overtake an earlier `new-window -a -t @N` (tmux: "can't find window"). A kill waits at most
+    /// WAIT; the creations it waited for then hold back no kill (`overdue`), and one that still
+    /// answers can meet that refusal.
     pub(crate) fn ordered(
         &mut self,
         io: &mut dyn Io,
@@ -46,16 +58,38 @@ impl Tmux {
                 return;
             };
             let busy = if kill {
-                server.clients.iter().any(|client| client.creating > 0)
+                server.clients.iter().any(|client| client.creating > client.overdue)
             } else {
                 server.order.killing > 0
             };
             if busy {
+                if kill && server.order.deadline.is_none() {
+                    let at = io.now() + WAIT;
+                    server.order.deadline = Some(at);
+                    io.timer(at);
+                }
                 return;
             }
             let (_, job) = server.order.waiting.pop_front().unwrap();
             server.order.killing += usize::from(kill);
+            server.order.deadline = None;
             job(self, io, ());
+        }
+    }
+    /// A Timer at `at`: on each server whose kill waited WAIT, the creations in flight hold back no
+    /// kill any more.
+    pub(crate) fn overdue(&mut self, io: &mut dyn Io, at: Instant) {
+        for id in self.backends.keys().copied().collect::<Vec<_>>() {
+            let Some(server) = self.backends.get_mut(&id).filter(|server| {
+                server.order.deadline.is_some_and(|deadline| deadline <= at)
+            }) else {
+                continue;
+            };
+            server.order.deadline = None;
+            for client in &mut server.clients {
+                client.overdue = client.creating;
+            }
+            self.proceed(io, id);
         }
     }
     /// A creation finished (its pane, if any, is in the latest snapshot); the last one
@@ -69,6 +103,7 @@ impl Tmux {
             return;
         };
         client.creating -= 1;
+        client.overdue = client.overdue.saturating_sub(1);
         if client.creating == 0 && std::mem::take(&mut client.detaching) {
             client.dismissed.extend(pane);
             if client.snapshot.as_ref().is_some_and(|snapshot| {
@@ -554,3 +589,7 @@ impl Tmux {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "close.test.rs"]
+mod tests;

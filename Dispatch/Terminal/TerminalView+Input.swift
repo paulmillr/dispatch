@@ -245,6 +245,9 @@ extension TerminalView {
         guard key.action != .release, modifierForKeyCode(UInt16(clamping: key.keycode)) == nil else { return }
         let plain = key.mods.intersection([.ctrl, .alt, .super]).isEmpty
         if key.keycode == 36 || key.keycode == 76 {
+            if plain, !key.mods.contains(.shift), let line = typeahead, !line.isEmpty {
+                TerminalRuntime.shared.chat.terminalSubmitted(line, tab: id)
+            }
             typeahead = plain && !key.mods.contains(.shift) ? "" : nil
         } else if key.keycode == 51, key.mods.subtracting(.capsLock).isEmpty {
             typeahead = typeahead.map { String($0.dropLast()) }

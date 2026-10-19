@@ -1,6 +1,6 @@
 # Architecture
 
-Each rule here guards against lost sessions, misdelivered input, or leaked data. Build and test mechanics are in [CLAUDE.md](../CLAUDE.md) and [test/README.md](../test/README.md); tmux, herdr, SSH, and agent lifecycles are in [integrations](integrations.md).
+Each rule here guards against lost sessions, misdelivered input, or leaked data. Build and test mechanics are in the [README](../README.md#run) and [test/README.md](../test/README.md); tmux, herdr, SSH, and agent lifecycles are in [integrations](integrations.md).
 
 | Owner | Owns |
 | --- | --- |
@@ -9,7 +9,7 @@ Each rule here guards against lost sessions, misdelivered input, or leaked data.
 | [TerminalRuntime](../Dispatch/Terminal/TerminalRuntime.swift) | The terminal engine and its surfaces, keyed by stable UUID. |
 | [Hosts](../Dispatch/Hosts/) | Presentation identity, kept separate from live process ownership and connection recipes. |
 | [SSH](../Dispatch/SSH/) | Enhanced-connection authentication and per-connection feature grants. |
-| [Tmux](../Dispatch/Tmux/) / [Herdr](../Dispatch/Herdr/) | Mapping server-owned sessions into native spaces and tabs. |
+| [Helper](../Dispatch/Helper/) / [Herdr](../Dispatch/Herdr/), over the helper's [tmux](../helper/multiplexers/tmux/) and [herdr](../helper/multiplexers/herdr/) crates | Mapping server-owned sessions into native spaces and tabs. |
 | [Chat](../Dispatch/Chat/) | Agent discovery, per-surface sessions, drafts, submissions, approvals. |
 | [Views](../Dispatch/Views/) | Presentation only. Views never own shell lifetime. |
 
@@ -23,5 +23,6 @@ Each rule here guards against lost sessions, misdelivered input, or leaked data.
 - **Agent requests.** Chat attaches only after discovery establishes process and conversation ownership. Approvals and question replies belong to a live request and never migrate with presentation state. Losing verification pauses input but keeps history and drafts.
 - **Persistence.** Dispatch saves only what `SettingsStore`, `HostSessionStore`, `TerminalHistoryStore`, and `ChatDraftRepository` save; it never restores shell processes. Sensitive files go through `PrivateFile` (owner-only, atomic). Agent histories and tmux/herdr sessions belong to those tools.
 - **Diagnostics.** `ChatViewportTrace` is opt-in, bounded, and never records conversation text, host/user details, paths, or original row IDs.
+- **Chat composers.** The main, `/btw`, and `/side` composers use `ChatCaretTextView`/`ChatEditorTextView`. Never revert one to a SwiftUI `TextField`: its native caret rendering made Chat slow on 120 Hz Adaptive-refresh displays (external displays and ProMotion MacBooks, especially in full screen). `ChatSideComposerTests` guards caret, IME, focus, and drafts.
 - **Engine.** The terminal is the Swift terminal (`Vendor/Term`, ported from Ghostty) behind [`TerminalBackend`](../Dispatch/Terminal/TerminalBackend.swift). It reads a Ghostty-syntax config, bundles Ghostty's shell integration and themes (`Vendor/Term/Resources`), and draws with the contrast shader in [`Shaders.swift`](../Vendor/Term/Sources/TermApple/Shaders.swift).
 - **Shutdown.** Save the remote workspace, unmount native views, stop coordinators, destroy surfaces, release the terminal engine, then await SSH/launcher cleanup.

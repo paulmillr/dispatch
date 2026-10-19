@@ -14,6 +14,13 @@ public final class FontCollection {
     #else
     static let bundle = Bundle(for: FontCollection.self)
     #endif
+    /// The bundled fonts' folder in it. An iOS app bundle is flat: Dispatch for iPhone copies them to
+    /// TermFonts, since a top-level Resources folder makes codesign read the app as a macOS-style bundle.
+    #if os(iOS)
+    static let fontFolder = "TermFonts"
+    #else
+    static let fontFolder = "Resources"
+    #endif
 
     public enum Style: Int, CaseIterable { case regular, bold, italic, boldItalic }
     public enum Presentation { case text, emoji }
@@ -60,7 +67,7 @@ public final class FontCollection {
             }
         }
         try completeStyles(synthetic: synthetic)
-        let resource = { (name: String) in [UInt8](try! Data(contentsOf: Self.bundle.url(forResource: name, withExtension: "ttf", subdirectory: "Resources")!)) }
+        let resource = { (name: String) in [UInt8](try! Data(contentsOf: Self.bundle.url(forResource: name, withExtension: "ttf", subdirectory: Self.fontFolder)!)) }
         let (upright, italic) = (resource("JetBrainsMono-Variable"), resource("JetBrainsMono-Italic-Variable"))
         add(upright, .regular, adjustment: .icWidth)
         add(upright, .bold, adjustment: .icWidth, weight: 700)

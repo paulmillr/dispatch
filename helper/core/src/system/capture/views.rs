@@ -1,4 +1,4 @@
-//! Views (docs/capture_scrub.md): the text a reader of one stream sees, in record order, so a needle is found where a
+//! Views (docs/replay.md, Scrub captures): the text a reader of one stream sees, in record order, so a needle is found where a
 //! record boundary cuts it or a terminal wraps it.
 
 /// One stream's text so far: the last `keep` bytes a match can start in, each with where it was recorded (`P`: a record's

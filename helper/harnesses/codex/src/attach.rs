@@ -837,14 +837,9 @@ impl Open {
                 }
             }
             Stage::Environment => {
-                // Environment values are bytes; an endpoint URL needs UTF-8 ones.
-                let text = |name| root.get(name).and_then(Data::bytes).and_then(|v| std::str::from_utf8(v).ok());
-                let home = text("CODEX_HOME")
-                    .map(str::to_owned)
-                    .or_else(|| text("HOME").map(|home| format!("{home}/.codex")))
-                    .ok_or_else(|| failure("endpoint", "Codex home unavailable"))?;
                 self.endpoint(&format!(
-                    "unix://{home}/app-server-control/app-server-control.sock"
+                    "unix://{}/app-server-control/app-server-control.sock",
+                    home(root)?
                 ))?;
                 self.socket(open, io)?;
             }
@@ -1127,6 +1122,21 @@ fn argument<'a>(process: &'a Process, flag: &str) -> Option<&'a str> {
     None
 }
 
+/// The Codex home the TUI's environment (`root`) names. Environment values are bytes; an endpoint URL needs UTF-8 ones.
+/// One that is not is refused, not skipped: the default home could be another app-server's. HOME counts only without
+/// CODEX_HOME.
+fn home(root: &Data<'_>) -> Result<String, Error> {
+    let text = |name| {
+        root.get(name).and_then(Data::bytes).map(|v| {
+            std::str::from_utf8(v).map_err(|_| failure("endpoint", "Codex home unavailable"))
+        }).transpose()
+    };
+    Ok(match text("CODEX_HOME")? {
+        Some(home) => home.to_owned(),
+        None => format!("{}/.codex", text("HOME")?.ok_or_else(|| failure("endpoint", "Codex home unavailable"))?),
+    })
+}
+
 /// The ancestor of `process` that `owns` it, reached through wrappers in its process group that
 /// pass the same `flag endpoint` on (npm's codex.js spawns the native binary instead of replacing
 /// itself), at most eight levels up; c1654cc CodexLauncherCommand.launcher. Any other ancestry
@@ -1308,3 +1318,7 @@ pub(super) fn locate(
         }),
     );
 }
+
+#[cfg(test)]
+#[path = "attach.test.rs"]
+mod tests;

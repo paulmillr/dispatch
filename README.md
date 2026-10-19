@@ -9,12 +9,11 @@ A terminal app for macs, which supercharges your existing workflows.
 
 That’s it. No bloat!
 
-[![](https://github.com/user-attachments/assets/e937fe12-4eae-4a04-86f3-fb5d23118bcd)](https://github.com/user-attachments/assets/e937fe12-4eae-4a04-86f3-fb5d23118bcd)
+![](https://github.com/user-attachments/assets/270c821d-6db7-4cd1-8370-e6583ba41edf)
 
 ## Quick start
 
     brew install --cask paulmillr/tap/dispatch
-    brew audit --cask --online paulmillr/tap/dispatch
 
 Dispatch is a normal terminal. The goal is to improve user's workflow, not to change it.
 
@@ -22,19 +21,24 @@ Dispatch is a normal terminal. The goal is to improve user's workflow, not to ch
     - SSH-ing somewhere presents a popup, which asks to upload optional dispatch-helper
     - SSH helper opens no ports and serves as a part which does all the heavy lifting for the app
 2. Try **Native Tabs**: run `tmux -CC` / `tmux -CC attach` or `herdr` locally / remotely
-3. Try **Chat Mode**: Start an agent in a terminal, it would auto-switch the tab to chat
+3. Try **Chat Mode**: Start an agent in a terminal, it would auto-switch the tab to chat.
+    - It uses hooks, local usage needs pre setup, remote usage is easier
+    - For local usage: Settings => Agents & Hosts => This Mac => Install (next to codex, claude etc)
+    - For usage over SSH: just ssh somewhere, ensure to check the checkbox while connecting to auto-install hooks
     - All sent messages are queued - not steered
     - There is a separate key combo to steer; also it's possible to steer queued message
     - Multi-line editor is enabled with shift+enter. It highlights markdown code brackets
-    - Requires codex-cli 0.161.0, claude 2.1.293, pi 1.1.0 or nanocodex
+    - Requires codex-cli 0.163.0, claude 2.1.302, pi 1.3.0 or nanocode
     - Try [Nanocodex](https://github.com/gakonst/nanocodex): Codex rebuilt so that it's faster and can be embedded in third party applications via an ergonomic library API
 4. Try splits: open 4 tabs, use ctrl+1, ctrl+2, ctrl+3, ctrl+4
 
 Extra features:
 
 - Spaces: tree view, reopen on launch, restore history, git branch titles, compact space list
+- Tabs only (Settings › Appearance): no tab strips; the sidebar lists every tab and "+ tab" replaces "+ space"
 - Check out sidebar footer: clicking on a host brings up stats widget
 - Auto-improve text contrast on light themes
+- Single window for *everything*: no multiple windows
 - OSC-7501 support
 
 ## How it works
@@ -43,7 +47,11 @@ There are two parts: Swift macos app and Rust helper. Rust helper parses tmux/he
 
 ## Run
 
-Requires Xcode 26+. Tested on macOS 26 & 27, but may run on macOS 14+.
+Homebrew contains notarized binary:
+
+    brew install --cask paulmillr/tap/dispatch
+
+To compile by yourself, you'll need Xcode 26+. The app is tested on macOS 26 & 27, but may run on macOS 14+.
 
 ```sh
 ./run.sh               # build Debug and launch
@@ -55,21 +63,25 @@ Requires Xcode 26+. Tested on macOS 26 & 27, but may run on macOS 14+.
 Easiest way to install xcode (needs apple id): `brew install xcodes; xcodes install 27.0`.
 
 All deps are downloaded into `build`.
-For signed, notarized macOS downloads, see [distribution](docs/distribution.md).
 
-## Architecture
+Official website (redirects to GitHub): https://dispatch.yachts
 
-Dispatch is two things: Swift macOS app and Rust helper.
+## Dispatch for iPhone
 
-The Rust helper is optional. The helper talks to tmux, herdr, reads agent chats.
+A thin client for your Macs and Linux machines: Spaces (tmux/herdr tabs and a real terminal) and Agents (chat with
+approvals, queue and diffs) over SSH. The same Rust helper does the work on each host; nothing leaves the phone but
+your SSH connections. Needs iOS 26+, Xcode 27, and on each host tmux 3.7+ or herdr 0.9.3+. Sideloaded, no App Store.
 
-## License
+```sh
+./run.sh --ios                                         # try it in the simulator
+python3 scripts/ios-signing.py TEAMID --suffix .you    # once: your team from Xcode, Settings, Accounts
+# on the phone: pair it by cable, turn on Developer Mode
+./run.sh --ios-device --prod                           # build, install, launch; again weekly on a free Apple ID
+```
 
-The MIT License (MIT)
+See [docs/ios.md](docs/ios.md).
 
-Copyright (c) 2026 Paul Miller (https://paulmillr.com)
-
-## Release
+## Releasing
 
 ```sh
 scripts/release-prepare.sh                     # maintainer: build, keep reference in tmp/dispatch-release
@@ -78,3 +90,10 @@ scripts/release-prepare.sh --verify Dispatch-X.Y.Z.dmg --team TEAMID  # maintain
 ```
 
 See [distribution](docs/distribution.md).
+
+## License
+
+The MIT License (MIT)
+
+Copyright (c) 2026 Paul Miller (https://paulmillr.com)
+

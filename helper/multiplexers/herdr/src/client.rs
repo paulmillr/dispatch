@@ -115,6 +115,23 @@ pub(super) fn arguments(process: &Process, typed: bool) -> Result<&[String], Err
 }
 
 impl Config {
+    /// The socket herdr itself uses for `session` without HERDR_SOCKET_PATH:
+    /// `$XDG_CONFIG_HOME/herdr` (when absolute) or `~/.config/herdr`, under `sessions/<name>`
+    /// for any session but "default".
+    pub fn default_socket(session: &str, home: &Path, config_home: Option<&Path>) -> PathBuf {
+        let base = config_home
+            .filter(|path| path.is_absolute())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".config"))
+            .join("herdr");
+        let directory = if session == "default" {
+            base
+        } else {
+            base.join("sessions").join(session)
+        };
+        directory.join("herdr.sock")
+    }
+
     /// Decode a prospective local client endpoint from private System observations.
     /// The caller still verifies foreground ownership and the server peer/snapshot,
     /// and resolves socket aliases through System before registering the endpoint.
@@ -190,23 +207,14 @@ impl Config {
             .map(String::as_str)
             .or_else(|| account.1.to_str())
             .ok_or_else(|| error("Herdr launch context is missing."))?;
-        let base = environment
-            .get("XDG_CONFIG_HOME")
-            .filter(|path| Path::new(path).is_absolute())
-            .map(PathBuf::from)
-            .unwrap_or_else(|| Path::new(home).join(".config"))
-            .join("herdr");
-        let default = if session == "default" {
-            base
-        } else {
-            base.join("sessions").join(&session)
-        };
         let socket = if explicit.is_none() {
             environment.get("HERDR_SOCKET_PATH").map(PathBuf::from)
         } else {
             None
         }
-        .unwrap_or_else(|| default.join("herdr.sock"));
+        .unwrap_or_else(|| {
+            Self::default_socket(&session, Path::new(home), environment.get("XDG_CONFIG_HOME").map(Path::new))
+        });
         let socket = if socket.is_absolute() {
             socket
         } else {
@@ -261,3 +269,7 @@ impl Herdr {
         Ok(environment)
     }
 }
+
+#[cfg(test)]
+#[path = "client.test.rs"]
+mod tests;

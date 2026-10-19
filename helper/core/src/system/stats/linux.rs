@@ -126,6 +126,9 @@ pub(super) fn host(host: &mut Host) {
         .filter(|value| value.is_finite() && *value >= 0.0);
 }
 
+/// A /proc/<pid>/stat line: `nanos` is the CPU time used so far (user + system), `start` the boot tick
+/// it started at. The stats plugin's CPU % is the growth of `nanos` over the time between two samples,
+/// 100 being one core.
 pub(super) fn row(bytes: &[u8], pid: i32, ticks: u64, page: u64) -> Option<Counter> {
     if bytes.len() > 16 * 1024 || pid <= 0 || ticks == 0 || page == 0 {
         return None;
@@ -153,15 +156,16 @@ pub(super) fn row(bytes: &[u8], pid: i32, ticks: u64, page: u64) -> Option<Count
     let nanos = u128::from(user.checked_add(system)?) * 1_000_000_000 / u128::from(ticks);
     Some(Counter {
         pid,
-        start: start.to_string(),
+        start: Some(start.to_string()),
         name: name(&bytes[left + 1..right]),
-        nanos: nanos.try_into().ok()?,
+        cpu: None,
+        nanos: Some(nanos.try_into().ok()?),
         rss,
     })
 }
 
 #[cfg(target_os = "linux")]
-pub(super) fn processes(scan: &mut Scan, units: [u64; 4]) -> io::Result<()> {
+pub(super) fn processes(scan: &mut Scan, units: [u64; 2]) -> io::Result<()> {
     let mut candidates = 0;
     for entry in std::fs::read_dir("/proc")? {
         if scan.expired() {

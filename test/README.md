@@ -81,7 +81,8 @@ Prepares dependencies offline, regenerates the Xcode project, and invokes `xcode
 No test selectors means **fast checks only**. Use `--suite full` for full correctness
 validation or `--suite exhaustive` for the complete live matrix. All three entry
 points (`run.sh`, `xcode.py`, and `vm.py test`) share the case manifest in
-`test/suites.json`; new unclassified cases remain in full and exhaustive.
+`test/suites.json`; new unclassified cases remain in full and exhaustive. Cases marked
+`disabled` there (the nanocodex Chat walkthroughs, for now) run in no suite, only when selected explicitly.
 Full uses detailed plain-local agent behavior and focused Codex/Claude/Pi transport
 checks; exhaustive also retains the original detailed live matrix and 20-cycle
 reconnect stress repetition. Security, reattachment, host-isolation and platform
@@ -175,6 +176,15 @@ build-reuse logic.
 
 ```sh
 bash test/ui-motion.sh
+```
+
+### `release.py`
+
+The full and exhaustive desktop suites also build and launch the hardened Release app outside XCTest. This checks that a window and a real terminal remain alive, then quits the owned app. It uses a temporary project-local home and keeps its log and result in `build/release-smoke/`.
+Use a disposable Mac with zsh as the login shell, as for the desktop fixtures.
+
+```sh
+python3 -B test/release.py                          # --app path/to/Dispatch.app checks an existing build
 ```
 
 ## macOS VM orchestration
@@ -282,10 +292,39 @@ python3 test/ssh-herdr-stream.py --herdr /absolute/path/to/herdr \
 
 ## Agent chat fixtures
 
-These commands use real installed agent CLIs and deterministic localhost model
-fixtures, without a model API account. Use new or empty `--keep` directories; optional
-CLI-path flags override PATH discovery. See the [shared fixture guide](../docs/vm_testing.md#claude-and-pi-messages-fixture)
-and [native Chat validation](../docs/vm_testing.md#native-chat-validation).
+Fixtures run the real installed agent CLIs against a deterministic loopback model: no API key, inherited credentials removed, and personal config untouched. They are not a network firewall. Use new or empty `--keep` directories; optional CLI-path flags override PATH discovery. Provenance: [Fixtures/README.md](../DispatchTests/Fixtures/README.md).
+
+```sh
+python3 test/codex-chat.py --keep /tmp/new-results          # empty dir; --codex PATH for another CLI
+python3 scripts/codex_fixture.py serve --no-hooks --state /tmp/demo   # manual; run the printed launch command
+python3 scripts/seed-codex-history.py --state /tmp/demo --turns 60   # then serve + launch --resume SESSION_ID
+```
+
+### Offline Codex scrolling fixture
+
+`python3 scripts/offline-codex-demo.py serve`, then `... resume` in a Dispatch terminal after "History ready". The first run creates 120 real turns in `offline-chat-state/`. `--state`, `--turns`, and `--paragraphs` change the dataset, and size options apply only at creation. This exercises local rendering, not SSH. Profiling: [benchmarks](../docs/benchmarks.md#chat-rendering).
+
+### Claude and Pi Messages fixture
+
+```sh
+python3 scripts/claude_fixture.py serve                # state /tmp/dispatch-claude-demo; --port, --delay
+python3 scripts/claude_fixture.py launch [--integration] [--hooks] [--resume UUID]
+python3 scripts/pi_fixture.py [--session ID] [--pi PATH]
+```
+
+Prompt keywords combine: `thinking`, `tool`, `permission tool`, `question`/`multiple questions`, `formatting`/`long`; anything else echoes. Claude runs with an isolated `CLAUDE_CONFIG_DIR`, and Pi with `STATE/pi-home` and only `bash`. Focused checks: `test/claude-chat.py [--endpoint-only]`, `test/pi-chat.py`, `test/pi-bridge.py`, each with a fresh `--keep tmp/profiling/...`. Pi RPC waits for `agent_settled`, not `agent_end`.
+
+### Native Chat validation
+
+Batch the relevant classes in one `vm.py test` run: Chat\* (discovery, drafts, queue, side, patch, presentation), Claude\*/HookTransport, Pi\*, and the SSH reconnect/recovery/lifetime classes. For remote Claude/Pi, pair with `--agent` and run `SSHClaudeIntegrationTests SSHLinuxClaudeIntegrationTests` or the Pi equivalents. Coverage is ARM64 only, so Intel macOS and Linux x86-64 agents are untested.
+
+### Process statistics checks
+
+The helper's `plugins/stats` tests (`cargo test` in `helper`) cover the native collectors. The live checks are `SSHProcessStatisticsIntegrationTests` (macOS cases in the VM). The Linux case reads `/tmp/dispatch-stats-linux.json` (`destination`, `options`) on the XCTest host and must not use a preconfigured ControlMaster.
+
+### UI checks
+
+For motion/layout changes, run `InterfaceMotionTests UIWalkthroughTests SplitSizingTests SettingsSynchronizationTests TerminalIntegrationTests`. Then check by hand: rapid sidebar reversal, divider restore, full screen, and Reduce Motion.
 
 ### `model-fixtures.py`
 
@@ -434,9 +473,9 @@ Tests replay their recorded I/O by default and run live when nothing is recorded
 
 ```sh
 python3 test/xcode.py DispatchTests/ChatTests                      # replay where replays/ has a journal, live otherwise
-python3 test/xcode.py --capture investigation-01 DispatchTests/ChatTests   # record live tests, store the passed ones
-python3 test/xcode.py --capture investigation-02 --live DispatchTests/ChatTests   # record every test
-python3 test/xcode.py --replay investigation-01 DispatchTests/ChatTests    # replay only that run's journals
+python3 test/xcode.py --capture DispatchTests/ChatTests           # record live tests in build/captures, store the passed ones
+python3 test/xcode.py --capture --live DispatchTests/ChatTests    # record every test
+python3 test/xcode.py --replay DispatchTests/ChatTests            # replay only the journals in build/captures
 ```
 
 The corpus in `replays/` is a git submodule (`git submodule update --init replays`); without it only `--live` runs.
@@ -446,23 +485,9 @@ The workflows, the corpus, the build's corpus check and the `capture` tool
 Collection regression checks use an existing real native capture:
 
 ```sh
-TMPDIR="$PWD/build/capture-tests" DISPATCH_CAPTURE_TEST_SOURCE=/path/to/helper-capture.rpl.bz2 \
+TMPDIR="$PWD/build/capture-tests" DISPATCH_CAPTURE_TEST_SOURCE=/path/to/helper-capture.rpl.zst \
   python3 test/capture.test.py
 ```
 
 Create the project-local temporary directory first. No live helper or network is
 needed for this transfer check.
-
-## Earlier tooling verification
-
-For this documentation update, all 29 Python files parsed, all seven shell scripts
-passed `bash -n`, and `--help` succeeded for all 25 Python commands supporting it and
-all five `vm.py` subcommands. The Linux guest controller's help check used an inert
-helper path solely to satisfy its import-time environment requirement.
-
-Executed `benchmark.py` (9 tests), `vm-runner.py` (20 tests), and a `profile.py` timing
-example successfully. This verifies command wiring and runner behavior; desktop,
-agent, Rust, and Linux workloads were not rerun. Placeholder executable/image/staging
-paths in examples must be replaced with the existing resources for the test machine.
-
-The full and exhaustive desktop suites also build and launch the hardened Release app outside XCTest. This checks that a window and a real terminal remain alive, then quits the owned app. Run it separately with `python3 -B test/release.py`; `--app path/to/Dispatch.app` checks an existing build. It uses a temporary project-local home and retains its log and result in `build/release-smoke/`. Use a disposable Mac with zsh as the login shell, as for the desktop fixtures.

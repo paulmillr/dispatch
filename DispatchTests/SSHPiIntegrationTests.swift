@@ -69,6 +69,8 @@ final class SSHPiIntegrationTests: XCTestCase {
         // wait for Pi's changelog receipt before saving its startup baseline.
         let models = home.appendingPathComponent("models.json")
         let savedModels = try System.read(models), savedSettings = try System.read(settings)
+        // Turning Pi on installs only where a host allows its hooks (each machine keeps its own choice): allow it here.
+        runtime.ssh.permissions.saveHooks(true, for: scope, agent: .pi)
         try await TestSupport.integrations(["pi"], enabled: true, chat: runtime.chat)
         try await TestSupport.eventually(timeout: .seconds(20), diagnostic: "Pi setup: \(runtime.chat.error ?? "none") / \(session.status ?? "none")") {
             (try? System.read(managed)) == source && session.status?.contains("/reload") == true

@@ -1,7 +1,7 @@
 import SwiftUI
 import CoreText
 
-/// Compact settings grouped into Appearance, Keys, General, and Agents & Hosts.
+/// Compact settings grouped into Appearance, Keys, General, Features, and Agents & Hosts.
 struct SettingsView: View {
     // Keep the controls stable while the user adjusts content typography.
     private let typography = AppTypography()
@@ -84,6 +84,7 @@ struct SettingsView: View {
                 case .appearance: appearanceSettings
                 case .keys: keySettings
                 case .general: generalSettings
+                case .features: featureSettings
                 case .hosts: agentsAndHosts
                 }
             }.id(selectedTab)
@@ -153,6 +154,7 @@ struct SettingsView: View {
         case appearance = "Appearance"
         case keys = "Keys"
         case general = "General"
+        case features = "Features"
         case hosts = "Agents & Hosts"
     }
 
@@ -257,19 +259,25 @@ struct SettingsView: View {
                             .frame(width: typography.expanded(60), alignment: .trailing)
                     }.frame(width: pickerWidth)
                 }
-                row("Show git branch", detail: "Beside each space’s name") {
+                row("Show git branch", detail: draft.gitEnabled ? "Beside each space’s name" : "Needs Git, in Features") {
                     settingToggle("Show git branch", isOn: $draft.showGitBranches)
+                        .disabled(!draft.gitEnabled)
                         .accessibilityIdentifier("show-git-branch")
                 }
-                row("Hide sidebar with one space") {
+                row(draft.tabsOnly ? "Hide sidebar with one tab" : "Hide sidebar with one space") {
                     settingToggle("Hide sidebar with one space", isOn: $draft.hideSingleSpace)
+                }
+                row("Tabs only", detail: "Every tab in the sidebar instead of spaces, with no tab strips") {
+                    settingToggle("Tabs only", isOn: $draft.tabsOnly)
+                        .accessibilityIdentifier("settings-tabs-only")
+                        .help("Lists every tab in the sidebar, grouped by host when spaces are. Tab strips go; ⌘T adds a tab and ⌘1…9 jump through the list. Spaces keep working underneath (⌘N, splits, layouts).")
                 }
             }
         }
     }
 
     /// What opens at launch and where new spaces start, how terminals behave, attention notifications, and
-    /// diagnostics for troubleshooting.
+    /// diagnostics for troubleshooting. Whole features and their options are under Features.
     private var generalSettings: some View {
         VStack(spacing: 8) {
             settingsGroup("Startup") {
@@ -295,14 +303,6 @@ struct SettingsView: View {
                 }
             }
             settingsGroup("Terminal") {
-                ForEach(multiplexers, id: \.self) { name in
-                    row("Open \(name) sessions as spaces", detail: sessionDetail(name)) {
-                        settingToggle("Open \(name) sessions as spaces", isOn: $draft.spaces[on: name])
-                    }
-                }
-                Text("The original tab closes after attach.")
-                    .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
-                    .frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 9)
                 row("Kitty graphics", detail: "Lets terminal programs display images") {
                     settingToggle("Kitty graphics", isOn: $draft.enableKittyGraphics)
                 }
@@ -333,6 +333,15 @@ struct SettingsView: View {
                 }
             }
             settingsGroup("Troubleshooting") {
+                let setup = SSHSetupLog.shared
+                if !setup.fallbacks.isEmpty {
+                    // Why SSH integration fell back to a plain shell since Dispatch started; the system log has each one.
+                    row("SSH integration fallbacks", detail: setup.fallbacks.sorted { $0.value > $1.value || ($0.value == $1.value && $0.key < $1.key) }
+                        .map { "\($0.key) ×\($0.value)" }.joined(separator: " · ")) {
+                        Text(verbatim: "\(setup.fallbacks.values.reduce(0, +))").foregroundStyle(Chrome.muted)
+                    }
+                    .accessibilityIdentifier("settings-ssh-fallbacks")
+                }
                 row("Diagnostics", detail: "Anonymous app diagnostics saved on this Mac") {
                     settingToggle("Enable diagnostics", isOn: $draft.enableDiagnostics)
                         .accessibilityIdentifier("enable-diagnostics")
@@ -356,6 +365,57 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+
+    /// Whole features, each with its options: Chat mode and its agents, tmux and herdr sessions as spaces, files mode,
+    /// and git.
+    private var featureSettings: some View {
+        VStack(spacing: 8) {
+            integrationCard("Chat mode", detail: "coding agent CLIs as chat", enabled: chatEnabled) {
+                ForEach(TerminalRuntime.shared.chat.listedLaunches, id: \.key) { agentRow($0) }
+            }
+            if let chatError = TerminalRuntime.shared.chat.error {
+                Text(chatError).font(typography.font(offset: -1.5)).foregroundStyle(.red).textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            settingsGroup("tmux & herdr") {
+                ForEach(multiplexers, id: \.self) { name in
+                    row("Open \(name) sessions as spaces", detail: sessionDetail(name)) {
+                        settingToggle("Open \(name) sessions as spaces", isOn: $draft.spaces[on: name])
+                    }
+                }
+                Text("The original tab closes after attach.")
+                    .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 9)
+            }
+            settingsGroup("Files") {
+                row("Drag and drop", detail: "Copy files in from Finder, out to Finder, or onto a terminal as paths") {
+                    settingToggle("Drag and drop", isOn: $draft.filesDragAndDrop)
+                        .accessibilityIdentifier("settings-files-drag-and-drop")
+                }
+                row("Follow the shell’s directory", detail: "Files opens where the tab’s shell is and moves with cd until you navigate") {
+                    settingToggle("Follow the shell’s directory", isOn: $draft.filesFollowShell)
+                        .accessibilityIdentifier("settings-files-follow-shell")
+                }
+                row("Show hidden files", detail: "Dotfiles and ignored folders; ⇧⌘. toggles per tab") {
+                    settingToggle("Show hidden files", isOn: $draft.filesShowHidden)
+                        .accessibilityIdentifier("settings-files-show-hidden")
+                }
+                // The popup names itself settings-dropdown-<title> in AppKit, like the other dropdowns.
+                row("Open files with", detail: "Open in editor types the command into the tab’s terminal") {
+                    dropdown("Open files with", selection: Binding(get: { draft.filesOpenWith.title }, set: { title in
+                        if let choice = FilesOpenWith.allCases.first(where: { $0.title == title }) { draft.filesOpenWith = choice }
+                    }), choices: FilesOpenWith.allCases.map(\.title))
+                }
+                row("Ask before replacing", detail: "A copy that would overwrite stops and asks; off keeps both") {
+                    settingToggle("Ask before replacing", isOn: $draft.filesAskBeforeReplacing)
+                        .accessibilityIdentifier("settings-files-ask-before-replacing")
+                }
+            }
+            integrationCard("Git", detail: "Changes and Commits in files mode, file marks and branch names",
+                            enabled: $draft.gitEnabled, hasOptions: false) {}
+                .accessibilityIdentifier("settings-git")
+        }.task { TerminalRuntime.shared.chat.loadLaunches() }
     }
 
     /// The modifiers that go with the digit keys. Recording one another group already uses swaps the two.
@@ -444,17 +504,10 @@ struct SettingsView: View {
         .help("Click, then hold the modifiers for \(title.lowercased()) and release them. ⌫ removes the shortcut; Esc cancels.")
     }
 
-    /// Chat mode's agents, then how SSH connections behave and each machine's choices, this Mac first: an agent
-    /// switch and the host lines it affects share the page.
+    /// How SSH connections behave and each machine's choices, this Mac first, with its agent hooks; Chat mode itself
+    /// is under Features.
     private var agentsAndHosts: some View {
         VStack(spacing: 8) {
-            integrationCard("Chat mode", detail: "coding agent CLIs as chat", enabled: chatEnabled) {
-                ForEach(TerminalRuntime.shared.chat.listedLaunches, id: \.key) { agentRow($0) }
-            }
-            if let chatError = TerminalRuntime.shared.chat.error {
-                Text(chatError).font(typography.font(offset: -1.5)).foregroundStyle(.red).textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
             SSHHostsSettings(workspace: workspace, permissions: sshPermissions, policy: $draft.newHostPolicy,
                              clipboard: $draft.allowRemoteClipboardWrites, reconnect: $draft.autoReconnectSSH,
                              resetting: resettingSSH) {
@@ -494,7 +547,9 @@ struct SettingsView: View {
     private func restoreDefaults() {
         draft = Preferences()
         keyError = nil
-        if selectedTab == .hosts {
+        // Chat mode (Features) and this Mac's agent hooks (Hosts) restore together: the agents install their hooks here
+        // again.
+        if selectedTab == .hosts || selectedTab == .features {
             // This Mac's agent hooks first, so restoring the agents installs them here again.
             let chat = TerminalRuntime.shared.chat
             chat.localHooks = [:]

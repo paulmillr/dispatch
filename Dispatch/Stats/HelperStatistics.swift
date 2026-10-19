@@ -86,6 +86,7 @@ enum HelperStatistics {
       let processes: Processes = try await connection.request(
         "stats.processes", params: [String: String]())
       result.processes = processes.rows.map(\.host)
+      result.processesPartial = processes.partial
     }
     if includeStorage {
       let disks = try await storage()

@@ -134,6 +134,52 @@ private struct FloatingGlassPanel: ViewModifier {
     }
 }
 
+/// A segmented control's track (the files tabs, Diff / Source): with Liquid Glass one glass capsule whose selected
+/// segment is its own glass pill (`GlassSegmentPill`), blending as a strip's tabs do; else the flat well.
+private struct GlassSegmentTrack: ViewModifier {
+    let fallback: Color
+    var corner: CGFloat = 6
+    var inset: CGFloat = 2
+
+    func body(content: Content) -> some View {
+        if LiquidGlassStore.shared.active, #available(macOS 26, *) {
+            GlassEffectContainer(spacing: inset) {
+                content.padding(inset).glassEffect(.regular, in: Capsule())
+            }
+        } else {
+            content.padding(inset).background(RoundedRectangle(cornerRadius: corner).fill(fallback))
+        }
+    }
+}
+
+private struct GlassSegmentPill: ViewModifier {
+    let on: Bool
+    let fallback: Color
+    var corner: CGFloat = 4
+
+    func body(content: Content) -> some View {
+        if LiquidGlassStore.shared.active {
+            if on { content.clipShape(Capsule()).liquidGlass(in: Capsule(), interactive: true) } else { content }
+        } else {
+            content.background { if on { RoundedRectangle(cornerRadius: corner).fill(fallback) } }
+        }
+    }
+}
+
+/// A row's small controls on one glass pill, like a strip's buttons (the files header's follow, scope, search and pane
+/// toggle); each keeps only a faint hover of its own. Flat chrome leaves them as they are.
+private struct GlassControlGroup: ViewModifier {
+    func body(content: Content) -> some View {
+        if LiquidGlassStore.shared.active, #available(macOS 26, *) {
+            content.padding(.horizontal, 3).padding(.vertical, 2)
+                .glassEffect(.regular, in: Capsule())
+                .environment(\.stripActionsMerged, true)
+        } else {
+            content
+        }
+    }
+}
+
 /// A glass strip's button (chat switch, layout picker) at the new-tab button's size: as tall as the glass track, a
 /// circle when icon-only and a pill when it carries text. On shared glass (a split pane's capsule, a lone strip's
 /// button pill, a tmux pane's header) it draws no glass of its own; elsewhere (the floating chat switch) it is its own
@@ -246,6 +292,16 @@ extension View {
 
     /// Lets the glass shapes inside blend as one group while Liquid Glass is active.
     func glassGroup(spacing: CGFloat = 4) -> some View { modifier(GlassBar(spacing: spacing)) }
+
+    func glassSegmentTrack(fallback: Color, corner: CGFloat = 6, inset: CGFloat = 2) -> some View {
+        modifier(GlassSegmentTrack(fallback: fallback, corner: corner, inset: inset))
+    }
+
+    func glassSegmentPill(_ on: Bool, fallback: Color, corner: CGFloat = 4) -> some View {
+        modifier(GlassSegmentPill(on: on, fallback: fallback, corner: corner))
+    }
+
+    func glassControlGroup() -> some View { modifier(GlassControlGroup()) }
 
     /// A bare row floating over content (chat status, queue, working indicator) gets its own small glass panel,
     /// so it stays legible over the transcript; without Liquid Glass it is unchanged.

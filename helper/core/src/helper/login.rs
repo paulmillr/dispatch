@@ -19,17 +19,39 @@ pub(crate) fn permits(grants: &Rc<RefCell<Option<BTreeSet<String>>>>, capability
             .is_none_or(|grants| grants.contains(capability))
 }
 
+/// The capability for a Plugin trait method. Both the public dispatch check and Registered's check use this
+/// table, so a method cannot accidentally require different grants at the two authorization layers.
+pub(crate) fn plugin_required(method: &str) -> &'static str {
+    match method {
+        "text" | "read" | "list" | "summary" | "pack" | "pack_drop" => "file.text",
+        "write" | "unpack_open" | "unpack_write" | "unpack_close" => "file.write",
+        "branch" | "git" => "git.read",
+        _ => "stats.sample",
+    }
+}
+
 pub(crate) fn required(method: &str) -> &'static str {
     let capability = match method {
         "hello" | "echo" | "permissions.reduce" => "",
         "plugins.reset" => "stats.sample",
-        "files.text" | "files.read" => "file.text",
+        "files.text" => plugin_required("text"),
+        "files.read" => plugin_required("read"),
+        "files.branch" => plugin_required("branch"),
+        "files.list" => plugin_required("list"),
+        "files.summary" => plugin_required("summary"),
+        "files.write" => plugin_required("write"),
+        "files.pack" => plugin_required("pack"),
+        "files.pack.drop" => plugin_required("pack_drop"),
+        "files.unpack.open" => plugin_required("unpack_open"),
+        "files.unpack.write" => plugin_required("unpack_write"),
+        "files.unpack.close" => plugin_required("unpack_close"),
+        "files.git" => plugin_required("git"),
         "installation.install" | "installation.audit" => "hooks.configure",
         // Public agent keys need submission authority; internal process-checked keys also
         // carry an admitted multiplexer controller's protocol, independently of Chat.
         "terminals.keys" => "agent.submit",
         "chat.open" | "chat.state" | "chat.page" | "chat.models" | "chat.settings"
-        | "chat.tools" | "queue.list" | "launches.list" => "agent.inspect",
+        | "chat.tools" | "queue.list" | "launches.list" | "chat.list" | "projects.recent" => "agent.inspect",
         method if method.starts_with("stats.") => "stats.sample",
         method
             if method.starts_with("chat.")
@@ -396,4 +418,19 @@ impl Login {
 /// SSH grant corresponding to a registered multiplexer.
 pub(crate) fn mux(name: &str) -> &'static str {
     match name { "tmux" => "tmux.pane", "herdr" => "herdr.rpc", _ => "" }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{plugin_required, required};
+
+    #[test]
+    fn file_and_git_methods_require_their_disclosed_grants() {
+        assert_eq!(required("files.branch"), "git.read");
+        assert_eq!(required("files.git"), "git.read");
+        assert_eq!(required("files.list"), "file.text");
+        assert_eq!(required("files.unpack.close"), "file.write");
+        assert_eq!(plugin_required("branch"), "git.read");
+        assert_eq!(plugin_required("git"), "git.read");
+    }
 }

@@ -97,12 +97,22 @@ impl Snapshot {
                     values.push(value);
                 }
             }
+            // The option's value is raw (any process in a pane can set it, line breaks included): a line that is not
+            // `@id|value`, or a window named with two values, gives no window its value. One pass: such a value can be
+            // millions of lines.
+            let mut named: BTreeMap<u64, Option<String>> = BTreeMap::new();
             for line in affinities.iter() {
                 let text = String::from_utf8_lossy(line);
-                let [w, affinity] = fields(&text)?;
-                let w = id(w, '@')?;
-                for window in values.iter_mut().filter(|window| window.id == w) {
-                    window.affinity = affinity.into();
+                let Ok([w, affinity]) = fields(&text) else { continue };
+                let Ok(w) = id(w, '@') else { continue };
+                let value = named.entry(w).or_insert_with(|| Some(affinity.to_owned()));
+                if value.as_deref() != Some(affinity) {
+                    *value = None;
+                }
+            }
+            for window in &mut values {
+                if let Some(Some(affinity)) = named.remove(&window.id) {
+                    window.affinity = affinity;
                 }
             }
             let text =
@@ -176,3 +186,7 @@ impl Snapshot {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "snapshot.test.rs"]
+mod tests;

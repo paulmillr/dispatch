@@ -166,17 +166,18 @@ impl Check {
                     self.endpoint.path = if path.is_absolute() {
                         path
                     } else {
-                        root.get("cwd").and_then(Data::path).ok_or(io::ErrorKind::InvalidData)?.join(path)
+                        // Paths reach the endpoint key as text (key()): one that is not UTF-8 is refused here.
+                        Path::new(root.get("cwd").and_then(Data::path).and_then(Path::to_str).ok_or(io::ErrorKind::InvalidData)?).join(path)
                     };
                 }
             }
             Step::Environment => {
                 // Environment values are bytes; a directory is a path.
-                let path = root
-                    .get("TMUX_TMPDIR")
-                    .and_then(Data::path)
-                    .unwrap_or(Path::new("/tmp"))
-                    .to_path_buf();
+                let path = match root.get("TMUX_TMPDIR").and_then(Data::path) {
+                    Some(path) => Path::new(path.to_str().ok_or(io::ErrorKind::InvalidInput)?),
+                    None => Path::new("/tmp"),
+                }
+                .to_path_buf();
                 if !path.is_absolute() {
                     return Err(io::ErrorKind::InvalidInput.into());
                 }
@@ -236,7 +237,7 @@ impl Check {
                 {
                     return Err(io::ErrorKind::PermissionDenied.into());
                 }
-                let executable = root.get("executable").and_then(Data::path).ok_or(io::ErrorKind::InvalidData)?.to_path_buf();
+                let executable = root.get("executable").and_then(Data::path).and_then(Path::to_str).map(PathBuf::from).ok_or(io::ErrorKind::InvalidData)?;
                 if !executable.is_absolute()
                     || executable.file_name() != Some(std::ffi::OsStr::new("tmux"))
                 {
@@ -457,3 +458,7 @@ impl Tmux {
         Some(event)
     }
 }
+
+#[cfg(test)]
+#[path = "endpoint.test.rs"]
+mod tests;

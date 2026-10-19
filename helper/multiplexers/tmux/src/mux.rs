@@ -657,6 +657,21 @@ impl Multiplexer for Tmux {
     fn program(&self) -> Option<String> {
         Some("tmux -CC new-session".into())
     }
+    fn version(&self) -> Option<Command> {
+        let mut command = Command::new(&self.executable);
+        command.arg("-V").env_remove("TMUX").env_remove("TMUX_PANE");
+        Some(command)
+    }
+    /// The default server ("tmux" key, honouring TMUX_TMPDIR) answers; `-N` never starts one.
+    fn server_probe(&self) -> Option<Command> {
+        let mut command = self.server("tmux", true);
+        command.args(["list-sessions", "-F", "#{session_id}"]);
+        Some(command)
+    }
+    /// Each published window's `#{window_activity}` (feature terminals.activity).
+    fn activity(&mut self, io: &mut dyn Io, done: Done<Vec<(Id, u64)>>) {
+        Tmux::activity(self, io, done);
+    }
     fn invalidate(&mut self, io: &mut dyn Io, process: &Process) {
         let mut changed = false;
         for (&id, (_, binding)) in &self.agents {
@@ -758,6 +773,44 @@ impl Multiplexer for Tmux {
     fn open(&mut self, io: &mut dyn Io, key: &str, done: Done<Id>) {
         self.open(io, key, done);
     }
+    /// A New space on a host whose tmux server is not running (the iPhone app has no shell to
+    /// type `tmux` into): start the server with one detached session, then open it like any
+    /// other. A running server, or one this helper already knows, is only opened.
+    fn start(&mut self, io: &mut dyn Io, key: &str, done: Done<Id>) {
+        if self.backends.values().any(|backend| backend.key == key) {
+            self.open(io, key, done);
+            return;
+        }
+        let key = key.to_owned();
+        let mut running = self.server(&key, true);
+        running.args(["list-sessions", "-F", "#{session_id}"]);
+        self.run(
+            io,
+            running,
+            Box::new(move |mux, io, result| {
+                if matches!(result, Ok(Output::Exit { status: Some(0), .. })) {
+                    mux.open(io, &key, done);
+                    return;
+                }
+                let mut start = mux.server(&key, false);
+                start.args(["new-session", "-d"]);
+                mux.run(
+                    io,
+                    start,
+                    Box::new(move |mux, io, result| match result {
+                        Ok(Output::Exit { status: Some(0), .. }) => mux.open(io, &key, done),
+                        Ok(Output::Exit { status, .. }) => finish(
+                            io,
+                            done,
+                            Err(error(format!("tmux new-session failed ({status:?})"))),
+                        ),
+                        Ok(_) => finish(io, done, Err(error("tmux new-session failed"))),
+                        Err(e) => finish(io, done, Err(error(e))),
+                    }),
+                );
+            }),
+        );
+    }
     fn keys(
         &mut self,
         io: &mut dyn Io,
@@ -848,6 +901,7 @@ impl Multiplexer for Tmux {
     fn event(&mut self, io: &mut dyn Io, ui: &mut dyn Ui, event: Event) {
         let event = self.endpoints(io, event);
         if let Some(Event::Timer { at }) = &event {
+            self.overdue(io, *at);
             let resumed = std::mem::take(&mut *self.resumes.borrow_mut());
             for next in resumed {
                 next(self, io, true);
@@ -983,3 +1037,7 @@ impl Multiplexer for Tmux {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "start.test.rs"]
+mod start_tests;

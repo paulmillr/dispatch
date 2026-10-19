@@ -529,6 +529,9 @@ final class InterfaceMotionTests: XCTestCase {
         try DesktopTestSupport.requireUnlocked()
         AppFont.register()
         let coordinator = ChatCoordinator(enabled: true)
+        // Files on the same tab, so the switch goes terminal → chat → terminal, and files by ⇧⌘F.
+        let files = FilesCoordinator { [weak coordinator] in coordinator }
+        coordinator.pairedFiles = files
         let session = coordinator.session(for: System.uuid())
         session.active = true; session.sessionID = "motion-test"; session.version = "0.153.2"
         session.draft = "Retain this draft"
@@ -552,9 +555,19 @@ final class InterfaceMotionTests: XCTestCase {
         XCTAssertTrue(session.showChat); XCTAssertTrue(session.manualViewChoice)
         let snapshot1 = try await capture("switch-chat").text()
         XCTAssertFalse(snapshot1.contains("chat"))
+        // From chat the click returns to the terminal; files is ⇧⌘F's step, and its glyph is an icon too.
         try click(250)
         try await Task.sleep(for: .milliseconds(350))
-        XCTAssertFalse(session.showChat); XCTAssertEqual(session.draft, "Retain this draft")
+        XCTAssertFalse(session.showChat); XCTAssertEqual(files.mode(for: session.id), .terminal)
+        XCTAssertEqual(session.draft, "Retain this draft")
+        files.toggleFiles(session.id)
+        try await Task.sleep(for: .milliseconds(350))
+        XCTAssertEqual(files.mode(for: session.id), .files)
+        let filesSnapshot = try await capture("switch-files").text()
+        XCTAssertFalse(filesSnapshot.contains("files"), "The files glyph is an icon too")
+        try click(250)
+        try await Task.sleep(for: .milliseconds(350))
+        XCTAssertEqual(files.mode(for: session.id), .terminal)
         window.contentView = NSHostingView(rootView: ChatModeSwitch(session: session, coordinator: coordinator)
             .frame(maxWidth: .infinity, maxHeight: .infinity).background(Chrome.terminal))
         try await Task.sleep(for: .milliseconds(100))

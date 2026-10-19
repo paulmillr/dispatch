@@ -385,9 +385,14 @@ enum StripSpaceMenu {
 
     /// The sidebar's jump shortcuts: the first eight spaces, then the last; unbound spaces show none.
     static func shortcuts(_ order: [Space], keys: KeyGroups) -> [UUID: String] {
-        Dictionary(uniqueKeysWithValues: order.enumerated().map { index, space in
-            (space.id, (index < 8 ? keys.shortcut(\.spaces, String(index + 1))
-                : space.id == order.last?.id ? keys.shortcut(\.spaces, "9") : nil) ?? "")
+        shortcuts(order.map(\.id), keys: keys, group: \.spaces)
+    }
+
+    /// The jump shortcuts of a list (spaces, or tabs only's tabs) by a Settings › Keys group: the first eight get
+    /// 1…8, the last 9; with the group unbound, none.
+    static func shortcuts(_ order: [UUID], keys: KeyGroups, group: KeyPath<KeyGroups, NSEvent.ModifierFlags>) -> [UUID: String] {
+        Dictionary(uniqueKeysWithValues: order.enumerated().map { index, id in
+            (id, (index < 8 ? keys.shortcut(group, String(index + 1)) : id == order.last ? keys.shortcut(group, "9") : nil) ?? "")
         })
     }
 }

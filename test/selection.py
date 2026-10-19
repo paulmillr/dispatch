@@ -42,6 +42,8 @@ def failed_tests(path):
 
 
 SUITES = ('fast', 'full', 'exhaustive')
+# A disabled case runs in no suite, only when selected explicitly.
+TIERS = SUITES + ('disabled',)
 BENCHMARKS = ('DispatchTests/ChatScrollBenchmarkTests', 'DispatchTests/HostScalingBenchmarkTests', 'DispatchTests/UIBenchmarkTests',
               'DispatchTests/UISettingsBenchmarkTests', 'DispatchTests/TerminalFPSBenchmarkTests')
 ROOT = Path(__file__).resolve().parent.parent
@@ -53,7 +55,13 @@ def inventory(root=ROOT):
     Classification is deliberately separate: discovering a new method never
     authorizes it for fast execution. Result identifiers verify this inventory.
     """
-    cases = []
+    return scan(root)[0]
+
+
+def scan(root=ROOT):
+    """inventory()'s cases, and each test class's file (its declaration's, without .swift): captures are staged and
+    stored as <file>/<test>."""
+    cases, files = [], {}
     tokens = re.compile(r'//[^\n]*|/\*|(?P<raw>\#*)(?P<quote>"""|")(?:\\(?P=raw).|(?!(?P=quote)(?P=raw)).)*(?P=quote)(?P=raw)', re.S)
     comments = re.compile(r'/\*|\*/')
     for path in sorted((root / 'DispatchTests').rglob('*.swift')):
@@ -76,12 +84,14 @@ def inventory(root=ROOT):
             extension = re.match(r'\s*extension\s+(\w+Tests)\b', line)
             if declaration or extension:
                 owner = (declaration or extension)[1]
+            if declaration:
+                files[owner] = path.stem
             method = re.match(r'\s*(?:@\w+\s+)?func\s+(test\w+)\s*\(\s*\)', line)
             if owner and method:
                 cases.append(f'{TARGET}/{owner}/{method[1]}')
     if not cases or len(cases) != len(set(cases)):
         raise ValueError('Empty or ambiguous XCTest source inventory')
-    return sorted(cases)
+    return sorted(cases), files
 
 
 def matches(case, selectors):
@@ -101,9 +111,10 @@ def resolve(tests=(), skips=(), suite=None, benchmarks=False, root=ROOT):
     manifest = json.loads((root / 'test/suites.json').read_text())
     if manifest.get('version') != 1 or not isinstance(manifest.get('cases'), dict):
         raise ValueError('Invalid suite manifest')
-    classifications = manifest['cases']
+    # Other test bundles' entries (DispatchMobileTests/...: test/ios.py) are classified and checked by their runners.
+    classifications = {case: tier for case, tier in manifest['cases'].items() if case.split('/')[0] == TARGET}
     for case, tier in classifications.items():
-        if case not in cases or tier not in SUITES:
+        if case not in cases or tier not in TIERS:
             raise ValueError('Stale or invalid suite manifest entry: ' + case)
     for selector in tests + skips:
         if not any(matches(case, [selector]) for case in cases):
@@ -120,6 +131,8 @@ def resolve(tests=(), skips=(), suite=None, benchmarks=False, root=ROOT):
         elif matches(case, BENCHMARKS):
             if not benchmarks:
                 reason = 'benchmark (opt-in)'
+        elif tier == 'disabled':
+            reason = 'disabled'
         elif SUITES.index(tier) > SUITES.index(selected_suite):
             reason = tier + ' coverage'
         if reason:

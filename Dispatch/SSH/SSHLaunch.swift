@@ -264,37 +264,41 @@ enum SSHLauncherCommand {
         let script = """
         prepare() {
           \(SSHBootstrap.privateDirectoryScript)
-          enter_private sessions && enter_private '\(sessionID)' || exit 1
+          enter_private sessions
+          enter_private '\(sessionID)'
           attempt=0
           while test ! -e ready && test ! -L ready && test "$attempt" -lt 325; do
             sleep 0.2
             attempt=$((attempt + 1))
           done
-          safe_file ready || exit 1
-          IFS= read -r helper < ready || exit 1
+          test -e ready || test -L ready || fail "Dispatch did not finish setting up in time"
+          safe_file ready || fail "unsafe ready file"
+          IFS= read -r helper < ready || fail "unreadable ready file"
           rm -f ready
           case "$helper" in
             .dispatch/bin/versions/*/dispatch-helper)
               digest=${helper#.dispatch/bin/versions/}
               digest=${digest%/dispatch-helper}
-              test "${#digest}" = 64 || exit 1
-              case "$digest" in *[!0-9a-f]*) exit 1;; esac
-              cd ../.. && enter_private bin && enter_private versions && enter_private "$digest" || exit 1
-              safe_file dispatch-helper && test -x dispatch-helper || exit 1
+              test "${#digest}" = 64 || fail "malformed helper path"
+              case "$digest" in *[!0-9a-f]*) fail "malformed helper path";; esac
+              cd ../.. && enter_private bin && enter_private versions && enter_private "$digest"
+              safe_file dispatch-helper && test -x dispatch-helper || fail "cached helper missing or unsafe"
               if command -v sha256sum >/dev/null 2>&1; then hash=$(sha256sum dispatch-helper | cut -d ' ' -f 1)
               elif command -v shasum >/dev/null 2>&1; then hash=$(shasum -a 256 dispatch-helper | cut -d ' ' -f 1)
-              else exit 1; fi
-              test "$hash" = "$digest" || exit 1
+              else fail "no sha256sum or shasum"; fi
+              test "$hash" = "$digest" || fail "cached helper checksum mismatch"
               printf '%s\\n' "$helper";;
-            *) exit 1;;
+            "unavailable: "*) fail "${helper#unavailable: }";;
+            *) fail "setup did not finish";;
           esac
         }
-        helper=$(prepare)
+        helper=$(prepare 2>/dev/null)
         if test "$?" = 0; then
           cd "$HOME" || exit 1
           \(SSHBootstrap.captureExport)exec "$HOME/$helper" login \(grant.profile.rawValue)\(grant.hooks ? " --hooks" : "")\(capabilities) --session '\(sessionID)'\(command.map { " " + HerdrLaunch.quote($0) } ?? "")
         fi
-        printf 'Dispatch SSH integration unavailable; opening the remote shell.\\r\\n' >&2
+        case "$helper" in "dispatch-setup: "*) reason=${helper#dispatch-setup: };; *) reason="unknown reason";; esac
+        printf 'Dispatch SSH integration unavailable (%s); opening the remote shell.\\r\\n' "$reason" >&2
         export TERM=xterm-256color
         \(fallback)
         """

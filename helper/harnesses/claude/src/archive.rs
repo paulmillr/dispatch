@@ -198,6 +198,9 @@ impl Claude {
                 } else {
                     None
                 };
+                let behind = !request.earlier
+                    && !request.selected
+                    && request.reader.position < metadata.size;
                 let snapshot = Snapshot {
                     later,
                     session: parser.observed.clone(),
@@ -263,6 +266,12 @@ impl Claude {
                         state,
                     }),
                 );
+                // A live read returns one chunk. A burst larger than it leaves the cursor behind the file
+                // with no change event left to move it, so the chat froze at the last chunk read; carry
+                // on as if one arrived until the read catches up.
+                if behind && let Some(binding) = &request.binding {
+                    self.dirty.insert(key(binding));
+                }
                 self.pending(io, ui, request.binding, request.path);
             }
         }

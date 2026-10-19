@@ -6,11 +6,13 @@ pub(crate) use file::{copy, errno};
 
 pub(crate) mod hooks;
 mod inspect;
+mod listing;
 pub mod launch;
 pub mod login;
 mod native;
 mod observe;
 mod process;
+pub mod search;
 pub mod queue;
 pub mod reactor;
 pub mod renderer;
@@ -21,6 +23,10 @@ pub mod startup;
 mod stats;
 mod watch;
 mod work;
+pub(crate) mod zstd;
+// The files plugin's transfer jobs and their archive layout.
+mod archive;
+mod tar;
 
 use crate::api::{
     Address, Event, Expected, FileKind, Grid, Io, Job, Metadata, Output, Spawned, Work,
@@ -77,6 +83,9 @@ pub struct System {
     parent: Option<(u32, reactor::Exit, Option<String>)>,
     reactor: reactor::Reactor,
     workers: work::Executor<file::Completion>,
+    /// Job::Collect's own workers, made for the first collect: a command such as `git status` on a large tree
+    /// takes seconds, and two of them on the shared workers would hold every file job behind them.
+    collects: Option<work::Executor<file::Completion>>,
     descriptors: BTreeMap<RawFd, File>,
     locks: BTreeMap<Work, File>,
     listeners: BTreeMap<RawFd, socket::Listener>,
@@ -507,6 +516,7 @@ impl System {
         Ok(Self {
             reactor,
             workers,
+            collects: None,
             descriptors: BTreeMap::new(),
             locks: BTreeMap::new(),
             listeners: BTreeMap::new(),
@@ -1041,9 +1051,14 @@ impl System {
             if !self.ready.is_empty() {
                 continue;
             }
-            if ready.fd == self.workers.as_raw_fd() {
+            let collects = self.collects.as_mut().filter(|collects| ready.fd == collects.as_raw_fd());
+            if ready.fd == self.workers.as_raw_fd() || collects.is_some() {
                 let (jobs, events, locks) = (&self.jobs, &mut self.ready, &mut self.locks);
-                self.workers.drain(|completion| {
+                let executor = match collects {
+                    Some(collects) => collects,
+                    None => &mut self.workers,
+                };
+                executor.drain(|completion| {
                     let work = completion.id;
                     let (section, _) = jobs.get(&work).unwrap();
                     let mut completion = completion.value.unwrap_or_else(|| file::Completion {
@@ -1122,6 +1137,7 @@ impl System {
                 .parent()
                 .filter(|p| !p.as_os_str().is_empty())
                 .unwrap_or(Path::new("."));
+            #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
             let mut metadata = std::fs::symlink_metadata(parent)?;
             #[cfg(target_os = "linux")]
             if metadata.file_type().is_symlink()
@@ -1214,23 +1230,43 @@ fn execute(job: Job) -> io::Result<Output> {
             bytes,
             mode,
             expected,
+            parent: expected_parent,
         } => {
             use std::os::unix::fs::PermissionsExt;
-            use std::sync::atomic::{AtomicU64, Ordering};
-            static SERIAL: AtomicU64 = AtomicU64::new(0);
             let parent = path.parent().ok_or(io::ErrorKind::InvalidInput)?;
             std::fs::create_dir_all(parent)?;
             let parent = native::directory(parent, expected)?;
+            if expected_parent.is_some_and(|identity| {
+                let current = parent.metadata().ok();
+                current.is_none_or(|value| value.dev() != identity.device || value.ino() != identity.inode)
+            }) {
+                return Err(io::Error::from_raw_os_error(native::ESTALE));
+            }
             let name = path.file_name().ok_or(io::ErrorKind::InvalidInput)?;
             let original = checked(&parent, name, expected)?;
+            // This name is visible in the destination directory for the duration of the write. It must not be
+            // predictable: in a shared writable directory another account could otherwise pre-create it, make
+            // the write fail, and become the object an unconditional error cleanup removes. O_EXCL in
+            // native::open still handles an accidental collision; replay never executes the recorded job.
+            let mut nonce = [0u8; 16];
+            random(&mut nonce)?;
             let temporary = std::ffi::OsString::from(format!(
-                ".dispatch-{}-{}.tmp",
-                std::process::id(),
-                SERIAL.fetch_add(1, Ordering::Relaxed)
+                ".dispatch-{}.tmp",
+                nonce
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>()
             ));
+            let mut created = false;
+            let mut stranded = false;
             let result = (|| {
                 let mut file = native::open(&parent, &temporary, Some(mode))?;
-                if let Some(original) = &original {
+                created = true;
+                // Internal checked writes preserve the managed file's mode and group. A files.write request
+                // supplies a parent identity and its explicit/default mode is the copy's mode.
+                if let Some(original) = &original
+                    && expected_parent.is_none()
+                {
                     file.set_permissions(std::fs::Permissions::from_mode(
                         original.mode() & 0o7777,
                     ))?;
@@ -1238,12 +1274,31 @@ fn execute(job: Job) -> io::Result<Output> {
                 }
                 file.write_all(&bytes)?;
                 file.sync_all()?;
-                // The original may have changed while writing; publish only if it did not.
-                checked(&parent, name, expected)?;
-                native::publish(&parent, &temporary, name, expected != Expected::Absent)?;
+                match expected {
+                    Expected::Same(_) => {
+                        // The swap is the check-and-publish transaction: `temporary` now names the exact object
+                        // displaced from the target. If it is not the authorized one, put both names back.
+                        native::exchange(&parent, &temporary, name)?;
+                        if let Err(error) = checked(&parent, &temporary, expected) {
+                            if let Err(restore) = native::exchange(&parent, &temporary, name) {
+                                stranded = true;
+                                return Err(io::Error::other(format!(
+                                    "checked write found a changed target and could not restore it: {restore}; original remains at {}",
+                                    temporary.to_string_lossy()
+                                )));
+                            }
+                            return Err(error);
+                        }
+                        native::remove(&parent, &temporary)?;
+                    }
+                    Expected::Absent => native::publish(&parent, &temporary, name, false)?,
+                    Expected::Any => native::publish(&parent, &temporary, name, true)?,
+                }
                 Ok(Output::Written)
             })();
-            if result.is_err() {
+            // Never unlink a collision that native::open did not create. This is also why `created` is set
+            // immediately after the exclusive open, before any later operation can fail.
+            if result.is_err() && created && !stranded {
                 let _ = native::remove(&parent, &temporary);
             }
             result
@@ -1264,6 +1319,17 @@ fn execute(job: Job) -> io::Result<Output> {
             native::remove(&parent, name)?;
             Ok(Output::Written)
         }
+        Job::Pack(job) => archive::pack(&job.base, &job.paths, &job.archive, job.limit, &job.stop).map(Output::Packed),
+        Job::Append(staging, bytes) => archive::append(&staging, &bytes).map(Output::Appended),
+        Job::Unpack(job) => {
+            archive::unpack(&job).map(Output::Unpacked)
+        }
+        Job::RemoveTree(path) => archive::remove_tree(&path).map(|()| Output::Removed),
+        Job::Stage(path, parent) => archive::stage(&path, parent).map(|folder| Output::Metadata(metadata(folder))),
+        Job::Discard(staging) => archive::discard(&staging).map(|()| Output::Removed),
+        Job::Sweep(prefix, age) => {
+            archive::sweep(&prefix, age).map(|(directory, removed)| Output::Swept(directory, removed))
+        }
         Job::List { path } => {
             let mut entries = Vec::new();
             for entry in std::fs::read_dir(path)? {
@@ -1277,6 +1343,8 @@ fn execute(job: Job) -> io::Result<Output> {
             entries.sort_by(|a, b| a.0.cmp(&b.0));
             Ok(Output::List(entries))
         }
+        Job::Entries(job) => listing::entries(&job.path, job.hidden, job.limit),
+        Job::Summary(job) => listing::summary(&job.path, job.limit),
         Job::Process { pid } => inspect::process(pid).map(Output::Process),
         Job::Native { name, value } => native(name, &value).map(Output::Value),
         Job::Isolated {
@@ -1311,6 +1379,15 @@ fn execute(job: Job) -> io::Result<Output> {
                 stdout,
             })
         }
+        Job::Collect(job) => {
+            let ran = process::collect(job.command, Instant::now() + job.timeout, job.stdout, job.stderr)?;
+            Ok(Output::Collected(crate::api::Collected {
+                status: ran.status.code(),
+                stdout: ran.stdout,
+                stderr: ran.stderr,
+                truncated: ran.truncated,
+            }))
+        }
     }
 }
 
@@ -1322,6 +1399,13 @@ fn checked(
 ) -> io::Result<Option<std::fs::Metadata>> {
     if expected == Expected::Any {
         return Ok(None);
+    }
+    // Anything there, whatever it is, is not absent: opening it would fail on a symlink or socket instead.
+    if expected == Expected::Absent {
+        return match native::exists(parent, name)? {
+            true => Err(io::Error::from_raw_os_error(native::EEXIST)),
+            false => Ok(None),
+        };
     }
     let current = match native::open(parent, name, None).and_then(|file| file.metadata()) {
         Ok(m) => Some(m),

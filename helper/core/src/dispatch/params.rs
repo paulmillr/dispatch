@@ -53,6 +53,12 @@ pub(super) const REVISION: &[(&str, Rule)] = &[
     ("modified_ns", Rule::Stamp),
     ("changed_ns", Rule::Stamp),
 ];
+pub(super) const IDENTITY: &[(&str, Rule)] = &[("device", Rule::Unsigned), ("inode", Rule::Unsigned)];
+pub(super) const REPLACEMENT: &[(&str, Rule)] = &[
+    ("name", Rule::Text),
+    ("device", Rule::Unsigned),
+    ("inode", Rule::Unsigned),
+];
 
 pub(super) fn validate(value: &Data<'_>, rule: Rule, name: &str) -> Result<(), Error> {
     // The binary reader already refuses duplicate keys.

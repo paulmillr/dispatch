@@ -34,6 +34,7 @@ actor ToolPresentationCache {
     }
 }
 
+#if canImport(AppKit)
 /// Small geometry records belong to the retained transcript, independently of
 /// the evictable payload cache. One measurement per tool revision is sufficient
 /// to avoid collapsing a previously expanded row while cold formatting loads.
@@ -59,3 +60,4 @@ final class ChatToolLayoutCache {
     }
     func removeAll() { measurements.removeAll() }
 }
+#endif

@@ -1,0 +1,14 @@
+{
+  "kind": "rerecord",
+  "why": "The files header shows the same controls on every tab (path, branch chip, search, pane toggle), previews wait for a double click, hidden files show by default, git can be turned off, and the Commits tab reads signatures (a raw log beside each page, verify-commit on selection) and asks for the log before the status. The tests asserting the old header were rewritten.",
+  "tests": [
+    "FilesPresentationTests/testControlCommandDigitsAndShiftCommandLettersSwitchTheTabs",
+    "FilesPresentationTests/testGitSegmentsAndFooterInsideAndOutsideARepository",
+    "GitChangesPresentationTests/testMockupShowsHeaderGroupsDiffAndFooter",
+    "GitCommitsPresentationTests/testMockupHeaderRowsAndDetail"
+  ],
+  "fingerprints": {
+    "git-requests": "304f81f82887039554cb741dc619371178c8467969777060cc4354408e0473b3",
+    "files-defaults": "7b74c0e654709edae7b40e86e9df1aff5706322aeb85413aafae585567a720a1"
+  }
+}

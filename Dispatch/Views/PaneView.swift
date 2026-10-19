@@ -27,11 +27,14 @@ struct PaneView: View {
     }
     private var activeLabel: String? { pane.activeTab.map(label) }
     private var tabStyle: StripTab.Style { .current(controller.windowState) }
-    /// Off the title row (full screen), the strip shows only when there are tabs or panes to choose between.
-    static func showsTabs(pane: Pane, space: Space) -> Bool {
-        !space.structured && (pane.tabs.count > 1 || space.panes.count > 1)
+    /// Off the title row (full screen), the strip shows only when there are tabs or panes to choose between; tabs
+    /// only (the sidebar lists them) never shows one.
+    static func showsTabs(pane: Pane, space: Space, tabsOnly: Bool) -> Bool {
+        !tabsOnly && !space.structured && (pane.tabs.count > 1 || space.panes.count > 1)
     }
-    private var showTabs: Bool { (!space.structured && inTitlebar) || Self.showsTabs(pane: pane, space: space) }
+    private var showTabs: Bool {
+        (!space.structured && inTitlebar && !workspace.tabsOnly) || Self.showsTabs(pane: pane, space: space, tabsOnly: workspace.tabsOnly)
+    }
     private var hasTmuxHeader: Bool { space.structured && (window?.arrangement.panes.count ?? 0) > 1 }
     /// With Liquid Glass the strip lies over the content, so the glass has the terminal or chat behind it.
     private var glassStrip: Bool { LiquidGlassStore.shared.active }
@@ -44,7 +47,7 @@ struct PaneView: View {
 
     private var floatingChatSwitch: Bool {
         guard let window else { return !showTabs }
-        return !inTitlebar && window.arrangement.panes.count == 1 && !WindowTabBar.showsTabs(space: space)
+        return !inTitlebar && window.arrangement.panes.count == 1 && !WindowTabBar.showsTabs(space: space, tabsOnly: workspace.tabsOnly)
     }
     private var placement: TabBarPlacement {
         TabBarPlacement(titlebar: titlebar,
@@ -118,11 +121,9 @@ struct PaneView: View {
     private var tmuxPaneHeader: some View {
         HStack(spacing: 8) {
             tmuxPaneTitle
+            // Every pane switches between its terminal, chat and files; a plain SSH login's switch dims instead.
             let chat = TerminalRuntime.shared.chat
-            let session = chat.session(for: pane.activeTab?.focusedSurfaceID ?? pane.selected)
-            if chat.canEnterChat(session) || session.showChat {
-                ChatModeSwitch(session: session, coordinator: chat).fixedSize()
-            }
+            ChatModeSwitch(session: chat.session(for: pane.activeTab?.focusedSurfaceID ?? pane.selected), coordinator: chat).fixedSize()
             Button { controller.closeTab(pane.selected) } label: {
                 CloseGlyph()
                     .frame(width: 24, height: glassStrip ? StripTab.glassTrackHeight(typography) : typography.expanded(26))
@@ -176,8 +177,8 @@ struct PaneView: View {
         let session = chat.session(for: pane.activeTab?.focusedSurfaceID ?? pane.selected)
         return TabBar(ids: pane.tabs.map(\.id), selected: pane.selected, space: space, workspace: workspace, controller: controller,
                       placement: placement, paneID: pane.id, paneFocused: space.focusedPane == pane.id,
-                      chatSession: (chat.canEnterChat(session) || session.showChat) ? session : nil,
-                      reservesChatSwitch: chat.canShowChat(anyOf: pane.tabs.map(\.focusedSurfaceID)),
+                      // Files are possible on every tab, so each one has the switch.
+                      chatSession: session, reservesChatSwitch: true,
                       showsLayoutPicker: pane.id == space.layout.topRightPaneID && space.layoutTabCount > 1, hostTint: hostTint,
                       host: TerminalRuntime.shared.ssh.stripHost(active: pane.activeTab, among: pane.tabs),
                       overflowItems: { pane.tabs.map { .init(id: $0.id, title: label($0), surfaceIDs: $0.surfaceIDs) } },

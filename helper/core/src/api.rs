@@ -23,6 +23,30 @@ pub type Shared<T> = Rc<RefCell<T>>;
 pub type Done<T> = Box<dyn FnOnce(&mut dyn Io, Result<T, Error>)>;
 
 /// Wrap a completion once at the caller boundary; part completion only queues its result.
+/// Environment entry a launch carries for its multiplexer only (never the program): the name
+/// its new window or tab gets instead of the launcher's process name (feature launch.names).
+pub const LAUNCH_NAME: &str = "DISPATCH_LAUNCH_NAME";
+
+/// The name a launch asks its multiplexer to give its new window or tab (LAUNCH_NAME): short
+/// printable text only, else none.
+pub fn launch_name(command: &Command) -> Option<&str> {
+    command
+        .get_envs()
+        .find(|(name, _)| *name == LAUNCH_NAME)
+        .and_then(|(_, value)| value?.to_str())
+        .filter(|name| !name.is_empty() && name.len() <= 64 && name.chars().all(|c| !c.is_control()))
+}
+
+/// Takes LAUNCH_NAME out of a command whose program the multiplexer starts itself (the native
+/// one spawns it directly; tmux and herdr leave it out when they copy the environment): the name
+/// is for the multiplexer, never the program. Only when it is set, so a command without it keeps
+/// inheriting the environment as it was.
+pub fn strip_launch_name(command: &mut Command) {
+    if command.get_envs().any(|(name, _)| name == LAUNCH_NAME) {
+        command.env_remove(LAUNCH_NAME);
+    }
+}
+
 pub fn deferred<T: 'static>(done: Done<T>) -> Done<T> {
     Box::new(move |io, result| io.defer(Box::new(move |io| done(io, result))))
 }
@@ -139,7 +163,8 @@ pub struct Metadata {
 /// What a Write/Remove requires at its path when it commits; old ssh-helper hook_file.rs:
 /// 95-232 (locked recheck of the original, no links, keep mode and group). Except for Any,
 /// the job holds an exclusive lock on the parent directory, refuses a symlink at the path
-/// (ELOOP), and rechecks right before publishing: a mismatch fails with EEXIST (Absent) or
+/// (ELOOP; for Absent anything at all there, symlink or socket, is EEXIST), and rechecks right
+/// before publishing: a mismatch fails with EEXIST (Absent) or
 /// ESTALE (Same) and nothing changes. A replaced file keeps the original's mode and group.
 /// Read, plan, then write with Same(what you read): a concurrent change fails instead of
 /// being overwritten. Pass the whole Guard::from(metadata): inode numbers are reused and
@@ -164,6 +189,10 @@ pub enum Job {
         path: PathBuf,
         follow: bool,
     },
+    /// One directory level for files.list (EntriesJob). Output::Entries.
+    Entries(EntriesJob),
+    /// Totals of a bounded walk for files.summary (SummaryJob). Output::Summary.
+    Summary(SummaryJob),
     /// Bounded read with metadata before/after from the same open file; c1654cc Helpers/ssh-helper/src/files.rs:101-113.
     Read {
         path: PathBuf,
@@ -177,6 +206,9 @@ pub enum Job {
         bytes: Vec<u8>,
         mode: u32,
         expected: Expected,
+        /// The directory the caller listed before authorizing this write. None is reserved for
+        /// internal writes that establish their own stronger transaction.
+        parent: Option<FileIdentity>,
     },
     /// Create missing directory components using mode; existing directories are unchanged.
     /// c1654cc Dispatch/Chat/PiChatSetup.swift:90-91.
@@ -191,6 +223,29 @@ pub enum Job {
         path: PathBuf,
         expected: Expected,
     },
+    // The files plugin's transfer jobs. Tuple variants: schema.rs counts an enum variant's named
+    // fields as wire fields, and these never reach the wire.
+    /// files.pack (PackJob).
+    Pack(PackJob),
+    /// Append bytes to the archive inside a verified staging folder; the answer
+    /// (Output::Appended) is its size afterwards.
+    Append(Staging, Vec<u8>),
+    /// files.unpack.open's staging folder: a new directory at the path (0700, never one that
+    /// exists: EEXIST) holding a new empty `archive.tar.zst` (0600). The answer is the folder's
+    /// Output::Metadata, whose identity later jobs check (Staging) before they touch it.
+    Stage(PathBuf, FileIdentity),
+    /// files.unpack.close with commit (UnpackJob).
+    Unpack(UnpackJob),
+    /// Remove a staging folder with everything in it, through its pinned target, only while both
+    /// are still what Job::Stage made (Staging). Output::Removed; already gone is Removed too.
+    Discard(Staging),
+    /// Remove a file, or a directory with everything in it, never following a symlink inside.
+    /// Missing paths return NotFound.
+    RemoveTree(PathBuf),
+    /// Remove this account's regular files named `<prefix>*` older than the duration from the
+    /// system's temporary directory, which the answer names (Output::Swept); files.pack keeps
+    /// its archives there.
+    Sweep(String, std::time::Duration),
     Process {
         pid: u32,
     },
@@ -201,6 +256,8 @@ pub enum Job {
         input: Vec<u8>,
         deadline: Instant,
     },
+    /// A command whose stderr matters and whose stdout may be cut (CollectJob). Output::Collected.
+    Collect(CollectJob),
     /// A helper-internal OS query: `value` and the answer (Output::Value) are encoded plain
     /// values (wire::body::encode_plain: typed, bytes stay bytes). All calls run on the fixed
     /// workers and are captured/replayed. Names below are reserved; an unavailable
@@ -223,8 +280,9 @@ pub enum Job {
     /// - "stats.host": {local:bool} -> {boot,monotonic,cpu?,network?,memoryTotal?,memoryUsed?,
     ///   swapTotal?,swapUsed?,load?,uptime?}; cpu entries {name,busy,total,ticks?:[u32;4]},
     ///   network entries {name,received,sent}. Local ticks preserve native Mach wrap behavior.
-    /// - "stats.processes": {local:bool} -> {boot,monotonic,truncated,ps:string} locally;
-    ///   remote {boot,monotonic,truncated,processes:[{pid,start,name,cpuNanos,rss}]}.
+    /// - "stats.processes": {local:bool} -> {boot,monotonic,truncated,processes:[{pid,start?,
+    ///   name,cpu?,cpuNanos?,rss}]}, local or not. macOS rows carry cpu (/bin/ps's percentage),
+    ///   Linux rows start and cpuNanos (CPU time so far).
     /// - "stats.disks": {local:bool} -> {disks:[{identity:string,paths:[string],total,free}]};
     ///   identity is the native signed fsid pair, "word:word". No fabricated identity.
     Native {
@@ -253,6 +311,10 @@ pub enum Job {
 #[derive(Clone, Debug)]
 pub enum Output {
     List(Vec<(String, FileKind)>),
+    /// Job::Entries: the entries and whether more exist.
+    Entries(Vec<Entry>, bool, FileIdentity),
+    /// Job::Summary.
+    Summary(FolderSummary),
     Metadata(Metadata),
     Read {
         before: Metadata,
@@ -271,6 +333,16 @@ pub enum Output {
     Value(Vec<u8>),
     /// Job::Lock holds its lock; release with Io::unlock(work).
     Locked,
+    Packed(Packed),
+    /// Job::Append: the file's size after the append.
+    Appended(u64),
+    Unpacked(Unpacked),
+    /// Job::RemoveTree.
+    Removed,
+    /// Job::Sweep: the temporary directory and how many files it removed there.
+    Swept(PathBuf, u64),
+    /// Job::Collect.
+    Collected(Collected),
 }
 
 pub struct Spawned {
@@ -774,8 +846,8 @@ pub struct State {
     pub service_tier: Option<String>,
     /// Native collaboration mode, including the acknowledged /plan setting.
     pub mode: Option<String>,
-    /// Running subagents' types, oldest first (Claude SubagentStart until SubagentStop). They
-    /// can outlive the turn that started them (background agents).
+    /// Running subagents' types, oldest first (Claude and Codex SubagentStart until
+    /// SubagentStop). They can outlive the turn that started them (background agents).
     pub agents: Vec<String>,
 }
 
@@ -1370,6 +1442,12 @@ pub trait Multiplexer {
     fn backends(&mut self, io: &mut dyn Io, done: Done<Vec<String>>);
     /// Attach or start a backend, then report topology via `Update::Topology`; c1654cc Dispatch/Tmux/TmuxCoordinator.swift:471.
     fn open(&mut self, io: &mut dyn Io, key: &str, done: Done<Id>);
+    /// `backends.create`: `open`, except that a producer may first start the server it opens
+    /// when none runs (tmux: a detached session). `open` itself never creates work, so
+    /// reconnects never make replacement servers (docs/integrations.md).
+    fn start(&mut self, io: &mut dyn Io, key: &str, done: Done<Id>) {
+        self.open(io, key, done);
+    }
     /// New terminal beside another; c1654cc Dispatch/Herdr/HerdrCoordinator.swift:122.
     /// `size`, when the app knows it, is the PTY size before exec (old ssh-helper pty.rs:15-31).
     fn create(
@@ -1492,6 +1570,27 @@ pub trait Multiplexer {
     fn program(&self) -> Option<String> {
         None
     }
+    /// The command that prints this multiplexer's version on its first line (feature
+    /// multiplexers.versions); None when it has no separate program.
+    fn version(&self) -> Option<Command> {
+        None
+    }
+    /// A command that tells, without starting anything, whether this multiplexer's server runs
+    /// for this user (feature multiplexers.versions); `running` reads its result.
+    fn server_probe(&self) -> Option<Command> {
+        None
+    }
+    /// Whether the `server_probe` command's exit and output say the server runs.
+    fn running(&self, status: Option<i32>, _stdout: &[u8]) -> bool {
+        status == Some(0)
+    }
+    /// When the server last saw activity in this multiplexer's published nodes: (node, Unix
+    /// milliseconds) as the native program reports it (feature terminals.activity). Asked only
+    /// for a client that named the feature, so no other client's native traffic changes.
+    /// Defaults know no times (herdr 0.9.5 reports none).
+    fn activity(&mut self, io: &mut dyn Io, done: Done<Vec<(Id, u64)>>) {
+        deferred(done)(io, Ok(Vec::new()));
+    }
     /// Active screen text now, or after its next change when `changed`; c1654cc Dispatch/Chat/ChatModelPicker.swift:72, 231-248.
     fn screen(&mut self, io: &mut dyn Io, terminal: Id, changed: bool, done: Done<Screen>);
     /// Screen text the app publishes for a terminal it renders itself; c1654cc Dispatch/Chat/ChatCoordinator.swift:2098-2100.
@@ -1540,6 +1639,216 @@ pub struct Disk {
     pub paths: Vec<PathBuf>,
     pub total: u64,
     pub available: u64,
+}
+
+/// One directory entry, never following a symlink (files.list).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Entry {
+    pub name: String,
+    pub kind: FileKind,
+    pub size: u64,
+    pub modified_ns: i128,
+    /// Identity of the entry itself, without following a symlink. Copy replacement consent is
+    /// bound to this identity rather than only to its name.
+    pub device: u64,
+    pub inode: u64,
+    /// A symlink's target kind; None when dangling or not a symlink.
+    pub target: Option<FileKind>,
+    /// Reserved for git marks ("M", "A", "U", "D", "R", "!"); None until files.list honors `git`.
+    pub mark: Option<String>,
+}
+
+/// One directory level in bytewise name order; `truncated` when the entry bound stopped it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Listing {
+    pub path: String,
+    pub entries: Vec<Entry>,
+    pub truncated: bool,
+    /// Identity of the directory whose entries were returned.
+    pub device: u64,
+    pub inode: u64,
+}
+
+/// One top-level entry whose replacement the user approved after listing it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Replacement {
+    pub name: String,
+    pub identity: FileIdentity,
+}
+
+/// Job::Collect: `command` runs in its own process group with stdin closed, killed with that group once it
+/// has run for `timeout` (TimedOut). The time counts from when the command starts, not from submission:
+/// collects run on their own two workers (git reads that take seconds must not hold the shared ones), and
+/// one queued behind them still gets all of its time. The first `stdout` bytes of its stdout are kept; once
+/// more arrive the group is killed (a reader that wants a bounded prefix should not wait for, or pay for,
+/// the rest) and the answer says `truncated`. At most `stderr` bytes of stderr are kept; the rest is read
+/// and dropped, so a chatty child never blocks on a full pipe. Kept out of the wire schema like EntriesJob.
+#[derive(Debug)]
+pub struct CollectJob {
+    pub command: Command,
+    pub timeout: std::time::Duration,
+    pub stdout: usize,
+    pub stderr: usize,
+}
+
+/// Job::Collect's answer: the exit status (None: ended by a signal, the bound's kill included).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Collected {
+    pub status: Option<i32>,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+    pub truncated: bool,
+}
+
+/// A bounded recursive walk's totals (files.summary). Named apart from the agent `Summary`;
+/// the wire carries only its fields.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FolderSummary {
+    pub files: u64,
+    pub folders: u64,
+    /// Regular-file sizes only.
+    pub bytes: u64,
+    pub truncated: bool,
+}
+
+/// Job::Entries: names in bytewise order (non-UTF-8 ones lossy), dot-names left out unless
+/// `hidden`, at most `limit` (the rest only set the flag); every entry lstat'ed, a symlink's
+/// target stat'ed. A struct in a tuple variant: core/build/schema.rs hashes the named fields of
+/// every enum variant here, and a job never reaches the wire.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EntriesJob {
+    pub path: PathBuf,
+    pub hidden: bool,
+    pub limit: u64,
+}
+
+/// Job::Summary: totals of the tree below `path`, never following a symlink: at most `limit`
+/// entries and 5 s of walking (either sets `truncated`); unreadable subdirectories are
+/// skipped. Kept out of the wire schema like EntriesJob.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SummaryJob {
+    pub path: PathBuf,
+    pub limit: u64,
+}
+
+/// A packed temporary archive (files.pack): `bytes` uncompressed, `size` the archive's own.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Packed {
+    pub archive: String,
+    pub entries: u64,
+    pub files: u64,
+    pub folders: u64,
+    pub bytes: u64,
+    pub size: u64,
+    /// Sockets, fifos and devices left out.
+    pub skipped: u64,
+}
+
+/// An open unpack transfer and its staging directory beside the target (files.unpack.open).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Transfer {
+    pub transfer: String,
+    pub staging: String,
+}
+
+/// Archive bytes staged so far (files.unpack.write).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Progress {
+    pub bytes: u64,
+}
+
+/// What a closed unpack transfer did; all zero when it was not committed (files.unpack.close).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Unpacked {
+    pub entries: u64,
+    pub bytes: u64,
+    pub replaced: u64,
+    pub kept: u64,
+    pub skipped: u64,
+}
+
+/// How Job::Unpack settles a top-level name that already exists in the target
+/// (files.unpack.open `policy`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Policy {
+    /// The incoming entry takes the name; the existing one is removed (a folder whole).
+    Replace,
+    /// The incoming entry is renamed "name 2", "name 3"…, before a file's extension.
+    Keep,
+    /// The existing entry stays; the incoming one is dropped.
+    Skip,
+}
+
+/// Job::Pack: `paths` (absolute, lexically inside `base`, named relative to it) walked without
+/// following a symlink into a ustar/pax tar through zstd level 1, written to the new file
+/// `archive` (O_EXCL, 0600). Sockets, fifos and devices are left out and counted. More than
+/// `limit` entries fails with QuotaExceeded; any failure removes the archive.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PackJob {
+    pub base: PathBuf,
+    pub paths: Vec<PathBuf>,
+    pub archive: PathBuf,
+    pub limit: u64,
+    /// Set by files.pack.drop: the walk stops before its next entry (Interrupted).
+    pub stop: Stop,
+}
+
+/// A running transfer job's stop request, set on the reactor and read by the job between entries. It is not
+/// recorded: a replayed job never runs, and a live one records the outcome it stopped with.
+#[derive(Clone, Debug, Default)]
+pub struct Stop(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+impl Stop {
+    pub fn set(&self) {
+        self.0.store(true, std::sync::atomic::Ordering::Release);
+    }
+    pub fn is_set(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::Acquire)
+    }
+}
+
+/// The same request, not the same state: two jobs never share one by accident.
+impl PartialEq for Stop {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+impl Eq for Stop {}
+
+/// A staging folder Job::Stage made directly inside `target`, and both folders' identities then: a
+/// target renamed or replaced since is not where the folder is, and nothing at its old path is touched.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Staging {
+    pub path: PathBuf,
+    pub target: PathBuf,
+    pub folder: FileIdentity,
+    pub parent: FileIdentity,
+}
+
+/// Job::Unpack: extract `archive` into `<staging>/tree/` (a refused entry fails with InvalidData
+/// before anything reaches `target`), move each top-level entry into `target` settling conflicts
+/// by `policy`, then remove `staging`, which must be a `.dispatch-copy-*` directory directly
+/// inside `target` and still the one Job::Stage made. A top-level entry not in `names` (what the client packed) is refused.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnpackJob {
+    pub archive: PathBuf,
+    pub staging: Staging,
+    pub policy: Policy,
+    pub names: std::collections::BTreeSet<Vec<u8>>,
+    /// Exact entries the user approved replacing: the subset of top-level names that existed in
+    /// the destination listing. A conflict absent from this map is never overwritten.
+    pub replacements: std::collections::BTreeMap<Vec<u8>, FileIdentity>,
+    /// Set by an uncommitted close (its client leaving): extraction stops before its next entry
+    /// (Interrupted) and nothing moves; once the move phase has begun it runs to its end.
+    pub stop: Stop,
+}
+
+/// A read-only git command's exit status and bounded output (files.git).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Git {
+    pub status: i64,
+    pub output: String,
+    pub truncated: bool,
 }
 
 mod plugin;

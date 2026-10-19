@@ -1,0 +1,153 @@
+[
+ {
+  "earlier": null,
+  "records": [
+   {
+    "blocks": [],
+    "completed": false,
+    "documents": [],
+    "exit_code": null,
+    "id": "e46cc7cfdbc9a8e50623736a0a3d0e7a0cdaa43fc931727539d159427592009e",
+    "inline_reasoning": false,
+    "kind": "turn_started",
+    "output": "",
+    "patch": null,
+    "position": null,
+    "text": "",
+    "time_ms": 946770100000,
+    "title": "",
+    "tool": null,
+    "turn": "turn-3"
+   },
+   {
+    "blocks": [],
+    "completed": false,
+    "documents": [],
+    "exit_code": null,
+    "id": "user-2c70ed8c47f6595f964a65da4f4bb1dac22401f703b13a3d516d7533e5373d44",
+    "inline_reasoning": false,
+    "kind": "user",
+    "output": "",
+    "patch": null,
+    "position": null,
+    "text": "tool check",
+    "time_ms": 946684800012,
+    "title": "",
+    "tool": null,
+    "turn": "turn-3"
+   },
+   {
+    "blocks": [
+     {
+      "kind": "code",
+      "language": "text",
+      "text": "DISPATCH_LOCAL_TOOL_OK\n"
+     }
+    ],
+    "completed": true,
+    "documents": [],
+    "exit_code": 0,
+    "id": "tool-00000000-0000-4000-8000-000000000004",
+    "inline_reasoning": false,
+    "kind": "tool",
+    "output": "Chunk ID: fixture\nWall time: 0.0000 seconds\nProcess exited with code 0\nOriginal token count: 6\nOutput:\nDISPATCH_LOCAL_TOOL_OK\n",
+    "patch": null,
+    "position": null,
+    "text": "{\n  \"command\" : [\n    \"\\/bin\\/zsh\",\n    \"-lc\",\n    \"printf 'DISPATCH_LOCAL_TOOL_OK\\\\n'\"\n  ],\n  \"cwd\" : \"\\/tmp\\/project\"\n}",
+    "time_ms": 946684800018,
+    "title": "Shell",
+    "tool": {
+     "additions": 0,
+     "children": [],
+     "confirmed_result": null,
+     "deletions": 0,
+     "directory": "/tmp/project",
+     "failed": false,
+     "input": "printf 'DISPATCH_LOCAL_TOOL_OK\\n'",
+     "kind": "shell",
+     "language": "shell",
+     "orchestration": false,
+     "patch": false,
+     "read": null,
+     "search": null,
+     "shell": {
+      "command": "printf 'DISPATCH_LOCAL_TOOL_OK\\n'",
+      "kind": "shell",
+      "swift_tests": false
+     },
+     "summary": "printf 'DISPATCH_LOCAL_TOOL_OK\\n'",
+     "symbol": "terminal",
+     "title": "Shell"
+    },
+    "turn": "turn-3"
+   },
+   {
+    "blocks": [],
+    "completed": false,
+    "documents": [],
+    "exit_code": null,
+    "id": "00000000-0000-4000-8000-000000000005",
+    "inline_reasoning": false,
+    "kind": "assistant",
+    "output": "",
+    "patch": null,
+    "position": null,
+    "text": "Local fixture reply: tool check\n\nTool result received.",
+    "time_ms": 946684800100,
+    "title": "",
+    "tool": null,
+    "turn": "turn-3"
+   },
+   {
+    "blocks": [],
+    "completed": false,
+    "documents": [],
+    "exit_code": null,
+    "id": "8facd735464bd9e4da1ec516749ad5f7fa687d4f9442ebeb34955e1a13405317",
+    "inline_reasoning": false,
+    "kind": "turn_ended",
+    "output": "",
+    "patch": null,
+    "position": null,
+    "text": "",
+    "time_ms": 946770100000,
+    "title": "",
+    "tool": null,
+    "turn": "turn-3"
+   }
+  ],
+  "snapshot": {
+   "awaiting_creation": false,
+   "caught_up": true,
+   "file": {
+    "device": 1,
+    "inode": 1
+   },
+   "generation": "00000000-0000-4000-8000-0000000000ff",
+   "initial": true,
+   "invalidated": false,
+   "session": "11111111-1111-4111-8111-111111111111",
+   "version": "0.153.2"
+  },
+  "state": {
+   "activity": null,
+   "agents": [],
+   "attention": null,
+   "busy": false,
+   "compacting": false,
+   "dialog": null,
+   "draft": null,
+   "effort": null,
+   "goal": null,
+   "leaf": null,
+   "mode": null,
+   "model": null,
+   "model_label": null,
+   "pending": false,
+   "service_tier": null,
+   "title": null,
+   "usage": null,
+   "version": null
+  }
+ }
+]

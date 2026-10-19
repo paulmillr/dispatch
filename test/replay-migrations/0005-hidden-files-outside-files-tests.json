@@ -1,0 +1,10 @@
+{
+  "kind": "rerecord",
+  "why": "Hidden files show by default and the whole features moved to a Features settings tab (0003), so opening files mode lists with hidden: true and Settings lists the chat agents under Features. 0003 rerecorded the files presentation tests but missed three integration tests that open files mode on the way (their recordings hold the old hidden: false request and stall at it) and the settings walkthrough (recorded before the Features tab, it finds no agent rows there). Found by replaying every recording that holds a files request, and by the full suite.",
+  "tests": [
+    "HerdrChatIntegrationTests/testChatFollowsRealHerdrTerminalsAcrossTabsSplitsMovesAndReattach",
+    "SettingsStatsPresentationTests/testSettingsNativeControlsRemainVisibleWithImplementedOptions",
+    "TerminalIntegrationTests/testRealShellSurvivesTabsSpacesSplitsAndSettings",
+    "TerminalIntegrationTests/testTerminalVisibilityTracksChatWindowAndTabWithoutStoppingSession"
+  ]
+}

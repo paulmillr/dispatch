@@ -76,14 +76,15 @@ enum SSHIntegrationConsent {
         return sheet.selection
     }
 
-    private static var background: NSColor { NSColor(Chrome.window) }
-    private static var foreground: NSColor { NSColor(Chrome.ink) }
-    private static var muted: NSColor { Chrome.palette.isDark ? NSColor(srgbRed: 111/255, green: 111/255, blue: 120/255, alpha: 1) : NSColor(Chrome.muted) }
-    private static var accent: NSColor { NSColor(Chrome.accent) }
+    // Shared with the other consent sheets in this style (LocalAgentsConsent).
+    static var background: NSColor { NSColor(Chrome.window) }
+    static var foreground: NSColor { NSColor(Chrome.ink) }
+    static var muted: NSColor { Chrome.palette.isDark ? NSColor(srgbRed: 111/255, green: 111/255, blue: 120/255, alpha: 1) : NSColor(Chrome.muted) }
+    static var accent: NSColor { NSColor(Chrome.accent) }
 
-    private static func font(size: CGFloat, bold: Bool) -> NSFont { AppFont.native(size: size, semibold: bold) }
+    static func font(size: CGFloat, bold: Bool) -> NSFont { AppFont.native(size: size, semibold: bold) }
 
-    private static func label(_ text: String, size: CGFloat, bold: Bool = false) -> NSTextField {
+    static func label(_ text: String, size: CGFloat, bold: Bool = false) -> NSTextField {
         let label = NSTextField(wrappingLabelWithString: text)
         label.font = font(size: size, bold: bold)
         label.textColor = muted
@@ -194,12 +195,15 @@ enum SSHIntegrationConsent {
             helper.heightAnchor.constraint(equalToConstant: 76).isActive = true
             rows.addArrangedSubview(helper)
             for row in Row.all {
-                let button = ChoiceButton(title: row.title, detail: row.detail, last: row == Row.all.last)
+                let button = ChoiceButton(title: row.title, detail: row.detail, last: row == Row.all.last, nested: row == .filesWrite)
                 button.target = self
                 button.action = #selector(toggleFeature(_:))
                 button.setAccessibilityIdentifier(Self.identifier(row))
                 if case .agent(let agent) = row {
                     button.toolTip = "Install \(row.title) Chat hooks in this account’s \(agent.rawValue) configuration when it starts."
+                }
+                if row == .filesWrite {
+                    button.toolTip = "Write files into this account’s folders: drop or paste from Finder and other tabs. Needs Files."
                 }
                 button.widthAnchor.constraint(equalToConstant: contentWidth).isActive = true
                 button.heightAnchor.constraint(equalToConstant: 36).isActive = true
@@ -209,7 +213,8 @@ enum SSHIntegrationConsent {
             stack.addArrangedSubview(rows)
             let explanation = label((current == nil ? "Uncheck the helper to connect with plain SSH." :
                 "Reductions apply now. Additions apply on your next connection. The helper stays cached when disabled.")
-                + " Chat transcripts, tmux and herdr integration come with the helper.", size: 11)
+                + " Chat transcripts, tmux and herdr integration come with the helper."
+                + " Agent hooks edit that agent’s configuration in your home folder.", size: 11)
             explanation.widthAnchor.constraint(equalToConstant: contentWidth).isActive = true
             stack.addArrangedSubview(explanation)
             let separator = NSBox()
@@ -268,6 +273,7 @@ enum SSHIntegrationConsent {
             switch row {
             case .stats: "ssh-feature-statistics"
             case .files: "ssh-feature-files"
+            case .filesWrite: "ssh-feature-files-write"
             case .agent(let agent): "ssh-agent-" + agent.rawValue
             }
         }
@@ -295,7 +301,8 @@ enum SSHIntegrationConsent {
             helper.needsDisplay = true
             for (row, button) in choices {
                 button.state = draft.checked.contains(row) ? .on : .off
-                button.isEnabled = draft.helper
+                // Copying in needs Files: it dims under Files when Files is off (checking it turns Files on).
+                button.isEnabled = draft.helper && (row != .filesWrite || draft.checked.contains(.files))
                 button.needsDisplay = true
             }
             if let focusedButton, focusedButton.isHiddenOrHasHiddenAncestor || !focusedButton.isEnabled { makeFirstResponder(helper) }
@@ -358,7 +365,7 @@ enum SSHIntegrationConsent {
         }
     }
 
-    private final class FooterButton: NSButton {
+    final class FooterButton: NSButton {
         private let shortcut: String?
         private let primary: Bool
         init(title: String, shortcut: String? = nil, identifier: String, primary: Bool = false) {
@@ -394,18 +401,27 @@ enum SSHIntegrationConsent {
     }
 
     /// Real AppKit buttons provide keyboard and accessibility activation. The
-    /// whole row is clickable, including its explanatory text.
-    private final class ChoiceButton: NSButton {
+    /// whole row is clickable, including its explanatory text. A parent row's `note` is its third line; a `radio`
+    /// row is one of several answers.
+    final class ChoiceButton: NSButton {
         private let detail: String
         private let parent: Bool
         private let last: Bool
+        private let note: String?
+        private let radio: Bool
+        /// A child of the row above it (Copy files in under Files): one level further in on the tree.
+        private let nested: Bool
         private var hovered = false
         private var tracking: NSTrackingArea?
 
-        init(title: String, detail: String, parent: Bool = false, last: Bool = false) {
+        init(title: String, detail: String, parent: Bool = false, last: Bool = false,
+             note: String? = "opens no ports · keeps its own files in ~/.dispatch", radio: Bool = false, nested: Bool = false) {
             self.detail = detail
             self.parent = parent
             self.last = last
+            self.note = note
+            self.radio = radio
+            self.nested = nested
             super.init(frame: .zero)
             self.title = title
             isBordered = false
@@ -443,7 +459,7 @@ enum SSHIntegrationConsent {
                 (parent ? accent.withAlphaComponent(state == .on ? 0.08 : 0.02) : foreground.withAlphaComponent(0.03)).setFill()
                 bounds.fill()
             }
-            if parent {
+            if parent && !(radio && last) {
                 accent.withAlphaComponent(0.25).setStroke()
                 let line = NSBezierPath()
                 line.move(to: NSPoint(x: 0, y: bounds.maxY - 0.5)); line.line(to: NSPoint(x: bounds.width, y: bounds.maxY - 0.5)); line.stroke()
@@ -453,12 +469,22 @@ enum SSHIntegrationConsent {
                 tree.lineWidth = 1.5
                 tree.move(to: NSPoint(x: 28, y: 0))
                 tree.line(to: NSPoint(x: 28, y: last ? bounds.midY : bounds.maxY))
-                tree.move(to: NSPoint(x: 28, y: bounds.midY)); tree.line(to: NSPoint(x: 39, y: bounds.midY))
+                if nested {
+                    // The parent's branch continues past this row; this row hangs off the parent's checkbox.
+                    tree.move(to: NSPoint(x: 60, y: 0)); tree.line(to: NSPoint(x: 60, y: bounds.midY))
+                    tree.move(to: NSPoint(x: 60, y: bounds.midY)); tree.line(to: NSPoint(x: 71, y: bounds.midY))
+                } else {
+                    tree.move(to: NSPoint(x: 28, y: bounds.midY)); tree.line(to: NSPoint(x: 39, y: bounds.midY))
+                }
                 tree.stroke()
             }
-            let box = NSRect(x: parent ? 22 : 52, y: bounds.midY - 8, width: 16, height: 16)
-            let path = NSBezierPath(roundedRect: box, xRadius: 4, yRadius: 4)
-            if state == .on {
+            let box = NSRect(x: parent ? 22 : nested ? 80 : 52, y: bounds.midY - 8, width: 16, height: 16)
+            let path = radio ? NSBezierPath(ovalIn: box) : NSBezierPath(roundedRect: box, xRadius: 4, yRadius: 4)
+            if state == .on && radio {
+                accent.withAlphaComponent(enabled).setFill(); path.fill()
+                background.withAlphaComponent(enabled).setFill()
+                NSBezierPath(ovalIn: box.insetBy(dx: 5, dy: 5)).fill()
+            } else if state == .on {
                 accent.withAlphaComponent(enabled).setFill(); path.fill()
                 background.withAlphaComponent(enabled).setStroke()
                 let check = NSBezierPath()
@@ -470,15 +496,16 @@ enum SSHIntegrationConsent {
             } else {
                 foreground.withAlphaComponent(0.25 * enabled).setStroke(); path.lineWidth = 1.5; path.stroke()
             }
-            let x: CGFloat = parent ? 50 : 80
+            let x: CGFloat = parent ? 50 : nested ? 108 : 80
             let nameAttributes: [NSAttributedString.Key: Any] = [.font: SSHIntegrationConsent.font(size: 12.5, bold: parent),
                 .foregroundColor: (state == .on ? foreground : NSColor(Chrome.muted)).withAlphaComponent(enabled)]
             let detailAttributes: [NSAttributedString.Key: Any] = [.font: SSHIntegrationConsent.font(size: 11, bold: false), .foregroundColor: muted.withAlphaComponent(enabled)]
             let nameHeight = (title as NSString).size(withAttributes: nameAttributes).height
-            (title as NSString).draw(at: NSPoint(x: x, y: parent ? bounds.midY - 27 : bounds.midY - nameHeight / 2), withAttributes: nameAttributes)
+            let top: CGFloat = parent ? (note == nil ? -18 : -27) : -nameHeight / 2
+            (title as NSString).draw(at: NSPoint(x: x, y: bounds.midY + top), withAttributes: nameAttributes)
             if parent {
-                (detail as NSString).draw(at: NSPoint(x: x, y: bounds.midY - 9), withAttributes: detailAttributes)
-                ("opens no ports · writes no files" as NSString).draw(at: NSPoint(x: x, y: bounds.midY + 7), withAttributes: detailAttributes)
+                (detail as NSString).draw(at: NSPoint(x: x, y: bounds.midY + (note == nil ? 1 : -9)), withAttributes: detailAttributes)
+                if let note { (note as NSString).draw(at: NSPoint(x: x, y: bounds.midY + 7), withAttributes: detailAttributes) }
             } else {
                 let size = (detail as NSString).size(withAttributes: detailAttributes)
                 (detail as NSString).draw(at: NSPoint(x: bounds.maxX - 14 - size.width, y: bounds.midY - size.height / 2), withAttributes: detailAttributes)

@@ -223,6 +223,42 @@ final class ClaudeHookTests: XCTestCase {
         }
     }
 
+    /// An approval-only opt-in from an older helper: its audit shows the upgrade and the next launch installs the
+    /// lifecycle hooks (subagents among them). A complete installation is never rewritten, so a reformatted file
+    /// audits without an edit and launches leave it alone.
+    func testLaunchUpgradesOlderOptInAndLeavesCompleteInstallations() async throws {
+        try await settings {
+            let command = try await command()
+            let legacy: [String: Any] = ["hooks": ["PermissionRequest": [["hooks": [["type": "command", "command": command, "timeout": 60]]]]]]
+            try System.write(JSONSerialization.data(withJSONObject: legacy), to: config)
+            let audit = try await install(nil)
+            XCTAssertEqual(audit.installed, true)
+            XCTAssertTrue(audit.edits.contains { $0.before != $0.after }, "The audit shows the upgrade")
+            let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
+            chat.loadLaunches()
+            let config = config
+            try await TestSupport.eventually(timeout: .seconds(10)) {
+                let root = try? JSONSerialization.jsonObject(with: System.read(config)) as? NSDictionary
+                return root?.value(forKeyPath: "hooks.SubagentStop") != nil
+            }
+            await chat.integrationChanges?.value
+            let root = try XCTUnwrap(JSONSerialization.jsonObject(with: System.read(config)) as? [String: Any])
+            let hooks = try XCTUnwrap(root["hooks"] as? [String: [[String: Any]]])
+            XCTAssertEqual(Set(hooks.keys), ["PermissionRequest", "PreToolUse", "SessionStart", "SessionEnd",
+                                           "UserPromptSubmit", "PostToolUse", "SubagentStart", "SubagentStop", "Stop"])
+            XCTAssertEqual(hooks["PermissionRequest"]?.count, 1, "The upgrade keeps one approval hook")
+            // Reformatted (as Claude Code rewrites its settings): still complete, so nothing is rewritten.
+            let reformatted = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted])
+            try System.write(reformatted, to: config)
+            let complete = try await install(nil)
+            XCTAssertEqual(complete.installed, true)
+            XCTAssertFalse(complete.edits.contains { $0.before != $0.after }, "A complete installation audits without an edit")
+            let installed = try await install(true)
+            XCTAssertFalse(installed.restart)
+            XCTAssertEqual(try System.read(config), reformatted)
+        }
+    }
+
     func testRealLocalClaudeAllowsDeniesAndRevokesApproval() async throws {
         let restore = TestSupport.preserveRuntime()
         defer { restore() }

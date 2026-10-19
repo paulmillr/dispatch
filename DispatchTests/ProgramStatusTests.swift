@@ -1,6 +1,10 @@
 import XCTest
 @_spi(Test) import Term
+#if canImport(AppKit)
 @testable import DispatchApp
+#else
+@testable import DispatchMobile
+#endif
 
 /// OSC 7501 program status: the engine keeps each terminal's records as the protocol defines them,
 /// and Dispatch shows what they ask of the user.
@@ -190,6 +194,7 @@ final class ProgramStatusTests: XCTestCase {
         XCTAssertEqual(messages(s).last?.count, 0)
     }
 
+    #if canImport(AppKit)
     func testFinishedRecordsShowUntilTheUserTypes() {
         let store = ProgramStatusStore(), tab = System.uuid()
         store.update(tab, [ProgramStatus(state: .done, app: "brew", serial: 1), ProgramStatus(id: "x", state: .working, serial: 2)])
@@ -206,6 +211,7 @@ final class ProgramStatusTests: XCTestCase {
         XCTAssertEqual(store.visible(tab), [])
         XCTAssertEqual(PaneUrgency(session: nil, programs: store.visible(tab)), .idle)
     }
+    #endif
 
     func testShownTextIsDisarmed() {
         // Bidirectional overrides, isolates and zero-width characters go; the program is named.

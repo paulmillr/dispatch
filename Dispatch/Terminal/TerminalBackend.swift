@@ -39,8 +39,9 @@ protocol TerminalBackend: AnyObject {
     func setSize(width: UInt32, height: UInt32)
     /// The display the view is on (its NSScreenNumber): frames follow it when it changes.
     func setDisplayID(_ display: UInt32)
-    /// The displays woke: frames attach to the view's display again, even an unchanged one.
-    func displaysWoke()
+    /// The displays woke, or the view joined a window again: frames attach to the view's display
+    /// again, even an unchanged one.
+    func relink()
     func refresh()
 
     func key(_ key: TerminalKey) -> Bool
@@ -91,6 +92,8 @@ enum TerminalEvent {
     case startSearch(String), endSearch, searchTotal(Int?), searchSelected(Int?)
     /// The terminal's OSC 7501 records after a change.
     case programStatus([ProgramStatus])
+    /// The shell finished a command and is back at its prompt (OSC 133 D).
+    case commandFinished(exitCode: Int?)
 }
 
 extension TerminalView {
@@ -127,6 +130,9 @@ extension TerminalView {
             case .title(let title), .tabTitle(let title): runtime.workspace?.updateTab(self.id, title: title)
             case .pwd(let path): runtime.workspace?.updateTab(self.id, directory: path)
             case .childExited: self.didExit()
+            case .commandFinished:
+                guard runtime.views[self.id] === self else { return }
+                runtime.files.shellPrompted(self.id)
             case .programStatus(let records):
                 guard runtime.views[self.id] === self else { return }
                 runtime.programs.update(self.id, records)

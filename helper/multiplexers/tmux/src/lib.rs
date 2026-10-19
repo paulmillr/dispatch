@@ -1,5 +1,6 @@
 //! Native tmux control and topology; terminal ownership stays in this multiplexer.
 mod actions;
+mod activity;
 mod affinity;
 mod backend;
 mod client;

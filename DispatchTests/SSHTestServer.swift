@@ -93,7 +93,7 @@ final class SSHTestServer {
             PasswordAuthentication no
             KbdInteractiveAuthentication no
             PubkeyAuthentication yes
-            SetEnv \(([path] + homes + environment).map(HerdrLaunch.quote).joined(separator: " "))
+            SetEnv \(([path, "TZ=UTC"] + homes + environment).map(HerdrLaunch.quote).joined(separator: " "))
             LogLevel ERROR
             """.write(to: config, atomically: true, encoding: .utf8)
             let knownHosts = root.appendingPathComponent("known_hosts")

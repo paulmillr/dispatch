@@ -91,7 +91,8 @@ Test the download on a disposable Mac (a local terminal and an SSH session) befo
 ## Notes
 
 - The app builds for the host architecture only (`ARCHS: $(NATIVE_ARCH_ACTUAL)`); the cask requires
-  Apple silicon. The macOS SSH helper is universal for remote Intel Macs.
+  Apple silicon. The macOS SSH helper is universal for remote Intel Macs (Debug builds make it for
+  the building Mac's architecture only; `DISPATCH_HELPER_UNIVERSAL=1` makes both).
 - Release builds carry no `com.apple.security.get-task-allow` (`CODE_SIGN_INJECT_BASE_ENTITLEMENTS:
   NO`), which notarization rejects; re-signing drops entitlements anyway.
 - A build the signer makes from source can't be verified this way: different Xcode versions, SDKs

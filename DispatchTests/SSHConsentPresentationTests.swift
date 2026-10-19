@@ -97,7 +97,7 @@ final class SSHConsentPresentationTests: XCTestCase {
         let root = try XCTUnwrap(sheet.contentView)
         root.layoutSubtreeIfNeeded()
         let buttons = PresentationTestSupport.views(of: NSButton.self, in: root)
-        XCTAssertEqual(Array(buttons.prefix(6).map(\.title)), ["Upload the Dispatch helper", "Stats", "File access", "Codex", "Claude", "Pi"])
+        XCTAssertEqual(Array(buttons.prefix(7).map(\.title)), ["Upload the Dispatch helper", "Stats", "Files", "Copy files in", "Codex", "Claude", "Pi"])
         XCTAssertEqual(sheet.frame.width, 460, accuracy: 1)
         for button in buttons {
             XCTAssertTrue(root.bounds.contains(button.convert(button.bounds, to: root)), button.title)
@@ -115,15 +115,15 @@ final class SSHConsentPresentationTests: XCTestCase {
 
     func testFeatureSelectionsWaitForConnectAndParentPreservesChildren() async throws {
         let result = try await prompt { sheet, buttons in
-            try click("File access", buttons)
+            try click("Files", buttons)
             XCTAssertNotNil(sheet.sheetParent)
             try click("Upload the Dispatch helper", buttons)
-            XCTAssertTrue(buttons.dropFirst().prefix(5).allSatisfy { !$0.isEnabled })
+            XCTAssertTrue(buttons.dropFirst().prefix(6).allSatisfy { !$0.isEnabled })
             try click("Upload the Dispatch helper", buttons)
-            XCTAssertEqual(buttons.first { $0.title == "File access" }?.state, .off)
+            XCTAssertEqual(buttons.first { $0.title == "Files" }?.state, .off)
             try click("Connect", buttons)
         }
-        XCTAssertEqual(result?.selectedFeatures, Set(SSHIntegrationFeature.allCases).subtracting([.files, .git]))
+        XCTAssertEqual(result?.selectedFeatures, Set(SSHIntegrationFeature.allCases).subtracting([.files, .filesWrite, .git]))
         XCTAssertTrue(result?.isCurrent == true)
         XCTAssertEqual(lastAgents, [.codex: true, .claude: true, .pi: true])
     }
@@ -174,7 +174,7 @@ final class SSHConsentPresentationTests: XCTestCase {
 
     func testReturnSavesAllFeaturesAndEscapeDiscardsEdits() async throws {
         let allFeatures = try await prompt { sheet, buttons in
-            XCTAssertTrue(buttons.prefix(6).allSatisfy { $0.state == .on })
+            XCTAssertTrue(buttons.prefix(7).allSatisfy { $0.state == .on })
             let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
                 windowNumber: sheet.windowNumber, context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
             XCTAssertTrue(sheet.performKeyEquivalent(with: event))
@@ -275,7 +275,7 @@ final class SSHConsentPresentationTests: XCTestCase {
             XCTAssertTrue(reconnectButton()?.isHidden ?? true)
             try click("Stats", buttons)
             XCTAssertTrue(reconnectButton()?.isHidden ?? true)
-            try click("File access", buttons)
+            try click("Files", buttons)
             XCTAssertEqual(reconnectButton()?.isHidden, false)
             XCTAssertEqual(reconnectButton()?.isEnabled, true)
             try click("Upload the Dispatch helper", buttons)
@@ -319,7 +319,7 @@ final class SSHConsentPresentationTests: XCTestCase {
             XCTAssertNotNil(sheet.sheetParent)
             XCTAssertEqual(reconnects, 0)
             XCTAssertEqual(buttons.first { $0.title == "Stats" }?.state, .on)
-            XCTAssertTrue(buttons.prefix(6).allSatisfy { $0.state == .on })
+            XCTAssertTrue(buttons.prefix(7).allSatisfy { $0.state == .on })
             try click("Save & reconnect", buttons)
         }
         XCTAssertEqual(result?.selectedFeatures, Set(SSHIntegrationFeature.allCases))
@@ -431,7 +431,7 @@ final class SSHConsentPresentationTests: XCTestCase {
                 if save { try click("Save", buttons) }
                 else { sheet.cancelOperation(nil) }
             }
-            XCTAssertEqual(result?.selectedFeatures, save ? Set(SSHIntegrationFeature.allCases).subtracting([.files, .git]) : nil)
+            XCTAssertEqual(result?.selectedFeatures, save ? Set(SSHIntegrationFeature.allCases).subtracting([.files, .filesWrite, .git]) : nil)
             XCTAssertEqual(reconnects, 0)
             let finalReads = reads
             try await Task.sleep(for: .milliseconds(600))

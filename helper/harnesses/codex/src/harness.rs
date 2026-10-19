@@ -171,6 +171,7 @@ impl Harness for Codex {
             self.forms.borrow_mut().remove(&session);
             self.live.borrow_mut().remove(&session);
             self.states.borrow_mut().remove(&session);
+            self.approvals.forget(&session);
             self.bindings.remove(&session);
         }
         let mut parents = self.parents.borrow_mut();
@@ -431,6 +432,8 @@ impl Harness for Codex {
                         state.title = states.get(&session).and_then(|state| state.title.clone());
                         state.version = states.get(&session).and_then(|state| state.version.clone());
                         state.mode = states.get(&session).and_then(|state| state.mode.clone());
+                        // Running subagents come from hooks, never from the rollout.
+                        state.agents = states.get(&session).map(|state| state.agents.clone()).unwrap_or_default();
                         states.insert(session.clone(), state);
                     }
                     if let Some(version) = version {

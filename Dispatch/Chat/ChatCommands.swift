@@ -1,4 +1,7 @@
+import Foundation
+#if canImport(AppKit)
 import AppKit
+#endif
 import Observation
 
 /// Only these exact forms have a chat workflow. Unrecognized commands retain
@@ -375,6 +378,7 @@ struct ChatNativeGoalEditor {
     }
 }
 
+#if canImport(AppKit)
 extension ChatCoordinator {
     func receiveCommandExecution(_ item: ChatItem, session: ChatSession) {
         guard item.completed, ChatCommandExecution.isUserShell(item.commandSource),
@@ -408,3 +412,4 @@ extension ChatCoordinator {
         }
     }
 }
+#endif

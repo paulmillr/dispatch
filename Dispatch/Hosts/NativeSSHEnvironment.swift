@@ -45,9 +45,14 @@ enum NativeSSHEnvironment {
         try fm.createDirectory(at: zsh, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         try fm.createDirectory(at: fish, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         for name in [".zshenv", ".zprofile", ".zshrc", ".zlogin"] {
+            // macOS's /etc/zshrc, run before .zshrc while ZDOTDIR is still this launch's folder, points HISTFILE there:
+            // history would start empty on every launch and never reach the user's file. The SSH wrapper does the same
+            // (helper/core/src/system/startup.rs); a HISTFILE the user's .zshrc sets still wins.
+            let history = name == ".zshrc"
+                ? "[[ ${HISTFILE-} == $DISPATCH_NATIVE_STARTUP/zsh/.zsh_history ]] && HISTFILE=$ZDOTDIR/.zsh_history\n" : ""
             var script = """
             ZDOTDIR=${DISPATCH_NATIVE_ZDOTDIR:-$HOME}
-            if [[ -r "$ZDOTDIR/\(name)" && "$ZDOTDIR" != "$DISPATCH_NATIVE_STARTUP/zsh" ]]; then
+            \(history)if [[ -r "$ZDOTDIR/\(name)" && "$ZDOTDIR" != "$DISPATCH_NATIVE_STARTUP/zsh" ]]; then
               builtin source "$ZDOTDIR/\(name)"
             fi
             export DISPATCH_NATIVE_ZDOTDIR=$ZDOTDIR

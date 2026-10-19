@@ -12,6 +12,39 @@ pub(super) struct Client {
     pub eof: bool,
     pub failed: bool,
     pub drains: BTreeMap<u64, Done<()>>,
+    /// terminal.output held back for coalescing (feature terminals.coalesce).
+    pub coalesced: Option<Coalesced>,
+}
+
+/// One stream's terminal output collected for at most `WINDOW` and `LIMIT` bytes, so a client
+/// that asked for it gets fewer, larger frames (tmux control mode yields one per line).
+pub(super) struct Coalesced {
+    pub id: u64,
+    pub terminal: u64,
+    pub bytes: Vec<u8>,
+    pub since: Instant,
+    /// A timer for `since + WINDOW` is set.
+    pub armed: bool,
+}
+/// How long output may wait, and how much one frame carries (inline: under wire::CHUNK).
+pub(super) const WINDOW: std::time::Duration = std::time::Duration::from_millis(4);
+pub(super) const LIMIT: usize = 60_000;
+
+/// The terminal and bytes of an encoded terminal.output notification.
+pub(super) fn output(body: &[u8]) -> Option<(u64, Vec<u8>)> {
+    if wire::body::method(body) != Some("terminal.output") {
+        return None;
+    }
+    // Queued bodies carry no schema prefix (wire::Message::value adds it).
+    let framed = [&wire::body::SCHEMA[..], body].concat();
+    let value = wire::body::decode(&framed).ok()?;
+    let params = value.get("params")?;
+    let terminal = params.get("terminal")?.unsigned()?;
+    let bytes = match params.get("bytes")? {
+        crate::json::Data::Bytes(bytes) => bytes.to_vec(),
+        _ => return None,
+    };
+    Some((terminal, bytes))
 }
 
 impl Client {
@@ -27,6 +60,44 @@ impl Client {
             eof: false,
             failed: false,
             drains: BTreeMap::new(),
+            coalesced: None,
+        }
+    }
+
+    /// Queue `body` for stream `id`; with `coalesce` (the current time) terminal.output joins
+    /// held output of the same stream and terminal. Anything else first releases held output,
+    /// keeping the order.
+    pub fn queue(&mut self, kind: wire::Kind, id: u64, body: Vec<u8>, coalesce: Option<Instant>) {
+        if let Some(now) = coalesce
+            && kind == wire::Kind::Notify
+            && let Some((terminal, bytes)) = output(&body)
+        {
+            match &mut self.coalesced {
+                Some(held) if held.id == id && held.terminal == terminal && held.bytes.len() + bytes.len() <= LIMIT => {
+                    held.bytes.extend_from_slice(&bytes);
+                }
+                _ => {
+                    self.release();
+                    self.coalesced = Some(Coalesced { id, terminal, bytes, since: now, armed: false });
+                }
+            }
+            if self.coalesced.as_ref().is_some_and(|held| held.bytes.len() >= LIMIT) {
+                self.release();
+            }
+            return;
+        }
+        self.release();
+        self.messages.push_back(wire::Message::value(kind, id, body));
+    }
+
+    /// Send held output now.
+    pub fn release(&mut self) {
+        if let Some(held) = self.coalesced.take() {
+            let body = crate::encode::notify(
+                "terminal.output",
+                &[("terminal", &held.terminal), ("bytes", &crate::encode::Bytes(&held.bytes))],
+            );
+            self.messages.push_back(wire::Message::value(wire::Kind::Notify, held.id, body));
         }
     }
 
@@ -70,3 +141,7 @@ pub(super) fn cancelled() -> Error {
         message: String::new(),
     }
 }
+
+#[cfg(test)]
+#[path = "client.test.rs"]
+mod tests;

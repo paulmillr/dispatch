@@ -64,12 +64,14 @@ struct SSHIntegrationScope: Hashable, Codable, Sendable {
 
 /// Independently selected helper features. Shared transport methods remain internal.
 enum SSHIntegrationFeature: String, Codable, CaseIterable, Sendable {
-    case statistics, files, chat, hooks, git, tmux, herdr
+    /// `files` lists, reads and copies out; `filesWrite` adds writing into the account's files (copy in, drop, paste).
+    case statistics, files, filesWrite, chat, hooks, git, tmux, herdr
 
     var title: String {
         switch self {
         case .statistics: "Stats"
-        case .files: "File access"
+        case .files: "Files"
+        case .filesWrite: "Copy files in"
         case .chat: "Chat transcripts"
         case .hooks: "Agent hooks"
         case .git: "Git metadata"
@@ -80,7 +82,8 @@ enum SSHIntegrationFeature: String, Codable, CaseIterable, Sendable {
     var detail: String {
         switch self {
         case .statistics: "cpu · mem · disk · processes"
-        case .files: "browse remote files"
+        case .files: "list, read and copy out"
+        case .filesWrite: "drop and paste into this host"
         case .chat: "sessions as chat"
         case .hooks: "attention · notifications"
         case .git: "branch · status"
@@ -91,7 +94,9 @@ enum SSHIntegrationFeature: String, Codable, CaseIterable, Sendable {
     var capabilities: Set<String> {
         switch self {
         case .statistics: ["stats.sample", "stats.ping", "stats.processes"]
-        case .files, .git: ["file.read", "file.text"]
+        case .files: ["file.read", "file.text"]
+        case .filesWrite: ["file.read", "file.text", "file.write"]
+        case .git: ["file.read", "file.text", "git.read"]
         case .chat: ["agent.inspect", "agent.version", "agent.submit", "agent.events", "agent.queue", "agent.side", "backend.register", "file.read", "file.text"]
         case .hooks: ["hooks.configure", "agent.pi", "agent.pi.configure", "backend.register"]
         case .tmux: ["tmux.pane", "backend.register"]
@@ -119,7 +124,7 @@ struct SSHIntegrationGrant: Codable, Equatable, Sendable {
         guard profile != .ordinary else { return [] }
         var values: Set<String> = ["host.identity", "stats.sample", "stats.ping", "stats.processes", "shell.lifecycle", "cancel", "events", "input.window"]
         if profile == .full {
-            values.formUnion(["agent.inspect", "agent.version", "agent.submit", "agent.events", "agent.queue", "agent.side", "backend.register", "tmux.pane", "herdr.start", "herdr.rpc", "herdr.terminal", "file.read", "file.text"])
+            values.formUnion(["agent.inspect", "agent.version", "agent.submit", "agent.events", "agent.queue", "agent.side", "backend.register", "tmux.pane", "herdr.start", "herdr.rpc", "herdr.terminal", "file.read", "file.text", "file.write", "git.read"])
             if hooks { values.formUnion(["hooks.configure", "agent.pi", "agent.pi.configure"]) }
         }
         return values
@@ -173,8 +178,11 @@ struct SSHIntegrationGrant: Codable, Equatable, Sendable {
         profile = try values.decode(SSHIntegrationProfile.self, forKey: .profile)
         hooks = try values.decode(Bool.self, forKey: .hooks)
         revision = try values.decode(Int.self, forKey: .revision)
-        features = try values.decodeIfPresent(Set<SSHIntegrationFeature>.self, forKey: .features)
+        var features = try values.decodeIfPresent(Set<SSHIntegrationFeature>.self, forKey: .features)
         var capabilities = try values.decode(Set<String>.self, forKey: .capabilities)
+        // Files granted writing before copying in was its own feature: keep what the user allowed.
+        if features?.contains(.files) == true, capabilities.contains("file.write") { features?.insert(.filesWrite) }
+        self.features = features
         // A latency echo is part of the existing statistics profile. Preserve
         // remembered choices from before its addition without widening profiles.
         if revision == Self.currentRevision, profile != .ordinary, capabilities.contains("stats.sample") {
@@ -225,12 +233,14 @@ struct SSHIntegrationSelection: Equatable, Sendable {
 /// tmux and herdr come with the helper.
 struct SSHIntegrationDraft: Equatable {
     enum Choice: Hashable {
-        case stats, files, agent(SSHHookAgent)
-        static let all: [Choice] = [.stats, .files] + SSHHookAgent.allCases.map { .agent($0) }
+        /// `filesWrite` belongs to `files`: it shows under it and needs it.
+        case stats, files, filesWrite, agent(SSHHookAgent)
+        static let all: [Choice] = [.stats, .files, .filesWrite] + SSHHookAgent.allCases.map { .agent($0) }
         var title: String {
             switch self {
             case .stats: "Stats"
-            case .files: "File access"
+            case .files: "Files"
+            case .filesWrite: "Copy files in"
             case .agent(.codex): "Codex"
             case .agent(.claude): "Claude"
             case .agent(.pi): "Pi"
@@ -239,7 +249,8 @@ struct SSHIntegrationDraft: Equatable {
         var detail: String {
             switch self {
             case .stats: "cpu · mem · disk · processes"
-            case .files: "browse files · git status"
+            case .files: "list, read and copy out as you"
+            case .filesWrite: "drop and paste into this host"
             case .agent: "chat hooks · attention"
             }
         }
@@ -257,6 +268,7 @@ struct SSHIntegrationDraft: Equatable {
             switch choice {
             case .stats: features.contains(.statistics)
             case .files: features.contains(.files)
+            case .filesWrite: features.contains(.files) && features.contains(.filesWrite)
             // Unanswered agents follow the grant's hook permission (on for new hosts).
             case .agent(let agent): agents[agent] ?? (current?.hooks ?? true)
             }
@@ -269,6 +281,7 @@ struct SSHIntegrationDraft: Equatable {
         var features = implied
         if checked.contains(.stats) { features.insert(.statistics) }
         if checked.contains(.files) { features.formUnion([.files, .git]) }
+        if checked.contains(.files), checked.contains(.filesWrite) { features.insert(.filesWrite) }
         if SSHHookAgent.allCases.contains(where: { checked.contains(.agent($0)) }) { features.insert(.hooks) }
         return features
     }
@@ -293,8 +306,15 @@ struct SSHIntegrationDraft: Equatable {
         helper.toggle()
         if helper, implied.isEmpty { implied = Self.implied }
     }
+    /// Writing needs reading: turning Files off turns copying in off, and turning copying in on turns Files on.
     mutating func toggle(_ choice: Choice) {
-        if checked.contains(choice) { checked.remove(choice) } else { checked.insert(choice); implied = Self.implied }
+        if checked.contains(choice) {
+            checked.remove(choice)
+            if choice == .files { checked.remove(.filesWrite) }
+        } else {
+            checked.insert(choice); implied = Self.implied
+            if choice == .filesWrite { checked.insert(.files) }
+        }
     }
     mutating func useDefaults() { self = .init(current: nil, agents: [:]) }
 }

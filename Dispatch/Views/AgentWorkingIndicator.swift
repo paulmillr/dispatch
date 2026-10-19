@@ -66,11 +66,11 @@ struct AgentWorkingState: Equatable {
         } else {
             label = "thinking"; fragment = ""
         }
-        // Running subagents name the activity while the agent waits on them (its Agent tool) or is idle.
+        // Running subagents name the activity while the agent waits on them (its Agent tool) or is idle; the
+        // footer's agents badge counts them.
         let agentTool = items.last { $0.kind == .tool && !$0.completed }.map { ["Agent", "Task"].contains($0.title) } ?? false
         if !loading, !waiting, !session.subagents.isEmpty, agentTool || !session.busy {
-            let count = session.subagents.count
-            label = count == 1 ? "1 agent running" : "\(count) agents running"
+            label = "waiting on agents"
             var seen = Set<String>()
             fragment = session.subagents.filter { seen.insert($0).inserted }.joined(separator: ", ")
         }

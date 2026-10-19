@@ -139,6 +139,14 @@ final class HerdrChatIntegrationTests: XCTestCase {
         controller.toggleChat()
         try await TestSupport.eventually(diagnostic: "chat=\(a.showChat), key=\(window.isKeyWindow), focused=\(String(describing: workspace.activeSurfaceID)), responder=\(String(describing: window.firstResponder))") { !a.showChat && window.firstResponder === first }
         XCTAssertTrue(c.showChat, "The shortcut affects only the focused inner pane")
+        // ⇧⌘F takes the keyboard from the terminal and gives it back on the way out.
+        controller.toggleFiles()
+        try await TestSupport.eventually { runtime.files.isShowing(a.id) && window.firstResponder !== first }
+        XCTAssertTrue(c.showChat, "Files affects only the focused inner pane")
+        controller.toggleFiles()
+        try await TestSupport.eventually(diagnostic: "files=\(runtime.files.isShowing(a.id)), responder=\(String(describing: window.firstResponder))") {
+            !runtime.files.isShowing(a.id) && window.firstResponder === first
+        }
         controller.toggleChat()
         try await TestSupport.eventually { a.showChat && window.firstResponder is ChatComposer.ComposerTextView }
         let composers = PresentationTestSupport.views(of: ChatComposer.ComposerTextView.self, in: window.contentView!)

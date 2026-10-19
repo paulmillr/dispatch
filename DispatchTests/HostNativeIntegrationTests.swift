@@ -26,6 +26,32 @@ final class HostNativeIntegrationTests: XCTestCase {
         if AppReplay.replaying { XCTAssertEqual(child.processIdentifier, 0) }
     }
 
+    /// A probed ssh's login scope comes from its `ssh -G`. One that prints more than a pipe holds blocked until its
+    /// output was read: read only after its exit, it timed out and the login had no scope.
+    func testProbedSSHWhoseResolvedConfigurationOutgrowsThePipeHasItsLoginScope() async throws {
+        let config = System.temporary.appendingPathComponent("ssh-config-" + System.uuid().uuidString)
+        defer { try? FileManager.default.removeItem(at: config) }
+        // About 130 KB of `ssh -G` output, twice the largest pipe buffer. The ProxyCommand reads and never answers:
+        // ssh waits for its server without connecting anywhere, and the proxy ends with it.
+        try System.write(Data(("Host fixture\n  HostName fixture.invalid\n  User fixture\n  Port 2200\n  ProxyCommand /usr/bin/sed d\n"
+            + (1...6000).map { "  SendEnv FIXTURE_\($0)\n" }.joined()).utf8), to: config, permissions: 0o600)
+        let child = Process()
+        child.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+        child.arguments = ["-F", config.path, "fixture"]
+        child.standardInput = FileHandle.nullDevice
+        child.standardOutput = FileHandle.nullDevice; child.standardError = FileHandle.nullDevice
+        defer { if !AppReplay.replaying, child.isRunning { child.terminate(); child.wait() } }
+        let bytes = try AppReplay.query(kind: "test.host.spawn", input: AppReplay.value(AppReplay.Launch(child))) {
+            try TestSupport.start(child)
+            return try AppReplay.value(XCTUnwrap(AgentProcess.capture(child.processIdentifier)))
+        }
+        let ssh = try AppReplay.decode(AgentProcess.self, bytes)
+        let group = UInt64(max(0, System.process("group", ssh.pid) { getpgid(ssh.pid) }))
+        let observations = await HostProcessWatcher().probe([HostProcessTarget(terminal: System.uuid(), source: .terminal(group))])
+        XCTAssertEqual(observations.map(\.scope), [SSHIntegrationScope(executable: "/usr/bin/ssh", destination: "fixture",
+            configuration: "user fixture\nhostname fixture.invalid\nport 2200\nproxycommand /usr/bin/sed d")])
+    }
+
     // On the helper route a host move is the app's placement (Workspace.placeHostTerminal, run by the host
     // coordinator's synchronize); the old tmux/herdr move lock (hostMoves.isBusy) has no counterpart.
     // Pane processes are read from the test's own tmux server.

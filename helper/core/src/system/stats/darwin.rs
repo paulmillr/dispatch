@@ -3,12 +3,6 @@ use super::ffi::Statfs;
 use std::ffi::{c_char, c_void};
 
 #[repr(C)]
-pub(super) struct Timebase {
-    pub numer: u32,
-    pub denom: u32,
-}
-
-#[repr(C)]
 pub(super) struct Vm {
     pub free_count: u32,
     pub active_count: u32,
@@ -35,60 +29,6 @@ pub(super) struct Vm {
     pub internal_page_count: u32,
     pub total_uncompressed_pages_in_compressor: u64,
     pub swapped_count: u64,
-}
-
-#[repr(C)]
-pub(super) struct Bsd {
-    pub pbi_flags: u32,
-    pub pbi_status: u32,
-    pub pbi_xstatus: u32,
-    pub pbi_pid: u32,
-    pub pbi_ppid: u32,
-    pub pbi_uid: u32,
-    pub pbi_gid: u32,
-    pub pbi_ruid: u32,
-    pub pbi_rgid: u32,
-    pub pbi_svuid: u32,
-    pub pbi_svgid: u32,
-    pub rfu_1: u32,
-    pub pbi_comm: [u8; 16],
-    pub pbi_name: [u8; 32],
-    pub pbi_nfiles: u32,
-    pub pbi_pgid: u32,
-    pub pbi_pjobc: u32,
-    pub e_tdev: u32,
-    pub e_tpgid: u32,
-    pub pbi_nice: i32,
-    pub pbi_start_tvsec: u64,
-    pub pbi_start_tvusec: u64,
-}
-
-#[repr(C)]
-pub(super) struct Task {
-    pub pti_virtual_size: u64,
-    pub pti_resident_size: u64,
-    pub pti_total_user: u64,
-    pub pti_total_system: u64,
-    pub pti_threads_user: u64,
-    pub pti_threads_system: u64,
-    pub pti_policy: i32,
-    pub pti_faults: i32,
-    pub pti_pageins: i32,
-    pub pti_cow_faults: i32,
-    pub pti_messages_sent: i32,
-    pub pti_messages_received: i32,
-    pub pti_syscalls_mach: i32,
-    pub pti_syscalls_unix: i32,
-    pub pti_csw: i32,
-    pub pti_threadnum: i32,
-    pub pti_numrunning: i32,
-    pub pti_priority: i32,
-}
-
-#[repr(C)]
-pub(super) struct Process {
-    pub pbsd: Bsd,
-    pub ptinfo: Task,
 }
 
 #[repr(C)]
@@ -143,7 +83,6 @@ unsafe extern "C" {
         new: *mut c_void,
         length: usize,
     ) -> i32;
-    pub(super) fn mach_timebase_info(value: *mut Timebase) -> i32;
     pub(super) fn mach_host_self() -> u32;
     pub(super) static mach_task_self_: u32;
     pub(super) fn host_processor_info(
@@ -159,14 +98,6 @@ unsafe extern "C" {
     pub(super) fn getloadavg(load: *mut f64, count: i32) -> i32;
     pub(super) fn getifaddrs(value: *mut *mut Interfaces) -> i32;
     pub(super) fn freeifaddrs(value: *mut Interfaces);
-    pub(super) fn proc_listallpids(pids: *mut i32, size: i32) -> i32;
-    pub(super) fn proc_pidinfo(
-        pid: i32,
-        flavor: i32,
-        argument: u64,
-        value: *mut Process,
-        size: i32,
-    ) -> i32;
     #[cfg_attr(target_arch = "x86_64", link_name = "getfsstat$INODE64")]
     pub(super) fn getfsstat(value: *mut Statfs, size: i32, flags: i32) -> i32;
 }

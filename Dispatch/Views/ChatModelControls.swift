@@ -71,7 +71,7 @@ struct ChatModelControls: View {
                 ChatModelPickerView(picker: picker, close: { picker.close() }, terminal: {
                     guard session.modelPicker === picker else { return }
                     picker.abandon(); session.modelPicker = nil
-                    coordinator.chooseChat(false, session: session)
+                    coordinator.showTerminal(session)
                 })
             }
     }

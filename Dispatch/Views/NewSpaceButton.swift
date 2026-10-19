@@ -149,6 +149,9 @@ struct NewSpaceButton: View {
     var grouped = false
     /// A header button shows only while its group is hovered, empty or read by VoiceOver.
     var revealed = true
+    /// Tabs only: "+ tab" makes a tab in the current space (⌘T); the host buttons make a space there, which lists as a
+    /// tab, so every title says tab.
+    var tabs = false
     @Environment(\.appTypography) private var typography
     @State private var hovered = false
 
@@ -156,12 +159,15 @@ struct NewSpaceButton: View {
     /// Only advertise Command-N where it currently targets.
     private var shortcut: String? {
         if isLocalSidebar { return "⇧⌘N" }
+        if tabs && host == nil { return "⌘T" }
         return host == nil || host?.id == (workspace.current?.hostID ?? .local) ? "⌘N" : nil
     }
     /// What it makes: in a tree group, a space on that group's host.
     private var title: String {
-        if grouped, let host { return host.id == .local ? "New local space" : "New space on \(host.name)" }
-        return isLocalSidebar ? "New local space" : "New space"
+        let title: String
+        if grouped, let host { title = host.id == .local ? "New local space" : "New space on \(host.name)" }
+        else { title = isLocalSidebar ? "New local space" : "New space" }
+        return NewSpaceMenu.noun(title, tabs: tabs)
     }
 
     var body: some View {
@@ -170,14 +176,16 @@ struct NewSpaceButton: View {
         }
         .allowsHitTesting(false)
         .overlay {
-            NewSpaceControl(workspace: workspace, host: host?.id, identifier: host.map { "host-new-space-\($0.id.rawValue)" }
-                ?? "sidebar-new-space")
+            NewSpaceControl(workspace: workspace, host: host?.id, identifier: identifier, tabs: tabs)
                 .accessibilityLabel(title)
-                .accessibilityIdentifier(host.map { "host-new-space-\($0.id.rawValue)" }
-                    ?? "sidebar-new-space")
+                .accessibilityIdentifier(identifier)
         }
         .onHover { hovered = $0 }
         .help(title + (shortcut.map { " (\($0))" } ?? "") + " · Right-click for options")
+    }
+
+    private var identifier: String {
+        host.map { "host-new-space-\($0.id.rawValue)" } ?? (tabs ? "sidebar-new-tab" : "sidebar-new-space")
     }
 
     /// A tree group's header button: a plus in the header's own control style, a soft capsule under the pointer and no
@@ -254,7 +262,7 @@ struct NewSpaceButton: View {
             }
             .foregroundStyle(Chrome.palette.secondary)
             .frame(width: iconWidth)
-            Text(isLocalSidebar ? "local" : "space")
+            Text(isLocalSidebar ? "local" : tabs ? "tab" : "space")
             Spacer(minLength: 0)
             if showsShortcut, let shortcut {
                 Text(shortcut).font(.system(size: shortcutSize).monospacedDigit()).tracking(shortcutSize * 0.06)
@@ -266,6 +274,11 @@ struct NewSpaceButton: View {
 
 @MainActor
 enum NewSpaceMenu {
+    /// Tabs only names what the sidebar lists: every "space" in a title reads "tab".
+    nonisolated static func noun(_ title: String, tabs: Bool) -> String {
+        tabs ? title.replacingOccurrences(of: " space", with: " tab") : title
+    }
+
     struct Choice {
         /// The item's name ("New tmux space"); `title` adds the host when the menu lists several.
         let label: String
@@ -399,13 +412,17 @@ private struct NewSpaceControl: NSViewRepresentable {
     let workspace: Workspace
     let host: HostID?
     let identifier: String
+    var tabs = false
 
     func makeNSView(context: Context) -> NewSpaceNativeButton { NewSpaceNativeButton() }
 
     func updateNSView(_ button: NewSpaceNativeButton, context: Context) {
         button.setAccessibilityIdentifier(identifier)
-        button.setAccessibilityLabel(host == .local ? "New local space" : "New space")
-        button.create = { workspace.newSpace(on: host ?? workspace.current?.hostID ?? .local) }
+        button.setAccessibilityLabel(NewSpaceMenu.noun(host == .local ? "New local space" : "New space", tabs: tabs))
+        // Tabs only's "+ tab" is ⌘T: a tab beside the current one; its host buttons still make a space on that host.
+        if tabs && host == nil { button.create = { workspace.newTab() } }
+        else { button.create = { workspace.newSpace(on: host ?? workspace.current?.hostID ?? .local) } }
+        button.tabs = tabs
         button.host = host
         button.immediateOptions = { NewSpaceMenu.immediateGroups(workspace: workspace, host: host) }
         button.options = { await NewSpaceMenu.groups(workspace: workspace, host: host) }
@@ -417,6 +434,8 @@ final class NewSpaceNativeButton: NSButton {
     var host: HostID? {
         didSet { if host != oldValue { prefetched = false } }
     }
+    /// Tabs only: the menu's titles say tab.
+    var tabs = false
     var create: () -> Void = {}
     var immediateOptions: (() -> [NewSpaceMenu.HostGroup])?
     var options: () async -> [NewSpaceMenu.HostGroup] = { [] }
@@ -464,7 +483,7 @@ final class NewSpaceNativeButton: NSButton {
             return menu
         }
         choices = [create]
-        let here = NSMenuItem(title: "New space here", action: #selector(choose(_:)), keyEquivalent: "n")
+        let here = NSMenuItem(title: tabs ? "New tab here" : "New space here", action: #selector(choose(_:)), keyEquivalent: tabs ? "t" : "n")
         here.keyEquivalentModifierMask = .command
         here.target = self; here.tag = 0
         menu.addItem(here)
@@ -489,7 +508,7 @@ final class NewSpaceNativeButton: NSButton {
 
     private func addOptions(_ options: [NewSpaceMenu.Option], to menu: NSMenu) {
         for option in options {
-            let item = NSMenuItem(title: option.choice.menuTitle, action: #selector(choose(_:)), keyEquivalent: "")
+            let item = NSMenuItem(title: NewSpaceMenu.noun(option.choice.menuTitle, tabs: tabs), action: #selector(choose(_:)), keyEquivalent: "")
             item.target = self
             item.tag = choices.count
             choices.append(option.action)

@@ -1,0 +1,5 @@
+{
+  "kind": "baseline",
+  "why": "The corpus as migrations found it: replays 459e46ce, recorded with wire schema ffb555cb07505319. Every corpus without a ledger (REPLAYS/MIGRATIONS) is here.",
+  "fingerprints": {"wire": "ffb555cb07505319"}
+}

@@ -15,6 +15,7 @@ final class TerminalRuntime {
     /// Saved text for relaunched local tabs, shown when each one starts its shell (TerminalHistoryStore).
     var restoredHistory: [UUID: String] = [:]
     var chat: ChatCoordinator = ChatCoordinator()
+    lazy var files: FilesCoordinator = FilesCoordinator { [weak self] in self?.chat }
     /// What programs in each terminal report about themselves (OSC 7501).
     let programs: ProgramStatusStore = ProgramStatusStore()
     let herdrLaunch: HerdrLaunch = HerdrLaunch()
@@ -32,6 +33,7 @@ final class TerminalRuntime {
             for helper in helpers.values { helper.bind(workspace) }
             workspace?.helpers = helpers
             workspace?.closeLaunching = preferences.closeLaunching
+            workspace?.tabsOnly = preferences.tabsOnly
             workspace?.machineForTab = { [weak self] in self?.machine(for: $0) ?? $0.machine }
             workspace?.owningMachineForTab = { [weak self] in self?.owningMachine(for: $0) ?? $0.machine }
         }
@@ -82,6 +84,7 @@ final class TerminalRuntime {
         AppFont.register()
         self.preferences = preferences
         workspace?.closeLaunching = preferences.closeLaunching
+        workspace?.tabsOnly = preferences.tabsOnly
         hosts.reconnect.automatic = preferences.autoReconnectSSH
         if !System.testing {
             ChatViewportTrace.shared.setEnabled(preferences.enableDiagnostics)
@@ -92,6 +95,7 @@ final class TerminalRuntime {
         HostColorStore.shared.choices = preferences.hostColors
         HostColorStore.shared.enabled = preferences.showHostColors
         chat.start()
+        installFileTransfers()
         let resources = System.resources
         do {
             // The launch mailbox, shims and shell wrappers (ssh/codex --*-launch) serve every terminal;
@@ -139,8 +143,12 @@ final class TerminalRuntime {
         let next = SwiftEngine.parse(text, dark: dark)
         config = next
         ChatThemeStore.shared.current = ChatTheme(config: next, preferences: preferences)
+        let gitChanged = self.preferences.gitEnabled != preferences.gitEnabled
         self.preferences = preferences
+        // Files views drop or resolve their repositories now rather than on the next tick.
+        if gitChanged { for id in files.sessions.keys { files.refresh(id) } }
         workspace?.closeLaunching = preferences.closeLaunching
+        workspace?.tabsOnly = preferences.tabsOnly
         hosts.reconnect.automatic = preferences.autoReconnectSSH
         for helper in helpers.values { helper.claim(preferences.spaces) }
         SidebarThemeStore.shared.current = preferences.resolvedSidebarTheme
@@ -250,7 +258,7 @@ final class TerminalRuntime {
     func close(_ ids: [UUID]) {
         let ids = ids.filter { id in !helpers.values.contains { $0.retains(id) } }
         for helper in helpers.values { ids.forEach(helper.detach) }
-        for id in ids { ssh.closeTab(id); hosts.close(id); herdrLaunch.close(id); chat.close(id); programs.close(id); views.removeValue(forKey: id)?.destroy() }
+        for id in ids { ssh.closeTab(id); hosts.close(id); herdrLaunch.close(id); chat.close(id); files.forget(id); programs.close(id); views.removeValue(forKey: id)?.destroy() }
         prune()
     }
 
@@ -302,13 +310,22 @@ final class TerminalRuntime {
     func focusActive() {
         guard let tab = workspace?.activeTab else { return }
         let id = tab.id
-        guard chat.sessions[id]?.showChat != true,
-              chat.sessions[id]?.terminalSearch.visible != true,
-              let view = views[id], view.isPresented, view.window?.isKeyWindow == true,
-              // The open space search keeps the keyboard: a request queued before it opened (a tab mounting, a pane
-              // focusing after a detach) would take it back and close the still empty search.
-              (view.window as? MainWindow)?.state?.spaceSearchFocusRequest == nil else { return }
+        // The open space search keeps the keyboard: a request queued before it opened (a tab mounting, a pane
+        // focusing after a detach) would take it back and close the still empty search.
+        guard (views[id]?.window as? MainWindow)?.state?.spaceSearchFocusRequest == nil else { return }
+        // Files covers the terminal and takes the keyboard itself, on a focus request (its list, once mounted).
+        if files.isShowing(id) {
+            files.existing(id)?.focusRequest = System.uuid()
+            return
+        }
+        guard terminalTakesKeyboard(id), let view = views[id], view.isPresented, view.window?.isKeyWindow == true else { return }
         view.window?.makeFirstResponder(view)
+    }
+
+    /// Nothing in front of this tab's terminal wants the keyboard: chat and files each take it themselves while they
+    /// cover the terminal, and an open find bar keeps it.
+    func terminalTakesKeyboard(_ id: UUID) -> Bool {
+        chat.sessions[id]?.showChat != true && !files.isShowing(id) && chat.sessions[id]?.terminalSearch.visible != true
     }
 
     func setActive(_ active: Bool) {

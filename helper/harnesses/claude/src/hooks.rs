@@ -27,6 +27,50 @@ fn string(v: Value<'_>, key: &str, limit: usize, empty: bool) -> Result<String, 
 fn printable(value: Value<'_>) -> Result<String, Error> {
     String::from_utf8(value.write_with(Format::PrettySorted)?).map_err(|issue| error("json", issue))
 }
+/// The id of the session-scoped allow choice (dispatch_helper_core's extension choices).
+pub const SESSION: &str = "Session";
+
+/// Claude's PermissionRequest `permission_suggestions` that add allow rules: what its own
+/// "Yes, and don't ask again" offers. Applied with destination "session" (Claude's
+/// updatedPermissions), they last until this Claude process exits.
+fn session_rules(root: Value<'_>) -> Vec<Value<'_>> {
+    root.get("permission_suggestions")
+        .and_then(|value| value.array())
+        .into_iter()
+        .flatten()
+        .filter(|suggestion| {
+            text(*suggestion, "type") == Some("addRules")
+                && text(*suggestion, "behavior") == Some("allow")
+                && suggestion.get("rules").and_then(|rules| rules.array()).is_some_and(|mut rules| {
+                    let mut any = false;
+                    let valid = rules.all(|rule| {
+                        any = true;
+                        text(rule, "toolName").is_some_and(|name| !name.is_empty() && name.len() <= 256)
+                            && rule.get("ruleContent").is_none_or(|content| {
+                                content.string().is_some_and(|content| content.len() <= 4096)
+                            })
+                    });
+                    valid && any
+                })
+        })
+        .take(8)
+        .collect()
+}
+
+/// "Bash(npm test:*)" for each rule, as Claude writes permission rules.
+fn describe(suggestions: &[Value<'_>]) -> String {
+    suggestions
+        .iter()
+        .filter_map(|suggestion| suggestion.get("rules").and_then(|rules| rules.array()))
+        .flatten()
+        .map(|rule| match text(rule, "ruleContent") {
+            Some(content) => format!("{}({content})", text(rule, "toolName").unwrap_or_default()),
+            None => text(rule, "toolName").unwrap_or_default().to_owned(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 impl Request {
     pub fn new(doc: Json) -> Result<Self, Error> {
         let root = doc.root();
@@ -168,6 +212,23 @@ impl Request {
             } else {
                 format!("{tool}\n{display}")
             };
+            let mut options = ["Allow", "Deny", "Terminal"]
+                .map(|s| Choice {
+                    id: s.into(),
+                    label: s.into(),
+                    detail: None,
+                })
+                .to_vec();
+            // Claude's own "don't ask again" suggestions, applied for this session only. Only
+            // clients that negotiated interaction.options see this choice (core filters it).
+            let rules = if side { Vec::new() } else { session_rules(root) };
+            if !rules.is_empty() {
+                options.push(Choice {
+                    id: SESSION.into(),
+                    label: "This session".into(),
+                    detail: Some(format!("Allow {} until Claude exits", describe(&rules))),
+                });
+            }
             rows.push(Question {
                 blocks: vec![Block::Code {
                     language: "json".into(),
@@ -177,13 +238,7 @@ impl Request {
                 header: tool.clone(),
                 text: operation,
                 secret: false,
-                options: ["Allow", "Deny", "Terminal"]
-                    .map(|s| Choice {
-                        id: s.into(),
-                        label: s.into(),
-                        detail: None,
-                    })
-                    .to_vec(),
+                options,
                 multiple: false,
                 custom: false,
             });
@@ -248,6 +303,7 @@ impl Request {
         let action = if approval {
             match values.get("approval").map(String::as_str) {
                 Some("Allow") => "allow",
+                Some("This session") if !self.side => "session",
                 Some("Deny") => "deny",
                 Some("Terminal") => "terminal",
                 _ if denied => "terminal",
@@ -290,6 +346,23 @@ impl Request {
                 ("message", Data::String(reason))
             });
             Data::Object(v)
+        } else if action == "session" {
+            let rules = session_rules(root)
+                .into_iter()
+                .filter_map(|suggestion| suggestion.get("rules"))
+                .map(|rules| {
+                    Data::Object(vec![
+                        ("type", Data::String("addRules")),
+                        ("rules", Data::Value(rules)),
+                        ("behavior", Data::String("allow")),
+                        ("destination", Data::String("session")),
+                    ])
+                })
+                .collect();
+            Data::Object(vec![
+                ("behavior", Data::String("allow")),
+                ("updatedPermissions", Data::Array(rules)),
+            ])
         } else if approval {
             Data::Object(vec![("behavior", Data::String(action))])
         } else {
@@ -335,3 +408,7 @@ pub(crate) fn control(id: &str, decision: Data<'_>) -> Result<Vec<u8>, Error> {
         ),
     ]))
 }
+
+#[cfg(test)]
+#[path = "hooks.test.rs"]
+mod tests;

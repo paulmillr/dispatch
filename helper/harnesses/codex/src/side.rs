@@ -25,13 +25,15 @@ pub const FEATURES: [&str; 13] = [
 ];
 
 /// The only variables a side inherits, each from the parent agent's own environment;
-/// c51466a ssh-helper agent_side.rs:72-84.
-pub const ENVIRONMENT: [&str; 14] = [
+/// c51466a ssh-helper agent_side.rs:72-84. TZ: a side runs in its parent's time zone, not the
+/// machine's (Codex writes the zone into what it sends).
+pub const ENVIRONMENT: [&str; 15] = [
     "HOME",
     "PATH",
     "TMPDIR",
     "LANG",
     "LC_ALL",
+    "TZ",
     "CODEX_HOME",
     "OPENAI_BASE_URL",
     "OPENAI_API_KEY",

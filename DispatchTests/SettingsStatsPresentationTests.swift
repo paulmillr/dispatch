@@ -343,7 +343,7 @@ final class SettingsStatsPresentationTests: XCTestCase {
         try click("homelab", in: await capture(window, "settings-ssh-hosts-collapsed"))
         let editor = try await capture(window, "settings-ssh-hosts-editor")
         let editorText = try editor.text()
-        for label in ["Dispatch helper", "Stats", "File access", "Agent hooks", "Codex", "Forget host"] {
+        for label in ["Dispatch helper", "Stats", "Files", "Agent hooks", "Codex", "Forget host"] {
             XCTAssertTrue(editorText.contains(label), editorText)
         }
         XCTAssertNil(permissions.agentHooks(reached)[.codex])
@@ -367,8 +367,8 @@ final class SettingsStatsPresentationTests: XCTestCase {
         for (profile, title, size, width) in [
             (SSHIntegrationProfile.ordinary, "no helper", 12.5, 356.0),
             (.statistics, "stats only", 12.5, 356.0),
-            (.full, "6 features", 12.5, 280.0),
-            (.full, "6 features", 22.0, 626.0)
+            (.full, "7 features", 12.5, 280.0),
+            (.full, "7 features", 22.0, 626.0)
         ] {
             let typography = AppTypography(contentSize: size)
             let entry = SSHIntegrationPermissions.Entry(scope: scope, grant: .init(profile: profile))
@@ -703,8 +703,9 @@ final class SettingsStatsPresentationTests: XCTestCase {
         for (tab, labels) in [
             ("Appearance", ["Terminal font", "Chat font", "Size", "Theme", "Host colors", "Custom terminal", "Liquid Glass", "Sidebar & tabs", "Space size", "Show git branch", "Hide sidebar with one space"]),
             ("Keys", ["Number keys", "Spaces", "Tabs", "Splits", "Keyboard", "Use Option as Alt"]),
-            ("General", ["Startup", "Starting folder", "Reopen spaces on launch", "Restore tab history", "Terminal", "Open tmux sessions as spaces", "tmux -CC attach", "Open herdr sessions as spaces", "Kitty graphics", "Automatic tab names", "Notifications", "Notify", "Dock badge", "Sound", "Troubleshooting", "Diagnostics"]),
-            ("Agents & Hosts", ["Chat mode", "coding agent CLIs as chat", "Codex", "Claude", "Pi", "Connections", "On new hosts", "Ask", "This Mac"])
+            ("General", ["Startup", "Starting folder", "Reopen spaces on launch", "Restore tab history", "Terminal", "Kitty graphics", "Automatic tab names", "Notifications", "Notify", "Dock badge", "Sound", "Troubleshooting", "Diagnostics"]),
+            ("Features", ["Chat mode", "coding agent CLIs as chat", "Codex", "Claude", "Pi", "tmux & herdr", "Open tmux sessions as spaces", "tmux -CC attach", "Open herdr sessions as spaces", "Files", "Drag and drop", "Show hidden files", "Ask before replacing", "Git", "Changes and Commits in files mode"]),
+            ("Agents & Hosts", ["Connections", "On new hosts", "Ask", "This Mac"])
         ] {
             if tab != "Appearance" { try await PresentationTestSupport.selectSettingsTab(tab, in: window) }
             var snapshots = [try await capture(window, "settings-\(tab)")]
@@ -728,6 +729,13 @@ final class SettingsStatsPresentationTests: XCTestCase {
                 XCTAssertFalse(text.contains("Use Option as Alt"), "Keyboard behaviour lives under Keys")
                 XCTAssertFalse(text.contains("Remote hosts"), "Hosts have their own page")
                 XCTAssertFalse(text.contains("Improve text contrast"), "Custom colors start collapsed")
+            }
+            if tab == "General" {
+                XCTAssertFalse(text.contains("Open tmux sessions"), "Whole features live under Features")
+                XCTAssertFalse(text.contains("Drag and drop"), "Files settings live under Features")
+            }
+            if tab == "Agents & Hosts" {
+                XCTAssertFalse(text.contains("coding agent CLIs as chat"), "Chat mode lives under Features")
             }
             if tab == "Keys" {
                 // OCR misreads ⌃ and ⌘; the recorders report their shortcuts to accessibility.
@@ -784,10 +792,10 @@ final class SettingsStatsPresentationTests: XCTestCase {
             scroll.reflectScrolledClipView(scroll.contentView)
         }
         // SwiftUI can reset the scroll position during layout; retry until the
-        // last listed login is on screen.
+        // last listed login is on screen (logins sort by host, then account: bob@build.example).
         try await TestSupport.eventually {
             try scrollToBottom()
-            return try await PresentationTestSupport.capture(window).text().lowercased().contains("carol")
+            return try await PresentationTestSupport.capture(window).text().lowercased().contains("bob")
         }
         let snapshot = try await capture(window, "settings-host-integrations")
         // Vision may insert a space after punctuation in monospaced hostnames.

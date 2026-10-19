@@ -1,0 +1,3 @@
+# Build output stays under the repository's build/ (as the helper's does).
+[build]
+target-dir = "../../../build/mobile-ssh/target"

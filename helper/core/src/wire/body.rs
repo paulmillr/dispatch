@@ -9,6 +9,10 @@ include!(concat!(env!("OUT_DIR"), "/wire-schema.rs"));
 
 // This is a transport nesting bound, not a provider transcript-parsing bound.
 pub const DEPTH: usize = 512;
+/// Values one wire body may hold. The frame limit is sized for TEXT_LIMIT bytes of text as JSON (six-byte escapes),
+/// but a binary null is one byte: a peer's frame would otherwise be millions of values, each a Data in memory. Plain
+/// values (captures, job output, values made here) are not counted.
+const VALUES: usize = super::TEXT_LIMIT as usize;
 
 fn error() -> Error {
     Error {
@@ -31,22 +35,39 @@ fn text(out: &mut Vec<u8>, value: &str) -> Result<(), Error> {
 /// Names the wire abbreviates (the generated schema); captures use none, so they do not depend on it.
 #[derive(Clone, Copy)]
 struct Dictionary {
+    /// In number order (src/wire/registry.txt): a name's number is its place.
     symbols: &'static [&'static str],
+    /// The numbers of `symbols` in the names' sorted order, for lookup.
+    order: &'static [u16],
     records: &'static [&'static [&'static str]],
 }
 const WIRE: Dictionary = Dictionary {
     symbols: SYMBOLS,
+    order: SYMBOL_ORDER,
     records: RECORDS,
 };
 const PLAIN: Dictionary = Dictionary {
     symbols: &[],
+    order: &[],
     records: &[],
 };
 
+impl Dictionary {
+    /// `name`'s number, if the table has it.
+    fn number(&self, name: &str) -> Option<u16> {
+        self.order.binary_search_by(|number| self.symbols[usize::from(*number)].cmp(name)).ok().map(|at| self.order[at])
+    }
+}
+
+/// `name`'s number in this helper's wire table (src/wire/registry.txt), if it has one.
+pub fn symbol(name: &str) -> Option<u16> {
+    WIRE.number(name)
+}
+
 fn key(out: &mut Vec<u8>, name: &str, names: Dictionary) -> Result<(), Error> {
-    match names.symbols.binary_search(&name) {
-        Ok(index) => out.extend_from_slice(&(index as u16).to_le_bytes()),
-        Err(_) => {
+    match names.number(name) {
+        Some(index) => out.extend_from_slice(&index.to_le_bytes()),
+        None => {
             out.extend_from_slice(&u16::MAX.to_le_bytes());
             text(out, name)?;
         }
@@ -78,9 +99,9 @@ fn value(out: &mut Vec<u8>, item: &Data<'_>, depth: usize, names: Dictionary) ->
         }
         Data::Real(_) => return Err(error()),
         Data::String(v) => {
-            if let Ok(index) = names.symbols.binary_search(v) {
+            if let Some(index) = names.number(v) {
                 out.push(9);
-                out.extend_from_slice(&(index as u16).to_le_bytes());
+                out.extend_from_slice(&index.to_le_bytes());
             } else {
                 out.push(6);
                 text(out, v)?;
@@ -211,6 +232,7 @@ pub(crate) fn method(bytes: &[u8]) -> Option<&str> {
         bytes,
         at: 0,
         names: WIRE,
+        values: VALUES,
     };
     let named = match reader.take(1).ok()?[0] {
         10 => *RECORDS.get(reader.symbol().ok()? as usize)?.first()? != "method",
@@ -248,9 +270,10 @@ pub struct Encoded {
     wire: bool,
 }
 impl Encoded {
-    /// A value tree made here (e.g. what the helper derived from an agent's JSON).
+    /// A value tree made here (e.g. what the helper derived from an agent's JSON), checked as `plain` is: agent JSON
+    /// can repeat a key, which the reader refuses.
     pub fn value(data: &Data<'_>) -> Result<Self, Error> {
-        Ok(Self { bytes: encode_plain(data)?, wire: false })
+        Self::plain(&encode_plain(data)?)
     }
     pub fn plain(bytes: &[u8]) -> Result<Self, Error> {
         decode_plain(bytes)?;
@@ -271,6 +294,7 @@ pub fn decode_plain(bytes: &[u8]) -> Result<Data<'_>, Error> {
         bytes,
         at: 0,
         names: PLAIN,
+        values: usize::MAX,
     };
     let data = reader.value(DEPTH)?;
     if reader.at != bytes.len() {
@@ -283,6 +307,8 @@ pub struct Reader<'a> {
     bytes: &'a [u8],
     at: usize,
     names: Dictionary,
+    /// Values this body may still hold (VALUES).
+    values: usize,
 }
 impl<'a> Reader<'a> {
     fn take(&mut self, count: usize) -> Result<&'a [u8], Error> {
@@ -310,9 +336,10 @@ impl<'a> Reader<'a> {
         }
     }
     fn value(&mut self, depth: usize) -> Result<Data<'a>, Error> {
-        if depth == 0 {
+        if depth == 0 || self.values == 0 {
             return Err(error());
         }
+        self.values -= 1;
         let tag = self.take(1)?[0];
         let data = match tag {
             0 => Data::Null,
@@ -393,6 +420,7 @@ pub fn decode(bytes: &[u8]) -> Result<Data<'_>, Error> {
         bytes,
         at: 0,
         names: WIRE,
+        values: VALUES,
     };
     if reader.take(SCHEMA.len())? != SCHEMA {
         return Err(Error {
@@ -406,3 +434,37 @@ pub fn decode(bytes: &[u8]) -> Result<Data<'_>, Error> {
     }
     Ok(data)
 }
+
+/// Another schema's names (an older helper's, from the corpus's dictionaries): what its wire bodies abbreviate.
+pub struct Names {
+    pub schema: [u8; 8],
+    pub symbols: &'static [&'static str],
+    pub records: &'static [&'static [&'static str]],
+}
+
+/// A wire body of the schema `names` describes (capture convert); borrows its strings and bytes.
+pub fn decode_as<'a>(bytes: &'a [u8], names: &Names) -> Result<Data<'a>, Error> {
+    let mut reader = Reader {
+        bytes,
+        at: 0,
+        // Decoding reads numbers only: no lookup order is needed.
+        names: Dictionary {
+            symbols: names.symbols,
+            order: &[],
+            records: names.records,
+        },
+        values: VALUES,
+    };
+    if reader.take(names.schema.len())? != names.schema {
+        return Err(error());
+    }
+    let data = reader.value(DEPTH)?;
+    if reader.at != bytes.len() {
+        return Err(error());
+    }
+    Ok(data)
+}
+
+#[cfg(test)]
+#[path = "body.test.rs"]
+mod tests;

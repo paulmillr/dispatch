@@ -20,6 +20,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     private var settingsKeyMonitor: Any?
     private var appearanceObservation: NSKeyValueObservation?
     private var termination: Task<Void, Never>?
+    /// Settings' "Remove Dispatch from this Mac": run once the runtime stopped (true also deletes the app's data).
+    var removalOnQuit: Bool?
     let hostSessionStore: HostSessionStore?
     private var closingNativeTabs: Set<UUID> = []
     private var savedHostSession = false
@@ -102,8 +104,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         window.setFrame(frame, display: true)
     }
 
+    /// With one space (tabs only: one tab) the sidebar hides, unless Settings keeps it.
     private var automaticSidebarVisible: Bool {
-        !settings.values.hideSingleSpace || workspace.lastingSpaceCount > 1
+        !settings.values.hideSingleSpace || (workspace.tabsOnly ? workspace.lastingTabCount : workspace.lastingSpaceCount) > 1
     }
     var sidebarVisible: Bool {
         windowState.sidebarVisibilityOverride ?? automaticSidebarVisible
@@ -120,7 +123,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// Chat's sheet when the active pane shows chat; otherwise the workspace sheet.
     @objc func showKeyboardShortcuts() {
         if let id = workspace.activeSurfaceID, let session = TerminalRuntime.shared.chat.sessions[id],
-           session.showChat, session.hasConversation {
+           TerminalRuntime.shared.files.mode(for: id) == .chat, session.hasConversation {
             windowState.shortcutsPresented = false
             session.shortcutsPresented.toggle()
         } else {
@@ -152,6 +155,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         }
         workspace.defaultDirectory = settings.values.startingDirectory
         workspace.spaceOrder = settings.values.spaceOrder
+        workspace.tabsOnly = settings.values.tabsOnly
         workspace.onCloseTabs = { TerminalRuntime.shared.close($0) }
         if restoreHostSession() {
             // Keep restored offline hosts visible; local-only sessions follow the usual sidebar rules.
@@ -168,6 +172,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         window.isReleasedWhenClosed = false
         window.delegate = self
         window.center()
+        LocalAgentsConsent.noteLaunch(frame: "Dispatch.Local.MainWindow")
         window.setFrameAutosaveName("Dispatch.Local.MainWindow")
         window.contentView = NSHostingView(rootView: MainView(workspace: workspace, settings: settings, controller: self))
         buildMenus()
@@ -175,6 +180,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         DispatchQueue.main.async { runtime.focusActive() }
+        let window = window!
+        Task { await LocalAgentsConsent.start(over: window, chat: runtime.chat) }
     }
 
     func applicationDidBecomeActive(_ notification: Notification) { TerminalRuntime.shared.setActive(true) }
@@ -198,7 +205,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
     func requestTermination(reply: @escaping @MainActor (Bool) -> Void) -> NSApplication.TerminateReply {
         guard termination == nil else { return .terminateLater }
-        guard confirmClosing(Array(workspace.allTabIDs), detaching: true) else { return .terminateCancel }
+        guard confirmClosing(Array(workspace.allTabIDs), detaching: true) else { removalOnQuit = nil; return .terminateCancel }
         saveHostSession()
         // Unmount terminal views before stopping the runtime, then keep AppKit
         // alive until private SSH masters and their mailbox paths are released.
@@ -218,6 +225,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         Task { await cleanup.value; deadline.cancel(); finish.finish() }
         termination = Task {
             for await _ in finished {}
+            // Dispatch's helpers here have stopped, so the removal is not refused or undone.
+            if let data = removalOnQuit { await DispatchRemoval.finishLocal(data: data) }
             reply(true)
         }
         return .terminateLater
@@ -401,7 +410,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     }
     @objc func toggleChat() {
         guard NSApp.keyWindow === window, let id = workspace.activeSurfaceID else { return }
-        TerminalRuntime.shared.chat.toggle(id)
+        TerminalRuntime.shared.files.toggleChat(id)
+    }
+    @objc func toggleFiles() {
+        guard NSApp.keyWindow === window, let id = workspace.activeSurfaceID else { return }
+        TerminalRuntime.shared.files.toggleFiles(id)
+    }
+    /// ⇧⌘F and ⌃⌘1 work on any tab but a plain SSH login (whose files no helper lists), and leave a files view shown.
+    func filesMenuEnabled(_ tab: TerminalTab?) -> Bool {
+        guard let id = tab?.focusedSurfaceID else { return false }
+        let files = TerminalRuntime.shared.files
+        return files.isShowing(id) || files.canShowFiles(id)
+    }
+    /// ⌥⌘P: the files preview beside the list, hidden or shown again.
+    @objc func togglePreview() {
+        guard NSApp.keyWindow === window, let id = workspace.activeSurfaceID,
+              let files = TerminalRuntime.shared.files.existing(id), files.visible else { return }
+        files.togglePreview()
+    }
+    /// ⌃⌘1 opens files on its Files tab from any mode; ⌃⌘2 and ⌃⌘3 select Changes and Commits while files shows.
+    @objc func showFilesTab(_ sender: NSMenuItem) {
+        guard NSApp.keyWindow === window, let id = workspace.activeSurfaceID, let tab = Self.filesTab(sender.tag) else { return }
+        TerminalRuntime.shared.files.showFiles(id, tab: tab)
+    }
+    /// ⇧⌘U and ⇧⌘L: files on its Changes or Commits tab, from any mode.
+    @objc func openFilesTab(_ sender: NSMenuItem) { showFilesTab(sender) }
+    static func filesTab(_ tag: Int) -> FilesTab? { FilesTab.allCases.indices.contains(tag) ? FilesTab.allCases[tag] : nil }
+    /// ⇧⌘U / ⇧⌘L, and ⌃⌘2 / ⌃⌘3 (`showing`: only while files shows): a tab that can show files, on a folder not known to
+    /// be outside a repository (one never shown in files has not been resolved, and falls back to Files if it is).
+    func filesTabMenuEnabled(_ tab: TerminalTab?, _ filesTab: FilesTab, showing: Bool) -> Bool {
+        guard let id = tab?.focusedSurfaceID else { return false }
+        let files = TerminalRuntime.shared.files
+        return (!showing || files.isShowing(id)) && files.canShowFiles(id, tab: filesTab)
     }
     @objc func applyLayout(_ sender: NSMenuItem) {
         guard LayoutPreset.allCases.indices.contains(sender.tag) else { return }
@@ -465,10 +505,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         switch item.action {
         case #selector(clearScreen):
             guard NSApp.keyWindow === window, let id = workspace.activeSurfaceID else { return false }
-            return TerminalRuntime.shared.chat.sessions[id]?.showChat != true && TerminalRuntime.shared.views[id] != nil
+            return TerminalRuntime.shared.files.mode(for: id) == .terminal && TerminalRuntime.shared.views[id] != nil
         case #selector(findInContent), #selector(findNext), #selector(findPrevious):
-            guard NSApp.keyWindow === window, let id = workspace.activeSurfaceID,
-                  let session = TerminalRuntime.shared.chat.sessions[id] else { return false }
+            guard NSApp.keyWindow === window, let id = workspace.activeSurfaceID else { return false }
+            // Files filters its list (or finds in its preview) on ⌘F; ⌘G has nothing to step through there.
+            if TerminalRuntime.shared.files.isShowing(id) { return item.action == #selector(findInContent) }
+            guard let session = TerminalRuntime.shared.chat.sessions[id] else { return false }
             return item.action == #selector(findInContent) || (session.showChat ? session.search : session.terminalSearch).visible
         case #selector(closeCurrentTab), #selector(closeCurrentSpace):
             let isSpace = item.action == #selector(closeCurrentSpace)
@@ -494,6 +536,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             let chat = TerminalRuntime.shared.chat
             let session = chat.session(for: tab.focusedSurfaceID)
             return session.showChat || chat.canEnterChat(session)
+        case #selector(toggleFiles):
+            return NSApp.keyWindow === window && filesMenuEnabled(workspace.activeTab)
+        case #selector(showFilesTab(_:)), #selector(openFilesTab(_:)):
+            guard NSApp.keyWindow === window, let tab = Self.filesTab(item.tag) else { return false }
+            if tab == .files { return filesMenuEnabled(workspace.activeTab) }
+            return filesTabMenuEnabled(workspace.activeTab, tab, showing: item.action == #selector(showFilesTab(_:)))
+        case #selector(togglePreview):
+            let files = workspace.activeSurfaceID.flatMap { TerminalRuntime.shared.files.existing($0) }
+            item.title = files?.previewOff == true ? "Show Preview" : "Hide Preview"
+            return NSApp.keyWindow === window && files?.visible == true
         case #selector(nextPane), #selector(previousPane):
             return (workspace.current?.layout.paneIDs.count ?? 0) > 1
         case #selector(moveTabToNextPane):

@@ -14,6 +14,7 @@ pub(crate) type Drains = Rc<RefCell<VecDeque<(RawFd, u64, Done<()>)>>>;
 mod client;
 pub(crate) mod candidate;
 pub(crate) mod login;
+mod transfers;
 use client::Client;
 /// The largest frame: a chunk (21-byte header + CHUNK) or an inline message (<= CHUNK + 13).
 const FRAME: usize = wire::CHUNK + 21;
@@ -26,6 +27,10 @@ const OUTPUT: usize = 4 * FRAME;
 const DETACHED_IDLE: Duration = Duration::from_secs(24 * 60 * 60);
 /// Timer section of the detached login's idle deadline.
 const DETACHED: &str = "login.detached";
+/// Wakes the loop when coalesced terminal output is due (feature terminals.coalesce).
+const COALESCE: &str = "ui.coalesce";
+/// Wakes the loop to check a stdio.liveness client's silence.
+const LIVENESS: &str = "ui.liveness";
 /// A stdio helper's SIGTERM: the app's close after its grace (HelperSession.close).
 const TERMINATED: &str = "terminated";
 
@@ -49,6 +54,9 @@ pub struct DispatchHelper {
     pub(crate) admitted: BTreeMap<(RawFd, u64), (Vec<&'static str>, Rc<Cell<bool>>)>,
     /// Bound startup shell, also used when a terminal request supplies only cwd.
     pub shell: std::path::PathBuf,
+    /// Serving a client on another machine (`--remote`, e.g. over an SSH exec channel). A
+    /// login wrapper implies it; a plain `--remote --stdio` helper (the iPhone app) has none.
+    pub remote: bool,
     pub(crate) default: Option<(usize, String)>,
     pub(crate) harnesses: Vec<Shared<dyn Harness>>,
     pub(crate) multiplexers: Vec<Shared<dyn Multiplexer>>,
@@ -94,6 +102,16 @@ pub struct DispatchHelper {
     pub(crate) drains: Drains,
     pub(crate) login: Option<login::SharedLogin>,
     pub(crate) windows: crate::dispatch::Windows,
+    /// Opt-in protocol features per client (dispatch/features.rs).
+    pub(crate) features: crate::dispatch::features::Features,
+    /// HOME as the user's login environment sees it (hello.account.login_home for feature
+    /// clients when it differs from the passwd home).
+    pub login_home: Option<std::path::PathBuf>,
+    /// Serving stdio (no listening socket): its one client is its whole life.
+    pub(crate) stdio: bool,
+    /// The stdio.liveness client's traffic (a `--remote --stdio` helper only).
+    pub(crate) liveness: Option<crate::dispatch::features::Liveness>,
+    pub(crate) transfers: transfers::Transfers,
 }
 
 struct Updates<'a> {
@@ -113,6 +131,7 @@ struct Updates<'a> {
     probes: crate::probe::Observed,
     candidates: candidate::Shared,
     login: Option<login::SharedLogin>,
+    features: crate::dispatch::features::Features,
 }
 impl Updates<'_> {
     /// A terminal's agent conversation is over: its questions expire and its interactions and
@@ -364,6 +383,21 @@ impl Ui for Updates<'_> {
                 .retain(|id, _| self.nodes.borrow().contains_key(id));
             self.controls.borrow_mut().retain(self.module, &self.nodes);
         }
+        // A choice only interaction.options clients understand: the others get the interaction
+        // without it, byte for byte what they got before the feature existed.
+        let legacy = match &update {
+            Update::Interaction { binding, interaction } => crate::dispatch::features::legacy(interaction).map(|legacy| {
+                crate::encode::notify(
+                    "interaction.opened",
+                    &[
+                        ("terminal", &terminal),
+                        ("session", &binding.session),
+                        ("interaction", &legacy),
+                    ],
+                )
+            }),
+            _ => None,
+        };
         let output = if matches!(&update, Update::Stderr { .. }) {
             "terminal.stderr"
         } else {
@@ -509,9 +543,21 @@ impl Ui for Updates<'_> {
             ),
         };
         for (fd, id) in recipients {
+            let body = match &legacy {
+                Some(legacy)
+                    if !crate::dispatch::features::enabled(
+                        &self.features,
+                        fd,
+                        crate::dispatch::features::INTERACTION_OPTIONS,
+                    ) =>
+                {
+                    legacy.clone()
+                }
+                _ => body.clone(),
+            };
             self.replies
                 .borrow_mut()
-                .push_back((fd, wire::Kind::Notify, id, body.clone()));
+                .push_back((fd, wire::Kind::Notify, id, body));
         }
     }
     fn watching(&self, binding: &Binding) -> bool {
@@ -596,7 +642,12 @@ impl DispatchHelper {
             permissions: Rc::new(RefCell::new(None)),
             admitted: BTreeMap::new(),
             windows: Default::default(),
+            features: Default::default(),
+            login_home: None,
+            stdio: false,
+            liveness: None,
             shell: std::env::var_os("SHELL").unwrap_or("/bin/sh".into()).into(),
+            remote: false,
             default: None,
             harnesses: Vec::new(),
             multiplexers: Vec::new(),
@@ -632,6 +683,7 @@ impl DispatchHelper {
             unclaimed: Default::default(),
             drains: Rc::new(RefCell::new(VecDeque::new())),
             login: None,
+            transfers: Default::default(),
         }
     }
     fn cancel_creations(&mut self, io: &mut dyn Io, fd: i32, request: Option<u64>) {
@@ -679,6 +731,7 @@ impl DispatchHelper {
                 candidates: self.candidates.clone(),
                 pending: self.updates.clone(),
                 login: self.login.clone(),
+                features: self.features.clone(),
             };
             let backends: BTreeSet<_> = self
                 .backends
@@ -812,13 +865,7 @@ impl DispatchHelper {
             section: format!("plugin/{}", self.plugins.len()),
             muted: None,
             permitted: Rc::new(move |method| {
-                login::permits(
-                    &grants,
-                    match method {
-                        "text" | "read" | "branch" => "file.text",
-                        _ => "stats.sample",
-                    },
-                )
+                login::permits(&grants, login::plugin_required(method))
             }),
         }));
         self.plugins.push(plugin.clone());
@@ -875,7 +922,7 @@ impl DispatchHelper {
             Ok(work) => work,
             Err(error) => return done(io, Err(Error { code: "setup", message: error.to_string() })),
         };
-        let (parent, installs, remote) = (io.pid(), self.installs.clone(), self.login.is_some());
+        let (parent, installs, remote) = (io.pid(), self.installs.clone(), self.remote || self.login.is_some());
         io.then(work, Box::new(move |io, result| {
             let process = match result {
                 Ok(Output::Process(process)) if process.pid == peer &&
@@ -1044,6 +1091,7 @@ impl DispatchHelper {
         }
         system.section("startup");
         let listener = socket.map(|path| system.listen(path)).transpose()?;
+        self.stdio = listener.is_none();
         // Best effort: without it, a session directory is only kept for a day.
         let _session = socket
             .filter(|_| login.is_some() && System::recording().is_none())
@@ -1155,6 +1203,8 @@ impl DispatchHelper {
         let mut exited = None;
         // Last client traffic of a detached login; None until it detaches.
         let mut traffic: Option<Instant> = None;
+        // A stdio helper whose client left, until its transfers are removed.
+        let mut ending: Option<Instant> = None;
         loop {
             let revoked: Vec<_> = self
                 .admitted
@@ -1288,6 +1338,7 @@ impl DispatchHelper {
                     candidates: self.candidates.clone(),
                     pending: self.updates.clone(),
                     login: self.login.clone(),
+                features: self.features.clone(),
                 }
                 .update(update);
             }
@@ -1328,14 +1379,48 @@ impl DispatchHelper {
             }
             system.callbacks();
             let count = replies.borrow().len();
+            // The clock is an observed (recorded) operation: read it only when some client
+            // asked for coalescing, so other clients' captures stay as they were.
+            let now = self
+                .features
+                .borrow()
+                .values()
+                .any(|set| set.contains(crate::dispatch::features::TERMINALS_COALESCE))
+                .then(|| system.now());
             for _ in 0..count {
                 let (fd, kind, id, body) = replies.borrow_mut().pop_front().unwrap();
                 if let Some(client) = clients.get_mut(&fd)
                     && client.pending.contains(&id)
                 {
-                    client
-                        .messages
-                        .push_back(wire::Message::value(kind, id, body));
+                    let coalesce = crate::dispatch::features::enabled(
+                        &self.features,
+                        fd,
+                        crate::dispatch::features::TERMINALS_COALESCE,
+                    );
+                    client.queue(kind, id, body, now.filter(|_| coalesce));
+                }
+            }
+            if let Some(liveness) = self.liveness.as_mut().filter(|l| !l.armed) {
+                liveness.armed = true;
+                let section = Io::section(&mut system, LIVENESS);
+                system.timer(liveness.last + liveness.limit);
+                Io::section(&mut system, &section);
+            }
+            // Held output goes out after its window; until then a timer wakes this loop.
+            if let Some(now) = now {
+                for client in clients.values_mut() {
+                    let Some(held) = &mut client.coalesced else { continue };
+                    if !client.pending.contains(&held.id) {
+                        client.coalesced = None;
+                    } else if now >= held.since + client::WINDOW {
+                        client.release();
+                    } else if !held.armed {
+                        held.armed = true;
+                        let at = held.since + client::WINDOW;
+                        let section = Io::section(&mut system, COALESCE);
+                        system.timer(at);
+                        Io::section(&mut system, &section);
+                    }
                 }
             }
             for (fd, id, done) in self.drains.borrow_mut().drain(..) {
@@ -1457,6 +1542,11 @@ impl DispatchHelper {
             if system.flush() {
                 continue;
             }
+            if let Some(deadline) = ending
+                && self.transfers.may_exit(system.now() >= deadline)
+            {
+                return Ok((system.finish(0)?, false));
+            }
             let (section, event) = match system.next() {
                 Err(error)
                     if error.kind() == io::ErrorKind::UnexpectedEof && system.replay_done() =>
@@ -1482,6 +1572,27 @@ impl DispatchHelper {
                     // A sender that left meanwhile has no reply to take.
                     let _ = system.reply(reply, &answer);
                 }
+                continue;
+            }
+            if section == LIVENESS {
+                system.section("ui");
+                if let Some(liveness) = self.liveness.as_mut() {
+                    liveness.armed = false;
+                    if system.now() >= liveness.last + liveness.limit {
+                        // The phone pings every 15 s; this much silence means its connection is
+                        // gone even though no close arrived (NAT, port forward).
+                        eprintln!(
+                            "dispatch-helper: no client traffic for {} s; ending",
+                            liveness.limit.as_secs()
+                        );
+                        return Ok((system.finish(0)?, false));
+                    }
+                }
+                continue;
+            }
+            if section == COALESCE {
+                // Held terminal output is released at the top of the loop.
+                system.section("ui");
                 continue;
             }
             if section == DETACHED {
@@ -1544,6 +1655,7 @@ impl DispatchHelper {
                     candidates: self.candidates.clone(),
                     pending: self.updates.clone(),
                     login: self.login.clone(),
+                features: self.features.clone(),
                 };
                 self.multiplexers[index]
                     .borrow_mut()
@@ -1577,6 +1689,7 @@ impl DispatchHelper {
                     candidates: self.candidates.clone(),
                     pending: self.updates.clone(),
                     login: self.login.clone(),
+                features: self.features.clone(),
                 };
                 self.harnesses[index]
                     .borrow_mut()
@@ -1604,6 +1717,7 @@ impl DispatchHelper {
                     candidates: self.candidates.clone(),
                     pending: self.updates.clone(),
                     login: self.login.clone(),
+                features: self.features.clone(),
                 };
                 self.plugins[index]
                     .borrow_mut()
@@ -1691,6 +1805,9 @@ impl DispatchHelper {
                     Ok(count) => {
                         if traffic.is_some() {
                             traffic = Some(system.now());
+                        }
+                        if let Some(liveness) = self.liveness.as_mut().filter(|l| l.fd == fd) {
+                            liveness.last = system.now();
                         }
                         let requests = match client.feed(&bytes[..count]) {
                             Ok(requests) => requests,
@@ -1792,6 +1909,10 @@ impl DispatchHelper {
                 client.abort(&mut system, None);
                 let write = client.write;
                 clients.remove(&fd);
+                self.features.borrow_mut().remove(&fd);
+                if self.liveness.as_ref().is_some_and(|l| l.fd == fd) {
+                    self.liveness = None;
+                }
                 self.questions
                     .borrow_mut()
                     .retain(|(peer, _, _, _), _| *peer != fd);
@@ -1800,8 +1921,16 @@ impl DispatchHelper {
                 if write != fd {
                     system.close(write);
                 }
+                self.transfers.end(fd, &mut system, &self.plugins);
                 if listener.is_none() {
-                    return Ok((system.finish(0)?, false));
+                    if !self.transfers.running() {
+                        return Ok((system.finish(0)?, false));
+                    }
+                    // Its transfers are being removed: exit once they are, or at the deadline.
+                    let deadline = system.now() + transfers::ENDING;
+                    system.section("transfers.ending");
+                    system.timer(deadline);
+                    ending = Some(deadline);
                 }
             } else {
                 system.section("ui");
@@ -1870,8 +1999,48 @@ impl DispatchHelper {
     ) {
         let result = (|| {
             let root = document.root();
+            // Opt-in features ride on hello; a hello without them is checked exactly as before.
+            let requested = crate::dispatch::features::requested(&root)?;
+            let stripped = requested.as_ref().map(|_| crate::dispatch::features::without(&root)).transpose()?;
+            let checked = stripped.as_ref().unwrap_or(&root);
+            if let Some(method) = checked.get("method").and_then(|m| m.string())
+                && crate::dispatch::features::OPERATIONS.contains(&method)
+                && crate::dispatch::features::enabled(&self.features, fd, method)
+            {
+                if !self.allowed(method) {
+                    return Err(Error { code: "permission_denied", message: "This SSH feature is disabled".into() });
+                }
+                let params = checked.get("params").unwrap_or(checked);
+                return crate::dispatch::Request {
+                    helper: self,
+                    io: system,
+                    replies: replies.clone(),
+                    document: document.clone(),
+                    fd,
+                    id,
+                }
+                .extension(method, params);
+            }
             let (method, params) =
-                crate::dispatch::parameters(&root, |method| self.allowed(method))?;
+                crate::dispatch::parameters(checked, |method| self.allowed(method))?;
+            if let Some(mut accepted) = requested {
+                use crate::dispatch::features::STDIO_LIVENESS;
+                // Only a helper that lives for one remote stdio client can end with it.
+                if !(self.stdio && self.remote && self.login.is_none()) {
+                    accepted.remove(STDIO_LIVENESS);
+                }
+                if accepted.contains(STDIO_LIVENESS) {
+                    self.liveness = Some(crate::dispatch::features::Liveness {
+                        fd,
+                        last: system.now(),
+                        limit: crate::dispatch::features::liveness(
+                            std::env::var_os("DISPATCH_STDIO_LIVENESS_SECONDS").as_deref(),
+                        ),
+                        armed: false,
+                    });
+                }
+                self.features.borrow_mut().insert(fd, accepted);
+            }
             let mut grants = vec![login::required(method)];
             if ["mux", "terminal", "node", "parent"]
                 .iter()

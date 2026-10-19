@@ -14,7 +14,7 @@ import tempfile
 import uuid
 from profile import Profile
 from timings import cases_from_result, report, compare
-from selection import resolve, describe, add_arguments
+from selection import resolve, describe, add_arguments, scan
 import shards
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -183,26 +183,48 @@ def validate_summary(summary):
 def corpus(root, stage, replays, helper, failed=False):
     """A run's passed tests into the replay corpus (the helper's capture tool: helper replays on that helper and
     app<->helper checks first); `failed`: its failed tests too, as recorded (a run's own replay reproduces them).
-    Prints what it did not store. False: a passed test was not stored."""
-    stored = subprocess.run([str(helper), 'capture', 'store', str(stage), str(replays), '--tests', str(root / 'DispatchTests')]
-                            + (['--failed'] if failed else []), stdout=subprocess.PIPE, text=True)
+    Prints what it did not store. False: a passed test was not stored. The corpus (replays/, public) gets them scrubbed
+    (test/scrub.py: this Mac's private values replaced, checked again); a run's own scratch corpus as recorded."""
+    if Path(replays).resolve() == (root / 'replays').resolve():
+        import scrub
+        try:
+            stored = scrub.store(stage, replays, helper, failed)
+        except SystemExit as error:
+            print(error, file=sys.stderr, flush=True)
+            return False
+    else:
+        stored = subprocess.run([str(helper), 'capture', 'store', str(stage), str(replays)] + (['--failed'] if failed else []),
+                                stdout=subprocess.PIPE, text=True)
     for line in stored.stdout.splitlines():
         if not line.startswith('pass\t'):
             print(line, flush=True)
     return stored.returncode == 0
 
 
+def migrate(root, helper):
+    """Brings replays/ up to the code before anything replays it (docs/replay.md, Migrations): the pending migrations in
+    test/replay-migrations, applied by the helper this build bundled. False when one did not apply."""
+    replays, migrations = root / 'replays', root / 'test/replay-migrations'
+    if not migrations.is_dir() or not Path(helper).exists() or not next(replays.rglob('*.rpl.zst'), None):
+        return True
+    result = subprocess.run([str(helper), 'capture', 'migrate', str(replays), str(migrations)], stdout=subprocess.PIPE, text=True)
+    for line in result.stdout.splitlines():
+        if line.startswith(('migration\t', 'rerecord\t', 'error\t')):
+            print('Replay corpus ' + line.replace('\t', ': ', 1), flush=True)
+    return result.returncode == 0
+
+
 def corpus_missing(root):
     """None, or why the corpus in replays/ (a git submodule) is absent: without it every test would run live, unnoticed."""
     replays = root / 'replays'
-    if next(replays.rglob('*.rpl.bz2'), None):
+    if next(replays.rglob('*.rpl.zst'), None):
         return None
     return ('The replay corpus is not checked out (' + str(replays) + ' has no recordings): run '
             '`git submodule update --init replays`, or pass --live to run every test live')
 
 
-def execute(root, tests, skips=(), recheck=False, benchmarks=False, selection=None, capture_run=None,
-            replays=None, required=False, live=False, output=None, replay_run=None):
+def execute(root, tests, skips=(), recheck=False, benchmarks=False, selection=None, capture=False,
+            replays=None, required=False, live=False, output=None, replay=False):
     if found := machine(root):
         raise ValueError('Machine facts come from System (docs/replay.md); read directly at:\n  ' + '\n  '.join(found))
     if found := processes(root):
@@ -248,16 +270,20 @@ def execute(root, tests, skips=(), recheck=False, benchmarks=False, selection=No
     try:
         # The old SSH helper's portable preflight went with it; the helper builds in the Xcode phase.
         plan = ensure_build(root, profile, force=recheck)
-        if replay_run:
-            # Replaying a run: its tests into a corpus of their own (failed ones too: they reproduce their failure),
-            # stored by the helper this build just bundled, then nothing but replay.
+        if not live and not replay and not migrate(root, root / 'build/Build/Products/Debug/Dispatch.app/Contents/Resources/dispatch-helper'):
+            raise RuntimeError('A replay migration did not apply (test/replay-migrations): fix it before the corpus replays')
+        if replay:
+            # Replaying the capture in build/captures: its tests into a corpus of their own (failed ones too: they
+            # reproduce their failure), stored by the helper this build just bundled, then nothing but replay.
             replays, required = root / 'build/app-replay' / str(uuid.uuid4()), True
             replays.mkdir(parents=True)
-            if not corpus(root, root / 'build/captures' / replay_run, replays,
+            if not corpus(root, root / 'build/captures', replays,
                           root / 'build/Build/Products/Debug/Dispatch.app/Contents/Resources/dispatch-helper', failed=True):
-                print('Some passed tests of the run were not stored; they fail without a journal', file=sys.stderr)
+                print('Some passed tests of the capture were not stored; they fail without a journal', file=sys.stderr)
             print('App replay corpus: ' + str(replays), flush=True)
-        environment = dict(os.environ)
+        # The account's locale stays out (its languages, its region in CoreFoundation's variable, its terminal's LC_*):
+        # every recorded environment holds it (the helper's, each command's). One basic locale is set with TZ below.
+        environment = {key: value for key, value in os.environ.items() if key != 'LANGUAGE' and not key.startswith('LC_')}
         environment.setdefault('TEST_RUNNER_DISPATCH_TEST_ROOT', test_root)
         environment.setdefault('TEST_RUNNER_TMPDIR', os.path.join(test_root, 'tmp') + '/')
         # Set and dictionary order is random per process; recorded app outputs must not depend on it.
@@ -271,17 +297,15 @@ def execute(root, tests, skips=(), recheck=False, benchmarks=False, selection=No
             environment['TEST_RUNNER_DISPATCH_REPLAY_REQUIRED'] = '1'
         if live:
             environment['TEST_RUNNER_DISPATCH_LIVE'] = '1'
-        if capture_run:
-            if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', capture_run):
-                raise ValueError('--capture RUN must be a single directory name')
-            # The whole run stays in build/captures/RUN for debugging, failed tests included.
-            recording = root / 'build/captures' / capture_run
-            if recording.exists(): raise ValueError('Capture run already exists: ' + str(recording))
-            for directory in ('raw', 'app'):
-                (recording / directory).mkdir(parents=True, mode=0o700)
-            environment.update(TEST_RUNNER_DISPATCH_TEST_CAPTURE='1',
-                               TEST_RUNNER_DISPATCH_CAPTURE=linked(recording / 'raw') + '/helper-%p.rpl.bz2',
-                               TEST_RUNNER_DISPATCH_APP_CAPTURE=linked(recording / 'app'))
+        if capture:
+            # One staging root, at the same path in every run (recordings hold it): each case writes <TestFile>/<test>/
+            # in it, as in replays/, failed cases too. The tests find a class's file in tests.json.
+            recording = root / 'build/captures'
+            if recording.exists() and any(recording.iterdir()):
+                raise ValueError('build/captures holds an earlier capture: move it away to keep it, or delete it')
+            recording.mkdir(parents=True, exist_ok=True, mode=0o700)
+            (recording / 'tests.json').write_text(json.dumps(scan(root)[1], indent=1, sort_keys=True) + '\n')
+            environment.update(TEST_RUNNER_DISPATCH_TEST_CAPTURE='1', TEST_RUNNER_DISPATCH_CAPTURE=linked(recording) + '/helper-%p.rpl.zst')
         command = ["xcodebuild", "-xctestrun", str(plan), "-destination", "platform=macOS",
                    "-parallel-testing-enabled", "NO", "-resultBundlePath", str(result), "test-without-building"]
         command += ["-only-testing:" + test for test in tests]
@@ -292,6 +316,10 @@ def execute(root, tests, skips=(), recheck=False, benchmarks=False, selection=No
                     # 3 = view types and values only. The loopback SSH fixture must match the helper build.
                     env={**environment, 'TEST_RUNNER_DISPATCH_TEST_FIXTURES': linked(fixtures),
                          'TEST_RUNNER_SWIFTUI_VIEW_DEBUG': '3',
+                         # The machine's time zone is private: agents write it into what tests record (Codex's context).
+                         'TEST_RUNNER_TZ': 'UTC',
+                         **{prefix + key: value for prefix in ('', 'TEST_RUNNER_')
+                            for key, value in {'LANG': 'en_US.UTF-8', '__CF_USER_TEXT_ENCODING': '0x%X:0x0:0x0' % os.getuid()}.items()},
                          'TEST_RUNNER_DISPATCH_UNPRIVILEGED_SSHD': os.environ.get('DISPATCH_UNPRIVILEGED_SSHD', '')}).returncode
             except KeyboardInterrupt:
                 status = 130
@@ -373,8 +401,8 @@ def arguments(description=__doc__):
     parser = argparse.ArgumentParser(description=description)
     add_arguments(parser)
     mode = parser.add_mutually_exclusive_group()
-    mode.add_argument('--capture', metavar='RUN', help='Record live tests in build/captures/RUN (failed ones too); store the passed ones in replays/')
-    mode.add_argument('--replay', metavar='RUN', help='Replay only: the tests of build/captures/RUN, each from its own journal, failed ones included (they reproduce their failure; a test without a journal fails)')
+    mode.add_argument('--capture', action='store_true', help='Record live tests in build/captures/<TestFile>/<test>/ (failed ones too); store the passed ones in replays/')
+    mode.add_argument('--replay', action='store_true', help='Replay only: the tests of build/captures, each from its own journal, failed ones included (they reproduce their failure; a test without a journal fails)')
     parser.add_argument('--live', action='store_true', help='Run every test live, ignoring the corpus in replays/')
     parser.add_argument('--tests-from', type=Path, help='Additional selectors from a non-empty JSON array')
     return parser
@@ -412,7 +440,7 @@ def main():
             raise ValueError(missing)
         return execute(ROOT, args.tests, args.skip,
                        recheck=args.recheck or os.environ.get("DISPATCH_TEST_RECHECK") == "1",
-                       benchmarks=benchmarks, selection=selection, capture_run=args.capture, replay_run=args.replay,
+                       benchmarks=benchmarks, selection=selection, capture=args.capture, replay=args.replay,
                        live=args.live)
     except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as error:
         print("Test runner: " + str(error), file=sys.stderr)
