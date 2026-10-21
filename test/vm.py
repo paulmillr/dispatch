@@ -35,8 +35,10 @@ CODEX = Path("/opt/homebrew/lib/node_modules/@openai/codex/node_modules/"
 # OpenAI's quick start uses this image registry. Pin the image for reproducibility.
 IMAGE = ("ghcr.io/cirruslabs/macos-tahoe-xcode@sha256:"
          "e0721ddeae3c7c037b764c1aebd0b2d245495c16622413f5a567d7110d18d863")
-SOURCES = ["Dispatch", "DispatchTests", "Mobile", "helper", "Vendor", "ThirdPartyLicenses", "scripts", "test", "extras",
-           "project.yml", "run.sh"]
+# Every directory project.yml names: XcodeGen refuses the spec when a target's sources or a local package are missing,
+# though the guest builds only the Mac app.
+SOURCES = ["Dispatch", "DispatchTests", "Mobile", "Watch", "Packages", "helper", "Vendor", "ThirdPartyLicenses", "scripts",
+           "test", "extras", "project.yml", "run.sh"]
 # The iPhone app's prebuilt SSH engine (scripts/setup_mobile.py): Xcode resolves its package for every scheme of the
 # project, the Mac's included, so the guest needs the binary target even though it never builds the iPhone app.
 MOBILE_ENGINE = "build/mobile-ssh/DispatchMobileSSHCore.xcframework"
@@ -414,7 +416,7 @@ def synchronize(vm, sources, destination, relative=False):
     command = ["/usr/bin/rsync", "--archive", "--no-times", "--checksum", "--delete",
                "--delete-excluded", "--exclude=__pycache__", "--exclude=.DS_Store",
                "--exclude=LocalToolAudit/", "--exclude=rollout-*.jsonl", "--exclude=STEPS.md",
-               "--exclude=/helper/target/", "--exclude=/" + CORPUS + "/.git", "--stats", "--rsync-path=/usr/bin/rsync",
+               "--exclude=/helper/target/", "--exclude=/Packages/*/.build/", "--exclude=/" + CORPUS + "/.git", "--stats", "--rsync-path=/usr/bin/rsync",
                "-e", shlex.join([sys.executable, str(ROOT / "scripts/tart-rsync.py")])]
     if relative:
         command.append("--relative")

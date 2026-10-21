@@ -463,10 +463,13 @@
           let local = endpoint == .local
           // The tab as it is now: its command or directory can have changed since it was shown.
           let latest = owned.flatMap(\.tabs).first { $0.id == tab.id } ?? tab
+          let prepared = local ? environment(surface) : (variables: [], integrated: false)
           let terminal = try await client.create(
             .init(
               parent: parent, beside: nil, cwd: local ? (latest.machine == .local ? latest.directory : System.home.path) : nil, launch: nil,
-              command: latest.launchCommand ?? latest.machine.command(), environment: local ? environment(surface) : []))
+              command: latest.launchCommand ?? latest.machine.command(), environment: prepared.variables,
+              // Only a default shell has startup files to skip; a command keeps the recorded request.
+              integration: prepared.integrated && latest.launchCommand == nil && latest.machine.command() == nil ? false : nil))
           guard !stopped, owned.flatMap(\.tabs).contains(where: { $0.id == tab.id }) else {
             _ = try await client.close(.init(node: terminal, policy: .terminate))
             throw CancellationError()
@@ -1000,7 +1003,9 @@
     /// What an app-spawned shell gets, for a helper shell: the app's integration (ssh/launch wrappers,
     /// launch mailbox) and Ghostty's shell integration (prompt marks, title, cursor) as the terminal
     /// engine would launch it (Term Launch). Only variables that differ from this process are sent.
-    func environment(_ identifier: UInt64?) -> [String] {
+    /// `integrated`: Ghostty's integration is in there (its ZDOTDIR or ENV), so the helper's own startup
+    /// files would go unread and it is told not to write them.
+    func environment(_ identifier: UInt64?) -> (variables: [String], integrated: Bool) {
       let process = System.inherited
       var environment = process.merging(TerminalRuntime.shared.herdrLaunch.nativeEnvironment(for: scope)) { _, new in new }
       // Tests isolate shells from the account's startup files like app-spawned ones (TerminalView);
@@ -1008,6 +1013,7 @@
       let testing: [(String, String)] =
         System.testing
         ? [("HOME", System.home.path), ("DISPATCH_NATIVE_ZDOTDIR", "/var/empty"), ("DISPATCH_TESTING", "1")] : []
+      var integrated = false
       if let config = TerminalRuntime.shared.config, let identifier,
         let launch = try? Launch(
           command: nil, directory: nil, overrides: testing, config: config, environment: environment,
@@ -1015,9 +1021,10 @@
           id: identifier)
       {
         environment = launch.env
+        integrated = true
       }
-      return environment.filter { process[$0.key] != $0.value }
-        .sorted { $0.key < $1.key }.map { $0.key + "=" + $0.value }
+      return (environment.filter { process[$0.key] != $0.value }
+        .sorted { $0.key < $1.key }.map { $0.key + "=" + $0.value }, integrated)
     }
 
     /// A local terminal's Ghostty surface id, made when its creation is asked for: concurrent creations
@@ -1072,11 +1079,12 @@
           if external(backend), newSpace == nil, let anchor = space.activeTab?.terminal {
             try await client.focus(.init(node: anchor))
           }
+          let prepared = endpoint == .local ? environment(surface) : (variables: [], integrated: false)
           let terminal = try await client.create(
             .init(
               // A multiplexer server knows its focused pane's directory (old app: tmux -c #{pane_current_path}).
               parent: parent, beside: nil, cwd: external(backend) ? nil : space.activeTab?.directory,
-              launch: nil, environment: endpoint == .local ? environment(surface) : []))
+              launch: nil, environment: prepared.variables, integration: prepared.integrated ? false : nil))
           await published()
           print("Helper creation reply: terminal=\(terminal), placeholder=\(String(describing: placeholder)), selected=\(String(describing: workspace?.activeTab?.id)), server=\(String(describing: snapshots[route]?.focus))")
           // A window dismissed while pending: the server's window is detached (kept running, listed), never shown.

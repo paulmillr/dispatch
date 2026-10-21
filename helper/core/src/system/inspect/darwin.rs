@@ -425,7 +425,41 @@ pub(super) fn jobs(shell: &Process) -> io::Result<bool> {
     Ok(false)
 }
 
-pub(super) fn pids() -> io::Result<Vec<u32>> {
+/// The processes a foreground scan looks at: those whose controlling terminal is `tty`
+/// (PROC_TTY_ONLY, the same session tty `snapshot` reports as `tty`), in the kernel's process
+/// list order like a full listing. The caller rechecks every snapshot's tty, so a listing that
+/// cannot be bounded (buffer full, an unusual tty number, a kernel refusal) falls back to every
+/// process rather than answering with fewer; the answer is the same, only the cost differs.
+pub(super) fn candidates(tty: u64) -> io::Result<Vec<u32>> {
+    let Ok(device) = u32::try_from(tty) else {
+        return pids();
+    };
+    // 16 KiB on the stack: a terminal rarely has more than a few dozen processes.
+    let mut pids = [0u32; 4096];
+    // SAFETY: fixed native PID buffer. PROC_TTY_ONLY=3.
+    let bytes = unsafe {
+        proc_listpids(
+            3,
+            device,
+            pids.as_mut_ptr().cast(),
+            size_of_val(&pids) as i32,
+        )
+    };
+    if bytes < 0
+        || bytes as usize % size_of::<u32>() != 0
+        || bytes as usize >= size_of_val(&pids)
+    {
+        return self::pids();
+    }
+    Ok(pids[..bytes as usize / size_of::<u32>()].to_vec())
+}
+
+#[cfg(test)]
+pub(super) fn every_pid() -> io::Result<Vec<u32>> {
+    pids()
+}
+
+fn pids() -> io::Result<Vec<u32>> {
     let mut pids = vec![0u32; 262_144];
     let bytes = unsafe {
         proc_listpids(

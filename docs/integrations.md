@@ -7,6 +7,7 @@ Rules every integration follows: server jobs and agent processes belong to their
 Launch with `tmux -CC new-session -A -s work`, or `herdr` (`--session NAME`, `session attach NAME`). tmux windows become tabs that keep their server splits; herdr workspaces/tabs become spaces/tabs. A tab moved to another space keeps its splits on both (herdr has no tab move between workspaces: the helper moves its panes one by one as one move, and puts them back if a step fails).
 
 - **Close tab** terminates only if every pane is verified idle (foreground, background, and stopped jobs). Otherwise, or if inspection is unavailable (e.g. disconnected), it detaches. Close space, Detach, and quit always detach.
+- **Quit and local shells.** When the local helper ends, its shells get a hangup and up to 0.7 s to finish their exit work (zsh writing its history under its lock file) before any still running is killed. Killing at once left `~/.zhistory.LOCK` behind, and the next zsh waited 10 s for it.
 - A client without a shell of its own (the iPhone app) creates a space with `backends.create`: for tmux it starts the server with one detached session when none is running. Opening (`backends.open`, every reconnect) never starts one.
 - **Detached** sidebar items reattach to the original client or session, never a replacement. The list lasts only for the current run.
 - Layout presets rearrange tabs locally; they never touch server processes or nested splits. Tabs move only between spaces on the same backend connection.

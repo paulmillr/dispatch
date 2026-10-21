@@ -22,7 +22,7 @@ mod projects;
 mod image;
 mod listeners;
 #[cfg(target_os = "macos")]
-use darwin::{arguments, environment, files, pids, snapshot};
+use darwin::{arguments, candidates, environment, files, snapshot};
 
 pub(super) fn executable(pid: u32, path: &Path) -> io::Result<fs::File> {
     #[cfg(target_os = "linux")]
@@ -236,6 +236,12 @@ fn pids() -> io::Result<Vec<u32>> {
     Ok(pids)
 }
 
+/// Linux keeps the full /proc walk; `snapshot` filters by tty below.
+#[cfg(target_os = "linux")]
+fn candidates(_tty: u64) -> io::Result<Vec<u32>> {
+    pids()
+}
+
 fn present<T>(result: io::Result<T>) -> io::Result<Option<T>> {
     match result {
         Ok(value) => Ok(Some(value)),
@@ -254,7 +260,7 @@ pub(super) fn foreground(tty: u64) -> io::Result<(i32, Vec<Process>)> {
     }
     let mut group = None;
     let mut members = Vec::new();
-    for pid in pids()? {
+    for pid in candidates(tty)? {
         let Ok(p) = snapshot(pid) else { continue };
         if p.tty != tty || p.foreground <= 0 {
             continue;

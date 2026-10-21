@@ -158,3 +158,76 @@ fn a_replaced_legacy_path_still_reads_the_running_image() {
     let _ = child.wait();
     result.unwrap();
 }
+
+/// A build's image, counting how often resolve asked for it.
+struct Image(std::cell::Cell<usize>, Vec<u8>);
+impl Image {
+    fn read(&self) -> io::Result<Vec<u8>> {
+        self.0.set(self.0.get() + 1);
+        Ok(self.1.clone())
+    }
+}
+
+#[test]
+fn a_known_build_relinks_without_reading_hashing_or_rewriting_its_image() {
+    let scratch = Scratch::new();
+    let bin = scratch.0.join("bin");
+    let image = Image(std::cell::Cell::new(0), b"mine".to_vec());
+    let mut memo = None;
+    let stable = resolve(&bin, &mut memo, &|| image.read()).unwrap();
+    assert_eq!(stable, bin.join("dispatch-helper"));
+    assert_eq!(image.0.get(), 1);
+    let target = stable.canonicalize().unwrap();
+    let before = fs::metadata(&target).unwrap();
+    assert_eq!(fs::read(&stable).unwrap(), b"mine");
+    // Already linked: nothing but a link read.
+    assert_eq!(resolve(&bin, &mut memo, &|| image.read()).unwrap(), stable);
+    assert_eq!(image.0.get(), 1);
+    // Another process published its build: ours relinks and reads nothing.
+    scratch.publish(b"theirs");
+    assert_eq!(fs::read(&stable).unwrap(), b"theirs");
+    assert_eq!(resolve(&bin, &mut memo, &|| image.read()).unwrap(), stable);
+    assert_eq!(image.0.get(), 1);
+    assert_eq!(fs::read(&stable).unwrap(), b"mine");
+    assert_eq!(stable.canonicalize().unwrap(), target);
+    let after = fs::metadata(&target).unwrap();
+    assert_eq!((before.ino(), before.mtime(), before.mtime_nsec()), (after.ino(), after.mtime(), after.mtime_nsec()));
+    assert_eq!(fs::read_dir(bin.join("launchers")).unwrap().count(), 2);
+}
+
+#[test]
+fn a_collected_build_is_published_again() {
+    let scratch = Scratch::new();
+    let bin = scratch.0.join("bin");
+    let image = Image(std::cell::Cell::new(0), b"mine".to_vec());
+    let mut memo = None;
+    let stable = resolve(&bin, &mut memo, &|| image.read()).unwrap();
+    let target = stable.canonicalize().unwrap();
+    fs::remove_dir_all(target.parent().unwrap()).unwrap();
+    assert_eq!(resolve(&bin, &mut memo, &|| image.read()).unwrap(), stable);
+    assert_eq!(image.0.get(), 2);
+    assert_eq!(fs::read(&stable).unwrap(), b"mine");
+}
+
+#[test]
+fn a_held_link_lock_yields_the_immutable_path_promptly() {
+    let scratch = Scratch::new();
+    let bin = scratch.0.join("bin");
+    let image = Image(std::cell::Cell::new(0), b"mine".to_vec());
+    let mut memo = None;
+    let stable = resolve(&bin, &mut memo, &|| image.read()).unwrap();
+    let mine = stable.canonicalize().unwrap();
+    scratch.publish(b"theirs");
+    let held = native::advisory(&bin.join(".lock"), Instant::now() + Duration::from_secs(30)).unwrap();
+    let started = Instant::now();
+    let path = resolve(&bin, &mut memo, &|| image.read()).unwrap();
+    let elapsed = started.elapsed();
+    assert!(elapsed >= Duration::from_millis(1900) && elapsed < Duration::from_secs(10), "{elapsed:?}");
+    assert_eq!(path.canonicalize().unwrap(), mine);
+    assert_eq!(fs::read(&path).unwrap(), b"mine");
+    assert_eq!(fs::read(&stable).unwrap(), b"theirs");
+    assert_eq!(image.0.get(), 1);
+    drop(held);
+    assert_eq!(resolve(&bin, &mut memo, &|| image.read()).unwrap(), stable);
+    assert_eq!(fs::read(&stable).unwrap(), b"mine");
+}

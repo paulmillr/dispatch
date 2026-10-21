@@ -197,31 +197,43 @@ impl Request<'_> {
             // No startup files: no directory or executable effect is needed.
             let empty = Path::new("");
             let (mut command, _) =
-                crate::system::startup::prepare(&shell, empty, empty, empty, None, None, &|name| {
+                crate::system::startup::prepare(&shell, empty, None, empty, None, None, &|name| {
                     std::env::var_os(name)
                 });
             self.place(p, &mut command)?;
             create(self.io, Ok(Some(command)));
             return Ok(());
         };
-        self.helper.startups += 1;
-        let directory = self
-            .io
-            .directory()
-            .map_err(failure)?
-            .join(format!("startup-{}", self.helper.startups));
+        // A client whose environment carries its own shell integration (the Mac app sends
+        // Ghostty's ZDOTDIR or ENV and its launch functions) never reads the startup files:
+        // `integration: false` writes none, so the shell starts without six trips through the
+        // disk workers behind whatever else they are doing.
+        let written = p.get("integration").and_then(Data::boolean).unwrap_or(true);
+        let directory = written
+            .then(|| {
+                self.helper.startups += 1;
+                self.io
+                    .directory()
+                    .map(|d| d.join(format!("startup-{}", self.helper.startups)))
+            })
+            .transpose()
+            .map_err(failure)?;
         let helper = self.io.executable().map_err(failure)?;
         let (_, home) = crate::system::System::account().map_err(failure)?;
         let (mut command, files) = crate::system::startup::prepare(
             &shell,
             &home,
-            &directory,
+            directory.as_deref(),
             &helper,
             None,
             Some(&integration),
             &|name| std::env::var_os(name),
         );
         self.place(p, &mut command)?;
+        let Some(directory) = directory else {
+            create(self.io, Ok(Some(command)));
+            return Ok(());
+        };
         let work = self
             .io
             .submit(Job::MakeDir {

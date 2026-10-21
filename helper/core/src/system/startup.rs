@@ -35,10 +35,13 @@ const BASH_LAUNCH: &str = "if (( BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 
 
 /// The shell command plus the startup files it needs (name, bytes) in `path`. `env` reads the
 /// helper's own environment (ZDOTDIR, ENV, HISTFILE, HOME), like the old code's std::env.
+/// `path` None: no startup files and nothing redirected to them, for a client whose environment
+/// carries its own shell integration (the Mac app sends Ghostty's ZDOTDIR or ENV and its launch
+/// functions); the command and the launch functions fish takes inline (`-C`) stay the same.
 pub fn prepare(
     shell: &Path,
     home: &Path,
-    path: &Path,
+    path: Option<&Path>,
     helper: &Path,
     original: Option<&str>,
     integration: Option<&Integration>,
@@ -59,44 +62,47 @@ pub fn prepare(
         }
         return (command, files);
     };
-    command
-        .env("DISPATCH_SSH_HELPER", helper)
-        .env("DISPATCH_SSH_STARTUP", path);
+    command.env("DISPATCH_SSH_HELPER", helper);
+    if let Some(path) = path {
+        command.env("DISPATCH_SSH_STARTUP", path);
+    }
     let posix = integration.posix.as_str();
     match shell.file_name().and_then(|name| name.to_str()) {
         Some("zsh") => {
-            command.env(
-                "DISPATCH_SSH_ZDOTDIR",
-                env("ZDOTDIR").unwrap_or_else(|| home.as_os_str().into()),
-            );
-            for name in [".zshenv", ".zprofile", ".zshrc", ".zlogin", ".zlogout"] {
-                let history = if name == ".zshrc" {
-                    "[[ ${HISTFILE-} == $DISPATCH_SSH_STARTUP/.zsh_history ]] && HISTFILE=$ZDOTDIR/.zsh_history\n"
-                } else {
-                    ""
-                };
-                let integration = if name == ".zshrc" || name == ".zlogin" {
-                    posix
-                } else {
-                    ""
-                };
-                // Redirect only while another startup wrapper is needed. A persistent tmux
-                // server must inherit the user's ZDOTDIR, not a private directory removed when
-                // this shell exits. Leaving the user directory also lets zsh load .zlogout.
-                let next = match name {
-                    ".zshenv" => {
-                        "if [[ -o interactive || -o login ]]; then ZDOTDIR=$DISPATCH_SSH_STARTUP; fi\n"
-                    }
-                    ".zprofile" => "ZDOTDIR=$DISPATCH_SSH_STARTUP\n",
-                    ".zshrc" => "if [[ -o login ]]; then ZDOTDIR=$DISPATCH_SSH_STARTUP; fi\n",
-                    _ => "",
-                };
-                let script = format!(
-                    "ZDOTDIR=$DISPATCH_SSH_ZDOTDIR\n{history}[[ -r $ZDOTDIR/{name} ]] && source $ZDOTDIR/{name}\nDISPATCH_SSH_ZDOTDIR=${{ZDOTDIR:-$HOME}}\n{next}{integration}"
+            if let Some(path) = path {
+                command.env(
+                    "DISPATCH_SSH_ZDOTDIR",
+                    env("ZDOTDIR").unwrap_or_else(|| home.as_os_str().into()),
                 );
-                files.push((name.into(), script.into_bytes()));
+                for name in [".zshenv", ".zprofile", ".zshrc", ".zlogin", ".zlogout"] {
+                    let history = if name == ".zshrc" {
+                        "[[ ${HISTFILE-} == $DISPATCH_SSH_STARTUP/.zsh_history ]] && HISTFILE=$ZDOTDIR/.zsh_history\n"
+                    } else {
+                        ""
+                    };
+                    let integration = if name == ".zshrc" || name == ".zlogin" {
+                        posix
+                    } else {
+                        ""
+                    };
+                    // Redirect only while another startup wrapper is needed. A persistent tmux
+                    // server must inherit the user's ZDOTDIR, not a private directory removed when
+                    // this shell exits. Leaving the user directory also lets zsh load .zlogout.
+                    let next = match name {
+                        ".zshenv" => {
+                            "if [[ -o interactive || -o login ]]; then ZDOTDIR=$DISPATCH_SSH_STARTUP; fi\n"
+                        }
+                        ".zprofile" => "ZDOTDIR=$DISPATCH_SSH_STARTUP\n",
+                        ".zshrc" => "if [[ -o login ]]; then ZDOTDIR=$DISPATCH_SSH_STARTUP; fi\n",
+                        _ => "",
+                    };
+                    let script = format!(
+                        "ZDOTDIR=$DISPATCH_SSH_ZDOTDIR\n{history}[[ -r $ZDOTDIR/{name} ]] && source $ZDOTDIR/{name}\nDISPATCH_SSH_ZDOTDIR=${{ZDOTDIR:-$HOME}}\n{next}{integration}"
+                    );
+                    files.push((name.into(), script.into_bytes()));
+                }
+                command.env("ZDOTDIR", path);
             }
-            command.env("ZDOTDIR", path);
             if let Some(original) = original {
                 command.arg("-c").arg(format!("{posix}{original}"));
             } else {
@@ -107,20 +113,22 @@ pub fn prepare(
             if let Some(original) = original {
                 command.arg("-c").arg(format!("{posix}{original}"));
             } else {
-                files.push((
-                    "bashrc".into(),
-                    BASHRC.replace("# DISPATCH_INTEGRATION", posix).into_bytes(),
-                ));
-                if let Some(original) = env("ENV") {
-                    command
-                        .env("DISPATCH_SSH_BASH_ENV", original)
-                        .env("DISPATCH_SSH_BASH_ENV_SET", "1");
-                } else {
-                    command
-                        .env_remove("DISPATCH_SSH_BASH_ENV")
-                        .env_remove("DISPATCH_SSH_BASH_ENV_SET");
+                if let Some(path) = path {
+                    files.push((
+                        "bashrc".into(),
+                        BASHRC.replace("# DISPATCH_INTEGRATION", posix).into_bytes(),
+                    ));
+                    if let Some(original) = env("ENV") {
+                        command
+                            .env("DISPATCH_SSH_BASH_ENV", original)
+                            .env("DISPATCH_SSH_BASH_ENV_SET", "1");
+                    } else {
+                        command
+                            .env_remove("DISPATCH_SSH_BASH_ENV")
+                            .env_remove("DISPATCH_SSH_BASH_ENV_SET");
+                    }
+                    command.env("ENV", path.join("bashrc"));
                 }
-                command.env("ENV", path.join("bashrc"));
                 if env("HISTFILE").is_none() {
                     let home = env("HOME")
                         .map(std::path::PathBuf::from)
@@ -151,3 +159,7 @@ pub fn prepare(
     }
     (command, files)
 }
+
+#[cfg(test)]
+#[path = "startup.test.rs"]
+mod tests;

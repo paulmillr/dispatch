@@ -174,6 +174,8 @@ final class HelperClient: Sendable {
     let launch: UInt64?
     var command: String? = nil
     var environment: [String] = []
+    /// false: the shell's startup files are not written; `environment` carries the integration (Mac local tabs).
+    var integration: Bool? = nil
   }
   enum Policy: String, Encodable, Sendable { case prompt, detach, terminate }
   struct Close: Encodable, Sendable {

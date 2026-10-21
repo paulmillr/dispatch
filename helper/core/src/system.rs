@@ -33,6 +33,9 @@ mod work;
 #[cfg(test)]
 #[path = "system/write.test.rs"]
 mod write_tests;
+#[cfg(test)]
+#[path = "system/retire.test.rs"]
+mod retire_tests;
 pub(crate) mod zstd;
 // The files plugin's transfer jobs and their archive layout.
 mod archive;
@@ -152,6 +155,35 @@ impl Drop for System {
             }
         }
         self.descriptors.clear();
+        // A hung-up shell saves its history before it exits (zsh under HISTFILE.LOCK, which a
+        // shell killed mid-save leaves behind: the next one then waits until it is 10 s old).
+        // Give the hangups a bounded moment; the app ends a helper still running one second
+        // after closing its stdin (HelperSession.close), so the whole grace stays under that.
+        let deadline = Instant::now() + RETIREMENT_GRACE;
+        loop {
+            let mut pending = false;
+            for child in self
+                .children
+                .values_mut()
+                .filter(|child| child.pty && child.status.is_none())
+            {
+                match child.process.try_wait() {
+                    Ok(Some(status)) => {
+                        let status = status.code().unwrap_or(128 + status.signal().unwrap_or(0));
+                        child.exit.take();
+                        #[cfg(target_os = "macos")]
+                        child.slave.take();
+                        child.status = Some((status, Instant::now()));
+                    }
+                    Ok(None) => pending = true,
+                    Err(_) => {}
+                }
+            }
+            if !pending || Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
         for mut child in std::mem::take(&mut self.children)
             .into_values()
             .filter(|child| (child.owned || child.pty) && child.status.is_none())
@@ -165,6 +197,9 @@ impl Drop for System {
         }
     }
 }
+
+/// How long retirement waits for hung-up terminal shells to exit on their own.
+const RETIREMENT_GRACE: Duration = Duration::from_millis(700);
 
 impl System {
     /// The helper's working directory, distinct from replay control-file locations.

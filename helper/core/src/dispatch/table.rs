@@ -46,6 +46,7 @@ operations! {
         ("cell_width", Unsigned),
         ("cell_height", Unsigned),
         ("environment", Array(&Text)),
+        ("integration", Boolean),
     ]),
         core create() id;
     "backends.prefix" => Object(&[

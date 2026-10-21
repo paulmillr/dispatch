@@ -1186,7 +1186,7 @@ impl DispatchHelper {
                 let (mut prepared, files) = crate::system::startup::prepare(
                     &self.shell,
                     &home,
-                    &directory,
+                    Some(&directory),
                     &executable,
                     script,
                     Some(integration),
