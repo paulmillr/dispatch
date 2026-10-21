@@ -69,7 +69,7 @@ final class HostScreensTests: XCTestCase {
 
         registry.networkPath(satisfied: false)
         XCTAssertEqual(HostSummary(session: session).status, "Waiting for the network…")
-        XCTAssertEqual(HostSummary(session: session).problem, "This iPhone is offline. Dispatch reconnects when the network is back.")
+        XCTAssertEqual(HostSummary(session: session).problem, "This \(MobileDevice.name) is offline. Dispatch reconnects when the network is back.")
         // A host verified in New host gets the reading too.
         let probe = registry.probe(HostRecord(name: "new", address: "new.local", user: "alex", auth: .password))
         XCTAssertTrue(probe.networkUnavailable)

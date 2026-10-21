@@ -1,0 +1,12 @@
+[1m[92malex@ai[0m:[1m[94m~/train[0m$ nvidia-smi --format=csv,noheader \
+> --query-gpu=index,utilization.gpu,\
+> memory.used,temperature.gpu
+0, 97 %, 44812 MiB, 71
+1, 96 %, 44790 MiB, 69
+[1m[92malex@ai[0m:[1m[94m~/train[0m$ python train.py configs/base.yaml
+[2m[10:41:07][0m d_model 2048, 24 layers, seq 4096
+[2m[10:41:07][0m ddp x2, bf16, grad accum 4
+[2m[10:41:31][0m resumed run-0413/ckpt-ep6.pt
+ep 7 1780/4000 loss [1m1.958[0m 41.0k tok/s
+ep 7 1800/4000 loss [1m1.951[0m 41.3k tok/s
+ep 7 1820/4000 loss [1m1.947[0m 41.1k tok/s

@@ -196,8 +196,10 @@ extension ChatCoordinator {
                 session.active = false; session.busy = false
                 return
             }
-            session.active = true
-            if let version = state.version { session.version = version }
+            // The helper sends its state with every transcript read: write only what differs, so an unchanged
+            // field invalidates no view (Observation reports every write, equal or not).
+            if !session.active { session.active = true }
+            if let version = state.version, session.version != version { session.version = version }
             // A native dialog owns the terminal (e.g. Claude's startup review of changed hooks, which
             // runs after the session registers): Chat opens once it closes.
             if session.sessionID != nil, state.dialog == nil, !session.manualViewChoice, !session.exitRequested, !session.showChat,
@@ -207,19 +209,22 @@ extension ChatCoordinator {
             }
             // Before busy, so a turn ending while its agents run keeps one working clock.
             if session.subagents != state.agents ?? [] { session.subagents = state.agents ?? [] }
-            session.busy = state.busy && !(session.agentID == "claude" && session.modelPicker != nil && state.activity == "waiting")
-            session.starting = false
-            session.nativeActivity = state.activity
-            if !state.busy, state.dialog == nil { session.retiredInteraction = false }
-            session.activityCheck = nil
+            let busy = state.busy && !(session.agentID == "claude" && session.modelPicker != nil && state.activity == "waiting")
+            if session.busy != busy { session.busy = busy }
+            if session.starting { session.starting = false }
+            if session.nativeActivity != state.activity { session.nativeActivity = state.activity }
+            if !state.busy, state.dialog == nil, session.retiredInteraction { session.retiredInteraction = false }
+            if session.activityCheck != nil { session.activityCheck = nil }
             if let model = state.model {
                 session.applyConfiguration(model: model, effort: state.effort)
             }
             // Core's State.usage is the documented ChatUsage object (api.rs State.usage).
             if let usage = state.usage, let payload = HelperBinary.foundation(usage) as? [String: Any] {
-                session.usage = ChatUsage(payload)
+                let usage = ChatUsage(payload)
+                if session.usage != usage { session.usage = usage }
             }
-            session.agentAttention = session.modelPicker == nil ? state.attention : nil
+            let attention = session.modelPicker == nil ? state.attention : nil
+            if session.agentAttention != attention { session.agentAttention = attention }
             if let attention = state.attention, session.modelPicker == nil {
                 requireTerminalAttention(session, status: attention)
             }
@@ -229,9 +234,9 @@ extension ChatCoordinator {
                 session.goal = goal; session.goalUpdatedAt = .now; session.goalRevision += 1
                 if session.commandResult?.title == "Goal" { session.commandResult?.text = goal?.summary ?? "Goal cleared." }
             }
-            if let title = state.title { session.title = title }
-            session.threadName = state.title
-            session.serviceTier = state.service_tier
+            if let title = state.title, session.title != title { session.title = title }
+            if session.threadName != state.title { session.threadName = state.title }
+            if session.serviceTier != state.service_tier { session.serviceTier = state.service_tier }
             if session.collaborationMode != state.mode {
                 session.collaborationMode = state.mode
                 session.settingsRevision += 1

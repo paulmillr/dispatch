@@ -65,8 +65,8 @@ final class HostStoreTests: XCTestCase {
         let key = try keys.generateED25519(label: "phone")
         XCTAssertEqual(keys.unsaved, [key.id])
         let notice = try XCTUnwrap(actions.saveFailure)
-        XCTAssertTrue(notice.hasPrefix("studio isn't saved on this iPhone: "), notice)
-        XCTAssertTrue(notice.contains("\nThe key “phone” isn't saved on this iPhone: "), notice)
+        XCTAssertTrue(notice.hasPrefix("studio isn't saved on this \(MobileDevice.name): "), notice)
+        XCTAssertTrue(notice.contains("\nThe key “phone” isn't saved on this \(MobileDevice.name): "), notice)
 
         actions.retrySave()
         XCTAssertNotNil(actions.saveFailure, "still blocked")

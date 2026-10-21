@@ -171,6 +171,8 @@ struct ChatWorkingRow: View {
                         .foregroundStyle(.secondary)
                         .frame(width: disclosure, height: disclosure)
                         .background(Color.chipFill, in: Circle())
+                        .contentShape(.hoverEffect, Circle())
+                        .hoverEffect(.highlight)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(expanded ? "Hide steps" : "Show steps")

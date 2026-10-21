@@ -57,7 +57,7 @@ extension SpacesNotice {
             notices.append(SpacesNotice(message: KnownHostStore.unreadableNotice, actions: [
                 Action(title: "Retry", run: actions.retryKnownHosts),
                 Action(title: "Reset", destructive: true,
-                       confirmation: ("Reset trusted host keys?", "Every host asks about its key again at its next connection. The unreadable file stays on this iPhone until Remove all data."),
+                       confirmation: ("Reset trusted host keys?", "Every host asks about its key again at its next connection. The unreadable file stays on this \(MobileDevice.name) until Remove all data."),
                        run: actions.resetKnownHosts),
             ]))
         }

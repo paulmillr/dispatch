@@ -2,6 +2,10 @@ import Foundation
 
 /// Markdown blocks of an agent message, line by line (the Mac's `ChatMarkdown` and the iPhone's thread draw them).
 struct ChatMarkdownBlock: Equatable {
+    /// A rendered table is a view per cell. Bound adversarial rows before they can create tens of thousands of views.
+    static let tableColumnsLimit = 64
+    static let fenceInfoLimit = 128
+
     enum Kind: Equatable {
         case paragraph, heading(Int), list(String, Int), quote, code(String), rule, table([[String]])
     }
@@ -24,7 +28,8 @@ struct ChatMarkdownBlock: Equatable {
             if let marker = trimmed.first, marker == "`" || marker == "~", trimmed.prefix(while: { $0 == marker }).count >= 3 {
                 flush()
                 let length = trimmed.prefix(while: { $0 == marker }).count
-                let language = String(trimmed.dropFirst(length)).trimmingCharacters(in: .whitespaces)
+                let language = TextRendering.prefix(String(trimmed.dropFirst(length)), scalars: fenceInfoLimit).text
+                    .trimmingCharacters(in: .whitespaces)
                 var code: [String] = []
                 var closed = false
                 while index < lines.count {
@@ -67,7 +72,7 @@ struct ChatMarkdownBlock: Equatable {
         }
         flush(); return blocks
     }
-    private static func cells(_ line: String) -> [String] {
+    private static func cells(_ line: String, markTruncated: Bool = true) -> [String] {
         var value = line.trimmingCharacters(in: .whitespaces)
         if value.hasPrefix("|") { value.removeFirst() }
         if value.hasSuffix("|") { value.removeLast() }
@@ -77,13 +82,133 @@ struct ChatMarkdownBlock: Equatable {
             if escaped { cell.append(char); escaped = false; continue }
             if char == "\\" { cell.append(char); escaped = true; continue }
             if char == "`" { inCode.toggle() }
-            if char == "|" && !inCode { cells.append(cell.trimmingCharacters(in: .whitespaces)); cell = "" }
+            if char == "|" && !inCode {
+                cells.append(cell.trimmingCharacters(in: .whitespaces)); cell = ""
+                if cells.count == tableColumnsLimit {
+                    if markTruncated { cells[cells.count - 1] = "…" }
+                    return cells
+                }
+            }
             else { cell.append(char) }
         }
         cells.append(cell.trimmingCharacters(in: .whitespaces)); return cells
     }
+    /// The text a reader sees, without its Markdown: for one-line previews (the iPhone's Agents rows and Spaces lines),
+    /// which showed `**bold**`, backticks and a table's pipes as typed. Headings, quotes and list items keep their
+    /// words, a table's rows their cells (" · " between them, no divider), inline markup its text (links their
+    /// titles); code blocks are left out unless nothing else is said.
+    static func plainText(_ text: String) -> String {
+        let blocks = parse(TextRendering.rich(text).text)
+        func inline(_ text: String) -> String {
+            let value = try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))
+            return value.map { String($0.characters) } ?? text
+        }
+        let prose: [String] = blocks.compactMap { block in
+            switch block.kind {
+            case .paragraph, .heading, .quote, .list: inline(block.text)
+            case .table(let rows): rows.map { $0.map(inline).joined(separator: " · ") }.joined(separator: "\n")
+            case .code, .rule: nil
+            }
+        }
+        let said = prose.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        if !said.isEmpty { return said.joined(separator: "\n") }
+        return blocks.compactMap { if case .code = $0.kind { $0.text } else { nil } }.joined(separator: "\n")
+    }
+
     private static func isTableDivider(_ line: String) -> Bool {
-        let row = cells(line)
+        let row = cells(line, markTruncated: false)
         return !row.isEmpty && row.allSatisfy { $0.range(of: #"^:?-{3,}:?$"#, options: .regularExpression) != nil }
+    }
+}
+
+/// Bounds rich-text work and makes controls that can visually reorder or conceal source explicit. The underlying
+/// file/message stays unchanged for copying and actions; this is only the string handed to text layout and Markdown.
+enum TextRendering {
+    static let richScalarLimit = 131_072
+    static let richLineLimit = 2_000
+
+    struct RichText: Equatable {
+        let text: String
+        let truncated: Bool
+    }
+
+    /// A scalar bound cannot be bypassed by one pathological extended grapheme made from thousands of scalars.
+    /// The returned text is otherwise unchanged; callers that draw it must still use `visible` or a renderer that does.
+    static func prefix(_ text: String, scalars limit: Int) -> RichText {
+        guard limit > 0 else { return RichText(text: "", truncated: !text.isEmpty) }
+        var bounded = String.UnicodeScalarView()
+        var count = 0
+        for scalar in text.unicodeScalars {
+            if count == limit { return RichText(text: String(bounded), truncated: true) }
+            bounded.append(scalar)
+            count += 1
+        }
+        return RichText(text: String(bounded), truncated: false)
+    }
+
+    static func rich(_ text: String) -> RichText {
+        var bounded = String.UnicodeScalarView()
+        var scalars = 0, lines = 1
+        var truncated = false
+        for scalar in text.unicodeScalars {
+            if scalars == richScalarLimit || (scalar == "\n" && lines == richLineLimit) {
+                truncated = true
+                break
+            }
+            bounded.append(scalar)
+            scalars += 1
+            if scalar == "\n" { lines += 1 }
+        }
+        return RichText(text: visible(String(bounded)), truncated: truncated)
+    }
+
+    static func visible(_ text: String) -> String {
+        let normalized = text.contains("\r\n") ? text.replacingOccurrences(of: "\r\n", with: "\n") : text
+        guard normalized.unicodeScalars.contains(where: unsafe) else { return normalized }
+        var result = ""
+        result.reserveCapacity(normalized.utf8.count)
+        for scalar in normalized.unicodeScalars {
+            if let label = label(for: scalar) { result += "⟦\(label)⟧" }
+            else { result.unicodeScalars.append(scalar) }
+        }
+        return result
+    }
+
+    private static func unsafe(_ scalar: Unicode.Scalar) -> Bool {
+        let value = scalar.value
+        return (value < 0x20 && value != 0x09 && value != 0x0A)
+            || (0x7F...0x9F).contains(value)
+            || scalar.properties.generalCategory == .format
+            || value == 0x2028 || value == 0x2029
+    }
+
+    private static func label(for scalar: Unicode.Scalar) -> String? {
+        guard unsafe(scalar) else { return nil }
+        switch scalar.value {
+        case 0x00: return "NUL"
+        case 0x08: return "BS"
+        case 0x0D: return "CR"
+        case 0x1B: return "ESC"
+        case 0x061C: return "ALM"
+        case 0x200B: return "ZWSP"
+        case 0x200C: return "ZWNJ"
+        case 0x200D: return "ZWJ"
+        case 0x200E: return "LRM"
+        case 0x200F: return "RLM"
+        case 0x2028: return "LS"
+        case 0x2029: return "PS"
+        case 0x202A: return "LRE"
+        case 0x202B: return "RLE"
+        case 0x202C: return "PDF"
+        case 0x202D: return "LRO"
+        case 0x202E: return "RLO"
+        case 0x2060: return "WJ"
+        case 0x2066: return "LRI"
+        case 0x2067: return "RLI"
+        case 0x2068: return "FSI"
+        case 0x2069: return "PDI"
+        case 0xFEFF: return "BOM"
+        default: return "U+" + String(scalar.value, radix: 16, uppercase: true)
+        }
     }
 }

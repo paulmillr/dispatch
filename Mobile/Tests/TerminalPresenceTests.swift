@@ -161,6 +161,36 @@ final class TerminalPresenceTests: XCTestCase {
         presences.close(key)
     }
 
+    /// A run of grid changes (a live window resize, a slide: a new grid every frame) reaches the feed once, at its last
+    /// size, when it settles (`resizeQuiet`); a run that comes back to the size the feed has sends nothing, and a
+    /// single change goes after the same short wait.
+    func testARunOfGridChangesSendsItsLastSizeOnce() async throws {
+        let feed = ScriptedTerminalFeed(output: Data("$ ".utf8))
+        let presence = TerminalPresence(feed: feed, grid: (columns: 80, rows: 24), configuration: TerminalConfiguration())
+        presence.start()
+        let attached = presence.session.currentSize
+        try await TestSupport.eventually { presence.attached }
+        for columns in 81...100 { presence.session.setGrid(columns: columns, rows: 24) }
+        XCTAssertEqual(feed.record.resizes, [], "Nothing while the run goes on")
+        let last = presence.session.currentSize
+        XCTAssertEqual(last.columns, 100)
+        try await TestSupport.eventually { !feed.record.resizes.isEmpty }
+        try await Task.sleep(for: TerminalPresence.resizeQuiet * 3)
+        XCTAssertEqual(feed.record.resizes, [last], "Once, the last size")
+
+        for columns in [99, 98, 100] { presence.session.setGrid(columns: columns, rows: 24) }
+        try await Task.sleep(for: TerminalPresence.resizeQuiet * 3)
+        XCTAssertEqual(feed.record.resizes, [last], "Back where the feed is: nothing to send")
+
+        presence.session.setGrid(columns: attached.columns, rows: 30)
+        try await TestSupport.eventually { feed.record.resizes.count == 2 }
+        XCTAssertEqual(feed.record.resizes.last?.rows, 30)
+        presence.session.setGrid(columns: attached.columns, rows: 20)
+        presence.stop()
+        try await Task.sleep(for: TerminalPresence.resizeQuiet * 3)
+        XCTAssertEqual(feed.record.resizes.count, 2, "A detached feed gets no size")
+    }
+
     /// A terminal shown again right after it was left (release, then retain) attaches the same feed again. The ended
     /// attachment's task must not detach the new one: the screen stayed, but nothing typed reached the program and
     /// nothing new was drawn.

@@ -546,7 +546,7 @@ final class HostSessionTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: folder) }
         sessions.knownHosts.trust(host: "studio.local", port: 22, algorithm: "ssh-ed25519", key: key)
         XCTAssertEqual(sessions.knownHosts.verify(host: "studio.local", port: 22, algorithm: "ssh-ed25519", key: key), .match)
-        XCTAssertTrue(actions.saveFailure?.hasPrefix("Trusted host keys aren't saved on this iPhone: ") == true)
+        XCTAssertTrue(actions.saveFailure?.hasPrefix("Trusted host keys aren't saved on this \(MobileDevice.name): ") == true)
         try FileManager.default.removeItem(at: folder)
         actions.retrySave()
         XCTAssertNil(actions.saveFailure)

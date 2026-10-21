@@ -34,7 +34,7 @@ struct MultiplexerHint: View {
                         .frame(width: 84, height: 84)
                         .background(Color.faintFill, in: Circle())
                     Text("No tmux or herdr").font(.title2.bold())
-                    Text("Dispatch shows the herdr workspaces or tmux sessions on \(name) as spaces, and keeps them running while your iPhone is away. Install one of them on \(name), then reconnect.")
+                    Text("Dispatch shows the herdr workspaces or tmux sessions on \(name) as spaces, and keeps them running while your \(MobileDevice.name) is away. Install one of them on \(name), then reconnect.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)

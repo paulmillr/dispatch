@@ -281,6 +281,19 @@ final class ChatConversationsTests: XCTestCase {
 
     func testPreviewsCollapseToOneParagraph() {
         XCTAssertEqual(ChatConversationSummary.preview("Done.\n\n```swift\nlet a = 1\n```\nTests   green."),
-                       "Done. let a = 1 Tests green.")
+                       "Done. Tests green.", "Code is left out of a line that says something else")
+        XCTAssertEqual(ChatConversationSummary.preview("```sh\ncargo test\n```"), "cargo test", "Unless the code is all there is")
+    }
+
+    /// Previews read as text: the Agents rows and Spaces lines showed `**bold**`, backticks and a table's pipes as typed.
+    func testPreviewsDropTheirMarkdown() {
+        XCTAssertEqual(ChatConversationSummary.preview("Done. Retries are keyed on the Stripe **event id**, see `idempotency_keys`."),
+                       "Done. Retries are keyed on the Stripe event id, see idempotency_keys.")
+        XCTAssertEqual(ChatConversationSummary.preview("## Plan\n- Add a **theme** column\n1. Read [the docs](https://example.com)\n> Quoted"),
+                       "Plan Add a theme column Read the docs Quoted")
+        XCTAssertEqual(ChatConversationSummary.preview("**run-0412 vs run-0411**\n\n| suite | metric |\n|---|---|\n| held-out | `val_loss` |"),
+                       "run-0412 vs run-0411 suite · metric held-out · val_loss")
+        XCTAssertEqual(ChatConversationSummary.preview("snake_case_names and a_b stay"), "snake_case_names and a_b stay",
+                       "Intraword underscores are not emphasis")
     }
 }

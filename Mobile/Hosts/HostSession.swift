@@ -64,7 +64,7 @@ final class HostSession: Identifiable {
     /// is the status itself.
     var problem: String? {
         guard link.isPending else { return nil }
-        if networkUnavailable { return "This iPhone is offline. Dispatch reconnects when the network is back." }
+        if networkUnavailable { return "This \(MobileDevice.name) is offline. Dispatch reconnects when the network is back." }
         if case .reconnecting(_, _, let reason?) = link { return reason }
         return nil
     }

@@ -75,6 +75,7 @@ public final class Session {
                 allowHostMedia: Bool = false) throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw Failure.noMetalDevice }
         metal = try MetalRenderer(device: device)
+        let scale = RenderSize.contentScale(scale)
         (self.config, self.scale) = (config, scale)
         cells = try Self.cells(config, scale)
         var options = HandlerOptions()
@@ -217,8 +218,11 @@ public final class Session {
 
     func winsize() -> Darwin.winsize {
         let t = surface.terminal
-        return Darwin.winsize(ws_row: UInt16(t.grid.rows), ws_col: UInt16(t.grid.cols), ws_xpixel: UInt16(t.grid.cols * surface.size.cell.width),
-                              ws_ypixel: UInt16(t.grid.rows * surface.size.cell.height))
+        let width = t.grid.cols.multipliedReportingOverflow(by: max(surface.size.cell.width, 0))
+        let height = t.grid.rows.multipliedReportingOverflow(by: max(surface.size.cell.height, 0))
+        return Darwin.winsize(ws_row: UInt16(clamping: t.grid.rows), ws_col: UInt16(clamping: t.grid.cols),
+                              ws_xpixel: UInt16(clamping: width.overflow ? Int.max : width.partialValue),
+                              ws_ypixel: UInt16(clamping: height.overflow ? Int.max : height.partialValue))
     }
 
     /// One frame into `target` (tests: their own texture); `completed` when the GPU is done.
@@ -236,8 +240,12 @@ public final class Session {
         drawLock.lock()
         defer { drawLock.unlock() }
         let (bounds, scale) = (surfaceLayer.bounds, surfaceLayer.contentsScale)
-        let (width, height) = (Int(bounds.width * scale), Int(bounds.height * scale))
-        guard width > 0, height > 0 else { return }
+        let dimensions = { (value: CGFloat) -> Int? in
+            let pixels = Double(value * scale)
+            guard pixels.isFinite, pixels >= 1, pixels <= Double(RenderSize.maxPixelDimension) else { return nil }
+            return Int(pixels)
+        }
+        guard let width = dimensions(bounds.width), let height = dimensions(bounds.height) else { return }
         let i = nextTarget
         nextTarget = (nextTarget + 1) % targets.count
         if targets[i].map({ IOSurfaceGetWidth($0.surface) != width || IOSurfaceGetHeight($0.surface) != height }) ?? true {
@@ -262,7 +270,10 @@ public final class Session {
         shownLock.lock()
         defer { shownLock.unlock() }
         let (bounds, scale) = (surfaceLayer.bounds, surfaceLayer.contentsScale)
-        guard n > shown, IOSurfaceGetWidth(surface) == Int(bounds.width * scale), IOSurfaceGetHeight(surface) == Int(bounds.height * scale) else { return }
+        let width = Double(bounds.width * scale), height = Double(bounds.height * scale)
+        guard width.isFinite, height.isFinite, width >= 0, height >= 0,
+              width <= Double(RenderSize.maxPixelDimension), height <= Double(RenderSize.maxPixelDimension),
+              n > shown, IOSurfaceGetWidth(surface) == Int(width), IOSurfaceGetHeight(surface) == Int(height) else { return }
         shown = n
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -273,6 +284,7 @@ public final class Session {
     /// metal/Target.zig: a 32BGRA IOSurface tagged Display P3 (the shaders convert sRGB colors to
     /// it, load_color) and a texture drawing into it.
     func makeTarget(_ width: Int, _ height: Int) -> (surface: IOSurfaceRef, texture: MTLTexture)? {
+        guard (1...RenderSize.maxPixelDimension).contains(width), (1...RenderSize.maxPixelDimension).contains(height) else { return nil }
         let properties: [CFString: Any] = [kIOSurfaceWidth: width, kIOSurfaceHeight: height, kIOSurfaceBytesPerElement: 4, kIOSurfacePixelFormat: kCVPixelFormatType_32BGRA]
         guard let surface = IOSurfaceCreate(properties as CFDictionary), let p3 = CGColorSpace(name: CGColorSpace.displayP3)?.copyPropertyList() else { return nil }
         IOSurfaceSetValue(surface, kIOSurfaceColorSpace, p3)
@@ -322,6 +334,7 @@ public final class Session {
 
     /// The view's backing scale: fonts and padding at the new resolution (Ghostty's content scale callback).
     public func setScale(_ scale: Double) {
+        let scale = RenderSize.contentScale(scale)
         guard scale != self.scale else { return }
         exclusive {
             self.scale = scale

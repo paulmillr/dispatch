@@ -253,7 +253,7 @@ struct NewChatSheet: View {
         }
         .tint(Color.dispatchPink)
         // M9a draws the sheet's grabber, as New space's (M7a) does.
-        .presentationDragIndicator(.visible)
+        .mobileSheetGrabber()
         .onChange(of: spaces) { _, spaces in
             if let made = making?.made { adopt(made) } else if space == nil { space = spaces.first }
         }

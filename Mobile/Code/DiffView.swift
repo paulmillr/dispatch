@@ -142,7 +142,7 @@ struct DiffView: View {
         switch entry {
         case .header(let file): header(file)
         case .hunk(_, _, let text):
-            Text(text)
+            Text(TextRendering.visible(text))
                 .font(.system(size: metrics.hunk, design: .monospaced))
                 .foregroundStyle(Color(uiColor: CodePalette.hunk))
                 .lineLimit(1)
@@ -171,7 +171,7 @@ struct DiffView: View {
                     .rotationEffect(.degrees(open ? 90 : 0))
                     .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: open)
                     .frame(width: 10)
-                Text(file.title)
+                Text(TextRendering.visible(file.title))
                     .font(.system(size: pathSize, design: .monospaced))
                     .foregroundStyle(.primary)
                     .fittingLine()
@@ -183,10 +183,12 @@ struct DiffView: View {
             .padding(.horizontal, 14)
             .frame(minHeight: headerHeight)
             .contentShape(Rectangle())
+            // A pointer lights the row it would open, as lists do.
+            .hoverEffect(.highlight)
         }
         .buttonStyle(.plain)
         .overlay(alignment: .top) { Rectangle().fill(Color(uiColor: CodePalette.hairline)).frame(height: 0.5) }
-        .accessibilityLabel("\(file.title), \(file.additions) added, \(file.deletions) removed")
+        .accessibilityLabel("\(TextRendering.visible(file.title)), \(file.additions) added, \(file.deletions) removed")
         .accessibilityValue(open ? "Expanded" : "Collapsed")
         .accessibilityHint(open ? "Hides the changes" : "Shows the changes")
     }

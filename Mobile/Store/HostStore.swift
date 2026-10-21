@@ -43,6 +43,26 @@ enum MobileFiles {
 
     private struct Envelope: Decodable { let version: Int }
 
+    /// Moves the files older builds wrote as class A (`complete`: unreadable while the phone is locked) in `directory`
+    /// to `PrivateFile`'s class C, so a watch request with the phone locked can read them. Run while the phone is
+    /// unlocked: a class A file's class cannot change while it is locked. Returns how many moved; a second run moves
+    /// none (the simulator reports no class, so it never moves anything there).
+    @discardableResult
+    static func reclassify(in directory: URL = Home.support) -> Int {
+        let manager = FileManager.default
+        var moved = 0
+        for name in (try? manager.contentsOfDirectory(atPath: directory.path)) ?? [] {
+            let path = directory.appendingPathComponent(name).path
+            guard let attributes = try? manager.attributesOfItem(atPath: path),
+                  attributes[.type] as? FileAttributeType == .typeRegular,
+                  attributes[.protectionKey] as? FileProtectionType == .complete,
+                  (try? manager.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+                                              ofItemAtPath: path)) != nil else { continue }
+            moved += 1
+        }
+        return moved
+    }
+
     /// Owner-only and atomic (`PrivateFile`), excluded from backups.
     static func write(_ value: some Encodable, to url: URL) throws {
         let encoder = JSONEncoder()

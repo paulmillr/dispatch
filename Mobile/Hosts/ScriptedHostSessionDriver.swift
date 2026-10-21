@@ -12,6 +12,9 @@ final class ScriptedHostSessionDriver: HostSessionDriver {
         /// `.ready` with a scripted client and these fixtures.
         case ready(hello: HelperSession.Info, multiplexers: [HelperClient.Multiplexer], versions: [String: String],
                    topology: HelperTopology?)
+        /// `.ready` with a client a peer answers (the simulator demo's `DemoHelper`), made for each connection.
+        case readyWith(client: @Sendable () -> HelperClient, hello: HelperSession.Info,
+                       multiplexers: [HelperClient.Multiplexer], versions: [String: String], topology: HelperTopology?)
         case sleep(Duration)
         /// Waits for `HostSession.retryNow()`.
         case awaitRetry
@@ -56,6 +59,9 @@ final class ScriptedHostSessionDriver: HostSessionDriver {
                     let client = HelperClient(HelperConnection(read: incoming.fileHandleForReading,
                                                                write: outgoing.fileHandleForWriting))
                     continuation.yield(.ready(client: client, hello: hello, multiplexers: multiplexers,
+                                              versions: versions, topology: topology))
+                case .readyWith(let client, let hello, let multiplexers, let versions, let topology):
+                    continuation.yield(.ready(client: client(), hello: hello, multiplexers: multiplexers,
                                               versions: versions, topology: topology))
                 case .sleep(let duration):
                     try? await Task.sleep(for: duration)

@@ -15,6 +15,88 @@ final class SwiftTerminalSessionTests: XCTestCase {
         XCTAssertEqual(TerminalLinkPolicy.confirmationScheme(for: "ssh://host"), "ssh")
     }
 
+    /// The CPU/GPU boundary rejects inconsistent lengths, formats and uniforms before a shader can
+    /// turn them into unchecked buffer or texture addresses. Extreme public initializer values stay
+    /// finite instead of trapping while they are narrowed to the Metal ABI.
+    func testMetalRendererRejectsUnsafeFrameMetadata() throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let renderer = try MetalRenderer(device: device)
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: renderer.pixelFormat, width: 1, height: 1, mipmapped: false)
+        (descriptor.usage, descriptor.storageMode) = (.renderTarget, .shared)
+        let target = try XCTUnwrap(device.makeTexture(descriptor: descriptor))
+        let gray = Atlas(size: 2, format: .grayscale), color = Atlas(size: 2, format: .bgra)
+        let background = RGB(r: 0, g: 0, b: 0)
+        let valid = Contents(cols: 1, rows: 1, background: background, bg: [0, 0, 0, 0], lists: [[], [], []])
+        let uniforms = FrameUniforms(size: RenderSize(screen: (1, 1), cell: (1, 1)), cell: (1, 1), cols: 1, rows: 1, background: background)
+
+        let commands = try XCTUnwrap(renderer.draw(valid, uniforms, gray: gray, color: color, into: target))
+        commands.waitUntilCompleted()
+        XCTAssertEqual(commands.status, .completed)
+
+        let short = Contents(cols: 1, rows: 1, background: background, bg: [0, 0, 0], lists: [[], [], []])
+        XCTAssertNil(renderer.draw(short, uniforms, gray: gray, color: color, into: target))
+        XCTAssertNil(renderer.draw(valid, uniforms, gray: gray, color: Atlas(size: 2, format: .bgr), into: target))
+        var mismatched = uniforms
+        mismatched.grid = SIMD2(2, 1)
+        XCTAssertNil(renderer.draw(valid, mismatched, gray: gray, color: color, into: target))
+        mismatched = uniforms
+        mismatched.padding.x = .infinity
+        XCTAssertNil(renderer.draw(valid, mismatched, gray: gray, color: color, into: target))
+        let readOnlyDescriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: renderer.pixelFormat, width: 1, height: 1, mipmapped: false)
+        (readOnlyDescriptor.usage, readOnlyDescriptor.storageMode) = (.shaderRead, .shared)
+        let readOnlyTarget = try XCTUnwrap(device.makeTexture(descriptor: readOnlyDescriptor))
+        XCTAssertNil(renderer.draw(valid, uniforms, gray: gray, color: color, into: readOnlyTarget))
+
+        let extreme = FrameUniforms(size: RenderSize(screen: (0, 0), cell: (0, 0)), cell: (0, 0), cols: .max, rows: -1,
+                                    background: background, opacity: .nan, block: (-1, -1, true, background))
+        XCTAssertEqual(extreme.grid, SIMD2(UInt16.max, 0))
+        XCTAssertEqual(extreme.bgColor.w, 255)
+        XCTAssertTrue((0..<16).allSatisfy { extreme.projection[$0].isFinite })
+        XCTAssertEqual(extreme.cursorPos, SIMD2(repeating: UInt16.max))
+
+        var atlas = Atlas(size: 8, format: .grayscale)
+        let original = atlas.data
+        XCTAssertNil(atlas.reserve(-1, 4))
+        XCTAssertNil(atlas.reserve(4, .max))
+        atlas.set(x: 7, y: 7, width: 2, height: 2, [1])
+        XCTAssertEqual(atlas.data, original)
+
+        let huge = RenderSize(screen: (.max, .max), cell: (0, 0), padding: (.max, .max, .max, .max))
+        XCTAssertEqual(huge.grid.cols, 1)
+        XCTAssertEqual(huge.grid.rows, 1)
+        XCTAssertEqual(RenderSize.contentScale(.infinity), 1)
+        XCTAssertEqual(RenderSize.contentScale(100), 16)
+        XCTAssertEqual(RenderSize.pixels(points: .max, dpi: .infinity), 0)
+    }
+
+    /// Darwin's POSIX shared-memory descriptors cannot be read with read/pread. Exercise the
+    /// page-aligned bounded mmap path with a deliberately unaligned requested range.
+    func testKittySharedMemoryReadsOnlyTheRequestedRange() throws {
+        typealias ShmOpen = @convention(c) (UnsafePointer<CChar>, Int32, mode_t) -> Int32
+        let symbol = try XCTUnwrap(dlsym(UnsafeMutableRawPointer(bitPattern: -2), "shm_open"))
+        let open = unsafeBitCast(symbol, to: ShmOpen.self)
+        let name = "/dsp-\(getpid())-\(arc4random())"
+        let fd = name.withCString { open($0, O_CREAT | O_EXCL | O_RDWR, 0o600) }
+        XCTAssertGreaterThanOrEqual(fd, 0)
+        guard fd >= 0 else { return }
+        defer { close(fd); shm_unlink(name) }
+        let bytes = Int(sysconf(_SC_PAGESIZE)) * 2
+        XCTAssertEqual(ftruncate(fd, off_t(bytes)), 0)
+        let map = try XCTUnwrap(mmap(nil, bytes, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0))
+        XCTAssertNotEqual(map, MAP_FAILED)
+        guard map != MAP_FAILED else { return }
+        defer { munmap(map, bytes) }
+        let expected: [UInt8] = [0xDE, 0xAD, 0xBE, 0xEF]
+        expected.withUnsafeBytes { memcpy(map + Int(sysconf(_SC_PAGESIZE)) + 1, $0.baseAddress!, $0.count) }
+
+        let actual = try KittyFiles(environment: ["TMPDIR": "/tmp"]).sharedMemory(Array(name.utf8)) { size in
+            XCTAssertEqual(size, bytes)
+            let start = Int(sysconf(_SC_PAGESIZE)) + 1
+            return start..<(start + expected.count)
+        }
+        XCTAssertEqual(actual, expected)
+    }
+
     /// New fonts (size, family, padding, scale) replace the glyph atlases while earlier frames keep
     /// their textures: a reconfigured session must draw exactly like a fresh one, in every in-flight frame.
     func testReconfiguredSessionDrawsLikeAFreshOne() throws {

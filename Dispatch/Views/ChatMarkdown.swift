@@ -36,8 +36,9 @@ struct ChatMarkdown: View {
     @State private var fileLink: ChatFileLink?
     @State private var selection = ChatMessageSelection()
     var body: some View {
+        let rendered = TextRendering.rich(text)
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(ChatMarkdownBlock.parse(text).enumerated()), id: \.offset) { _, block in
+            ForEach(Array(ChatMarkdownBlock.parse(rendered.text).enumerated()), id: \.offset) { _, block in
                 switch block.kind {
                 case .code(let language): ChatCodeBlock(code: block.text, language: language)
                 case .heading(let level):
@@ -70,6 +71,10 @@ struct ChatMarkdown: View {
                 case .paragraph: inline(block.text)
                 }
             }
+            if rendered.truncated {
+                Text("Rendered preview truncated for safety")
+                    .font(theme.typography.detail).foregroundStyle(theme.muted)
+            }
         }.frame(maxWidth: fillWidth ? .infinity : nil, alignment: .leading)
             .environment(\.openURL, OpenURLAction { url in
                 if let link = ChatFileLink(url) { fileLink = link; return .handled }
@@ -101,7 +106,8 @@ struct ChatMarkdown: View {
     }
 
     static func safeInlineMarkdown(_ text: String) -> AttributedString {
-        var value = (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
+        let visible = TextRendering.visible(text)
+        var value = (try? AttributedString(markdown: visible, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(visible)
         let unsafe = value.runs.compactMap { run -> Range<AttributedString.Index>? in
             guard let url = run.link else { return nil }
             guard isWebLink(url) || ChatFileLink(url) != nil else { return run.range }

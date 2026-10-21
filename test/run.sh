@@ -2,12 +2,13 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export PYTHONDONTWRITEBYTECODE=1
-# Dispatch for iPhone: its own runner (simulator, no desktop), test/ios.py.
+# Dispatch for iPhone and Dispatch for Apple Watch: their own runner (simulator, no desktop), test/ios.py.
 if [[ "${1:-}" == --platform ]]; then
     case "${2:-}" in
         ios) shift 2; exec python3 test/ios.py "$@" ;;
+        watch) shift 2; exec python3 test/ios.py --platform watch "$@" ;;
         mac) shift 2 ;;
-        *) echo "Unknown platform: ${2:-} (mac or ios)" >&2; exit 2 ;;
+        *) echo "Unknown platform: ${2:-} (mac, ios or watch)" >&2; exit 2 ;;
     esac
 fi
 # Validate and show selection before dependency preparation. --list and --help

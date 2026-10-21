@@ -89,7 +89,7 @@ struct GitDiffView: View {
 
     private var header: some View {
         let presentation = model.presentation
-        let title = diff.oldPath.map { $0 == diff.path ? diff.path : "\($0) → \(diff.path)" } ?? diff.path
+        let title = TextRendering.visible(diff.oldPath.map { $0 == diff.path ? diff.path : "\($0) → \(diff.path)" } ?? diff.path)
         let meta = isBinary ? [label, GitChangesText.binary(old: diff.oldSize, new: diff.newSize, kind: kind)]
             .compactMap { $0 }.joined(separator: " · ")
             : GitChangesText.meta(label: label, additions: presentation.additions, deletions: presentation.deletions,
@@ -587,23 +587,26 @@ struct GitSourceText: Equatable {
     func attributed(_ index: Int, theme: ChatTheme) -> AttributedString {
         let line = presentation.lines[index]
         if line.text.isEmpty { return AttributedString(" ") }
-        if line.text.count > FileTextLines.lineLimit {
-            var text = AttributedString(String(line.text.prefix(FileTextLines.lineLimit)) + " …")
-            text.foregroundColor = theme.ink
-            return text
+        if line.text.utf8.count > FileTextLines.lineLimit {
+            let bounded = TextRendering.prefix(line.text, scalars: FileTextLines.lineLimit)
+            if bounded.truncated {
+                var text = AttributedString(TextRendering.visible(bounded.text) + " …")
+                text.foregroundColor = theme.ink
+                return text
+            }
         }
         let number = hunkOf[index]
         let lines = colored[number] ?? color(presentation.hunks[number], theme: theme)
         colored[number] = lines
         let offset = index - presentation.hunks[number].lines.lowerBound
-        return lines.indices.contains(offset) ? lines[offset] : AttributedString(line.text)
+        return lines.indices.contains(offset) ? lines[offset] : AttributedString(TextRendering.visible(line.text))
     }
 
     private func color(_ hunk: GitDiffPresentation.Hunk, theme: ChatTheme) -> [AttributedString] {
         let path = key?.diff.path ?? ""
         let lines = Array(presentation.lines[hunk.lines])
         var result = lines.map { line -> AttributedString in
-            var text = AttributedString(line.text)
+            var text = AttributedString(TextRendering.visible(line.text))
             text.foregroundColor = theme.ink
             return text
         }

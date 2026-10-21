@@ -200,8 +200,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     // Full-screen transitions use temporary AppKit windows. Only an explicit
     // close of our main window should end the application session.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+    /// AppKit waits for a `.terminateLater` reply in a nested event loop that runs neither main-queue blocks nor
+    /// main-actor tasks (measured on macOS 27: `DispatchQueue.main.async` and `Task { @MainActor }` both wait until the
+    /// reply), so the cleanup `requestTermination` awaits could never finish there and the app sat in that loop
+    /// for days at 1% CPU. The user's quit is refused at once instead, the cleanup runs on the outer loop (the window
+    /// is already gone), and the quit is repeated when it ends, then granted. A quit the system sends for a logout,
+    /// shutdown or restart (the quit event names its reason) cannot be refused without refusing the logout: the
+    /// session is saved and the quit granted at once, the processes end with the session anyway.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        requestTermination { sender.reply(toApplicationShouldTerminate: $0) }
+        if terminationGranted { return .terminateNow }
+        if Self.systemQuit {
+            saveHostSession()
+            return .terminateNow
+        }
+        let reply = requestTermination { [weak self] allowed in
+            guard allowed, let self else { return }
+            terminationGranted = true
+            sender.terminate(nil)
+        }
+        return reply == .terminateLater ? .terminateCancel : reply
+    }
+    private var terminationGranted = false
+    /// Whether the quit being handled came from loginwindow (logout, shutdown, restart): the quit Apple event then
+    /// carries a reason; the Dock's and AppleScript's carry none.
+    private static var systemQuit: Bool {
+        guard let event = NSAppleEventManager.shared().currentAppleEvent,
+              event.eventClass == AEEventClass(kCoreEventClass), event.eventID == AEEventID(kAEQuitApplication)
+        else { return false }
+        // keyAEQuitReason ('why?', AERegistry.h: kAELogOut, kAEReallyLogOut, kAEShowRestartDialog, kAEShowShutdownDialog)
+        // is not imported into Swift.
+        return event.attributeDescriptor(forKeyword: AEKeyword(0x7768_793F)) != nil
     }
     func requestTermination(reply: @escaping @MainActor (Bool) -> Void) -> NSApplication.TerminateReply {
         guard termination == nil else { return .terminateLater }

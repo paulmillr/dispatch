@@ -47,6 +47,14 @@ final class CodeTextView: UITextView, NSTextStorageDelegate {
         placeholderLabel.textColor = .tertiaryLabel
         placeholderLabel.isAccessibilityElement = false
         addSubview(placeholderLabel)
+        #if DEBUG
+        // `-DispatchHardwareKeyboard YES` stands in for an attached keyboard: no software keyboard either, as with a
+        // real one, so screenshots and tests show the composer as a keyboard user sees it.
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: "DispatchHardwareKeyboard") != nil, defaults.bool(forKey: "DispatchHardwareKeyboard") {
+            inputView = UIView(frame: .zero)
+        }
+        #endif
         NotificationCenter.default.addObserver(self, selector: #selector(textDidChange), name: UITextView.textDidChangeNotification, object: self)
         registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (view: CodeTextView, _: UITraitCollection) in
             view.restyleForContentSize()
@@ -203,11 +211,46 @@ final class CodeTextView: UITextView, NSTextStorageDelegate {
         pasted?(nil)
     }
 
-    override var keyCommands: [UIKeyCommand]? {
-        [UIKeyCommand(title: "Send", action: #selector(sendCommand), input: "\r", modifierFlags: .command)]
+    /// The draft's editor mode and whether the agent works, for the hardware keys (`ComposerHardwareKeys`).
+    var keyState: () -> (multiline: Bool, working: Bool) = { (false, false) }
+    /// A hardware key's action the composer carries out (send, steer, stop, editor mode); newline and resign are the
+    /// view's own.
+    var keyAction: ((ComposerKeyAction) -> Void)?
+
+    /// Made once: UIKit asks for them on every key event.
+    private static let commands = ComposerHardwareKeys.commands(action: #selector(hardwareKey(_:)))
+    override var keyCommands: [UIKeyCommand]? { Self.commands }
+
+    func action(for command: UIKeyCommand) -> ComposerKeyAction {
+        guard let key = ComposerHardwareKeys.key(command) else { return .system }
+        let state = keyState()
+        return ComposerHardwareKeys.action(key, modifiers: command.modifierFlags, multiline: state.multiline,
+                                           working: state.working, composing: markedTextRange != nil)
     }
 
-    @objc private func sendCommand() { submit?() }
+    /// A command the composer does not take this time (an open composition's Return) is declined, so the key goes on
+    /// to the text system.
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        if action == #selector(hardwareKey(_:)) {
+            guard let command = sender as? UIKeyCommand else { return markedTextRange == nil }
+            return self.action(for: command) != .system
+        }
+        return super.canPerformAction(action, withSender: sender)
+    }
+
+    @objc func hardwareKey(_ command: UIKeyCommand) { perform(action(for: command)) }
+
+    func perform(_ action: ComposerKeyAction) {
+        switch action {
+        case .newline:
+            insertText("\n")
+            didEdit()
+        case .resign: _ = resignFirstResponder()
+        case .system: break
+        case .send where keyAction == nil: submit?()
+        default: keyAction?(action)
+        }
+    }
 
     /// The height the editor wants at `width`: its text, at least one prose line, at most `maximumHeight` (then it
     /// scrolls). Measured on a copy of the styled text, so it does not depend on the view's current width (SwiftUI asks

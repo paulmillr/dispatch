@@ -61,10 +61,19 @@ final class TerminalPresence {
     @ObservationIgnored private var serverGrid: (columns: Int, rows: Int)?
     @ObservationIgnored private var lastResize = ContinuousClock.now - .seconds(60)
     @ObservationIgnored private var settling: Task<Void, Never>?
+    /// The view's grid waiting for its run to settle (`resizeQuiet`) before the feed gets it.
+    @ObservationIgnored private var resizing: Task<Void, Never>?
+    /// The grid the feed last got (or attached at).
+    @ObservationIgnored private var sent: TerminalFeedSize?
     /// The view showing this presence lays out again (the shown grid changed).
     @ObservationIgnored var relayout: (() -> Void)?
     /// A server size different from the view's right after a resize is the old one: the server's comes within this.
     nonisolated static let resizeSettle = Duration.milliseconds(1500)
+    /// A run of grid changes (a live window resize, a pinch, the keyboard's frames) reaches the server once, at its
+    /// last size, when none has come for this long: each `terminals.resize` makes tmux and the program redraw, and
+    /// the redraws of sizes the view has already left arrived after it and repainted the screen at the wrong size,
+    /// several times over. The view's own grid follows every frame, as the Mac's does in a live resize.
+    nonisolated static let resizeQuiet = Duration.milliseconds(100)
 
     /// What the view showing this presence handles (selection, background, bell, clipboard).
     @ObservationIgnored var onViewEvent: ((TerminalSession.Event) -> Void)?
@@ -125,6 +134,7 @@ final class TerminalPresence {
 
     isolated deinit {
         settling?.cancel()
+        resizing?.cancel()
         consumer?.cancel()
         parser?.cancel()
         publication.pending?.cancel()
@@ -134,9 +144,7 @@ final class TerminalPresence {
 
     private func resize(_ size: TerminalFeedSize) {
         available = size
-        lastResize = .now
-        feed.resize(size)
-        evaluate()
+        request(size)
     }
 
     /// The view's own grid while it shows the server's: asked for when it changes.
@@ -144,8 +152,26 @@ final class TerminalPresence {
         guard size != available else { return }
         available = size
         guard attached else { return }
+        request(size)
+    }
+
+    /// The feed gets `size` once the run it belongs to settles (`resizeQuiet`); a run that ends where it began sends
+    /// nothing. Meanwhile the server's size counts as the old one (`evaluate`).
+    private func request(_ size: TerminalFeedSize) {
         lastResize = .now
-        feed.resize(size)
+        resizing?.cancel()
+        resizing = nil
+        if size != sent {
+            resizing = Task { [weak self] in
+                try? await Task.sleep(for: Self.resizeQuiet)
+                guard !Task.isCancelled, let self, self.attached, self.available == size else { return }
+                self.resizing = nil
+                self.sent = size
+                self.lastResize = .now
+                self.feed.resize(size)
+                self.evaluate()
+            }
+        }
         evaluate()
     }
 
@@ -188,6 +214,7 @@ final class TerminalPresence {
         // A later attachment repaints the whole screen; the last one stays shown until its first output arrives, so a
         // terminal shown again (or reattached after a reconnect) never flashes empty.
         let repaint = attachments > 1
+        sent = session.currentSize
         let stream = feed.attach(session.currentSize)
         inbox = TerminalInbox(limit: Self.inboxLimit)
         let session = session, inbox = inbox, attachment = attachments, feed = feed
@@ -240,6 +267,8 @@ final class TerminalPresence {
     func stop() {
         guard attached else { return }
         attached = false
+        resizing?.cancel()
+        resizing = nil
         consumer?.cancel()
         consumer = nil
         parser?.cancel()

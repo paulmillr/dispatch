@@ -144,8 +144,10 @@ struct ChatToolCard: View {
     private func header(_ tool: ToolPresentation?) -> some View {
             HStack(spacing: 9) {
                 Image(systemName: tool?.symbol ?? "wrench.and.screwdriver").foregroundStyle(theme.muted).frame(width: 14)
-                let title = (requested ? tool?.title : tool?.displayTitle) ?? "Tools"
-                let summary = String((tool?.displaySummary(in: directory) ?? "").prefix(180))
+                let title = TextRendering.visible(TextRendering.prefix(
+                    (requested ? tool?.title : tool?.displayTitle) ?? "Tools", scalars: 256).text)
+                let summary = TextRendering.visible(TextRendering.prefix(
+                    tool?.displaySummary(in: directory) ?? "", scalars: 180).text)
                 let titleText = Text(ChatSearchHighlight.text(AttributedString(title), query: query, theme: theme)).fontWeight(.semibold)
                 if let titleColumn {
                     // A longer name fits its column with an ellipsis; one with nothing after it, or a running step (shown

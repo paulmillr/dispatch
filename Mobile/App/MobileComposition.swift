@@ -22,6 +22,8 @@ final class MobileComposition {
     /// Set by `app()`; tests make their own.
     var refresh: BackgroundRefresh?
     var network: NetworkPathWatcher?
+    /// The Apple Watch link (docs/watch.md); nil where WatchConnectivity is unsupported.
+    var watch: WatchBridge?
     /// Spaces and Agents see a Chat-off host's topology without agents.
     private let topologies = HostTopologies()
     /// What was last handed to the areas per host; an unchanged host is not synced again (latency ticks).
@@ -36,7 +38,7 @@ final class MobileComposition {
     init(hosts: HostSessions, tabs: MobileTabs = MobileTabs(), presences: TerminalPresences = .shared,
          markers: ChatMarkers = .shared, outbox: ChatOutbox = .shared, drafts: ChatDraftRepository = .shared,
          cache: HostCache = HostCache(url: nil), settings: MobileSettings = MobileSettings(), modelMemory: ChatModelMemory = .shared,
-         feedsTabs: Bool = true) {
+         feedsTabs: Bool = true, splitMemory: UserDefaults? = nil) {
         self.hosts = hosts
         self.tabs = tabs
         self.presences = presences
@@ -46,7 +48,7 @@ final class MobileComposition {
         self.feedsTabs = feedsTabs
         conversations = ChatConversations(presence: TerminalChatPresence(presences: presences), markers: markers,
                                           outbox: outbox, drafts: drafts)
-        navigator = SpacesNavigator(model: tabs)
+        navigator = SpacesNavigator(model: tabs, memory: splitMemory)
         restore()
         wire()
         sync()
@@ -211,13 +213,18 @@ final class MobileComposition {
         let hosts = HostSessions.app()
         #if DEBUG
         if UserDefaults.standard.bool(forKey: "DispatchTabsSample") {
-            return MobileComposition(hosts: hosts, tabs: TabsSample.model(), feedsTabs: false)
+            // `-DispatchSplitMemory YES`: the sample keeps the iPad's shown tab and sidebar too (its relaunch tests).
+            let memory = UserDefaults.standard.bool(forKey: "DispatchSplitMemory") ? UserDefaults.standard : nil
+            return MobileComposition(hosts: hosts, tabs: TabsSample.model(), feedsTabs: false, splitMemory: memory)
         }
         let saving = environment["DISPATCH_MOBILE_STORE"] != "memory" && (environment["DISPATCH_MOBILE_SCRIPTED"] ?? "0") == "0"
+            && !DemoScenario.enabled
         #else
         let saving = true
         #endif
-        let composition = MobileComposition(hosts: hosts, cache: HostCache(url: saving ? HostCache.file : nil))
+        // The iPad's shown tab and sidebar (`SpacesNavigator.restoreSplit`) are kept where the cache is.
+        let composition = MobileComposition(hosts: hosts, cache: HostCache(url: saving ? HostCache.file : nil),
+                                            splitMemory: saving ? .standard : nil)
         composition.refresh = BackgroundRefresh(
             notifier: SystemNotifier(), settings: composition.settings, cache: composition.cache,
             markers: composition.conversations.markers, hosts: { [weak hosts] in hosts?.store.hosts ?? [] },
@@ -226,6 +233,8 @@ final class MobileComposition {
         network.observed = { [weak hosts] path in hosts?.networkPath(satisfied: path.satisfied) }
         network.start()
         composition.network = network
+        // Also in the in-memory and scripted modes, so simulator demos push snapshots.
+        composition.watch = WatchBridge.app(composition)
         return composition
     }
 
@@ -233,6 +242,7 @@ final class MobileComposition {
     /// next background refresh.
     func scenePhaseChanged(_ phase: ScenePhase) {
         hosts.scenePhaseChanged(phase)
+        watch?.scenePhaseChanged()
         if phase == .background {
             cache.flush()
             refresh?.schedule()
@@ -353,7 +363,7 @@ final class MobileComposition {
                 #if DEBUG
                 if sample {
                     let output = Data(String(repeating: "\r\n", count: 60).utf8) + TerminalFixtures.viteDev
-                    return AnyView(TerminalSegmentView(feed: ScriptedTerminalFeed(output: output)))
+                    return AnyView(TerminalSegmentView(feed: ScriptedTerminalFeed.sample(output: output)))
                 }
                 #endif
                 return AnyView(TerminalSegment(hosts: hosts, presences: presences, tab: tab, pane: pane))

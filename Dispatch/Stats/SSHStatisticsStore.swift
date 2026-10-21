@@ -234,7 +234,9 @@ final class SSHStatisticsStore {
     @ObservationIgnored private let backgroundLatencyInterval: Duration
     @ObservationIgnored private var sleeping = false
 
-    init(interval: Duration = .seconds(2), backgroundInterval: Duration = .seconds(15),
+    /// Background sampling (no popover open) only pre-fills the chart: once a minute, like the latency echo, so an
+    /// idle host costs one request (and one helper spawn there) a minute instead of four.
+    init(interval: Duration = .seconds(2), backgroundInterval: Duration = .seconds(60),
          diskInterval: Duration = .seconds(15), historyRetention: TimeInterval = 3600,
          latencyInterval: Duration = .seconds(2), backgroundLatencyInterval: Duration = .seconds(60),
          observesSystemSleep: Bool = false) {

@@ -596,28 +596,51 @@ final class MobileChatSession: Identifiable {
     /// The composer's text, sent by `route(steer:)`. The draft leaves the composer only once its destination took it
     /// (for the queue, once it is saved on the device); a failure restores it.
     func send(steer: Bool = false) {
-        let text = drafts.current.text
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        submit(drafts.current.text, steer: steer) { self.drafts.prepareDelivery(consume: true) }
+    }
+
+    /// Text from elsewhere (the watch, docs/watch.md), routed exactly as the composer's but without its draft: the
+    /// draft is neither read, taken nor restored. Returns where it went, or nil when nothing was sent (empty text, or a
+    /// device queue that could not be saved: `failure` says why). A prompt's own delivery failure comes later, in
+    /// `failure`.
+    @discardableResult
+    func send(text: String, steer: Bool) -> Route? {
+        submit(text, steer: steer, delivery: nil)
+    }
+
+    /// `delivery` prepares the composer's draft for delivery (nil: not the composer's text); a nil result sends nothing.
+    private func submit(_ text: String, steer: Bool, delivery prepare: (() -> ChatDraftDelivery?)?) -> Route? {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         failure = nil; commandResult = nil
         let isCommand = AgentInput.isCommand(text, multiline: text.contains("\n"))
         let route = route(steer: steer, command: isCommand)
-        guard let delivery = drafts.prepareDelivery(consume: true) else { return }
+        var delivery: ChatDraftDelivery?
+        if let prepare {
+            guard let prepared = prepare() else { return nil }
+            delivery = prepared
+        }
         switch route {
         case .outbox, .queue:
             let item = ChatOutboxItem(key: key, conversation: conversation, text: text, command: isCommand,
                                       process: phase == .verified ? .init(binding) : nil)
             let accepted = outbox.add(item)
-            drafts.finish(delivery, success: accepted)
-            if !accepted { failure = outbox.error; return }
+            finish(delivery, success: accepted)
+            if !accepted { failure = outbox.error; return nil }
             if route == .queue { Task { await self.drainQueue() } }
         case .prompt where isCommand:
             command(text, delivery: delivery)
         case .prompt, .steer:
             prompt(text, steer: route == .steer, delivery: delivery)
         }
+        return route
     }
 
-    private func prompt(_ text: String, steer: Bool, delivery: ChatDraftDelivery) {
+    /// Settles the composer's draft after a delivery (nothing for text that was not the draft).
+    private func finish(_ delivery: ChatDraftDelivery?, success: Bool) {
+        if let delivery { drafts.finish(delivery, success: success) }
+    }
+
+    private func prompt(_ text: String, steer: Bool, delivery: ChatDraftDelivery?) {
         var input = route()
         input.text = text
         input.mode = steer ? "steer" : "prompt"
@@ -634,10 +657,10 @@ final class MobileChatSession: Identifiable {
             defer { if self.sendTicket == ticket { self.sending = false } }
             do {
                 try await self.deliver(input, generation: generation)
-                self.drafts.finish(delivery, success: true)
+                self.finish(delivery, success: true)
             } catch {
                 // Not retried: the draft comes back and the failure says whether it may have been sent.
-                self.drafts.finish(delivery, success: false)
+                self.finish(delivery, success: false)
                 if self.optimisticPrompt?.id == pending.id { self.optimisticPrompt = nil }
                 if !steer { self.awaitingAck = false; self.submittedAt = nil }
                 self.updateWorkingSince()
@@ -668,7 +691,7 @@ final class MobileChatSession: Identifiable {
         return sendTicket
     }
 
-    private func command(_ text: String, delivery: ChatDraftDelivery) {
+    private func command(_ text: String, delivery: ChatDraftDelivery?) {
         var input = route()
         input.text = text
         lastCommand = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -679,10 +702,10 @@ final class MobileChatSession: Identifiable {
             do {
                 let outcome: HelperChat.Outcome = try await call("chat.command", input, generation: generation)
                 try outcome.confirmed()
-                self.drafts.finish(delivery, success: true)
+                self.finish(delivery, success: true)
                 self.commandResult = outcome.result(agent: self.agentName)
             } catch {
-                self.drafts.finish(delivery, success: false)
+                self.finish(delivery, success: false)
                 self.failure = self.explain(error)
             }
         }

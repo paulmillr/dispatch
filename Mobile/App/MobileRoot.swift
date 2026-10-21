@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// The two sections of the tab bar (M2a, M3a). Hosts are managed inside Spaces (M1d, M1e, M1f).
 enum MobileSection: Hashable, CaseIterable, Identifiable {
@@ -53,12 +54,17 @@ struct MobileRoot: View {
     /// The split's columns' space and the fold in it (`MobileFoldReader`); zero until measured.
     @State private var splitSpace = CGSize.zero
     @State private var fold: CGFloat?
+    /// The phone's split rules or the iPad's (`MobileSplit.Device`).
+    private let device: MobileSplit.Device
     private let composition: MobileComposition
     @Bindable private var navigator: SpacesNavigator
 
-    init(composition: MobileComposition) {
+    init(composition: MobileComposition, device: MobileSplit.Device = .current) {
         self.composition = composition
+        self.device = device
         navigator = composition.navigator
+        // Before the first frame: the launch's window shows the tab and the sidebar as they were left (once a launch).
+        if device == .pad { navigator.restoreSplit(splits: MobileSplit.applies(to: MobileSplit.initialSize, device: .pad)) }
     }
 
     private var tabs: MobileTabs { composition.tabs }
@@ -126,19 +132,36 @@ struct MobileRoot: View {
     /// The one stack, or Spaces beside the tab in a wide window (`MobileSplit`). Both show the navigator's path, so
     /// folding or unfolding keeps the screens the user was on.
     private var root: some View {
-        let split = MobileSplit.applies(to: windowSize)
+        let split = MobileSplit.applies(to: windowSize, device: device)
         return Group {
-            if split { splitView } else { stack(path: $navigator.path) }
+            if split {
+                splitView
+            } else {
+                // The window's width, not the screen's: an iPad window in a third or Slide Over is a phone's width on a
+                // 13-inch screen, and its headers must truncate to it.
+                stack(path: $navigator.path, titleInBar: false)
+                    .environment(\.tabsColumnWidth, windowSize.width > 0 ? windowSize.width : nil)
+                    .mobileCompactWidth(device == .pad)
+            }
         }
         .background {
-            // The whole window, keyboard and bars included: the keyboard coming up must not fold the split away.
-            Color.clear
+            // The whole window, keyboard and bars included: the keyboard coming up must not fold the split away, nor
+            // the status bar on the Duo's unfolded screen, 553 points high held as a book (`MobileWindowReader`:
+            // SwiftUI's geometry here shrank with both).
+            MobileWindowReader { windowSize = $0 }
                 .ignoresSafeArea()
-                .onGeometryChange(for: CGSize.self, of: \.size) { windowSize = $0 }
         }
-        .onChange(of: split, initial: true) { _, split in navigator.split = split }
+        .onChange(of: split, initial: true) { _, split in
+            navigator.split = split
+            // Folded or unfolded: the vertical bar follows the screen (`MobileVerticalBar`).
+            MobileVerticalBar.refresh()
+        }
+        // A section chosen while the sidebar is hidden (⌘1, ⌘2) shows it.
+        .onChange(of: section) { navigator.showSidebar() }
         .spacesPresentations(navigator, hostViews: composition.hostViews)
         .environment(\.hostSpaceOpening, navigator)
+        // The menu bar and ⌘ chords (MobileCommands).
+        .mobileCommands(composition, section: $section, sheet: $sheet)
         #if DEBUG
         .onAppear {
             navigator.selectSection = { name in section = name == "agents" ? .agents : .spaces }
@@ -146,32 +169,48 @@ struct MobileRoot: View {
         #endif
     }
 
-    /// The split's columns: measured once the split has laid out, the window's until then.
+    /// The split's columns: measured once the split has laid out, the window's until then. An iPad has no fold and
+    /// no side insets: the window's size, which changes in the same update as `split`, so a rotation or a resize never
+    /// draws a frame of the last size's columns while the probe's report waits for the next turn.
     private var columns: MobileSplit.Columns {
-        let space = splitSpace.width > 0 ? splitSpace : windowSize
-        return MobileSplit.columns(width: space.width, height: space.height, fold: fold)
+        let space = device == .pad || splitSpace.width <= 0 ? windowSize : splitSpace
+        return MobileSplit.columns(width: space.width, height: space.height, fold: fold, device: device)
     }
 
-    /// The phone's stack, tab bar and all, in the sidebar; the tab its rows open beside it, past the fold.
+    /// The phone's stack, tab bar and all, in the sidebar; the tab its rows open beside it, past the fold. On an iPad
+    /// the sidebar can give the tab the whole window (`SpacesNavigator.toggleSidebar`): it slides off the leading edge
+    /// at its own width, still alive (its stack, scroll position and tab bar stay), and comes back the same way. As
+    /// the Mac's split slides its sidebar (`NativeSplit`), the tab keeps the wider of its two widths for the whole
+    /// slide and only moves, the window's edge clipping the overhang: its terminal and chat lay out once a slide, not
+    /// on every frame (which resized the terminal's grid, and the server's window, sixty times a second).
     private var splitView: some View {
         let columns = columns
-        return HStack(spacing: 0) {
-            stack(path: Binding(get: { navigator.splitPath.sidebar }, set: { navigator.setSidebar($0) }))
-                .frame(width: columns.sidebar)
-                .environment(\.tabsColumnWidth, columns.sidebar)
+        let hidden = device == .pad && navigator.sidebarShownHidden
+        let leading = columns.sidebar + columns.gap
+        let wide = hidden || (device == .pad && navigator.sidebarSliding)
+        return ZStack(alignment: .topLeading) {
+            HStack(spacing: 0) {
+                stack(path: Binding(get: { navigator.splitPath.sidebar }, set: { navigator.setSidebar($0) }),
+                      titleInBar: device == .phone)
+                    .frame(width: columns.sidebar)
+                    .mobileCompactWidth(device == .pad)
+                    .environment(\.tabsColumnWidth, columns.sidebar)
+                    .environment(\.tabsSelectTab, { navigator.select($0) })
+                // The hairline: on the fold in book posture.
+                Rectangle()
+                    .fill(Color.hairline)
+                    .frame(width: 0.5)
+                    .frame(width: columns.gap)
+                    .ignoresSafeArea()
+            }
+            .offset(x: hidden ? -leading : 0)
+            .allowsHitTesting(!hidden)
+            .accessibilityHidden(hidden)
+            detail(columns: columns, leading: leading, hidden: hidden, wide: wide)
+                .environment(\.tabsColumnWidth, wide ? columns.sidebar + columns.gap + columns.tab : columns.tab)
                 .environment(\.tabsSelectTab, { navigator.select($0) })
-            // The hairline: on the fold in book posture.
-            Rectangle()
-                .fill(Color.hairline)
-                .frame(width: 0.5)
-                .frame(width: columns.gap)
-                .ignoresSafeArea()
-            // The rest, not a set width: the probe measures what the columns are given, and a total wider than that
-            // centred the row and clipped the sidebar's leading edge.
-            MobileSplitDetail(navigator: navigator, content: composition.content, hostViews: composition.hostViews)
-                .frame(maxWidth: .infinity)
-                .environment(\.tabsColumnWidth, columns.tab)
-                .environment(\.tabsSelectTab, { navigator.select($0) })
+                .environment(\.tabsSidebarToggle, device == .pad && navigator.canToggleSidebar
+                    ? TabsSidebarToggle(hidden: hidden, toggle: { navigator.toggleSidebar() }) : nil)
         }
         .background {
             MobileFoldReader { size, fold in
@@ -181,14 +220,50 @@ struct MobileRoot: View {
         }
     }
 
-    private func stack(path: Binding<[TabsRoute]>) -> some View {
-        NavigationStack(path: path) {
+    /// The detail column: on an iPad a set width, which changes only outside the slide's animation (the slide moves
+    /// it, `SpacesNavigator.toggleSidebar`); on the Duo the rest of the split's space.
+    @ViewBuilder private func detail(columns: MobileSplit.Columns, leading: CGFloat, hidden: Bool, wide: Bool) -> some View {
+        let detail = MobileSplitDetail(navigator: navigator, content: composition.content, hostViews: composition.hostViews)
+        if device == .pad {
+            // Across the window whatever its width: a narrower stack centred the columns.
+            detail
+                .frame(width: wide ? leading + columns.tab : columns.tab)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .offset(x: hidden ? 0 : leading)
+        } else {
+            // The rest, not a set width: the probe measures what the columns are given, and a total wider than that
+            // centred the row and clipped the sidebar's leading edge.
+            detail
+                .frame(maxWidth: .infinity)
+                .padding(.leading, leading)
+        }
+    }
+
+    /// `titleInBar`: the Duo's sidebar names its section in the bar's row, beside its controls, instead of the
+    /// phone's large title on a second line (M2a, M3a): the sidebar sits beside a tab whose header is one row. An
+    /// iPad's keeps the large title: its tab's header keeps the switch under it (`TabScreen.segmentInHeader`), and
+    /// name, capsule and Edit in one row overflowed its 280-point sidebar.
+    private func stack(path: Binding<[TabsRoute]>, titleInBar: Bool) -> some View {
+        let narrow = titleInBar && MobileSplit.narrow(sidebar: columns.sidebar, device: device)
+        return NavigationStack(path: path) {
             tabView
                 .navigationTitle(section.title)
-                .toolbarTitleDisplayMode(.large)
+                .toolbarTitleDisplayMode(titleInBar ? .inline : .large)
+                // The section's name is the leading item instead (the title stays the screen's name for VoiceOver).
+                .toolbar(removing: titleInBar ? .title : nil)
                 .toolbar {
+                    if titleInBar {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Text(section.title)
+                                .font(narrow ? .headline : .title2.weight(.bold))
+                                .lineLimit(1)
+                                .accessibilityAddTraits(.isHeader)
+                                .fixedSize()
+                        }
+                        .sharedBackgroundVisibility(.hidden)
+                    }
                     switch section {
-                    case .spaces: SpacesToolbar(model: tabs, editing: $navigator.editing)
+                    case .spaces: SpacesToolbar(model: tabs, editing: $navigator.editing, capsuleTrailing: titleInBar, glyphEdit: narrow)
                     case .agents: AgentsToolbar(conversations: conversations)
                     }
                 }
@@ -200,9 +275,9 @@ struct MobileRoot: View {
     }
 
     private var tabView: some View {
-        let split = MobileSplit.applies(to: windowSize)
+        let split = MobileSplit.applies(to: windowSize, device: device)
         let sidebar = columns.sidebar
-        let narrow = split && MobileSplit.narrow(sidebar: sidebar)
+        let narrow = split && MobileSplit.narrow(sidebar: sidebar, device: device)
         return TabView(selection: selection) {
             ForEach(MobileSection.allCases) { item in
                 Tab(value: Slot.section(item)) {
@@ -283,6 +358,36 @@ struct MobileRoot: View {
                          if let ref = composition.tab(for: conversation.key) { navigator.actions.close(.tab(ref), .close) }
                      },
                      chrome: false)
+    }
+}
+
+extension View {
+    /// The iPad's stack and sidebar column at a compact width, as `UISplitViewController` gives its own columns (its
+    /// primary reports compact in a regular window): SwiftUI's `TabView` then draws the phone's bottom bar with New as
+    /// its own glass circle. In a regular width it drew iPadOS's floating top bar, under the stack's large title, with
+    /// New folded into a chevron. The phone's sizes are compact already and get nothing.
+    @ViewBuilder func mobileCompactWidth(_ apply: Bool) -> some View {
+        if apply { environment(\.horizontalSizeClass, .compact) } else { self }
+    }
+
+    /// The sheets' grabber: drawn on the phone, as the mockups' sheets (M7a, M8a, M9a) have it; none on an iPad, whose
+    /// form sheets in the middle of the window carry none (they still swipe down), as the system's own do.
+    func mobileSheetGrabber() -> some View {
+        presentationDragIndicator(UIDevice.current.userInterfaceIdiom == .pad ? .hidden : .visible)
+    }
+
+    /// A sheet's detents on the phone (`[.medium, .large]`: half the screen, then all of it); none on an iPad, where
+    /// detents made a card anchored to the window's bottom with the phone's grabber, its list cut by the screen's edge,
+    /// instead of the system's form sheet in the middle that the other sheets are.
+    @ViewBuilder func mobilePhoneDetents(_ detents: Set<PresentationDetent>) -> some View {
+        if UIDevice.current.userInterfaceIdiom == .pad { self } else { presentationDetents(detents) }
+    }
+
+    /// On an iPad, a sheet that needs more than a form sheet's height (the host key questions: the message, the key's
+    /// rows and two large buttons) as a page sheet, whose height is the window's; the phone's sheets are its height
+    /// already.
+    @ViewBuilder func mobileTallSheet() -> some View {
+        if UIDevice.current.userInterfaceIdiom == .pad { presentationSizing(.page) } else { self }
     }
 }
 

@@ -11,7 +11,7 @@ struct HostRemovalConfirmation: Equatable {
 /// (M1e), reordering over `HostStore`, and the host screens Spaces embeds through `SpacesHostViews` (M1f pushed, M8a as
 /// a sheet).
 extension HostSessions: SpacesHostActions {
-    static let removalMessage = "Its spaces and tabs close on this iPhone, and Dispatch forgets its password and host key. Nothing changes on the host: its tmux or herdr sessions and agents keep running."
+    static var removalMessage: String { "Its spaces and tabs close on this \(MobileDevice.name), and Dispatch forgets its password and host key. Nothing changes on the host: its tmux or herdr sessions and agents keep running." }
 
     func removalConfirmation(for host: UUID) -> HostRemovalConfirmation? {
         store.record(host).map {
@@ -26,14 +26,14 @@ extension HostSessions: SpacesHostActions {
         var lines: [String] = []
         if let error = store.saveError {
             let names = store.hosts.filter { store.unsaved.contains($0.id) }.map(\.name)
-            lines.append("\(Self.list(names, or: "Your hosts")) \(names.count == 1 ? "isn't" : "aren't") saved on this iPhone: \(error)")
+            lines.append("\(Self.list(names, or: "Your hosts")) \(names.count == 1 ? "isn't" : "aren't") saved on this \(MobileDevice.name): \(error)")
         }
         if let error = keys.saveError {
             let names = keys.keys.filter { keys.unsaved.contains($0.id) }.map { "the key “\($0.label)”" }
-            lines.append("\(Self.list(names, or: "Your keys").capitalizedFirst) \(names.count == 1 ? "isn't" : "aren't") saved on this iPhone: \(error)")
+            lines.append("\(Self.list(names, or: "Your keys").capitalizedFirst) \(names.count == 1 ? "isn't" : "aren't") saved on this \(MobileDevice.name): \(error)")
         }
         if let error = knownHosts.saveError {
-            lines.append("Trusted host keys aren't saved on this iPhone: \(error)")
+            lines.append("Trusted host keys aren't saved on this \(MobileDevice.name): \(error)")
         }
         return lines.isEmpty ? nil : lines.joined(separator: "\n")
     }

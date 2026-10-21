@@ -50,7 +50,9 @@ public struct FaceMetrics {
     /// Ghostty's getMetrics: vertical metrics from hhea or OS/2 by its preference rules, underline
     /// from post, strikeout and cap/x height from OS/2, the rest measured.
     public init(_ t: FontTables, pixels: Double, _ m: FontMeasurements) {
-        let unit = pixels / Double(t.unitsPerEm ?? m.unitsPerEm)
+        let pixels = pixels.isFinite && pixels > 0 ? pixels : 13
+        let units = (t.unitsPerEm ?? m.unitsPerEm) > 0 ? (t.unitsPerEm ?? m.unitsPerEm) : 1000
+        let unit = pixels / Double(units)
         (pxPerEm, cellWidth, asciiHeight, icWidth) = (pixels, m.maxAdvance, m.asciiHeight, m.icWidth)
         let scale = { (a: Int, d: Int, g: Int) in (Double(a) * unit, Double(d) * unit, Double(g) * unit) }
         if let h = t.hhea {
@@ -92,22 +94,33 @@ public struct CellMetrics: Equatable {
     public var iconHeight: Double, iconHeightSingle: Double, faceWidth: Double, faceHeight: Double, faceY: Double
 
     public init(_ f: FaceMetrics) {
-        let faceHeight = f.ascent - f.descent + f.lineGap
-        let (width, height) = (f.cellWidth.rounded(), faceHeight.rounded())
-        let faceBaseline = f.lineGap / 2 - f.descent
+        let safe = { (value: Double, fallback: Double) in value.isFinite ? value : fallback }
+        let ascent = safe(f.ascent, f.pxPerEm), descent = safe(f.descent, 0), lineGap = safe(f.lineGap, 0)
+        let faceHeight = safe(ascent - descent + lineGap, max(f.pxPerEm, 1))
+        let (width, height) = (safe(f.cellWidth, 1).rounded(), faceHeight.rounded())
+        let faceBaseline = lineGap / 2 - descent
         let baseline = (faceBaseline - (height - faceHeight) / 2).rounded()
         let top = height - baseline
-        let underline = max(1, f.underlineThick.rounded(.up)), strike = max(1, f.strikethroughThick.rounded(.up))
-        let underlinePos = f.underlinePosition ?? -f.underlineThick
-        let strikePos = f.strikethroughPosition ?? (f.ex + f.strikethroughThick) * 0.5
-        // Minimums: 1 for every size and thickness.
-        let px = { (v: Double) in max(1, UInt32(v)) }
-        (cellWidth, cellHeight, cellBaseline) = (px(width), px(height), UInt32(baseline))
-        (underlinePosition, underlineThickness) = (UInt32((top - underlinePos).rounded()), px(underline))
-        (strikethroughPosition, strikethroughThickness) = (UInt32((top - strikePos).rounded()), px(strike))
+        let underlineThick = safe(f.underlineThick, 1), strikeThick = safe(f.strikethroughThick, 1)
+        let underline = max(1, underlineThick.rounded(.up)), strike = max(1, strikeThick.rounded(.up))
+        let underlinePos = safe(f.underlinePosition ?? -underlineThick, -underlineThick)
+        let strikePos = safe(f.strikethroughPosition ?? (f.ex + strikeThick) * 0.5, 0)
+        // Minimums: 1 for every size and thickness. The Metal ABI does signed-int pixel math.
+        let limit = Double(Int32.max)
+        let px = { (v: Double) -> UInt32 in
+            guard v.isFinite, v > 1 else { return 1 }
+            return v >= limit ? UInt32(Int32.max) : UInt32(v)
+        }
+        let coordinate = { (v: Double) -> UInt32 in
+            guard v.isFinite, v > 0 else { return 0 }
+            return v >= limit ? UInt32(Int32.max) : UInt32(v)
+        }
+        (cellWidth, cellHeight, cellBaseline) = (px(width), px(height), coordinate(baseline))
+        (underlinePosition, underlineThickness) = (coordinate((top - underlinePos).rounded()), px(underline))
+        (strikethroughPosition, strikethroughThickness) = (coordinate((top - strikePos).rounded()), px(strike))
         (overlinePosition, overlineThickness, boxThickness, cursorThickness, cursorHeight) = (0, px(underline), px(underline), 1, px(height))
-        (iconHeight, iconHeightSingle) = (max(1, faceHeight), max(1, (2 * f.cap + faceHeight) / 3))
-        (faceWidth, self.faceHeight, faceY) = (max(1, f.cellWidth), max(1, faceHeight), baseline - faceBaseline)
+        (iconHeight, iconHeightSingle) = (min(max(1, faceHeight), limit), min(max(1, safe((2 * f.cap + faceHeight) / 3, 1)), limit))
+        (faceWidth, self.faceHeight, faceY) = (min(max(1, safe(f.cellWidth, 1)), limit), min(max(1, faceHeight), limit), safe(baseline - faceBaseline, 0))
     }
 }
 

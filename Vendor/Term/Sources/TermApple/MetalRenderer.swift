@@ -5,6 +5,7 @@
 // drawn.
 #if canImport(Metal)
 import Dispatch
+import Foundation
 import Metal
 import Term
 
@@ -20,17 +21,27 @@ public struct FrameUniforms {
     /// leaves at the right and bottom. `cell`: the font grid's cell (the renderer's own metrics).
     public init(size: RenderSize, cell: (width: Int, height: Int), cols: Int, rows: Int, background: RGB, opacity: Double = 1,
                 block: (x: Int, y: Int, wide: Bool, text: RGB)? = nil) {
-        let p = size.padding
-        let (w, h) = (max(size.screen.width - p.left - p.right, 0), max(size.screen.height - p.top - p.bottom, 0))
-        let (left, right, bottom, top) = (-Float(p.left), Float(w + p.right), Float(h + p.bottom), -Float(p.top))
-        projection = [2 / (right - left), 0, 0, 0, 0, 2 / (top - bottom), 0, 0, 0, 0, -1, 0,
-                      -(right + left) / (right - left), -(top + bottom) / (top - bottom), 0, 1]
-        let blankRight = max(size.screen.width - (cols * cell.width + p.left + p.right), 0)
-        let blankBottom = max(size.screen.height - (rows * cell.height + p.top + p.bottom), 0)
-        (screen, self.cell, grid) = (SIMD2(Float(size.screen.width), Float(size.screen.height)), SIMD2(Float(cell.width), Float(cell.height)), SIMD2(UInt16(cols), UInt16(rows)))
-        padding = SIMD4(Float(p.top), Float(blankRight + p.right), Float(blankBottom + p.bottom), Float(p.left))
-        bgColor = SIMD4(background.r, background.g, background.b, UInt8((opacity * 255).rounded()))
-        if let b = block { (cursorPos, cursorWide, cursorColor) = (SIMD2(UInt16(b.x), UInt16(b.y)), b.wide, SIMD4(b.text.r, b.text.g, b.text.b, 255)) }
+        // Keep malformed embedding inputs finite. The normal path is unchanged, but a zero-sized
+        // target, an excessive padding value, or an out-of-range cursor can no longer create an
+        // infinity or trap while narrowing values for the shader ABI.
+        let p = (top: Float(max(size.padding.top, 0)), bottom: Float(max(size.padding.bottom, 0)),
+                 right: Float(max(size.padding.right, 0)), left: Float(max(size.padding.left, 0)))
+        let (sw, sh) = (Float(max(size.screen.width, 0)), Float(max(size.screen.height, 0)))
+        let (cw, ch) = (Float(max(cell.width, 1)), Float(max(cell.height, 1)))
+        let (w, h) = (max(sw - p.left - p.right, 0), max(sh - p.top - p.bottom, 0))
+        let (left, right, bottom, top) = (-p.left, w + p.right, h + p.bottom, -p.top)
+        let (spanX, spanY) = (max(right - left, 1), min(top - bottom, -1))
+        projection = [2 / spanX, 0, 0, 0, 0, 2 / spanY, 0, 0, 0, 0, -1, 0,
+                      -(right + left) / spanX, -(top + bottom) / spanY, 0, 1]
+        let blankRight = max(sw - (Float(max(cols, 0)) * cw + p.left + p.right), 0)
+        let blankBottom = max(sh - (Float(max(rows, 0)) * ch + p.top + p.bottom), 0)
+        (screen, self.cell, grid) = (SIMD2(sw, sh), SIMD2(cw, ch), SIMD2(UInt16(clamping: cols), UInt16(clamping: rows)))
+        padding = SIMD4(p.top, blankRight + p.right, blankBottom + p.bottom, p.left)
+        let alpha = opacity.isFinite ? min(max(opacity, 0), 1) : 1
+        bgColor = SIMD4(background.r, background.g, background.b, UInt8((alpha * 255).rounded()))
+        if let b = block, let x = UInt16(exactly: b.x), let y = UInt16(exactly: b.y) {
+            (cursorPos, cursorWide, cursorColor) = (SIMD2(x, y), b.wide, SIMD4(b.text.r, b.text.g, b.text.b, 255))
+        }
     }
 
     /// MSL layout: each field at its alignment, the whole padded to 16.
@@ -63,7 +74,13 @@ public struct FrameUniforms {
 
 extension Contents {
     /// Text instances in draw order.
-    public var count: Int { lists.reduce(0) { $0 + $1.count } }
+    public var count: Int {
+        lists.reduce(0) { total, list in
+            guard total != .max else { return .max }
+            let (next, overflow) = total.addingReportingOverflow(list.count)
+            return overflow ? .max : next
+        }
+    }
 
     /// The CellText records at `to` (32 bytes each: atlas position, size, bearings, grid position,
     /// color, atlas, flags).
@@ -71,11 +88,12 @@ extension Contents {
         var at = to
         for list in lists {
             for e in list {
-                at.storeBytes(of: SIMD4<UInt32>(UInt32(e.glyph.x), UInt32(e.glyph.y), UInt32(e.glyph.width), UInt32(e.glyph.height)), as: SIMD4<UInt32>.self)
-                at.storeBytes(of: Int16(e.bearings.x), toByteOffset: 16, as: Int16.self)
-                at.storeBytes(of: Int16(e.bearings.y), toByteOffset: 18, as: Int16.self)
-                at.storeBytes(of: UInt16(e.x), toByteOffset: 20, as: UInt16.self)
-                at.storeBytes(of: UInt16(e.y), toByteOffset: 22, as: UInt16.self)
+                at.storeBytes(of: SIMD4<UInt32>(UInt32(clamping: e.glyph.x), UInt32(clamping: e.glyph.y),
+                                                UInt32(clamping: e.glyph.width), UInt32(clamping: e.glyph.height)), as: SIMD4<UInt32>.self)
+                at.storeBytes(of: Int16(clamping: e.bearings.x), toByteOffset: 16, as: Int16.self)
+                at.storeBytes(of: Int16(clamping: e.bearings.y), toByteOffset: 18, as: Int16.self)
+                at.storeBytes(of: UInt16(clamping: e.x), toByteOffset: 20, as: UInt16.self)
+                at.storeBytes(of: UInt16(clamping: e.y), toByteOffset: 22, as: UInt16.self)
                 at.storeBytes(of: SIMD8<UInt8>(e.color.r, e.color.g, e.color.b, e.alpha, e.glyph.color ? 1 : 0, (e.noMinContrast ? 1 : 0) | (e.cursor ? 2 : 0), 0, 0),
                               toByteOffset: 24, as: SIMD8<UInt8>.self)
                 at += 32
@@ -84,19 +102,28 @@ extension Contents {
     }
 
     /// The same bytes as an array (checks).
-    public var instances: [UInt8] { [UInt8](unsafeUninitializedCapacity: count * 32) { b, n in if let p = b.baseAddress { write(p) }; n = count * 32 } }
+    public var instances: [UInt8] {
+        let (bytes, overflow) = count.multipliedReportingOverflow(by: 32)
+        guard !overflow else { return [] }
+        return [UInt8](unsafeUninitializedCapacity: bytes) { b, n in if let p = b.baseAddress { write(p) }; n = bytes }
+    }
 }
 
 public final class MetalRenderer {
     public enum Failure: Error { case commandQueueUnavailable }
     public let device: MTLDevice, pixelFormat: MTLPixelFormat
     let queue: MTLCommandQueue, bgColor: MTLRenderPipelineState, cellBg: MTLRenderPipelineState, cellText: MTLRenderPipelineState, image: MTLRenderPipelineState
+    /// Serializes the public renderer boundary. Sessions already have a draw lock, but keeping the
+    /// swap-chain index, caches, and image snapshot safe here prevents another embedder from racing
+    /// `draw`, invalidation, and `Images.update` into the same shared Metal resources.
+    let stateLock = NSLock()
     /// The kitty images of the next frame (set under the terminal lock, see Images.update).
-    public let images = Images()
+    public let images: Images
 
     /// Pipelines like metal/shaders.zig: premultiplied alpha blending (not for the background color).
     public init(device: MTLDevice, pixelFormat: MTLPixelFormat = .bgra8Unorm) throws {
         (self.device, self.pixelFormat) = (device, pixelFormat)
+        images = Images(lock: stateLock)
         guard let queue = device.makeCommandQueue() else { throw Failure.commandQueueUnavailable }
         self.queue = queue
         let library = try device.makeLibrary(source: ghosttyShaders, options: nil)
@@ -139,23 +166,94 @@ public final class MetalRenderer {
 
     /// Colors or the minimum contrast changed: every frame's contrast cache is cleared when it is
     /// next used (a frame the GPU may still read is never touched here).
-    public func invalidateContrast() { for i in frames.indices { frames[i].epoch = 0 } }
+    public func invalidateContrast() {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        for i in frames.indices { frames[i].epoch = 0 }
+    }
 
     /// New atlases replaced the old ones (fonts, size or scale changed; Ghostty's setFontGrid): their
     /// counters start again, so every frame uploads them on its next use instead of trusting a counter.
     public func invalidateTextures() {
+        stateLock.lock()
+        defer { stateLock.unlock() }
         for i in frames.indices { frames[i].textures = frames[i].textures.mapValues { ($0.texture, -1) } }
     }
 
     func buffer(_ b: inout MTLBuffer?, _ length: Int) -> MTLBuffer? {
+        guard length >= 0 else { return nil }
         if let b, b.length >= length { return b }
-        b = device.makeBuffer(length: max(length, 2 * (b?.length ?? 0), 16), options: .storageModeShared)
+        let doubled = (b?.length ?? 0).multipliedReportingOverflow(by: 2)
+        let capacity = min(max(length, doubled.overflow ? length : doubled.partialValue, 16), device.maxBufferLength)
+        guard capacity >= length else { return nil }
+        b = device.makeBuffer(length: capacity, options: .storageModeShared)
         return b
+    }
+
+    /// Checks every value that becomes a GPU address or a narrowed ABI field. Metal buffer pointers
+    /// do not carry a shader-visible length, so rejecting an inconsistent frame here is what keeps a
+    /// bad cell coordinate or background size from becoming an out-of-bounds device read.
+    func validatedCount(_ c: Contents, _ u: FrameUniforms, gray: Atlas, color: Atlas, target: MTLTexture) -> Int? {
+        guard c.cols > 0, c.rows > 0, c.cols <= Int(UInt16.max), c.rows <= Int(UInt16.max),
+              u.grid == SIMD2(UInt16(c.cols), UInt16(c.rows)),
+              target.pixelFormat == pixelFormat, target.textureType == .type2D, target.sampleCount == 1,
+              target.usage.contains(.renderTarget),
+              target.width > 0, target.height > 0, target.device.registryID == device.registryID else { return nil }
+
+        let shaderIntMax = Float(Int32.max)
+        let floatsAreFinite = (0..<16).allSatisfy { u.projection[$0].isFinite }
+            && (0..<2).allSatisfy { u.screen[$0].isFinite && u.screen[$0] >= 0 && u.screen[$0] <= shaderIntMax
+                && u.cell[$0].isFinite && u.cell[$0] > 0 && u.cell[$0] <= shaderIntMax }
+            && (0..<4).allSatisfy { u.padding[$0].isFinite && u.padding[$0] >= 0 && u.padding[$0] <= shaderIntMax }
+            && u.minContrast.isFinite
+        guard floatsAreFinite else { return nil }
+        let cursorHidden = u.cursorPos == SIMD2<UInt16>(repeating: .max)
+        guard cursorHidden || Int(u.cursorPos.x) < c.cols && Int(u.cursorPos.y) < c.rows
+                && (!u.cursorWide || Int(u.cursorPos.x) + 1 < c.cols) else { return nil }
+
+        func valid(_ a: Atlas, _ format: Atlas.Format) -> Bool {
+            guard a.format == format, a.size >= 2, a.size <= Atlas.maxSize else { return false }
+            let pixels = a.size.multipliedReportingOverflow(by: a.size)
+            guard !pixels.overflow else { return false }
+            let bytes = pixels.partialValue.multipliedReportingOverflow(by: a.format.depth)
+            return !bytes.overflow && a.data.count == bytes.partialValue
+        }
+        guard valid(gray, .grayscale), valid(color, .bgra) else { return nil }
+
+        let cells = c.cols.multipliedReportingOverflow(by: c.rows)
+        guard !cells.overflow else { return nil }
+        let cellBytes = cells.partialValue.multipliedReportingOverflow(by: 4)
+        guard !cellBytes.overflow, cellBytes.partialValue <= device.maxBufferLength, c.bg.count == cellBytes.partialValue else { return nil }
+
+        var count = 0
+        for list in c.lists {
+            let next = count.addingReportingOverflow(list.count)
+            guard !next.overflow else { return nil }
+            count = next.partialValue
+            for e in list {
+                guard e.x >= 0, e.x < c.cols, e.y >= 0, e.y < c.rows,
+                      UInt16(exactly: e.x) != nil, UInt16(exactly: e.y) != nil,
+                      Int16(exactly: e.bearings.x) != nil, Int16(exactly: e.bearings.y) != nil,
+                      e.glyph.x >= 0, e.glyph.y >= 0, e.glyph.width > 0, e.glyph.height > 0,
+                      UInt32(exactly: e.glyph.x) != nil, UInt32(exactly: e.glyph.y) != nil,
+                      UInt32(exactly: e.glyph.width) != nil, UInt32(exactly: e.glyph.height) != nil else { return nil }
+                let right = e.glyph.x.addingReportingOverflow(e.glyph.width)
+                let bottom = e.glyph.y.addingReportingOverflow(e.glyph.height)
+                let atlas = e.glyph.color ? color : gray
+                guard !right.overflow, !bottom.overflow, right.partialValue <= atlas.size, bottom.partialValue <= atlas.size else { return nil }
+            }
+        }
+        let textBytes = count.multipliedReportingOverflow(by: 32)
+        guard !textBytes.overflow, textBytes.partialValue <= device.maxBufferLength else { return nil }
+        return count
     }
 
     /// The atlas as a texture (grayscale: r8, color: bgra8 sRGB), replaced when it grew, re-uploaded
     /// when it changed (syncAtlasTexture).
     func texture(_ a: Atlas, _ cache: inout [Atlas.Format: (texture: MTLTexture, modified: Int)]) -> MTLTexture? {
+        // Metal has no three-channel 8-bit texture format. Treating BGR as BGRA would make
+        // `replace` read a fourth byte per source pixel past each row (and eventually the array).
+        guard a.format == .grayscale || a.format == .bgra else { return nil }
         if let t = cache[a.format], t.modified == a.modified { return t.texture }
         var t = cache[a.format]?.texture
         if t == nil || a.size > t!.width {
@@ -175,12 +273,16 @@ public final class MetalRenderer {
     @discardableResult
     public func draw(_ c: Contents, _ u: FrameUniforms, gray: Atlas, color: Atlas, into target: MTLTexture,
                      completed: (() -> Void)? = nil) -> MTLCommandBuffer? {
+        guard let n = validatedCount(c, u, gray: gray, color: color, target: target) else { return nil }
         guard inflight.wait(timeout: .now() + .milliseconds(250)) == .success else { return nil }
         var committed = false
-        defer { if !committed { inflight.signal() } }
+        stateLock.lock()
+        defer {
+            stateLock.unlock()
+            if !committed { inflight.signal() }
+        }
         let f = next
         next = (next + 1) % frames.count
-        let n = c.count
         let (textBytes, overflow) = n.multipliedReportingOverflow(by: 32)
         guard !overflow, let uniforms = buffer(&frames[f].uniforms, FrameUniforms.size),
               let cells = buffer(&frames[f].cells, c.bg.count), let text = buffer(&frames[f].text, textBytes) else { return nil }
@@ -228,8 +330,8 @@ public final class MetalRenderer {
         images.draw(.aboveText, encoder, image, uniforms)
         encoder.endEncoding()
         commands.addCompletedHandler { [inflight] _ in
-            completed?()
             inflight.signal()
+            completed?()
         }
         committed = true
         commands.commit()
@@ -242,11 +344,22 @@ public final class MetalRenderer {
 /// placement one quad (image_vertex/image_fragment) in its layer. Used under the renderer's draw lock.
 public final class Images {
     public enum Layer { case belowBackground, belowText, aboveText }
+    let lock: NSLock
     var draws = ImageDraws(), textures: [UInt32: (generation: UInt64, texture: MTLTexture)] = [:]
+
+    init(lock: NSLock) { self.lock = lock }
 
     /// The terminal's draws now (under its lock: the images are shared copies, nothing converted).
     public func update(_ t: Terminal, cell: (width: Int, height: Int)) {
-        t.imageDraws(&draws, cellWidth: UInt32(cell.width), cellHeight: UInt32(cell.height))
+        lock.lock()
+        defer { lock.unlock() }
+        guard let width = UInt32(exactly: cell.width), let height = UInt32(exactly: cell.height), width > 0, height > 0 else {
+            draws.draws.removeAll(keepingCapacity: true)
+            draws.images.removeAll(keepingCapacity: true)
+            (draws.belowBackground, draws.belowText, draws.virtual) = (0, 0, false)
+            return
+        }
+        t.imageDraws(&draws, cellWidth: width, cellHeight: height)
     }
 
     /// RGBA8 sRGB textures (imageTextureOptions(.rgba, srgb: true)) for the drawn images that lack
@@ -279,7 +392,11 @@ public final class Images {
         encoder.setVertexBuffer(uniforms, offset: 0, index: 1)
         encoder.setFragmentBuffer(uniforms, offset: 0, index: 1)
         for d in draws.draws[range] {
-            guard let texture = textures[d.image]?.texture else { continue }
+            guard let texture = textures[d.image]?.texture,
+                  d.sourceWidth > 0, d.sourceHeight > 0,
+                  UInt64(d.sourceX) < UInt64(texture.width), UInt64(d.sourceY) < UInt64(texture.height),
+                  UInt64(d.sourceX) + UInt64(d.sourceWidth) <= UInt64(texture.width),
+                  UInt64(d.sourceY) + UInt64(d.sourceHeight) <= UInt64(texture.height) else { continue }
             var quad = SIMD16<Float>(Float(d.x), Float(d.y), Float(d.cellOffsetX), Float(d.cellOffsetY), Float(d.sourceX), Float(d.sourceY),
                                      Float(d.sourceWidth), Float(d.sourceHeight), Float(d.width), Float(d.height), 0, 0, 0, 0, 0, 0)
             encoder.setVertexBytes(&quad, length: 40, index: 0)

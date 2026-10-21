@@ -17,6 +17,7 @@ final class FilePreviewTests: XCTestCase {
         source.file(base + "/assets/logo@2x.png", try Self.png(width: 4, height: 3))
         source.file(base + "/assets/broken.png", "not an image")
         source.file(base + "/data.bin", Data([0x61, 0x62, 0x00, 0x63]))
+        source.file(base + "/malformed.txt", Data([0x61, 0xC0, 0xAF, 0x62]))
         source.file(base + "/big.log", String(repeating: "0123456789abcdef\n", count: 190_000))
 
         let billing = try await loaded(base + "/src/routes/billing.ts", in: source)
@@ -40,6 +41,12 @@ final class FilePreviewTests: XCTestCase {
         let binary = try await loaded(base + "/data.bin", in: source)
         guard case .binary(let size, nil) = binary.kind else { return XCTFail("data.bin: \(binary.kind)") }
         XCTAssertEqual(size, 4)
+
+        let malformed = try await loaded(base + "/malformed.txt", in: source)
+        guard case .binary(let malformedSize, nil) = malformed.kind else {
+            return XCTFail("malformed.txt: \(malformed.kind)")
+        }
+        XCTAssertEqual(malformedSize, 4, "Malformed UTF-8 is not shown as lossy replacement text")
 
         let before = source.calls.count
         let large = try await loaded(base + "/big.log", in: source)
@@ -79,6 +86,7 @@ final class FilePreviewTests: XCTestCase {
             ("scan.tiff", 10, nul, .image),
             ("huge.png", FilePreviewLoader.imageLimit + 1, nul, .binary),
             ("archive.ts", 10, nul, .binary),
+            ("malformed.txt", 2, Data([0xC0, 0xAF]), .binary),
             ("bench.json", limit + 1, nul, .binary),
             ("bench.json", limit + 1, text, .tooLarge),
             ("notes.md", limit + 1, text, .tooLarge),
@@ -103,7 +111,7 @@ final class FilePreviewTests: XCTestCase {
         XCTAssertEqual(recorder.reads.count, 2)
         XCTAssertEqual(recorder.reads[0].length, FilePreviewLoader.sniffLength)
         XCTAssertNil(recorder.reads[0].revision)
-        XCTAssertNil(recorder.reads[1].length)
+        XCTAssertEqual(recorder.reads[1].length, 190_000, "The second read is bounded by the size already verified")
         XCTAssertEqual(recorder.reads[1].offset, 0)
         XCTAssertEqual(recorder.reads[1].revision?.size, 190_000, "The rest of the file is guarded by the first window")
     }
@@ -203,6 +211,10 @@ final class FilePreviewTests: XCTestCase {
         let source = FakeFilesSource.mockupAPI()
         let largePath = base + "/bench.json", binaryPath = base + "/core.bin"
         source.file(largePath, String(repeating: "{\"n\":1}\n", count: 400_000))
+        let malformedPath = base + "/malformed.log"
+        var malformedBytes = Data(repeating: 0x61, count: Int(FilePreviewLoader.textLimit + 1))
+        malformedBytes[9_000] = 0xFF
+        source.file(malformedPath, malformedBytes)
         var bytes = Data(repeating: 0x41, count: 200_000)
         bytes[10] = 0
         source.file(binaryPath, bytes)
@@ -213,6 +225,15 @@ final class FilePreviewTests: XCTestCase {
         XCTAssertEqual(size, 3_200_000)
         XCTAssertEqual(head.utf8.count, 65_536)
         XCTAssertTrue(head.hasPrefix("{\"n\":1}\n"))
+
+        let malformed = try await loaded(malformedPath, in: source)
+        guard case .tooLarge = malformed.kind else { return XCTFail("malformed head: \(malformed.kind)") }
+        await FilePreviewLoader.loadHead(malformed, from: source)
+        guard case .binary(let malformedSize, let malformedHead?) = malformed.kind else {
+            return XCTFail("malformed head: \(malformed.kind)")
+        }
+        XCTAssertEqual(malformedSize, FilePreviewLoader.textLimit + 1)
+        XCTAssertEqual(malformedHead[9_000], 0xFF)
 
         let binary = try await loaded(binaryPath, in: source)
         await FilePreviewLoader.loadHead(binary, from: source)
@@ -363,6 +384,11 @@ final class FilePreviewTests: XCTestCase {
         XCTAssertEqual(String(lines.attributed(1, theme: .standard).characters), lines.cut[1])
         XCTAssertEqual(String(lines.attributed(2, theme: .standard).characters), exact, "a line at the limit shows whole")
         XCTAssertEqual(lines.occurrences(of: "é").first, 1, "find searches the whole line")
+
+        lines.prepare(.init(owner: owner, count: 4, language: "text", theme: .standard)) {
+            "safe\u{202E}txt\u{200D}\u{1B}"
+        }
+        XCTAssertEqual(lines.lines, ["safe⟦RLO⟧txt⟦ZWJ⟧⟦ESC⟧"])
     }
 
     func testFindStepsWrapAround() {

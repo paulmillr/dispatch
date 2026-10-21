@@ -125,14 +125,14 @@ private struct FilePreviewContent: View {
                 .font(.system(size: 12))
                 .foregroundStyle(theme.ink.opacity(0.6))
                 .frame(width: 14)
-            Text(verbatim: preview.name)
+            Text(verbatim: TextRendering.visible(preview.name))
                 .font(theme.typography.font())
                 .foregroundStyle(theme.ink)
                 .lineLimit(1).truncationMode(.middle)
                 .layoutPriority(1)
                 .accessibilityIdentifier("file-preview-name")
-            Text(verbatim: FilesFormatting.meta(preview, root: root, home: session.home ?? session.source?.home,
-                                                 now: System.date()))
+            Text(verbatim: TextRendering.visible(FilesFormatting.meta(
+                preview, root: root, home: session.home ?? session.source?.home, now: System.date())))
                 .font(theme.typography.font(offset: -1.5))
                 .foregroundStyle(theme.muted)
                 .lineLimit(1).truncationMode(.tail)

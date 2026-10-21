@@ -94,6 +94,14 @@ struct SettingsView: View {
                     }
                 }
 
+                if let watch = composition.watch {
+                    Section {
+                        LabeledContent("Apple Watch") { Text(watch.status.pairing.label) }
+                    } footer: {
+                        Text(Self.watchFooter(watch.status.pairing))
+                    }
+                }
+
                 Section {
                     ForEach(MobileComposition.Removal.allCases) { removal in
                         Button(removal.title, role: .destructive) { confirmingRemoval = removal }
@@ -117,6 +125,17 @@ struct SettingsView: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
             }
+        }
+    }
+}
+
+extension SettingsView {
+    /// Under the Apple Watch row (docs/watch.md, Consent): uninstalling the watch app is the off switch.
+    static func watchFooter(_ pairing: WatchPairing) -> String {
+        switch pairing {
+        case .notPaired: "Pair an Apple Watch to see your agents and answer them from your wrist."
+        case .notInstalled: "Install Dispatch from the Watch app on this iPhone to see your agents and answer them from your wrist."
+        case .installed: "Your watch shows your agents and spaces. Opening a conversation there connects its host from this iPhone, also in the background; remove Dispatch from the watch to stop that."
         }
     }
 }
@@ -168,8 +187,8 @@ extension MobileComposition {
         }
         var message: String {
             switch self {
-            case .everything: "Removes every host, the keys and passwords in the Keychain, trusted host keys, read markers, cached lists, drafts, queued messages and remembered models from this iPhone. Nothing changes on your hosts."
-            case .keepingKeys: "Removes every host, their passwords, trusted host keys, read markers, cached lists, drafts, queued messages and remembered models from this iPhone. Your SSH keys and their passphrases stay, for new hosts. Nothing changes on your hosts."
+            case .everything: "Removes every host, the keys and passwords in the Keychain, trusted host keys, read markers, cached lists, drafts, queued messages and remembered models from this \(MobileDevice.name). Nothing changes on your hosts."
+            case .keepingKeys: "Removes every host, their passwords, trusted host keys, read markers, cached lists, drafts, queued messages and remembered models from this \(MobileDevice.name). Your SSH keys and their passphrases stay, for new hosts. Nothing changes on your hosts."
             }
         }
     }

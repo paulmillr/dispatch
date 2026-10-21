@@ -72,6 +72,7 @@ enum CodeSyntax {
 
     /// `code` as attributed text in the palette (no font).
     static func attributed(_ code: String, language: String) -> NSAttributedString {
+        let code = TextRendering.visible(code)
         let result = NSMutableAttributedString(string: code, attributes: [.foregroundColor: CodePalette.ink])
         for token in tokens(code, language: language) {
             result.addAttribute(.foregroundColor, value: token.role.uiColor, range: token.range)
@@ -82,6 +83,7 @@ enum CodeSyntax {
     /// `code` cut into lines, each as attributed text in the palette (SwiftUI colours): one pass over the whole text, so
     /// a string or comment that spans lines keeps its colour on every line.
     static func lines(_ code: String, language: String) -> [AttributedString] {
+        let code = TextRendering.visible(code)
         let source = code as NSString
         var lines: [AttributedString] = []
         var starts: [Int] = []

@@ -217,7 +217,7 @@ final class AttentionCoordinator: NSObject, UNUserNotificationCenterDelegate {
     /// Native banners choose their own wrapping; keep the excerpt short enough
     /// for roughly two lines, without changing or summarizing the agent's words.
     static func preview(_ text: String) -> String {
-        let blocks = ChatMarkdownBlock.parse(String(text.prefix(8192)))
+        let blocks = ChatMarkdownBlock.parse(TextRendering.visible(TextRendering.prefix(text, scalars: 8_192).text))
         let plain = blocks.compactMap { block -> String? in
             let source: String
             switch block.kind {
@@ -230,7 +230,8 @@ final class AttentionCoordinator: NSObject, UNUserNotificationCenterDelegate {
             return value.map { String($0.characters) } ?? source
         }.joined(separator: " ")
         let compact = plain.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        return compact.count > 160 ? String(compact.prefix(159)) + "…" : compact
+        let bounded = TextRendering.prefix(compact, scalars: 159)
+        return bounded.text + (bounded.truncated ? "…" : "")
     }
 
     func notificationRequest(for entry: AttentionEntry) -> UNNotificationRequest? {

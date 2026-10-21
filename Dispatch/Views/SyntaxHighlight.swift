@@ -32,6 +32,7 @@ enum SyntaxHighlight {
 
     struct Token { let range: NSRange; let color: Color }
     static func text(_ code: String, language hint: String, theme: ChatTheme = .standard) -> AttributedString {
+        let code = TextRendering.visible(code)
         var result = AttributedString(code)
         result.foregroundColor = theme.ink
         for token in tokens(code, language: hint, theme: theme) {
@@ -162,8 +163,10 @@ struct ChatCodeBlock: View {
     var title: String?
     var firstLine: Int?
     var body: some View {
-        let preview = String(code.prefix(32_768))
-        let shown = firstLine != nil && preview.hasSuffix("\n") ? String(preview.dropLast()) : preview
+        let preview = TextRendering.prefix(code, scalars: 32_768)
+        let shown = firstLine != nil && preview.text.hasSuffix("\n") ? String(preview.text.dropLast()) : preview.text
+        let rawLabel = title ?? (language == "text" ? "Text" : language)
+        let label = TextRendering.visible(TextRendering.prefix(rawLabel, scalars: 128).text)
         // Formatting depends on the content, not the viewport. Capture it outside
         // GeometryReader so resizing only lays out the existing attributed text.
         let highlighted = SyntaxHighlight.text(shown.isEmpty ? " " : shown, language: language, theme: theme)
@@ -174,12 +177,12 @@ struct ChatCodeBlock: View {
         let scroller = NSScroller.preferredScrollerStyle == .legacy ? NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy) : 0
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text(title ?? (language == "text" ? "Text" : language)).foregroundStyle(theme.muted)
+                Text(label).foregroundStyle(theme.muted)
                 Spacer()
                 Button {
                     NSPasteboard.general.clearContents(); NSPasteboard.general.setString(code, forType: .string)
                 } label: { Image(systemName: "doc.on.doc") }
-                    .buttonStyle(.plain).help("Copy \(title ?? "code")").accessibilityLabel("Copy \(title ?? "code")")
+                    .buttonStyle(.plain).help("Copy \(label)").accessibilityLabel("Copy \(label)")
             }.font(theme.typography.detail).padding(.horizontal, 12).padding(.vertical, 8)
                 .background(theme.window)
             GeometryReader { geometry in
@@ -197,7 +200,7 @@ struct ChatCodeBlock: View {
                     .frame(minWidth: max(0, geometry.size.width - 24), alignment: .leading).padding(12)
             }
             }.frame(height: tall ? 320 : max(44, natural) + scroller)
-            if preview.count < code.count {
+            if preview.truncated {
                 Text("Preview truncated · Copy includes the full text")
                     .font(theme.typography.detail).foregroundStyle(theme.muted).padding(8)
             }

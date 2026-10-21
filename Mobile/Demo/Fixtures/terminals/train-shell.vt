@@ -1,0 +1,15 @@
+[1m[92malex@ai[0m:[1m[94m~/train[0m$ source .venv/bin/activate
+[2m(.venv)[0m [1m[92malex@ai[0m:[1m[94m~/train[0m$ pip list | grep torch
+torch          2.6.0+cu128
+torchaudio     2.6.0+cu128
+torchvision    0.21.0+cu128
+[2m(.venv)[0m [1m[92malex@ai[0m:[1m[94m~/train[0m$ export R=runs/run-0412
+[2m(.venv)[0m [1m[92malex@ai[0m:[1m[94m~/train[0m$ tail -n 4 $R/eval.jsonl
+{"suite":"long-context","len":24576,"recall":0.874}
+{"suite":"long-context","len":32768,"recall":0.702}
+{"suite":"held-out","val_loss":1.988}
+{"suite":"code","pass@1":0.436}
+[2m(.venv)[0m [1m[92malex@ai[0m:[1m[94m~/train[0m$ df -h /data
+Filesystem      Size  Used Avail Use%
+/dev/nvme1n1p1  7.3T  5.1T  1.9T  73%
+[2m(.venv)[0m [1m[92malex@ai[0m:[1m[94m~/train[0m$ 

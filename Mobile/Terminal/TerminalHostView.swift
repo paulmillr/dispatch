@@ -19,6 +19,13 @@ final class TerminalHostView: UIView {
     /// The latched capsule modifiers for the next key (the key capsule's model), and the notice that a key used them.
     var pendingMods: () -> Mods = { [] }
     var onKeySent: (() -> Void)?
+    /// The keyboard's frame in the window changed (nil: no window).
+    var onKeyboardFrame: ((CGRect?) -> Void)?
+    /// Pinned to `keyboardLayoutGuide`, which follows a floating or split keyboard too: the keyboard's real frame.
+    /// The keyboard's notifications cannot say it: a keyboard that comes up floating posts none, and floating a
+    /// docked one posts a hide while it stays on screen.
+    let keyboardTracker = UIView()
+    private var reportedKeyboard: CGRect??
     /// Whether the software keyboard shows while this view is first responder; false keeps hardware keys and the
     /// capsule working with no keyboard on screen.
     var softwareKeyboard = true {
@@ -61,6 +68,13 @@ final class TerminalHostView: UIView {
     var momentumTime: CFTimeInterval = 0
     var momentumPoint = CGPoint.zero
     var draggedHandle: Surface.TouchHandle?
+    /// Presses `pressesBegan` took for the terminal (a chord iPadOS reserves): their ends stay here too.
+    var reservedPresses: Set<UIPress> = []
+    /// The selection came from a pointer (no handles); a long press makes a touch one.
+    var pointerSelection = false
+    /// The scroll, wheel and pointer recognizers (tests check how they are set up).
+    var pointerRecognizers: (pan: UIPanGestureRecognizer, wheel: UIPanGestureRecognizer, click: UILongPressGestureRecognizer,
+                             secondary: UITapGestureRecognizer)?
     /// Runs once, after the first layout with a size (the attachment waits for the view's grid).
     var onSized: (() -> Void)?
     var hasSize: Bool { bounds.width > 0 && bounds.height > 0 && window != nil }
@@ -79,6 +93,23 @@ final class TerminalHostView: UIView {
         presence.onViewEvent = { [weak self] event in self?.handle(event) }
         presence.relayout = { [weak self] in self?.setNeedsLayout() }
         installGestures()
+        installKeyboardTracker()
+        #if DEBUG
+        // `-DispatchHardwareKeyboard YES` stands in for an attached keyboard: no software keyboard either, as with a
+        // real one (and as Chat's composer does), so screenshots show the terminal as a keyboard user sees it. The
+        // capsule's keyboard key still brings it.
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: "DispatchHardwareKeyboard") != nil, defaults.bool(forKey: "DispatchHardwareKeyboard") {
+            // In the initializer its observer does not run: the input view too.
+            softwareKeyboard = false
+            inputView = UIView(frame: .zero)
+        }
+        #endif
+        // The iPad keyboard's shortcut bar would offer Undo, Redo and Paste, which a terminal has no use for or has
+        // in its edit menu and ⌘V; the capsule carries the keys the keyboard lacks. Empty, the bar goes and gives the
+        // rows back (with a hardware keyboard, only the system's minimal bar remains). No effect on an iPhone.
+        inputAssistantItem.leadingBarButtonGroups = []
+        inputAssistantItem.trailingBarButtonGroups = []
         accessibilityLabel = "Terminal"
         accessibilityTraits = .allowsDirectInteraction
     }
@@ -95,8 +126,32 @@ final class TerminalHostView: UIView {
         }
     }
 
+    private func installKeyboardTracker() {
+        keyboardTracker.isHidden = true
+        keyboardTracker.isUserInteractionEnabled = false
+        keyboardTracker.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(keyboardTracker)
+        let guide = keyboardLayoutGuide
+        guide.followsUndockedKeyboard = true
+        NSLayoutConstraint.activate([
+            keyboardTracker.topAnchor.constraint(equalTo: guide.topAnchor),
+            keyboardTracker.bottomAnchor.constraint(equalTo: guide.bottomAnchor),
+            keyboardTracker.leadingAnchor.constraint(equalTo: guide.leadingAnchor),
+            keyboardTracker.trailingAnchor.constraint(equalTo: guide.trailingAnchor),
+        ])
+    }
+
+    /// The tracker's frame in the window, when it changed.
+    private func reportKeyboard() {
+        let frame = window.map { convert(keyboardTracker.frame, to: $0) }
+        guard reportedKeyboard != .some(frame) else { return }
+        reportedKeyboard = .some(frame)
+        onKeyboardFrame?(frame)
+    }
+
     override func layoutSubviews() {
         super.layoutSubviews()
+        reportKeyboard()
         guard bounds.width > 0, bounds.height > 0 else {
             CATransaction.begin()
             CATransaction.setDisableActions(true)

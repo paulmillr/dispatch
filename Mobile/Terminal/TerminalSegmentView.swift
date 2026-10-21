@@ -2,9 +2,10 @@ import SwiftUI
 import UIKit
 
 /// The Terminal segment of a tab (M6a): the terminal fills the space under Tabs' header, the glass key capsule sits
-/// at the bottom (above the keyboard while it shows), and the d-pad's arrow cluster pops up over the terminal's
-/// bottom right while held or pinned. The feed is the tab's terminal node; leaving the segment stops observing it
-/// and never ends anything on the host.
+/// at the bottom (above the keyboard while it is docked; at the bottom under a floating or split one), and the
+/// d-pad's arrow cluster pops up over the terminal's bottom right while held or pinned. On an iPad with a hardware
+/// keyboard the capsule collapses to a small button over the terminal's bottom right, and the terminal gets its rows.
+/// The feed is the tab's terminal node; leaving the segment stops observing it and never ends anything on the host.
 struct TerminalSegmentView: View {
     private let make: @MainActor () -> TerminalController
     /// Holds the controller across view updates (made once, on the first body).
@@ -33,20 +34,34 @@ struct TerminalSegmentView: View {
 
     var body: some View {
         let controller = controller
+        let full = controller.capsuleForm == .full
         TerminalSurfaceView(controller: controller)
             .overlay(alignment: .bottomTrailing) {
-                TerminalDPadCluster(controller: controller)
-                    .padding(.trailing, 14)
-                    .padding(.bottom, 12)
-                    // Over the terminal, which keeps its own (dark) theme in either appearance.
-                    .environment(\.colorScheme, .dark)
+                Group {
+                    if full {
+                        TerminalDPadCluster(controller: controller)
+                            .padding(.trailing, 14)
+                    } else {
+                        TerminalKeysButton(controller: controller)
+                            .padding(.trailing, 10)
+                    }
+                }
+                .padding(.bottom, 12)
+                // Over the terminal, which keeps its own (dark) theme in either appearance.
+                .environment(\.colorScheme, .dark)
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                TerminalKeyCapsule(controller: controller)
-                    .padding(.horizontal, 10)
-                    .padding(.bottom, 8)
-                    .environment(\.colorScheme, .dark)
+                if full {
+                    TerminalKeyCapsule(controller: controller)
+                        .frame(maxWidth: TerminalAdaptation.capsuleMaxWidth(idiom: controller.idiom))
+                        .padding(.horizontal, 10)
+                        .padding(.bottom, 8)
+                        .environment(\.colorScheme, .dark)
+                }
             }
+            // SwiftUI keeps a keyboard inset for a floating (or split) keyboard too, lifting the capsule under it; the
+            // capsule rides only a docked keyboard.
+            .ignoresSafeArea(.keyboard, edges: controller.keyboard == .floating ? .bottom : [])
             .coordinateSpace(.named(TerminalDPadCluster.space))
             .background(Color(controller.hostView.backgroundColor ?? .black))
             .onAppear { controller.appear() }
@@ -77,13 +92,24 @@ struct TerminalKeyCapsule: View {
             key("Tab") { controller.press(.tab) }
             modifier("Alt", .alt)
             dpad
-            Button { controller.toggleKeyboard() } label: {
-                Image(systemName: controller.keyboardVisible ? "keyboard.chevron.compact.down" : "keyboard")
-                    .scaledFont(19, relativeTo: .callout)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .contentShape(Rectangle())
+            if controller.keysCanHide {
+                // A hardware keyboard: the software one stays away; this key folds the capsule into its button.
+                Button { controller.hideKeys() } label: {
+                    Image(systemName: "chevron.down")
+                        .scaledFont(17, relativeTo: .callout)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .contentShape(Rectangle())
+                }
+                .accessibilityLabel("Hide terminal keys")
+            } else {
+                Button { controller.toggleKeyboard() } label: {
+                    Image(systemName: controller.keyboardVisible ? "keyboard.chevron.compact.down" : "keyboard")
+                        .scaledFont(19, relativeTo: .callout)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .contentShape(Rectangle())
+                }
+                .accessibilityLabel(controller.keyboardVisible ? "Hide keyboard" : "Show keyboard")
             }
-            .accessibilityLabel(controller.keyboardVisible ? "Hide keyboard" : "Show keyboard")
         }
         .buttonStyle(KeyCapsuleButtonStyle())
         // A colour, not the hierarchical `.primary`: the d-pad's Canvas draws with it.
@@ -151,6 +177,28 @@ struct TerminalKeyCapsule: View {
             )
             .accessibilityLabel("Arrow keys")
             .accessibilityAddTraits(.isButton)
+    }
+}
+
+/// The collapsed capsule (an iPad with a hardware keyboard): one glass key over the terminal's bottom right that
+/// brings the six keys back (Esc for a keyboard without one, the latches, the d-pad). Its glyph is the capsule's
+/// own keyboard key.
+struct TerminalKeysButton: View {
+    let controller: TerminalController
+    static let side = 44.0
+
+    var body: some View {
+        Button { controller.showKeys() } label: {
+            Image(systemName: "keyboard")
+                .scaledFont(17, relativeTo: .callout)
+                .frame(width: Self.side, height: Self.side)
+                .contentShape(Circle())
+        }
+        .buttonStyle(KeyCapsuleButtonStyle())
+        .foregroundStyle(Color.primary)
+        .glassEffect(.regular.interactive(), in: .circle)
+        .dynamicTypeSize(...DynamicTypeSize.accessibility1)
+        .accessibilityLabel("Show terminal keys")
     }
 }
 

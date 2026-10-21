@@ -100,7 +100,9 @@ public struct KittyPlacement {
         return (x, y, min(sourceWidth > 0 ? sourceWidth : img.width, img.width - x), min(sourceHeight > 0 ? sourceHeight : img.height, img.height - y))
     }
 
-    static func cell(_ t: Terminal) -> (w: UInt32, h: UInt32) { (UInt32(t.widthPx / t.cols), UInt32(t.heightPx / t.rows)) }
+    static func cell(_ t: Terminal) -> (w: UInt32, h: UInt32) {
+        (UInt32(clamping: max(t.widthPx / t.cols, 0)), UInt32(clamping: max(t.heightPx / t.rows, 0)))
+    }
     static func sat(_ a: UInt32, _ b: UInt32) -> UInt32 { let (m, o) = a.multipliedReportingOverflow(by: b); return o ? .max : m }
     static func scale(_ v: UInt32, _ num: UInt32, _ den: UInt32) -> UInt32 {
         den == 0 ? 0 : UInt32(clamping: (UInt64(v) * UInt64(num) + UInt64(den) / 2) / UInt64(den))

@@ -89,9 +89,9 @@ extension ChatConversationSummary {
     }
 
     /// Markdown-free enough for two lines: whitespace collapsed, code fences dropped.
+    /// One line of what the agent said: its Markdown read as text (`ChatMarkdownBlock.plainText`), whitespace collapsed.
     static func preview(_ text: String) -> String {
-        text.components(separatedBy: .newlines).filter { !$0.hasPrefix("```") }.joined(separator: " ")
-            .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        ChatMarkdownBlock.plainText(text).split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
 }
 
@@ -390,6 +390,17 @@ struct ChatConversation: Identifiable, Equatable {
               let time = session.transcript.lastActivity else { return }
         markers.markSeen(host: key.host, conversation: conversation, through: Self.milliseconds(time))
         rebuild()
+    }
+
+    /// The watch showed the thread through `through` (docs/watch.md, Seen): the marker moves there, never past the newest
+    /// record the phone knows of (the row's `lastActivity`) and never back. False: no such row, or nothing to mark.
+    @discardableResult
+    func markSeen(_ key: ChatConversationKey, through: Date) -> Bool {
+        guard let row = conversations.first(where: { $0.key == key }), let latest = row.summary.lastActivity,
+              let conversation = sessions[key]?.conversation ?? row.binding.session.nilIfEmpty else { return false }
+        markers.markSeen(host: key.host, conversation: conversation, through: Self.milliseconds(min(through, latest)))
+        rebuild()
+        return true
     }
 
     func setMuted(_ muted: Bool, _ conversation: ChatConversation) {

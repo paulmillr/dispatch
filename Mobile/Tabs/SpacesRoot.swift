@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 
 /// Where the Spaces stack can go.
@@ -28,9 +29,29 @@ struct TabsContent {
 /// space picker, New space, the Tabs dialogs). Spaces and Agents push onto the same path.
 @MainActor @Observable
 final class SpacesNavigator {
-    var path: [TabsRoute] = []
+    var path: [TabsRoute] = [] {
+        didSet { rememberSplit() }
+    }
     /// The window shows Spaces beside the tab (`MobileSplit`, set by `MobileRoot`): a tab opened replaces the shown one.
-    var split = false
+    var split = false {
+        didSet { rememberSplit() }
+    }
+    /// The split hides its sidebar (`toggleSidebar`): an iPad's does, the Duo's never (`MobileRoot` sets it).
+    var sidebarHides = false
+    /// The iPad split's sidebar is hidden and the tab takes the window (`MobileRoot`, `toggleSidebar`). Only while a tab
+    /// is shown: without one the sidebar is all there is.
+    var sidebarHidden = false {
+        didSet { rememberSplit() }
+    }
+    /// The sidebar is sliding in or out (`toggleSidebar`): the tab keeps its wider width meanwhile (`MobileRoot`).
+    var sidebarSliding = false
+    /// The sidebar as the slide draws it (`toggleSidebar`, `sidebarShownHidden`).
+    var sidebarDrawnHidden = false
+    /// Which slide `sidebarSliding` waits for: one started over another ends it, not the first one's completion.
+    @ObservationIgnored var sidebarSlides = 0
+    /// Where the iPad split's tab and sidebar are kept across launches (`SpacesNavigator+Sidebar`); nil keeps nothing
+    /// (tests, the scripted demo, the Spaces sample).
+    @ObservationIgnored let memory: UserDefaults?
     var editing = false
     var picking = false
     var newSpace: NewSpaceRequest?
@@ -39,8 +60,9 @@ final class SpacesNavigator {
     let model: MobileTabs
     let actions: TabsActions
 
-    init(model: MobileTabs) {
+    init(model: MobileTabs, memory: UserDefaults? = nil) {
         self.model = model
+        self.memory = memory
         actions = TabsActions(model: model)
         actions.closed = { [weak self] in self?.closed($0) }
     }
@@ -149,7 +171,8 @@ final class SpacesNavigator {
         path.append(.space(space.ref))
     }
 
-    /// What closed leaves the stack: a space takes its tabs and details with it.
+    /// What closed leaves the stack: a space takes its tabs and details with it. With no tab left to show, a hidden
+    /// sidebar comes back for good, so the next tab opened does not arrive without it.
     func closed(_ target: TabsActions.Target) {
         path.removeAll { route in
             switch (target, route) {
@@ -159,6 +182,7 @@ final class SpacesNavigator {
             default: false
             }
         }
+        if splitPath.tab == nil { sidebarHidden = false }
     }
 
     #if DEBUG
@@ -353,10 +377,33 @@ private struct SpacesHome: View {
 struct SpacesToolbar: ToolbarContent {
     @Bindable var model: MobileTabs
     @Binding var editing: Bool
+    /// The split's sidebar: the section's name leads the row, so the capsule joins Edit at its end.
+    var capsuleTrailing = false
+    /// The narrow sidebar: Edit as a glyph, the row's three controls and the name in 263 points.
+    var glyphEdit = false
 
     var body: some ToolbarContent {
-        if !model.workspaces.isEmpty {
-            ToolbarItem(placement: .topBarLeading) {
+        if !model.workspaces.isEmpty, glyphEdit {
+            // One item, capsule and a plain Edit glyph: as two items (Edit in its platter) the bar folded both into
+            // its "…" menu beside the name in 263 points.
+            ToolbarItem(placement: .topBarTrailing) {
+                HStack(spacing: 6) {
+                    TabsCapsule(tree: $model.tree, query: $model.query, editing: editing)
+                    Button { editing.toggle() } label: {
+                        Image(systemName: editing ? "checkmark" : "pencil")
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(editing ? Color.dispatchPink : .primary)
+                            .frame(width: 32, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(editing ? "Done" : "Edit")
+                }
+                .fixedSize()
+            }
+            .sharedBackgroundVisibility(.hidden)
+        } else if !model.workspaces.isEmpty {
+            ToolbarItem(placement: capsuleTrailing ? .topBarTrailing : .topBarLeading) {
                 TabsCapsule(tree: $model.tree, query: $model.query, editing: editing)
             }
             .sharedBackgroundVisibility(.hidden)
@@ -389,6 +436,8 @@ struct TabsCapsule: View {
                     .frame(width: 40, height: 36)
                     .background(shown ? (query.filtering ? Color.lensOnTint : Color.lens) : .clear, in: Capsule())
                     .contentShape(Capsule())
+                    .contentShape(.hoverEffect, Capsule())
+                    .hoverEffect(.highlight)
             }
             .allowsHitTesting(!editing)
             .accessibilityLabel("Spaces")
@@ -415,6 +464,8 @@ struct TabsCapsule: View {
                     .frame(width: 22, height: 22)
                     .frame(width: 40, height: 36)
                     .contentShape(Capsule())
+                    .contentShape(.hoverEffect, Capsule())
+                    .hoverEffect(.highlight)
             }
             .accessibilityLabel(query.filtering ? "Sort and filter, showing \(query.filter.title)" : "Sort and filter")
         }
@@ -643,17 +694,15 @@ struct SpacesHostHeader: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("Remove \(section.host.name)")
             }
-            Text(section.host.name)
-                .font(.title3.bold())
-                .foregroundStyle(Color(uiColor: .label))
-                .lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
-                .accessibilityAddTraits(.isHeader)
-            HostGlyph(host: section.host.glyphRecord, size: 18)
-                .foregroundStyle(section.host.tint)
-                .opacity(section.host.state == .offline ? 0.5 : 1)
-                .accessibilityHidden(true)
-            if let multiplexer = section.host.multiplexer {
-                MultiplexerMark(name: multiplexer)
+            if column != nil, UIDevice.current.userInterfaceIdiom == .pad {
+                // An iPad's sidebar (320 points, 280 beside the window controls): the chip gives way before the name,
+                // which edit mode's controls left as "…" beside it.
+                ViewThatFits(in: .horizontal) {
+                    identity(chip: true)
+                    identity(chip: false)
+                }
+            } else {
+                identity(chip: true)
             }
             Spacer(minLength: 0)
             if !editing, section.collapsed, section.unread > 0 {
@@ -694,6 +743,24 @@ struct SpacesHostHeader: View {
         .padding(.bottom, 2)
     }
 
+    /// The host's name and glyph, and the multiplexer's chip when `chip` and one is known.
+    private func identity(chip: Bool) -> some View {
+        HStack(spacing: 8) {
+            Text(section.host.name)
+                .font(.title3.bold())
+                .foregroundStyle(Color(uiColor: .label))
+                .lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
+                .accessibilityAddTraits(.isHeader)
+            HostGlyph(host: section.host.glyphRecord, size: 18)
+                .foregroundStyle(section.host.tint)
+                .opacity(section.host.state == .offline ? 0.5 : 1)
+                .accessibilityHidden(true)
+            if chip, let multiplexer = section.host.multiplexer {
+                MultiplexerMark(name: multiplexer)
+            }
+        }
+    }
+
     private var disclosure: some View {
         Image(systemName: section.collapsed ? "chevron.right" : "chevron.down")
             .font(.system(size: 13, weight: .semibold))
@@ -704,6 +771,8 @@ struct SpacesHostHeader: View {
     }
 
     @Environment(\.dynamicTypeSize) private var typeSize
+    /// Set in the split's sidebar only (`MobileRoot`); the phone's screens and the Duo's keep their layout.
+    @Environment(\.tabsColumnWidth) private var column
 }
 
 /// M2b's line for a connected host without spaces: New space, which opens the form for this host; held, the quick

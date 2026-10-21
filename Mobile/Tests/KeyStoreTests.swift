@@ -239,7 +239,8 @@ final class KeyStoreTests: XCTestCase {
         XCTAssertNil(try vault.secret(for: "password:test", reason: "test"))
     }
 
-    /// Where the simulator offers a Secure Enclave, its key is presented as `ecdsa-sha2-nistp256` and signs.
+    /// Where the simulator offers a Secure Enclave, its key is presented as `ecdsa-sha2-nistp256` and signs; never
+    /// unattended (its handle reads after first unlock, but the enclave would ask Face ID).
     func testSecureEnclaveKeyWhenAvailable() async throws {
         try XCTSkipUnless(SecureEnclave.isAvailable, "No Secure Enclave on this simulator")
         let keys = KeyStore(url: nil, vault: MemoryVault(), keyProtection: .none)
@@ -248,5 +249,99 @@ final class KeyStoreTests: XCTestCase {
         XCTAssertTrue(record.publicKey.hasPrefix("ecdsa-sha2-nistp256 "))
         guard case .secureEnclaveP256(let key)? = try await keys.material(for: record.id) else { return XCTFail() }
         XCTAssertEqual(SSHKeyEncoding.p256Blob(key.publicKey), record.blob)
+        do {
+            _ = try await keys.material(for: record.id, interactive: false)
+            XCTFail("an enclave key is never used unattended")
+        } catch {
+            XCTAssertEqual(error as? SecretVaultError, .interactionNotAllowed)
+        }
+    }
+
+    // MARK: Keychain classes
+
+    private static func service() -> String { "yachts.dispatch.mobile.tests." + UUID().uuidString }
+
+    /// The item's `kSecAttrAccessible`, read from its attributes.
+    private static func accessible(_ service: String, _ account: String) -> String? {
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
+                                    kSecAttrAccount as String: account, kSecReturnAttributes as String: true,
+                                    kSecMatchLimit as String: kSecMatchLimitOne]
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess else { return nil }
+        return (result as? [String: Any])?[kSecAttrAccessible as String] as? String
+    }
+
+    /// An item as builds before after-first-unlock stored every secret without Face ID.
+    private static func addWhenUnlocked(_ service: String, _ account: String) -> OSStatus {
+        let control = SecAccessControlCreateWithFlags(nil, kSecAttrAccessibleWhenUnlockedThisDeviceOnly, [], nil)
+        let item: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
+                                   kSecAttrAccount as String: account, kSecAttrSynchronizable as String: false,
+                                   kSecValueData as String: Data(account.utf8), kSecAttrAccessControl as String: control as Any]
+        return SecItemAdd(item as CFDictionary, nil)
+    }
+
+    private static let whenUnlocked = kSecAttrAccessibleWhenUnlockedThisDeviceOnly as String
+    private static let afterFirstUnlock = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly as String
+
+    /// Passwords and passphrases read after the first unlock (a watch request with the phone locked logs in); keys
+    /// behind Face ID only while unlocked.
+    func testKeychainClassPerProtection() throws {
+        XCTAssertEqual(KeyProtection.none.accessible as String, Self.afterFirstUnlock)
+        XCTAssertEqual(KeyProtection.biometry.accessible as String, Self.whenUnlocked)
+        let service = Self.service(), vault = KeychainVault(service: service)
+        defer { try? vault.removeAll() }
+        try vault.set(Data("pw".utf8), for: "password:test", protection: .none)
+        XCTAssertEqual(Self.accessible(service, "password:test"), Self.afterFirstUnlock)
+        XCTAssertEqual(try vault.secret(for: "password:test", reason: "test", interactive: false), Data("pw".utf8))
+    }
+
+    /// The launch's move to after first unlock: only the named when-unlocked items, their secrets kept, once.
+    func testKeychainMigrationMovesOnlyTheNamedItems() throws {
+        let service = Self.service(), vault = KeychainVault(service: service)
+        defer { try? vault.removeAll() }
+        for account in ["password:a", "passphrase:b", "key:c"] {
+            XCTAssertEqual(Self.addWhenUnlocked(service, account), errSecSuccess)
+        }
+        try vault.set(Data("d".utf8), for: "password:d", protection: .none)
+        let notKeys: (String) -> Bool = { !$0.hasPrefix("key:") }
+        XCTAssertEqual(try vault.migrate(moving: notKeys), KeychainVault.Migration(moved: 2, failed: 0))
+        XCTAssertEqual(Self.accessible(service, "password:a"), Self.afterFirstUnlock)
+        XCTAssertEqual(Self.accessible(service, "passphrase:b"), Self.afterFirstUnlock)
+        XCTAssertEqual(Self.accessible(service, "key:c"), Self.whenUnlocked, "not named: untouched")
+        XCTAssertEqual(Self.accessible(service, "password:d"), Self.afterFirstUnlock)
+        XCTAssertEqual(try vault.secret(for: "password:a", reason: "test", interactive: false), Data("password:a".utf8))
+        XCTAssertEqual(try vault.secret(for: "key:c", reason: "test", interactive: false), Data("key:c".utf8))
+        XCTAssertEqual(try vault.migrate(moving: notKeys), KeychainVault.Migration(), "a second run moves nothing")
+    }
+
+    /// `KeyStore` names passwords, passphrases and Secure Enclave handles, and keys only where they are not behind
+    /// Face ID: a key stored with `biometry` is never touched.
+    func testKeyStoreMigratesNoKeyBehindFaceID() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("KeyStoreTests-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("keys.json")
+        let record = try KeyStore(url: url, vault: MemoryVault(), keyProtection: .biometry, secureEnclaveAvailable: false)
+            .generateED25519(label: "phone")
+        let host = UUID()
+        let service = Self.service(), vault = KeychainVault(service: service)
+        defer { try? vault.removeAll() }
+        let password = KeyStore.passwordAccount(host), passphrase = KeyStore.passphraseAccount(record.id)
+        let key = KeyStore.privateAccount(record.id)
+        for account in [password, passphrase, key] { XCTAssertEqual(Self.addWhenUnlocked(service, account), errSecSuccess) }
+
+        let device = KeyStore(url: url, vault: vault, keyProtection: .biometry, secureEnclaveAvailable: false)
+        let moved = await device.migrateSecrets()
+        XCTAssertEqual(moved, KeychainVault.Migration(moved: 2, failed: 0))
+        XCTAssertEqual(Self.accessible(service, password), Self.afterFirstUnlock)
+        XCTAssertEqual(Self.accessible(service, passphrase), Self.afterFirstUnlock)
+        XCTAssertEqual(Self.accessible(service, key), Self.whenUnlocked)
+
+        // The simulator's keys have no Face ID: they move too.
+        let simulator = KeyStore(url: url, vault: vault, keyProtection: .none, secureEnclaveAvailable: false)
+        let rest = await simulator.migrateSecrets()
+        XCTAssertEqual(rest, KeychainVault.Migration(moved: 1, failed: 0))
+        XCTAssertEqual(Self.accessible(service, key), Self.afterFirstUnlock)
+        let none = await KeyStore(url: nil, vault: MemoryVault(), keyProtection: .none).migrateSecrets()
+        XCTAssertNil(none, "no Keychain, nothing to move")
     }
 }

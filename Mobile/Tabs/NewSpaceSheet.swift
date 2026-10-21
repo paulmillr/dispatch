@@ -115,7 +115,7 @@ struct NewSpaceSheet: View {
             .scrollDismissesKeyboard(.interactively)
         }
         .background(Color(uiColor: .secondarySystemBackground))
-        .presentationDragIndicator(.visible)
+        .mobileSheetGrabber()
         .presentationBackground(Color(uiColor: .secondarySystemBackground))
         .onAppear { focus = .name }
         .task(id: workspace?.id) {
@@ -472,7 +472,7 @@ struct NewTabPicker: View {
                 }
             }
         }
-        .presentationDetents([.medium, .large])
+        .mobilePhoneDetents([.medium, .large])
     }
 }
 

@@ -73,9 +73,21 @@ public final class KittyFiles: KittyMedia {
         var st = stat()
         guard fstat(fd, &st) == 0, st.st_size > 0 else { throw .invalidData }
         let size = Int(st.st_size), r = try range(size)
-        guard let map = mmap(nil, size, PROT_READ, MAP_SHARED, fd, 0), map != MAP_FAILED else { throw .invalidData }
-        defer { munmap(map, size) }
-        return Array(UnsafeRawBufferPointer(start: map + r.lowerBound, count: r.count))
+        guard r.lowerBound >= 0, r.upperBound <= size, r.count <= KittyError.maxSize else { throw .invalidData }
+        if r.isEmpty { return [] }
+        // Darwin POSIX shared-memory descriptors are mmap-only (pread returns ESPIPE). Map only
+        // the bounded requested range rather than the producer-controlled full object. The file
+        // offset must be page aligned, so include the short prefix and copy only the requested
+        // bytes. Remote sessions never enable this host-media transport.
+        let page = Int(sysconf(_SC_PAGESIZE))
+        guard page > 0 else { throw .invalidData }
+        let offset = r.lowerBound - r.lowerBound % page
+        let delta = r.lowerBound - offset
+        let mapped = delta.addingReportingOverflow(r.count)
+        guard !mapped.overflow,
+              let map = mmap(nil, mapped.partialValue, PROT_READ, MAP_SHARED, fd, off_t(offset)), map != MAP_FAILED else { throw .invalidData }
+        defer { munmap(map, mapped.partialValue) }
+        return Array(UnsafeRawBufferPointer(start: map + delta, count: r.count))
     }
 
     #if canImport(Darwin)
@@ -204,15 +216,18 @@ extension KittySystem {
             stream.pointee.src_ptr = input.baseAddress!
             stream.pointee.src_size = input.count
             while true {
+                let inputBefore = stream.pointee.src_size
                 let status = buf.withUnsafeMutableBufferPointer { b -> compression_status in
                     stream.pointee.dst_ptr = b.baseAddress!
                     stream.pointee.dst_size = b.count
                     return compression_stream_process(stream, Int32(COMPRESSION_STREAM_FINALIZE.rawValue))
                 }
-                out += buf[..<(buf.count - stream.pointee.dst_size)]
+                let produced = buf.count - stream.pointee.dst_size
+                out += buf[..<produced]
                 if out.count > limit { return false }
                 if status == COMPRESSION_STATUS_END { return true }
                 if status != COMPRESSION_STATUS_OK { return false }
+                if produced == 0, stream.pointee.src_size == inputBefore { return false }
             }
         }
         // Like Ghostty's reader: what follows the stream (the Adler-32, anything else) isn't checked.

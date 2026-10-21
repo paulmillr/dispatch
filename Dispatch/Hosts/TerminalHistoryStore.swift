@@ -113,9 +113,11 @@ enum PrivateFile {
         let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         do {
             #if os(iOS)
-            // Class A: drafts, queued prompts, host metadata and terminal history are unavailable while locked. Set it
-            // on the temporary inode before content is written; the atomic rename retains the protection class.
-            try FileManager.default.setAttributes([.protectionKey: FileProtectionType.complete],
+            // Class C, readable once the phone was unlocked since it started: a watch request or background refresh
+            // with the phone locked reads the hosts, keys and trusted host keys and writes the queue, markers and
+            // cache (class A failed every read then, and a store moved its unreadable file aside). Set on the
+            // temporary inode before content is written; the atomic rename retains the protection class.
+            try FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
                                                   ofItemAtPath: temporary.path)
             #endif
             try body(handle)

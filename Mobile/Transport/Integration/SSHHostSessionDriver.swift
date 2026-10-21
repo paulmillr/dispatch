@@ -306,7 +306,7 @@ extension HostKeyOffer {
 /// A key deleted since is dropped, never used for another login.
 actor KeyCache {
     private var cached: SSHKey?
-    static let missing = "This host's key is no longer on this iPhone. Choose another in Edit."
+    static var missing: String { "This host's key is no longer on this \(MobileDevice.name). Choose another in Edit." }
 
     func key(_ context: HostSessionContext) async throws -> SSHKey {
         if let cached {

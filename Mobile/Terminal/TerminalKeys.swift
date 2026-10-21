@@ -181,6 +181,14 @@ struct KeyCapsuleModel: Equatable, Sendable {
 
     mutating func keyUp() { release() }
 
+    /// Everything off: latches released, the cluster hidden (the capsule collapsed).
+    mutating func reset() {
+        ctrl = .off
+        alt = .off
+        lastTap = nil
+        hideCluster()
+    }
+
     /// Hides the cluster (the keyboard or the view went away).
     mutating func hideCluster() {
         cluster = .hidden

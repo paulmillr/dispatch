@@ -61,8 +61,7 @@ final class HelperSession: @unchecked Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-      // `features` is written only when the helper accepted some: the Mac names none, so its records never carry it;
-      // the iPhone's launch cache keeps them with the hello.
+      // `features` is written only when the helper accepted some; the iPhone's launch cache keeps them with the hello.
       case version, os, arch, plugins, unavailable_harnesses, ops, account, identity, terminal, process, features
       case limit = "frame_limit"
       case chunkKind = "chunk_kind"
@@ -87,6 +86,10 @@ final class HelperSession: @unchecked Sendable {
       try fields.encodeIfPresent(features, forKey: .features)
     }
   }
+
+  /// The opt-in hello features the Mac names (docs/ios.md lists the iPhone's).
+  static let features = ["terminals.coalesce"]
+  private struct Hello: Encodable, Sendable { let features: [String] }
 
   // The Mac app runs its helper as a child process; the iPhone app reaches helpers over SSH channels only.
   #if canImport(AppKit)
@@ -145,7 +148,10 @@ final class HelperSession: @unchecked Sendable {
     self.connection = connection
     self.exited = exited
     do {
-      info = try await connection.request("hello", params: [String: String]())
+      // Features the Mac asks for (helper/PROTOCOL.md, Features). `terminals.coalesce`: the helper joins a terminal's
+      // output notifications for up to 4 ms, so a redrawing agent costs one frame per batch instead of one per tmux
+      // output line (fewer wakeups here, fewer packets over SSH). A helper that knows no feature answers as before.
+      info = try await connection.request("hello", params: Hello(features: Self.features))
       guard info.version == HelperBinary.version else {
         throw HelperFailure(
           code: "protocol_version", message: "The helper protocol is incompatible.")

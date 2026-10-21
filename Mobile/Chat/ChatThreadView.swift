@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// A conversation's Chat segment (M4a, M3b, M4b, M4c, M5a, M5c, M5f): the link banner, the thread, the thinking row and
 /// queue, and the composer. The Tabs stream's `TabScreen` draws the header above it (back pill, title, segmented
@@ -13,7 +14,8 @@ struct ChatThreadView: View {
     var directory: String?
     /// The host's homes, for "~" in M3b's "Runs in …" (`HomePath`).
     var homes = HomePath(account: nil)
-    /// The composer takes focus on appear (M3b, a new chat).
+    /// The composer takes focus on appear (M3b, a new chat). In the split's detail column with a hardware keyboard it
+    /// does anyway (`focusesOnAppear`).
     var focusOnAppear = false
     /// The newest result is on screen (ChatConversations.markSeen).
     var seen: () -> Void = {}
@@ -30,6 +32,21 @@ struct ChatThreadView: View {
     @State private var settings = false
     @State private var column: CGFloat = 370
     @FocusState private var focused: Bool
+    /// The software keyboard floats (an iPad): the composer stays at the bottom (`MobileKeyboardReader`).
+    @State private var floatingKeyboard = false
+    @Environment(\.tabsSplitDetail) private var splitDetail
+    @ScaledMetric(relativeTo: .callout) private var measure = ChatMeasure.standard
+
+    /// Whether the composer takes focus when the thread appears: when asked (a new chat, M3b), or when the tab opens in
+    /// the split's detail column while a hardware keyboard is attached, so typing goes straight to the agent as on the
+    /// Mac. A touch-only iPad gets no software keyboard it did not ask for, and a phone's stack is unchanged.
+    static func focusesOnAppear(requested: Bool, splitDetail: Bool, hardwareKeyboard: Bool) -> Bool {
+        requested || (splitDetail && hardwareKeyboard)
+    }
+
+    private var multiline: Binding<Bool> {
+        Binding(get: { session.drafts.current.multiline }, set: { session.drafts.edit(multiline: $0) })
+    }
 
     private var draft: Binding<String> {
         Binding(get: { session.drafts.current.text }, set: { session.drafts.edit(text: $0, fromEditor: true) })
@@ -58,16 +75,26 @@ struct ChatThreadView: View {
             .scrollDismissesKeyboard(.interactively)
             .onGeometryChange(for: CGFloat.self, of: { $0.size.width - 32 }) { column = $0 }
             .environment(\.chatColumnWidth, column)
+            .environment(\.chatMeasure, measure)
             CodeComposer(text: draft, placeholder: placeholder, working: session.working && session.phase == .verified,
                          stopping: session.stopping, focus: $focused,
                          send: { session.send() },
                          steer: session.working ? { session.send(steer: true) } : nil,
                          stop: { session.stop() },
-                         dictationOwner: ObjectIdentifier(session))
+                         dictationOwner: ObjectIdentifier(session), multiline: multiline)
         }
         .background(Color.canvas)
+        // A floating keyboard sits over the thread, as the terminal's capsule leaves it: SwiftUI's inset for it lifted
+        // the composer part of the way, under the keyboard. The user moves the keyboard; a docked one still raises it.
+        .ignoresSafeArea(.keyboard, edges: floatingKeyboard ? .bottom : [])
+        .background {
+            if UIDevice.current.userInterfaceIdiom == .pad {
+                MobileKeyboardReader { floatingKeyboard = $0 == .floating }
+            }
+        }
         .onAppear {
-            if focusOnAppear { focused = true }
+            if Self.focusesOnAppear(requested: focusOnAppear, splitDetail: splitDetail,
+                                    hardwareKeyboard: HardwareKeyboard.shared.attached) { focused = true }
             if expandSteps { workingExpanded = true }
             if expandQueue { queueExpanded = true }
             seen()
@@ -169,8 +196,9 @@ struct ChatThreadView: View {
             // Claude's thinking, inline and muted as the Mac shows it (not a bubble, never collapsed).
             MobileChatMarkdownView(text: row.item.text, muted: true)
                 .font(.footnote)
-                .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 14)
+                .frame(maxWidth: measure, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .contextMenu { Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = row.item.text } }
         case .notice:
             Text(row.item.text)
@@ -238,6 +266,7 @@ struct ChatThreadView: View {
 /// A small centred note in the thread (paused input, hints, failures).
 struct ChatNote: View {
     let text: String
+    @Environment(\.chatMeasure) private var measure
     var body: some View {
         Text(text)
             .font(.footnote)
@@ -247,6 +276,9 @@ struct ChatNote: View {
             .padding(.vertical, 9)
             .frame(maxWidth: .infinity)
             .background(Color.faintFill, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            // Centred at the readable measure in a wide column.
+            .frame(maxWidth: measure)
+            .frame(maxWidth: .infinity)
             .padding(.top, 4)
     }
 }

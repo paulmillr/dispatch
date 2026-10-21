@@ -10,7 +10,10 @@ import UIKit
 /// `UITextView` that grows with the draft up to a bound and renders its Markdown as you type (`CodeTextView`). With a
 /// fenced block in the draft the slot moves under the text, so the panel spans the field. While the field is focused a
 /// glass key row above the keyboard offers the backtick, the fence and code pairs, and a paste of several lines offers
-/// "Paste as code".
+/// "Paste as code". With a hardware keyboard the keys follow the Mac's composer (`ComposerHardwareKeys`): Return sends
+/// and Shift-Return starts a new line, which puts the draft in editor mode, where Return inserts newlines and ⌘Return
+/// sends; ⌥Return steers, ⌘E toggles editor mode, Esc leaves editor mode, else stops a running turn, else leaves the
+/// field. The key row stays away then: the keyboard has every key it offers.
 struct CodeComposer: View {
     enum Slot: Equatable { case mic, send, stop }
 
@@ -26,8 +29,11 @@ struct CodeComposer: View {
     var attach: () -> Void = {}
     /// Whose dictation the mic starts and shows (the conversation).
     var dictationOwner: AnyHashable = "composer"
+    /// The draft's editor mode (`ChatDraft.multiline`): Return inserts a newline from a hardware keyboard.
+    var multiline: Binding<Bool> = .constant(false)
 
     @State private var editor = CodeEditorModel()
+    @State private var keyboard = HardwareKeyboard.shared
     @ReduceMotion private var reduceMotion
 
     static func slot(text: String, working: Bool, dictating: Bool = false) -> Slot {
@@ -37,6 +43,25 @@ struct CodeComposer: View {
     }
 
     private var dictation: Dictation { .shared }
+
+    /// The key row above the keyboard shows while the field edits, unless a hardware keyboard is attached: then there
+    /// is no software keyboard to ride on and the keys it offers are on the keyboard.
+    static func showsKeyRow(editing: Bool, hardwareKeyboard: Bool) -> Bool { editing && !hardwareKeyboard }
+
+    /// The editor-mode hint shows only where Return means something else in it: with a hardware keyboard.
+    static func showsEditorHint(multiline: Bool, hardwareKeyboard: Bool) -> Bool { multiline && hardwareKeyboard }
+
+    /// Carries out a hardware key's action (the field inserts newlines and leaves focus itself).
+    private func perform(_ action: ComposerKeyAction) {
+        switch action {
+        case .send: send()
+        case .steer: (steer ?? send)()
+        case .stop: stop()
+        case .toggleEditor: multiline.wrappedValue.toggle()
+        case .leaveEditor: multiline.wrappedValue = false
+        case .newline, .resign, .system: break
+        }
+    }
 
     /// The slot sits under the text once the draft holds a fenced block.
     static func stacked(_ text: String) -> Bool { !ComposerFence.scan(text).isEmpty }
@@ -54,12 +79,15 @@ struct CodeComposer: View {
                         .foregroundStyle(Color.primary.opacity(0.75))
                         .frame(width: 34, height: 34)
                         .background(Color.primary.opacity(0.1), in: Circle())
+                        .contentShape(.hoverEffect, Circle())
+                        .hoverEffect(.highlight)
                 }
                 .accessibilityLabel("Attach")
                 .padding(.bottom, 1)
                 VStack(alignment: .trailing, spacing: 6) {
                     HStack(alignment: .bottom, spacing: 6) {
-                        CodeEditorField(text: $text, placeholder: placeholder, focus: focus, editor: editor, send: send)
+                        CodeEditorField(text: $text, placeholder: placeholder, focus: focus, editor: editor, send: send,
+                                        keyState: { (multiline.wrappedValue, working) }, keyAction: perform)
                             .frame(height: editor.height)
                             .focused(focus)
                         if !stacked { slot.padding(.bottom, 4) }
@@ -76,6 +104,22 @@ struct CodeComposer: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
+            .overlay(alignment: .topTrailing) {
+                if dictationStatus == nil, editor.pasteOffer == nil,
+                   Self.showsEditorHint(multiline: multiline.wrappedValue, hardwareKeyboard: keyboard.attached) {
+                    // The Mac's "editor" badge: Return now starts a line, so say what sends.
+                    Text("Editor · ⌘↩ sends")
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Color.primary.opacity(0.08), in: Capsule())
+                        .padding(.trailing, 20)
+                        .alignmentGuide(.top) { $0[.bottom] + 2 }
+                        .accessibilityIdentifier("composer-editor-mode")
+                        .allowsHitTesting(false)
+                }
+            }
             .overlay(alignment: .topLeading) {
                 if let status = dictationStatus {
                     Button { if !dictation.active(dictationOwner) { dictation.dismissError() } } label: {
@@ -110,8 +154,11 @@ struct CodeComposer: View {
                     .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.9, anchor: .bottomLeading)))
                 }
             }
-            if editor.editing {
+            if Self.showsKeyRow(editing: editor.editing, hardwareKeyboard: keyboard.attached) {
+                // On an iPad the terminal capsule's width, centred: six keys spread over a 1,000-point column read
+                // as a phone's row stretched.
                 CodeKeyRow { editor.press($0) }
+                    .frame(maxWidth: CodeKeyRow.maxWidth(idiom: UIDevice.current.userInterfaceIdiom))
                     .padding(.horizontal, 10)
                     .padding(.bottom, 8)
             }
@@ -170,6 +217,8 @@ struct CodeComposer: View {
                 // A 44 point target around the 28 point glyph; the outer padding gives the room back to the layout.
                 .padding(8)
                 .contentShape(Rectangle())
+                .contentShape(.hoverEffect, Circle().inset(by: 8))
+                .hoverEffect(.highlight)
             }
             .buttonStyle(.plain)
             .padding(-8)
@@ -182,6 +231,8 @@ struct CodeComposer: View {
                     .opacity(stopping ? 0.5 : 1)
                     .padding(8)
                     .contentShape(Rectangle())
+                    .contentShape(.hoverEffect, Circle().inset(by: 8))
+                    .hoverEffect(.highlight)
             }
             .buttonStyle(.plain)
             .padding(-8)
@@ -195,6 +246,8 @@ struct CodeComposer: View {
                 .background(Color.dispatchPink, in: Circle())
                 .padding(8)
                 .contentShape(Rectangle())
+                .contentShape(.hoverEffect, Circle().inset(by: 8))
+                .hoverEffect(.highlight)
                 .onTapGesture(perform: send)
                 .onLongPressGesture(minimumDuration: 0.4) { (steer ?? send)() }
                 .accessibilityElement()
@@ -211,6 +264,10 @@ struct CodeComposer: View {
 struct CodeKeyRow: View {
     let press: (ComposerKey) -> Void
     static let height = 44.0
+
+    /// As wide as the terminal's key capsule at most (`TerminalAdaptation.capsuleMaxWidth`): the phone's row spans
+    /// the composer, an iPad's keeps six phone-width keys.
+    static func maxWidth(idiom: UIUserInterfaceIdiom) -> CGFloat { TerminalAdaptation.capsuleMaxWidth(idiom: idiom) }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -297,6 +354,8 @@ struct CodeEditorField: UIViewRepresentable {
     var focus: FocusState<Bool>.Binding
     let editor: CodeEditorModel
     var send: () -> Void
+    var keyState: () -> (multiline: Bool, working: Bool) = { (false, false) }
+    var keyAction: ((ComposerKeyAction) -> Void)? = nil
 
     func makeUIView(context: Context) -> CodeTextView {
         let view = CodeTextView()
@@ -315,6 +374,8 @@ struct CodeEditorField: UIViewRepresentable {
     func updateUIView(_ view: CodeTextView, context: Context) {
         context.coordinator.parent = self
         view.submit = send
+        view.keyState = keyState
+        view.keyAction = keyAction
         if view.placeholder != placeholder { view.placeholder = placeholder }
         if view.textStorage.string != text {
             view.setDraft(text)

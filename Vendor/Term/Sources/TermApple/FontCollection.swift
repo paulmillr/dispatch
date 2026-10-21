@@ -57,6 +57,10 @@ public final class FontCollection {
     /// with bold/italic traits, like Config.finalize), then the embedded fonts. Throws where Ghostty
     /// fails to make the surface's font grid.
     public init(families: [String], points: Float, dpi: Int, synthetic: Bool = true) throws {
+        // Config is a public value and its float parser deliberately accepts inf/nan. Keep those
+        // values (and extreme host DPI) out of CoreText's allocation and transform paths.
+        let points = points.isFinite ? min(max(points, 1), 512) : 13
+        let dpi = min(max(dpi, 1), 1152)
         (self.points, self.dpi) = (points, dpi)
         for style in Style.allCases {
             for family in families {
@@ -120,10 +124,12 @@ public final class FontCollection {
             primary = Face(face(e), pixels: CTFontGetSize(face(e))).metrics
         }
         let p = primary!, (ps, fs) = (1 / p.pxPerEm, 1 / f.pxPerEm)
-        if f.icWidth == f.icWidthOrFallback { return p.icWidthOrFallback * ps / (f.icWidthOrFallback * fs) }
-        if f.exHeight == f.ex { return p.ex * ps / (f.ex * fs) }
-        if f.capHeight == f.cap { return p.cap * ps / (f.cap * fs) }
-        return p.lineHeight * ps / (f.lineHeight * fs)
+        let raw: Double
+        if f.icWidth == f.icWidthOrFallback { raw = p.icWidthOrFallback * ps / (f.icWidthOrFallback * fs) }
+        else if f.exHeight == f.ex { raw = p.ex * ps / (f.ex * fs) }
+        else if f.capHeight == f.cap { raw = p.cap * ps / (f.cap * fs) }
+        else { raw = p.lineHeight * ps / (f.lineHeight * fs) }
+        return raw.isFinite && raw > 0 ? min(max(raw, 0.01), 100) : 1
     }
 
     /// Styles without faces (Collection.completeStyles), from the first regular text face: italic =

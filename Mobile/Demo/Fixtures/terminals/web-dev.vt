@@ -1,0 +1,19 @@
+[38;5;114malex@mba2[0m [38;5;75m~/src/web[0m [2m%[0m pnpm dev
+
+> web@0.18.2 dev
+> next dev --turbopack
+
+  [1m[35m▲ Next.js 15.2.3[0m (Turbopack)
+  - Local:   http://localhost:3000
+  - Network: http://192.168.1.24:3000
+
+ [32m✓[0m Ready in 1.4s
+ [38;5;244m○[0m Compiling / ...
+ [32m✓[0m Compiled / in 2.1s
+ GET / [32m200[0m in 2318ms
+ [38;5;244m○[0m Compiling /settings ...
+ [32m✓[0m Compiled /settings in 980ms
+ GET /settings [32m200[0m in 412ms
+ GET /api/session [32m200[0m in 38ms
+ POST /api/preferences [32m200[0m in 61ms
+ GET /settings [32m200[0m in 74ms

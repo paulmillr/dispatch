@@ -12,10 +12,10 @@ struct ChatToolOutput: View {
         var remaining = 32_768
         var visible: [ToolOutput.Block] = []
         for block in blocks.prefix(40) {
-            let text = String(block.text.prefix(remaining))
-            visible.append(.init(kind: block.kind, text: text))
-            remaining -= text.count
-            if remaining == 0 { return (visible, true) }
+            let bounded = TextRendering.prefix(block.text, scalars: remaining)
+            visible.append(.init(kind: block.kind, text: bounded.text))
+            remaining -= bounded.text.unicodeScalars.count
+            if bounded.truncated || remaining == 0 { return (visible, true) }
         }
         return (visible, visible.count < blocks.count)
     }
@@ -35,7 +35,7 @@ struct ChatToolOutput: View {
                 case .code(let language): ChatCodeBlock(code: block.text, language: language)
                 case .markdown: ChatMarkdown(text: block.text)
                 case .attachment:
-                    Text(ChatSearchHighlight.text(AttributedString(block.text), query: query, theme: theme))
+                    Text(ChatSearchHighlight.text(AttributedString(TextRendering.visible(block.text)), query: query, theme: theme))
                         .font(theme.typography.detail).foregroundStyle(theme.muted).textSelection(.enabled)
                 }
             }

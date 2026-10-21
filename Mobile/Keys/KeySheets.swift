@@ -46,7 +46,7 @@ struct ImportKeySheet: View {
                 } header: {
                     Text("Private key")
                 } footer: {
-                    Text("An OpenSSH key file such as ~/.ssh/id_ed25519. It is stored in the Keychain on this iPhone and unlocks with Face ID.")
+                    Text("An OpenSSH key file such as ~/.ssh/id_ed25519. It is stored in the Keychain on this \(MobileDevice.name) and unlocks with Face ID.")
                 }
                 if let failure {
                     Section { Text(failure).foregroundStyle(.red) }
@@ -128,8 +128,8 @@ struct CreateKeySheet: View {
                     Text("Type")
                 } footer: {
                     Text(sessions.keys.secureEnclaveAvailable
-                         ? "ED25519 works with every OpenSSH server. A Secure Enclave key never leaves this iPhone and is offered as ecdsa-sha2-nistp256."
-                         : "This iPhone has no Secure Enclave available, so the key is ED25519.")
+                         ? "ED25519 works with every OpenSSH server. A Secure Enclave key never leaves this \(MobileDevice.name) and is offered as ecdsa-sha2-nistp256."
+                         : "This \(MobileDevice.name) has no Secure Enclave available, so the key is ED25519.")
                 }
                 .disabled(!sessions.keys.secureEnclaveAvailable)
                 if let failure {

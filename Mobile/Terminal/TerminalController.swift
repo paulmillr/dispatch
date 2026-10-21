@@ -11,8 +11,23 @@ final class TerminalController {
     @ObservationIgnored let hostView: TerminalHostView
     @ObservationIgnored private let ownsPresence: Bool
     private(set) var capsule = KeyCapsuleModel()
+    /// Where the software keyboard is: docked (the capsule rides on it), floating or split (the capsule stays at the
+    /// bottom), or hidden (also when a hardware keyboard leaves only the shortcut bar).
+    private(set) var keyboard = TerminalAdaptation.Keyboard.hidden
     /// The software keyboard is on screen.
-    private(set) var keyboardVisible = false
+    var keyboardVisible: Bool { keyboard != .hidden }
+    /// The device class (iPad: the capsule collapses with a hardware keyboard); tests set it.
+    var idiom = UIDevice.current.userInterfaceIdiom
+    /// Whether a hardware keyboard is attached (`HardwareKeyboard.shared`; tests give their own).
+    var hardwareKeyboard = HardwareKeyboard.shared
+    /// The user brought the capsule's keys back while a hardware keyboard was attached (remembered).
+    private(set) var keysShown: Bool
+    /// The capsule's form: the six keys, or the small button that brings them back.
+    var capsuleForm: TerminalAdaptation.CapsuleForm {
+        TerminalAdaptation.capsuleForm(idiom: idiom, hardwareKeyboard: hardwareKeyboard.attached, shown: keysShown)
+    }
+    /// The capsule's last key collapses it instead of toggling the software keyboard (an iPad with a hardware one).
+    var keysCanHide: Bool { idiom == .pad && hardwareKeyboard.attached }
     /// What the header shows (title, OSC 7 directory) and whether the terminal ended.
     var title: String? { presence.title }
     var directory: String? { presence.directory }
@@ -20,11 +35,14 @@ final class TerminalController {
 
     @ObservationIgnored private var timer: Task<Void, Never>?
     @ObservationIgnored private let origin = ContinuousClock.now
-    @ObservationIgnored private var observers: [NSObjectProtocol] = []
     /// The clock the capsule's hold and repeat run on.
     @ObservationIgnored var now: () -> Duration
 
     static let fontSizeKey = "terminal.fontSize"
+    static let keysShownKey = "terminal.keysShown"
+
+    /// The font size of a terminal before any pinch or Settings choice: the device class's.
+    static var defaultFontSize: Double { TerminalAdaptation.defaultFontSize(idiom: UIDevice.current.userInterfaceIdiom) }
 
     /// Shows a presence someone else keeps (Tabs, shared with Chat).
     convenience init(presence: TerminalPresence) { self.init(presence: presence, owns: false) }
@@ -39,37 +57,39 @@ final class TerminalController {
         self.presence = presence
         ownsPresence = owns
         hostView = TerminalHostView(presence: presence)
+        keysShown = UserDefaults.standard.bool(forKey: Self.keysShownKey)
         let origin = origin
         now = { ContinuousClock.now - origin }
-        hostView.pendingMods = { [weak self] in self?.capsule.mods ?? [] }
+        // A collapsed capsule's latches are not on screen: they modify nothing.
+        hostView.pendingMods = { [weak self] in self.map { $0.capsuleForm == .full ? $0.capsule.mods : [] } ?? [] }
         hostView.onKeySent = { [weak self] in _ = self?.capsule.consume() }
         hostView.onFontSize = { size in UserDefaults.standard.set(size, forKey: Self.fontSizeKey) }
-        let center = NotificationCenter.default
-        observers.append(center.addObserver(forName: UIResponder.keyboardWillChangeFrameNotification, object: nil, queue: .main) { [weak self] note in
-            let frame = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue
-            MainActor.assumeIsolated { self?.keyboardChanged(frame) }
-        })
-        observers.append(center.addObserver(forName: UIResponder.keyboardWillHideNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.keyboardChanged(nil) }
-        })
+        hostView.onKeyboardFrame = { [weak self] frame in self?.keyboardChanged(frame) }
     }
 
     isolated deinit {
         timer?.cancel()
-        for observer in observers { NotificationCenter.default.removeObserver(observer) }
     }
 
-    /// The configuration with the font size a pinch last chose.
+    /// The configuration with the font size a pinch (or Settings) last chose, else the device class's default.
     static func storedConfiguration() -> TerminalConfiguration {
         var configuration = TerminalConfiguration()
         let stored = UserDefaults.standard.double(forKey: fontSizeKey)
-        if TerminalConfiguration.fontSizes.contains(stored) { configuration.fontSize = stored }
+        configuration.fontSize = TerminalConfiguration.fontSizes.contains(stored) ? stored : defaultFontSize
         return configuration
     }
 
     /// The segment is shown: the terminal is attached (a no-op when the presence already is), at the view's grid:
     /// before its first layout the attachment waits for it, so the first screen is never drawn for another size.
     func appear() {
+        // With a hardware keyboard on an iPad the terminal takes the keys as soon as it shows, as a Mac's selected tab
+        // does; no software keyboard comes up unasked (the hardware one hides it).
+        if idiom == .pad, hardwareKeyboard.attached {
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.hostView.window != nil, !self.hostView.isFirstResponder else { return }
+                _ = self.hostView.becomeFirstResponder()
+            }
+        }
         guard !presence.attached else { return }
         if hostView.hasSize { presence.start() } else { hostView.onSized = { [weak self] in self?.presence.start() } }
     }
@@ -84,9 +104,26 @@ final class TerminalController {
         _ = hostView.resignFirstResponder()
     }
 
+    /// The keyboard layout guide's frame in the window (`TerminalHostView.keyboardTracker`): judged in the window, which
+    /// in Split View or Stage Manager is not the screen.
     private func keyboardChanged(_ frame: CGRect?) {
-        guard let frame, let screen = hostView.window?.windowScene?.screen else { keyboardVisible = false; return }
-        keyboardVisible = frame.height > 120 && frame.minY < screen.bounds.maxY - 1
+        let next = hostView.window.map { TerminalAdaptation.keyboard(frame: frame, window: $0.bounds) } ?? .hidden
+        if next != keyboard { keyboard = next }
+    }
+
+    /// The collapsed capsule's button: the six keys again, remembered while a hardware keyboard stays attached.
+    func showKeys() {
+        keysShown = true
+        UserDefaults.standard.set(true, forKey: Self.keysShownKey)
+    }
+
+    /// The capsule's last key with a hardware keyboard: back to the small button, latches and the cluster released.
+    func hideKeys() {
+        keysShown = false
+        UserDefaults.standard.set(false, forKey: Self.keysShownKey)
+        capsule.reset()
+        timer?.cancel()
+        timer = nil
     }
 
     func tap(_ modifier: KeyCapsuleModel.Modifier) { capsule.tap(modifier, at: now()) }

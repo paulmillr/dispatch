@@ -8,6 +8,7 @@ struct ChatBubble<Content: View>: View {
     var faded = false
     @ViewBuilder var content: Content
     @Environment(\.chatColumnWidth) private var column
+    @Environment(\.chatMeasure) private var measure
 
     var body: some View {
         HStack(spacing: 0) {
@@ -23,8 +24,10 @@ struct ChatBubble<Content: View>: View {
                                 ? .init(topLeading: 20, bottomLeading: 20, bottomTrailing: 6, topTrailing: 20)
                                 : .init(topLeading: 20, bottomLeading: 6, bottomTrailing: 20, topTrailing: 20),
                                 style: .continuous))
-                // 78% of the column for the user, 86% for the agent (M4a); the bubble hugs shorter text.
-                .frame(maxWidth: column * (side == .user ? 0.78 : 0.86), alignment: side == .user ? .trailing : .leading)
+                // 78% of the column for the user, 86% for the agent (M4a), never past the readable measure (an iPad's
+                // wide column); the bubble hugs shorter text.
+                .frame(maxWidth: ChatMeasure.bubble(user: side == .user, column: column, measure: measure),
+                       alignment: side == .user ? .trailing : .leading)
                 .fixedSize(horizontal: false, vertical: true)
             if side == .agent { Spacer(minLength: 0) }
         }
@@ -34,6 +37,34 @@ struct ChatBubble<Content: View>: View {
 extension EnvironmentValues {
     /// The thread's text column (the screen less 16 pt each side), which bubble widths are a share of.
     @Entry var chatColumnWidth: CGFloat = 370
+    /// The widest a bubble, a thinking block, a note or the queue card gets (`ChatMeasure`), at the text size.
+    @Entry var chatMeasure: CGFloat = ChatMeasure.standard
+}
+
+/// The thread's readable measure, the Mac's: a bubble keeps to 80 characters of its text (`ChatTranscriptRow`'s
+/// `bubbleWidth`, `ChatUserMessage.maxWidth`) plus its padding, on the speaker's side, and the thread is not centred.
+/// A phone's column never reaches it (80 characters of callout is about 790 points), so there the phone's shares
+/// decide; in an iPad's detail column it keeps lines readable where 86 % would run to a thousand points.
+enum ChatMeasure {
+    static let characters: CGFloat = 80
+    /// The bubble's horizontal padding, both sides.
+    static let padding: CGFloat = 28
+
+    /// The measure at the default text size: 80 of the callout font's "0" (the Mac measures the same glyph), plus
+    /// the padding. The thread scales it with Dynamic Type (`@ScaledMetric` relative to callout).
+    static let standard: CGFloat = {
+        let font = UIFont.preferredFont(forTextStyle: .callout,
+                                        compatibleWith: UITraitCollection(preferredContentSizeCategory: .large))
+        return (characters * ("0" as NSString).size(withAttributes: [.font: font]).width + padding).rounded()
+    }()
+
+    /// A bubble's widest: the phone's share of the column (78 % for the user, 86 % for the agent, M4a), capped.
+    static func bubble(user: Bool, column: CGFloat, measure: CGFloat) -> CGFloat {
+        min(column * (user ? 0.78 : 0.86), measure)
+    }
+
+    /// The queue card's width: 92 % of the column on a phone (M5c), the user's bubble's measure at most.
+    static func queueCard(column: CGFloat, measure: CGFloat) -> CGFloat { min(column * 0.92, measure) }
 }
 
 /// The line under a bubble where iMessage puts "Delivered" (12 pt, the tertiary label: 30 % in both schemes, L2a).
@@ -131,6 +162,8 @@ struct ChatChip: View {
                             .overlay(Capsule().strokeBorder(Color.chipBorder, lineWidth: 0.5))
                     }
                 }
+                .contentShape(.hoverEffect, Capsule())
+                .hoverEffect(.highlight)
         }
         .buttonStyle(.plain)
         .accessibilityHint(hint ?? "")

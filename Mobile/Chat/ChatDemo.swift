@@ -7,6 +7,10 @@ import SwiftUI
 /// Launch with `DISPATCH_MOBILE_CHAT_DEMO=<screen id>` (`SIMCTL_CHILD_DISPATCH_MOBILE_CHAT_DEMO` through simctl).
 enum ChatDemo {
     static var screen: String? { ProcessInfo.processInfo.environment["DISPATCH_MOBILE_CHAT_DEMO"] }
+    /// `DISPATCH_MOBILE_CHAT_DEMO_WIDTH=<points>`: M3a in a sidebar column that wide.
+    static var sidebarWidth: CGFloat? {
+        ProcessInfo.processInfo.environment["DISPATCH_MOBILE_CHAT_DEMO_WIDTH"].flatMap(Double.init).map { CGFloat($0) }
+    }
 
     static let conversation = "00000000-0000-4000-8000-000000000201"
     static let host = UUID(uuidString: "6A0F2D6E-6B4E-4C59-9D7E-2C1F2E1D0B01")!
@@ -97,8 +101,10 @@ enum ChatDemo {
                 respond(id, ["records": [record("a\(terminal)", "assistant", turn: "t", text: previews[Int(terminal)] ?? "", time: time),
                                          record("e\(terminal)", "turn_ended", turn: "t", time: time)], "earlier": NSNull()])
             case "queue.list": respond(id, screen == "M5c" ? queued() : [])
-            // M4b's chips: the answer is written, as the helper's hook would report it.
-            case "interactions.answer": respond(id, ["written": true, "may_have_sent": true, "reason": NSNull()])
+            // M4b's chips: the answer is written, as the helper's hook would report it. A message or a stop from the
+            // composer is typed into the terminal (the thread keeps the sent bubble; no turn follows).
+            case "interactions.answer", "chat.send", "chat.stop":
+                respond(id, ["written": true, "may_have_sent": true, "reason": NSNull()])
             case "queue.add":
                 serial += 1
                 respond(id, item("held-\(serial)", params["text"] as? String ?? ""))
@@ -238,12 +244,20 @@ struct ChatDemoRoot: View {
         let key = ChatConversationKey(host: ChatDemo.host, node: "tmux:s:$0:%0")
         switch screen {
         case "M3a":
-            NavigationStack {
+            let agents = NavigationStack {
                 AgentsScreen(conversations: conversations, look: ChatDemo.look, open: { _ in }, close: { _ in })
                     // The app's canvas, as the shell gives the Agents tab (#F2F2F7 in light, L1a).
                     .background(Color.canvas)
             }
             .task { await conversations.refresh(host: ChatDemo.host) }
+            if let width = ChatDemo.sidebarWidth {
+                // As a split's sidebar column (an iPad, the unfolded Duo) beside an empty detail column.
+                HStack(spacing: 0) {
+                    agents.frame(width: width).environment(\.tabsNarrowSidebar, MobileSplit.narrow(sidebar: width))
+                    Rectangle().fill(Color.hairline).frame(width: 0.5).ignoresSafeArea()
+                    Color.canvas.ignoresSafeArea()
+                }
+            } else { agents }
         case "M9a":
             Color.canvas.sheet(isPresented: .constant(true)) {
                 NewChatSheet(conversations: conversations, memory: ChatDemo.memory, look: ChatDemo.look, started: { _ in })

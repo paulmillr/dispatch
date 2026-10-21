@@ -952,7 +952,8 @@ final class FilesNameCell: FilesCell {
     func configure(_ row: FilesRow, style: FilesOutlineStyle) {
         self.row = row
         self.style = style
-        label.stringValue = row.title
+        let visibleTitle = TextRendering.visible(row.title)
+        label.stringValue = visibleTitle
         label.font = row.isEntry ? style.nameFont : style.metaFont
         let symbol: String? = switch row.kind {
         case .entry: row.isDirectory ? "folder" : "doc"
@@ -964,7 +965,7 @@ final class FilesNameCell: FilesCell {
         badge.image = row.entry?.kind == .symlink
             ? FilesSymbols.image("arrow.up.right", size: style.iconSize * 0.55, weight: .bold) : nil
         badge.isHidden = badge.image == nil
-        setAccessibilityLabel(row.entry?.kind == .symlink ? "\(row.title), symbolic link" : row.title)
+        setAccessibilityLabel(row.entry?.kind == .symlink ? "\(visibleTitle), symbolic link" : visibleTitle)
         recolor()
         needsLayout = true
     }

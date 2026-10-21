@@ -1,0 +1,36 @@
+ep 7 1840/4000 loss [1m1.943[0m 41.1k tok/s
+ep 7 1860/4000 loss [1m1.941[0m 41.2k tok/s
+ep 7 1880/4000 loss [1m1.939[0m 40.7k tok/s
+ep 7 1900/4000 loss [1m1.939[0m 41.4k tok/s
+ep 7 1920/4000 loss [1m1.937[0m 40.8k tok/s
+ep 7 1940/4000 loss [1m1.934[0m 41.1k tok/s
+ep 7 1960/4000 loss [1m1.931[0m 41.1k tok/s
+ep 7 1980/4000 loss [1m1.928[0m 40.8k tok/s
+ep 7 2000/4000 loss [1m1.926[0m 41.5k tok/s
+ep 7 2020/4000 loss [1m1.924[0m 41.3k tok/s
+ep 7 2040/4000 loss [1m1.922[0m 40.7k tok/s
+[36meval[0m val_loss [1m1.987[0m ppl 7.29 [2m41.8s[0m
+ep 7 2060/4000 loss [1m1.919[0m 40.9k tok/s
+ep 7 2080/4000 loss [1m1.919[0m 41.5k tok/s
+ep 7 2100/4000 loss [1m1.917[0m 41.3k tok/s
+ep 7 2120/4000 loss [1m1.914[0m 41.3k tok/s
+ep 7 2140/4000 loss [1m1.911[0m 41.0k tok/s
+ep 7 2160/4000 loss [1m1.908[0m 41.0k tok/s
+ep 7 2180/4000 loss [1m1.904[0m 41.5k tok/s
+ep 7 2200/4000 loss [1m1.904[0m 40.7k tok/s
+ep 7 2220/4000 loss [1m1.903[0m 41.6k tok/s
+ep 7 2240/4000 loss [1m1.901[0m 41.2k tok/s
+ep 7 2260/4000 loss [1m1.900[0m 41.1k tok/s
+ep 7 2280/4000 loss [1m1.898[0m 41.0k tok/s
+ep 7 2300/4000 loss [1m1.896[0m 41.2k tok/s
+ep 7 2320/4000 loss [1m1.893[0m 41.3k tok/s
+ep 7 2340/4000 loss [1m1.889[0m 41.5k tok/s
+ep 7 2360/4000 loss [1m1.886[0m 41.3k tok/s
+ep 7 2380/4000 loss [1m1.885[0m 41.5k tok/s
+[36meval[0m val_loss [1m1.954[0m ppl 7.06 [2m41.8s[0m
+ep 7 2400/4000 loss [1m1.882[0m 41.2k tok/s
+ep 7 2420/4000 loss [1m1.879[0m 40.8k tok/s
+ep 7 2440/4000 loss [1m1.876[0m 41.2k tok/s
+ep 7 2460/4000 loss [1m1.875[0m 40.7k tok/s
+ep 7 2480/4000 loss [1m1.872[0m 41.6k tok/s
+ep 7 2500/4000 loss [1m1.871[0m 41.4k tok/s

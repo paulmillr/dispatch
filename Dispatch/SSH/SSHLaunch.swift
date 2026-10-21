@@ -108,9 +108,14 @@ enum SSHLauncherCommand {
         defer { child = 0; signal(SIGHUP, previousHup); signal(SIGTERM, previousTerm); signal(SIGINT, previousInt) }
         var status: Int32 = 0
         while true {
-            let result = waitpid(pid, &status, WNOHANG)
+            // Until the ready request is announced the control socket is watched 20 times a second (connecting and
+            // authenticating take seconds). After it, nothing here changes until ssh exits: block in waitpid, so this
+            // process wakes no more for the session's lifetime (hours). A signal forwarded to ssh interrupts the wait
+            // (EINTR) and it resumes.
+            let result = waitpid(pid, &status, announced ? 0 : WNOHANG)
             if result == pid { break }
             if result < 0 && errno != EINTR { break }
+            if announced { continue }
             let ready = FileManager.default.fileExists(atPath: master.controlPath)
             if (!connectingAnnounced || ready) && !announced {
                 let request = SSHLaunchRequest(tabID: tab, token: token, connectionID: id, credential: credential,

@@ -34,7 +34,7 @@ final class MobileSettings {
         get {
             access(keyPath: \.terminalFontSize)
             let size = defaults.double(forKey: TerminalController.fontSizeKey)
-            return TerminalConfiguration.fontSizes.contains(size) ? size : TerminalConfiguration().fontSize
+            return TerminalConfiguration.fontSizes.contains(size) ? size : TerminalController.defaultFontSize
         }
         set {
             withMutation(keyPath: \.terminalFontSize) { defaults.set(newValue, forKey: TerminalController.fontSizeKey) }

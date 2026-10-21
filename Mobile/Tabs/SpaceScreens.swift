@@ -49,7 +49,7 @@ struct SpaceTabsScreen: View {
         }
         .tabsPushedScreen()
         .toolbar {
-            TabsScreenHeader(title: space?.name ?? "", column: column) {
+            TabsScreenHeader(title: space?.name ?? "", column: column, atTrailingEdge: column == nil) {
                 TabsBackPill(label: "Spaces") { pop() }
             } subtitle: {
                 if let host { TabsHostPath(host: host, path: host.abbreviate(space?.cwd)) }
@@ -60,6 +60,8 @@ struct SpaceTabsScreen: View {
                         .accessibilityHint("Shows the space’s tabs and its Close")
                         .frame(width: 44, height: 44)
                         .glassEffect(.regular.interactive(), in: Circle())
+                        .contentShape(.hoverEffect, Circle())
+                        .hoverEffect(.highlight)
                         .accessibilityLabel("Space details")
                 }
             }

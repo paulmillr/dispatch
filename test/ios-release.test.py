@@ -30,6 +30,7 @@ release = load('ios_release', 'test/ios-release.py')
 sys.path.insert(0, str(ROOT / 'scripts'))
 runner = load('run_script', 'scripts/run.py')
 simulators = load('ios_simulator', 'scripts/ios_simulator.py')
+watches = load('watch_simulator', 'scripts/watch_simulator.py')
 setup_mobile = load('setup_mobile', 'scripts/setup_mobile.py')
 
 
@@ -115,13 +116,14 @@ class DeviceDiscoveryTests(unittest.TestCase):
             'hardware': {'reality': reality, 'platform': platform, 'deviceType': kind, 'udid': udid or 'udid-' + name},
             'state': {'name': name}, 'connection': {'state': 'connected' if connected else 'disconnected'}}}
 
-    def test_lists_real_iphones_only_connected_first(self):
+    def test_lists_real_iphones_and_ipads_only_connected_first(self):
         document = {'result': {'devices': [
             self.device('dispatch-release', 'simulated'), self.device('Old phone', 'physical', connected=False),
-            self.device("Paul's iPhone", 'physical'), self.device('Mac', 'physical', platform='macOS', kind='Mac'),
-            self.device('iPad', 'physical', kind='iPad')]}}
+            self.device('Work iPhone', 'physical'), self.device('Mac', 'physical', platform='macOS', kind='Mac'),
+            self.device('iPad', 'physical', kind='iPad'), self.device('Vision', 'physical', platform='xrOS', kind='RealityDevice'),
+            self.device('iPad sim', 'simulated', kind='iPad')]}}
         self.assertEqual(runner.paired_iphones(document),
-                         [("udid-Paul's iPhone", "Paul's iPhone"), ('udid-Old phone', 'Old phone')])
+                         [('udid-Work iPhone', 'Work iPhone'), ('udid-iPad', 'iPad'), ('udid-Old phone', 'Old phone')])
         self.assertEqual(runner.paired_iphones({}), [])
 
     def test_this_xcodes_simulator_listing_has_no_phone(self):
@@ -165,12 +167,80 @@ class DeviceDiscoveryTests(unittest.TestCase):
         self.assertIsNone(simulators.choose_simulator(document, 'Apple Vision Pro'))
         self.assertIsNone(simulators.choose_simulator({}, 'iPhone Air'))
 
+    def test_ipads_are_chosen_alike_and_named_by_their_family(self):
+        prefix = 'com.apple.CoreSimulator.SimRuntime.'
+        kind = 'com.apple.CoreSimulator.SimDeviceType.'
+
+        def device(udid, name, device_type, state='Shutdown'):
+            return {'udid': udid, 'name': name, 'state': state, 'isAvailable': True,
+                    'deviceTypeIdentifier': kind + device_type}
+        # iPads have no 27.1 runtime: the 27.0 one is found for an iPad's name; a custom name gets its family.
+        document = {'devices': {
+            prefix + 'iOS-27-1': [device('DUO', 'iPhone Duo', 'iPhone-Duo')],
+            prefix + 'iOS-27-0': [device('PRO', 'iPad Pro 11-inch (M5)', 'iPad-Pro-11-inch-M5'),
+                                  device('MINE', 'dispatch-ipad', 'iPad-mini-A17-Pro', state='Booted'),
+                                  device('PHONE', 'dispatch-ipad-iphone', 'iPhone-17'),
+                                  device('OLD', 'iPad Pro 11-inch (M5)', 'iPad-Pro-11-inch-M5')],
+            prefix + 'iOS-26-2': [device('PRO26', 'iPad Pro 11-inch (M5)', 'iPad-Pro-11-inch-M5')]}}
+        chosen = simulators.choose_simulator(document, 'iPad Pro 11-inch (M5)')
+        self.assertEqual(chosen[1], 'iPad Pro 11-inch (M5) (iOS 27.0)')
+        self.assertIn(chosen[0], ('PRO', 'OLD'))
+        self.assertTrue(simulators.is_ipad(chosen[1]))
+        self.assertEqual(simulators.choose_simulator(document, 'dispatch-ipad'), ('MINE', 'dispatch-ipad (iPad, iOS 27.0, booted)'))
+        self.assertTrue(simulators.is_ipad('dispatch-ipad (iPad, iOS 27.0, booted)'))
+        phone = simulators.choose_simulator(document, 'dispatch-ipad-iphone')
+        self.assertEqual(phone, ('PHONE', 'dispatch-ipad-iphone (iPhone, iOS 27.0)'))
+        self.assertFalse(simulators.is_ipad(phone[1]), 'an iPhone whose name mentions iPad')
+        self.assertEqual(simulators.choose_simulator(document, 'iPhone Duo'), ('DUO', 'iPhone Duo (iOS 27.1)'))
+        self.assertEqual(simulators.family('com.apple.CoreSimulator.SimDeviceType.Apple-Vision-Pro'), '')
+
     def test_an_unknown_simulator_stops_before_the_build(self):
         def run(command, **kwargs):
             self.assertEqual(command, ['xcrun', 'simctl', 'list', 'devices', 'available', '--json'])
             return subprocess.CompletedProcess(command, 0, stdout='{"devices": {}}')
         with self.assertRaisesRegex(OSError, 'No available iOS simulator named iPhone 99'):
             simulators.find_simulator('iPhone 99', run)
+
+    def test_a_watch_keeps_its_pair_or_is_paired_with_our_phone_on_a_runtime_that_supports_it(self):
+        prefix = 'com.apple.CoreSimulator.SimRuntime.'
+        watch = {'udid': 'WATCH', 'name': 'Apple Watch Series 12 (46mm)', 'state': 'Shutdown'}
+        devices = {'devices': {prefix + 'watchOS-27-0': [watch],
+                               prefix + 'iOS-27-0': [{'udid': 'IN-USE', 'name': 'iPhone 18 Pro', 'state': 'Booted'}]}}
+        # The newest runtime supports only another device type: the phone goes on the older one.
+        runtimes = {'runtimes': [
+            {'identifier': prefix + 'iOS-27-1', 'platform': 'iOS', 'version': '27.1', 'isAvailable': True,
+             'supportedDeviceTypes': [{'name': 'iPhone Duo', 'identifier': 'type.Duo'}]},
+            {'identifier': prefix + 'iOS-27-0', 'platform': 'iOS', 'version': '27.0', 'isAvailable': True,
+             'supportedDeviceTypes': [{'name': 'iPhone 18 Pro', 'identifier': 'type.18Pro'}]}]}
+        pairs = {'pairs': {}}
+        commands = []
+
+        def run(command, **kwargs):
+            commands.append(command[2:])
+            output = {('list', 'devices'): devices, ('list', 'pairs'): pairs, ('list', 'runtimes'): runtimes}
+            if command[2] == 'create':
+                phone = {'udid': 'OURS', 'name': command[3], 'state': 'Shutdown'}
+                devices['devices'][prefix + 'iOS-27-0'].append(phone)
+                return subprocess.CompletedProcess(command, 0, stdout='OURS\n')
+            if command[2] == 'pair':
+                pairs['pairs']['PAIR'] = {'watch': {'udid': command[3]}, 'phone': {'udid': command[4]},
+                                          'state': '(active, disconnected)'}
+                return subprocess.CompletedProcess(command, 0, stdout='PAIR\n')
+            return subprocess.CompletedProcess(command, 0, stdout=json.dumps(output.get(tuple(command[2:4]), {})))
+
+        found = watches.find_pair('apple watch series 12 (46mm)', run)
+        self.assertEqual(found, (('OURS', 'Dispatch Watch iPhone (iOS 27.0)'),
+                                 ('WATCH', 'Apple Watch Series 12 (46mm) (watchOS 27.0)')))
+        self.assertEqual([command for command in commands if command[0] != 'list'],
+                         [['create', 'Dispatch Watch iPhone', 'type.18Pro', prefix + 'iOS-27-0'],
+                          ['pair', 'WATCH', 'OURS']])
+        # Again: the pair is kept; an inactive one is made active, and nothing is created or paired twice.
+        pairs['pairs']['PAIR']['state'] = '(inactive, disconnected)'
+        commands.clear()
+        self.assertEqual(watches.find_pair('WATCH', run)[0][0], 'OURS')
+        self.assertEqual([command for command in commands if command[0] != 'list'], [['pair_activate', 'PAIR']])
+        with self.assertRaisesRegex(OSError, 'No available watchOS simulator named Apple Watch Ultra'):
+            watches.find_pair('Apple Watch Ultra', run)
 
     def test_a_device_build_stops_early_without_a_valid_config(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -250,15 +320,47 @@ class ReleaseBundleTests(unittest.TestCase):
         source = (ROOT / 'Dispatch/Helper/HelperBinary.swift').read_text()
         self.assertIsNotNone(release.protocol_version(source))
 
-    def test_info_plist_needs_face_id_local_network_and_refresh(self):
+    IPHONE = ['UIInterfaceOrientationPortrait', 'UIInterfaceOrientationLandscapeLeft', 'UIInterfaceOrientationLandscapeRight']
+
+    def info(self, **changes):
         info = {'CFBundleIdentifier': 'yachts.dispatch.mobile', 'NSFaceIDUsageDescription': 'Keys',
-                'NSLocalNetworkUsageDescription': 'Hosts', 'UIBackgroundModes': ['fetch'],
-                'BGTaskSchedulerPermittedIdentifiers': ['yachts.dispatch.mobile.refresh']}
-        self.assertEqual(release.info_problems(info), [])
-        self.assertEqual(len(release.info_problems({'CFBundleIdentifier': 'x'})), 4)
+                'NSLocalNetworkUsageDescription': 'Hosts', 'NSMicrophoneUsageDescription': 'Dictation',
+                'NSSpeechRecognitionUsageDescription': 'Dictation on this device', 'UIBackgroundModes': ['fetch'],
+                'BGTaskSchedulerPermittedIdentifiers': ['yachts.dispatch.mobile.refresh'], 'UIDeviceFamily': [1, 2],
+                'UISupportedInterfaceOrientations': self.IPHONE,
+                'UISupportedInterfaceOrientations~ipad': self.IPHONE + ['UIInterfaceOrientationPortraitUpsideDown']}
+        info.update(changes)
+        return info
+
+    def test_info_plist_needs_the_prompts_and_refresh(self):
+        self.assertEqual(release.info_problems(self.info()), [])
+        bare = {'CFBundleIdentifier': 'x', 'UIDeviceFamily': [1, 2], 'UISupportedInterfaceOrientations': self.IPHONE,
+                'UISupportedInterfaceOrientations~ipad': self.info()['UISupportedInterfaceOrientations~ipad']}
+        self.assertEqual(len(release.info_problems(bare)), 6, release.info_problems(bare))
+        problems = release.info_problems(self.info(NSSpeechRecognitionUsageDescription='Dictation on this iPhone.'))
+        self.assertEqual(len(problems), 1)
+        self.assertIn('names a device', problems[0])
+
+    def test_info_plist_is_for_iphone_and_ipad(self):
+        for changes, expected in (({'UIDeviceFamily': [1]}, 'UIDeviceFamily'),
+                                  ({'UISupportedInterfaceOrientations~ipad': self.IPHONE}, 'UISupportedInterfaceOrientations~ipad'),
+                                  ({'UISupportedInterfaceOrientations': self.IPHONE + ['UIInterfaceOrientationPortraitUpsideDown']},
+                                   'UISupportedInterfaceOrientations is'),
+                                  ({'UIRequiresFullScreen': True}, 'Split View')):
+            with self.subTest(changes=changes):
+                problems = release.info_problems(self.info(**changes))
+                self.assertEqual(len(problems), 1, problems)
+                self.assertIn(expected, problems[0])
+        self.assertEqual(release.info_problems(self.info(UIDeviceFamily=[2, 1], UIRequiresFullScreen=False)), [])
+
+    def test_the_apps_info_plist_and_project_pass(self):
+        # The built plist gets UIDeviceFamily from TARGETED_DEVICE_FAMILY (project.yml), the rest from the source.
+        project = (ROOT / 'project.yml').read_text()
+        self.assertIn('TARGETED_DEVICE_FAMILY: "1,2"', project)
         source = plistlib.loads((ROOT / 'Mobile/App/Info.plist').read_bytes())
         source['CFBundleIdentifier'] = 'yachts.dispatch.mobile'
         source['BGTaskSchedulerPermittedIdentifiers'] = ['yachts.dispatch.mobile.refresh']
+        source['UIDeviceFamily'] = [1, 2]
         self.assertEqual(release.info_problems(source), [])
 
 

@@ -85,6 +85,7 @@ final class TerminalSession: @unchecked Sendable {
         guard let device = MTLCreateSystemDefaultDevice() else { throw Failure.noMetalDevice }
         metal = try MetalRenderer(device: device)
         config = configuration.config()
+        let scale = RenderSize.contentScale(scale)
         self.scale = scale
         cells = try Self.cells(config, scale)
         var size = RenderSize(screen: (800, 600), cell: Self.cell(cells))
@@ -264,7 +265,12 @@ final class TerminalSession: @unchecked Sendable {
 
     /// The view's size in points: the drawable and the surface in pixels.
     @MainActor func setSize(width: Double, height: Double) {
-        let pixels = (Int((width * scale).rounded()), Int((height * scale).rounded()))
+        let pixel = { (points: Double) -> Int in
+            let value = (points * self.scale).rounded()
+            guard value.isFinite, value > 0 else { return 0 }
+            return value >= Double(RenderSize.maxPixelDimension) ? RenderSize.maxPixelDimension : Int(value)
+        }
+        let pixels = (pixel(width), pixel(height))
         layer.drawableSize = CGSize(width: pixels.0, height: pixels.1)
         locked { surface.setSize(width: pixels.0, height: pixels.1) }
         pump()
@@ -282,13 +288,22 @@ final class TerminalSession: @unchecked Sendable {
     /// The pixels a grid takes, padding included.
     @MainActor func pixels(columns: Int, rows: Int) -> (width: Int, height: Int) {
         let (cell, padding) = locked { (surface.size.cell, surface.size.padding) }
-        return (columns * cell.width + padding.left + padding.right, rows * cell.height + padding.top + padding.bottom)
+        func dimension(_ count: Int, _ unit: Int, _ a: Int, _ b: Int) -> Int {
+            let value = Double(max(count, 0)) * Double(max(unit, 0)) + Double(max(a, 0)) + Double(max(b, 0))
+            return value >= Double(RenderSize.maxPixelDimension) ? RenderSize.maxPixelDimension : Int(value)
+        }
+        return (dimension(columns, cell.width, padding.left, padding.right), dimension(rows, cell.height, padding.top, padding.bottom))
     }
 
     /// The grid a view of this size in points holds, and its cell in pixels (what `resize` asks the server for).
     @MainActor func fitting(width: Double, height: Double) -> TerminalFeedSize {
         let (cell, padding) = locked { (surface.size.cell, surface.size.padding) }
-        let pixels = (Int((width * scale).rounded()), Int((height * scale).rounded()))
+        let pixel = { (points: Double) -> Int in
+            let value = (points * self.scale).rounded()
+            guard value.isFinite, value > 0 else { return 0 }
+            return value >= Double(RenderSize.maxPixelDimension) ? RenderSize.maxPixelDimension : Int(value)
+        }
+        let pixels = (pixel(width), pixel(height))
         let columns = (pixels.0 - padding.left - padding.right) / max(1, cell.width)
         let rows = (pixels.1 - padding.top - padding.bottom) / max(1, cell.height)
         return TerminalFeedSize(columns: max(1, columns), rows: max(1, rows), cellWidth: cell.width, cellHeight: cell.height)
@@ -296,6 +311,7 @@ final class TerminalSession: @unchecked Sendable {
 
     /// The screen's scale: fonts and padding at the new resolution.
     @MainActor func setScale(_ scale: Double) {
+        let scale = RenderSize.contentScale(scale)
         guard scale != self.scale else { return }
         exclusive {
             self.scale = scale

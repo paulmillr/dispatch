@@ -563,11 +563,16 @@ final class HelperChat {
     var archive = Input(route)
     archive.terminal = nil
     archive.transcript = transcript
+    // One main-queue hop per burst of notifications (`batch`): a helper read publishes a turn's records and its
+    // state as several frames at once, and each hop would wake the main thread and lay the transcript out once
+    // more. The chat's one batch keeps the order across an old and a new watch, and the `ended` callback below
+    // still follows the hop scheduled before it.
+    let batch = batch
     func subscribe<P: Encodable & Sendable>(_ params: P) async throws -> UInt64 {
       try await connection.subscribe(
       "chat.open", params: params,
       notify: { [weak self] method, data in
-        DispatchQueue.main.async {
+        batch.add { [weak self] in
           guard let self, self.stream == next || self.pending?.stream == next else { return }
           if self.pending?.stream == next {
             // Both watches decode on one transport queue and deliver on the main queue.
@@ -646,6 +651,36 @@ final class HelperChat {
     let connection = try await HelperApp.shared.connection(endpoint)
     self.connection = connection
     return connection
+  }
+
+  /// This chat's watch notifications, taken off the transport queue and run on the main queue in one hop per burst,
+  /// in the order they arrived.
+  private let batch = Batch()
+
+  final class Batch: @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [@MainActor () -> Void] = []
+    private var scheduled = false
+
+    /// Queues `deliver`; the first of a burst schedules the drain on the main queue.
+    func add(_ deliver: @escaping @MainActor () -> Void) {
+      lock.lock()
+      items.append(deliver)
+      let schedule = !scheduled
+      scheduled = true
+      lock.unlock()
+      if schedule { DispatchQueue.main.async { MainActor.assumeIsolated { self.drain() } } }
+    }
+
+    /// Runs everything queued so far, in order; what arrives from now on schedules its own drain.
+    @MainActor private func drain() {
+      lock.lock()
+      scheduled = false
+      let taken = items
+      items.removeAll(keepingCapacity: true)
+      lock.unlock()
+      for deliver in taken { deliver() }
+    }
   }
 
   private func accepts(_ terminal: UInt64, session: String) -> Bool {

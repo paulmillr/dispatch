@@ -45,9 +45,22 @@ extension FontCollection {
             (x, y) = (x.rounded(), y.rounded())
         }
         let pad = thicken && !sbix ? 1 : 0
-        let (pxX, pxY) = (Int(x.rounded(.down)) - pad, Int(y.rounded(.down)) - pad)
+        guard x.isFinite, y.isFinite, width.isFinite, height.isFinite, width > 0, height > 0 else { return .empty }
+        func integer(_ value: Double, _ rule: FloatingPointRoundingRule) -> Int? {
+            let rounded = value.rounded(rule)
+            return rounded.isFinite && rounded >= Double(Int.min) && rounded < Double(Int.max) ? Int(rounded) : nil
+        }
+        guard let roundedX = integer(x, .down), let roundedY = integer(y, .down),
+              let roundedW = integer(width + (x - x.rounded(.down)), .up),
+              let roundedH = integer(height + (y - y.rounded(.down)), .up) else { return .empty }
+        let (xPad, xOverflow) = roundedX.subtractingReportingOverflow(pad)
+        let (yPad, yOverflow) = roundedY.subtractingReportingOverflow(pad)
+        let (widthPad, widthOverflow) = roundedW.addingReportingOverflow(2 * pad)
+        let (heightPad, heightOverflow) = roundedH.addingReportingOverflow(2 * pad)
+        guard !xOverflow, !yOverflow, !widthOverflow, !heightOverflow else { return .empty }
+        let (pxX, pxY) = (xPad, yPad)
         let (fracX, fracY) = (x - x.rounded(.down), y - y.rounded(.down))
-        let (pxW, pxH) = (Int((width + fracX).rounded(.up)) + 2 * pad, Int((height + fracY).rounded(.up)) + 2 * pad)
+        let (pxW, pxH) = (widthPad, heightPad)
         let depth = color ? 4 : 1
         guard pxW >= 0, pxH >= 0, pxW <= Atlas.maxSize - 2, pxH <= Atlas.maxSize - 2,
               let bytes = [pxW, pxH, depth].reduce(Optional(1), { total, value in total.flatMap { $0.multipliedReportingOverflow(by: value).overflow ? nil : $0 * value } }) else {
@@ -86,7 +99,9 @@ extension FontCollection {
             CTFontDrawGlyphs(font, glyphs, [CGPoint(x: -rect.origin.x, y: -rect.origin.y)], 1, ctx)
         }
         guard rendered else { return .empty }
-        return RasterGlyph(width: pxW, height: pxH, offsetX: pxX, offsetY: pxY + pxH, color: color, pixels: pixels)
+        let offsetY = pxY.addingReportingOverflow(pxH)
+        guard !offsetY.overflow else { return .empty }
+        return RasterGlyph(width: pxW, height: pxH, offsetX: pxX, offsetY: offsetY.partialValue, color: color, pixels: pixels)
     }
 }
 #endif

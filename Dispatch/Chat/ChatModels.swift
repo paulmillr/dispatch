@@ -1181,7 +1181,9 @@ final class ChatSession: Identifiable {
                 scrollPosition.expectRow()
             }
         }
-        if !historical {
+        // A record published again unchanged (the helper repeats a turn's records with its state) moves nothing:
+        // no revision, so no transcript pass and no follow scroll for it.
+        if !historical, result.added || result.changed {
             if result.changed && !latestOutputIsVisible { hasNewMessages = true }
             followRevision = atBottom ? revision + 1 : nil
             revision += 1

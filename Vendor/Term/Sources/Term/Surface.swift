@@ -152,7 +152,11 @@ public final class Surface {
 
     /// A resize the test scripts make directly (`r`): the host's size and the grid follow at once.
     @_spi(Test) public func resize(cols: Int, rows: Int) {
-        size.screen = (cols * size.cell.width, rows * size.cell.height)
+        let dimension = { (count: Int, cell: Int) in
+            let value = Double(max(count, 0)) * Double(max(cell, 0))
+            return value >= Double(RenderSize.maxPixelDimension) ? RenderSize.maxPixelDimension : Int(value)
+        }
+        size.screen = (dimension(cols, size.cell.width), dimension(rows, size.cell.height))
         hostSize = size.screen
         handler.termio.append(.resize(size))
     }
@@ -168,10 +172,11 @@ public final class Surface {
     // MARK: host events (embedded.zig wrappers + Surface.zig callbacks)
 
     public func setSize(width: Int, height: Int) {
-        guard hostSize != (width, height) else { return }
-        hostSize = (width, height)
-        guard size.screen != (width, height) else { return }
-        size.screen = (width, height)
+        let dimensions = (min(max(width, 0), RenderSize.maxPixelDimension), min(max(height, 0), RenderSize.maxPixelDimension))
+        guard hostSize != dimensions else { return }
+        hostSize = dimensions
+        guard size.screen != dimensions else { return }
+        size.screen = dimensions
         handler.termio.append(.resize(size))
     }
 
@@ -185,7 +190,7 @@ public final class Surface {
 
     /// The host's content scale (NaN or below 1: 1). The font side of Ghostty's callback lives with the fonts.
     public func setContentScale(x: Double, y: Double) {
-        let clamp = { (v: Double) in Float(max(1, v.isNaN ? 1 : v)) }
+        let clamp = { (v: Double) in Float(RenderSize.contentScale(v)) }
         scale = (clamp(x), clamp(y))
     }
 

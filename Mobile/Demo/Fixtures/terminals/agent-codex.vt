@@ -1,0 +1,29 @@
+[2m╭──────────────────────────────────────────────╮[0m
+[2m│[0m [1m>_ OpenAI Codex[0m [2m(v0.154.0)[0m                   [2m│[0m
+[2m│[0m                                              [2m│[0m
+[2m│[0m [2mmodel:[0m     astra-6 high                      [2m│[0m
+[2m│[0m [2mdirectory:[0m ~/src/api                         [2m│[0m
+[2m╰──────────────────────────────────────────────╯[0m
+
+[1m›[0m Add per-key rate limiting to the public
+  API (100 req/min), with a 429 and
+  Retry-After.
+
+[32m•[0m [1mExplored[0m
+  [2m└[0m Search layer|middleware in src
+    Read mod.rs, auth.rs
+
+[32m•[0m [1mRan[0m cargo add governor@0.8
+  [2m└[0m Adding governor v0.8.1
+
+[32m•[0m Added src/limit.rs; cargo check is clean.
+  Next: the full test suite.
+
+[33m▌[0m [1mAllow command?[0m
+[33m▌[0m   $ cargo test --workspace
+[33m▌[0m [36m›[0m 1. Yes, proceed
+[33m▌[0m   2. Yes, always for this command
+[33m▌[0m   3. No, tell Codex what to do [2mesc[0m
+
+[1m›[0m 
+  [2m⏎ send  ⌃T transcript[0m       [2m82% context[0m

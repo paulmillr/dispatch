@@ -24,6 +24,12 @@ public struct Contents {
     public var lists: [[Entry]]
     /// The block cursor for the shader, which recolors the text under it: cell (x, y), wide, text color.
     public var block: (x: Int, y: Int, wide: Bool, text: RGB)?
+
+    /// Direct construction for renderer boundary checks; production frames come from CellRenderer.
+    @_spi(Test) public init(cols: Int, rows: Int, background: RGB, bg: [UInt8], lists: [[Entry]],
+                            block: (x: Int, y: Int, wide: Bool, text: RGB)? = nil) {
+        (self.cols, self.rows, self.background, self.bg, self.lists, self.block) = (cols, rows, background, bg, lists, block)
+    }
 }
 
 /// Builds Contents from a terminal: shapes each row, renders each glyph once (cached like

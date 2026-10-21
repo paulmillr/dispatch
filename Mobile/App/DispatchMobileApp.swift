@@ -13,7 +13,10 @@ struct DispatchMobileApp: App {
     var body: some Scene {
         WindowGroup {
             MobileRoot(composition: composition).environment(composition.hosts).mobileAppearance()
+                .background(MobileVerticalBarOff())
         }
+        // iPadOS's menu bar and the hardware keyboard's ⌘ chords (MobileCommands).
+        .commands { MobileCommands() }
         // Connected in the foreground, disconnected in the background (docs/ios.md, Connection).
         .onChange(of: scenePhase) { _, phase in composition.scenePhaseChanged(phase) }
         // The background refresh (docs/ios.md, Background refresh): the system launches or wakes the app for it.
@@ -28,6 +31,7 @@ struct DispatchMobileApp: App {
 final class MobileAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        MobileDevice.start()
         UNUserNotificationCenter.current().delegate = self
         return true
     }

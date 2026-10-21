@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Trust on first use (plan 3.6; not in the mockup): the host's algorithm and SHA256 fingerprint, Trust or Cancel.
 /// A key that differs from the trusted one is a hard stop: Remove and retry, or Cancel.
@@ -45,7 +46,7 @@ struct HostTrustSheet: View {
             }
             .navigationTitle(request.hostName)
             .navigationBarTitleDisplayMode(.inline)
-            .safeAreaInset(edge: .bottom) { actions }
+            .modifier(TrustActionsBar(actions: actions))
         }
         .interactiveDismissDisabled()
     }
@@ -55,7 +56,7 @@ struct HostTrustSheet: View {
     private var message: String {
         mismatch
             ? "The key \(request.hostName) offered isn’t the one you trusted. Someone may be intercepting the connection, or the host was reinstalled. Dispatch won’t connect until you remove the old key."
-            : "This is the first connection to \(request.hostName) from this iPhone. Check that the fingerprint matches the host’s before you trust it."
+            : "This is the first connection to \(request.hostName) from this \(MobileDevice.name). Check that the fingerprint matches the host’s before you trust it."
     }
 
     private func fingerprint(_ title: String, _ value: String) -> some View {
@@ -94,6 +95,20 @@ struct HostTrustSheet: View {
     }
 }
 
+/// The buttons under the key: on an iPad a bar with the system's scroll edge under it (`safeAreaBar`), so rows that
+/// scroll under the buttons fade there instead of showing cut through; the phone's inset as before.
+private struct TrustActionsBar<Actions: View>: ViewModifier {
+    let actions: Actions
+
+    func body(content: Content) -> some View {
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            content.safeAreaBar(edge: .bottom) { actions }
+        } else {
+            content.safeAreaInset(edge: .bottom) { actions }
+        }
+    }
+}
+
 extension View {
     /// Presents the host key and login questions from here while this is the topmost presenter (the root, or a sheet over it
     /// that registered later), so a question is never lost behind a sheet.
@@ -109,7 +124,7 @@ private struct HostTrustPrompt: ViewModifier {
             .sheet(item: Binding(get: { sessions.trustPresenter == token ? sessions.question : nil },
                                  set: { _ in })) { question in
                 switch question {
-                case .trust(let request): HostTrustSheet(request: request).tint(.dispatchPink)
+                case .trust(let request): HostTrustSheet(request: request).tint(.dispatchPink).mobileTallSheet()
                 case .login(let prompt): HostLoginPromptSheet(prompt: prompt).tint(.dispatchPink)
                 }
             }

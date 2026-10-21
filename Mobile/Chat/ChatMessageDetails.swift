@@ -12,6 +12,7 @@ struct ChatMessageDetails: View {
     let directory: String?
     let open: (ChatStep) -> Void
     @Environment(\.dismiss) private var dismiss
+    @ScaledMetric(relativeTo: .callout) private var measure = ChatMeasure.standard
 
     private var turn: ChatTurn? { session.transcript.turns.first { $0.id == row.turnID } }
 
@@ -29,6 +30,8 @@ struct ChatMessageDetails: View {
                     .padding(.vertical, 9)
                     .background(Color.bubbleAgent, in: UnevenRoundedRectangle(
                         cornerRadii: .init(topLeading: 20, bottomLeading: 6, bottomTrailing: 20, topTrailing: 20), style: .continuous))
+                    // The thread's readable measure, as the bubble it quotes has (an iPad's wide detail column).
+                    .frame(maxWidth: measure, alignment: .leading)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.trailing, 28)
                     .textSelection(.enabled)
@@ -169,24 +172,28 @@ struct ChatStepOutputSheet: View {
                 VStack(alignment: .leading, spacing: 12) {
                     if step.kind == .patch, !documents.isEmpty {
                         ForEach(Array(documents.enumerated()), id: \.offset) { _, document in
-                            Text(document.path).font(.footnote.weight(.semibold).monospaced())
+                            Text(TextRendering.visible(document.path)).font(.footnote.weight(.semibold).monospaced())
                             diff(document.diff)
                         }
                     } else {
                         let input = ToolPresentation(step.item).input
                         if !input.isEmpty, step.kind == .run {
-                            Text("$ " + input).font(.system(size: 13, design: .monospaced)).foregroundStyle(.secondary)
+                            let shown = TextRendering.rich("$ " + input)
+                            Text(shown.text).font(.system(size: 13, design: .monospaced)).foregroundStyle(.secondary)
+                            if shown.truncated { Text("Input preview truncated").font(.caption).foregroundStyle(.secondary) }
                         }
-                        Text(output.isEmpty ? (record == nil && error == nil ? "Loading…" : "No output.") : output)
+                        let shown = TextRendering.rich(output.isEmpty ? (record == nil && error == nil ? "Loading…" : "No output.") : output)
+                        Text(shown.text)
                             .font(.system(size: 13, design: .monospaced))
+                        if shown.truncated { Text("Output preview truncated").font(.caption).foregroundStyle(.secondary) }
                     }
-                    if let error { Text(error).font(.caption).foregroundStyle(.secondary) }
+                    if let error { Text(TextRendering.visible(error)).font(.caption).foregroundStyle(.secondary) }
                 }
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(16)
             }
-            .navigationTitle(step.title)
+            .navigationTitle(TextRendering.visible(step.title))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
@@ -209,14 +216,16 @@ struct ChatStepOutputSheet: View {
     private var documents: [ToolDocument] { ToolPresentation(item).documents }
 
     private func diff(_ text: String) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(text.components(separatedBy: "\n").enumerated()), id: \.offset) { _, line in
+        let shown = TextRendering.rich(text)
+        return VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(shown.text.components(separatedBy: "\n").enumerated()), id: \.offset) { _, line in
                 Text(line.isEmpty ? " " : line)
                     .font(.system(size: 12.5, design: .monospaced))
                     .foregroundStyle(line.hasPrefix("+") ? ChatStep.added : line.hasPrefix("-") ? ChatStep.removed : .primary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(line.hasPrefix("+") ? ChatStep.added.opacity(0.08) : line.hasPrefix("-") ? ChatStep.removed.opacity(0.08) : .clear)
             }
+            if shown.truncated { Text("Diff preview truncated").font(.caption).foregroundStyle(.secondary) }
         }
     }
 }

@@ -3,6 +3,7 @@ options:
   deploymentTarget:
     macOS: "14.0"
     iOS: "26.0"
+    watchOS: "26.0"
 settings:
   base:
     SWIFT_VERSION: "6.0"
@@ -29,16 +30,27 @@ settingGroups:
   ios:
     ARCHS: "$(ARCHS_STANDARD)"
     ENABLE_HARDENED_RUNTIME: NO
-  # The iPhone app and its test bundles: iPhone only, signed automatically for a device (the team comes from
+  # The iPhone and iPad app and its test bundles, signed automatically for a device (the team comes from
   # build/signing.xcconfig through Mobile/Config/Signing.xcconfig), ad hoc in the simulator.
   mobileApp:
-    TARGETED_DEVICE_FAMILY: "1"
+    TARGETED_DEVICE_FAMILY: "1,2"
     CODE_SIGN_STYLE: Automatic
     CODE_SIGN_IDENTITY: Apple Development
     "CODE_SIGN_IDENTITY[sdk=iphonesimulator*]": "-"
     # The project's Release turns this off for the notarized Mac app; without it an iPhone Release build (--prod)
     # has no application-identifier, and every Keychain write (a new key, a saved password) fails with "A required
     # entitlement is not present" (errSecMissingEntitlement).
+    CODE_SIGN_INJECT_BASE_ENTITLEMENTS: YES
+  # Dispatch for Apple Watch and its tests (docs/watch.md): Apple Watch only, signed as mobileApp signs the phone's
+  # (the same team and suffix, so the watch app's id stays under the phone app's).
+  watchApp:
+    TARGETED_DEVICE_FAMILY: "4"
+    # The project's ARCHS (the Mac's arm64e) matches no watch simulator or device (arm64_32 and arm64).
+    ARCHS: "$(ARCHS_STANDARD)"
+    ENABLE_HARDENED_RUNTIME: NO
+    CODE_SIGN_STYLE: Automatic
+    CODE_SIGN_IDENTITY: Apple Development
+    "CODE_SIGN_IDENTITY[sdk=watchsimulator*]": "-"
     CODE_SIGN_INJECT_BASE_ENTITLEMENTS: YES
   # The Swift terminal (Vendor/Term) is optimized with whole-module optimization in every
   # configuration: built like the app's Debug code (unoptimized, or file by file) it consumes
@@ -258,7 +270,8 @@ targets:
       - path: Mobile
         # Tests: DispatchMobileTests. Transport: its own Swift package; its Integration folder (the app's SSH driver)
         # is app code.
-        excludes: [App/Info.plist, Config, Tests, UITests, Transport, ThirdPartyLicenses]
+        # Demo/Fixtures: the simulator demo reads them from the source tree (Debug only, never bundled).
+        excludes: [App/Info.plist, Config, Tests, UITests, Transport, ThirdPartyLicenses, Demo/Fixtures]
       - path: Mobile/Transport/Integration
       # The Dispatch themes (TerminalConfiguration reads them from the app's ghostty folder).
       - path: extras/ghostty
@@ -309,6 +322,8 @@ targets:
       - Dispatch/Views/HostGlyph.swift
       - Dispatch/Views/HostTint.swift
       - Dispatch/WorkspaceModels.swift
+      # The watch protocol (docs/watch.md): the phone's side of WatchConnectivity is in Mobile/Watch.
+      - path: Watch/Shared
     settings:
       groups: [ios, mobileApp]
       base:
@@ -320,7 +335,7 @@ targets:
         INFOPLIST_FILE: Mobile/App/Info.plist
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
-        # iPhone only (iPad later): TARGETED_DEVICE_FAMILY in mobileApp.
+        # iPhone and iPad (TARGETED_DEVICE_FAMILY in mobileApp); never Catalyst or a Mac running the iPad build.
         SUPPORTS_MACCATALYST: NO
         SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
         SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD: NO
@@ -338,6 +353,8 @@ targets:
       - package: MobileTransport
       - package: Dictation
       - target: SSHHelpers
+      # Embedded in Watch/ ("Embed Watch Content"): installing the phone app offers it on a paired watch.
+      - target: DispatchWatch
       - target: TermMobile
         embed: false
       - target: TermAppleMobile
@@ -393,6 +410,68 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: yachts.dispatch.mobile.uitests$(DISPATCH_BUNDLE_ID_SUFFIX)
         GENERATE_INFOPLIST_FILE: YES
         TEST_TARGET_NAME: DispatchMobile
+  # Dispatch for Apple Watch (docs/watch.md): a single-target SwiftUI app, a WatchConnectivity companion of the
+  # phone app, which embeds it. Its version follows the phone's: Apple requires a watch app and its companion to match
+  # (the simulator build's embedded-binary validation does not check it).
+  DispatchWatch:
+    type: application
+    platform: watchOS
+    configFiles:
+      Debug: Mobile/Config/Signing.xcconfig
+      Release: Mobile/Config/Signing.xcconfig
+    sources:
+      - path: Watch/App
+        excludes: [Info.plist]
+      # Foundation-only, compiled into both apps.
+      - path: Watch/Shared
+    settings:
+      groups: [watchApp]
+      base:
+        PRODUCT_NAME: DispatchWatch
+        PRODUCT_MODULE_NAME: DispatchWatch
+        SWIFT_INCLUDE_PATHS: ""
+        # Must extend the phone app's id, suffix included, as WKCompanionAppBundleIdentifier names it.
+        PRODUCT_BUNDLE_IDENTIFIER: yachts.dispatch.mobile$(DISPATCH_BUNDLE_ID_SUFFIX).watchkitapp
+        INFOPLIST_FILE: Watch/App/Info.plist
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        ENABLE_PREVIEWS: YES
+  DispatchWatchTests:
+    type: bundle.unit-test
+    platform: watchOS
+    configFiles:
+      Debug: Mobile/Config/Signing.xcconfig
+      Release: Mobile/Config/Signing.xcconfig
+    sources:
+      - path: Watch/Tests
+    dependencies:
+      - target: DispatchWatch
+    settings:
+      groups: [watchApp]
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: yachts.dispatch.mobile$(DISPATCH_BUNDLE_ID_SUFFIX).watchkitapp.tests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/DispatchWatch.app/DispatchWatch"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+  # Taps the watch app (docs/watch.md, Testing): its own scheme, so the unit test runs never start it.
+  DispatchWatchUITests:
+    type: bundle.ui-testing
+    platform: watchOS
+    configFiles:
+      Debug: Mobile/Config/Signing.xcconfig
+      Release: Mobile/Config/Signing.xcconfig
+    sources:
+      - path: Watch/UITests
+    dependencies:
+      - target: DispatchWatch
+    settings:
+      groups: [watchApp]
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: yachts.dispatch.mobile$(DISPATCH_BUNDLE_ID_SUFFIX).watchkitapp.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: DispatchWatch
 aggregateTargets:
   # The Rust helper depends on nothing in Xcode, so this target builds alongside Term/TermApple
   # instead of serially inside the app target.
@@ -422,6 +501,12 @@ schemes:
         DispatchMobile: all
     test:
       targets: [DispatchMobileTests]
+  DispatchWatch:
+    build:
+      targets:
+        DispatchWatch: all
+    test:
+      targets: [DispatchWatchTests]
   DispatchMobileUITests:
     build:
       targets:
@@ -429,3 +514,10 @@ schemes:
         DispatchMobileUITests: [test]
     test:
       targets: [DispatchMobileUITests]
+  DispatchWatchUITests:
+    build:
+      targets:
+        DispatchWatch: all
+        DispatchWatchUITests: [test]
+    test:
+      targets: [DispatchWatchUITests]

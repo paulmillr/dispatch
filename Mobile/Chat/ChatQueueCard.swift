@@ -13,6 +13,7 @@ struct ChatQueueCard: View {
     @State private var swiped: String?
     @FocusState private var focused: Bool
     @Environment(\.chatColumnWidth) private var column
+    @Environment(\.chatMeasure) private var measure
     @Environment(\.dynamicTypeSize) private var typeSize
     private static let rowHeight: CGFloat = 52
 
@@ -31,7 +32,7 @@ struct ChatQueueCard: View {
                 .background(Color.groupedRow, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.dispatchPink.opacity(0.35), lineWidth: 0.5))
                 .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .frame(width: column * 0.92)
+                .frame(width: ChatMeasure.queueCard(column: column, measure: measure))
                 .frame(maxWidth: .infinity, alignment: .trailing)
             } else {
                 Button { expanded = true } label: {

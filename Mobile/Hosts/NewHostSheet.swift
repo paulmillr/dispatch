@@ -205,7 +205,7 @@ struct NewHostSheet: View {
         }
         .hostTrustPrompt()
         // M8a draws the sheet's grabber, as New space's and New chat's do.
-        .presentationDragIndicator(.visible)
+        .mobileSheetGrabber()
         .interactiveDismissDisabled(verifying)
         // Swiped away after a failed attempt: nothing of the unsaved host stays behind.
         .onDisappear { if !saved, editing == nil { discardProbe() } }
@@ -313,7 +313,7 @@ struct KeyList: View {
         } message: { key in
             Text(sessions.store.hosts.contains { $0.auth == .key(key.id) }
                  ? "Hosts that use this key can't connect until you choose another."
-                 : "The private key is removed from this iPhone.")
+                 : "The private key is removed from this \(MobileDevice.name).")
         }
     }
 }

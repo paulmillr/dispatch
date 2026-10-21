@@ -37,6 +37,7 @@ import ImageIO
         let ext = (name as NSString).pathExtension.lowercased()
         if imageExtensions.contains(ext) { return size <= imageLimit ? .image : .binary }
         if head.contains(0) { return .binary }
+        if validUTF8PrefixLength(head, allowingIncompleteSuffix: UInt64(head.count) < size) == nil { return .binary }
         if size > textLimit { return .tooLarge }
         if markdownExtensions.contains(ext) { return .markdown }
         return .text(language: SyntaxHighlight.language(name))
@@ -85,9 +86,14 @@ import ImageIO
         do {
             let result = try await source.read(preview.path, offset: 0, length: headLength, revision: preview.revision)
             guard !Task.isCancelled else { return }
+            guard result.revision == preview.revision, result.revision.size == size,
+                  UInt64(result.data.count) == min(headLength, size) else {
+                throw FilesSourceError.changed(preview.path)
+            }
             preview.revision = result.revision
             preview.kind = binary ? .binary(size: size, head: result.data)
-                : .tooLarge(size: size, head: String(decoding: result.data, as: UTF8.self))
+                : textPrefix(result.data).map { .tooLarge(size: size, head: $0) }
+                    ?? .binary(size: size, head: result.data)
         } catch FilesSourceError.changed {
             // The file is a different one now (it may even fit the preview): classify it again.
             guard !Task.isCancelled else { return }
@@ -126,6 +132,10 @@ import ImageIO
         }
         try Task.checkCancellation()
         let size = first.revision.size
+        guard first.revision.kind == .file,
+              UInt64(first.data.count) == min(sniffLength, size) else {
+            throw FilesSourceError.changed(preview.path)
+        }
         let decision = decide(name: preview.name, size: size, head: first.data)
         switch decision {
         case .binary:
@@ -142,8 +152,13 @@ import ImageIO
         var data = first.data
         var revision = first.revision
         if UInt64(first.data.count) < size {
-            let whole = try await source.read(preview.path, offset: 0, length: nil, revision: first.revision)
+            // Never turn a small preview into the source's protocol-wide (128 MB) "to the end" read. The revision
+            // protects the file race; the explicit length also bounds a buggy or older remote source.
+            let whole = try await source.read(preview.path, offset: 0, length: size, revision: first.revision)
             try Task.checkCancellation()
+            guard whole.revision == first.revision, UInt64(whole.data.count) == size else {
+                throw FilesSourceError.changed(preview.path)
+            }
             data = whole.data
             revision = whole.revision
         }
@@ -163,9 +178,17 @@ import ImageIO
             }
             preview.kind = .image(data, pixelSize: pixels)
         case .markdown:
-            preview.kind = .markdown(text(data))
+            guard let text = text(data) else {
+                preview.kind = .binary(size: size, head: nil)
+                return
+            }
+            preview.kind = .markdown(text)
         case .text(let language):
-            preview.kind = .text(text(data), language: language)
+            guard let text = text(data) else {
+                preview.kind = .binary(size: size, head: nil)
+                return
+            }
+            preview.kind = .text(text, language: language)
         case .binary, .tooLarge:
             break
         }
@@ -200,11 +223,51 @@ import ImageIO
         return size.width * size.height <= CGFloat(imagePixelLimit)
     }
 
-    /// Text decoded as UTF-8; invalid sequences show as replacement characters rather than hiding the file.
-    static func text(_ data: Data) -> String {
-        var data = data
-        if data.starts(with: [0xEF, 0xBB, 0xBF]) { data.removeFirst(3) }
-        return String(decoding: data, as: UTF8.self)
+    /// Exact UTF-8 text. Lossy replacement characters can conceal different source bytes, so malformed input is
+    /// offered as a hex preview instead. A leading UTF-8 BOM is metadata and is omitted from display.
+    static func text(_ data: Data) -> String? {
+        guard validUTF8PrefixLength(data, allowingIncompleteSuffix: false) == data.count else { return nil }
+        let start = data.starts(with: [0xEF, 0xBB, 0xBF]) ? 3 : 0
+        return String(decoding: data.dropFirst(start), as: UTF8.self)
+    }
+
+    /// A bounded head can end midway through an otherwise valid scalar. Decode its complete prefix; invalid bytes
+    /// before that boundary make the head binary instead of silently changing what the user sees.
+    static func textPrefix(_ data: Data) -> String? {
+        guard let count = validUTF8PrefixLength(data, allowingIncompleteSuffix: true) else { return nil }
+        let start = data.starts(with: [0xEF, 0xBB, 0xBF]) ? 3 : 0
+        return String(decoding: data.dropFirst(start).prefix(max(0, count - start)), as: UTF8.self)
+    }
+
+    /// Returns the number of bytes in the valid prefix. With `allowingIncompleteSuffix`, only a well-formed scalar
+    /// cut off at the end is accepted; overlong encodings, surrogates and values past U+10FFFF remain invalid.
+    static func validUTF8PrefixLength(_ data: Data, allowingIncompleteSuffix: Bool) -> Int? {
+        let bytes = [UInt8](data)
+        var index = 0
+        while index < bytes.count {
+            let first = bytes[index]
+            if first < 0x80 { index += 1; continue }
+            let length: Int
+            let second: ClosedRange<UInt8>
+            switch first {
+            case 0xC2...0xDF: length = 2; second = 0x80...0xBF
+            case 0xE0: length = 3; second = 0xA0...0xBF
+            case 0xE1...0xEC, 0xEE...0xEF: length = 3; second = 0x80...0xBF
+            case 0xED: length = 3; second = 0x80...0x9F
+            case 0xF0: length = 4; second = 0x90...0xBF
+            case 0xF1...0xF3: length = 4; second = 0x80...0xBF
+            case 0xF4: length = 4; second = 0x80...0x8F
+            default: return nil
+            }
+            let available = min(length, bytes.count - index)
+            if available >= 2, !second.contains(bytes[index + 1]) { return nil }
+            if available >= 3 {
+                for offset in 2..<available where !(0x80...0xBF).contains(bytes[index + offset]) { return nil }
+            }
+            guard available == length else { return allowingIncompleteSuffix ? index : nil }
+            index += length
+        }
+        return index
     }
 
     private static func fail(_ preview: FilePreviewState, _ error: any Error) {

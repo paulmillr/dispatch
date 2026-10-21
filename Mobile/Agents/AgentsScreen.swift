@@ -19,23 +19,36 @@ struct AgentsScreen: View {
     var close: (ChatConversation) -> Void
     /// Its own title and filter button; off in the app, whose shared stack's bar carries them (`AgentsToolbar`).
     var chrome = true
+    @Environment(\.tabsNarrowSidebar) private var narrow
+
+    /// A row's line one detail (after the name) and line two. In a split's narrowest sidebar (under 300 points, the
+    /// unfolded Duo's 263) the host moves to the start of line two, so the conversation's name is not cut to make
+    /// room for it beside the time.
+    static func rowText(host: String, muted: Bool, preview: String?, narrow: Bool) -> (detail: String?, subtitle: String?) {
+        guard narrow else { return (host + (muted ? " · muted" : ""), preview) }
+        return (muted ? "muted" : nil, [host, preview].compactMap { $0 }.joined(separator: " · "))
+    }
 
     var body: some View {
         let rows = conversations.visible
         List {
             ForEach(Array(rows.enumerated()), id: \.element.id) { index, conversation in
+                let text = Self.rowText(host: conversation.hostName, muted: conversation.muted,
+                                        preview: conversation.summary.preview ?? conversation.summary.attention, narrow: narrow)
                 Button { open(conversation) } label: {
                     MobileRow(
                         dot: conversation.dot, tint: look.tint(conversation.key.host),
                         name: conversation.name,
-                        detail: conversation.hostName + (conversation.muted ? " · muted" : ""),
+                        detail: text.detail,
                         time: TabsTime.label(conversation.summary.lastActivity),
-                        subtitle: conversation.summary.preview ?? conversation.summary.attention,
+                        subtitle: text.subtitle,
                         lines: 2, separator: index < rows.count - 1, stale: conversation.stale) {
                             look.glyph(conversation.key.host)
                         }
                 }
                 .buttonStyle(.plain)
+                // Under an iPad's pointer: the highlight Spaces' rows have (a plain button in a list has none).
+                .tabsRowHover()
                 .listRowInsets(EdgeInsets(top: 0, leading: 6, bottom: 0, trailing: 0))
                 .listRowSeparator(.hidden)
                 .listRowBackground(Color.clear)

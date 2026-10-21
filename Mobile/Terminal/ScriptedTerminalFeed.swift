@@ -18,6 +18,9 @@ final class ScriptedTerminalFeed: TerminalFeed {
     struct Options: Sendable {
         var chunk = 65_536
         var echo = false
+        /// Every input comes back on a line of its own in caret notation (ESC as `^[`, Ctrl-C as `^C`), so a UI test
+        /// reads a key's encoding off the screen (`-DispatchTerminalEcho keys`).
+        var echoKeys = false
         var prompt = "\u{1B}[32m~/src/app\u{1B}[0m \u{1B}[38;2;111;111;120m$\u{1B}[0m "
         var scroll = TerminalScrollResult.appOwned
         var history: UInt64 = 0
@@ -122,7 +125,8 @@ final class ScriptedTerminalFeed: TerminalFeed {
         let echo = state.withLock { state -> (AsyncStream<TerminalFeedEvent>.Continuation, Data)? in
             guard state.events != nil else { return nil }
             state.record.input.append(input)
-            guard options.echo, let events = state.events else { return nil }
+            guard options.echo || options.echoKeys, let events = state.events else { return nil }
+            if options.echoKeys { return (events, Data(("\r\n" + Self.caret(input)).utf8)) }
             return (events, Self.echo(input, line: &state.line, prompt: options.prompt))
         }
         if let (events, bytes) = echo, !bytes.isEmpty { events.yield(.output(bytes)) }
@@ -155,6 +159,29 @@ final class ScriptedTerminalFeed: TerminalFeed {
         if let position { events?.yield(.history(position)) }
         return result
     }
+
+    /// Bytes as `cat -v` shows them: C0 controls as `^@` to `^_`, DEL as `^?`, the rest as text.
+    static func caret(_ input: Data) -> String {
+        var out = ""
+        for scalar in String(decoding: input, as: UTF8.self).unicodeScalars {
+            switch scalar.value {
+            case 0x00...0x1F: out += "^" + String(UnicodeScalar(UInt8(scalar.value + 0x40)))
+            case 0x7F: out += "^?"
+            default: out.unicodeScalars.append(scalar)
+            }
+        }
+        return out
+    }
+
+    #if DEBUG
+    /// The Spaces sample's terminal (`-DispatchTabsSample`): `output`, and with `-DispatchTerminalEcho keys` every
+    /// input echoed in caret notation (UI tests of hardware keys).
+    static func sample(output: Data) -> ScriptedTerminalFeed {
+        var options = Options()
+        options.echoKeys = UserDefaults.standard.string(forKey: "DispatchTerminalEcho") == "keys"
+        return ScriptedTerminalFeed(output: output, options: options)
+    }
+    #endif
 
     /// A shell line editor's echo: printable text as typed, backspace erases, return runs nothing and prompts again.
     static func echo(_ input: Data, line: inout String, prompt: String) -> Data {

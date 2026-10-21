@@ -17,7 +17,7 @@ struct DictationSettingsView: View {
                 .labelsHidden()
             } footer: {
                 Text(settings.dictationEngine == .apple ? AppleTranscriber.summary + "."
-                     : "Whisper runs on this iPhone with a model you download.")
+                     : "Whisper runs on this \(MobileDevice.name) with a model you download.")
             }
             if settings.dictationEngine == .whisper {
                 Section {
@@ -29,7 +29,7 @@ struct DictationSettingsView: View {
                 } header: {
                     Text("Whisper models")
                 } footer: {
-                    Text("Models download from huggingface.co and stay on this iPhone, out of its backups. Tap one to use it; a large model needs Wi-Fi and a few seconds more per message.")
+                    Text("Models download from huggingface.co and stay on this \(MobileDevice.name), out of its backups. Tap one to use it; a large model needs Wi-Fi and a few seconds more per message.")
                 }
             }
         }

@@ -130,7 +130,9 @@ final class HostStats {
                     trimHistory()
                 }
                 guard let self else { return }
-                let interval: Duration = subscriptions.isEmpty ? .seconds(5) : .seconds(2)
+                // With a viewer the chart moves every 2 s. Without one the history only pre-fills the chart for the
+                // next popover: a sample a minute keeps an hour of context at a sixtieth of the helper spawns.
+                let interval: Duration = subscriptions.isEmpty ? .seconds(60) : .seconds(2)
                 do { try await System.sleep(for: interval, "sample") } catch { return }
             }
         }

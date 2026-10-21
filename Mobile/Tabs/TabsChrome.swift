@@ -109,6 +109,9 @@ struct TabsHeaderPill<Label: View>: View {
         }
         .buttonStyle(.plain)
         .glassEffect(.regular.interactive(), in: Capsule())
+        // The pointer's highlight in the pill's shape: a plain button gets none, and interactive glass none either.
+        .contentShape(.hoverEffect, Capsule())
+        .hoverEffect(.highlight)
         .fixedSize()
         // The navigation bar keeps its height: the pill's text grows to xxxLarge, larger sizes show the large content
         // viewer on a long press, as the system's bar buttons do.
@@ -139,13 +142,7 @@ struct TabsBackPill: View {
                 TabsBackChevron()
                 if count {
                     // A badge, so the number reads as a count of waiting conversations.
-                    Text(label)
-                        .font(.footnote.weight(.bold))
-                        .monospacedDigit()
-                        .foregroundStyle(Color.onAccent)
-                        .padding(.horizontal, 6)
-                        .frame(minWidth: 20, minHeight: 20)
-                        .background(Color.dispatchPink, in: Capsule())
+                    TabsCountBadge(label: label)
                 } else {
                     TabsCappedWidth(max: Self.labelWidth) {
                         Text(label)
@@ -175,17 +172,32 @@ private struct TabsBackChevron: View {
 /// trailing control. In the bar, not over the content: a hidden bar on a pushed screen hides it for the whole stack
 /// at the start of the push, and the screen underneath jumped up for a frame (a screen recording showed it).
 struct TabsScreenHeader<Back: View, Subtitle: View, Trailing: View>: ToolbarContent {
-    /// The leading item's widest: the column (`tabsColumnWidth`; the screen without a split) less the bar's margins
-    /// (20 each side), the 44 point host pill and the 12 the bar leaves before it.
-    @MainActor static func leadingWidth(column: CGFloat?) -> CGFloat {
-        let width = column ?? (UIApplication.shared.connectedScenes.first as? UIWindowScene)?.screen.bounds.width ?? 402
-        return max(100, width - 96)
+    /// The leading item's widest: the column (`tabsColumnWidth`; the window before it is measured) less the bar's
+    /// margins (20 each side), the trailing control (the 44 point host pill, or the split's Terminal / Chat switch) and
+    /// the 12 the bar leaves before it.
+    @MainActor static func leadingWidth(column: CGFloat?, trailing: CGFloat = 44, atTrailingEdge: Bool = true) -> CGFloat {
+        let measured = MobileSplit.initialSize.width
+        let width = column ?? (measured > 0 ? measured : 402)
+        return max(100, width - 52 - trailing - (atTrailingEdge ? statusCorner : 0))
+    }
+
+    /// The unfolded Duo keeps its status (time, signal) in the bar's row at the screen's trailing end; its status bar
+    /// is a 2-point strip, where other iPhones' is the row above the bar. About 82 points and its gap, which the bar
+    /// reserves and reports nowhere: a header at that edge leaves them, or a long title and its trailing control
+    /// overflowed into the bar's "…" menu.
+    @MainActor static var statusCorner: CGFloat {
+        let status = (UIApplication.shared.connectedScenes.first as? UIWindowScene)?.statusBarManager?.statusBarFrame
+        return (status?.height ?? 54) < 20 ? 100 : 0
     }
     let title: String
     /// The column the bar is in (`tabsColumnWidth`).
     var column: CGFloat? = nil
     /// No back pill: the split's detail column, beside the sidebar it would return to.
     var showsBack = true
+    /// The trailing control's width (`leadingWidth`).
+    var trailingWidth: CGFloat = 44
+    /// The bar ends at the screen's trailing edge (the phone, the split's detail column), where `statusCorner` is.
+    var atTrailingEdge = true
     @ViewBuilder var back: Back
     @ViewBuilder var subtitle: Subtitle
     @ViewBuilder var trailing: Trailing
@@ -195,7 +207,8 @@ struct TabsScreenHeader<Back: View, Subtitle: View, Trailing: View>: ToolbarCont
         // assumed the "‹ 1" badge; a pill naming its screen ("‹ ciphers") and a long title (a Claude tab's prompt)
         // overflowed the bar, which then showed only its "…" menu, the back pill inside it.
         ToolbarItem(placement: .topBarLeading) {
-            TabsHeaderLeading(width: Self.leadingWidth(column: column), back: showsBack) {
+            TabsHeaderLeading(width: Self.leadingWidth(column: column, trailing: trailingWidth, atTrailingEdge: atTrailingEdge),
+                              back: showsBack) {
                 if showsBack { back }
                 VStack(alignment: .leading, spacing: 1) {
                     Text(title)
@@ -228,12 +241,12 @@ struct TabsHeaderLeading: Layout {
     static let spacing: CGFloat = 12
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let (back, title) = sizes(subviews)
+        let (back, title) = sizes(subviews, offered: proposal.width)
         return CGSize(width: offset(back) + title.width, height: max(back.height, title.height))
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let (back, title) = sizes(subviews)
+        let (back, title) = sizes(subviews, offered: bounds.width)
         if self.back, let pill = subviews.first {
             pill.place(at: CGPoint(x: bounds.minX, y: bounds.midY), anchor: .leading, proposal: ProposedViewSize(back))
         }
@@ -249,10 +262,13 @@ struct TabsHeaderLeading: Layout {
     /// Where the title column starts: after the pill and the bar's gap.
     private func offset(_ back: CGSize) -> CGFloat { self.back ? back.width + Self.spacing : 0 }
 
-    private func sizes(_ subviews: Subviews) -> (back: CGSize, title: CGSize) {
+    /// `offered`: what the bar proposes, when it is less than `width`. The unfolded Duo's status sits in the bar's row
+    /// beside the split's detail column, and the bar keeps its items clear of it without saying how wide it is.
+    private func sizes(_ subviews: Subviews, offered: CGFloat?) -> (back: CGSize, title: CGSize) {
         let back = self.back ? subviews.first?.sizeThatFits(.unspecified) ?? .zero : .zero
         guard let column = titleColumn(subviews) else { return (back, .zero) }
-        let room = max(0, width - offset(back))
+        let limit = offered.map { $0.isFinite && $0 > 0 ? min($0, width) : width } ?? width
+        let room = max(0, limit - offset(back))
         let ideal = column.sizeThatFits(.unspecified).width
         let title = column.sizeThatFits(ProposedViewSize(width: min(ideal, room), height: nil))
         // A fixed-size subtitle (the pane switcher's menu) may answer wider than offered: the item still stops at `width`.
@@ -261,7 +277,8 @@ struct TabsHeaderLeading: Layout {
 }
 
 extension EnvironmentValues {
-    /// The width of the column a screen is in: the split's sidebar or detail (`MobileSplit`); nil fills the screen.
+    /// The width of the column a screen is in: the split's sidebar or detail (`MobileSplit`), else the window's (an iPad
+    /// window may be narrower than its screen); nil before the window is measured, which reads the screen's.
     @Entry var tabsColumnWidth: CGFloat? = nil
     /// The split's detail column: its tab has no back pill, the sidebar beside it is where Back went.
     @Entry var tabsSplitDetail = false
@@ -271,6 +288,49 @@ extension EnvironmentValues {
     @Entry var tabsNarrowSidebar = false
     /// The split's columns: a tab row opens its tab in the detail column (`TabsTabLink`); nil pushes it.
     @Entry var tabsSelectTab: ((TabRef) -> Void)? = nil
+    /// The iPad split's detail column: its tab's header carries the sidebar button (`TabsSidebarPill`).
+    @Entry var tabsSidebarToggle: TabsSidebarToggle? = nil
+}
+
+/// The iPad split's sidebar, as the tab's header sees it: whether it is hidden, and what hides or shows it.
+struct TabsSidebarToggle {
+    var hidden: Bool
+    var toggle: () -> Void
+}
+
+/// The iPad split's sidebar button, where the stack's back pill would be (as iPadOS puts its sidebar button at the
+/// leading edge of the detail's bar): hides the sidebar so the tab takes the window, and shows it again. It carries
+/// the needs-you count as the back pill does, in both states: a badge that came and went with the sidebar animated the
+/// pill's width and showed half a badge for frames.
+struct TabsSidebarPill: View {
+    let toggle: TabsSidebarToggle
+    let needsYou: Int
+
+    var body: some View {
+        TabsHeaderPill(trailing: 12, action: toggle.toggle) {
+            HStack(spacing: 5) {
+                Image(systemName: "sidebar.leading")
+                if needsYou > 0 { TabsCountBadge(label: "\(needsYou)") }
+            }
+        }
+        .accessibilityLabel(toggle.hidden ? "Show sidebar" : "Hide sidebar")
+        .accessibilityValue(needsYou > 0 ? "\(needsYou) \(needsYou == 1 ? "conversation needs" : "conversations need") you" : "")
+    }
+}
+
+/// The back pill's count of conversations that need the user, as a badge (Messages' unread count).
+struct TabsCountBadge: View {
+    let label: String
+
+    var body: some View {
+        Text(label)
+            .font(.footnote.weight(.bold))
+            .monospacedDigit()
+            .foregroundStyle(Color.onAccent)
+            .padding(.horizontal, 6)
+            .frame(minWidth: 20, minHeight: 20)
+            .background(Color.dispatchPink, in: Capsule())
+    }
 }
 
 /// A tab row's link: on the phone it pushes the tab; in the split it opens it beside the sidebar. A push from the
@@ -281,11 +341,23 @@ struct TabsTabLink<Label: View>: View {
     @Environment(\.tabsSelectTab) private var select
 
     var body: some View {
-        if let select {
-            Button { select(tab) } label: { label }
-        } else {
-            NavigationLink(value: TabsRoute.tab(tab)) { label }
+        Group {
+            if let select {
+                Button { select(tab) } label: { label }
+            } else {
+                NavigationLink(value: TabsRoute.tab(tab)) { label }
+            }
         }
+        .tabsRowHover()
+    }
+}
+
+extension View {
+    /// A list row under the pointer (an iPad's trackpad or mouse): the system's highlight in a rounded rectangle
+    /// across the row, as a list cell gets, which the plain buttons and links of the rows' stacks do not.
+    func tabsRowHover() -> some View {
+        contentShape(.hoverEffect, RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .hoverEffect(.highlight)
     }
 }
 
@@ -352,6 +424,8 @@ struct TabsFloatingButton: View {
         }
         .buttonStyle(.plain)
         .glassEffect(.regular.interactive(), in: Capsule())
+        .contentShape(.hoverEffect, Capsule())
+        .hoverEffect(.highlight)
     }
 }
 

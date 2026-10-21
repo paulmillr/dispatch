@@ -41,7 +41,7 @@ final class CodeDocumentState {
     private(set) var lines: [Line] = []
 
     func update(_ diff: String, path: String, animate: Bool) -> [Line] {
-        let preview = String(diff.prefix(32_768))
+        let preview = TextRendering.prefix(diff, scalars: 32_768).text
         let animate = animate && snapshot != nil && self.path == path && !suspended
         suspended = false
         if !animate { clearArrivals() }
@@ -163,7 +163,8 @@ struct CodeDocumentView: View {
     }
     private var displayed: String { state.sourceMode ? (state.source ?? "") : document.diff }
     var body: some View {
-        let preview = String(displayed.prefix(32_768))
+        let bounded = TextRendering.prefix(displayed, scalars: 32_768)
+        let preview = bounded.text
         let diff = state.diffLines.update(document.diff, path: document.path, animate: animatesChanges && !state.sourceMode)
         let rows = state.sourceMode ? preview.components(separatedBy: "\n").enumerated().map {
             DiffLinePresentation.Line(id: -($0.offset + 1), text: $0.element, arrival: nil)
@@ -176,7 +177,7 @@ struct CodeDocumentView: View {
         VStack(alignment: .leading, spacing: 0) {
             if showHeader {
             HStack(spacing: 10) {
-                Text(ChatSearchHighlight.text(AttributedString(document.displayPath(in: directory)), query: query, theme: theme)).lineLimit(1).truncationMode(.middle)
+                Text(ChatSearchHighlight.text(AttributedString(TextRendering.visible(document.displayPath(in: directory))), query: query, theme: theme)).lineLimit(1).truncationMode(.middle)
                 if !state.sourceMode {
                     Text("+\(lines.filter { $0.hasPrefix("+") }.count)").foregroundStyle(theme.green)
                     Text("−\(lines.filter { $0.hasPrefix("-") }.count)").foregroundStyle(theme.red)
@@ -189,7 +190,7 @@ struct CodeDocumentView: View {
                 Text(sshSource == nil ? "Current file on disk" : "Current file on SSH host").font(theme.typography.detail).foregroundStyle(theme.muted).padding(.horizontal, 10).padding(.top, 6)
             }
             if loading { ProgressView().controlSize(.small).padding() }
-            if state.sourceMode, let error { Text(error).foregroundStyle(theme.muted).padding(10) }
+            if state.sourceMode, let error { Text(TextRendering.visible(error)).foregroundStyle(theme.muted).padding(10) }
             // A document that fits its 360 pt scrolls sideways only, as a chat code block does.
             let tall = CGFloat(rows.count) * (theme.typography.codeDetailLineHeight + 4) > 360
             GeometryReader { geometry in
@@ -215,7 +216,7 @@ struct CodeDocumentView: View {
             }
             }.frame(height: min(360, max(50, CGFloat(lines.count) * (theme.typography.codeDetailLineHeight + 4)
                 + (NSScroller.preferredScrollerStyle == .legacy ? NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy) : 0))))
-            if preview.count < displayed.count {
+            if bounded.truncated {
                 Text("Preview truncated · Copy includes the full text").foregroundStyle(theme.muted).padding(8)
             }
         }

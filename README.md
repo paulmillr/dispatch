@@ -66,20 +66,25 @@ All deps are downloaded into `build`.
 
 Official website (redirects to GitHub): https://dispatch.yachts
 
-## Dispatch for iPhone
+## Dispatch for iPhone and iPad
 
 A thin client for your Macs and Linux machines: Spaces (tmux/herdr tabs and a real terminal) and Agents (chat with
-approvals, queue and diffs) over SSH. The same Rust helper does the work on each host; nothing leaves the phone but
-your SSH connections. Needs iOS 26+, Xcode 27, and on each host tmux 3.7+ or herdr 0.9.3+. Sideloaded, no App Store.
+approvals, queue and diffs) over SSH. The same Rust helper does the work on each host; nothing leaves the device but
+your SSH connections. On an iPad, Spaces sits beside the tab it opens, and a hardware keyboard adds the menu bar and
+the Mac's ⌘ shortcuts. Needs iOS or iPadOS 26+, Xcode 27, and on each host tmux 3.7+ or herdr 0.9.3+. Sideloaded, no
+App Store.
 
 ```sh
 ./run.sh --ios                                         # try it in the simulator
+./run.sh --ios --simulator "iPad Pro 11-inch (M5)"     # on an iPad (the iOS 27.0 runtime has the iPads)
 python3 scripts/ios-signing.py TEAMID --suffix .you    # once: your team from Xcode, Settings, Accounts
-# on the phone: pair it by cable, turn on Developer Mode
+# on the iPhone or iPad: pair it by cable, turn on Developer Mode
 ./run.sh --ios-device --prod                           # build, install, launch; again weekly on a free Apple ID
 ```
 
 See [docs/ios.md](docs/ios.md).
+
+The Apple Watch companion: `./run.sh --watch` (paired iPhone and watch simulators), [docs/watch.md](docs/watch.md).
 
 ## Releasing
 

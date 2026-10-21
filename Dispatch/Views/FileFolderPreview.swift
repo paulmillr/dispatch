@@ -45,7 +45,7 @@ struct FileFolderPreview: View {
                 }
                 GridRow {
                     label("path")
-                    Text(verbatim: path).foregroundStyle(theme.ink.opacity(0.7))
+                    Text(verbatim: TextRendering.visible(path)).foregroundStyle(theme.ink.opacity(0.7))
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("file-preview-folder-path")

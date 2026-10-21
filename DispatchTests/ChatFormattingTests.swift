@@ -468,6 +468,8 @@ final class ChatFormattingTests: XCTestCase {
         XCTAssertEqual(SyntaxHighlight.text("42", language: "json").foregroundColor, SyntaxHighlight.number)
         XCTAssertEqual(SyntaxHighlight.text("let 42", language: "unknown").foregroundColor, Chrome.ink)
         XCTAssertEqual(SyntaxHighlight.lines("/* hello\nworld */", language: "swift")[1].foregroundColor, SyntaxHighlight.comment)
+        XCTAssertEqual(String(SyntaxHighlight.text("let safe = 1 // \u{202E} hidden", language: "swift").characters),
+                       "let safe = 1 // ⟦RLO⟧ hidden")
         let large = String(repeating: "a", count: 70_000)
         XCTAssertEqual(String(SyntaxHighlight.text(large, language: "swift").characters), large)
     }
@@ -480,6 +482,21 @@ final class ChatFormattingTests: XCTestCase {
         XCTAssertTrue(blocks.contains(.init(kind: .table([["Name", "Value"], ["`a|b`", "x\\|y"]]), text: "")))
         XCTAssertTrue(blocks.contains(.init(kind: .code("swift"), text: "let fence = \"```\"")))
         XCTAssertEqual(blocks.last, .init(kind: .code("python"), text: "print('unfinished')"))
+        let wide = "| " + String(repeating: "cell | ", count: ChatMarkdownBlock.tableColumnsLimit + 20)
+        let divider = "| " + String(repeating: "--- | ", count: ChatMarkdownBlock.tableColumnsLimit + 20)
+        guard case .table(let bounded)? = ChatMarkdownBlock.parse(wide + "\n" + divider).first?.kind else {
+            return XCTFail("Wide table was not parsed")
+        }
+        XCTAssertEqual(bounded.first?.count, ChatMarkdownBlock.tableColumnsLimit)
+        let rich = TextRendering.rich(String(repeating: "line\n", count: TextRendering.richLineLimit + 20))
+        XCTAssertTrue(rich.truncated)
+        XCTAssertEqual(rich.text.filter { $0 == "\n" }.count, TextRendering.richLineLimit - 1)
+        let pathological = "a" + String(repeating: "\u{0301}", count: 20_000)
+        let scalarBounded = TextRendering.prefix(pathological, scalars: 64)
+        XCTAssertTrue(scalarBounded.truncated)
+        XCTAssertEqual(scalarBounded.text.unicodeScalars.count, 64)
+        XCTAssertEqual(FileTextLines.cut([pathological])[0]?.unicodeScalars.count, FileTextLines.lineLimit + 2,
+                       "The visible ellipsis adds a space and one scalar")
     }
     /// A streamed fence keeps its lines while its closing fence arrives a backtick at a time: an unfinished last line
     /// that could still close it adds no line the next delta would take away.

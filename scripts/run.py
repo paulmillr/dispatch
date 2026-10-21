@@ -15,8 +15,9 @@ import subprocess
 import sys
 import tempfile
 import time
-from ios_simulator import find_simulator
+from ios_simulator import find_simulator, is_ipad
 from setup_consent import environment
+from watch_simulator import find_pair
 
 ROOT = Path(__file__).resolve().parent.parent
 # The iPhone app's DerivedData: its own build database, so an iPhone build never waits on (or locks) the Mac's in build/.
@@ -235,15 +236,16 @@ def ios_target(args, phone=None, simulator=None):
 
 
 def paired_iphones(document):
-    """[(udid, name)] of the real iPhones in `devicectl list devices --json-output` (Xcode 27 lists the simulators
-    there too), connected ones first. The UDID is what both xcodebuild's destination and devicectl's --device take."""
+    """[(udid, name)] of the real iPhones and iPads in `devicectl list devices --json-output` (Xcode 27 lists the
+    simulators there too), connected ones first. The UDID is what both xcodebuild's destination and devicectl's --device
+    take."""
     phones = []
     for device in document.get('result', {}).get('devices', []):
         properties = device.get('properties') or {}
         hardware = properties.get('hardware') or device.get('hardwareProperties') or {}
         if hardware.get('reality') != 'physical' or hardware.get('platform') != 'iOS':
             continue
-        if hardware.get('deviceType', 'iPhone') != 'iPhone':
+        if hardware.get('deviceType', 'iPhone') not in ('iPhone', 'iPad'):
             continue
         name = (properties.get('state') or {}).get('name') or (device.get('deviceProperties') or {}).get('name')
         connection = properties.get('connection') or device.get('connectionProperties') or {}
@@ -264,7 +266,7 @@ def find_iphone(ui, args, env):
                          env, capture=True)
     phone = choose_iphone(paired_iphones(json.loads(listing or '{}')), args.ios_device)
     if phone is None and not args.just_build:
-        raise OSError(f'No paired iPhone{" named " + args.ios_device if args.ios_device else ""}: connect it by '
+        raise OSError(f'No paired iPhone or iPad{" named " + args.ios_device if args.ios_device else ""}: connect it by '
                       'cable once and trust this Mac (docs/ios.md, Signing and a device)')
     return phone
 
@@ -283,28 +285,58 @@ def signing_problem(path=None):
     return 'build/signing.xcconfig: ' + '; '.join(found) if found else None
 
 
+def bundle_identifier(app):
+    return subprocess.run(['/usr/libexec/PlistBuddy', '-c', 'Print :CFBundleIdentifier', str(app / 'Info.plist')],
+                          capture_output=True, text=True, check=True).stdout.strip()
+
+
+def boot_simulator(ui, env, simulator):
+    # Booting a booted simulator fails harmlessly ("Unable to boot device in current state: Booted").
+    udid, description = simulator
+    ui.step(f'Booting {description}', ['xcrun', 'simctl', 'boot', udid], env, allowed=(0, 149))
+
+
+def open_simulator_window(ui):
+    # The simulator's window: Xcode 27's DeviceHub, which took over from Simulator.app (the simulator runs without
+    # either).
+    if not any(subprocess.run(['open', '-b', bundle], stdout=ui.log, stderr=ui.log).returncode == 0
+               for bundle in ('com.apple.dt.Devices', 'com.apple.iphonesimulator')):
+        ui.line(ui.style('–', '33'), 'Neither DeviceHub nor Simulator.app is installed; the app runs headless '
+                                    '(xcrun simctl io booted screenshot)')
+
+
 def launch_ios(ui, app, args, env, phone=None, simulator=None):
     """Install and launch the iPhone app: in the simulator (booted if needed), or on a device through devicectl."""
-    bundle = subprocess.run(['/usr/libexec/PlistBuddy', '-c', 'Print :CFBundleIdentifier', str(app / 'Info.plist')],
-                            capture_output=True, text=True, check=True).stdout.strip()
+    bundle = bundle_identifier(app)
     if args.ios_device is None:
-        # Booting a booted simulator fails harmlessly ("Unable to boot device in current state: Booted").
-        udid, description = simulator
-        ui.step(f'Booting {description}', ['xcrun', 'simctl', 'boot', udid], env, allowed=(0, 149))
-        # The simulator's window: Xcode 27's DeviceHub, which took over from Simulator.app (the simulator runs without
-        # either).
-        if not any(subprocess.run(['open', '-b', bundle], stdout=ui.log, stderr=ui.log).returncode == 0
-                   for bundle in ('com.apple.dt.Devices', 'com.apple.iphonesimulator')):
-            ui.line(ui.style('–', '33'), 'Neither DeviceHub nor Simulator.app is installed; the app runs headless '
-                                        '(xcrun simctl io booted screenshot)')
+        udid, _ = simulator
+        boot_simulator(ui, env, simulator)
+        open_simulator_window(ui)
         ui.step('Installing Dispatch for iPhone', ['xcrun', 'simctl', 'install', udid, str(app)], env)
-        ui.step('Launching Dispatch for iPhone', ['xcrun', 'simctl', 'launch', udid, bundle], env)
+        # --demo: the simulator demo's hosts (Mobile/Demo, Debug only); a running copy restarts into it.
+        demo = ['--terminate-running-process', udid, bundle, '-DispatchDemo', 'YES'] if args.demo else [udid, bundle]
+        ui.step('Launching Dispatch for iPhone' + (' (demo)' if args.demo else ''), ['xcrun', 'simctl', 'launch', *demo], env)
         return
     # docs/ios.md: a paired phone with Developer Mode on, signed with build/signing.xcconfig's team.
     device, name = phone
     ui.step(f'Installing on {name}', ['xcrun', 'devicectl', 'device', 'install', 'app', '--device', device, str(app)], env)
     ui.step(f'Launching on {name}', ['xcrun', 'devicectl', 'device', 'process', 'launch', '--terminate-existing',
                                      '--device', device, bundle], env)
+
+
+def launch_watch(ui, app, env, simulator, watch):
+    """Install the iPhone app on the paired phone and its embedded watch app on the watch, then launch both (the
+    phone app first: it is the watch's data source)."""
+    watch_app = app / 'Watch/DispatchWatch.app'
+    boot_simulator(ui, env, simulator)
+    boot_simulator(ui, env, watch)
+    open_simulator_window(ui)
+    ui.step('Installing Dispatch for iPhone', ['xcrun', 'simctl', 'install', simulator[0], str(app)], env)
+    # A simulator does not install a phone app's embedded watch app on its paired watch, as a device does.
+    ui.step('Installing Dispatch for Apple Watch', ['xcrun', 'simctl', 'install', watch[0], str(watch_app)], env)
+    ui.step('Launching Dispatch for iPhone', ['xcrun', 'simctl', 'launch', simulator[0], bundle_identifier(app)], env)
+    ui.step('Launching Dispatch for Apple Watch', ['xcrun', 'simctl', 'launch', watch[0], bundle_identifier(watch_app)],
+            env)
 
 
 def main():
@@ -328,15 +360,35 @@ def main():
     parser.add_argument('--clean', action='store_true',
                         help='remove local build artifacts, logs, downloaded tools and caches, then rebuild')
     parser.add_argument('--ios', action='store_true',
-                        help='build Dispatch for iPhone (docs/ios.md) and run it in the simulator')
+                        help='build Dispatch for iPhone and iPad (docs/ios.md) and run it in the simulator')
     parser.add_argument('--simulator', default=os.environ.get('DISPATCH_IOS_SIMULATOR', 'iPhone Air'), metavar='NAME',
-                        help='the simulator --ios runs in, by name or UDID; a booted one, then the newest runtime, when '
-                             'several share the name (default: iPhone Air)')
+                        help='the simulator --ios runs in, an iPhone or an iPad ("iPad Pro 11-inch (M5)"), by name or '
+                             'UDID; a booted one, then the newest runtime, when several share the name (default: '
+                             'DISPATCH_IOS_SIMULATOR, else iPhone Air; --watch uses the watch\'s paired iPhone)')
+    parser.add_argument('--watch', action='store_true',
+                        help='build Dispatch for iPhone with Dispatch for Apple Watch (docs/watch.md) and run both on '
+                             'a paired iPhone and watch simulator')
+    parser.add_argument('--watch-simulator', default=os.environ.get('DISPATCH_WATCH_SIMULATOR',
+                                                                    'Apple Watch Series 12 (46mm)'), metavar='NAME',
+                        help='the watch simulator --watch runs on, by name or UDID, with the iPhone it is paired with; '
+                             'without one it is paired with a "Dispatch Watch iPhone" simulator, made once '
+                             '(default: Apple Watch Series 12 (46mm))')
+    parser.add_argument('--demo', action='store_true',
+                        help='with --ios: launch the simulator demo (three demo hosts with spaces, agents and terminals; '
+                             'Debug only, nothing reaches a host)')
     parser.add_argument('--ios-device', nargs='?', const='', default=None, metavar='NAME',
-                        help='build Dispatch for iPhone for a device and install it there with devicectl '
-                             '(default: the first paired iPhone; needs a team in build/signing.xcconfig: '
+                        help='build Dispatch for a device and install it there with devicectl '
+                             '(default: the first paired iPhone or iPad; needs a team in build/signing.xcconfig: '
                              'scripts/ios-signing.py; add --prod for the build to keep on the phone)')
     args = parser.parse_args()
+    if args.demo:
+        if args.ios_device is not None or args.prod:
+            parser.error('--demo runs in the simulator, in Debug (the demo is compiled out of Release)')
+        args.ios = True
+    if args.watch:
+        if args.ios_device is not None:
+            parser.error('--watch runs in the simulator; --ios-device installs on a phone')
+        args.ios = True
     if args.ios_device is not None:
         args.ios = True
         problem = signing_problem()
@@ -370,7 +422,8 @@ def main():
         link.symlink_to(path.name)
         link.replace(directory / 'latest.log')
         ui = BuildUI(log)
-        print(f'\n  {ui.style("Dispatch for iPhone" if args.ios else "Dispatch", "1")}  {ui.style(configuration, "36")}')
+        title = 'Dispatch for Apple Watch' if args.watch else 'Dispatch for iPhone' if args.ios else 'Dispatch'
+        print(f'\n  {ui.style(title, "1")}  {ui.style(configuration, "36")}')
         hint = ('./run.sh  # to get debug build' if configuration == 'Release' else
                 './run.sh --production  # to get faster release build')
         print(f'  {ui.style(hint, "2")}\n')
@@ -384,7 +437,12 @@ def main():
                 # SwiftPM resolves the SSH engine's binary target before any build script: prepare it first.
                 ui.step('Preparing the iPhone SSH engine', ['python3', 'scripts/setup_mobile.py'], env)
                 phone = find_iphone(ui, args, env) if args.ios_device is not None else None
-                simulator = find_simulator(args.simulator) if args.ios_device is None else None
+                watch = None
+                if args.watch:
+                    simulator, watch = find_pair(args.watch_simulator)
+                    ui.line(ui.style('✓', '32'), f'Paired simulators: {simulator[1]} and {watch[1]}')
+                else:
+                    simulator = find_simulator(args.simulator) if args.ios_device is None else None
                 destination, platform = ios_target(args, phone, simulator)
                 command = ['xcodebuild', '-project', 'Dispatch.xcodeproj', '-scheme', 'DispatchMobile',
                            '-configuration', configuration, '-destination', destination,
@@ -396,12 +454,17 @@ def main():
                 if env.get('DISPATCH_BUILD_JOBS'):
                     command += ['-jobs', env['DISPATCH_BUILD_JOBS']]
                     env['CARGO_BUILD_JOBS'] = env['DISPATCH_BUILD_JOBS']
-                ui.step('Building Dispatch for iPhone', command, env)
+                device = 'iPad' if simulator and is_ipad(simulator[1]) else 'iPhone'
+                ui.step(f'Building Dispatch for {device}', command, env)
                 app = ROOT / IOS_DERIVED_DATA / 'Build/Products' / f'{configuration}-{platform}' / 'DispatchMobile.app'
-                if not args.just_build:
+                if not args.just_build and args.watch:
+                    launch_watch(ui, app, env, simulator, watch)
+                elif not args.just_build:
                     launch_ios(ui, app, args, env, phone, simulator)
                 print(f'\n  {ui.style("Ready", "32")} in {time.monotonic() - started:.1f}s')
-                print(f'  App  {os.path.relpath(app)}\n')
+                print(f'  App  {os.path.relpath(app)}' + ('' if args.watch else '\n'))
+                if args.watch:
+                    print(f'  Watch  {os.path.relpath(app / "Watch/DispatchWatch.app")}\n')
                 return 0
             with tempfile.TemporaryDirectory(prefix='.progress-', dir=directory) as progress:
                 helper_complete = Path(progress) / 'helper-complete'

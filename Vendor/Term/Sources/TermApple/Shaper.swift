@@ -119,11 +119,14 @@ public struct Shaper {
     /// Shaper.shape: the sprite font draws code points itself; other fonts go through a CTTypesetter
     /// (embedding level forced left to right) with the font's features.
     public mutating func shape(_ run: TextRun) -> [ShapedCell] {
+        guard run.codepoints.lowerBound >= 0, run.codepoints.upperBound <= codepoints.count else { return [] }
         let cps = Array(codepoints[run.codepoints])
         if run.font < 0 { return cps.filter { $0.cp != 0 }.map { ShapedCell(x: $0.cluster, glyph: Int($0.cp), xOffset: 0, yOffset: 0) } }
         let font = runFont(run.style, run.font)
         let units = cps.flatMap { cp -> [UInt16] in
-            cp.cp == 0 ? [] : cp.cp > 0xFFFF ? Array(String(UnicodeScalar(cp.cp)!).utf16) : [UInt16(cp.cp)]
+            guard cp.cp != 0 else { return [] }
+            let scalar = UnicodeScalar(cp.cp) ?? UnicodeScalar(0xFFFD)!
+            return scalar.value > 0xFFFF ? Array(String(scalar).utf16) : [UInt16(scalar.value)]
         }
         let string = CFStringCreateWithCharacters(nil, units, units.count)!
         let attributed = CFAttributedStringCreate(nil, string, [kCTFontAttributeName: font] as CFDictionary)!
@@ -141,15 +144,22 @@ public struct Shaper {
             CTRunGetPositions(ctrun, CFRange(), &positions)
             CTRunGetStringIndices(ctrun, CFRange(), &indices)
             for k in 0..<n {
-                let index = indices[k], cluster = cps[index].cluster
+                let index = indices[k]
+                guard index >= 0, index < cps.count, positions[k].x.isFinite, positions[k].y.isFinite,
+                      advances[k].width.isFinite else { return [] }
+                let cluster = cps[index].cluster
                 if cellCluster != cluster {
                     // A new cell starts at its first code point, unless glyphs of it or later clusters came already.
                     let firstInCluster = cps[..<index].last { $0.cp != 0 }.map { $0.cluster != cluster } ?? true
                     if firstInCluster, cluster > runCluster { (cellCluster, cellX) = (cluster, runX) }
                 }
-                cells.append(ShapedCell(x: cellCluster, glyph: Int(glyphs[k]), xOffset: Int((positions[k].x - cellX).rounded()),
-                                        yOffset: Int(positions[k].y.rounded())))
+                let xOffset = (positions[k].x - cellX).rounded(), yOffset = positions[k].y.rounded()
+                guard xOffset.isFinite, yOffset.isFinite,
+                      xOffset >= Double(Int.min), xOffset < Double(Int.max),
+                      yOffset >= Double(Int.min), yOffset < Double(Int.max) else { return [] }
+                cells.append(ShapedCell(x: cellCluster, glyph: Int(glyphs[k]), xOffset: Int(xOffset), yOffset: Int(yOffset)))
                 runX += advances[k].width
+                guard runX.isFinite else { return [] }
                 runCluster = Swift.max(runCluster, cluster)
             }
         }

@@ -113,7 +113,7 @@ Mux references are opaque registration indexes; global entity IDs carry their mu
 
 ## Features
 
-Opt-in behaviour a client names in `hello.params.features` (helper/core/src/dispatch/features.rs; hand-maintained, not generated). Unknown names are dropped; the reply's `features` lists the accepted ones. A client that names none gets exactly the pre-feature replies, which the Mac app's replay corpus records. Features change neither the wire schema id nor any output for other clients of the same helper.
+Opt-in behaviour a client names in `hello.params.features` (helper/core/src/dispatch/features.rs; hand-maintained, not generated). Unknown names are dropped; the reply's `features` lists the accepted ones. A client that names none gets exactly the pre-feature replies. The Mac names `terminals.coalesce`; its replay compares a hello without its features, so recordings made before it named any (pre-feature replies) still replay. Features change neither the wire schema id nor any output for other clients of the same helper.
 
 | Feature | Effect for that client |
 | --- | --- |

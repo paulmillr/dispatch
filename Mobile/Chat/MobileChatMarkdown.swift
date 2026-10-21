@@ -5,8 +5,9 @@ import SwiftUI
 /// active; the environment check is a second boundary in case attributed content reaches the view another way.
 enum MobileChatMarkdown {
     static func text(_ text: String) -> AttributedString {
+        let visible = TextRendering.visible(text)
         var value = (try? AttributedString(
-            markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
+            markdown: visible, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(visible)
         let unsafe = value.runs.compactMap { run -> Range<AttributedString.Index>? in
             guard let url = run.link, !isWebLink(url) else { return nil }
             return run.range
@@ -33,9 +34,13 @@ struct MobileChatMarkdownView: View {
     var muted = false
 
     var body: some View {
+        let rendered = TextRendering.rich(text)
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(ChatMarkdownBlock.parse(text).enumerated()), id: \.offset) { _, block in
+            ForEach(Array(ChatMarkdownBlock.parse(rendered.text).enumerated()), id: \.offset) { _, block in
                 self.block(block)
+            }
+            if rendered.truncated {
+                Text("Rendered preview truncated for safety").font(.footnote).foregroundStyle(.secondary)
             }
         }
         .foregroundStyle(muted ? Color.secondary : Color.primary)
@@ -65,11 +70,13 @@ struct MobileChatMarkdownView: View {
             }
             .fixedSize(horizontal: false, vertical: true)
         case .code(let language):
+            let preview = TextRendering.prefix(block.text, scalars: 32_768)
             ScrollView(.horizontal, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(CodeSyntax.lines(block.text, language: language).enumerated()), id: \.offset) { _, line in
+                    ForEach(Array(CodeSyntax.lines(preview.text, language: language).enumerated()), id: \.offset) { _, line in
                         Text(line)
                     }
+                    if preview.truncated { Text("Preview truncated").foregroundStyle(.secondary) }
                 }
                 .font(.footnote.monospaced())
                 .padding(10)

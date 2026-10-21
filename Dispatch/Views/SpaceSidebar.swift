@@ -1690,7 +1690,6 @@ private struct HarbourPings: NSViewRepresentable {
             ring.opacity = 0
             ring.contentsScale = window.backingScaleFactor
             layer?.addSublayer(ring)
-            let fps = Float(max(1, window.screen?.maximumFramesPerSecond ?? 60))
             let grow = CABasicAnimation(keyPath: "transform.scale")
             grow.fromValue = 0.15; grow.toValue = 1
             let fade = CABasicAnimation(keyPath: "opacity")
@@ -1699,7 +1698,7 @@ private struct HarbourPings: NSViewRepresentable {
             group.animations = [grow, fade]
             group.duration = Self.duration
             group.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            group.preferredFrameRateRange = CAFrameRateRange(minimum: fps, maximum: fps, preferred: fps)
+            group.preferredFrameRateRange = MotionRate.range(for: window)
             CATransaction.begin()
             CATransaction.setCompletionBlock { ring.removeFromSuperlayer() }
             ring.add(group, forKey: "ping")

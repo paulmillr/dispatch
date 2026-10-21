@@ -47,7 +47,8 @@ struct ChatStep: Identifiable, Equatable {
         let directory = directory ?? item.directory ?? ""
         if item.kind == .reasoning {
             kind = .think
-            title = item.text.split(whereSeparator: \.isNewline).first.map(String.init) ?? "Thinking"
+            let rawTitle = item.text.split(whereSeparator: \.isNewline).first.map(String.init) ?? "Thinking"
+            title = TextRendering.visible(TextRendering.prefix(rawTitle, scalars: 512).text)
             detail = nil; additions = 0; deletions = 0; failed = false; running = !item.completed
             return
         }
@@ -83,18 +84,22 @@ struct ChatStep: Identifiable, Equatable {
         }
         switch kind {
         case .patch where !tool.documents.isEmpty:
-            title = tool.documents.map { relative($0.path) }.joined(separator: ", ")
+            title = TextRendering.visible(TextRendering.prefix(
+                tool.documents.map { relative($0.path) }.joined(separator: ", "), scalars: 512).text)
         case .read where tool.readCommand != nil:
-            title = relative(tool.readCommand!.path)
+            title = TextRendering.visible(TextRendering.prefix(relative(tool.readCommand!.path), scalars: 512).text)
         case .read:
             let path = (ToolPresentation.json(item.text) as? [String: Any])?["file_path"] as? String
-            title = path.map(relative) ?? tool.displaySummary(in: directory)
+            title = TextRendering.visible(TextRendering.prefix(
+                path.map(relative) ?? tool.displaySummary(in: directory), scalars: 512).text)
         case .run:
             let command = item.source?.tool?.shell?.command ?? tool.input
-            title = command.split(whereSeparator: \.isNewline).first.map(String.init) ?? tool.displaySummary(in: directory)
+            let rawTitle = command.split(whereSeparator: \.isNewline).first.map(String.init) ?? tool.displaySummary(in: directory)
+            title = TextRendering.visible(TextRendering.prefix(rawTitle, scalars: 512).text)
         default:
             let summary = tool.displaySummary(in: directory)
-            title = summary.isEmpty ? tool.displayTitle : summary
+            title = TextRendering.visible(TextRendering.prefix(
+                summary.isEmpty ? tool.displayTitle : summary, scalars: 512).text)
         }
         switch kind {
         case .patch:
@@ -102,7 +107,8 @@ struct ChatStep: Identifiable, Equatable {
         case .run:
             let last = tool.output.split(whereSeparator: \.isNewline).last.map { String($0).trimmingCharacters(in: .whitespaces) }
             let exit = tool.exitCode.flatMap { $0 == 0 ? nil : "exit \($0)" }
-            detail = [last.map { String($0.prefix(80)) }, exit].compactMap { $0 }.joined(separator: " · ").nilIfEmpty
+            detail = [last.map { TextRendering.visible(TextRendering.prefix($0, scalars: 80).text) }, exit]
+                .compactMap { $0 }.joined(separator: " · ").nilIfEmpty
         default:
             detail = nil
         }

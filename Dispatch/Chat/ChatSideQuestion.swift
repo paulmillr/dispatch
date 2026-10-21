@@ -17,6 +17,9 @@ final class ChatSideQuestion: Identifiable {
         let isOther: Bool
         let isSecret: Bool
         let options: [Option]?
+        /// Several options may be chosen (`HelperChat.Question.multiple`), for surfaces that render the question
+        /// themselves (the iPhone's watch bridge); `select` reads the interaction's own flag.
+        var multiple = false
         var allowsCustom: Bool { isOther || options?.isEmpty != false }
     }
     let id: String
@@ -44,7 +47,7 @@ final class ChatSideQuestion: Identifiable {
             Question(id: $0.id, header: $0.header, question: $0.text, isOther: $0.custom,
                      isSecret: $0.secret, options: $0.options.map {
                          Option(label: $0.label, description: $0.detail ?? "")
-                     })
+                     }, multiple: $0.multiple)
         }
     }
 
