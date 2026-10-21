@@ -82,9 +82,21 @@ impl Helper {
 
     /// files.unpack.open for an archive of the top-level `names`.
     fn open(&mut self, transfer: &str, target: &Path, policy: &str, names: &[&str]) -> Result<Transfer, Error> {
-        let (result, done) = slot();
         let parent = std::fs::metadata(target)
             .map_or(FileIdentity { device: 0, inode: 0 }, |metadata| identity(&metadata));
+        self.open_in(transfer, target, parent, policy, names)
+    }
+
+    /// files.unpack.open with the target identity the client listed, which a replay cannot stat.
+    fn open_in(
+        &mut self,
+        transfer: &str,
+        target: &Path,
+        parent: FileIdentity,
+        policy: &str,
+        names: &[&str],
+    ) -> Result<Transfer, Error> {
+        let (result, done) = slot();
         let replacements: Vec<_> = if policy == "replace" {
             names
                 .iter()
@@ -652,6 +664,8 @@ fn transfer_failures_have_their_own_codes() {
 }
 
 const COPY_ROOT: &str = "FILES_TEST_COPY_ROOT";
+/// The target's `device:inode`, as the client sent it in both runs.
+const COPY_PARENT: &str = "FILES_TEST_COPY_PARENT";
 
 /// The recorded process of `a_copy_replays_with_its_random_names_without_its_files`; does nothing in an ordinary
 /// run.
@@ -666,7 +680,10 @@ fn copied_process() {
     let dropped = helper.drop_pack("out");
     let file = |name: &str| (block(name, b'0', 1, ""), &b"x"[..]);
     let bytes = hostile(&[file("folder/a"), file("folder/b")]);
-    let opened = helper.open("in", &target, "keep", &["folder"]);
+    let parent = std::env::var(COPY_PARENT).unwrap();
+    let (device, inode) = parent.split_once(':').unwrap();
+    let parent = FileIdentity { device: device.parse().unwrap(), inode: inode.parse().unwrap() };
+    let opened = helper.open_in("in", &target, parent, "keep", &["folder"]);
     let sent = helper.send("in", &bytes);
     let closed = helper.close("in", true);
     println!("RESULT {packed:?}\nRESULT {dropped:?}\nRESULT {opened:?}\nRESULT {sent:?}\nRESULT {closed:?}");
@@ -679,12 +696,15 @@ fn a_copy_replays_with_its_random_names_without_its_files() {
     let base = tree(&scratch);
     let target = scratch.0.join("target");
     std::fs::create_dir_all(target.join("folder")).unwrap();
+    let parent = std::fs::metadata(&target).unwrap();
+    let parent = format!("{}:{}", parent.dev(), parent.ino());
     let recordings = Scratch::new("copy-replay-capture");
     let capture = recordings.0.join("helper.rpl.zst");
     let run = |control: &str| {
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "transfer_tests::copied_process", "--nocapture"])
             .env(COPY_ROOT, &scratch.0)
+            .env(COPY_PARENT, &parent)
             .env(control, &capture)
             .output()
             .unwrap();

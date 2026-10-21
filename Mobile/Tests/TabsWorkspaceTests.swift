@@ -176,6 +176,33 @@ final class TabsWorkspaceTests: XCTestCase {
         XCTAssertFalse(MobileTab.isShell("pnpm"))
     }
 
+    /// The Mac's automatic tab names: a renamed tab keeps its name, an agent's tab takes its conversation title, and a
+    /// herdr tab numbered by position shows its pane's name, else its folder.
+    func testTabsAreNamedAsTheMacNamesThem() {
+        var host = TabsFixtures.host
+        host.multiplexer = "herdr"
+        let workspace = MobileWorkspace(host: host, client: nil, activity: TabActivityStore(url: nil))
+        workspace.apply(TopologySketch(spaces: [.init(key: "herdr:w", name: "w", tabs: [
+            .init(key: "herdr:w:1", name: "1", panes: [.init(key: "p:1", name: "vim", cwd: "/Users/alex/src/app")]),
+            .init(key: "herdr:w:2", name: "2", panes: [.init(key: "p:2", name: "", cwd: "/Users/alex/src/docs")]),
+            .init(key: "herdr:w:3", name: "notes", renamed: true, panes: [.init(key: "p:3", name: "zsh", cwd: "/Users/alex")]),
+            .init(key: "herdr:w:4", name: "4", panes: [.init(key: "p:4", name: "", cwd: "/Users/alex")]),
+        ])]).topology)
+        let homes = host.homes
+        XCTAssertEqual(workspace.tab("herdr:w:1")?.label(conversation: nil, homes: homes), "vim")
+        XCTAssertEqual(workspace.tab("herdr:w:2")?.label(conversation: nil, homes: homes), "docs")
+        XCTAssertEqual(workspace.tab("herdr:w:3")?.label(conversation: "Fix the build", homes: homes), "notes")
+        XCTAssertEqual(workspace.tab("herdr:w:4")?.label(conversation: nil, homes: homes), "~")
+        XCTAssertEqual(workspace.tab("herdr:w:1")?.label(conversation: "Fix the build", homes: homes), "Fix the build")
+        // The attached terminal's own title, as the Mac's pane label reads it: a shell's prompt title names the folder.
+        XCTAssertEqual(workspace.tab("herdr:w:1")?.label(conversation: nil, homes: homes, paneTitle: "~/src/app"), "app")
+        XCTAssertEqual(workspace.tab("herdr:w:1")?.label(conversation: nil, homes: homes, paneTitle: "vim notes.md"), "vim notes.md")
+        // tmux names an unrenamed window after its program: that name stays.
+        let tmux = TabsFixtures.workspace()
+        tmux.apply(TabsFixtures.app().topology)
+        XCTAssertEqual(tmux.tab("herdr:app:3")?.label(conversation: nil, homes: homes), "zsh")
+    }
+
     /// Two backends on one host (herdr and tmux) list side by side; removing one leaves the other.
     func testBackendsMergeAndLeave() {
         let workspace = TabsFixtures.workspace()

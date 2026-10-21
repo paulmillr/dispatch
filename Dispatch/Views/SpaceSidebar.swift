@@ -194,22 +194,21 @@ struct SpaceSidebar: View {
     private var overflowBar: Bool {
         if #available(macOS 26, *) { return glass } else { return false }
     }
-    /// The flat order's "+ local" and "+ space" (tabs only: "+ tab") on one row after the last row, on Liquid Glass two
+    /// The flat order's "+ space" (tabs only: "+ tab") and "+ local" on one row after the last row, on Liquid Glass two
     /// capsules close enough that their glass blends. With only the local host, "+ local" would repeat "+ space", so
     /// "+ space" stands alone in the left half rather than filling the row.
     private var newSpaceButtons: some View {
         let remote = workspace.liveHosts.contains(where: { $0.id != .local })
         return HStack(spacing: glass ? 4 : 6) {
+            NewSpaceButton(workspace: workspace, metrics: metrics, tabs: tabsOnly)
             if remote {
                 NewSpaceButton(workspace: workspace, host: workspace.hosts.record(.local), metrics: metrics, tabs: tabsOnly)
-            }
-            NewSpaceButton(workspace: workspace, metrics: metrics, tabs: tabsOnly)
-            if !remote {
+            } else {
                 Color.clear.frame(maxWidth: .infinity, maxHeight: 0).accessibilityHidden(true)
             }
         }
-        // A host arrives in its own update, before any space moves to it: "+ space" slides between the halves as
-        // "+ local" fades, the same both ways.
+        // A host arrives in its own update, before any space moves to it: "+ space" keeps the left half as "+ local"
+        // fades in or out of the right one, the same both ways.
         .animation(InterfaceMotion.animation(reduce: reduceMotion), value: remote)
         // Blends glass across twice the capsules' gap, so they join at rest rather than only while they move.
         .glassGroup(spacing: 8)

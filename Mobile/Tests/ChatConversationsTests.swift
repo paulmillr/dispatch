@@ -61,6 +61,30 @@ final class ChatConversationsTests: XCTestCase {
     }
     private func milliseconds(_ record: Int) -> Int64 { ChatConversations.milliseconds(now.addingTimeInterval(TimeInterval(record))) }
 
+    /// The Mac's urgency for a row not open on the phone: an open approval (`chat.list` `waiting`) needs you, and
+    /// subagents left running after the turn ended do not hold back its unseen result. An unrenamed tab's row takes the
+    /// conversation's title, as the Mac's automatic tab names do.
+    func testAnOpenApprovalNeedsYouAndLeftoverSubagentsDoNotCountAsWorking() async throws {
+        let source = Source()
+        var waiting = summary(record: 1)
+        waiting.waiting = true
+        waiting.title = "Fix the retry loop"
+        source.set(3, waiting)
+        var subagents = summary(record: 9)
+        subagents.subagents = 2
+        source.set(5, subagents)
+        let markers = ChatMarkers(store: ChatMarkerMemoryStore())
+        markers.markSeen(host: host, conversation: "conv-app", through: milliseconds(1))
+        let conversations = list(source, markers: markers)
+        conversations.update(snapshot(try topology()))
+        try await TestSupport.eventually { conversations.dot(host: host, terminal: 3) != nil && conversations.dot(host: host, terminal: 5) != nil }
+        XCTAssertEqual(conversations.conversations.first { $0.terminal == 3 }?.urgency, .waiting)
+        XCTAssertEqual(conversations.conversations.first { $0.terminal == 5 }?.urgency, .unread)
+        XCTAssertEqual(conversations.needsYouCount, 1)
+        XCTAssertEqual(conversations.conversations.first { $0.terminal == 3 }?.name, "Fix the retry loop")
+        XCTAssertEqual(conversations.conversations.first { $0.terminal == 5 }?.name, "app")
+    }
+
     func testRowsComeFromAgentBoundTerminalsWithTheirUrgency() async throws {
         let source = Source()
         source.set(3, summary(attention: "Waiting for approval", record: 1))

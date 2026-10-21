@@ -307,7 +307,7 @@ def check_bundle(app, protocol, built_version, log_name):
 def main(arguments=None):
     parser = argparse.ArgumentParser(prog='test/ios-release.py', description=__doc__.split('\n\n')[0],
                                      epilog=__doc__.split('\n\n', 2)[2], formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--simulator', default=os.environ.get('DISPATCH_IOS_SIMULATOR', 'iPhone 17'), metavar='NAME')
+    parser.add_argument('--simulator', default=os.environ.get('DISPATCH_IOS_SIMULATOR', 'iPhone Air'), metavar='NAME')
     parser.add_argument('--helper-profile', choices=('release', 'local'), default='release',
                         help="the helpers' Cargo profile (default release: fat LTO, what ./run.sh --prod ships)")
     parser.add_argument('--skip-build', action='store_true', help='check the existing Release builds in build/dd')

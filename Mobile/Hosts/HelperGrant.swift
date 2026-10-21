@@ -1,7 +1,8 @@
 import Foundation
 
 /// The one grant the phone runs the helper with (docs/ios.md, Helper contract): the Mac's full profile with hooks on
-/// (`SSHIntegrationGrant.capabilities(.full, hooks: true)`). On the phone the helper is not optional, so there is no
+/// (`SSHIntegrationGrant.capabilities(.full, hooks: true)`) less file writes and Git reads (`file.write`, `git.read`:
+/// the phone has no Files mode). On the phone the helper is not optional, so there is no
 /// per-host choice; the New host sheet states what this grant lets it do (`disclosures`), and the SSH driver runs
 /// `command(sha256:)` on a plain exec channel: no PTY, no extra environment.
 enum HelperGrant {

@@ -219,6 +219,7 @@ extension ChatCoordinator {
             if let usage = state.usage, let payload = HelperBinary.foundation(usage) as? [String: Any] {
                 session.usage = ChatUsage(payload)
             }
+            session.agentAttention = session.modelPicker == nil ? state.attention : nil
             if let attention = state.attention, session.modelPicker == nil {
                 requireTerminalAttention(session, status: attention)
             }
@@ -342,12 +343,7 @@ extension ChatCoordinator {
     /// Records come in transcript order: an earlier page goes before everything shown, the rest after.
     /// Their positions order records with equal times, as file offsets did (legacy transcript reader).
     private func receiveHelper(_ records: [HelperChat.Record], session: ChatSession, historical: Bool, earlier: Bool = false) {
-        let date = Date(), count = UInt64(records.count), span = session.helperPositions ?? (1 << 62)...(1 << 62)
-        let start = earlier ? span.lowerBound - count : span.upperBound + 1
-        session.helperPositions = min(start, span.lowerBound)...max(start + count, span.upperBound)
-        let decoded = records.enumerated().compactMap { index, record in
-            record.display(at: historical ? Date(timeIntervalSince1970: 0) : date).map { var shown = $0; shown.fileOffset = start + UInt64(index); return shown }
-        }
+        let decoded = session.transcriptIndex.decode(records, historical: historical, earlier: earlier, now: Date())
         // What a native command printed: the pending command's result (more of it extends that result),
         // never a turn, whether it arrives live or in a page.
         func output(_ text: String) {
@@ -651,9 +647,13 @@ extension ChatCoordinator {
         let id = System.uuid()
         session.interruptionID = id
         session.stopQueue()
+        let upload = session.upload
         operations.run(for: session.id) { [weak session] in
             guard let session else { return }
             defer { if session.interruptionID == id { session.interruptionID = nil } }
+            // An upload already on its way reaches the helper first, so its Stop pauses that row too
+            // (helper calls are not ordered between tasks).
+            await upload?.value
             do {
                 let sent: HelperChat.Sent = try await helper.call("chat.stop", input: .init(helper.route))
                 try sent.confirmed()
@@ -668,7 +668,7 @@ extension ChatCoordinator {
             if cycle { picker.cycleEffort() } else { picker.showColumn(column) }
             return
         }
-        session.modelChoices.prepare(for: session)
+        session.modelChoices = modelChoices(for: session)
         let picker = ChatModelPicker(model: session.model, effort: session.effort, column: column, cache: session.modelChoices, helper: helper,
             confirmed: { [weak session] model, effort in
                 guard let session, session.helper === helper else { return }
@@ -710,7 +710,8 @@ extension ChatCoordinator {
         if let permission = interaction.permission {
             let key = interaction.key ?? interaction.id
             session.approvals.append(PendingApproval(key: key, interaction: interaction.id, operation: permission.operation,
-                                                     item: interaction.tool(in: session.turns), turnID: interaction.turn, toolItemID: interaction.record) { [weak self, weak session] in
+                                                     item: interaction.tool(in: session.turns), turnID: interaction.turn, toolItemID: interaction.record,
+                                                     anchorTurnID: session.turns.last?.id) { [weak self, weak session] in
                 guard let self, let session else { return }
                 self.completeHelper($0, interaction: interaction, helper: helper, session: session)
             })
@@ -722,7 +723,8 @@ extension ChatCoordinator {
                                          multiple: question.multiple)
             })
             session.approvals.append(PendingApproval(key: interaction.id, interaction: interaction.id, operation: interaction.questions.map(\.text).joined(separator: "\n"),
-                                                     turnID: interaction.turn, toolItemID: interaction.record, questions: questions) { [weak self, weak session] in
+                                                     turnID: interaction.turn, toolItemID: interaction.record, anchorTurnID: session.turns.last?.id,
+                                                     questions: questions) { [weak self, weak session] in
                 guard let self, let session else { return }
                 self.completeHelper($0, interaction: interaction, helper: helper, session: session)
             })
@@ -1033,6 +1035,76 @@ extension ChatCoordinator {
         drainQueue(session)
     }
 
+    /// Whether the host's queue store keeps this conversation's queue: a helper-held queue (not
+    /// the agent's own) of a conversation the agent has named.
+    func storesQueue(_ session: ChatSession) -> Bool {
+        guard let helper = session.helper, !session.helperNativeQueue else { return false }
+        return !(helper.route.session ?? "").isEmpty && helper.route.session == session.sessionID
+    }
+
+    /// Hand the oldest held row to the host's queue store, one at a time and in order. The row
+    /// becomes the host's in place once accepted (on disk there); one the host refuses stays here
+    /// and this Mac sends it itself. True while an upload runs or starts.
+    @discardableResult
+    func uploadHeldQueue(_ session: ChatSession) -> Bool {
+        guard storesQueue(session), let helper = session.helper else { return false }
+        if session.queueBusy { return session.queuedMessages.contains { $0.held && $0.pending } }
+        // Pending without an upload running: one cancelled before it started.
+        for index in session.queuedMessages.indices where session.queuedMessages[index].held && session.queuedMessages[index].pending {
+            session.queuedMessages[index].pending = false
+        }
+        if let id = session.sendAfterUpload {
+            session.sendAfterUpload = nil
+            if let row = session.queuedMessages.first(where: { $0.id == id }), row.pause == nil {
+                if row.native != nil { mutateHelperQueue(row, session: session, operation: "send"); return true }
+                if row.local { sendNow(session, queuedID: id); return true }
+            }
+        }
+        // Only the first held row, in order: one waiting for review (paused) or for this Mac
+        // (local) keeps the rows behind it here, and a row being sent directly is not uploaded.
+        guard session.binding != nil, session.editingQueuedID == nil, session.queuedSubmissionID == nil,
+              let row = session.queuedMessages.first(where: \.held),
+              !row.local, !row.pending, row.pause == nil, row.matches(session) else { return false }
+        // Pending from now on: Stop and Send now see the row is being handed over.
+        if let index = session.queuedMessages.firstIndex(where: { $0.id == row.id }) { session.queuedMessages[index].pending = true }
+        var input = HelperChat.Input(helper.route)
+        input.text = row.text
+        input.mode = "prompt"
+        input.command = row.isCommand
+        session.upload = changeHelperQueue(session, message: nil) { session in
+            defer { session.upload = nil }
+            @MainActor func update(_ change: (inout ChatQueuedMessage) -> Void) {
+                if let index = session.queuedMessages.firstIndex(where: { $0.id == row.id }) { change(&session.queuedMessages[index]) }
+            }
+            // Stopped, sent directly or removed since: nothing goes to the host.
+            guard let current = session.queuedMessages.first(where: { $0.id == row.id }), current.held,
+                  current.pause == nil, session.queuedSubmissionID != row.id else {
+                update { $0.pending = false }
+                return
+            }
+            let added: HelperChat.Queued
+            do { added = try await helper.call("queue.add", input: input) } catch {
+                // A refusal stored nothing: this Mac sends the row itself. Anything else (a reply lost
+                // with the connection, a storage error after the write) may hide an add the host kept
+                // and will send: never twice.
+                let refusals = ["invalid_input", "shell_command", "unavailable", "permission_denied", "expired"]
+                let uncertain = !((error as? HelperFailure).map { refusals.contains($0.code) } ?? false)
+                update { row in
+                    row.pending = false
+                    if uncertain { row.pause = .uncertain } else { row.local = true }
+                }
+                throw error
+            }
+            update { row in
+                if let delivery = row.delivery { session.drafts.finish(delivery, success: true) }
+                row.delivery = nil
+                row.native = added
+                row.pending = false
+            }
+        } failed: { _ in }
+        return true
+    }
+
     /// Edit (and optionally send) a helper-owned row; the editor keeps the draft on failure.
     func updateHelperQueued(_ message: ChatQueuedMessage, session: ChatSession, text: String, send: Bool) {
         guard let helper = session.helper, let native = message.native, native.editable,
@@ -1105,12 +1177,13 @@ extension ChatCoordinator {
     }
 
     /// One queue operation at a time; snapshots arriving meanwhile apply after it.
+    @discardableResult
     private func changeHelperQueue(_ session: ChatSession, message: UUID?,
                                    _ body: @escaping @MainActor (ChatSession) async throws -> Void,
-                                   failed: @escaping @MainActor (ChatSession) -> Void) {
+                                   failed: @escaping @MainActor (ChatSession) -> Void) -> Task<Void, Never> {
         let helper = session.helper, generation = session.queueGeneration
         session.queueBusy = true; session.queuedSubmissionID = message; session.submissionFailure = nil
-        operations.run(for: session.id) { [weak self, weak session] in
+        return operations.run(for: session.id) { [weak self, weak session] in
             guard let self, let session else { return }
             let current = { session.helper === helper && session.queueGeneration == generation }
             do {

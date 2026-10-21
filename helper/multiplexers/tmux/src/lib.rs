@@ -10,6 +10,7 @@ pub mod control;
 mod create;
 mod discovery;
 mod endpoint;
+mod host;
 mod mux;
 mod open;
 mod ops;

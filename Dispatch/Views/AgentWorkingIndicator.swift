@@ -188,12 +188,7 @@ struct AgentWorkingAnimation: View {
     @State private var appeared = Date()
     @State private var finishedClock = Date()
 
-    static func elapsedText(_ interval: TimeInterval) -> String {
-        let seconds = max(0, Int(interval))
-        if seconds < 60 { return "\(seconds)s" }
-        if seconds < 3600 { return "\(seconds / 60)m \(seconds % 60)s" }
-        return "\(seconds / 3600)h \(seconds / 60 % 60)m"
-    }
+    static func elapsedText(_ interval: TimeInterval) -> String { ChatTranscript.elapsed(interval) }
 
     /// With Reduce Motion a running clock counts the first 10 seconds, then steps every 5 (10s, 15s, 20s…), so it
     /// changes less often; a finished turn keeps its exact duration.

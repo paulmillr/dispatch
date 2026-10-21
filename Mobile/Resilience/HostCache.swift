@@ -37,6 +37,8 @@ struct HostCacheEntry: Codable, Equatable, Sendable {
         var preview: String?
         var finished: Bool
         var lastActivity: Date?
+        var waiting: Bool
+        var title: String?
 
         /// Longest preview kept: two lines of the list, with room to spare.
         static let previewLimit = 280
@@ -49,6 +51,8 @@ struct HostCacheEntry: Codable, Equatable, Sendable {
             preview = values.lenient(String.self, forKey: .preview)
             finished = values.lenient(Bool.self, forKey: .finished, default: false)
             lastActivity = values.lenient(Date.self, forKey: .lastActivity)
+            waiting = values.lenient(Bool.self, forKey: .waiting, default: false)
+            title = values.lenient(String.self, forKey: .title)
         }
 
         init(_ summary: ChatConversationSummary) {
@@ -58,11 +62,14 @@ struct HostCacheEntry: Codable, Equatable, Sendable {
             preview = summary.preview.map { $0.count > Self.previewLimit ? String($0.prefix(Self.previewLimit)) : $0 }
             finished = summary.finished
             lastActivity = summary.lastActivity
+            waiting = summary.waiting
+            title = summary.title
         }
 
         var summary: ChatConversationSummary {
             ChatConversationSummary(busy: busy, subagents: subagents, attention: attention, preview: preview,
-                                    finished: finished, lastActivity: lastActivity)
+                                    finished: finished, lastActivity: lastActivity, waiting: waiting,
+                                    title: title)
         }
     }
 

@@ -37,6 +37,8 @@ pub struct Tmux {
     pub(crate) aliases: BTreeMap<Id, (Id, String)>,
     /// Completions of local-only changes: they run once the next topology went to the UI.
     pub(crate) published: Vec<Done<()>>,
+    /// `screen` reads terminals no client renders from tmux (host.rs); off in a client helper.
+    pub(crate) host_screens: bool,
     /// Each backend's last published layouts and focus: a backend that cannot read its
     /// server (suspended, opening) republishes them with its current retained views.
     shown: BTreeMap<Id, (Vec<Layout>, Option<Id>)>,
@@ -888,15 +890,13 @@ impl Multiplexer for Tmux {
         }
     }
     fn publish(&mut self, io: &mut dyn Io, terminal: Id, screen: Screen) {
-        if let Some(state) = self.terminals.get_mut(&terminal)
-            && state.screen.as_ref() != Some(&screen)
-        {
-            state.screen = Some(screen.clone());
-            state.changed = state.readers.is_empty();
-            for done in std::mem::take(&mut state.readers) {
-                finish(io, done, Ok(screen.clone()));
-            }
+        if let Some(state) = self.terminals.get_mut(&terminal) {
+            state.client = true;
         }
+        self.show(io, terminal, screen);
+    }
+    fn host_screens(&mut self, enabled: bool) {
+        self.host_screens = enabled;
     }
     fn event(&mut self, io: &mut dyn Io, ui: &mut dyn Ui, event: Event) {
         let event = self.endpoints(io, event);

@@ -12,7 +12,7 @@ final class TabsActions {
     var renaming: Target?
     var name = ""
     var terminating: Target?
-    /// M4d's Close space: the dialog with Close Space, Detach and Terminate….
+    /// M4d's Close space: the dialog with Detach and Terminate…, the Mac's space menu.
     var closingSpace: SpaceRef?
     var failure: String?
 

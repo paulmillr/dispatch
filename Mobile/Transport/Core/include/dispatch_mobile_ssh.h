@@ -35,6 +35,10 @@ extern "C" {
 #define DMS_UNSUPPORTED (-8)
 #define DMS_CLOSED (-9)             /* the connection is closed */
 #define DMS_REFUSED (-10)           /* the server refused the channel request */
+#define DMS_HOST_NOT_FOUND (-11)    /* name resolution found no address */
+#define DMS_CONNECTION_REFUSED (-12) /* nothing accepted the TCP connection on the port */
+#define DMS_UNREACHABLE (-13)       /* no route to the host (or Local Network access denied) */
+#define DMS_NO_ANSWER (-14)         /* the host did not answer the TCP connection in time */
 
 /* Authentication methods (remaining_methods bits). */
 #define DMS_METHOD_PASSWORD 1u

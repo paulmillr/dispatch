@@ -320,13 +320,12 @@ impl Request<'_> {
         };
         let before = live();
         let process = agent.as_ref().map(|binding| binding.process.clone());
+        let permissions = self.helper.permissions.clone();
         let action: Done<()> = Box::new(move |io, checked| {
             if let Err(error) = checked { return done(io, Err(error)); }
-            harness.borrow_mut().install(
-            io,
-            &route,
-            enabled,
-            agent.as_ref(),
+            crate::helper::installation::run(io,
+            Rc::new(move || crate::helper::login::permits(&permissions, "hooks.configure")),
+            Rc::new(move |io, done| harness.borrow_mut().install(io, &route, enabled, agent.as_ref(), done)),
             Box::new(move |io, result| {
                 done(
                     io,

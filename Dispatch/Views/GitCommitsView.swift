@@ -1,10 +1,11 @@
 import AppKit
 import SwiftUI
 
-/// The Commits tab: the log as a graph with the selected commit beside it, read-only (F4a). `FilesHeader` carries its
-/// branch, scope menu and search. The git data layer fills `log`,
-/// `commitDetail` and `commitDiff`; this view asks through `logWanted`, `logScope`, `logFilter`, `selectedCommit` and
-/// `commitFile`.
+/// The Commits tab: the log as a graph under the uncommitted-changes row, with the selected row beside it, read-only
+/// (F4a; F3a's Changes is that row's detail). `FilesHeader` carries its branch and search, the list's footer its scope.
+/// The git data layer fills `log`, `commitDetail`, `commitDiff`, `status` and `changesDiff`; this view asks through
+/// `logWanted`, `logScope`, `logFilter`, `selectedCommit`, `commitFile`, `changesSelection` and the tab (`.changes` while
+/// the uncommitted row is selected).
 struct GitCommitsView: View {
     @Bindable var session: FilesSession
     let focused: Bool
@@ -23,13 +24,19 @@ struct GitCommitsView: View {
                 // The Files tab's split: the same divider, widths and ⌥⌘P as its preview and the Changes tab's diff.
                 FilesSplit(session: session,
                            list: GitCommitsList(session: session, graph: graph, focus: $focus, detailShown: detailShown),
-                           detail: GitCommitDetailPane(session: session, focus: $focus)
+                           detail: detail
                                .onAppear { detailShown = true }
-                               .onDisappear { detailShown = false })
+                               .onDisappear { detailShown = false },
+                           back: "Commits")
             }
         }
-        // ⌘C while the list or the commit's files have the keyboard: the selected commit's hash.
-        .gitCopyShortcut(active: focus != nil) { session.selectedCommit }
+        // ⌘C while the list or the commit's files have the keyboard: the selected commit's hash; on the uncommitted row's
+        // files, the picked change's repository-relative path.
+        .gitCopyShortcut(active: focus != nil) {
+            guard session.tab == .changes else { return session.selectedCommit }
+            guard focus == .files else { return nil }
+            return session.status?.changes.first { $0.id == session.changesSelection }?.path
+        }
         .onAppear {
             pickFirstFile()
             if focused { focus = .list }
@@ -44,6 +51,15 @@ struct GitCommitsView: View {
         .onChange(of: session.commitDetail) { _, _ in pickFirstFile() }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("git-commits")
+    }
+
+    /// The selected row's detail: the uncommitted changes or the commit.
+    @ViewBuilder private var detail: some View {
+        if session.tab == .changes {
+            GitUncommittedDetailPane(session: session, focus: $focus)
+        } else {
+            GitCommitDetailPane(session: session, focus: $focus)
+        }
     }
 
     /// The mockup opens the selected commit on its first file's diff; a file already picked in it stays.
@@ -69,20 +85,23 @@ enum GitCommitsFocus: Hashable {
         var head: String?
         var uncommitted: Bool
         var linked: Bool
+        var maxLanes: Int
     }
 
     private var key: Key?
     private var value = GitGraph.empty
 
-    func graph(for session: FilesSession) -> GitGraph {
+    /// `maxLanes`: how many lanes the list's width has room for (`GitGraphCell.maxLanes`).
+    func graph(for session: FilesSession, maxLanes: Int = GitGraph.maxLanes) -> GitGraph {
         let commits = session.log?.commits ?? []
         let head = GitGraph.head(in: commits, status: session.status, scope: session.log?.scope ?? session.logScope)
         let key = Key(loadedAt: session.log?.loadedAt, count: commits.count, first: commits.first?.hash,
                       last: commits.last?.hash, head: head, uncommitted: (session.status?.changedFiles ?? 0) > 0,
-                      linked: (session.log?.filter ?? session.logFilter).isEmpty)
+                      linked: (session.log?.filter ?? session.logFilter).isEmpty, maxLanes: maxLanes)
         if key != self.key {
             self.key = key
-            value = GitGraph.layout(commits, head: head, uncommitted: key.uncommitted, linked: key.linked)
+            value = GitGraph.layout(commits, head: head, uncommitted: key.uncommitted, linked: key.linked,
+                                    maxLanes: maxLanes)
         }
         return value
     }
@@ -115,14 +134,54 @@ enum GitCommitsText {
         return years == 1 ? "1 year ago" : "\(years) years ago"
     }
 
+    /// The time as git prints it with `--date=iso`, in the offset the commit was made in ("2026-10-18 18:50:47 +0000");
+    /// without one (the raw headers not read) in this Mac's.
+    static func fullTime(_ date: Date, zone: String?, local: TimeZone = .current) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        if let zone, let offset = offset(zone), let timeZone = TimeZone(secondsFromGMT: offset) {
+            formatter.timeZone = timeZone
+            formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+            return formatter.string(from: date) + " " + zone
+        }
+        formatter.timeZone = local
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss Z"
+        return formatter.string(from: date)
+    }
+
+    /// "+0530" as seconds east of UTC.
+    private static func offset(_ zone: String) -> Int? {
+        guard zone.count == 5, let sign = zone.first, sign == "+" || sign == "-",
+              let hours = Int(zone.dropFirst().prefix(2)), let minutes = Int(zone.suffix(2)) else { return nil }
+        return (sign == "-" ? -1 : 1) * (hours * 3600 + minutes * 60)
+    }
+
+    /// The detail's committer line: "Committed by GitHub · 3 hours ago", "Committed 3 hours ago" when only the time
+    /// differs, "Committed by GitHub" when only the person does.
+    static func committed(_ committer: GitPerson, of commit: GitCommit, at reference: Date) -> String {
+        let person = committer.name != commit.author || committer.email != commit.email
+        let time = committer.date != commit.date
+        return ["Committed" + (person ? " by \(committer.name)" : ""), time ? ago(committer.date, at: reference) : nil]
+            .compactMap { $0 }.joined(separator: person && time ? " · " : " ")
+    }
+
     /// How the data layer keys a commit file's diff (`GitDiffState.key`).
     static func diffKey(hash: String, path: String) -> String { "\(hash):\(path)" }
 
-    /// The commit the detail shows: the loaded detail's, else the log's row while the detail loads.
+    /// The commit the detail shows: the loaded detail's, else the log's row while the detail loads. The log read the raw
+    /// headers (the signature, the author's offset, the committer); the detail's own copy does not say.
     @MainActor static func selected(_ session: FilesSession) -> GitCommit? {
         guard let hash = session.selectedCommit else { return nil }
-        if let detail = session.commitDetail, detail.commit.hash == hash { return detail.commit }
-        return session.log?.commits.first { $0.hash == hash }
+        let row = session.log?.commits.first { $0.hash == hash }
+        guard let detail = session.commitDetail, detail.commit.hash == hash else { return row }
+        var commit = detail.commit
+        if let row {
+            commit.signature = row.signature
+            commit.zone = row.zone
+            commit.committer = row.committer
+        }
+        return commit
     }
 }
 
@@ -240,28 +299,45 @@ private struct GitCommitsList: View {
     var focus: FocusState<GitCommitsFocus?>.Binding
     let detailShown: Bool
     @Environment(\.appTypography) private var typography
+    /// One column: a chosen row's detail takes the list's place (`FilesSplit`).
+    @Environment(\.filesSplitNarrow) private var narrow
 
     var body: some View {
+        // The list's width caps the graph's lanes and the rows' refs, so neither crowds out the subjects.
+        GeometryReader { geometry in
+            rows(width: geometry.size.width)
+        }
+    }
+
+    private func rows(width: CGFloat) -> some View {
         let commits = session.log?.commits ?? []
-        let layout = graph.graph(for: session)
+        let scale = typography.expanded(1)
+        let layout = graph.graph(for: session, maxLanes: GitGraphCell.maxLanes(width: width, scale: scale))
         let rowHeight = typography.expanded(28)
-        let graphWidth = GitGraphCell.width(lanes: layout.lanes, scale: typography.expanded(1))
+        let graphWidth = GitGraphCell.width(lanes: layout.lanes, scale: scale)
+        let refsWidth = GitRefChips.maxWidth(list: width)
         let uncommitted = session.status?.changedFiles ?? 0
-        VStack(spacing: 0) {
+        return VStack(spacing: 0) {
             ScrollViewReader { proxy in
                 ScrollView(.vertical) {
                     LazyVStack(spacing: 0) {
                         if uncommitted > 0 {
-                            GitUncommittedButton(session: session, files: uncommitted, row: layout.top,
-                                                 graphWidth: graphWidth, height: rowHeight)
+                            GitUncommittedButton(session: session, files: uncommitted, row: layout.top, lanes: layout.lanes,
+                                                 graphWidth: graphWidth, height: rowHeight) {
+                                focus.wrappedValue = .list
+                                if narrow { session.narrowDetail = true }
+                            }
+                                .id(Self.uncommittedID)
                         }
                         ForEach(Array(commits.enumerated()), id: \.element.hash) { index, commit in
                             // A button, not a tap gesture: in the focusable scroll view a tap gesture never saw the
                             // click (as in the Changes list).
                             Button { select(commit.hash) } label: {
-                                GitCommitRow(commit: commit, check: session.signatureChecks[commit.hash], row: index < layout.rows.count ? layout.rows[index] : nil,
-                                             selected: commit.hash == session.selectedCommit, graphWidth: graphWidth,
-                                             height: rowHeight)
+                                GitCommitRow(commit: commit, check: session.signatureChecks[commit.hash],
+                                             row: index < layout.rows.count ? layout.rows[index] : nil, lanes: layout.lanes,
+                                             selected: session.tab == .commits && commit.hash == session.selectedCommit,
+                                             graphWidth: graphWidth,
+                                             refsWidth: refsWidth, height: rowHeight)
                             }
                             .buttonStyle(.plain)
                             .id(commit.hash)
@@ -274,11 +350,14 @@ private struct GitCommitsList: View {
                 .focusable()
                 .focusEffectDisabled()
                 .focused(focus, equals: .list)
-                .onKeyPress(.upArrow) { move(-1, proxy: proxy) }
-                .onKeyPress(.downArrow) { move(1, proxy: proxy) }
+                // The separate Changes tab is another tab, not a row the arrows reach.
+                .onKeyPress(.upArrow) { move(-1, uncommitted: uncommitted > 0 && !session.changesTab, proxy: proxy) }
+                .onKeyPress(.downArrow) { move(1, uncommitted: uncommitted > 0 && !session.changesTab, proxy: proxy) }
                 .onKeyPress(.return) {
-                    // Without the detail pane (narrow, or hidden by ⌥⌘P) the list keeps the keyboard.
-                    guard session.selectedCommit != nil, detailShown else { return .ignored }
+                    // Without the detail pane (hidden by ⌥⌘P) the list keeps the keyboard; one column shows the detail.
+                    let picked = session.tab == .changes ? session.changesSelection : session.selectedCommit
+                    guard picked != nil, detailShown || narrow else { return .ignored }
+                    if narrow { session.narrowDetail = true }
                     focus.wrappedValue = .files
                     return .handled
                 }
@@ -289,9 +368,14 @@ private struct GitCommitsList: View {
         }
     }
 
+    /// The uncommitted row's scroll identity, beside the commits' hashes.
+    static let uncommittedID = "uncommitted"
+
     private func select(_ hash: String) {
         if session.selectedCommit != hash { session.selectedCommit = hash }
+        session.select(.commits)
         focus.wrappedValue = .list
+        if narrow { session.narrowDetail = true }
     }
 
     /// A row within 20 of the end raises the wanted count by a page, once a page: until the data layer has loaded
@@ -301,14 +385,22 @@ private struct GitCommitsList: View {
         session.logWanted += GitLoader.page
     }
 
-    private func move(_ step: Int, proxy: ScrollViewProxy) -> KeyPress.Result {
-        let commits = session.log?.commits ?? []
-        guard !commits.isEmpty else { return .ignored }
-        let current = session.selectedCommit.flatMap { hash in commits.firstIndex { $0.hash == hash } }
-        let next = current.map { min(max($0 + step, 0), commits.count - 1) } ?? (step > 0 ? 0 : commits.count - 1)
-        let hash = commits[next].hash
-        if session.selectedCommit != hash { session.selectedCommit = hash }
-        proxy.scrollTo(hash)
+    /// ↑↓ through the rows: the uncommitted one (while there are changes), then the commits.
+    private func move(_ step: Int, uncommitted: Bool, proxy: ScrollViewProxy) -> KeyPress.Result {
+        // Nil stands for the uncommitted row.
+        let rows: [String?] = (uncommitted ? [nil] : []) + (session.log?.commits ?? []).map(\.hash)
+        guard !rows.isEmpty else { return .ignored }
+        let current = session.tab == .changes ? rows.firstIndex(where: { $0 == nil })
+            : session.selectedCommit.flatMap { hash in rows.firstIndex { $0 == hash } }
+        let next = current.map { min(max($0 + step, 0), rows.count - 1) } ?? (step > 0 ? 0 : rows.count - 1)
+        if let hash = rows[next] {
+            if session.selectedCommit != hash { session.selectedCommit = hash }
+            session.select(.commits)
+            proxy.scrollTo(hash)
+        } else {
+            session.select(.changes)
+            proxy.scrollTo(Self.uncommittedID)
+        }
         return .handled
     }
 
@@ -326,6 +418,8 @@ private struct GitCommitsList: View {
 private struct GitUncommittedRow: View {
     let files: Int
     let row: GitGraph.Row?
+    let lanes: Int
+    let selected: Bool
     let graphWidth: CGFloat
     let height: CGFloat
     @Environment(\.appTypography) private var typography
@@ -334,11 +428,11 @@ private struct GitUncommittedRow: View {
     var body: some View {
         let palette = Chrome.palette
         HStack(spacing: 0) {
-            GitGraphCell(row: row, hollow: true, width: graphWidth, height: height)
+            GitGraphCell(row: row, lanes: lanes, hollow: true, width: graphWidth, height: height)
             HStack(spacing: 8) {
                 Text("Uncommitted changes")
                     .font(AppFont.ui(size: typography.size()))
-                    .foregroundStyle(palette.sidebarHostLabel)
+                    .foregroundStyle(selected ? palette.ink : palette.sidebarHostLabel)
                 Spacer(minLength: 8)
                 Text(verbatim: GitCommitsText.files(files))
                     .font(AppFont.ui(size: typography.size(offset: -2)))
@@ -348,27 +442,35 @@ private struct GitUncommittedRow: View {
             .padding(.trailing, 12)
         }
         .frame(height: height)
-        .background(hovering ? palette.hover : .clear)
+        .background(selected ? palette.ink.opacity(0.08) : hovering ? palette.hover : .clear)
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
     }
 }
 
-/// The uncommitted row as a button: a click opens the Changes tab, which takes the keyboard.
+/// The uncommitted row as a button: a click selects it, its changes and their diffs in the detail.
 private struct GitUncommittedButton: View {
     let session: FilesSession
     let files: Int
     let row: GitGraph.Row?
+    let lanes: Int
     let graphWidth: CGFloat
     let height: CGFloat
+    let focusList: () -> Void
 
     var body: some View {
-        Button { session.select(.changes) } label: {
-            GitUncommittedRow(files: files, row: row, graphWidth: graphWidth, height: height)
+        let selected = session.tab == .changes
+        Button {
+            session.select(.changes)
+            focusList()
+        } label: {
+            GitUncommittedRow(files: files, row: row, lanes: lanes, selected: selected, graphWidth: graphWidth,
+                              height: height)
         }
         .buttonStyle(.plain)
-        .help("Open the Changes tab · ⌃⌘2")
+        .help(session.changesTab ? "Open the Changes tab · ⌃⌘2" : "Show the uncommitted changes · ⌃⌘2")
         .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityIdentifier("git-commits-uncommitted")
     }
 }
@@ -379,23 +481,26 @@ private struct GitCommitRow: View {
     /// The signature's check, once the commit was selected and checked.
     var check: GitSignatureCheck?
     let row: GitGraph.Row?
+    let lanes: Int
     let selected: Bool
     let graphWidth: CGFloat
+    /// The most the refs take: past it they fold into a count (`GitRefChips`).
+    let refsWidth: CGFloat
     let height: CGFloat
     @Environment(\.appTypography) private var typography
 
     var body: some View {
         let palette = Chrome.palette
         HStack(spacing: 0) {
-            GitGraphCell(row: row, hollow: false, width: graphWidth, height: height)
+            GitGraphCell(row: row, lanes: lanes, hollow: false, width: graphWidth, height: height)
             HStack(spacing: 8) {
-                // The subject gives way first: the chips and the age keep their width.
+                // The subject gives way first: the chips (up to their share of the row) and the age keep their width.
                 Text(verbatim: commit.subject)
                     .font(AppFont.ui(size: typography.size()))
                     .foregroundStyle(selected ? palette.ink : palette.secondary)
                     .truncationMode(.tail)
-                ForEach(GitRefChip.ordered(commit.refs), id: \.self) { ref in
-                    GitRefChip(ref: ref).fixedSize()
+                if !commit.refs.isEmpty {
+                    GitRefChips(refs: commit.refs, maxWidth: refsWidth).layoutPriority(1)
                 }
                 if let kind = commit.signature {
                     GitSignatureSeal(kind: kind, check: check)
@@ -426,6 +531,8 @@ private struct GitCommitRow: View {
 /// a count of deeper lanes at the left edge.
 struct GitGraphCell: View {
     let row: GitGraph.Row?
+    /// The lanes drawn (`GitGraph.lanes`): a dot in a deeper one is counted at the left edge instead.
+    let lanes: Int
     let hollow: Bool
     let width: CGFloat
     let height: CGFloat
@@ -438,6 +545,14 @@ struct GitGraphCell: View {
     }
 
     static func x(_ lane: Int, scale: CGFloat) -> CGFloat { (22 + 14 * CGFloat(lane)) * scale }
+
+    /// The lanes a list `width` wide draws: the graph takes a fifth of it at most, two lanes at least and never more
+    /// than `GitGraph.maxLanes`; deeper branches fold into the rows' counts.
+    static func maxLanes(width: CGFloat, scale: CGFloat) -> Int {
+        guard width > 0, scale > 0 else { return GitGraph.maxLanes }
+        let room = Int(((width * 0.2 / scale - 42) / 14).rounded(.down)) + 1
+        return min(max(room, 2), GitGraph.maxLanes)
+    }
 
     var body: some View {
         let palette = Chrome.palette
@@ -476,7 +591,7 @@ struct GitGraphCell: View {
                 context.stroke(path, with: .color(line.current ? green : amber), lineWidth: 2 * scale)
             }
             let color = row.current ? green : amber
-            if row.lane < GitGraph.maxLanes {
+            if row.lane < lanes {
                 let radius = 4.5 * scale
                 let dot = Path(ellipseIn: CGRect(x: Self.x(row.lane, scale: scale) - radius, y: middle - radius,
                                                  width: radius * 2, height: radius * 2))
@@ -490,7 +605,7 @@ struct GitGraphCell: View {
             if row.hidden > 0 {
                 // The commit's own lane among the hidden ones: the count takes its dot's colour.
                 let count = Text(verbatim: "+\(row.hidden)").font(countFont)
-                    .foregroundStyle(row.lane >= GitGraph.maxLanes ? color : faint)
+                    .foregroundStyle(row.lane >= lanes ? color : faint)
                 context.draw(count, at: CGPoint(x: 1, y: middle), anchor: .leading)
             }
         }
@@ -528,6 +643,7 @@ struct GitRefChip: View {
             .font(AppFont.ui(size: typography.size(offset: -2.5)))
             .foregroundStyle(filled ? palette.green : ref.kind == .tag ? palette.warning : palette.muted)
             .lineLimit(1)
+            .truncationMode(.middle)
             .padding(.horizontal, 6)
             .frame(height: typography.expanded(16))
             .background { if filled { Capsule().fill(palette.green.opacity(0.18)) } }
@@ -545,6 +661,64 @@ struct GitRefChip: View {
     }
 }
 
+/// A commit's refs in order within `maxWidth`: as many chips as fit, the rest folded into "+2"; one chip alone
+/// truncates in the middle ("origin/1240…main").
+struct GitRefChips: View {
+    let refs: [GitRef]
+    var maxWidth: CGFloat = .infinity
+
+    /// A log row's refs take at most a third of the list.
+    static func maxWidth(list width: CGFloat) -> CGFloat { max(64, (width / 3).rounded()) }
+
+    var body: some View {
+        let ordered = GitRefChip.ordered(refs)
+        GitWidthCap(width: maxWidth) {
+            ViewThatFits(in: .horizontal) {
+                ForEach(Array(stride(from: ordered.count, to: 0, by: -1)), id: \.self) { shown in
+                    HStack(spacing: 6) {
+                        ForEach(ordered.prefix(shown), id: \.self) { GitRefChip(ref: $0) }
+                        if shown < ordered.count { GitRefOverflow(refs: Array(ordered.dropFirst(shown))).fixedSize() }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// "+2": the refs that did not fit, named in its help.
+private struct GitRefOverflow: View {
+    let refs: [GitRef]
+    @Environment(\.appTypography) private var typography
+
+    var body: some View {
+        let palette = Chrome.palette
+        Text(verbatim: "+\(refs.count)")
+            .font(AppFont.ui(size: typography.size(offset: -2.5)))
+            .foregroundStyle(palette.muted)
+            .padding(.horizontal, 6)
+            .frame(height: typography.expanded(16))
+            .overlay { Capsule().strokeBorder(palette.selectedControl) }
+            .help(refs.map(\.name).joined(separator: ", "))
+            .accessibilityLabel("\(refs.count) more: " + refs.map(\.name).joined(separator: ", "))
+    }
+}
+
+/// Offers its view at most `width` and takes the size the view chose: a cap that, unlike `frame(maxWidth:)`, does not
+/// grow to the cap when the view is narrower.
+private struct GitWidthCap: Layout {
+    let width: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let view = subviews.first else { return .zero }
+        return view.sizeThatFits(ProposedViewSize(width: min(proposal.width ?? width, width), height: proposal.height))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: CGPoint(x: bounds.minX, y: bounds.midY), anchor: .leading,
+                              proposal: ProposedViewSize(width: bounds.width, height: bounds.height))
+    }
+}
+
 /// The 24 pt line under the list: how much of the log is loaded, and the scope.
 private struct GitCommitsFooter: View {
     @Bindable var session: FilesSession
@@ -552,10 +726,16 @@ private struct GitCommitsFooter: View {
 
     var body: some View {
         let palette = Chrome.palette
-        HStack(spacing: 0) {
+        HStack(spacing: 8) {
             Text(verbatim: GitCommitsText.footer(session.log))
                 .accessibilityIdentifier("git-commits-footer-summary")
             Spacer(minLength: 0)
+            // Narrow lists keep the menu as "All ▾" / "Branch ▾".
+            ViewThatFits(in: .horizontal) {
+                scopeMenu(short: false)
+                scopeMenu(short: true)
+            }
+            .layoutPriority(1)
         }
         .lineLimit(1)
         .padding(.leading, 14)
@@ -567,6 +747,34 @@ private struct GitCommitsFooter: View {
         .overlay(alignment: .top) { palette.separator.frame(height: 1) }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("git-commits-footer")
+    }
+
+    /// This branch's history or every branch's.
+    private func scopeMenu(short: Bool) -> some View {
+        let title = session.logScope == .all ? (short ? "All" : "All branches") : (short ? "Branch" : "This branch")
+        return Menu {
+            Picker("Show", selection: Binding(get: { session.logScope }, set: { scope in
+                guard scope != session.logScope else { return }
+                session.logScope = scope
+                // Another query starts again from one page.
+                session.logWanted = GitLoader.page
+            })) {
+                Text("This branch").tag(GitLogScope.branch)
+                Text("All branches").tag(GitLogScope.all)
+            }
+            .pickerStyle(.inline)
+        } label: {
+            // One text, so the menu keeps the chevron after the title and draws both in the footer's ink.
+            (Text(verbatim: title + " ") + Text(Image(systemName: "chevron.down")).font(.system(size: typography.size(offset: -5),
+                                                                                               weight: .semibold)))
+                .font(AppFont.ui(size: typography.size(offset: -2)))
+                .foregroundStyle(Chrome.palette.muted)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Show this branch’s history or all branches")
+        .accessibilityIdentifier("git-log-scope")
     }
 }
 
@@ -601,7 +809,7 @@ private struct GitCommitDetailPane: View {
 /// The detail's summary over its diff: the summary at its own height up to half the pane (160 pt at least), where it
 /// scrolls instead, and the diff in the rest. A layout rather than a measured height, so no frame shows the summary
 /// at a stale size.
-private struct GitCommitDetailStack: Layout {
+struct GitCommitDetailStack: Layout {
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         proposal.replacingUnspecifiedDimensions()
     }
@@ -625,7 +833,6 @@ private struct GitCommitSummary: View {
 
     var body: some View {
         let palette = Chrome.palette
-        let notice = FilesEditorNotices.shared.notice(for: session.id)
         VStack(alignment: .leading, spacing: 8) {
             Text(verbatim: commit.subject)
                 // Prose in the system face, as the mockup sets the subject and body; the rest stays in the UI font.
@@ -634,57 +841,32 @@ private struct GitCommitSummary: View {
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("git-commit-subject")
-            HStack(spacing: 10) {
-                Button(action: copyHash) {
-                    HStack(spacing: 5) {
-                        Text(verbatim: commit.short)
-                        Image(systemName: copied == commit.hash ? "checkmark" : "doc.on.doc")
-                            .font(.system(size: typography.size(offset: -2)))
+            // The refs on the hash's line while it has room for them all, else on their own line under it.
+            if commit.refs.isEmpty {
+                metaLine(refs: false)
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    metaLine(refs: true)
+                    VStack(alignment: .leading, spacing: 8) {
+                        metaLine(refs: false)
+                        GitRefChips(refs: commit.refs)
+                            .font(AppFont.ui(size: typography.size(offset: -1)))
                     }
-                    .foregroundStyle(palette.green)
-                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
-                .help("Copy \(commit.hash) · ⌘C")
-                .accessibilityLabel(commit.short)
-                .accessibilityIdentifier("git-commit-hash")
-                Text("·").foregroundStyle(palette.faint)
-                Text(verbatim: commit.author)
-                    .help(commit.email)
-                Text("·").foregroundStyle(palette.faint)
-                // The age moves on by the minute with nothing reloaded.
-                TimelineView(.periodic(from: .now, by: 60)) { _ in
-                    let now = System.date()
-                    Text(verbatim: GitCommitsText.ago(commit.date, at: now))
-                        .help(FilesFormatting.timestamp(commit.date, now: now))
-                }
-                if !commit.refs.isEmpty {
-                    Text("·").foregroundStyle(palette.faint)
-                    ForEach(GitRefChip.ordered(commit.refs), id: \.self) { GitRefChip(ref: $0).fixedSize() }
-                }
-                Spacer(minLength: 0)
-                if let notice {
-                    Text(verbatim: notice)
-                        .foregroundStyle(palette.warning)
-                        .fixedSize()
-                        .accessibilityIdentifier("git-commit-notice")
-                }
-                Button("git show ›") {
-                    // Typed into the tab's shell, with -C when that shell is outside the repository.
-                    guard let root = session.git.repository?.root else { return }
-                    FilesEditor.runGit("show \(commit.hash)", repository: root, tab: session.id,
-                                       files: TerminalRuntime.shared.files)
-                }
-                .buttonStyle(FilePreviewButtonStyle())
-                .help("Switches to the terminal and types git show \(commit.short)")
-                .accessibilityIdentifier("git-commit-show")
             }
-            .font(AppFont.ui(size: typography.size(offset: -1)))
-            .foregroundStyle(palette.muted)
-            .lineLimit(1)
-            // The log read which commits are signed; the detail's own copy of the commit does not say.
-            if let kind = session.log?.commits.first(where: { $0.hash == commit.hash })?.signature {
-                GitSignatureLine(kind: kind, check: session.signatureChecks[commit.hash])
+            // Who committed it, when that is not the author or not when it was written (a rebase, an amend, a merge
+            // made on a forge).
+            if let committer = commit.distinctCommitter {
+                TimelineView(.periodic(from: .now, by: 60)) { _ in
+                    Text(verbatim: GitCommitsText.committed(committer, of: commit, at: System.date()))
+                        .help("\(committer.name) <\(committer.email)> · "
+                              + GitCommitsText.fullTime(committer.date, zone: committer.zone))
+                }
+                .font(AppFont.ui(size: typography.size(offset: -1.5)))
+                .foregroundStyle(palette.detail)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .accessibilityIdentifier("git-commit-committer")
             }
             if !commit.body.isEmpty {
                 Text(verbatim: commit.body)
@@ -700,6 +882,54 @@ private struct GitCommitSummary: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(EdgeInsets(top: 14, leading: 16, bottom: 12, trailing: 16))
         .overlay(alignment: .bottom) { palette.separator.frame(height: 1) }
+    }
+
+    /// The hash, the author with the seal, the age and (`refs`) the refs, on one line.
+    private func metaLine(refs: Bool) -> some View {
+        let palette = Chrome.palette
+        return HStack(spacing: 10) {
+            Button(action: copyHash) {
+                HStack(spacing: 5) {
+                    Text(verbatim: commit.short)
+                    Image(systemName: copied == commit.hash ? "checkmark" : "doc.on.doc")
+                        .font(.system(size: typography.size(offset: -2)))
+                }
+                .foregroundStyle(palette.green)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .fixedSize()
+            .help("Copy \(commit.hash) · ⌘C")
+            .accessibilityLabel(commit.short)
+            .accessibilityIdentifier("git-commit-hash")
+            Text("·").foregroundStyle(palette.faint)
+            // The author and, for a signed commit, its seal: "Sam Example ✓ Signed".
+            HStack(spacing: 6) {
+                Text(verbatim: commit.author)
+                    .help(commit.email)
+                    .accessibilityIdentifier("git-commit-author")
+                if let kind = commit.signature {
+                    GitSignatureBadge(kind: kind, check: session.signatureChecks[commit.hash])
+                }
+            }
+            .layoutPriority(1)
+            Text("·").foregroundStyle(palette.faint)
+            // The age moves on by the minute with nothing reloaded.
+            TimelineView(.periodic(from: .now, by: 60)) { _ in
+                Text(verbatim: GitCommitsText.ago(commit.date, at: System.date()))
+                    .help(GitCommitsText.fullTime(commit.date, zone: commit.zone))
+                    .accessibilityIdentifier("git-commit-date")
+            }
+            .fixedSize()
+            if refs {
+                Text("·").foregroundStyle(palette.faint)
+                GitRefChips(refs: commit.refs)
+            }
+            Spacer(minLength: 0)
+        }
+        .font(AppFont.ui(size: typography.size(offset: -1)))
+        .foregroundStyle(palette.muted)
+        .lineLimit(1)
     }
 
     private func copyHash() {
@@ -786,13 +1016,20 @@ private struct GitCommitFiles: View {
                 .focused(focus, equals: .files)
                 .onKeyPress(.upArrow) { move(-1, in: files) }
                 .onKeyPress(.downArrow) { move(1, in: files) }
-                .onKeyPress(.leftArrow) { focus.wrappedValue = .list; return .handled }
-                .onKeyPress(.escape) { focus.wrappedValue = .list; return .handled }
+                .onKeyPress(.leftArrow) { leave() }
+                .onKeyPress(.escape) { leave() }
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("git-commit-files")
             }
         }
         .padding(.bottom, 6)
+    }
+
+    /// The keyboard back to the log, and on one column the log back in sight.
+    private func leave() -> KeyPress.Result {
+        session.narrowDetail = false
+        focus.wrappedValue = .list
+        return .handled
     }
 
     private func move(_ step: Int, in files: [GitChange]) -> KeyPress.Result {
@@ -804,11 +1041,13 @@ private struct GitCommitFiles: View {
     }
 }
 
-private struct GitCommitFileRow: View {
+struct GitCommitFileRow: View {
     let file: GitChange
     let selected: Bool
     /// The file's loaded diff while it is picked: it carries a binary's sizes when the detail did not.
     let diff: GitDiff?
+    /// The row's accessibility identifier: "git-commit-file-<path>" unless given (an uncommitted change's names its area).
+    var identifier: String?
     @Environment(\.appTypography) private var typography
 
     var body: some View {
@@ -834,7 +1073,7 @@ private struct GitCommitFileRow: View {
         .help(file.path)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(selected ? .isSelected : [])
-        .accessibilityIdentifier("git-commit-file-\(file.path)")
+        .accessibilityIdentifier(identifier ?? "git-commit-file-\(file.path)")
     }
 }
 
@@ -869,11 +1108,13 @@ private struct GitCommitDiff: View {
         let palette = Chrome.palette
         let state = Self.shown(session)
         VStack(spacing: 0) {
-            palette.separator.frame(height: 1)
+            // Between the commit's files and the picked file's diff: the control border, which (unlike the separator)
+            // still shows on the dark palette's near-black.
+            palette.controlBorder.frame(height: 1)
             if session.commitFile == nil {
                 Color.clear
             } else if let state, let diff = state.diff {
-                GitDiffView(diff: diff, mode: $session.diffMode, source: reader(diff))
+                GitDiffView(diff: diff, mode: $session.diffMode, wrap: $session.diffWrap, source: reader(diff))
                     // Each commit's file gets its own folds, scroll and cursor.
                     .id(state.key)
             } else if let error = state?.error {
@@ -902,34 +1143,36 @@ struct GitSignatureSeal: View {
         Image(systemName: look.symbol)
             .font(.system(size: typography.size(offset: -1.5)))
             .foregroundStyle(look.color)
-            .help(check.map { GitSignatureText.line($0, kind: kind) } ?? "Signed with \(kind.title) · select to verify")
-            .accessibilityLabel(check.map { GitSignatureText.line($0, kind: kind) } ?? "Signed with \(kind.title)")
+            .help(check.map { GitSignatureText.detail($0, kind: kind) } ?? "Signed with \(kind.title) · select to verify")
+            .accessibilityLabel(check.map { "\(GitSignatureText.short($0)) · \(GitSignatureText.detail($0, kind: kind))" }
+                                ?? "Signed with \(kind.title)")
             .accessibilityIdentifier("git-commit-seal")
     }
 }
 
-/// The selected commit's signature under its hash and author: checking, then the verdict, the signer and the key.
-struct GitSignatureLine: View {
+/// The selected commit's seal beside its author: "Signed" (or what is wrong with the signature) in the verdict's
+/// colour, the signer and the key in its help; a spinner while it is checked.
+struct GitSignatureBadge: View {
     let kind: GitSignatureKind
     let check: GitSignatureCheck?
     @Environment(\.appTypography) private var typography
 
     var body: some View {
         let look = GitSignatureText.look(check)
-        HStack(spacing: 6) {
+        let detail = GitSignatureText.detail(check, kind: kind)
+        HStack(spacing: 4) {
             if check == nil {
                 ProgressView().controlSize(.mini)
-                Text(verbatim: "Checking the \(kind.title) signature…").foregroundStyle(Chrome.palette.detail)
-            } else if let check {
-                Image(systemName: look.symbol).foregroundStyle(look.color)
-                Text(verbatim: GitSignatureText.line(check, kind: kind)).foregroundStyle(look.color)
-                    .textSelection(.enabled)
+            } else {
+                Image(systemName: look.symbol).font(.system(size: typography.size(offset: -2)))
             }
+            Text(verbatim: GitSignatureText.short(check))
         }
-        .font(AppFont.ui(size: typography.size(offset: -1)))
-        .lineLimit(1)
-        .truncationMode(.middle)
-        .accessibilityElement(children: .combine)
+        .foregroundStyle(look.color)
+        .fixedSize()
+        .help(detail)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(GitSignatureText.short(check)) · \(detail)")
         .accessibilityIdentifier("git-commit-signature")
     }
 }
@@ -951,22 +1194,41 @@ enum GitSignatureText {
         }
     }
 
-    /// "Good GPG signature · Paul Miller <paul@example.com> · 697079DA6878B89B".
-    static func line(_ check: GitSignatureCheck, kind: GitSignatureKind) -> String {
-        let name = (check.kind ?? kind).title
-        let verdict = switch check.verdict {
-        case .good(true): "Good \(name) signature"
+    /// The badge's word: "Signed" for a good signature (and while it is checked), else what is wrong with it.
+    static func short(_ check: GitSignatureCheck?) -> String {
+        switch check?.verdict {
+        case nil, .good?: "Signed"
+        case .bad?: "Bad signature"
+        case .unknownKey?: "Unknown key"
+        case .expiredSignature?: "Expired signature"
+        case .expiredKey?: "Expired key"
+        case .revokedKey?: "Revoked key"
+        case .unsigned?: "Not signed"
+        case .unchecked?: "Unverified"
+        }
+    }
+
+    /// The help: "Sam Example <sam@example.com> · GPG key ID: 01234567…" for a good certified signature, the verdict
+    /// first for any other ("Bad GPG signature · …").
+    static func detail(_ check: GitSignatureCheck?, kind: GitSignatureKind) -> String {
+        guard let check else { return "Checking the \(kind.title) signature…" }
+        let kind = check.kind ?? kind
+        let name = kind.title
+        let verdict: String? = switch check.verdict {
+        case .good(true): nil
         case .good(false): "Good \(name) signature, key not certified"
         case .bad: "Bad \(name) signature"
-        case .unknownKey: (check.kind ?? kind) == .ssh ? "\(name) signature from a key not in your allowed signers"
-                                                       : "\(name) signature from a key not in your keyring"
+        case .unknownKey: kind == .ssh ? "\(name) signature from a key not in your allowed signers"
+                                       : "\(name) signature from a key not in your keyring"
         case .expiredSignature: "Expired \(name) signature"
         case .expiredKey: "\(name) signature from an expired key"
         case .revokedKey: "\(name) signature from a revoked key"
         case .unsigned: "Not signed"
         case .unchecked(let reason): "Signed with \(name) · couldn’t check: \(reason)"
         }
-        return ([verdict] + [check.signer, check.key].compactMap { $0 }).joined(separator: " · ")
+        let key = check.key.map { kind == .ssh ? "SSH key: \($0)" : "\(name) key ID: \($0)" }
+        let parts = [verdict, check.signer, key].compactMap { $0 }
+        return parts.isEmpty ? "Good \(name) signature" : parts.joined(separator: " · ")
     }
 }
 

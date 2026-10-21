@@ -20,7 +20,8 @@ enum PaneUrgency: Int, CaseIterable {
     #if canImport(AppKit)
     /// `programs`: the surface's visible OSC 7501 records.
     @MainActor init(session: ChatSession?, programs: [ProgramStatus] = []) {
-        let waiting = session?.approvals.contains(where: \.pending) == true || programs.contains { $0.state == .blocked }
+        let waiting = session?.approvals.contains(where: \.pending) == true || session?.agentAttention != nil
+            || programs.contains { $0.state == .blocked }
         let working = session?.active == true && session?.busy == true || programs.contains { $0.state == .working }
         let unread = session?.hasNewMessages == true || programs.contains(where: \.finished)
         self.init(waiting: waiting, working: working, unread: unread)

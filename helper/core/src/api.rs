@@ -1268,6 +1268,8 @@ pub trait Harness {
     /// With `agent`, the target is that running agent's own config root (its environment,
     /// e.g. CODEX_HOME) instead of the helper's account default; c51466a
     /// hook_transport.rs:1055-1077.
+    /// Error code `changed` means no edit committed and the whole operation may be retried
+    /// against fresh snapshots. Partial/uncertain writes must use a different error code.
     fn install(
         &mut self,
         io: &mut dyn Io,
@@ -1595,6 +1597,11 @@ pub trait Multiplexer {
     fn screen(&mut self, io: &mut dyn Io, terminal: Id, changed: bool, done: Done<Screen>);
     /// Screen text the app publishes for a terminal it renders itself; c1654cc Dispatch/Chat/ChatCoordinator.swift:2098-2100.
     fn publish(&mut self, io: &mut dyn Io, terminal: Id, screen: Screen);
+    /// Let `screen` read terminals no client renders from the multiplexer itself (tmux `capture-pane`, herdr's
+    /// terminal observer), as the screen a client would publish (crate::cells). For a helper without clients (the
+    /// queue drainer); off by default, so a client helper reads only published screens and records nothing new. A
+    /// terminal a client attached or published for keeps reading the client's screens.
+    fn host_screens(&mut self, _enabled: bool) {}
     /// Completion of IO this multiplexer submitted; also reports `Update::Clipboard`, c1654cc Dispatch/Tmux/TmuxSession.swift:178-191.
     fn event(&mut self, io: &mut dyn Io, ui: &mut dyn Ui, event: Event);
 }

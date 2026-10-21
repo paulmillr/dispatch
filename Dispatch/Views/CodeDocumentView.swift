@@ -190,8 +190,10 @@ struct CodeDocumentView: View {
             }
             if loading { ProgressView().controlSize(.small).padding() }
             if state.sourceMode, let error { Text(error).foregroundStyle(theme.muted).padding(10) }
+            // A document that fits its 360 pt scrolls sideways only, as a chat code block does.
+            let tall = CGFloat(rows.count) * (theme.typography.codeDetailLineHeight + 4) > 360
             GeometryReader { geometry in
-            ScrollView([.horizontal, .vertical]) {
+            ScrollView(tall ? [.horizontal, .vertical] : .horizontal) {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
                         let line = row.text

@@ -82,7 +82,7 @@ struct SpacesSection: Identifiable {
     /// Whether the section shows New space below the host: a connected host whose spaces are known to be none (live:
     /// not the cache's, not a multiplexer switch still on its way), expanded, unfiltered and outside edit mode.
     func offersNewSpace(editing: Bool, filter: TabsQuery.Filter) -> Bool {
-        spaces.isEmpty && !host.stale && !collapsed && !editing && filter == .all
+        spaces.isEmpty && !host.stale && !collapsed && !editing && filter == .all && host.sameMachine == nil
     }
 }
 

@@ -27,7 +27,7 @@ final class HelperTerminalFeedTests: XCTestCase {
     }
 
     func testAttachSendsTheGridAndStreamsTheNodesUpdates() async throws {
-        let peer = ScriptedHelper.terminal()
+        let peer = ScriptedHelper.terminal(attached: false)
         defer { peer.close() }
         let feed = HelperTerminalFeed(client: peer.client, terminal: 7)
         let stream = feed.attach(TerminalFeedSize(columns: 50, rows: 30, cellWidth: 22, cellHeight: 48))
@@ -95,7 +95,8 @@ final class HelperTerminalFeedTests: XCTestCase {
     func testScrollStepsMadeDuringACallJoinIntoOneStep() async throws {
         let peer = ScriptedHelper { request in
             switch request.method {
-            case "terminals.attach", "terminals.input": .open
+            case "terminals.attach": .attachedNow
+            case "terminals.input": .open
             case "terminals.scroll": .error(code: "scrollback_app_owned", message: "")
             default: .empty
             }
@@ -197,7 +198,7 @@ final class HelperTerminalFeedTests: XCTestCase {
         let owned = TestBox(false)
         let peer = ScriptedHelper { request in
             switch request.method {
-            case "terminals.attach": .open
+            case "terminals.attach": .attachedNow
             case "terminals.scroll" where owned.value: .error(code: "scrollback_app_owned", message: "")
             default: .empty
             }
@@ -248,8 +249,24 @@ final class HelperTerminalFeedTests: XCTestCase {
         XCTAssertNotEqual(attaches[0].id, attaches[1].id)
     }
 
+    /// Input waits for the helper to confirm the attach (`terminal.attached`), as the Mac's does: a multiplexer may
+    /// refuse input to a terminal it has not attached yet.
+    func testInputWaitsForTheAttachToBeConfirmed() async throws {
+        let peer = ScriptedHelper.terminal(open: ["terminals.attach"], attached: false)
+        defer { peer.close() }
+        let feed = HelperTerminalFeed(client: peer.client, terminal: 7)
+        _ = feed.attach(TerminalFeedSize(columns: 80, rows: 24))
+        let attach = try await peer.wait(for: "terminals.attach")[0]
+        feed.send(Data("ls\r".utf8))
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertTrue(peer.requests("terminals.input").isEmpty, "Held until the attach is confirmed")
+        peer.notify(attach.id, .attached, method: "terminal.attached")
+        let input = try await peer.wait(for: "terminals.input")[0]
+        XCTAssertEqual(try params(Input.self, input).bytes, Data("ls\r".utf8))
+    }
+
     func testFailedAttachEndsTheStream() async throws {
-        let peer = ScriptedHelper.terminal()
+        let peer = ScriptedHelper.terminal(attached: false)
         defer { peer.close() }
         let feed = HelperTerminalFeed(client: peer.client, terminal: 7)
         let stream = feed.attach(TerminalFeedSize(columns: 80, rows: 24))

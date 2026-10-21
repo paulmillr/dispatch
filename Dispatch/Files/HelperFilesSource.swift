@@ -338,6 +338,7 @@ private enum Wire {
         let size: UInt64
         let modified_ns: Stamp
         let target: String?
+        /// On the wire, never set: the Files list shows nothing of git.
         let mark: String?
         let device: UInt64?
         let inode: UInt64?
@@ -345,7 +346,7 @@ private enum Wire {
         var model: FileEntry {
             FileEntry(name: name, kind: FileEntryKind(rawValue: kind) ?? .other, size: size,
                       modified: FileRevision.date(modified_ns.text), targetKind: target.map { FileEntryKind(rawValue: $0) ?? .other },
-                      mark: mark, identity: device.flatMap { device in inode.map { FileIdentity(device: device, inode: $0) } })
+                      identity: device.flatMap { device in inode.map { FileIdentity(device: device, inode: $0) } })
         }
     }
 

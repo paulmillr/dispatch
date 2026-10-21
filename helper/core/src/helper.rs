@@ -12,6 +12,7 @@ use std::{
 pub(crate) type Replies = Rc<RefCell<VecDeque<(RawFd, wire::Kind, u64, Vec<u8>)>>>;
 pub(crate) type Drains = Rc<RefCell<VecDeque<(RawFd, u64, Done<()>)>>>;
 mod client;
+pub(crate) mod installation;
 pub(crate) mod candidate;
 pub(crate) mod login;
 mod transfers;
@@ -112,6 +113,13 @@ pub struct DispatchHelper {
     /// The stdio.liveness client's traffic (a `--remote --stdio` helper only).
     pub(crate) liveness: Option<crate::dispatch::features::Liveness>,
     pub(crate) transfers: transfers::Transfers,
+    /// Starts a helper without clients that sends the stored queues this one leaves behind
+    /// (`dispatch-helper queue-drain …`); None for that helper itself, and where nothing may
+    /// outlive the helper.
+    pub drain: Option<(std::path::PathBuf, Vec<std::ffi::OsString>)>,
+    /// This helper serves the drainer: it registers no hook routes, so the agents' hooks keep
+    /// going to the helpers of the user's clients.
+    pub draining: bool,
 }
 
 struct Updates<'a> {
@@ -234,7 +242,10 @@ impl Ui for Updates<'_> {
         {
             self.interactions.borrow_mut().insert(
                 (id, binding.session.clone(), interaction.id.clone()),
-                interaction.questions.iter().map(|q| q.id.clone()).collect(),
+                (
+                    interaction.questions.iter().map(|q| q.id.clone()).collect(),
+                    interaction.approval || interaction.blocking,
+                ),
             );
         }
         let recipients: Vec<_> = self
@@ -602,6 +613,25 @@ impl Default for DispatchHelper {
     }
 }
 impl DispatchHelper {
+    /// Leaving with sendable stored queues: start the drainer, which sends them once their
+    /// agents are idle (a running drainer keeps the lock, and this one just ends).
+    fn handoff(&self, system: &mut System) {
+        let Some((program, arguments)) = &self.drain else { return };
+        if !crate::dispatch::queue::unsent(&self.held) {
+            return;
+        }
+        let mut command = std::process::Command::new(program);
+        command
+            .args(arguments)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        system.section("queue.drain");
+        if let Err(error) = Io::daemon(system, command) {
+            eprintln!("dispatch-helper: could not start the queue drainer: {error}");
+        }
+        system.section("ui");
+    }
     pub(crate) fn binding(
         &self,
         terminal: Id,
@@ -638,6 +668,7 @@ impl DispatchHelper {
         Ok((*harness, binding))
     }
     pub fn new() -> Self {
+        let updates = Rc::new(RefCell::new(VecDeque::new()));
         Self {
             permissions: Rc::new(RefCell::new(None)),
             admitted: BTreeMap::new(),
@@ -659,7 +690,7 @@ impl DispatchHelper {
             questions: Rc::new(RefCell::new(BTreeMap::new())),
             interactions: Rc::new(RefCell::new(BTreeMap::new())),
             adoptions: Rc::new(RefCell::new(Vec::new())),
-            held: Rc::new(RefCell::new(BTreeMap::new())),
+            held: crate::dispatch::Held::new(updates.clone()),
             commands: Rc::new(RefCell::new(Default::default())),
             creations: Default::default(),
             backends: Default::default(),
@@ -674,7 +705,7 @@ impl DispatchHelper {
             archives: Rc::new(RefCell::new(BTreeMap::new())),
             sides: Rc::new(RefCell::new(BTreeMap::new())),
             controls: Rc::new(RefCell::new(crate::control::Routes::default())),
-            updates: Rc::new(RefCell::new(VecDeque::new())),
+            updates,
             prompts: Default::default(),
             probes: Rc::new(RefCell::new(BTreeMap::new())),
             launching: Default::default(),
@@ -684,6 +715,8 @@ impl DispatchHelper {
             drains: Rc::new(RefCell::new(VecDeque::new())),
             login: None,
             transfers: Default::default(),
+            drain: None,
+            draining: false,
         }
     }
     fn cancel_creations(&mut self, io: &mut dyn Io, fd: i32, request: Option<u64>) {
@@ -836,6 +869,13 @@ impl DispatchHelper {
         self.multiplexers.push(mux.clone());
         mux
     }
+    /// Every multiplexer reads screens no client publishes itself (`Multiplexer::host_screens`): for a helper
+    /// that has no clients, such as the queue drainer.
+    pub fn host_screens(&mut self, enabled: bool) {
+        for mux in &self.multiplexers {
+            mux.borrow_mut().host_screens(enabled);
+        }
+    }
     /// The bin chooses the plain-shell backend; clients need no provider-specific rule.
     pub fn default_backend(&mut self, mux: &Shared<dyn Multiplexer>, key: &str) {
         let index = self.multiplexers.iter().position(|m| Rc::ptr_eq(m, mux));
@@ -918,6 +958,12 @@ impl DispatchHelper {
             Ok((_, route)) => route,
             Err(error) => return done(io, Err(Error { code: "setup", message: error.to_string() })),
         };
+        // Migrate a legacy regular stable executable before capturing the peer's identity:
+        // unlinking it changes Linux /proc/<peer>/exe to "... (deleted)". New publications
+        // switch a symlink between immutable builds and leave running identities intact.
+        if (self.remote || self.login.is_some()) && let Err(error) = io.executable() {
+            return done(io, Err(Error { code: "setup", message: error.to_string() }));
+        }
         let work = match io.submit(Job::Process { pid: peer }) {
             Ok(work) => work,
             Err(error) => return done(io, Err(Error { code: "setup", message: error.to_string() })),
@@ -934,7 +980,10 @@ impl DispatchHelper {
             let binding = remote.then_some(Binding { session: String::new(), transcript: None, process });
             let next = harness.clone();
             let target = route.clone();
-            harness.borrow_mut().install(io, &route, None, binding.clone().as_ref(), Box::new(move |io, result| {
+            let audit_binding = binding.clone();
+            installation::run(io, enabled.clone(), Rc::new(move |io, done| {
+                harness.borrow_mut().install(io, &route, None, audit_binding.as_ref(), done);
+            }), Box::new(move |io, result| {
                 let audit = match result { Ok(audit) => audit, Err(error) => return done(io, Err(error)) };
                 // Optional integrations require an explicit enabled state on this helper,
                 // even when the launcher's custom HOME has never seen their files.
@@ -943,7 +992,9 @@ impl DispatchHelper {
                 }
                 io.defer(Box::new(move |io| {
                     if !enabled() { return done(io, Ok(false)); }
-                    next.borrow_mut().install(io, &target, Some(true), binding.as_ref(), Box::new(move |io, result| {
+                    installation::run(io, enabled.clone(), Rc::new(move |io, done| {
+                        next.borrow_mut().install(io, &target, Some(true), binding.as_ref(), done);
+                    }), Box::new(move |io, result| {
                         done(io, result.map(|_| enabled()));
                     }));
                 }));
@@ -1085,7 +1136,7 @@ impl DispatchHelper {
             owned.then_some(bound)
         };
         // Typed startup setup must be discoverable before Chat observes an agent.
-        for index in 0..self.harnesses.len() {
+        for index in (0..self.harnesses.len()).filter(|_| !self.draining) {
             system.section(&format!("harness/{index}"));
             system.route()?;
         }
@@ -1528,6 +1579,7 @@ impl DispatchHelper {
                     }
                 }
                 if let Some((status, natural)) = exited.filter(|_| clients.is_empty()) {
+                    self.handoff(&mut system);
                     return Ok((system.finish(status)?, natural));
                 }
                 system.interest(
@@ -1545,6 +1597,7 @@ impl DispatchHelper {
             if let Some(deadline) = ending
                 && self.transfers.may_exit(system.now() >= deadline)
             {
+                self.handoff(&mut system);
                 return Ok((system.finish(0)?, false));
             }
             let (section, event) = match system.next() {
@@ -1558,6 +1611,7 @@ impl DispatchHelper {
             };
             system.section(&section);
             if section == TERMINATED {
+                self.handoff(&mut system);
                 return Ok((system.finish(128 + 15)?, false));
             }
             if section == crate::system::hooks::OWNER {
@@ -1585,9 +1639,15 @@ impl DispatchHelper {
                             "dispatch-helper: no client traffic for {} s; ending",
                             liveness.limit.as_secs()
                         );
+                        self.handoff(&mut system);
                         return Ok((system.finish(0)?, false));
                     }
                 }
+                continue;
+            }
+            if section == crate::dispatch::queue::STORE {
+                system.section("ui");
+                crate::dispatch::queue::changed(&mut system, &self.held, &event);
                 continue;
             }
             if section == COALESCE {
@@ -1598,6 +1658,7 @@ impl DispatchHelper {
             if section == DETACHED {
                 if let (Event::Timer { .. }, Some(last), Some((status, natural))) = (&event, traffic, exited) {
                     if system.now() >= last + DETACHED_IDLE {
+                        self.handoff(&mut system);
                         return Ok((system.finish(status)?, natural));
                     }
                     detached(&mut system, last + DETACHED_IDLE);
@@ -1916,6 +1977,7 @@ impl DispatchHelper {
                 self.questions
                     .borrow_mut()
                     .retain(|(peer, _, _, _), _| *peer != fd);
+                crate::dispatch::queue::left(&mut system, &self.held, fd);
                 observers.retain(|(peer, _, _)| *peer != fd);
                 system.close(fd);
                 if write != fd {
@@ -1924,6 +1986,7 @@ impl DispatchHelper {
                 self.transfers.end(fd, &mut system, &self.plugins);
                 if listener.is_none() {
                     if !self.transfers.running() {
+                        self.handoff(&mut system);
                         return Ok((system.finish(0)?, false));
                     }
                     // Its transfers are being removed: exit once they are, or at the deadline.

@@ -58,10 +58,14 @@ struct TabsEntry: Identifiable {
     let urgency: TabUrgency?
     /// Its time (`MobileTabs.activity(of:)`); nil: the tab's own.
     let activity: Date?
+    /// The name it shows (`MobileTabs.label(of:)`).
+    let label: String
     let id: TabRef
 
-    @MainActor init(tab: MobileTab, space: MobileSpace?, host: TabsHost, urgency: TabUrgency?, activity: Date? = nil) {
+    @MainActor init(tab: MobileTab, space: MobileSpace?, host: TabsHost, urgency: TabUrgency?, activity: Date? = nil,
+                    label: String? = nil) {
         self.tab = tab
+        self.label = label ?? tab.name
         self.space = space
         self.host = host
         self.urgency = urgency
@@ -88,16 +92,16 @@ enum TabsOrdering {
             switch sort {
             case .activity:
                 if let order = activity(a.activity, b.activity) { return order }
-                if let order = text(a.tab.name, b.tab.name) { return order }
+                if let order = text(a.label, b.label) { return order }
             case .name:
-                if let order = text(a.tab.name, b.tab.name) { return order }
+                if let order = text(a.label, b.label) { return order }
                 if let order = text(a.space?.name ?? "", b.space?.name ?? "") { return order }
                 if let order = activity(a.activity, b.activity) { return order }
             case .host:
                 if let order = text(a.host.name, b.host.name) { return order }
                 if a.host.id != b.host.id { return a.host.id.uuidString < b.host.id.uuidString }
                 if let order = activity(a.activity, b.activity) { return order }
-                if let order = text(a.tab.name, b.tab.name) { return order }
+                if let order = text(a.label, b.label) { return order }
             }
             if a.host.id != b.host.id { return a.host.id.uuidString < b.host.id.uuidString }
             return a.tab.ref.key < b.tab.ref.key

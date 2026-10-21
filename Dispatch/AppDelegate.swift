@@ -428,12 +428,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
               let files = TerminalRuntime.shared.files.existing(id), files.visible else { return }
         files.togglePreview()
     }
-    /// ⌃⌘1 opens files on its Files tab from any mode; ⌃⌘2 and ⌃⌘3 select Changes and Commits while files shows.
+    /// ⌃⌘1 opens files on its Files tab from any mode; ⌃⌘2 and ⌃⌘3 select Commits' uncommitted row or a commit while
+    /// files shows.
     @objc func showFilesTab(_ sender: NSMenuItem) {
         guard NSApp.keyWindow === window, let id = workspace.activeSurfaceID, let tab = Self.filesTab(sender.tag) else { return }
         TerminalRuntime.shared.files.showFiles(id, tab: tab)
     }
-    /// ⇧⌘U and ⇧⌘L: files on its Changes or Commits tab, from any mode.
+    /// ⇧⌘U and ⇧⌘L: files on Commits, its uncommitted row or a commit, from any mode.
     @objc func openFilesTab(_ sender: NSMenuItem) { showFilesTab(sender) }
     static func filesTab(_ tag: Int) -> FilesTab? { FilesTab.allCases.indices.contains(tag) ? FilesTab.allCases[tag] : nil }
     /// ⇧⌘U / ⇧⌘L, and ⌃⌘2 / ⌃⌘3 (`showing`: only while files shows): a tab that can show files, on a folder not known to
@@ -544,7 +545,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             return filesTabMenuEnabled(workspace.activeTab, tab, showing: item.action == #selector(showFilesTab(_:)))
         case #selector(togglePreview):
             let files = workspace.activeSurfaceID.flatMap { TerminalRuntime.shared.files.existing($0) }
-            item.title = files?.previewOff == true ? "Show Preview" : "Hide Preview"
+            item.title = files?.paneShown == false ? "Show Preview" : "Hide Preview"
             return NSApp.keyWindow === window && files?.visible == true
         case #selector(nextPane), #selector(previousPane):
             return (workspace.current?.layout.paneIDs.count ?? 0) > 1

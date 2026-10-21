@@ -270,12 +270,28 @@ final class TerminalSession: @unchecked Sendable {
         pump()
     }
 
-    /// A grid with no view (a presence the Chat segment keeps): the size in pixels that holds it exactly.
-    @MainActor func setGrid(columns: Int, rows: Int) {
-        let (cell, padding) = locked { (surface.size.cell, surface.size.padding) }
-        let width = columns * cell.width + padding.left + padding.right, height = rows * cell.height + padding.top + padding.bottom
+    /// A grid with no view (a presence the Chat segment keeps): the size in pixels that holds it exactly. `drawn`: a
+    /// view shows it at that size (the server's grid, `TerminalPresence.shownGrid`), so the drawable follows.
+    @MainActor func setGrid(columns: Int, rows: Int, drawn: Bool = false) {
+        let (width, height) = pixels(columns: columns, rows: rows)
+        if drawn { layer.drawableSize = CGSize(width: width, height: height) }
         locked { surface.setSize(width: width, height: height) }
         pump()
+    }
+
+    /// The pixels a grid takes, padding included.
+    @MainActor func pixels(columns: Int, rows: Int) -> (width: Int, height: Int) {
+        let (cell, padding) = locked { (surface.size.cell, surface.size.padding) }
+        return (columns * cell.width + padding.left + padding.right, rows * cell.height + padding.top + padding.bottom)
+    }
+
+    /// The grid a view of this size in points holds, and its cell in pixels (what `resize` asks the server for).
+    @MainActor func fitting(width: Double, height: Double) -> TerminalFeedSize {
+        let (cell, padding) = locked { (surface.size.cell, surface.size.padding) }
+        let pixels = (Int((width * scale).rounded()), Int((height * scale).rounded()))
+        let columns = (pixels.0 - padding.left - padding.right) / max(1, cell.width)
+        let rows = (pixels.1 - padding.top - padding.bottom) / max(1, cell.height)
+        return TerminalFeedSize(columns: max(1, columns), rows: max(1, rows), cellWidth: cell.width, cellHeight: cell.height)
     }
 
     /// The screen's scale: fonts and padding at the new resolution.

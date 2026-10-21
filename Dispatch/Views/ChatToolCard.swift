@@ -12,6 +12,8 @@ struct ChatToolCard: View {
     var layouts: ChatToolLayoutCache?
     var layoutWidth: CGFloat = 0
     var live = false
+    /// Its time on an opened group's timeline, shown before its status.
+    var elapsed: TimeInterval? = nil
     @State private var formatted: (id: UUID, value: ToolPresentation)?
     @State private var rawExpanded = false
     @State private var singleFileState = CodeDocumentState()
@@ -151,6 +153,9 @@ struct ChatToolCard: View {
                 if let tool, tool.deletions > 0 { Text("−\(tool.deletions)").foregroundStyle(theme.red).fixedSize() }
                 if let tool, tool.failed {
                     Text(tool.exitCode.map { $0 != 0 ? "exit \($0)" : "Failed" } ?? "Failed").foregroundStyle(theme.yellow).fixedSize()
+                }
+                if let elapsed {
+                    Text(ChatTranscript.elapsed(elapsed.rounded())).monospacedDigit().foregroundStyle(theme.muted.opacity(0.75)).fixedSize()
                 }
                 if !requested {
                     statusIcon(failed: tool?.failed == true, completed: tool?.completed ?? item.completed)

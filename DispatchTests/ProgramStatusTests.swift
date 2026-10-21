@@ -221,4 +221,17 @@ final class ProgramStatusTests: XCTestCase {
         XCTAssertEqual(ProgramStatus(state: .done, app: "x", title: "US East", message: String(repeating: "m", count: 200)).summary.count,
                        "US East · Done: ".count + 120)
     }
+
+    #if canImport(AppKit)
+    /// The harness's own attention (a prompt only Terminal can answer) needs the user, as on the iPhone; it ends with
+    /// the state that clears it.
+    func testAgentAttentionNeedsTheUser() {
+        let session = ChatSession(id: System.uuid(), draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
+        XCTAssertEqual(PaneUrgency(session: session), .idle)
+        session.agentAttention = "Claude needs permission in Terminal."
+        XCTAssertEqual(PaneUrgency(session: session), .waiting)
+        session.agentAttention = nil
+        XCTAssertEqual(PaneUrgency(session: session), .idle)
+    }
+    #endif
 }

@@ -17,12 +17,15 @@ enum TabMode: String, Hashable, Sendable {
     /// The preview width last chosen on any tab: every tab without a width of its own lays out at it
     /// (`previewPreference`), so it reaches tabs whose session existed before the choice. In memory only.
     var lastPreviewWidth: CGFloat?
+    /// Closed tabs' views, oldest first, for Restore (FilesCoordinator+Restore.swift).
+    @ObservationIgnored var retainedViews: [UUID: RetainedTabView] = [:]
+    @ObservationIgnored var retainedOrder: [UUID] = []
 
     init(chat: @escaping @MainActor () -> ChatCoordinator?) {
         chatCoordinator = chat
     }
 
-    private var chat: ChatCoordinator? { chatCoordinator() }
+    var chat: ChatCoordinator? { chatCoordinator() }
 
     func session(for id: UUID) -> FilesSession {
         if let session = sessions[id] { return session }

@@ -23,8 +23,6 @@ struct FileEntry: Hashable, Sendable, Identifiable {
     var size: UInt64
     var modified: Date?
     var targetKind: FileEntryKind?
-    /// Reserved for the git tabs: "M", "A", "U", "D", "R" or "!" (ignored). Nil until they exist.
-    var mark: String?
     var identity: FileIdentity? = nil
 
     var id: String { name }
@@ -199,6 +197,9 @@ enum FilesAvailability {
 }
 
 /// The three tabs of files mode. Step one shows `.files` only; the others are remembered but not shown.
+/// What files mode shows: the Files tab, or the Commits tab with one of its rows selected: `changes` is its
+/// uncommitted-changes row (the working tree's files and their diffs in the detail), `commits` a commit. With
+/// Settings › Features › Git › Separate Changes tab, `changes` is that tab instead (`FilesSession.showsLog`).
 enum FilesTab: String, Hashable, Sendable, CaseIterable {
     case files, changes, commits
 }

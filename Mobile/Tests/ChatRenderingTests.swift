@@ -54,6 +54,9 @@ final class ChatRenderingTests: XCTestCase {
         XCTAssertEqual(ChatLinkBanner.title(.failed("refused"), host: "mba2"), "Can’t reach mba2")
         XCTAssertEqual(size(ChatLinkBanner(link: .connected, host: "mba2")).height, 0, "No banner while connected")
         XCTAssertEqual(size(ChatLinkBanner(link: .reconnecting(attempt: 1, since: Date()), host: "mba2")).height, 38, "32 pt and 6 below (M4c)")
+        // Why it is down, on a second line: the banner grows to hold it.
+        let problem = "mba2.tail3f.ts.net didn’t answer on port 22. Check that Tailscale is on and the host is awake."
+        XCTAssertGreaterThan(size(ChatLinkBanner(link: .reconnecting(attempt: 1, since: Date()), host: "mba2", problem: problem)).height, 50)
     }
 
     func testAgentMarkdownKeepsOnlyCredentialFreeWebLinks() {
@@ -94,6 +97,15 @@ final class ChatRenderingTests: XCTestCase {
         // Another directory: paths fall back to the one the agent recorded.
         XCTAssertEqual(ChatStep.steps(transcript.turns[1], directory: "/Users/me/elsewhere", reasoning: false).first?.title,
                        "src/routes/invoices.ts")
+        // A patch that did not apply shows its state, not its counts (the Mac's tool card).
+        var declined = try XCTUnwrap(transcript.turns[0].items.first { ChatStep($0, directory: nil).kind == .patch })
+        declined.patch = ChatPatch(documents: declined.patch?.documents ?? [], state: .declined)
+        let step = ChatStep(declined, directory: "/work/app")
+        XCTAssertEqual([step.additions, step.deletions], [0, 0])
+        XCTAssertEqual(step.detail, "Patch declined")
+        // A shell search reads as Search, as the Mac titles it.
+        let rg = ChatItem(id: "rg", kind: .tool, text: #"{"command":"rg -n retry src"}"#, title: "Bash", completed: true)
+        XCTAssertEqual(ChatStep(rg, directory: nil).kind.label, "Search")
     }
 
     func testTheWorkingRowFoldsToOneLine() async throws {

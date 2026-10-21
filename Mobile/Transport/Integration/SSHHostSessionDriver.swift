@@ -45,8 +45,11 @@ struct SSHHostSessionDriver: HostSessionDriver {
     private func drive(_ host: HostRecord, context: HostSessionContext, events: AsyncStream<HostSessionEvent>.Continuation) async {
         let keys = KeyCache()
         let driver = self
+        // Once connected, the automatic reconnects ask the user nothing, as the Mac's (BatchMode): a host that needs a
+        // keyboard-interactive answer (a one-time code) fails them, and Connect asks again.
+        let connectedOnce = ConnectedOnce()
         let connection = HostConnection<HelperLink>(clock: clock, refused: Self.refused) { phase in
-            try await driver.establish(host, context: context, keys: keys, phase: phase)
+            try await driver.establish(host, context: context, keys: keys, interactive: !connectedOnce.isSet, phase: phase)
         }
         let states = await connection.states()
         let probeTimeout = probeTimeout
@@ -74,6 +77,7 @@ struct SSHHostSessionDriver: HostSessionDriver {
                 continue
             case .connected:
                 guard let link = await connection.session else { continue }
+                connectedOnce.set()
                 live?.cancel()
                 let gate = ReadyGate()
                 live = Task { await driver.serve(link, preference: preference, gate: gate, events: events) }
@@ -105,7 +109,7 @@ struct SSHHostSessionDriver: HostSessionDriver {
     }
 
     /// SSH, the helper and its greeting: the session `HostConnection` keeps until it is lost.
-    private func establish(_ host: HostRecord, context: HostSessionContext, keys: KeyCache,
+    private func establish(_ host: HostRecord, context: HostSessionContext, keys: KeyCache, interactive: Bool = true,
                            phase: @escaping @Sendable (HostConnectionPhase) async -> Void) async throws -> HelperLink {
         var credentials: [SSHCredential] = []
         switch host.auth {
@@ -116,12 +120,15 @@ struct SSHHostSessionDriver: HostSessionDriver {
             do { password = try await context.password() } catch { throw HostRefusal(error.localizedDescription) }
             if let password { credentials.append(.password(password)) }
         }
-        // Keyboard-interactive last: PAM passwords and one-time codes, answered in the Hosts sheet.
-        credentials.append(.keyboardInteractive { challenge in
-            await context.keyboardInteractive(HostLoginChallenge(
-                name: challenge.name, instruction: challenge.instruction,
-                prompts: challenge.prompts.map { .init(text: $0.text, echo: $0.echo) }))
-        })
+        // Keyboard-interactive last: PAM passwords and one-time codes, answered in the Hosts sheet (never on an automatic
+        // reconnect).
+        if interactive {
+            credentials.append(.keyboardInteractive { challenge in
+                await context.keyboardInteractive(HostLoginChallenge(
+                    name: challenge.name, instruction: challenge.instruction,
+                    prompts: challenge.prompts.map { .init(text: $0.text, echo: $0.echo) }))
+            })
+        }
         let ssh = try await SSHHostSession.establish(
             endpoint: SSHEndpoint(host: host.address, port: host.port, username: host.user), credentials: credentials,
             trust: HostKeyQuestion(verify: context.verifyHostKey), binaries: binaries,
@@ -250,8 +257,13 @@ final class HelperLink: MobileTransport.HostSession {
             Task { await ssh.connection.closed(); once.run { continuation.resume() } }
             Task { _ = await ssh.helper.exitStatus(); once.run { continuation.resume() } }
         }
+        // Before closing: afterwards the SSH connection's end is this close.
+        ended.withLock { $0 = ssh.lossReason ?? "The helper on the host stopped." }
         await close()
     }
+
+    private let ended = Mutex<String?>(nil)
+    var lossReason: String? { ended.withLock { $0 } }
 
     func close() async {
         client.connection.close()
@@ -420,4 +432,11 @@ final class ReadyGate: Sendable {
             return state.pending
         }
     }
+}
+
+/// The run has been connected: its later connections are automatic reconnects.
+private final class ConnectedOnce: Sendable {
+    private let value = Mutex(false)
+    var isSet: Bool { value.withLock { $0 } }
+    func set() { value.withLock { $0 = true } }
 }

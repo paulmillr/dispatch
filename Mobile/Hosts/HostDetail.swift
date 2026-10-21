@@ -115,6 +115,14 @@ struct HostDetail<Spaces: View>: View {
                     .lineLimit(2)
             }
             .accessibilityElement(children: .combine)
+            if let problem = summary.problem {
+                Text(problem)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 24)
+            }
             if let os = summary.osLabel {
                 Text(os).font(.footnote).foregroundStyle(.tertiary)
             }

@@ -51,13 +51,7 @@ struct ClaudeModelMenu: Equatable {
 
     /// Rows name aliases ("Opus"); the detail names the model ("Opus 5.5 · …").
     /// Returns Claude's undated model ID for it, e.g. claude-opus-5-5.
-    static func modelID(detail: String) -> String? {
-        let pattern = #"^([A-Za-z]+) ([0-9]+(?:\.[0-9]+)*)(?:\s+·|$)"#
-        guard let match = detail.range(of: pattern, options: .regularExpression) else { return nil }
-        let words = detail[match].split(separator: " ")
-        guard words.count >= 2 else { return nil }
-        return "claude-" + words[0].lowercased() + "-" + words[1].replacingOccurrences(of: ".", with: "-")
-    }
+    static func modelID(detail: String) -> String? { AgentModelMenu.claudeModelID(detail) }
 
     /// Stronger efforts first; unknown values keep Claude's order after them.
     static func sortedEfforts(_ values: [String]) -> [String] {

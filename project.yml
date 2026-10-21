@@ -36,6 +36,10 @@ settingGroups:
     CODE_SIGN_STYLE: Automatic
     CODE_SIGN_IDENTITY: Apple Development
     "CODE_SIGN_IDENTITY[sdk=iphonesimulator*]": "-"
+    # The project's Release turns this off for the notarized Mac app; without it an iPhone Release build (--prod)
+    # has no application-identifier, and every Keychain write (a new key, a saved password) fails with "A required
+    # entitlement is not present" (errSecMissingEntitlement).
+    CODE_SIGN_INJECT_BASE_ENTITLEMENTS: YES
   # The Swift terminal (Vendor/Term) is optimized with whole-module optimization in every
   # configuration: built like the app's Debug code (unoptimized, or file by file) it consumes
   # output 3-80x slower and blocks the programs writing to it.
@@ -257,12 +261,14 @@ targets:
       - Dispatch/Chat/AgentModelMenu.swift
       - Dispatch/Chat/ChatCommands.swift
       - Dispatch/Chat/ChatDrafts.swift
+      - Dispatch/Chat/ChatMarkdownBlock.swift
       - Dispatch/Chat/ChatModelChoicesCache.swift
       - Dispatch/Chat/ChatModels.swift
       - Dispatch/Chat/ChatOperations.swift
       - Dispatch/Chat/ChatPatch.swift
       - Dispatch/Chat/ChatSideConversation.swift
       - Dispatch/Chat/ChatSideQuestion.swift
+      - Dispatch/Chat/ChatTranscript.swift
       - Dispatch/Chat/ClaudeQuestions.swift
       - Dispatch/Chat/HelperChat.swift
       - Dispatch/Chat/ToolCommandPresentation.swift

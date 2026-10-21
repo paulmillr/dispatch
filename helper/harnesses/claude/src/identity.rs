@@ -74,7 +74,7 @@ pub(crate) struct Probe {
 /// `CLAUDE_CONFIG_DIR ?? (HOME ?? app home) + "/.claude"`; the account home is only the fallback.
 /// From a native environment answer (values are bytes, as paths).
 pub(crate) fn home(environment: &Data<'_>, account: Option<PathBuf>) -> Option<PathBuf> {
-    let path = |name| environment.get(name).and_then(Data::path);
+    let path = |name| environment.get(name).and_then(Data::path).filter(|path| !path.as_os_str().is_empty());
     path("CLAUDE_CONFIG_DIR")
         .map(PathBuf::from)
         .or_else(|| path("HOME").map(|home| home.join(".claude")))

@@ -76,6 +76,7 @@ final class HostStore {
         let saved = url.flatMap { MobileFiles.read(Document.self, from: $0, version: 1)?.hosts } ?? hosts
         self.hosts = saved.sorted { $0.order < $1.order }
         renumber()
+        publishColors()
     }
 
     func record(_ id: UUID) -> HostRecord? { hosts.first { $0.id == id } }
@@ -85,8 +86,31 @@ final class HostStore {
         guard record(host.id) == nil else { return update(host) }
         var host = host
         host.order = (hosts.map(\.order).max() ?? -1) + 1
+        if host.color == nil { host.color = Self.freeColor(seed: host.tint.seed, among: hosts) }
         hosts.append(host)
         save(changed: [host.id])
+    }
+
+    /// The colour a new host gets (HostRegistry.assignColors): one the fewest hosts show, its seed breaking ties.
+    static func freeColor(seed: UInt32, among hosts: [HostRecord]) -> HostColor {
+        var used: [HostColor: Int] = [:]
+        for host in hosts { used[host.color ?? Self.hashColor(host.tint.seed), default: 0] += 1 }
+        let fewest = HostColor.allCases.map { used[$0, default: 0] }.min() ?? 0
+        let candidates = HostColor.allCases.filter { used[$0, default: 0] == fewest }
+        return candidates[Int(seed % UInt32(candidates.count))]
+    }
+
+    private static func hashColor(_ seed: UInt32) -> HostColor {
+        HostColor.allCases[Int(seed % UInt32(HostColor.allCases.count))]
+    }
+
+    /// Each host's colour where `HostTint` reads it (by machine), as HostRegistry publishes the Mac's. Only the saved
+    /// list does: an in-memory store (previews, tests) leaves the shared colours alone.
+    private func publishColors() {
+        guard url != nil else { return }
+        var automatic: [String: HostColor] = [:]
+        for host in hosts { if let color = host.color, automatic[host.tint.machine] == nil { automatic[host.tint.machine] = color } }
+        if HostColorStore.shared.automatic != automatic { HostColorStore.shared.automatic = automatic }
     }
 
     /// Replaces the saved host with `host`'s fields, keeping its place.
@@ -127,6 +151,7 @@ final class HostStore {
     func retrySave() { save() }
 
     private func save(changed: Set<UUID> = []) {
+        publishColors()
         guard let url else { return }
         do {
             try MobileFiles.write(Document(hosts: hosts), to: url)

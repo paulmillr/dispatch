@@ -271,10 +271,10 @@ final class TerminalSplitView: NSSplitView, NSSplitViewDelegate {
             arrangedSubviews[1].frame = bounds
             return
         }
-        let oldFirst = isVertical ? arrangedSubviews[0].frame.width : arrangedSubviews[0].frame.height
         let length = (isVertical ? bounds.width : bounds.height) - dividerThickness
         guard length > 0 else { return }
-        let position = sidebar ? (positioned && oldFirst > 0 ? oldFirst : sidebarWidth) : length * (share ?? initialFraction)
+        // The sidebar returns to its chosen width whenever the window has room for it again.
+        let position = sidebar ? sidebarWidth : length * (share ?? initialFraction)
         resizing = true; defer { resizing = false }
         super.resizeSubviews(withOldSize: oldSize)
         setPosition(clamped(position, length: length), ofDividerAt: 0)
@@ -284,7 +284,9 @@ final class TerminalSplitView: NSSplitView, NSSplitViewDelegate {
     private func clamped(_ value: CGFloat, length: CGFloat) -> CGFloat {
         guard length > 0 else { return 0 }
         let minimum = sidebar ? max(200, firstMinimumSize.width) : (isVertical ? firstMinimumSize.width : firstMinimumSize.height)
-        let secondMinimum = sidebar ? max(min(420, length / 2), secondMinimumSize.width)
+        // Beside the sidebar the content keeps 420 pt, which the window's minimum always leaves room for: a narrow
+        // window narrows the sidebar (to its 200) before the panes.
+        let secondMinimum = sidebar ? max(min(420, length - minimum), secondMinimumSize.width)
             : (isVertical ? secondMinimumSize.width : secondMinimumSize.height)
         // Layout can update before the window grows to its new minimum size.
         // Keep temporary frames valid until that resize reaches this subtree.

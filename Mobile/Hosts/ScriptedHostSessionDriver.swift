@@ -81,8 +81,9 @@ final class ScriptedHostSessionDriver: HostSessionDriver {
          .event(.link(.bootstrapping)), .sleep(.milliseconds(35)),
          // As the SSH driver's follower names its choice while the first topology is awaited.
          .event(.following("tmux")),
-         .ready(hello: HostFixture.hello(), multiplexers: HostFixture.multiplexers(["tmux"]), versions: ["tmux": "3.7"],
-                topology: HostFixture.topology()),
+         // Each record its own machine (its tint seed), as distinct hosts are; the same seed is the same machine.
+         .ready(hello: HostFixture.hello(identity: host.tintSeed), multiplexers: HostFixture.multiplexers(["tmux"]),
+                versions: ["tmux": "3.7"], topology: HostFixture.topology()),
          .event(.latency(latency)), .hold]
     }
 }

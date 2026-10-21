@@ -704,7 +704,7 @@ final class SettingsStatsPresentationTests: XCTestCase {
             ("Appearance", ["Terminal font", "Chat font", "Size", "Theme", "Host colors", "Custom terminal", "Liquid Glass", "Sidebar & tabs", "Space size", "Show git branch", "Hide sidebar with one space"]),
             ("Keys", ["Number keys", "Spaces", "Tabs", "Splits", "Keyboard", "Use Option as Alt"]),
             ("General", ["Startup", "Starting folder", "Reopen spaces on launch", "Restore tab history", "Terminal", "Kitty graphics", "Automatic tab names", "Notifications", "Notify", "Dock badge", "Sound", "Troubleshooting", "Diagnostics"]),
-            ("Features", ["Chat mode", "coding agent CLIs as chat", "Codex", "Claude", "Pi", "tmux & herdr", "Open tmux sessions as spaces", "tmux -CC attach", "Open herdr sessions as spaces", "Files", "Drag and drop", "Show hidden files", "Ask before replacing", "Git", "Changes and Commits in files mode"]),
+            ("Features", ["Chat mode", "coding agent CLIs as chat", "Codex", "Claude", "Pi", "tmux & herdr", "Open tmux sessions as spaces", "tmux -CC attach", "Open herdr sessions as spaces", "Files", "Drag and drop", "Show hidden files", "Ask before replacing", "Git", "Commits and uncommitted changes in files mode", "Separate Changes tab"]),
             ("Agents & Hosts", ["Connections", "On new hosts", "Ask", "This Mac"])
         ] {
             if tab != "Appearance" { try await PresentationTestSupport.selectSettingsTab(tab, in: window) }

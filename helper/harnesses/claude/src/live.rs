@@ -40,9 +40,9 @@ impl Claude {
                 })
                 .map(str::to_owned);
         }
-        // c1654cc: the picker's confirmation sets the model; only a newer model call replaces it.
+        // c1654cc: the picker's confirmation sets the model until the transcript sets it again.
         if let Some((after, model, effort)) = self.chosen.get(&key)
-            && cache.is_none_or(|c| c.parser.configured == *after)
+            && cache.is_none_or(|c| c.parser.changed == *after)
         {
             state.model = Some(model.clone());
             state.effort = effort.clone().or(state.effort);

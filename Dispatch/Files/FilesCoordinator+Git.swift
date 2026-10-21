@@ -109,7 +109,7 @@ extension FilesCoordinator {
         } else if tick {
             // Commits reads the status too: its uncommitted row and the branch's ahead and behind come from it.
             watch.statusDue = true
-            if session.tab == .commits { watch.refsDue = true }
+            if session.showsLog { watch.refsDue = true }
         }
         sync(watch)
     }
@@ -120,16 +120,6 @@ extension FilesCoordinator {
     func forget(_ id: UUID) {
         guard let watch = watches.removeValue(forKey: id) else { return }
         stop(watch)
-    }
-
-    /// The listing with the marks of the session's repository status, or without marks outside a repository.
-    func marked(_ listing: FileListing, in session: FilesSession) -> FileListing {
-        guard let marks = watches[session.id]?.marks, let root = session.git.repository?.root,
-              FilesLoader.path(listing.path, isInside: root) else {
-            return listing.entries.contains { $0.mark != nil } ? GitMarks.apply(nil, folder: nil, to: listing) : listing
-        }
-        let folder = listing.path == root ? "" : String(listing.path.dropFirst(root == "/" ? 1 : root.count + 1))
-        return GitMarks.apply(marks, folder: folder, to: listing)
     }
 
     // MARK: Test seams
@@ -162,15 +152,17 @@ extension FilesCoordinator {
         guard let session = watch.session, watches[session.id] === watch else { return }
         arm(session, watch)
         guard watch.shows, let source = watch.source, let folder = watch.folder else { return }
-        if watch.tab != session.tab {
-            // Coming to Commits, or back from it, read what the tab shows again rather than wait for the tick.
-            if session.tab == .commits {
+        if watch.tab != session.tab || watch.logShown != session.showsLog {
+            // Coming to Commits, or back from it, read what the tab shows again rather than wait for the tick; moving
+            // between its rows reads nothing new.
+            if session.showsLog, watch.logShown != true {
                 watch.refsDue = true
                 watch.statusDue = true
-            } else if watch.tab == .commits {
+            } else if !session.showsLog, watch.logShown == true {
                 watch.statusDue = true
             }
             watch.tab = session.tab
+            watch.logShown = session.showsLog
         }
         resolve(session, watch, source, folder)
         // While another folder resolves, the last answer stays shown and nothing new starts.
@@ -191,6 +183,7 @@ extension FilesCoordinator {
         watch.armed = true
         withObservationTracking {
             _ = session.tab
+            _ = session.changesTab
             _ = session.logWanted
             _ = session.logScope
             _ = session.logFilter
@@ -237,7 +230,6 @@ extension FilesCoordinator {
         watch.pagesTarget = nil
         watch.refs = []
         watch.head = nil
-        remark(session)
         if session.status != nil { session.status = nil }
         if session.log != nil { session.log = nil }
         if session.changesSelection != nil { session.changesSelection = nil }
@@ -360,8 +352,9 @@ extension FilesCoordinator {
 
     // MARK: Status and marks
 
-    /// Every tab reads the status on the tick, after a prompt and when Commits is entered or left: Files marks its
-    /// listings with it, Changes lists it, Commits shows its uncommitted row and the branch's ahead and behind.
+    /// Every tab reads the status on the tick, after a prompt and when Commits is entered or left: the header counts its
+    /// files, Commits shows them as its uncommitted row (and lists them when that row is selected), and the branch's
+    /// ahead and behind.
     private func status(_ session: FilesSession, _ watch: Watch, _ queries: GitQueries, _ repository: GitRepository) {
         let due = watch.statusDue || watch.statusAttempt != repository
         guard due else { return }
@@ -374,7 +367,7 @@ extension FilesCoordinator {
         watch.statusDue = false
         watch.statusAttempt = repository
         let counted = watch.untracked, sized = watch.sizes
-        let listed = listedFiles(session, repository)
+        let listed = listedFiles(session, repository, marks: watch.marks)
         let source = queries.source
         watch.statusToken += 1
         let token = watch.statusToken
@@ -399,19 +392,16 @@ extension FilesCoordinator {
                     session.status = status
                 }
                 self.reconcileSelection(session, previous: previous)
-                if watch.marks != read.marks {
-                    watch.marks = read.marks
-                    self.remark(session)
-                }
+                watch.marks = read.marks
             case .failure(let error):
                 self.failed(error, session, watch)
             }
         }
     }
 
-    /// The Changes selection under a new status (`GitChangesText.reconciled`): the same change, else its path in the area
-    /// it moved to (`git add`), else the change now where it was, else the first. Nothing selected stays so off the
-    /// Changes tab; on it the first change is picked, as the list shows it selected.
+    /// The uncommitted selection under a new status (`GitChangesText.reconciled`): the same change, else its path in the
+    /// area it moved to (`git add`), else the change now where it was, else the first. Nothing selected stays so while
+    /// the uncommitted row is not selected; once it is, the first change is picked, as its files show it selected.
     private func reconcileSelection(_ session: FilesSession, previous: [GitChange]) {
         guard let status = session.status, session.changesSelection != nil || session.tab == .changes else { return }
         let selection = GitChangesText.reconciled(session.changesSelection, previous: previous,
@@ -419,15 +409,18 @@ extension FilesCoordinator {
         if selection != session.changesSelection { session.changesSelection = selection }
     }
 
-    /// Size and modification time of the changed and untracked files whose folders are listed: a count, or a binary's
-    /// sizes, is redone when they change.
-    private func listedFiles(_ session: FilesSession, _ repository: GitRepository) -> [String: Stamp] {
+    /// Size and modification time of the files the last status (`marks`) changed or left untracked whose folders are
+    /// listed: a count, or a binary's sizes, is redone when they change.
+    private func listedFiles(_ session: FilesSession, _ repository: GitRepository, marks: GitMarks?) -> [String: Stamp] {
+        guard let marks, !marks.isEmpty else { return [:] }
         let root = repository.root
         var out: [String: Stamp] = [:]
         for (path, state) in session.listings where FilesLoader.path(path, isInside: root) {
             let folder = path == root ? "" : String(path.dropFirst(root == "/" ? 1 : root.count + 1))
-            for entry in state.entries where entry.isRegularFile && entry.mark != nil && entry.mark != GitChangeKind.ignored.rawValue {
-                out[folder.isEmpty ? entry.name : folder + "/" + entry.name] = Stamp(size: entry.size, modified: entry.modified)
+            for entry in state.entries where entry.isRegularFile && entry.name != ".git" {
+                let relative = folder.isEmpty ? entry.name : folder + "/" + entry.name
+                guard let mark = marks.mark(relative, directory: false), mark != GitChangeKind.ignored.rawValue else { continue }
+                out[relative] = Stamp(size: entry.size, modified: entry.modified)
             }
         }
         return out
@@ -525,24 +518,10 @@ extension FilesCoordinator {
         }
     }
 
-    /// Sets every listing's marks from the current status; a listing whose marks are unchanged keeps its value.
-    private func remark(_ session: FilesSession) {
-        var listings = session.listings, changed = false
-        for (path, state) in listings {
-            guard let listing = state.listing else { continue }
-            let marked = marked(listing, in: session)
-            if marked != listing {
-                listings[path]?.listing = marked
-                changed = true
-            }
-        }
-        if changed { session.listings = listings }
-    }
-
     // MARK: Log
 
     private func log(_ session: FilesSession, _ watch: Watch, _ queries: GitQueries, _ repository: GitRepository) {
-        guard session.tab == .commits else { return }
+        guard session.showsLog else { return }
         let target = LogTarget(repository: repository, scope: session.logScope, filter: session.logFilter)
         let wanted = max(session.logWanted, Self.page)
         if watch.logTask != nil {
@@ -659,7 +638,7 @@ extension FilesCoordinator {
 
     // MARK: Selections
 
-    /// The Changes tab's selected change: git's diff for staged and unstaged changes, the file itself for an untracked
+    /// The selected uncommitted change: git's diff for staged and unstaged changes, the file itself for an untracked
     /// one. Read again when the status shows the change differently (its counts moved) or after a prompt.
     private func changesDiff(_ session: FilesSession, _ watch: Watch, _ queries: GitQueries, _ repository: GitRepository) {
         guard session.tab == .changes else { return }
@@ -906,6 +885,8 @@ extension FilesCoordinator {
         var prompted = false
         var armed = false
         var tab: FilesTab?
+        /// Whether Commits showed at the last sync (`FilesSession.showsLog`).
+        var logShown: Bool?
 
         /// The source and folder `session.git` answers for, while that answer holds (a prompt asks again).
         var resolved: Key?

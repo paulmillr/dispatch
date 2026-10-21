@@ -199,4 +199,21 @@ final class HostStoreTests: XCTestCase {
         XCTAssertEqual(KnownHostStore.key(host: "studio", port: 2222), "[studio]:2222")
         XCTAssertEqual(KnownHostStore.key(host: "fd00::1", port: 22), "[fd00::1]:22")
     }
+
+    /// A new host takes the colour the fewest hosts show (HostRegistry.assignColors), its hash breaking ties, and keeps
+    /// it; a host saved before colours were kept shows its hash's.
+    func testANewHostTakesTheLeastUsedColour() {
+        let store = HostStore(url: nil)
+        var colours: [HostColor] = []
+        for index in 0..<HostColor.allCases.count {
+            store.add(HostRecord(name: "h\(index)", address: "h\(index)", user: "sam", auth: .password, tintSeed: "machine-\(index % 2)"))
+            colours.append(store.hosts.last!.color!)
+        }
+        XCTAssertEqual(Set(colours).count, HostColor.allCases.count, "Eight hosts, eight colours, though two machines' hashes")
+        var edited = store.hosts[0]
+        edited.name = "renamed"
+        store.update(edited)
+        XCTAssertEqual(store.hosts[0].color, colours[0], "An edit keeps the colour")
+        XCTAssertEqual(HostStore.freeColor(seed: 3, among: []), HostColor.allCases[3])
+    }
 }

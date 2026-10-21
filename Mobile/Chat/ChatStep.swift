@@ -57,16 +57,20 @@ struct ChatStep: Identifiable, Equatable {
             kind = .patch
         } else if tool.readCommand != nil || category == "read" || tool.title == "Read" {
             kind = .read
+        } else if category == "search" || tool.title == "Search" || item.source?.tool?.search != nil {
+            // Before shell: an `rg` or `grep` run is a search, as the Mac's tool cards title it.
+            kind = .search
         } else if tool.commandPresentation != nil || category == "shell" || item.source?.tool?.shell != nil {
             kind = .run
         } else if WebToolPresentation.matches(item.title) {
             kind = .web
-        } else if category == "search" || tool.title == "Search" || item.source?.tool?.search != nil {
-            kind = .search
         } else { kind = .tool }
-        additions = tool.additions
-        deletions = tool.deletions
-        failed = tool.failed
+        // A patch that did not apply (declined, failed, interrupted) changed nothing: its state shows, not its counts
+        // (ChatToolCard's "Patch declined").
+        let unapplied = item.patch.flatMap { [.interrupted, .failed, .declined].contains($0.state) ? $0.state : nil }
+        additions = unapplied == nil ? tool.additions : 0
+        deletions = unapplied == nil ? tool.deletions : 0
+        failed = tool.failed || unapplied != nil
         running = !item.completed
         // Relative to the conversation's directory, else to the directory the agent recorded for the call.
         let bases = [directory, item.directory ?? "", item.source?.tool?.directory ?? ""].filter { !$0.isEmpty }
@@ -94,7 +98,7 @@ struct ChatStep: Identifiable, Equatable {
         }
         switch kind {
         case .patch:
-            detail = additions + deletions > 0 ? "+\(additions) −\(deletions)" : nil
+            detail = unapplied.map { "Patch " + $0.rawValue } ?? (additions + deletions > 0 ? "+\(additions) −\(deletions)" : nil)
         case .run:
             let last = tool.output.split(whereSeparator: \.isNewline).last.map { String($0).trimmingCharacters(in: .whitespaces) }
             let exit = tool.exitCode.flatMap { $0 == 0 ? nil : "exit \($0)" }
@@ -104,10 +108,11 @@ struct ChatStep: Identifiable, Equatable {
         }
     }
 
-    /// A turn's steps, in order: its tools as the caption counts them, and its reasoning in the live log.
+    /// A turn's steps, in order: its tools as the caption counts them, and its reasoning summaries in the live log
+    /// (Claude's thinking is a row of the thread itself).
     static func steps(_ turn: ChatTurn, directory: String?, reasoning: Bool) -> [ChatStep] {
         ChatTurnSummary.displayed(turn.items, turnID: turn.id)
-            .filter { $0.kind == .tool || reasoning && $0.kind == .reasoning && !$0.text.isEmpty }
+            .filter { $0.kind == .tool || reasoning && $0.kind == .reasoning && !$0.isNarration && !$0.text.isEmpty }
             .map { ChatStep($0, directory: directory) }
     }
 }

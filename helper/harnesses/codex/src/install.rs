@@ -200,7 +200,7 @@ struct Setup {
 
 /// Audit (None) reports the current state and the edit an install would make; Some(true) installs,
 /// Some(false) leaves the file as it is and reports the state. For a running `agent` the target is
-/// that process's CODEX_HOME, else the account's ~/.codex (c51466a hook_transport.rs:1059-1072);
+/// that process's CODEX_HOME or HOME/.codex, else the account's ~/.codex (c51466a hook_transport.rs:1059-1072);
 /// without one the helper's own $CODEX_HOME, else ~/.codex (CodexHookSetup.swift:11-13).
 pub fn run(
     jobs: &Jobs,
@@ -219,10 +219,13 @@ pub fn run(
     let executable = executable.to_string_lossy().replace('\'', "'\\''");
     let command = format!("'{executable}' hook codex");
     let (next, pid) = (jobs.clone(), io.pid());
-    variables(jobs, io, pid, &["CODEX_HOME", "HOME"], move |io, own| {
+    variables(jobs, io, pid, None, &["CODEX_HOME", "HOME"], move |io, own| {
         let jobs = next.clone();
         let finish =
             move |io: &mut dyn Io, directory: Result<Option<PathBuf>, Error>| match directory {
+                Ok(Some(directory)) if !directory.is_absolute() => done(io, Err(failure(
+                    "environment", "Codex home is not absolute.",
+                ))),
                 Ok(Some(directory)) => inspect(
                     io,
                     Setup {
@@ -265,7 +268,8 @@ fn running(
     then: impl FnOnce(&mut dyn Io, Result<Option<PathBuf>, Error>) + 'static,
 ) {
     let (next, pid) = (jobs.clone(), agent.process.pid);
-    variables(jobs, io, pid, &["CODEX_HOME"], move |io, theirs| {
+    let expected = agent.process.clone();
+    variables(jobs, io, pid, Some(&expected), &["CODEX_HOME", "HOME"], move |io, theirs| {
         let theirs = match theirs {
             Ok(theirs) => theirs,
             Err(error) => return then(io, Err(error)),
@@ -279,7 +283,8 @@ fn running(
                     let same = process.start == agent.process.start
                         && process.executable == agent.process.executable;
                     match same {
-                        true => Ok(theirs.get("CODEX_HOME").cloned()),
+                        true => Ok(theirs.get("CODEX_HOME").cloned()
+                            .or_else(|| theirs.get("HOME").map(|home| home.join(".codex")))),
                         false => Err(failure("process", "The agent exited.")),
                     }
                 }),
@@ -294,11 +299,17 @@ fn variables(
     jobs: &Jobs,
     io: &mut dyn Io,
     pid: u32,
+    process: Option<&Process>,
     names: &[&'static str],
     then: impl FnOnce(&mut dyn Io, Result<BTreeMap<String, PathBuf>, Error>) + 'static,
 ) {
     let names = Data::Array(names.iter().copied().map(Data::String).collect());
-    let input = Data::Object(vec![("pid", Data::Unsigned(pid.into())), ("names", names)]);
+    let mut fields = vec![("pid", Data::Unsigned(pid.into())), ("names", names)];
+    if let Some(process) = process {
+        fields.push(("start", Data::Array(process.start.iter().copied().map(Data::Unsigned).collect())));
+        fields.push(("executable", Data::from(process.executable.as_path())));
+    }
+    let input = Data::Object(fields);
     let read = Box::new(move |io: &mut dyn Io, result: Result<Encoded, Error>| {
         let values = result.map(|value| {
             let value = value.root();

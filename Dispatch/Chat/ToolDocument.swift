@@ -140,7 +140,9 @@ struct ToolDocument: Identifiable, Hashable, Sendable {
             }
             if line.hasPrefix("-") { defer { old = old.map { $0 + 1 } }; return old }
             if line.hasPrefix("+") { defer { new = new.map { $0 + 1 } }; return new }
-            if line.hasPrefix(" ") {
+            // A blank context line whose leading space was stripped (agents' patches, editors trimming trailing
+            // whitespace) is still a line of both files, as `git apply` reads it.
+            if line.hasPrefix(" ") || line.isEmpty && new != nil {
                 defer { old = old.map { $0 + 1 }; new = new.map { $0 + 1 } }; return new
             }
             return nil

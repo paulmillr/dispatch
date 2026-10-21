@@ -81,7 +81,7 @@ def main():
     parser = argparse.ArgumentParser(prog='test/run.sh --platform ios', description=__doc__.split('\n\n')[0])
     parser.add_argument('tests', nargs='*', help='Explicit Class or Class/testMethod identifiers (cannot combine with --suite)')
     parser.add_argument('--suite', choices=SUITES, help='Default: fast')
-    parser.add_argument('--simulator', default=os.environ.get('DISPATCH_IOS_SIMULATOR', 'iPhone 17'), metavar='NAME')
+    parser.add_argument('--simulator', default=os.environ.get('DISPATCH_IOS_SIMULATOR', 'iPhone Air'), metavar='NAME')
     parser.add_argument('--list', action='store_true', help='Show the selection without building')
     args = parser.parse_args()
     if args.suite and args.tests:

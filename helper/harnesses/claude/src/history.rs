@@ -62,8 +62,11 @@ pub struct Parser {
     bytes: usize,
     pub state: State,
     pub observed: Option<String>,
-    /// Line uuid of the newest model call (the assistant record behind `state.model`).
+    /// Line uuid of the newest record behind `state.model`: a model call or a native /model switch.
     pub configured: Option<String>,
+    /// Line uuid of the newest record that set the model or effort (`configured` or a native
+    /// /effort switch); a picker choice (`Claude.chosen`) holds until it changes.
+    pub changed: Option<String>,
     pub version: Option<String>,
     page: Option<(BTreeSet<String>, Option<String>)>,
 }
@@ -81,6 +84,7 @@ impl Parser {
             state: State::default(),
             observed: None,
             configured: None,
+            changed: None,
             version: None,
             page: None,
         }
@@ -100,6 +104,7 @@ impl Parser {
             self.state.model = Some(model.into());
             self.state.effort = text(root, "effort").map(str::to_owned);
             self.configured = Some(id.into());
+            self.changed = Some(id.into());
             // Context of the last model call; like pi no totals (a page sees part of the file).
             if let Some(usage) = message.get("usage") {
                 let tokens = [
@@ -137,6 +142,14 @@ impl Parser {
                 && text(message, "role") == Some("assistant")
             {
                 self.configure(root, message, id);
+            } else if self.configured.is_none()
+                && let Some(id) = text(root, "uuid")
+                && let Some(output) = Self::native_output(root)
+                && let Some((model, effort)) = switched_model(&output)
+            {
+                self.state.model = Some(model);
+                self.state.effort = effort;
+                self.configured = Some(id.into());
             }
         }
         self.state.title.is_some() && self.configured.is_some()
@@ -408,6 +421,32 @@ impl Parser {
             format!("{name} {arguments}")
         })
     }
+    /// A native /model or /effort switch. Claude records it only as command output, and the next
+    /// model call (the reply) may be far off, so without this a switch in Terminal, or one in a
+    /// fresh session, never reached the chat.
+    fn switch(&mut self, output: &str, id: &str) {
+        if let Some((model, effort)) = switched_model(output) {
+            self.state.model = Some(model);
+            self.state.effort = effort;
+            self.configured = Some(id.into());
+            self.changed = Some(id.into());
+        } else if let Some(effort) = switched_effort(output) {
+            self.state.effort = Some(effort);
+            self.changed = Some(id.into());
+        }
+    }
+    /// The plain output of a native command record (either of Claude's two record shapes).
+    fn native_output(root: Value<'_>) -> Option<String> {
+        let body = match text(root, "type") {
+            Some("system") if text(root, "subtype") == Some("local_command") => {
+                text(root, "content")?.to_owned()
+            }
+            Some("user") => content(root.get("message")?.get("content")),
+            _ => return None,
+        };
+        Self::command(root, &body).then_some(())?;
+        Self::output("", &body, Record::default()).map(|r| r.text)
+    }
     fn interrupted(s: &str) -> bool {
         [
             "[Request interrupted by user]",
@@ -440,11 +479,13 @@ impl Parser {
                     text: "Conversation compacted".into(),
                     ..record
                 }),
-                Some("local_command") => out.extend(Self::output(
-                    id,
-                    text(root, "content").unwrap_or(""),
-                    record,
-                )),
+                Some("local_command") => {
+                    let output = Self::output(id, text(root, "content").unwrap_or(""), record);
+                    if let Some(output) = &output {
+                        self.switch(&output.text, id);
+                    }
+                    out.extend(output)
+                }
                 _ => {}
             }
             return out;
@@ -509,7 +550,11 @@ impl Parser {
                 return out;
             }
             if Self::command(root, &body) {
-                out.extend(Self::output(id, &body, record));
+                let output = Self::output(id, &body, record);
+                if let Some(output) = &output {
+                    self.switch(&output.text, id);
+                }
+                out.extend(output);
                 return out;
             }
             if Self::interrupted(&body) {
@@ -607,6 +652,31 @@ impl Parser {
         out
     }
 }
+/// Claude 2.1.302's /model output: "Set model to `Sonnet 5.5` for this session only", "… `Opus 5.5
+/// (default)` and saved as your default for new sessions", "… with `low` effort" when the menu
+/// changed the effort too. Without that suffix the effort is the new model's default.
+pub(crate) fn switched_model(s: &str) -> Option<(String, Option<String>)> {
+    let (name, tail) = s.strip_prefix("Set model to `")?.split_once('`')?;
+    let name = name.split_once(" (").map_or(name, |(name, _)| name).trim();
+    if name.is_empty() {
+        return None;
+    }
+    let model = crate::menu::model(name).unwrap_or_else(|| name.to_owned());
+    let effort = tail
+        .lines()
+        .next()
+        .and_then(|line| line.rsplit_once(" with `"))
+        .and_then(|(_, level)| level.strip_suffix("` effort"))
+        .filter(|level| !level.is_empty() && level.bytes().all(|b| b.is_ascii_lowercase()));
+    Some((model, effort.map(str::to_owned)))
+}
+/// /effort's output: "Set effort level to high (this session only): …", "… xhigh (saved as your
+/// default for new sessions): …".
+pub(crate) fn switched_effort(s: &str) -> Option<String> {
+    let rest = s.strip_prefix("Set effort level to ")?;
+    let (level, after) = rest.split_at(rest.find(|c: char| !c.is_ascii_lowercase()).unwrap_or(rest.len()));
+    (!level.is_empty() && (after.is_empty() || after.starts_with([' ', ':', '\n']))).then(|| level.to_owned())
+}
 fn notice_text(s: &str) -> String {
     if !s.starts_with("<task-notification>") {
         return s.into();
@@ -660,4 +730,112 @@ fn time(s: &str) -> i64 {
         })
         .unwrap_or((0, 3));
     (days * 86400 + h * 3600 + min * 60 + sec) * 1000 + fraction.0 * 10i64.pow(3 - fraction.1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SESSION: &str = "6f3a01d7-99c2-420c-81b7-ddec079513d8";
+
+    /// Claude 2.1.302 records a native command's output as a user line.
+    fn output(uuid: &str, text: &str) -> String {
+        format!(
+            r#"{{"parentUuid":null,"isSidechain":false,"type":"user","message":{{"role":"user","content":"<local-command-stdout>{text}</local-command-stdout>"}},"uuid":"{uuid}","timestamp":"2026-10-20T12:29:47.561Z","sessionId":"{SESSION}","version":"2.1.302"}}"#
+        ) + "\n"
+    }
+
+    fn assistant(uuid: &str, model: &str) -> String {
+        format!(
+            r#"{{"parentUuid":null,"isSidechain":false,"type":"assistant","message":{{"role":"assistant","model":"{model}","content":[{{"type":"text","text":"hi"}}],"stop_reason":"end_turn"}},"uuid":"{uuid}","timestamp":"2026-10-20T12:30:00.000Z","sessionId":"{SESSION}"}}"#
+        ) + "\n"
+    }
+
+    #[test]
+    fn a_terminal_model_switch_sets_the_model_before_any_reply() {
+        let mut parser = Parser::new(SESSION.into());
+        let records = parser
+            .feed(output("u1", "Set model to `Sonnet 5.5` for this session only").as_bytes())
+            .unwrap();
+        assert!(records.iter().all(|r| r.kind == RecordKind::Output));
+        assert_eq!(parser.state.model.as_deref(), Some("claude-sonnet-5-5"));
+        assert_eq!(parser.state.effort, None);
+        assert_eq!(parser.configured.as_deref(), Some("u1"));
+        assert_eq!(parser.changed.as_deref(), Some("u1"));
+    }
+
+    #[test]
+    fn a_switch_after_a_reply_replaces_its_model_and_effort() {
+        let mut parser = Parser::new(SESSION.into());
+        parser.feed(assistant("a1", "claude-opus-5-5").as_bytes()).unwrap();
+        parser
+            .feed(output("u1", "Set model to `Fable 5.1` for this session only with `xhigh` effort").as_bytes())
+            .unwrap();
+        assert_eq!(parser.state.model.as_deref(), Some("claude-fable-5-1"));
+        assert_eq!(parser.state.effort.as_deref(), Some("xhigh"));
+        parser
+            .feed(output("u2", "Set model to `Opus 5.5 (default)` and saved as your default for new sessions").as_bytes())
+            .unwrap();
+        assert_eq!(parser.state.model.as_deref(), Some("claude-opus-5-5"));
+        assert_eq!(parser.state.effort, None);
+    }
+
+    #[test]
+    fn an_effort_switch_keeps_the_model() {
+        let mut parser = Parser::new(SESSION.into());
+        parser.feed(assistant("a1", "claude-opus-5-5").as_bytes()).unwrap();
+        parser
+            .feed(
+                output(
+                    "u1",
+                    "Set effort level to high (this session only): Comprehensive implementation with extensive testing and documentation",
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        assert_eq!(parser.state.model.as_deref(), Some("claude-opus-5-5"));
+        assert_eq!(parser.state.effort.as_deref(), Some("high"));
+        assert_eq!(parser.configured.as_deref(), Some("a1"));
+        assert_eq!(parser.changed.as_deref(), Some("u1"));
+    }
+
+    #[test]
+    fn older_system_command_records_switch_too_and_kept_models_do_not() {
+        let mut parser = Parser::new(SESSION.into());
+        let system = |uuid: &str, text: &str| {
+            format!(
+                r#"{{"parentUuid":null,"isSidechain":false,"type":"system","subtype":"local_command","content":"<local-command-stdout>{text}</local-command-stdout>","uuid":"{uuid}","timestamp":"2026-10-04T13:49:03.452Z","sessionId":"{SESSION}","version":"2.1.287"}}"#
+            ) + "\n"
+        };
+        parser
+            .feed(system("s1", "Set model to `Opus 5.5` for this session only with `medium` effort").as_bytes())
+            .unwrap();
+        parser.feed(system("s2", "Kept model as `Fable 5.1`").as_bytes()).unwrap();
+        assert_eq!(parser.state.model.as_deref(), Some("claude-opus-5-5"));
+        assert_eq!(parser.state.effort.as_deref(), Some("medium"));
+        assert_eq!(parser.changed.as_deref(), Some("s1"));
+    }
+
+    #[test]
+    fn an_initial_page_reads_an_earlier_switch_back() {
+        let mut parser = Parser::new(SESSION.into());
+        assert!(!parser.earlier(output("u1", "Set model to `Haiku 5.5` for this session only with `low` effort").trim_end().as_bytes()));
+        assert_eq!(parser.state.model.as_deref(), Some("claude-haiku-5-5"));
+        assert_eq!(parser.state.effort.as_deref(), Some("low"));
+        // An older model call no longer applies.
+        parser.earlier(assistant("a0", "claude-opus-5-5").trim_end().as_bytes());
+        assert_eq!(parser.state.model.as_deref(), Some("claude-haiku-5-5"));
+    }
+
+    #[test]
+    fn switch_outputs() {
+        assert_eq!(switched_model("Set model to `my-gateway-model` for this session only"), Some(("my-gateway-model".into(), None)));
+        assert_eq!(switched_model("Set model to `Opus 5.5 (1M context)` for this session only"), Some(("claude-opus-5-5".into(), None)));
+        // Claude 2.1.28x's styled form names no single model.
+        assert_eq!(switched_model("Set model to Default (Opus 5.5 · Best for everyday, complex tasks)"), None);
+        assert_eq!(switched_effort("Set effort level to xhigh (saved as your default for new sessions): Deeper"), Some("xhigh".into()));
+        assert_eq!(switched_effort("Set effort level to max"), Some("max".into()));
+        assert_eq!(switched_effort("Set effort level to "), None);
+        assert_eq!(switched_effort("Set effort level to High"), None);
+    }
 }

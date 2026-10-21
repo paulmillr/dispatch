@@ -119,6 +119,12 @@ struct TabsHeaderPill<Label: View>: View {
 
 /// The back pill: a chevron and the previous screen's title, or the needs-you count in a tab (M4a: "‹ 1").
 struct TabsBackPill: View {
+    /// A tab's back pill: how many conversations elsewhere need the user, as a badge (Messages' unread count); with
+    /// none, the screen it returns to. A bare "0" read as nothing at all.
+    static func needsYou(_ count: Int, back title: String, action: @escaping () -> Void) -> TabsBackPill {
+        count > 0 ? TabsBackPill(label: "\(count)", count: true, action: action) : TabsBackPill(label: title, action: action)
+    }
+
     let label: String
     var count = false
     let action: () -> Void
@@ -127,13 +133,23 @@ struct TabsBackPill: View {
         TabsHeaderPill(trailing: count ? 14 : 16, action: action) {
             HStack(spacing: count ? 5 : 4) {
                 TabsBackChevron()
-                Text(label)
-                    .font(count ? .callout.weight(.semibold) : .body)
-                    .monospacedDigit()
-                    .lineLimit(1)
+                if count {
+                    // A badge, so the number reads as a count of waiting conversations.
+                    Text(label)
+                        .font(.footnote.weight(.bold))
+                        .monospacedDigit()
+                        .foregroundStyle(Color.onAccent)
+                        .padding(.horizontal, 6)
+                        .frame(minWidth: 20, minHeight: 20)
+                        .background(Color.dispatchPink, in: Capsule())
+                } else {
+                    Text(label)
+                        .font(.body)
+                        .lineLimit(1)
+                }
             }
         }
-        .accessibilityLabel(count ? "Back, \(label) need you" : "Back to \(label)")
+        .accessibilityLabel(count ? "Back, \(label) \(label == "1" ? "conversation needs" : "conversations need") you" : "Back to \(label)")
     }
 }
 

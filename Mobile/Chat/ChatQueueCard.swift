@@ -140,7 +140,7 @@ struct ChatQueueCard: View {
             .contentShape(Rectangle())
             .offset(x: swiped == row.id ? -84 : 0)
             .onTapGesture { edit(row, held: held) }
-            .onLongPressGesture { if !held { session.sendQueuedNow(row) } }
+            .onLongPressGesture { if !held, session.canSendNow(row) { session.sendQueuedNow(row) } }
             .simultaneousGesture(DragGesture(minimumDistance: 20).onEnded { value in
                 if value.translation.width < -40, abs(value.translation.height) < 30 { swiped = row.id }
                 else if value.translation.width > 20 { swiped = nil }
@@ -149,11 +149,13 @@ struct ChatQueueCard: View {
                 if row.status != nil, case .device = row.source {
                     Button("Send", systemImage: "paperplane") { session.resendQueued(row) }
                 }
-                if !held { Button("Send now", systemImage: "arrow.up.circle") { session.sendQueuedNow(row) } }
+                if !held, session.canSendNow(row) {
+                    Button("Send now", systemImage: "arrow.up.circle") { session.sendQueuedNow(row) }
+                }
                 Button("Delete", systemImage: "trash", role: .destructive) { session.removeQueued(row) }
             }
             .modifier(QueueRowAccessibility(row: row, editing: isEditing, edit: { edit(row, held: held) },
-                                            sendNow: held ? nil : { session.sendQueuedNow(row) },
+                                            sendNow: held || !session.canSendNow(row) ? nil : { session.sendQueuedNow(row) },
                                             moveUp: held || index == 0 ? nil : { session.moveQueued(from: index, to: index - 1) },
                                             moveDown: held || index == count - 1 ? nil : { session.moveQueued(from: index, to: index + 1) },
                                             delete: { session.removeQueued(row) }))

@@ -33,3 +33,8 @@ test = false
 name = "terminals"
 path = "benches/terminals.bench.rs"
 harness = false
+
+# Live: real Claude Code, tmux and the loopback fixture (ignored by default; see the file).
+[[test]]
+name = "queue_drain"
+path = "tests/queue_drain.rs"

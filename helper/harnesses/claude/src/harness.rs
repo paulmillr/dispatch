@@ -61,7 +61,7 @@ pub struct Claude {
     startup: BTreeMap<Key, Startup>,
     labels: BTreeMap<Key, BTreeMap<String, String>>,
     /// The last verified model choice (Goal::Select) with the model call it followed
-    /// (`Parser.configured`); state reports it until the transcript has a newer model call.
+    /// (`Parser.changed`); state reports it until the transcript sets the model or effort again.
     chosen: BTreeMap<Key, (Option<String>, String, Option<String>)>,
     probes: BTreeMap<Work, Observation>,
     /// Serial of the newest probe started per process (`Observation.serial`).
@@ -507,6 +507,9 @@ impl Harness for Claude {
     fn launch(&mut self, io: &mut dyn Io, cwd: &Path, arguments: &[String], done: Done<Command>) {
         self.invoke(io, cwd, arguments, done);
     }
+    fn configures(&self, arguments: &[String]) -> bool {
+        crate::process::interactive(arguments)
+    }
     fn exited(&mut self, io: &mut dyn Io, process: &Process, _: Option<i32>) {
         self.release(io, process.pid);
     }
@@ -696,7 +699,7 @@ impl Harness for Claude {
             let after = self
                 .cache
                 .get(&Source::Live(key.clone()))
-                .and_then(|c| c.parser.configured.clone());
+                .and_then(|c| c.parser.changed.clone());
             self.chosen.insert(
                 key,
                 (after, menu.current.clone().unwrap_or_else(|| model.clone()), effort.clone()),
@@ -932,7 +935,7 @@ impl Harness for Claude {
         };
         let command = format!("'{}' hook claude", executable.replace('\'', "'\\''"));
         let setup =
-            crate::install::Setup::new(self.home.clone(), enabled, self.remote, command, done);
+            crate::install::Setup::new(self.home.clone(), enabled, self.remote, command, binding.map(|b| b.process.clone()), done);
         let job = Job::Process { pid: binding.map_or_else(|| io.pid(), |binding| binding.process.pid) };
         self.installation(io, setup, job);
     }

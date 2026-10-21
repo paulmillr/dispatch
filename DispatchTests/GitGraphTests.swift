@@ -131,7 +131,7 @@ final class GitGraphTests: XCTestCase {
             GitChange(path: "a.ts", kind: .modified, area: .unstaged),
             GitChange(path: "b.ts", kind: .untracked, area: .untracked),
         ], loadedAt: now)
-        // One wording for the checkout: the header's branch chip.
+        // One wording for the checkout: the header's branch segment.
         XCTAssertEqual(GitChangesText.branch(status), "main")
         let detached = GitStatus(head: "c28855c", changes: [], loadedAt: now)
         XCTAssertEqual(GitChangesText.branch(detached), "detached at c28855c")
@@ -179,6 +179,44 @@ final class GitGraphTests: XCTestCase {
         XCTAssertFalse(GitCommitsFilter.settled(nil, filter: "fix", editing: false))
         XCTAssertEqual(GitCommitsFilter.applied("  ", filter: "fix"), "", "spaces alone clear the filter")
         XCTAssertNil(GitCommitsFilter.applied(nil, filter: "fix"))
+    }
+
+    func testANarrowListDrawsFewerLanes() {
+        // The graph takes a fifth of the list at most: two lanes at 320 pt, five at 500, never past eight.
+        XCTAssertEqual(GitGraphCell.maxLanes(width: 320, scale: 1), 2)
+        XCTAssertEqual(GitGraphCell.maxLanes(width: 500, scale: 1), 5)
+        XCTAssertEqual(GitGraphCell.maxLanes(width: 2_000, scale: 1), GitGraph.maxLanes)
+        XCTAssertEqual(GitGraphCell.maxLanes(width: 500, scale: 1.25), 3, "a larger text size takes more room a lane")
+        XCTAssertEqual(GitGraphCell.maxLanes(width: 0, scale: 1), GitGraph.maxLanes, "not laid out yet")
+        let tips = (0..<10).map { "t\($0): p\($0)" }, seconds = (0..<10).map { "p\($0): r" }
+        let graph = GitGraph.layout(log(tips + seconds + ["r"]), head: "t0", maxLanes: 3)
+        XCTAssertEqual(graph.lanes, 3)
+        XCTAssertEqual(graph.rows[3].hidden, 1, "the fourth tip's own lane is counted, not drawn")
+        XCTAssertTrue(graph.rows.allSatisfy { $0.lines.allSatisfy { $0.from < 3 && $0.to < 3 } })
+        // The refs take a third of the list, never under 64 pt.
+        XCTAssertEqual(GitRefChips.maxWidth(list: 620), 207)
+        XCTAssertEqual(GitRefChips.maxWidth(list: 120), 64)
+    }
+
+    func testFullTimesAndTheCommitterLine() {
+        let date = Date(timeIntervalSince1970: 1792349447)
+        XCTAssertEqual(GitCommitsText.fullTime(date, zone: "+0000"), "2026-10-18 18:50:47 +0000")
+        XCTAssertEqual(GitCommitsText.fullTime(date, zone: "-0730"), "2026-10-18 11:20:47 -0730", "in the commit's own offset")
+        XCTAssertEqual(GitCommitsText.fullTime(date, zone: nil, local: TimeZone(secondsFromGMT: 19_800)!),
+                       "2026-10-19 00:20:47 +0530", "without one, in this Mac's")
+        let commit = GitCommit(hash: String(repeating: "a", count: 40), parents: [], subject: "", body: "", author: "Sam Example",
+                               email: "sam@example.com", date: date, refs: [])
+        let later = date.addingTimeInterval(2 * 3_600)
+        let now = date.addingTimeInterval(3 * 3_600)
+        XCTAssertEqual(GitCommitsText.committed(GitPerson(name: "Robin Example", email: "robin@example.com", date: later,
+                                                          zone: "+0000"), of: commit, at: now),
+                       "Committed by Robin Example · 1 hour ago")
+        XCTAssertEqual(GitCommitsText.committed(GitPerson(name: "Sam Example", email: "sam@example.com", date: later,
+                                                          zone: "+0000"), of: commit, at: now),
+                       "Committed 1 hour ago", "the author, later: a rebase or an amend")
+        XCTAssertEqual(GitCommitsText.committed(GitPerson(name: "Robin Example", email: "robin@example.com", date: date,
+                                                          zone: "+0000"), of: commit, at: now),
+                       "Committed by Robin Example")
     }
 
     func testChipsPutTheCheckedOutBranchFirst() {

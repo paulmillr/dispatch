@@ -1015,7 +1015,8 @@ impl Walk {
                     .choices
                     .iter()
                     .find(|r| r.current)
-                    .map(|r| crate::menu::model(&r.detail).unwrap_or_else(|| r.name.clone()));
+                    // 2.1.302 rows name the model ("Opus 5.5") and describe it; older ones put it in the detail.
+                    .map(|r| crate::menu::model(&r.detail).or_else(|| crate::menu::model(&r.name)).unwrap_or_else(|| r.name.clone()));
                 self.stage = Stage::Exit;
                 self.key(5)
             }

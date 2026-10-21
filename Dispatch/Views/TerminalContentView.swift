@@ -91,6 +91,9 @@ struct TerminalContentView: View {
     let focused: Bool
     let isPresented: Bool
     let floatingSwitch: Bool
+    /// Full screen with one tab: the floating switch centers on the row leading the window (`Chrome.bareLeadingRowHeight`)
+    /// beside the edge reveal's host mark, at the strip's trailing inset, as it would sit on a strip.
+    var switchRow: CGFloat?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// A glass strip over the pane's top: the terminal always sits below it, so switching to chat never resizes
     /// the PTY; chat scrolls under it.
@@ -98,6 +101,8 @@ struct TerminalContentView: View {
     @State private var presentationID = System.uuid()
     /// The floating switch's width, which a files header under it leaves free.
     @State private var floatingSwitchWidth: CGFloat = 0
+
+    private var switchTrailing: CGFloat { switchRow == nil ? Chrome.paneContentInset : Chrome.stripInset }
 
     var body: some View {
         let runtime = TerminalRuntime.shared
@@ -139,7 +144,7 @@ struct TerminalContentView: View {
                 if mode == .files {
                     // Files sits below a glass strip like the terminal: its header must stay readable, not scroll under it.
                     FilesView(session: runtime.files.session(for: tab.id), focused: focused)
-                        .environment(\.filesHeaderTrailingInset, floatingSwitch ? floatingSwitchWidth + Chrome.paneContentInset + 8 : 0)
+                        .environment(\.filesHeaderTrailingInset, floatingSwitch ? floatingSwitchWidth + switchTrailing + 8 : 0)
                         .padding(.top, glassInset)
                         .transition(reduceMotion ? .identity : .opacity.combined(with: .offset(y: 8)))
                         .zIndex(1)
@@ -147,7 +152,9 @@ struct TerminalContentView: View {
                 if floatingSwitch && !searchShown {
                     ChatModeSwitch(session: session, coordinator: chat, floating: true)
                         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { floatingSwitchWidth = $0 }
-                        .padding(.top, 10 + glassInset).padding(.trailing, Chrome.paneContentInset).zIndex(3)
+                        // Centered on a fixed row, not offset by a measured height: no frame shows it elsewhere.
+                        .frame(height: switchRow, alignment: .center)
+                        .padding(.top, (switchRow == nil ? 10 : 0) + glassInset).padding(.trailing, switchTrailing).zIndex(3)
                 }
                 if mode == .terminal, search.visible {
                     ContentSearchBar(search: search, focused: focused && isPresented).padding(.top, glassInset).zIndex(4)

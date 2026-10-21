@@ -8,6 +8,8 @@ struct ChatHostSnapshot: Identifiable {
     let id: UUID
     var name: String
     var link: HostLink
+    /// Why the host is not connected yet (`HostSession.problem`).
+    var problem: String? = nil
     var client: HelperClient?
     var topology: HelperTopology?
     /// The helper features this connection's hello accepted (`HelperSession.Info.features`), e.g. "chat.list".
@@ -28,6 +30,14 @@ struct ChatConversationSummary: Equatable, Sendable {
     var finished = false
     /// When the newest record was written: what "seen" marks (ChatMarkers).
     var lastActivity: Date?
+    /// An approval or blocking question is open (`chat.list` `waiting`): the agent waits for the user, as a pending
+    /// approval card does on the Mac.
+    var waiting = false
+    /// The conversation's title (`State.title`), which names an unrenamed tab as on the Mac.
+    var title: String?
+
+    /// Needs the user: an open approval or question, or the agent's own attention (a prompt only Terminal can answer).
+    var needsYou: Bool { waiting || attention != nil }
 }
 
 /// Summaries for the agent-bound terminals of one host.
@@ -59,6 +69,7 @@ struct ChatStateProbe: ChatConversationSource {
         guard let observed: Observed = try? await client.connection.request("chat.state", params: input) else { return nil }
         var summary = ChatConversationSummary(busy: observed.state.busy, subagents: observed.state.agents?.count ?? 0,
                                               attention: observed.state.attention)
+        summary.title = observed.state.title
         if let page: HelperChat.Page = try? await client.connection.request("chat.page", params: input) {
             summary.apply(page.records)
         }
@@ -93,6 +104,9 @@ struct ChatListOperation: ChatConversationSource {
         /// The newest assistant text, lines kept (at most 280 characters).
         let preview: String?
         let time_ms: Int64?
+        /// Absent from helpers before it: nothing known to be open.
+        let waiting: Bool?
+        let title: String?
 
         var summary: ChatConversationSummary {
             let busy = busy ?? false
@@ -100,7 +114,8 @@ struct ChatListOperation: ChatConversationSource {
             return ChatConversationSummary(
                 busy: busy, attention: attention, preview: preview.map(ChatConversationSummary.preview),
                 finished: !busy && preview != nil,
-                lastActivity: time_ms.map { Date(timeIntervalSince1970: Double($0) / 1000) })
+                lastActivity: time_ms.map { Date(timeIntervalSince1970: Double($0) / 1000) }, waiting: waiting ?? false,
+                title: title)
         }
     }
 
@@ -303,7 +318,7 @@ struct ChatConversation: Identifiable, Equatable {
                 session.update(terminal: node?.id, binding: node?.agent)
             }
             // Without a topology (offline) the last binding stands: the thread stays readable.
-            session.update(link: host.link, client: host.client)
+            session.update(link: host.link, client: host.client, problem: host.problem)
         }
         rebuild()
         let bindings = { (topology: HelperTopology?) -> [String] in
@@ -365,7 +380,7 @@ struct ChatConversation: Identifiable, Equatable {
         session.update(terminal: node?.id, binding: node?.agent)
         session.changed = { [weak self] _ in self?.rebuild() }
         sessions[key] = session
-        session.update(link: host?.link ?? .disconnected, client: host?.client)
+        session.update(link: host?.link ?? .disconnected, client: host?.client, problem: host?.problem)
         return session
     }
 
@@ -394,16 +409,17 @@ struct ChatConversation: Identifiable, Equatable {
                 let space = sequence(first: node, next: { $0.parent.flatMap { nodes[$0] } }).first { $0.kind == .workspace }
                 let session = sessions[key]
                 var summary = summaries[key] ?? ChatConversationSummary()
-                var waiting = summary.attention != nil
+                var waiting = summary.needsYou
                 var stale = host.link != .connected || !host.live || cached.contains(key)
                 if let session, session.phase == .verified || !session.transcript.isEmpty {
                     stale = host.link != .connected || !host.live || session.phase != .verified
                     summary = ChatConversationSummary(
-                        busy: session.working, subagents: session.subagents.count, attention: session.attention,
+                        busy: session.turnRunning, subagents: session.subagents.count, attention: session.attention,
                         preview: session.transcript.lastAgentItem.map { ChatConversationSummary.preview($0.text) } ?? summary.preview,
                         finished: session.transcript.turns.last?.ended != nil,
-                        lastActivity: session.transcript.lastActivity ?? summary.lastActivity)
-                    waiting = session.attention != nil || session.waitingForUser
+                        lastActivity: session.transcript.lastActivity ?? summary.lastActivity,
+                        waiting: session.waitingForUser, title: session.title ?? summary.title)
+                    waiting = summary.needsYou
                 }
                 let conversation = binding.session.isEmpty ? nil : binding.session
                 var unread = false
@@ -415,9 +431,11 @@ struct ChatConversation: Identifiable, Equatable {
                         markers.markSeen(host: host.id, conversation: conversation, through: latest)
                     }
                 }
-                let working = summary.busy || summary.subagents > 0
+                // As the Mac's PaneUrgency: the turn runs. Subagents left running after it ended do not hold back
+                // its unseen result.
+                let working = summary.busy
                 rows.append(ChatConversation(
-                    key: key, terminal: node.id, hostName: host.name, name: tab?.name ?? node.name, space: space?.name,
+                    key: key, terminal: node.id, hostName: host.name, name: Self.name(tab: tab ?? node, title: summary.title), space: space?.name,
                     spaceNode: space?.id, cwd: node.cwd, binding: binding, summary: summary,
                     urgency: PaneUrgency(waiting: waiting, working: working, unread: unread),
                     muted: markers.muted(host: host.id, node: node.key), unread: unread, stale: stale))
@@ -431,6 +449,13 @@ struct ChatConversation: Identifiable, Equatable {
             conversations = rows
             rowsChanged?()
         }
+    }
+
+    /// A row's name as the Mac's automatic tab names give it (ContainerTab.displayLabel): a renamed tab's own name, else
+    /// the conversation's title, else the tab's.
+    static func name(tab: HelperTopology.Node, title: String?) -> String {
+        guard tab.renamed != true else { return tab.name }
+        return TerminalTab.conversationLabel(title) ?? tab.name
     }
 
     static func milliseconds(_ date: Date) -> Int64 { Int64((date.timeIntervalSince1970 * 1000).rounded()) }

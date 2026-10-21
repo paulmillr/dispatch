@@ -19,6 +19,14 @@ pub enum Code {
     Closed = -9,
     /// The remote refused the channel request (exec).
     Refused = -10,
+    /// Name resolution found no address for the host.
+    HostNotFound = -11,
+    /// Nothing accepted the TCP connection on the port.
+    ConnectionRefused = -12,
+    /// No route to the host from this network (also: Local Network access denied on iOS).
+    Unreachable = -13,
+    /// The host did not answer the TCP connection before the deadline.
+    NoAnswer = -14,
 }
 
 #[derive(Debug)]
@@ -37,10 +45,30 @@ impl From<russh::Error> for Failure {
     fn from(error: russh::Error) -> Self {
         let code = match &error {
             russh::Error::UnknownKey => Code::HostKeyRejected,
-            russh::Error::IO(_) => Code::Network,
-            russh::Error::KeepaliveTimeout | russh::Error::InactivityTimeout | russh::Error::ConnectionTimeout => Code::Timeout,
+            russh::Error::IO(error) => return Failure::io(error),
+            russh::Error::KeepaliveTimeout | russh::Error::InactivityTimeout => {
+                return Failure::new(Code::Timeout, "the host stopped answering");
+            }
+            russh::Error::ConnectionTimeout => Code::Timeout,
             russh::Error::Disconnect | russh::Error::SendError | russh::Error::RecvError | russh::Error::HUP => Code::Closed,
             _ => Code::Protocol,
+        };
+        Failure::new(code, error.to_string())
+    }
+}
+
+impl Failure {
+    /// A socket error by what it means for the user: refused, unreachable, no answer; else the OS's text.
+    pub fn io(error: &std::io::Error) -> Self {
+        use std::io::ErrorKind::*;
+        let code = match error.kind() {
+            ConnectionRefused => Code::ConnectionRefused,
+            NetworkUnreachable | HostUnreachable | NetworkDown | AddrNotAvailable => Code::Unreachable,
+            TimedOut => Code::NoAnswer,
+            ConnectionReset | ConnectionAborted | BrokenPipe | UnexpectedEof => {
+                return Failure::new(Code::Closed, "the connection was reset");
+            }
+            _ => Code::Network,
         };
         Failure::new(code, error.to_string())
     }

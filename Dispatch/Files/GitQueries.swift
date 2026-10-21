@@ -210,8 +210,9 @@ struct GitQueries: Sendable {
         case .author(let text): args += ["--author=\(text)", "--regexp-ignore-case", "--fixed-strings"]
         }
         if scope == .branch, let tip { args.append(try Self.checked(tip)) }
-        // Which of them are signed: the same range in the raw format, whose headers name a signature without checking
-        // it, read beside the page. A page without it shows no seals rather than failing.
+        // Which of them are signed, the author date's offset and the committer: the same range in the raw format, whose
+        // headers name a signature without checking it, read beside the page. A page without it shows less rather than
+        // failing.
         let rawArgs = args.map { $0 == Self.format ? "--pretty=raw" : $0 }.filter { $0 != "--date=unix" }
         async let raw = try? self.output(rawArgs)
         let output: GitOutput
@@ -223,8 +224,13 @@ struct GitQueries: Sendable {
         }
         var commits = GitParsers.log(output.output)
         if let raw = await raw {
-            let signed = GitParsers.signatures(raw.output)
-            for index in commits.indices { commits[index].signature = signed[commits[index].hash] }
+            let headers = GitParsers.rawHeaders(raw.output)
+            for index in commits.indices {
+                guard let read = headers[commits[index].hash] else { continue }
+                commits[index].signature = read.signature
+                commits[index].zone = read.author?.zone
+                commits[index].committer = read.committer
+            }
         }
         // A page the bound cut is short without being the end; one the bound cut to nothing can never advance.
         return GitLogPage(commits: commits, exhausted: output.truncated ? commits.isEmpty : commits.count < count)

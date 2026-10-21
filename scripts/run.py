@@ -321,8 +321,8 @@ def main():
                         help='remove local build artifacts, logs, downloaded tools and caches, then rebuild')
     parser.add_argument('--ios', action='store_true',
                         help='build Dispatch for iPhone (docs/ios.md) and run it in the simulator')
-    parser.add_argument('--simulator', default=os.environ.get('DISPATCH_IOS_SIMULATOR', 'iPhone 17'), metavar='NAME',
-                        help='the simulator --ios runs in (default: iPhone 17)')
+    parser.add_argument('--simulator', default=os.environ.get('DISPATCH_IOS_SIMULATOR', 'iPhone Air'), metavar='NAME',
+                        help='the simulator --ios runs in (default: iPhone Air)')
     parser.add_argument('--ios-device', nargs='?', const='', default=None, metavar='NAME',
                         help='build Dispatch for iPhone for a device and install it there with devicectl '
                              '(default: the first paired iPhone; needs a team in build/signing.xcconfig: '

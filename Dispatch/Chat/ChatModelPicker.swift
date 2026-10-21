@@ -74,7 +74,7 @@ final class ChatModelPicker: Identifiable {
 
     func start(cycle: Bool = false) {
         if structured != nil { loadStructuredChoices(cycle: cycle); return }
-        guard let name = cache.menuName(for: currentModel) else {
+        guard let name = cache.menuName(for: currentModel) ?? cachedClaudeRow(for: currentModel) else {
             if helper != nil { loadHelper(cycle: cycle) } else { loadLiveChoices(cycle: cycle) }
             return
         }
@@ -88,6 +88,15 @@ final class ChatModelPicker: Identifiable {
             return
         }
         if helper != nil { loadHelper(cycle: cycle) } else { loadLiveChoices(cycle: cycle) }
+    }
+
+    /// Claude reports a model ID (claude-sonnet-5-5); its rows name the model ("Sonnet 5.5", 2.1.302) or describe it
+    /// ("Opus" · "Opus 5.5 · …"). Without this a model set outside the picker (Terminal's /model, a fresh session's
+    /// banner) had no cached row, and every open walked Claude's whole model menu again.
+    private func cachedClaudeRow(for model: String) -> String? {
+        guard let rows = cache.catalog?.models, let row = AgentModelMenu.row(for: model, in: rows) else { return nil }
+        cache.rememberAlias(model, menuName: row.name)
+        return row.name
     }
 
     convenience init(model: String, effort: String?, column: Column, cache: ChatModelChoicesCache, helper: HelperChat,

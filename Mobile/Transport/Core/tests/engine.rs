@@ -227,6 +227,26 @@ fn rejected_host_key_fails_connect_without_disconnect() {
     assert!(events.disconnects.lock().unwrap().is_empty());
 }
 
+fn connect_failure(host: &str, port: u16) -> dispatch_mobile_ssh::Failure {
+    let events = Arc::new(Events { expected: start_server().host_key.clone(), seen: Mutex::default(), disconnects: Mutex::default() });
+    let options = ConnectOptions { host: host.into(), port, timeout: Duration::from_secs(10), keepalive_interval: Duration::from_secs(15), keepalive_max: 3 };
+    let failure = runtime().block_on(Session::connect(options, events.clone())).err().expect("connect fails");
+    assert!(events.disconnects.lock().unwrap().is_empty());
+    failure
+}
+
+#[test]
+fn a_closed_port_is_refused() {
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    assert_eq!(connect_failure("127.0.0.1", port).code, Code::ConnectionRefused);
+}
+
+#[test]
+fn a_name_that_does_not_resolve_is_not_found() {
+    // RFC 6761: .invalid never resolves.
+    assert_eq!(connect_failure("dispatch-test.invalid", 22).code, Code::HostNotFound);
+}
+
 /// A proxy to `port` that passes the server's version line at once and holds the rest of what the
 /// server sends (its key exchange) back for `delay`.
 fn slow_proxy(port: u16, delay: Duration) -> u16 {
@@ -272,7 +292,8 @@ fn a_key_exchange_finishing_after_the_deadline_never_asks() {
         keepalive_max: 3,
     };
     let result = runtime().block_on(Session::connect(options, events.clone()));
-    assert_eq!(result.err().map(|f| f.code), Some(Code::Timeout));
+    let failure = result.err().unwrap();
+    assert_eq!((failure.code, failure.message.as_str()), (Code::Timeout, "the SSH handshake"), "past TCP: the handshake timed out");
     std::thread::sleep(Duration::from_millis(2500));
     assert!(events.seen.lock().unwrap().is_empty(), "host_key was asked after connect had failed");
     assert!(events.disconnects.lock().unwrap().is_empty());

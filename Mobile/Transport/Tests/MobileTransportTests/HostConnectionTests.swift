@@ -27,8 +27,10 @@ final class HostConnectionTests: XCTestCase {
     XCTAssertEqual(harness.clock.requested, [.seconds(1)])
     harness.clock.advance(by: 1)
     let seen = try await collect(states, skipping: 1, until: { $0 == .connected })
-    // Reconnect attempts never pass through connecting/authenticating/bootstrapping.
-    XCTAssertEqual(seen, [.connected, .reconnecting(attempt: 0, since: lostAt), .reconnecting(attempt: 1, since: lostAt), .connected])
+    // Reconnect attempts never pass through connecting/authenticating/bootstrapping, and keep saying why the link is down.
+    let lost = "The connection was lost."
+    XCTAssertEqual(seen, [.connected, .reconnecting(attempt: 0, since: lostAt, reason: lost),
+                          .reconnecting(attempt: 1, since: lostAt, reason: lost), .connected])
   }
 
   func testFailedAttemptsBackOffTwoToSixtySeconds() async throws {
@@ -150,8 +152,10 @@ final class HostConnectionTests: XCTestCase {
     try await harness.clock.waitForSleepers(1)
     harness.clock.advance(by: 2)
     let seen = try await collect(states, until: { $0 == .connected })
-    XCTAssertEqual(seen, [.disconnected, .connecting, .authenticating, .bootstrapping, .reconnecting(attempt: 0, since: start),
-                          .reconnecting(attempt: 1, since: start), .connected])
+    // The failure is the reason while it waits and while the next attempt runs.
+    let reason = URLError(.cannotConnectToHost).localizedDescription
+    XCTAssertEqual(seen, [.disconnected, .connecting, .authenticating, .bootstrapping, .reconnecting(attempt: 0, since: start, reason: reason),
+                          .reconnecting(attempt: 1, since: start, reason: reason), .connected])
   }
 
   #if os(macOS)

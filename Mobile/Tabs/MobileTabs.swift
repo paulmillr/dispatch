@@ -31,6 +31,10 @@ final class MobileTabs {
     @ObservationIgnored var urgency: @MainActor (UUID, UInt64) -> TabUrgency? = { _, _ in nil }
     /// (host, terminal) → what a chat tab is doing, for line two of its row. Chat sets it.
     @ObservationIgnored var status: @MainActor (UUID, UInt64) -> String? = { _, _ in nil }
+    /// (host, terminal) → the agent's conversation title, which names an unrenamed tab as on the Mac. Chat sets it.
+    @ObservationIgnored var conversationTitle: @MainActor (UUID, UInt64) -> String? = { _, _ in nil }
+    /// (host, pane key) → the terminal's own title (OSC 0/2) while the phone has it attached. The composition sets it.
+    @ObservationIgnored var paneTitle: @MainActor (UUID, String) -> String? = { _, _ in nil }
     /// (host, terminal) → when an agent's conversation last moved (its newest record, the time Agents shows). Chat sets
     /// it; a chat tab's time is the later of this and the last change the phone saw in the tab.
     @ObservationIgnored var agentActivity: @MainActor (UUID, UInt64) -> Date? = { _, _ in nil }
@@ -237,7 +241,14 @@ final class MobileTabs {
     func activity(of space: MobileSpace) -> Date? { space.tabs.compactMap { activity(of: $0) }.max() }
 
     private func entry(_ tab: MobileTab, space: MobileSpace?, host: TabsHost) -> TabsEntry {
-        TabsEntry(tab: tab, space: space, host: host, urgency: urgency(of: tab), activity: activity(of: tab))
+        TabsEntry(tab: tab, space: space, host: host, urgency: urgency(of: tab), activity: activity(of: tab),
+                  label: label(of: tab, host: host))
+    }
+
+    /// The name a tab shows (rows, its screen, sorting): `MobileTab.label` with its agent's conversation title.
+    func label(of tab: MobileTab, host: TabsHost?) -> String {
+        tab.label(conversation: tab.agentPane.flatMap { conversationTitle(tab.ref.host, $0.id) }, homes: host?.homes ?? HomePath(account: nil),
+                  paneTitle: tab.activePane.flatMap { paneTitle(tab.ref.host, $0.key) })
     }
 
     /// Chat's count of conversations waiting for the user, but `excluding`'s (the back pill); nil: counted from the rows.

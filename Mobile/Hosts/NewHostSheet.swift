@@ -79,113 +79,128 @@ struct NewHostSheet: View {
         return record
     }
 
+    private static let failureRow = "failure"
+
     var body: some View {
         NavigationStack {
-            Form {
-                Section {
-                    TextField("studio", text: $name)
-                        .focused($focused, equals: .name)
-                        .textInputAutocapitalization(.never)
-                        .submitLabel(.next)
-                        .onSubmit { focused = .address }
-                } header: {
-                    MobileSectionHeader("Name")
-                }
-                Section {
-                    HStack(spacing: 12) {
-                        TextField("studio.tail3f.ts.net", text: $address)
-                            .focused($focused, equals: .address)
-                            .monospaced()
-                            .keyboardType(.URL)
-                            .textContentType(.URL)
-                        Divider()
-                        TextField("22", text: $port)
-                            .focused($focused, equals: .port)
-                            .monospaced()
-                            .keyboardType(.numberPad)
-                            .frame(width: 64)
-                    }
-                } header: {
-                    MobileSectionHeader("Host")
-                } footer: {
-                    Text("Hostname or Tailscale name · port")
-                }
-                Section {
-                    TextField("alex", text: $user)
-                        .focused($focused, equals: .user)
-                        .monospaced()
-                        .textContentType(.username)
-                } header: {
-                    MobileSectionHeader("Username")
-                }
-                Section {
-                    Picker("Authentication", selection: $method) {
-                        Text("Password").tag(Method.password)
-                        Text("Key file").tag(Method.key)
-                    }
-                    .pickerStyle(.segmented)
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets())
-                    if method == .password {
-                        SecureField(editing?.auth == .password ? "Unchanged" : "Password", text: $password)
-                            .focused($focused, equals: .password)
-                            .textContentType(.password)
-                    } else {
-                        KeyList(selection: $keyID)
-                        Button("Import key…") { importingKey = true }
-                        Button("Create key…") { creatingKey = true }
-                    }
-                } header: {
-                    MobileSectionHeader("Authentication")
-                } footer: {
-                    if method == .key {
-                        Text("Private keys stay in the Keychain and unlock with Face ID; Secure Enclave keys are available for P-256.")
-                    }
-                }
-                if method == .key, let keyID, let key = sessions.keys.key(keyID) {
-                    PublicKeyActions(key: key)
-                }
-                Section {
-                } footer: {
-                    Text(Self.helperStatement)
-                }
-                if let failure {
+            ScrollViewReader { reader in
+                Form {
                     Section {
-                        Text(failure).foregroundStyle(.red)
+                        TextField("studio", text: $name)
+                            .focused($focused, equals: .name)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .submitLabel(.next)
+                            .onSubmit { focused = .address }
+                    } header: {
+                        MobileSectionHeader("Name")
+                    }
+                    Section {
+                        HStack(spacing: 12) {
+                            TextField("studio.tail3f.ts.net", text: $address)
+                                .focused($focused, equals: .address)
+                                .monospaced()
+                                .keyboardType(.URL)
+                                .textContentType(.URL)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                            Divider()
+                            TextField("22", text: $port)
+                                .focused($focused, equals: .port)
+                                .monospaced()
+                                .keyboardType(.numberPad)
+                                .frame(width: 64)
+                        }
+                    } header: {
+                        MobileSectionHeader("Host")
                     } footer: {
-                        Text("Nothing was saved. Check the address and login, then Create again.")
+                        Text("Hostname or Tailscale name · port")
+                    }
+                    Section {
+                        TextField("alex", text: $user)
+                            .focused($focused, equals: .user)
+                            .monospaced()
+                            .textContentType(.username)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                    } header: {
+                        MobileSectionHeader("Username")
+                    }
+                    Section {
+                        Picker("Authentication", selection: $method) {
+                            Text("Password").tag(Method.password)
+                            Text("Key file").tag(Method.key)
+                        }
+                        .pickerStyle(.segmented)
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets())
+                        if method == .password {
+                            SecureField(editing?.auth == .password ? "Unchanged" : "Password", text: $password)
+                                .focused($focused, equals: .password)
+                                .textContentType(.password)
+                        } else {
+                            KeyList(selection: $keyID)
+                            Button("Import key…") { importingKey = true }
+                            Button("Create key…") { creatingKey = true }
+                        }
+                    } header: {
+                        MobileSectionHeader("Authentication")
+                    } footer: {
+                        if method == .key {
+                            Text("Private keys stay in the Keychain and unlock with Face ID; Secure Enclave keys are available for P-256.")
+                        }
+                    }
+                    if method == .key, let keyID, let key = sessions.keys.key(keyID) {
+                        PublicKeyActions(key: key)
+                    }
+                    Section {
+                    } footer: {
+                        Text(Self.helperStatement)
+                    }
+                    if let failure {
+                        Section {
+                            Text(failure).foregroundStyle(.red)
+                        } footer: {
+                            Text("Nothing was saved. Check the address and login, then Create again.")
+                        }
+                        .id(Self.failureRow)
                     }
                 }
-            }
-            .scrollDismissesKeyboard(.interactively)
-            .navigationTitle(editing == nil ? "New host" : "Edit host")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(role: .cancel) { cancel() } label: { Image(systemName: "xmark") }
-                        .tint(.primary)
-                        .accessibilityLabel("Cancel")
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    if verifying {
-                        ProgressView().accessibilityLabel("Connecting")
-                    } else {
-                        Button(editing == nil ? "Create" : "Save") { submit() }
-                            .buttonStyle(.glassProminent)
-                            .disabled(record == nil)
+                .scrollDismissesKeyboard(.interactively)
+                .navigationTitle(editing == nil ? "New host" : "Edit host")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button(role: .cancel) { cancel() } label: { Image(systemName: "xmark") }
+                            .tint(.primary)
+                            .accessibilityLabel("Cancel")
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        if verifying {
+                            ProgressView().accessibilityLabel("Connecting")
+                        } else {
+                            Button(editing == nil ? "Create" : "Save") { submit() }
+                                .buttonStyle(.glassProminent)
+                                .disabled(record == nil)
+                        }
                     }
                 }
-            }
-            .disabled(verifying)
-            .sheet(isPresented: $importingKey) {
-                ImportKeySheet { keyID = $0.id }.tint(.dispatchPink)
-            }
-            .sheet(isPresented: $creatingKey) {
-                CreateKeySheet { keyID = $0.id }.tint(.dispatchPink)
-            }
-            .onChange(of: probe?.link) { _, link in probeChanged(link) }
-            .onAppear {
-                if editing == nil, keyID == nil { keyID = sessions.keys.keys.first?.id }
+                .disabled(verifying)
+                .sheet(isPresented: $importingKey) {
+                    ImportKeySheet { keyID = $0.id }.tint(.dispatchPink)
+                }
+                .sheet(isPresented: $creatingKey) {
+                    CreateKeySheet { keyID = $0.id }.tint(.dispatchPink)
+                }
+                .onChange(of: probe?.link) { _, link in probeChanged(link) }
+                .onAppear {
+                    if editing == nil, keyID == nil { keyID = sessions.keys.keys.first?.id }
+                }
+                // The failure is the form's last section, below the helper's text: brought into view, or a small screen
+                // would show only the Create button coming back.
+                .onChange(of: failure) { _, failure in
+                    if failure != nil { withAnimation { reader.scrollTo(Self.failureRow, anchor: .bottom) } }
+                }
             }
         }
         .hostTrustPrompt()
@@ -242,6 +257,11 @@ struct NewHostSheet: View {
             save(record, probe: probe)
         case .failed(let reason):
             failure = probe.hostKeyMismatch != nil ? "The host key changed since you trusted it." : reason
+        case .reconnecting(_, _, let reason?):
+            // A saved host keeps retrying a network failure; verifying a new one stops at the first and says why
+            // (a mistyped name, Tailscale off, no signal), instead of spinning.
+            failure = probe.problem ?? reason
+            discardProbe()
         default:
             break
         }

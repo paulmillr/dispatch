@@ -57,6 +57,32 @@ final class HostScreensTests: XCTestCase {
         XCTAssertTrue(HostSummary(session: failing).offline)
     }
 
+    /// On a bad network a retrying host says why (the transport's reason), and an offline iPhone says so first: the
+    /// host is not to blame. Connected, or refused (the status is the reason), there is nothing more to say.
+    func testRetryingHostsSayWhyAndAnOfflineIPhoneSaysSo() async throws {
+        let since = Date(), reason = "Can’t find studio.tail3f.ts.net. Check the name, and that Tailscale is on."
+        let (registry, session) = sessions([.event(.link(.reconnecting(attempt: 2, since: since, reason: reason))), .hold])
+        session.connect()
+        try await TestSupport.eventually { session.link == .reconnecting(attempt: 2, since: since, reason: reason) }
+        XCTAssertEqual(HostSummary(session: session).problem, reason)
+        XCTAssertEqual(HostSummary(session: session).status, "Reconnecting · attempt 2")
+
+        registry.networkPath(satisfied: false)
+        XCTAssertEqual(HostSummary(session: session).status, "Waiting for the network…")
+        XCTAssertEqual(HostSummary(session: session).problem, "This iPhone is offline. Dispatch reconnects when the network is back.")
+        // A host verified in New host gets the reading too.
+        let probe = registry.probe(HostRecord(name: "new", address: "new.local", user: "alex", auth: .password))
+        XCTAssertTrue(probe.networkUnavailable)
+        registry.networkPath(satisfied: true)
+        XCTAssertFalse(probe.networkUnavailable)
+        XCTAssertEqual(HostSummary(session: session).problem, reason)
+
+        let (_, failing) = sessions([.event(.link(.failed("Connection refused")))])
+        failing.connect()
+        try await TestSupport.eventually { HostSummary(session: failing).status == "Connection refused" }
+        XCTAssertNil(HostSummary(session: failing).problem)
+    }
+
     /// What Spaces (Tabs) drives: the host list in order with its link, removal with its question, reordering,
     /// and the embedded screens.
     func testHostManagement() async throws {

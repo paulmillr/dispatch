@@ -883,6 +883,7 @@
                 if let topology = self.snapshots[window.route] {
                   self.imported(topology, route: window.route)
                 }
+                self.restoreViews()
               } else { self.imports.removeValue(forKey: window.route) }
             }
           }
@@ -912,6 +913,12 @@
           reopen(entry)
         }
       }
+    }
+
+    /// Restored tabs show what they showed when they were detached (Files on a commit, chat, the terminal).
+    private func restoreViews() {
+      guard let workspace else { return }
+      TerminalRuntime.shared.files.restoreViews(present: workspace.allTabIDs)
     }
 
     private func placeholder(_ route: HelperBackend.Route, name: String, host: HostID) {
@@ -2764,6 +2771,7 @@
         }
         inherit(topology.backend)
         for tab in spaces.flatMap(\.tabs) { _ = TerminalRuntime.shared.view(for: tab) }
+        restoreViews()
         restoring.removeValue(forKey: route)
         restored.presentation.forEach { forget($0.id) }
         for helper in detached { for id in requested { helper.forget(id) } }

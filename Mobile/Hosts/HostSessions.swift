@@ -121,6 +121,17 @@ final class HostSessions {
         for session in ordered { session.retryNow() }
     }
 
+    /// Whether this iPhone has a usable network, for what the hosts say while they cannot connect.
+    private(set) var networkUnavailable = false
+    @ObservationIgnored private var probes: [Weak] = []
+
+    /// Each reading of the network path (`NetworkPathWatcher.observed`).
+    func networkPath(satisfied: Bool) {
+        networkUnavailable = !satisfied
+        probes.removeAll { $0.session == nil }
+        for session in ordered + probes.compactMap(\.session) { session.networkUnavailable = !satisfied }
+    }
+
     func scenePhaseChanged(_ phase: ScenePhase) {
         switch phase {
         case .background: setActive(false)
@@ -132,7 +143,11 @@ final class HostSessions {
 
     /// A session for a host that is not saved yet: New host connects it once to verify (M8a). Pass it to `add`
     /// to keep its connection.
-    func probe(_ record: HostRecord) -> HostSession { makeSession(record) }
+    func probe(_ record: HostRecord) -> HostSession {
+        let session = makeSession(record)
+        probes.append(Weak(session: session))
+        return session
+    }
 
     /// A session for background work (the app refresh task) that asks the user nothing: a host key that is not
     /// already trusted and a keyboard-interactive login fail it, as does a key behind Face ID (no prompt can show).
@@ -380,6 +395,7 @@ final class HostSessions {
         session.refusal = { [weak self] in self?.connectionRefusal }
         session.postConnect = postConnect
         session.clientEnded = clientEnded
+        session.networkUnavailable = networkUnavailable
         session.changed = { [weak self] session in
             guard let self, self.sessions[session.id] === session else { return }
             // Disconnected (backgrounded, or the user's own disconnect): no run is left to take an answer.

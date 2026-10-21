@@ -1,0 +1,8 @@
+{
+  "kind": "rerecord",
+  "why": "Settings › Features › Git › Separate Changes tab (d88f1d47) added `changesTab` to the files loader's preferences, so the files-defaults fingerprint moved. Off by default, it changes no request the app recorded: every files and git recording replayed unchanged in the full suite, so no test is recorded again.",
+  "tests": [],
+  "fingerprints": {
+    "files-defaults": "23651b9b135c0e2de971225217751f7b9ca601fb8a9019da44c9b93f8f0348d8"
+  }
+}

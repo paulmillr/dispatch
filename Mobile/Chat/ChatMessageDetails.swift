@@ -20,7 +20,7 @@ struct ChatMessageDetails: View {
         let steps = turn.map { ChatStep.steps($0, directory: directory, reasoning: false) } ?? []
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                Text(MobileChatMarkdown.text(row.item.text))
+                MobileChatMarkdownView(text: row.item.text)
                     .environment(\.openURL, MobileChatMarkdown.openURL)
                     .font(.subheadline)
                     .lineSpacing(2)
@@ -299,7 +299,8 @@ struct ChatSettingsSheet: View {
             do {
                 models = try await session.models()
                 if let agent = session.agentKey { memory?.remember(agent: agent, models: models) }
-                model = session.model ?? models.first { $0.current }?.name
+                // The agent reports the model's ID (claude-opus-5-5); the picker takes its menu row ("Opus 5.5").
+                model = session.model.flatMap { AgentModelMenu.row(for: $0, in: models)?.name } ?? models.first { $0.current }?.name
             } catch { self.error = error.localizedDescription }
         }
         .task(id: model) {
@@ -321,8 +322,10 @@ struct ChatSettingsSheet: View {
         Task {
             defer { applying = false }
             do {
-                try await session.select(model: model, effort: effort)
-                if let agent = session.agentKey { memory?.remember(agent: agent, model: model, effort: effort) }
+                let chosen = try await session.select(model: model, effort: effort)
+                // New chats offer the remembered model among the menu's rows, so remember the row the report names.
+                let row = AgentModelMenu.row(for: chosen.model, in: models)?.name ?? chosen.model
+                if let agent = session.agentKey { memory?.remember(agent: agent, model: row, effort: chosen.effort) }
                 dismiss()
             } catch { self.error = error.localizedDescription }
         }

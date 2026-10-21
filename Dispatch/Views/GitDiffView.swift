@@ -11,6 +11,8 @@ import SwiftUI
 struct GitDiffView: View {
     let diff: GitDiff
     @Binding var mode: GitDiffMode
+    /// Long lines wrap to the pane rather than scroll sideways.
+    @Binding var wrap: Bool
     /// The status letter beside the path; nil draws none.
     var kind: GitChangeKind?
     /// The meta line's first words: "unstaged", "staged", "untracked", a commit's short hash.
@@ -106,23 +108,20 @@ struct GitDiffView: View {
                 .lineLimit(1).truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityIdentifier("git-diff-meta")
-            GitDiffModePicker(mode: $mode)
-            Button(action: copy) {
-                Image(systemName: "doc.on.doc").font(.system(size: 11))
+            Button { wrap.toggle() } label: {
+                FileWrapGlyph().frame(width: 14, height: 14)
             }
-            .buttonStyle(FilePreviewIconButtonStyle(on: false))
-            .help(mode == .diff ? "Copy diff" : "Copy source")
-            .accessibilityLabel(mode == .diff ? "Copy diff" : "Copy source")
-            .accessibilityIdentifier("git-diff-copy")
+            .buttonStyle(FilePreviewIconButtonStyle(on: wrap))
+            .help(wrap ? "Don’t wrap lines" : "Wrap lines")
+            .accessibilityLabel("Wrap lines")
+            .accessibilityValue(wrap ? "on" : "off")
+            .accessibilityIdentifier("git-diff-wrap")
+            GitDiffModePicker(mode: $mode)
         }
         .padding(.horizontal, 14)
         .frame(height: 40)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("git-diff-header")
-    }
-
-    private func copy() {
-        GitPasteboard.copy(mode == .diff ? diff.text : sourceText ?? model.newSide.joined(separator: "\n"))
     }
 
     // MARK: Body
@@ -185,11 +184,11 @@ struct GitDiffView: View {
         let contentWidth = codeLeading + CGFloat(widest) * metrics.digitWidth + 14
         return GeometryReader { geometry in
             // Every row as wide as the widest line, so the tints run the whole width when scrolled sideways (the code
-            // font is monospaced: characters times the digit's advance).
-            let width = max(geometry.size.width, contentWidth.rounded(.up))
+            // font is monospaced: characters times the digit's advance); wrapped, as wide as the pane.
+            let width = wrap ? geometry.size.width : max(geometry.size.width, contentWidth.rounded(.up))
             let page = max(1, Int(geometry.size.height / metrics.rowHeight) - 2)
             ScrollViewReader { proxy in
-                ScrollView([.horizontal, .vertical]) {
+                ScrollView(wrap ? [.vertical] : [.horizontal, .vertical]) {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(rows, id: \.self) { row in
                             self.row(row, gutter: gutter, width: width, metrics: metrics)
@@ -315,7 +314,7 @@ struct GitDiffView: View {
             }
             .font(theme.typography.codeFont(offset: -1))
             .lineLimit(1)
-            .fixedSize()
+            .fixedSize(horizontal: !wrap, vertical: false)
             .padding(.horizontal, 14)
             .frame(minWidth: width, minHeight: 22, maxHeight: 22, alignment: .leading)
             .background(theme.blue.opacity(0.07))
@@ -398,12 +397,13 @@ struct GitDiffView: View {
             }
             Text(code)
                 .textSelection(.enabled)
-                .fixedSize(horizontal: true, vertical: true)
+                .fixedSize(horizontal: !wrap, vertical: true)
             Spacer(minLength: 0)
         }
-        // Exactly the text preview's 20 pt row, the line centred in it: rows never wrap, and the baseline alignment
-        // of 11 pt numbers with 12.5 pt code would otherwise make the row taller than its text.
-        .frame(minWidth: width, minHeight: metrics.rowHeight, maxHeight: metrics.rowHeight, alignment: .leading)
+        // Exactly the text preview's 20 pt row, the line centred in it: unwrapped rows never wrap, and the baseline
+        // alignment of 11 pt numbers with 12.5 pt code would otherwise make the row taller than its text.
+        .frame(minWidth: width, maxWidth: wrap ? width : nil, minHeight: metrics.rowHeight,
+               maxHeight: wrap ? nil : metrics.rowHeight, alignment: .leading)
         .background(tint)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(Self.spoken(single ? [line.new] : [line.old, line.new], sign: single ? "" : sign, code))
@@ -421,10 +421,11 @@ struct GitDiffView: View {
             Text(code)
                 .foregroundStyle(theme.ink)
                 .textSelection(.enabled)
-                .fixedSize(horizontal: true, vertical: true)
+                .fixedSize(horizontal: !wrap, vertical: true)
             Spacer(minLength: 0)
         }
-        .frame(minWidth: width, minHeight: metrics.rowHeight, maxHeight: metrics.rowHeight, alignment: .leading)
+        .frame(minWidth: width, maxWidth: wrap ? width : nil, minHeight: metrics.rowHeight,
+               maxHeight: wrap ? nil : metrics.rowHeight, alignment: .leading)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(Self.spoken([old, new], code))
         .accessibilityIdentifier("git-diff-gap-line-\(new)")
@@ -437,10 +438,11 @@ struct GitDiffView: View {
             Text(code)
                 .foregroundStyle(theme.ink)
                 .textSelection(.enabled)
-                .fixedSize(horizontal: true, vertical: true)
+                .fixedSize(horizontal: !wrap, vertical: true)
             Spacer(minLength: 0)
         }
-        .frame(minWidth: width, minHeight: metrics.rowHeight, maxHeight: metrics.rowHeight, alignment: .leading)
+        .frame(minWidth: width, maxWidth: wrap ? width : nil, minHeight: metrics.rowHeight,
+               maxHeight: wrap ? nil : metrics.rowHeight, alignment: .leading)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(Self.spoken([index + 1], code))
         .accessibilityIdentifier("git-diff-source-line-\(index + 1)")
@@ -532,8 +534,6 @@ struct GitSourceText: Equatable {
         digitsDiff = String(presentation.lines.reduce(0) { max($0, $1.old ?? 0, $1.new ?? 0) }).count
         rowsKey = nil
     }
-
-    var newSide: [String] { presentation.lines.filter { $0.kind != .removed }.map(\.text) }
 
     /// Digits of the largest line number shown: the read file's line count, else the diff's numbers.
     func digits(source: Bool) -> Int { source && sourceText != nil ? String(self.source.lines.count).count : digitsDiff }

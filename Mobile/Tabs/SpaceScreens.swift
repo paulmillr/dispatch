@@ -70,7 +70,7 @@ struct SpaceTabsScreen: View {
 }
 
 /// M4d: what the host pill opens. Identity (the host disc, the space name, host and path), its tabs, and the
-/// destructive action last: Close space, with the Mac's choices (Close Space, Detach, Terminate…).
+/// destructive action last: Close space, with the Mac's choices for a multiplexer space (Detach, Terminate…).
 struct SpaceDetailsScreen: View {
     let model: MobileTabs
     @Bindable var actions: TabsActions
@@ -112,7 +112,9 @@ struct SpaceDetailsScreen: View {
                                 ForEach(Array(space.tabs.enumerated()), id: \.element.id) { index, tab in
                                     if index > 0 { Rectangle().fill(Color(uiColor: .separator)).frame(height: 0.5).padding(.leading, 16) }
                                     NavigationLink(value: TabsRoute.tab(tab.ref)) {
-                                        SpaceDetailsTabRow(tab: tab, line: TabsTabRow.line(tab, host: host, status: model.status))
+                                        let label = model.label(of: tab, host: host)
+                                        SpaceDetailsTabRow(tab: tab, label: label,
+                                                           line: TabsTabRow.line(tab, label: label, host: host, status: model.status))
                                     }
                                     .buttonStyle(.plain)
                                     .contextMenu { TabsTabMenu(actions: actions, tab: tab.ref) }
@@ -161,7 +163,6 @@ struct SpaceDetailsScreen: View {
         .confirmationDialog(space.map { "Close “\($0.name)”" } ?? "", isPresented: Binding(
             get: { actions.closingSpace == ref }, set: { if !$0 { actions.closingSpace = nil } }
         ), titleVisibility: .visible) {
-            Button("Close Space") { actions.close(.space(ref), .close) }
             Button("Detach") { actions.close(.space(ref), .detach) }
             Button("Terminate…", role: .destructive) { actions.close(.space(ref), .terminate) }
             Button("Cancel", role: .cancel) {}
@@ -177,13 +178,14 @@ struct SpaceDetailsScreen: View {
         }
     }
 
-    /// What Close Space does, in the words of docs/integrations.md.
-    static let closeMessage = "Close Space ends it only if every pane is idle; otherwise it detaches and the work keeps running."
+    /// What closing a space does, in the words of docs/integrations.md: as on the Mac, it always detaches.
+    static let closeMessage = "Detach keeps the space and its work running on the host; Terminate ends its windows and the processes in them."
 }
 
 /// M4d's tab row: the kind glyph, the name, what it is doing, a chevron.
 private struct SpaceDetailsTabRow: View {
     let tab: MobileTab
+    let label: String
     let line: String?
 
     var body: some View {
@@ -192,7 +194,7 @@ private struct SpaceDetailsTabRow: View {
                 .frame(width: 18, height: 18)
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
-            Text(tab.name).font(.subheadline).fittingLine(2).layoutPriority(1)
+            Text(label).font(.subheadline).fittingLine(2).layoutPriority(1)
             if let line {
                 Text(line).font(.footnote).foregroundStyle(.tertiary).fittingLine(2)
             }

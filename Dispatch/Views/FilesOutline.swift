@@ -8,6 +8,19 @@ enum FilesColumns {
     static let trailing: CGFloat = 12
     static func modified(_ typography: AppTypography) -> CGFloat { typography.expanded(64) }
     static func size(_ typography: AppTypography) -> CGFloat { typography.expanded(72) }
+    /// The names' room before a narrow list gives up a column for them.
+    static func nameMinimum(_ typography: AppTypography) -> CGFloat { typography.expanded(220) }
+
+    /// The columns a list `width` wide shows beside the names, which keep `name` at least: Size goes first, then
+    /// Modified.
+    static func shown(width: CGFloat, name: CGFloat, modified: CGFloat, size: CGFloat) -> (modified: Bool, size: Bool) {
+        let room = width - leading - trailing - name
+        return (modified: room >= modified, size: room >= modified + size)
+    }
+
+    @MainActor static func shown(width: CGFloat, typography: AppTypography) -> (modified: Bool, size: Bool) {
+        shown(width: width, name: nameMinimum(typography), modified: modified(typography), size: size(typography))
+    }
     static func rowHeight(_ typography: AppTypography) -> CGFloat { typography.expanded(24) }
     /// `.d1`, `.d2`: each level 20 pt further in.
     static func indent(_ typography: AppTypography) -> CGFloat { typography.expanded(20) }
@@ -17,7 +30,6 @@ enum FilesColumns {
 struct FilesOutlineStyle: Equatable {
     var nameFont: NSFont
     var metaFont: NSFont
-    var markFont: NSFont
     /// Names (#c9c9ce), selected names (#ececf0), icons (#8f8f98).
     var text: NSColor
     var selectedText: NSColor
@@ -25,16 +37,16 @@ struct FilesOutlineStyle: Equatable {
     /// Modified and size (#6f6f78), and on a selected row (#9a9aa2).
     var meta: NSColor
     var selectedMeta: NSColor
-    /// Dimmed rows and placeholders (#5c5c64), dimmed icons (#3f3f47).
+    /// Placeholders (#5c5c64).
     var dim: NSColor
-    var faint: NSColor
     var wash: NSColor
     var accent: NSColor
     var warning: NSColor
-    var green: NSColor
     var rowHeight: CGFloat
     var modifiedWidth: CGFloat
     var sizeWidth: CGFloat
+    /// What the names keep before Size, then Modified, give way (`FilesColumns.shown`).
+    var nameMinimum: CGFloat
     var indent: CGFloat
     var iconSize: CGFloat
 
@@ -42,22 +54,20 @@ struct FilesOutlineStyle: Equatable {
         let palette = Chrome.palette
         nameFont = AppFont.native(size: typography.size())
         metaFont = AppFont.native(size: typography.size(offset: -1.5))
-        markFont = AppFont.native(size: typography.size(offset: -3))
         text = NSColor(palette.secondary)
         selectedText = NSColor(palette.ink)
         icon = NSColor(palette.muted)
         meta = NSColor(palette.sidebarDetail)
         selectedMeta = NSColor(palette.sidebarHostLabel)
         dim = NSColor(palette.detail)
-        faint = NSColor(palette.faint)
         // The mockup's `.sel`: the ink at 8 %, on any palette.
         wash = NSColor(palette.ink).withAlphaComponent(0.08)
         accent = NSColor(palette.accent)
         warning = NSColor(palette.warning)
-        green = NSColor(palette.green)
         rowHeight = FilesColumns.rowHeight(typography)
         modifiedWidth = FilesColumns.modified(typography)
         sizeWidth = FilesColumns.size(typography)
+        nameMinimum = FilesColumns.nameMinimum(typography)
         indent = FilesColumns.indent(typography)
         iconSize = typography.expanded(14)
     }
@@ -203,6 +213,11 @@ final class FilesOutlineView: NSOutlineView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         controller?.windowChanged()
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        controller?.fitColumns()
     }
 
     override func frameOfOutlineCell(atRow row: Int) -> NSRect {
@@ -372,6 +387,21 @@ final class FilesOutlineView: NSOutlineView {
         outline.menu = menu
     }
 
+    /// Hides Size, then Modified, when the list is too narrow to keep the names readable beside them.
+    func fitColumns() {
+        guard let outline, let style, let width = outline.enclosingScrollView?.contentSize.width, width > 0 else { return }
+        let shown = FilesColumns.shown(width: width, name: style.nameMinimum, modified: style.modifiedWidth,
+                                       size: style.sizeWidth)
+        for column in outline.tableColumns {
+            let hidden = switch column.identifier {
+            case Self.modifiedColumn: !shown.modified
+            case Self.sizeColumn: !shown.size
+            default: false
+            }
+            if column.isHidden != hidden { column.isHidden = hidden }
+        }
+    }
+
     func dismantle() {
         outline?.dataSource = nil
         outline?.delegate = nil
@@ -406,6 +436,7 @@ final class FilesOutlineView: NSOutlineView {
                 }
             }
         }
+        if restyled { fitColumns() }
         apply(configuration.rows, root: configuration.root, reload: restyled)
         syncSelection()
         syncDrag(configuration.drag)
@@ -666,8 +697,7 @@ final class FilesOutlineView: NSOutlineView {
             let size = tableColumn.identifier == Self.sizeColumn
             let reuse = size ? FilesValueCell.sizeReuse : FilesValueCell.modifiedReuse
             let cell = outlineView.makeView(withIdentifier: reuse, owner: nil) as? FilesValueCell ?? FilesValueCell(reuse: reuse)
-            cell.configure(size ? node.row.size : node.row.modified, dimmed: node.row.dimmed, style: style,
-                           trailing: size ? FilesColumns.trailing : 0)
+            cell.configure(size ? node.row.size : node.row.modified, style: style, trailing: size ? FilesColumns.trailing : 0)
             return cell
         default:
             return nil
@@ -896,13 +926,12 @@ class FilesCell: NSTableCellView {
     func recolor() {}
 }
 
-/// Icon (folder, document, a link badge for symlinks), name and the reserved git mark.
+/// Icon (folder, document, a link badge for symlinks) and name.
 final class FilesNameCell: FilesCell {
     static let reuse = NSUserInterfaceItemIdentifier("files-name")
     private let icon = NSImageView()
     private let badge = NSImageView()
     private let label = NSTextField(labelWithString: "")
-    private let mark = NSTextField(labelWithString: "")
     private var row: FilesRow?
     private var style: FilesOutlineStyle?
 
@@ -913,10 +942,7 @@ final class FilesNameCell: FilesCell {
         badge.imageScaling = .scaleProportionallyDown
         label.lineBreakMode = .byTruncatingMiddle
         label.maximumNumberOfLines = 1
-        mark.alignment = .center
-        mark.wantsLayer = true
-        mark.layer?.cornerRadius = 3
-        for view in [icon, badge, label, mark] { addSubview(view) }
+        for view in [icon, badge, label] { addSubview(view) }
         textField = label
         imageView = icon
     }
@@ -928,10 +954,6 @@ final class FilesNameCell: FilesCell {
         self.style = style
         label.stringValue = row.title
         label.font = row.isEntry ? style.nameFont : style.metaFont
-        mark.font = style.markFont
-        let git = row.entry?.mark ?? ""
-        mark.stringValue = git == "!" ? "" : git
-        mark.isHidden = mark.stringValue.isEmpty
         let symbol: String? = switch row.kind {
         case .entry: row.isDirectory ? "folder" : "doc"
         case .error: "exclamationmark.triangle"
@@ -949,23 +971,9 @@ final class FilesNameCell: FilesCell {
 
     override func recolor() {
         guard let row, let style else { return }
-        let dimmed = row.dimmed || !row.isEntry
-        label.textColor = row.kind == .error ? style.warning : dimmed ? style.dim : selected ? style.selectedText : style.text
-        icon.contentTintColor = row.kind == .error ? style.warning : row.dimmed ? style.faint : style.icon
+        label.textColor = row.kind == .error ? style.warning : !row.isEntry ? style.dim : selected ? style.selectedText : style.text
+        icon.contentTintColor = row.kind == .error ? style.warning : style.icon
         badge.contentTintColor = selected ? style.selectedText : style.text
-        let markColor = Self.markColor(mark.stringValue, style: style)
-        mark.textColor = markColor
-        mark.layer?.backgroundColor = markColor.withAlphaComponent(0.12).cgColor
-    }
-
-    /// The git tabs' marks: M amber, A and U green, D red.
-    private static func markColor(_ mark: String, style: FilesOutlineStyle) -> NSColor {
-        switch mark {
-        case "M": style.warning
-        case "A", "U": style.green
-        case "D": NSColor(srgbRed: 236/255, green: 161/255, blue: 154/255, alpha: 1)
-        default: style.dim
-        }
     }
 
     override func layout() {
@@ -980,16 +988,11 @@ final class FilesNameCell: FilesCell {
             x = size + 7
         }
         let height = ceil(label.intrinsicContentSize.height)
-        let markWidth: CGFloat = mark.isHidden ? 0 : ceil(mark.intrinsicContentSize.width) + 8
-        let available = max(0, bounds.width - x - (markWidth > 0 ? markWidth + 6 : 0) - 4)
+        let available = max(0, bounds.width - x - 4)
         // The cell's size, not the intrinsic one: that leaves out the 2 pt the label draws on each side, and every
         // name came out a character short, middle-truncated ("bill…g.ts").
         let width = min(available, ceil(label.cell?.cellSize.width ?? label.intrinsicContentSize.width))
         label.frame = NSRect(x: x, y: (bounds.height - height) / 2, width: width, height: height)
-        if markWidth > 0 {
-            let markHeight = min(bounds.height, ceil(mark.intrinsicContentSize.height))
-            mark.frame = NSRect(x: label.frame.maxX + 6, y: (bounds.height - markHeight) / 2, width: markWidth, height: markHeight)
-        }
     }
 }
 
@@ -999,7 +1002,6 @@ final class FilesValueCell: FilesCell {
     static let sizeReuse = NSUserInterfaceItemIdentifier("files-size")
     private let label = NSTextField(labelWithString: "")
     private var style: FilesOutlineStyle?
-    private var dimmed = false
     private var trailing: CGFloat = 0
 
     init(reuse: NSUserInterfaceItemIdentifier) {
@@ -1014,9 +1016,8 @@ final class FilesValueCell: FilesCell {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(_ text: String, dimmed: Bool, style: FilesOutlineStyle, trailing: CGFloat) {
+    func configure(_ text: String, style: FilesOutlineStyle, trailing: CGFloat) {
         self.style = style
-        self.dimmed = dimmed
         self.trailing = trailing
         label.stringValue = text
         label.font = style.metaFont
@@ -1026,7 +1027,7 @@ final class FilesValueCell: FilesCell {
 
     override func recolor() {
         guard let style else { return }
-        label.textColor = dimmed ? style.dim : selected ? style.selectedMeta : style.meta
+        label.textColor = selected ? style.selectedMeta : style.meta
     }
 
     override func layout() {

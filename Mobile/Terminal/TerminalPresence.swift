@@ -51,6 +51,20 @@ final class TerminalPresence {
     /// The attachment ended: the process exited or the attachment failed.
     private(set) var ended: TerminalFeedEvent?
     private(set) var attached = false
+    /// The grid the screen is laid out at when it is not the view's: tmux keeps one size per window for every client,
+    /// so while another client (the Mac) holds the window at its size, output comes for that grid. As the Mac's
+    /// `tmuxGrid`, the view then draws it at the same font size from the top left, and keeps asking for its own.
+    private(set) var shownGrid: (columns: Int, rows: Int)?
+    /// The view's own grid, the size `resize` asks for.
+    @ObservationIgnored private var available: TerminalFeedSize?
+    /// The window's size on the server (the topology's `size`, tmux only).
+    @ObservationIgnored private var serverGrid: (columns: Int, rows: Int)?
+    @ObservationIgnored private var lastResize = ContinuousClock.now - .seconds(60)
+    @ObservationIgnored private var settling: Task<Void, Never>?
+    /// The view showing this presence lays out again (the shown grid changed).
+    @ObservationIgnored var relayout: (() -> Void)?
+    /// A server size different from the view's right after a resize is the old one: the server's comes within this.
+    nonisolated static let resizeSettle = Duration.milliseconds(1500)
 
     /// What the view showing this presence handles (selection, background, bell, clipboard).
     @ObservationIgnored var onViewEvent: ((TerminalSession.Event) -> Void)?
@@ -70,6 +84,8 @@ final class TerminalPresence {
     /// an unbounded claim on the phone's memory. Overflow ends the attachment: dropping terminal bytes would leave its
     /// parser in a state different from the remote terminal. (8 MiB alone ended every attach of a long history.)
     nonisolated static let inboxLimit = HelperConnection.replyLimit + 8 * 1024 * 1024
+    /// Where the consumer stops taking output until the parser drains (`inboxLimit` stays the hard bound).
+    nonisolated static let inboxHighWater = 16 * 1024 * 1024
     nonisolated static let publishInterval = Duration.milliseconds(33)
 
     private struct Publication {
@@ -95,8 +111,9 @@ final class TerminalPresence {
         session.setGrid(columns: grid.columns, rows: grid.rows)
         session.output = { [weak feed] data in feed?.send(data) }
         session.onGrid = { [weak self] size in
-            guard let self, self.attached else { return }
-            self.feed.resize(size)
+            // Laid out at the server's grid: the view asks for its own (`offer`), never for the grid it shows.
+            guard let self, self.attached, self.shownGrid == nil else { return }
+            self.resize(size)
         }
         session.onEvent = { [weak self] event in self?.handle(event) }
         let queued = publishQueued
@@ -107,11 +124,59 @@ final class TerminalPresence {
     }
 
     isolated deinit {
+        settling?.cancel()
         consumer?.cancel()
         parser?.cancel()
         publication.pending?.cancel()
         if attached { feed.detach() }
         session.close()
+    }
+
+    private func resize(_ size: TerminalFeedSize) {
+        available = size
+        lastResize = .now
+        feed.resize(size)
+        evaluate()
+    }
+
+    /// The view's own grid while it shows the server's: asked for when it changes.
+    func offer(_ size: TerminalFeedSize) {
+        guard size != available else { return }
+        available = size
+        guard attached else { return }
+        lastResize = .now
+        feed.resize(size)
+        evaluate()
+    }
+
+    /// The window's size on the server, from each topology (nil: unknown). Only tmux shares one size between clients.
+    func server(grid: (columns: Int, rows: Int)?) {
+        serverGrid = scrollback == .client ? grid : nil
+        evaluate()
+    }
+
+    /// The screen follows the server's grid once it has differed from the view's for longer than a resize takes, and
+    /// the view's again as soon as they agree: never a frame of a size the server is about to leave.
+    private func evaluate() {
+        settling?.cancel()
+        settling = nil
+        guard let server = serverGrid, let available, attached,
+              server.columns != available.columns || server.rows != available.rows else {
+            if shownGrid != nil { shownGrid = nil; relayout?() }
+            return
+        }
+        if let shown = shownGrid, shown == server { return }
+        let waited = ContinuousClock.now - lastResize
+        guard waited >= Self.resizeSettle else {
+            settling = Task { [weak self] in
+                try? await Task.sleep(for: Self.resizeSettle - waited)
+                guard !Task.isCancelled else { return }
+                self?.evaluate()
+            }
+            return
+        }
+        shownGrid = server
+        relayout?()
     }
 
     /// Attaches the feed at the session's grid (no-op while attached).
@@ -127,16 +192,21 @@ final class TerminalPresence {
         inbox = TerminalInbox(limit: Self.inboxLimit)
         let session = session, inbox = inbox, attachment = attachments, feed = feed
         let (signals, signal) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        // The parse task says when it took a batch, so a consumer ahead of it can wait instead of filling the inbox.
+        let (drains, drained) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
         parser = Task.detached(priority: .userInitiated) {
             var clear = repaint
             for await _ in signals {
                 while !Task.isCancelled, let batch = inbox.take(limit: Self.batchLimit) {
+                    drained.yield()
                     if clear { session.reset(); clear = false }
                     session.feed(batch)
                 }
             }
+            drained.finish()
         }
         consumer = Task.detached(priority: .userInitiated) { [weak self] in
+            var draining = drains.makeAsyncIterator()
             for await event in stream {
                 if case .output(let bytes) = event {
                     switch inbox.append(bytes) {
@@ -148,6 +218,12 @@ final class TerminalPresence {
                             self?.end(attachment, feed: feed, "Terminal output exceeded the device buffer limit.")
                         }
                         return
+                    }
+                    // Backpressure: past the high-water mark the next events wait in the feed's own bounded stream
+                    // until the parser catches up, so a burst never reaches the inbox's limit (which ends the
+                    // attachment) while the parser is merely behind.
+                    while inbox.count > Self.inboxHighWater, !Task.isCancelled {
+                        guard await draining.next() != nil else { break }
                     }
                 } else {
                     await MainActor.run { self?.handle(event, attachment: attachment) }
@@ -268,7 +344,15 @@ final class TerminalPresence {
 final class TerminalInbox: Sendable {
     enum Append: Equatable { case signal, queued, overflow }
 
-    private let state = Mutex(Data())
+    /// The bytes and where the next batch starts: a batch is taken by moving `head`, never by copying what is left
+    /// (which made draining a full inbox quadratic: every 256 KiB batch copied the tens of MiB behind it).
+    private struct Pending {
+        var bytes = Data()
+        var head = 0
+        var count: Int { bytes.count - head }
+    }
+
+    private let state = Mutex(Pending())
     private let limit: Int
 
     init(limit: Int = TerminalPresence.inboxLimit) { self.limit = limit }
@@ -277,25 +361,33 @@ final class TerminalInbox: Sendable {
     func append(_ bytes: Data) -> Append {
         state.withLock { pending in
             guard pending.count <= limit, bytes.count <= limit - pending.count else { return .overflow }
-            let wasEmpty = pending.isEmpty
-            pending.append(bytes)
+            let wasEmpty = pending.count == 0
+            pending.bytes.append(bytes)
             return wasEmpty ? .signal : .queued
         }
     }
 
-    func clear() { state.withLock { $0 = Data() } }
+    /// The bytes waiting for the parse task.
+    var count: Int { state.withLock { $0.count } }
+
+    func clear() { state.withLock { $0 = Pending() } }
 
     /// Up to `limit` bytes, oldest first; nil: empty.
     func take(limit: Int) -> Data? {
         state.withLock { pending in
-            guard !pending.isEmpty else { return nil }
-            if pending.count <= limit {
-                defer { pending = Data() }
-                return pending
+            guard pending.count > 0 else { return nil }
+            let start = pending.bytes.startIndex + pending.head
+            let end = start + min(limit, pending.count)
+            let batch = Data(pending.bytes[start..<end])
+            pending.head += end - start
+            if pending.count == 0 {
+                pending = Pending()
+            } else if pending.head >= pending.bytes.count / 2 {
+                // Taken bytes go once they are half the buffer: each byte is moved at most once more, on average.
+                pending.bytes.removeSubrange(pending.bytes.startIndex..<pending.bytes.startIndex + pending.head)
+                pending.head = 0
             }
-            let batch = pending.prefix(limit)
-            pending = Data(pending.dropFirst(limit))
-            return Data(batch)
+            return batch
         }
     }
 }
@@ -378,6 +470,13 @@ final class TerminalPresences {
     func close(_ key: Key) {
         users[key] = nil
         presences.removeValue(forKey: key)?.stop()
+    }
+
+    /// Each terminal's window size on the server, from the host's topology (`TerminalPresence.server(grid:)`).
+    func serverGrids(host: UUID, topology: HelperTopology) {
+        for node in topology.nodes where node.kind == .terminal {
+            presences[Key(host: host, node: node.key)]?.server(grid: node.size.map { (Int($0.columns), Int($0.rows)) })
+        }
     }
 
     /// The host disconnected: every presence of it stops (those in use reattach after the reconnect).

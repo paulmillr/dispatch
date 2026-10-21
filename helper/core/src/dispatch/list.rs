@@ -19,6 +19,9 @@ struct Row {
     preview: Option<String>,
     time_ms: Option<i64>,
     history_error: Option<Error>,
+    /// An approval or blocking question of this conversation is open: the agent waits for the
+    /// user (a list row's "needs you" without opening the chat).
+    waiting: bool,
 }
 
 impl crate::encode::Encode for Row {
@@ -45,6 +48,7 @@ impl crate::encode::Encode for Row {
                 ("preview", &self.preview),
                 ("time_ms", &self.time_ms),
                 ("history_error", &self.history_error),
+                ("waiting", &self.waiting),
             ],
         );
     }
@@ -69,7 +73,8 @@ pub(crate) fn last(records: &[Record]) -> (Option<String>, Option<i64>) {
 
 impl Request<'_> {
     /// Protocol result: Vec of rows (terminal, session, binding, key, label, name, cwd, busy,
-    /// attention, activity, title, state_error, preview, time_ms, history_error), by terminal.
+    /// attention, activity, title, state_error, preview, time_ms, history_error, waiting), by
+    /// terminal.
     pub(super) fn chat_list(&mut self, p: &Data<'_>) -> Result<(), Error> {
         if p.object().is_some_and(|mut fields| fields.next().is_some()) {
             return Err(invalid("params"));
@@ -84,6 +89,20 @@ impl Request<'_> {
                 Some((terminal, harness, binding, node.name.clone(), node.cwd.clone()))
             })
             .collect();
+        let interactions = self.helper.interactions.borrow();
+        let waiting = |terminal: Id, session: &str| {
+            interactions.iter().any(|((id, conversation, _), (questions, holds))| {
+                *id == terminal && conversation == session && *holds && !questions.is_empty()
+            })
+        };
+        let rows: Vec<_> = rows
+            .into_iter()
+            .map(|(terminal, harness, binding, name, cwd)| {
+                let open = waiting(terminal, &binding.session);
+                (terminal, harness, binding, name, cwd, open)
+            })
+            .collect();
+        drop(interactions);
         let done = self.done::<Vec<Row>>(None);
         let collected: Rc<RefCell<Vec<Row>>> = Rc::new(RefCell::new(Vec::new()));
         let remaining = Rc::new(Cell::new(rows.len()));
@@ -93,7 +112,7 @@ impl Request<'_> {
             deferred(done)(self.io, Ok(Vec::new()));
             return Ok(());
         }
-        for (terminal, index, binding, name, cwd) in rows {
+        for (terminal, index, binding, name, cwd, waiting) in rows {
             let Some(harness) = self.helper.harnesses.get(index).cloned() else {
                 remaining.set(remaining.get() - 1);
                 continue;
@@ -114,6 +133,7 @@ impl Request<'_> {
                 preview: None,
                 time_ms: None,
                 history_error: None,
+                waiting,
             })));
             let (next, history_binding) = (harness.clone(), binding.clone());
             let (collected, remaining, done) = (collected.clone(), remaining.clone(), done.clone());

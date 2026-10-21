@@ -192,7 +192,7 @@ struct ModeSwitchMenuItem: Identifiable {
                      item(.mode(.chat), "Chat", checked: state.mode == .chat, enabled: state.reaches(.chat))]
         guard let files else { return items }
         let shown = state.mode == .files ? files.existing(id)?.tab ?? .files : nil
-        for (tab, title) in [(FilesTab.files, "Files"), (.changes, "Changes"), (.commits, "Commits")] {
+        for (tab, title) in [(FilesTab.files, "Files"), (.changes, "Uncommitted Changes"), (.commits, "Commits")] {
             items.append(item(.files(tab), title, checked: shown == tab,
                               enabled: state.reaches(.files) && files.canShowFiles(id, tab: tab)))
         }

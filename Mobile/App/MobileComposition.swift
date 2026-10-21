@@ -69,7 +69,7 @@ final class MobileComposition {
         NotificationRoute.shared.open = { [weak self] key in self?.openChat(key, keyboard: false) }
         let presences = presences
         hosts.clientEnded = { session in presences.stopAll(host: session.id) }
-        hosts.postConnect = [Self.enablePi]
+        hosts.postConnect = [Self.enableIntegrations]
         let conversations = conversations
         // The Debug Spaces sample brings its own urgency and lines (M2a's dots and "thinking 48s", the back pill's
         // count); its hosts are not sessions, so Chat has nothing to say about them.
@@ -86,6 +86,12 @@ final class MobileComposition {
             guard let key = conversations.key(host: host, terminal: terminal),
                   let row = conversations.conversations.first(where: { $0.key == key }) else { return nil }
             return Self.status(row, session: conversations.sessions[key])
+        }
+        let presences = presences
+        tabs.paneTitle = { host, key in presences.presence(.init(host: host, node: key))?.title }
+        tabs.conversationTitle = { host, terminal in
+            guard let key = conversations.key(host: host, terminal: terminal) else { return nil }
+            return conversations.conversations.first { $0.key == key }?.summary.title
         }
         tabs.agentActivity = { host, terminal in
             guard let key = conversations.key(host: host, terminal: terminal) else { return nil }
@@ -115,23 +121,43 @@ final class MobileComposition {
         let features: [String]
         let following: String?
         let home: String?
+        let sameMachine: String?
+    }
+
+    /// Hosts that reach a machine and account an earlier host in the list already shows (a LAN and a Tailscale address
+    /// of one Mac): the Mac keys a host by machine and uid (`HostRegistry`, `ssh:<machine>:<uid>`) and shows it once, so
+    /// here the first connected one shows its spaces and agents and the others name it. Host id → that host's name.
+    static func sameMachine(_ sessions: [HostSession]) -> [UUID: String] {
+        var first: [String: String] = [:], result: [UUID: String] = [:]
+        for session in sessions where session.link.isConnected {
+            guard let identity = session.hello?.identity, let account = session.hello?.account else { continue }
+            let key = identity.host + ":" + String(account.uid)
+            if let name = first[key] { result[session.id] = name } else { first[key] = session.host.name }
+        }
+        return result
     }
 
     /// Hands every host's current state to Spaces and Agents (cheap when nothing changed).
     func sync() {
         let sessions = hosts.ordered
+        let duplicates = Self.sameMachine(sessions)
         var inputs: [TabsHostInput] = []
         var changed = false
         for session in sessions {
+            let sameMachine = duplicates[session.id]
             let signature = Signature(record: session.host, link: session.link, client: session.client.map(ObjectIdentifier.init),
                                       topology: session.topology, live: session.topologyIsLive,
                                       switching: session.switchingMultiplexer,
                                       features: session.hello?.features ?? [],
-                                      following: session.following, home: session.hello?.account?.home)
+                                      following: session.following, home: session.hello?.account?.home,
+                                      sameMachine: sameMachine)
             if synced[session.id] != signature {
                 synced[session.id] = signature
                 changed = true
-                conversations.update(snapshot(session))
+                var chat = snapshot(session)
+                // The same machine's agents show once, under the host that shows its spaces.
+                if sameMachine != nil { chat.topology = nil }
+                conversations.update(chat)
                 cache.record(session)
                 if let client = session.client, session.topologyIsLive {
                     // The connection's first live topology: the host's presences attach again by topology key (a stale
@@ -144,11 +170,17 @@ final class MobileComposition {
                     // else ever closes one, and each holds an attachment, a parse task and a render thread.
                     let keeping = Set(session.topology?.nodes.filter { $0.kind == .terminal }.map(\.key) ?? [])
                     presences.prune(host: session.id, keeping: keeping)
+                    if let topology = session.topology { presences.serverGrids(host: session.id, topology: topology) }
                 } else if session.client == nil {
                     reattached[session.id] = nil
                 }
             }
-            inputs.append(input(session))
+            var host = input(session)
+            if let sameMachine {
+                host.topology = nil
+                host.host.sameMachine = sameMachine
+            }
+            inputs.append(host)
         }
         let ids = Set(sessions.map(\.id))
         for id in synced.keys where !ids.contains(id) {
@@ -191,6 +223,7 @@ final class MobileComposition {
             markers: composition.conversations.markers, hosts: { [weak hosts] in hosts?.store.hosts ?? [] },
             source: HostSessionsRefreshSource(hosts: hosts))
         let network = NetworkPathWatcher { [weak hosts] in hosts?.networkChanged() }
+        network.observed = { [weak hosts] path in hosts?.networkPath(satisfied: path.satisfied) }
         network.start()
         composition.network = network
         return composition
@@ -260,7 +293,7 @@ final class MobileComposition {
     }
 
     static func snapshot(_ session: HostSession) -> ChatHostSnapshot {
-        ChatHostSnapshot(id: session.id, name: session.host.name, link: session.link,
+        ChatHostSnapshot(id: session.id, name: session.host.name, link: session.link, problem: session.problem,
                          client: session.topologyIsLive ? session.client : nil, topology: session.topology,
                          features: Set(session.hello?.features ?? []), live: session.topologyIsLive)
     }
@@ -273,20 +306,25 @@ final class MobileComposition {
             let parts = [model, doing].compactMap { $0 }
             if !parts.isEmpty { return parts.joined(separator: " · ") }
         }
-        if row.summary.attention != nil { return "needs you" }
+        if row.summary.needsYou { return "needs you" }
         if row.summary.busy { return "working" }
         return row.summary.preview
     }
 
-    /// Pi's extension is enabled per helper connection (docs/ios.md, Helper contract): re-enabled on every connection where
-    /// Pi and its Dispatch integration are installed. Starting Pi the first time installs it (New chat).
-    static let enablePi: HostPostConnectStep = { _, client in
-        guard let launches = try? await client.launches(), let pi = launches.first(where: { $0.key == "pi" }) else { return }
-        guard let audit: HelperChat.Installation = try? await client.connection.request(
-            "installation.audit", params: HelperChat.Setup(launch: pi.launch, enabled: nil, terminal: nil)),
-              audit.installed == true else { return }
-        let _: HelperChat.Installation? = try? await client.connection.request(
-            "installation.install", params: HelperChat.Setup(launch: pi.launch, enabled: true, terminal: nil))
+    /// The agents' integrations on every connection, as the Mac's `installHelperIntegrations` does for a newly connected
+    /// host: each non-optional one (Claude Code's and Codex's hooks) is installed, so an agent started outside Dispatch
+    /// still asks here; an optional one (Pi's extension) is opt-in and only enabled again where it is installed (the
+    /// helper keeps that per connection, docs/ios.md, Helper contract). New chat installs it once the user agrees. With
+    /// Chat off the grant has no `hooks.configure` and nothing changes.
+    static let enableIntegrations: HostPostConnectStep = { session, client in
+        guard session.host.chat, let launches = try? await client.launches() else { return }
+        for launch in launches {
+            guard let audit: HelperChat.Installation = try? await client.connection.request(
+                "installation.audit", params: HelperChat.Setup(launch: launch.launch, enabled: nil, terminal: nil)),
+                  audit.optional != true || audit.installed == true else { continue }
+            let _: HelperChat.Installation? = try? await client.connection.request(
+                "installation.install", params: HelperChat.Setup(launch: launch.launch, enabled: true, terminal: nil))
+        }
     }
 
     /// The host's terminal presences attach again through the new connection (a new helper may hand out the same ids).
@@ -391,9 +429,20 @@ private struct TerminalSegment: View {
                 .onAppear { presences.retain(key) }
                 .onDisappear { presences.release(key) }
         } else {
-            Text("\(hosts.session(tab.ref.host)?.host.name ?? "The host") is offline.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+            let session = hosts.session(tab.ref.host)
+            VStack(spacing: 6) {
+                Text(session?.link.isPending == true ? "Connecting to \(session?.host.name ?? "the host")…"
+                     : "\(session?.host.name ?? "The host") is offline.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                if let problem = session?.problem {
+                    Text(problem)
+                        .font(.footnote)
+                        .foregroundStyle(.tertiary)
+                        .multilineTextAlignment(.center)
+                }
+            }
+            .padding(.horizontal, 24)
         }
     }
 

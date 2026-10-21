@@ -67,6 +67,27 @@ final class HelperChat {
 
     var display: ChatRecord? { display(at: Date(timeIntervalSince1970: 0)) }
 
+    /// Claude's shell mode writes `!ls` as `<bash-input>ls</bash-input>`: shown as typed.
+    static func shellInput(_ text: String) -> String? {
+      let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard trimmed.hasPrefix("<bash-input>"), trimmed.hasSuffix("</bash-input>") else { return nil }
+      return "!" + trimmed.dropFirst("<bash-input>".count).dropLast("</bash-input>".count)
+    }
+
+    /// …and its output as `<bash-stdout>…</bash-stdout><bash-stderr>…</bash-stderr>`: the text, stderr after stdout.
+    static func shellOutput(_ text: String) -> String? {
+      let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard trimmed.hasPrefix("<bash-stdout>") || trimmed.hasPrefix("<bash-stderr>") else { return nil }
+      func element(_ tag: String) -> String? {
+        guard let start = trimmed.range(of: "<\(tag)>"), let end = trimmed.range(of: "</\(tag)>", range: start.upperBound..<trimmed.endIndex)
+        else { return nil }
+        return String(trimmed[start.upperBound..<end.lowerBound])
+      }
+      let parts = [element("bash-stdout"), element("bash-stderr")].compactMap { $0 }.filter { !$0.isEmpty }
+      guard trimmed.hasSuffix("</bash-stdout>") || trimmed.hasSuffix("</bash-stderr>") else { return nil }
+      return parts.joined(separator: "\n")
+    }
+
     /// A tool's call and its result can be separate records under one id, and
     /// only the call carries the presentation. Keep it whichever lands last.
     func filled(from other: Record) -> Record {
@@ -83,10 +104,12 @@ final class HelperChat {
       case "turn_ended": action = .ended
       // What a native command printed: the pending command's result, never a chat row.
       case "output": action = .commandOutput(text)
+      // Claude's shell mode records what a `!` command printed as a user message in markup: the same result.
+      case "user" where Self.shellOutput(text) != nil: action = .commandOutput(Self.shellOutput(text) ?? "")
       default:
         guard let kind = ChatItem.Kind(rawValue: kind) else { return nil }
         var item = ChatItem(
-          id: id, kind: kind, text: text, title: title,
+          id: id, kind: kind, text: kind == .user ? Self.shellInput(text) ?? text : text, title: title,
           output: output, completed: completed, exitCode: exit_code.map(Int.init))
         item.source = self
         item.directory = tool?.directory
@@ -327,9 +350,14 @@ final class HelperChat {
       if let record, let item = turns.flatMap(\.items).first(where: { $0.id == record }) {
         return ChatItem(id: id, kind: .tool, text: item.text, title: question.header)
       }
+      return ChatItem(id: id, kind: .tool, text: operation ?? "", title: question.header)
+    }
+
+    /// The first question's operation without the "<tool>\n" prefix an approval's text carries.
+    var operation: String? {
+      guard let question = questions.first else { return nil }
       let prefix = question.header + "\n"
-      let input = question.text.hasPrefix(prefix) ? String(question.text.dropFirst(prefix.count)) : question.text
-      return ChatItem(id: id, kind: .tool, text: input, title: question.header)
+      return question.text.hasPrefix(prefix) ? String(question.text.dropFirst(prefix.count)) : question.text
     }
 
     /// A completed question form's answers (question text -> the chosen labels joined by ", ", or the

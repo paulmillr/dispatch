@@ -333,7 +333,8 @@ final class TabsCommandTests: XCTestCase {
         XCTAssertEqual(helper.methods, [])
     }
 
-    /// New tab: a terminal under the space's node in its directory; it opens once the topology shows it.
+    /// New tab: a terminal under the space's node, with no folder (the multiplexer opens it in its focused pane's live
+    /// directory, as the Mac's do); it opens once the topology shows it.
     func testNewTabCreatesUnderTheSpace() async throws {
         let sketch = TabsFixtures.app()
         let grown = TabsFixtures.app(extraTab: true)
@@ -347,7 +348,7 @@ final class TabsCommandTests: XCTestCase {
         workspace.apply(grown.topology)
         let tab = try await created
         XCTAssertEqual(tab.ref.key, "herdr:app:4")
-        XCTAssertEqual(params(helper.requests[0]), ["parent": sketch.ids["herdr:app"]!, "cwd": "/Users/alex/src/app", "environment": []])
+        XCTAssertEqual(params(helper.requests[0]), ["parent": sketch.ids["herdr:app"]!, "environment": []])
     }
 
     /// A creation the host never shows ends with an error instead of waiting forever.
@@ -447,22 +448,14 @@ final class TabsCommandTests: XCTestCase {
         XCTAssertEqual(helper.requests.map { $0.params["policy"] as? String }, ["prompt", "detach"])
     }
 
-    /// Close Space: every pane idle terminates the space; otherwise the space detaches.
-    func testCloseSpaceTerminatesOnlyWhenIdle() async throws {
-        let (helper, workspace, sketch) = closing([.closed(false, confirmation: false), .closed(true, confirmation: false)])
+    /// Close Space detaches, idle or not, as the Mac's does (docs/integrations.md): nothing is checked or ended.
+    func testCloseSpaceAlwaysDetaches() async throws {
+        let (helper, workspace, sketch) = closing([.closed(true, confirmation: false)])
         defer { helper.close() }
         let node = sketch.ids["herdr:docs"]!
-        let idle = try await workspace.close(space: workspace.space("herdr:docs")!, .close)
-        XCTAssertEqual(idle, .terminated)
-        XCTAssertEqual(helper.requests.map { params($0) },
-                       [["node": node, "policy": "prompt", "check": true], ["node": node, "policy": "terminate", "check": false]])
-
-        let (busy, other, again) = closing([.closed(false, confirmation: true), .closed(true, confirmation: false)])
-        defer { busy.close() }
-        let detached = try await other.close(space: other.space("herdr:app")!, .close)
-        XCTAssertEqual(detached, .detached)
-        XCTAssertEqual(busy.requests.map { params($0) }, [["node": again.ids["herdr:app"]!, "policy": "prompt", "check": true],
-                                                          ["node": again.ids["herdr:app"]!, "policy": "detach", "check": false]])
+        let outcome = try await workspace.close(space: workspace.space("herdr:docs")!, .close)
+        XCTAssertEqual(outcome, .detached)
+        XCTAssertEqual(helper.requests.map { params($0) }, [["node": node, "policy": "detach", "check": false]])
     }
 
     /// Detach and Terminate ask nothing of the helper first.

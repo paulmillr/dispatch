@@ -7,7 +7,8 @@ typealias HostPostConnectStep = @MainActor (HostSession, HelperClient) async -> 
 /// A host's connection state (docs/ios.md, Areas and seams).
 enum HostLink: Equatable, Sendable {
     case disconnected, connecting, authenticating, bootstrapping, connected
-    case reconnecting(attempt: Int, since: Date)
+    /// Down since `since` (or never up), retrying; `reason`: the latest attempt's failure, else why it was lost.
+    case reconnecting(attempt: Int, since: Date, reason: String? = nil)
     case failed(String)
 
     var isConnected: Bool { self == .connected }
@@ -53,6 +54,20 @@ final class HostSession: Identifiable {
     private(set) var latency: Duration?
     /// Set when the server's key differs from the trusted one: a hard stop until the user removes it and retries.
     private(set) var hostKeyMismatch: HostKeyOffer?
+    /// This iPhone has no usable network (`NetworkPathWatcher`, through `HostSessions.networkPath`).
+    var networkUnavailable = false {
+        didSet { if networkUnavailable != oldValue { changed?(self) } }
+    }
+
+    /// Why the host is not connected while it is on its way, for the screens: this iPhone's own network first, else
+    /// what the transport reported (the latest attempt's failure, or why the link dropped). A refusal (`.failed`)
+    /// is the status itself.
+    var problem: String? {
+        guard link.isPending else { return nil }
+        if networkUnavailable { return "This iPhone is offline. Dispatch reconnects when the network is back." }
+        if case .reconnecting(_, _, let reason?) = link { return reason }
+        return nil
+    }
 
     @ObservationIgnored private let hostID: UUID
     @ObservationIgnored private let driver: any HostSessionDriver

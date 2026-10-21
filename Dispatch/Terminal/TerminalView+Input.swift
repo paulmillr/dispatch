@@ -180,12 +180,21 @@ extension TerminalView {
         _ = surface.mouseButton(.release, .middle, mods: mouseModifiers(event))
     }
 
-    override func mouseMoved(with event: NSEvent) { reportMousePosition(event) }
+    /// Under test the physical pointer is not the test's: resting or moving over a terminal it would type mouse
+    /// reports into programs that track every motion (Pi's TUI), different on every run and machine, so a recording
+    /// could never replay. Tests drive terminals with keys, clicks and drags; motion and entry come only from the user.
+    private var followsPointer: Bool { !System.testing }
+
+    override func mouseMoved(with event: NSEvent) {
+        guard followsPointer else { return }
+        reportMousePosition(event)
+    }
     override func mouseDragged(with event: NSEvent) { reportMousePosition(event) }
     override func rightMouseDragged(with event: NSEvent) { reportMousePosition(event) }
     override func otherMouseDragged(with event: NSEvent) { reportMousePosition(event) }
 
     override func mouseEntered(with event: NSEvent) {
+        guard followsPointer else { return }
         reportMousePosition(event)
     }
 

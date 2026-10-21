@@ -123,14 +123,14 @@ final class ToolCommandPresentationTests: XCTestCase {
             XCTAssertEqual(tool.documents.first?.path, "file.swift")
             XCTAssertTrue(tool.documents.first?.diff.contains("+new") == true)
             XCTAssertEqual(tool.input, command)
-            XCTAssertEqual(ChatToolGroupHeader.summarize([item]), "")
+            XCTAssertEqual(ChatToolStep(item, seconds: nil).kind, .other)
         }
         let item = ChatItem(id: "edit", kind: .tool,
                             text: "*** Begin Patch\n*** Update File: file.swift\n@@\n-old\n+new\n*** End Patch",
                             title: "functions.apply_patch", completed: true)
         XCTAssertEqual(ToolPresentation(item).title, "Patch")
         XCTAssertTrue(ToolPresentation(item).isPatch)
-        XCTAssertEqual(ChatToolGroupHeader.summarize([item]), "Patch")
+        XCTAssertEqual(ChatToolStep(item, seconds: nil).kind, .edit)
     }
 
     func testRunningOutputAndTerminalPollingDoNotLookFinished() {

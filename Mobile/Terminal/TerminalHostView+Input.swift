@@ -123,6 +123,21 @@ extension TerminalHostView {
         if flags.contains(.command) { mods.insert(.super) }
         let functions = [UIKeyCommand.f1, UIKeyCommand.f2, UIKeyCommand.f3, UIKeyCommand.f4, UIKeyCommand.f5, UIKeyCommand.f6,
                          UIKeyCommand.f7, UIKeyCommand.f8, UIKeyCommand.f9, UIKeyCommand.f10, UIKeyCommand.f11, UIKeyCommand.f12]
+        // PageUp and PageDown (alone or with Shift) page a multiplexer's own history, as on the Mac; the program gets the
+        // key when the server leaves the scrollback to the app. Shift pages the emulator's history (its keybinds).
+        if input == UIKeyCommand.inputPageUp || input == UIKeyCommand.inputPageDown, mods.isEmpty || mods == .shift,
+           presence.scrollback == .server, let feed {
+            let rows = max(1, session.currentSize.rows)
+            let request = TerminalScrollRequest(lines: (input == UIKeyCommand.inputPageUp ? 1 : -1) * rows, page: true,
+                                                modifiers: mods == .shift ? 1 : 0)
+            let key = (input == UIKeyCommand.inputPageUp ? TerminalInputKey.pageUp : TerminalInputKey.pageDown).with(mods)
+            Task { [weak self] in
+                let result = await feed.scroll(request)
+                if result != .server { self?.send(key) }
+            }
+            afterKey()
+            return
+        }
         let key: TerminalInputKey
         switch input {
         case UIKeyCommand.inputUpArrow: key = .up
@@ -142,7 +157,8 @@ extension TerminalHostView {
             if let index = functions.firstIndex(of: input) {
                 key = TerminalInputKey(keycode: TerminalInputKey.functionKeycodes[index])
             } else if let character = input.first {
-                key = .character(character)
+                // A shifted chord carries the shifted character, as the Mac's do (Option+Shift+A is ESC A, not ESC a).
+                key = mods.contains(.shift) ? TerminalInputKey.withShift(character) : .character(character)
             } else { return }
         }
         send(key.with(mods))

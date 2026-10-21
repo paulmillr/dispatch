@@ -235,7 +235,11 @@ final class ClaudeChatIntegrationTests: XCTestCase {
             XCTAssertTrue(session.commandResult?.text.hasPrefix("No MCP servers configured") == true)
             XCTAssertTrue(session.showChat); XCTAssertNil(session.terminalAttention)
             // Compaction waits on the model; its command and summary are not prompts.
-            try await command("/compact") { session.commandResult?.title == "/compact" }
+            // The title shows at once; Claude's output and the compaction notice follow.
+            try await command("/compact") {
+                session.commandResult?.title == "/compact" && session.commandResult?.text.hasPrefix("Compacted") == true
+                    && session.turns.flatMap(\.items).contains { $0.kind == .notice && $0.text == "Conversation compacted" }
+            }
             XCTAssertTrue(session.commandResult?.text.hasPrefix("Compacted") == true)
             XCTAssertTrue(session.turns.flatMap(\.items).contains { $0.kind == .notice && $0.text == "Conversation compacted" })
             XCTAssertEqual(userTexts(), ["new conversation", "/init"])

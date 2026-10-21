@@ -123,12 +123,14 @@ extension AppDelegate {
         add(view, "Switch Terminal / Chat", #selector(toggleChat), "C", [.command, .shift], target: self)
         add(view, "Switch Terminal / Files", #selector(toggleFiles), "F", [.command, .shift], target: self)
         // Files on a git tab from any mode (F5b); the tag is the FilesTab's index.
-        add(view, "Changes", #selector(openFilesTab(_:)), "U", [.command, .shift], target: self, tag: 1)
+        add(view, "Uncommitted Changes", #selector(openFilesTab(_:)), "U", [.command, .shift], target: self, tag: 1)
         add(view, "Commits", #selector(openFilesTab(_:)), "L", [.command, .shift], target: self, tag: 2)
         // Their keys yield to a Settings › Keys group that takes ⌃⌘ digits (applyKeyGroups). ⌃⌘2 and ⌃⌘3 reach the
-        // places Changes and Commits above name, and only while files shows, so the menu does not list them twice.
+        // places Uncommitted Changes and Commits above name, and only while files shows, so the menu does not list them
+        // twice.
         add(view, "Files Tab", #selector(showFilesTab(_:)), "1", [.control, .command], target: self, tag: 0)
-        add(view, "Changes Tab", #selector(showFilesTab(_:)), "2", [.control, .command], target: self, tag: 1, hidden: true)
+        add(view, "Uncommitted Changes Row", #selector(showFilesTab(_:)), "2", [.control, .command], target: self, tag: 1,
+            hidden: true)
         add(view, "Commits Tab", #selector(showFilesTab(_:)), "3", [.control, .command], target: self, tag: 2, hidden: true)
         // Its title follows the pane (validateMenuItem); ⌥⌘P reaches it only while files shows. ⇧⌘P is left alone: the
         // space search's test holds the menu to ⌘P only.

@@ -1,6 +1,7 @@
 //! Native effects and completion routing. Reactor and workers are ported from helper2.
 pub mod capture;
 mod effects;
+mod executable;
 mod file;
 pub(crate) use file::{copy, errno};
 
@@ -16,6 +17,12 @@ pub mod search;
 pub mod queue;
 pub mod reactor;
 pub mod renderer;
+
+/// The account's persistent state directory (`Io::storage` without creating it or recording):
+/// for programs that run beside a helper, not inside one.
+pub fn storage_root() -> io::Result<PathBuf> {
+    hooks::base().map(|base| base.join("state"))
+}
 pub mod replay;
 pub mod sender;
 mod socket;
@@ -23,6 +30,9 @@ pub mod startup;
 mod stats;
 mod watch;
 mod work;
+#[cfg(test)]
+#[path = "system/write.test.rs"]
+mod write_tests;
 pub(crate) mod zstd;
 // The files plugin's transfer jobs and their archive layout.
 mod archive;
@@ -1276,10 +1286,17 @@ fn execute(job: Job) -> io::Result<Output> {
                 file.sync_all()?;
                 match expected {
                     Expected::Same(_) => {
+                        // Recheck the full revision after preparing the replacement. Renaming can change
+                        // ctime (Linux RENAME_EXCHANGE does), so it is checked only before our own swap.
+                        // Pin every other field, including identity, even if the caller's guard is partial.
+                        let mut guard =
+                            crate::api::Guard::from(metadata(original.as_ref().unwrap().clone()));
+                        checked(&parent, name, Expected::Same(guard))?;
+                        guard.changed_ns = None;
                         // The swap is the check-and-publish transaction: `temporary` now names the exact object
                         // displaced from the target. If it is not the authorized one, put both names back.
                         native::exchange(&parent, &temporary, name)?;
-                        if let Err(error) = checked(&parent, &temporary, expected) {
+                        if let Err(error) = checked(&parent, &temporary, Expected::Same(guard)) {
                             if let Err(restore) = native::exchange(&parent, &temporary, name) {
                                 stranded = true;
                                 return Err(io::Error::other(format!(

@@ -82,14 +82,26 @@ pub(super) fn collect(parent: &Path, uid: u32) -> io::Result<File> {
     for path in entries(&parent.join("run"), 32) {
         let _ = run(&path, uid);
     }
+    // The stable hook command must work even if no helper used it during the last day.
+    // Publishers hold this same storage lock until their new symlink is in place.
+    let published = parent.join("bin/dispatch-helper").canonicalize().ok()
+        .and_then(|path| path.parent().map(Path::to_path_buf));
     for path in entries(&parent.join("sessions"), 24)
         .into_iter()
         .chain(entries(&parent.join("bin").join("versions"), 64))
+        .chain(entries(&parent.join("bin").join("launchers"), 64))
     {
+        if published.as_ref().is_some_and(|target| path.canonicalize().ok().as_ref() == Some(target)) {
+            continue;
+        }
         let _ = unused(&path, uid);
     }
     Ok(guard)
 }
+
+#[cfg(test)]
+#[path = "storage.test.rs"]
+mod tests;
 
 /// A run directory whose helper is gone: its sockets, shell startup folders, and lock.
 fn run(path: &Path, uid: u32) -> io::Result<()> {
@@ -185,15 +197,17 @@ fn unused(path: &Path, uid: u32) -> io::Result<()> {
     Ok(())
 }
 
-/// When this executable is an uploaded build (`bin/versions/<sha256>/dispatch-helper`), hold a
+/// When this executable is an uploaded or published build, hold a
 /// shared lock on its `lock` for the helper's lifetime and date it, so `collect` keeps it.
 pub(super) fn version(parent: &Path, uid: u32) -> Option<File> {
     let executable = std::env::current_exe().ok()?.canonicalize().ok()?;
     let directory = executable.parent()?;
-    let versions = parent.join("bin").join("versions").canonicalize().ok()?;
+    let stored = ["versions", "launchers"].iter().any(|name| {
+        parent.join("bin").join(name).canonicalize().ok().as_deref() == directory.parent()
+    });
     let digest = directory.file_name()?.to_str()?;
     if executable.file_name()? != "dispatch-helper"
-        || directory.parent()? != versions
+        || !stored
         || digest.len() != 64
         || !digest.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f'))
     {

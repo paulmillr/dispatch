@@ -60,8 +60,8 @@ struct MainView: View {
     private var leadingRowHeight: CGFloat {
         // Glass strips are 38 points in full screen too, and a split pane's shorter strip keeps its capsule level with a
         // lone strip's track, so the sidebar header and button follow 38 points in every layout and backend.
-        if glassStrips { return typography.expanded(38) }
-        guard let space = workspace.current, space.structured else { return typography.expanded(30) }
+        if glassStrips { return Chrome.bareLeadingRowHeight(typography) }
+        guard let space = workspace.current, space.structured else { return Chrome.bareLeadingRowHeight(typography) }
         if showTmuxTabs || (space.windowPresentation?.groups.count ?? 1) > 1 { return tmuxStripHeight }
         return typography.expanded(hasLeadingTabRow ? 26 : 30)
     }
@@ -117,16 +117,22 @@ struct MainView: View {
                                         revealed: { revealShown = $0 }) { controller.toggleSidebar() }
                     .frame(width: 48).frame(maxHeight: .infinity)
                     .overlay(alignment: .topLeading) {
-                        // The reveal tracks the pointer; the mark shows where its button would.
+                        // The reveal tracks the pointer; the mark shows where a strip leading the window puts it (at the
+                        // strip's inset, as it replaces the button there).
                         if let host, revealShown || revealPicker {
                             StripHostMark(host: host, workspace: workspace, controller: controller,
                                           presentedChanged: { revealPicker = $0 })
-                                .offset(x: Chrome.sidebarButtonInset,
+                                // The overlay sits outside the content's environment: without the text size the mark
+                                // drew at the default size while its offset and the strips' marks followed the setting.
+                                .environment(\.appTypography, typography)
+                                .offset(x: Chrome.stripInset,
                                         y: (leadingRowHeight - StripHostMark.size(typography).height) / 2)
                                 .transition(reduceMotion ? .opacity : .scale(scale: 0.4).combined(with: .opacity))
                         }
                     }
                     .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: 0.15), value: revealShown || revealPicker)
+                    // Over the same area as the content, which ignores the safe area: measured from the window's top.
+                    .ignoresSafeArea()
             }
         }
         .onChange(of: workspace.focusRequest) { _, _ in

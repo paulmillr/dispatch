@@ -473,9 +473,10 @@ enum GitRefs {
     }
 }
 
-/// The Files list's git marks (F2a), from one status: M/A/D/R/C/T (and X for a conflict) on changed files, U on
-/// untracked files and on a folder the status lists whole, `!` on ignored entries (the outline dims them). What is
-/// inside an untracked or ignored folder takes its folder's mark. Folders holding changes show none.
+/// Each path's letter against HEAD, from one status: M/A/D/R/C/T (and X for a conflict) on changed files, U on
+/// untracked files and on a folder the status lists whole, `!` on ignored entries. What is inside an untracked or
+/// ignored folder takes its folder's mark; folders holding changes have none. The git loader stamps the listed files
+/// with one, so their counts are redone when they change.
 struct GitMarks: Hashable, Sendable {
     /// Repository-relative paths of files with a mark.
     private(set) var files: [String: String] = [:]
@@ -519,20 +520,6 @@ struct GitMarks: Hashable, Sendable {
         }
         return nil
     }
-
-    /// The listing with its entries' marks set (`folder` relative to the repository, "" at its top); nil `marks` clear them.
-    static func apply(_ marks: GitMarks?, folder: String?, to listing: FileListing) -> FileListing {
-        var listing = listing
-        for index in listing.entries.indices {
-            let entry = listing.entries[index]
-            var mark: String?
-            if let marks, let folder, entry.name != ".git" {
-                mark = marks.mark(folder.isEmpty ? entry.name : folder + "/" + entry.name, directory: entry.isDirectory)
-            }
-            if entry.mark != mark { listing.entries[index].mark = mark }
-        }
-        return listing
-    }
 }
 
 extension GitParsers {
@@ -567,15 +554,17 @@ extension GitParsers {
 // MARK: Signatures
 
 extension GitParsers {
-    /// `log --pretty=raw`: each commit that carries a signature header, by hash. Headers sit between a `commit` line
-    /// and the first blank line; message lines are indented, so no message can pose as one.
-    static func signatures(_ raw: String) -> [String: GitSignatureKind] {
-        var result: [String: GitSignatureKind] = [:]
+    /// `log --pretty=raw`: each commit's headers, by hash: its signature's kind (from the header's armor, nothing
+    /// checked), its author and its committer. Headers sit between a `commit` line and the first blank line; message
+    /// lines are indented, so no message can pose as one.
+    static func rawHeaders(_ raw: String) -> [String: GitRawHeaders] {
+        var result: [String: GitRawHeaders] = [:]
         var hash: String?, inHeaders = false, signature = false
         for line in raw.split(separator: "\n", omittingEmptySubsequences: false) {
             if line.hasPrefix("commit "), let word = line.dropFirst(7).split(separator: " ").first,
                isObjectName(String(word)) {
                 hash = String(word); inHeaders = true; signature = false
+                result[String(word)] = GitRawHeaders()
                 continue
             }
             guard inHeaders, let current = hash else { continue }
@@ -583,14 +572,30 @@ extension GitParsers {
             if line.hasPrefix("gpgsig ") || line.hasPrefix("gpgsig-sha256 ") {
                 signature = true
                 let armor = line.split(separator: " ", maxSplits: 1).last.map(String.init) ?? ""
-                result[current] = armor.contains("SSH SIGNATURE") ? .ssh : armor.contains("SIGNED MESSAGE") ? .x509 : .gpg
+                result[current]?.signature = armor.contains("SSH SIGNATURE") ? .ssh : armor.contains("SIGNED MESSAGE") ? .x509 : .gpg
             } else if signature, line.hasPrefix(" ") {
                 continue
             } else {
                 signature = false
+                if line.hasPrefix("author ") {
+                    result[current]?.author = person(line.dropFirst(7))
+                } else if line.hasPrefix("committer ") {
+                    result[current]?.committer = person(line.dropFirst(10))
+                }
             }
         }
         return result
+    }
+
+    /// `Sam Example <sam@example.com> 1792363575 +0200`; nil for anything else.
+    static func person(_ text: Substring) -> GitPerson? {
+        guard let close = text.lastIndex(of: ">"), let open = text[..<close].lastIndex(of: "<") else { return nil }
+        let when = text[text.index(after: close)...].split(separator: " ")
+        guard when.count == 2, let seconds = TimeInterval(when[0]), when[1].count == 5,
+              when[1].first == "+" || when[1].first == "-", Int(when[1].dropFirst()) != nil else { return nil }
+        return GitPerson(name: text[..<open].trimmingCharacters(in: .whitespaces),
+                         email: String(text[text.index(after: open)..<close]),
+                         date: Date(timeIntervalSince1970: seconds), zone: String(when[1]))
     }
 
     /// `verify-commit --raw`'s answer: gpg's status lines (`[GNUPG:] GOODSIG …`) or ssh-keygen's words, and git's

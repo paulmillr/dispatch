@@ -192,9 +192,11 @@ struct Preferences: Codable, Equatable {
     var filesOpenWith = FilesOpenWith.editorInTab
     /// Off keeps both files instead of asking when a copy would overwrite.
     var filesAskBeforeReplacing = true
-    /// Git in files mode (the Changes and Commits tabs, the list's marks) and the sidebar's branch names. Off, Dispatch
-    /// reads nothing of any repository.
+    /// Git in files mode (the Commits tab) and the sidebar's branch names. Off, Dispatch reads nothing of any repository.
     var gitEnabled = true
+    /// The uncommitted changes as their own Changes tab beside Commits, as they first were, instead of Commits'
+    /// uncommitted row.
+    var gitChangesTab = false
 
     func resolvedTheme(systemIsDark: Bool) -> String {
         let selected = appTheme.isDark(systemIsDark: systemIsDark) ? theme : lightTheme
@@ -222,7 +224,7 @@ struct Preferences: Codable, Equatable {
         case sidebarStyle, showGitBranches, liquidGlass, hostColors, showHostColors
         case improveTextContrast
         case spaces, closeLaunching, enableKittyGraphics
-        case filesDragAndDrop, filesFollowShell, filesOpenWith, filesAskBeforeReplacing, gitEnabled
+        case filesDragAndDrop, filesFollowShell, filesOpenWith, filesAskBeforeReplacing, gitEnabled, gitChangesTab
         // Stored under a new name since hidden files show by default: every save wrote the old key, so its `false`
         // was usually the old default rather than a choice.
         case filesShowHidden = "filesShowHiddenFiles"
@@ -303,6 +305,7 @@ struct Preferences: Codable, Equatable {
         filesOpenWith = try fields.decodeIfPresent(String.self, forKey: .filesOpenWith).flatMap(FilesOpenWith.init(rawValue:)) ?? filesOpenWith
         filesAskBeforeReplacing = try fields.decodeIfPresent(Bool.self, forKey: .filesAskBeforeReplacing) ?? filesAskBeforeReplacing
         gitEnabled = try fields.decodeIfPresent(Bool.self, forKey: .gitEnabled) ?? gitEnabled
+        gitChangesTab = try fields.decodeIfPresent(Bool.self, forKey: .gitChangesTab) ?? gitChangesTab
     }
 }
 

@@ -16,23 +16,7 @@ struct ChatModelControls: View {
         session.effort ?? (["claude", "codex"].contains(session.agentID) && session.model != session.agentTitle ? "default" : "unknown")
     }
 
-    /// Family, then version: claude-opus-5-5[1m] → opus-5.5[1m], gpt-6.1-sol → sol-6.1. Also covers dated, legacy
-    /// (claude-3-5-sonnet), Bedrock (us.anthropic.claude-…-v1:0), Vertex (…@20250805) and provider/model IDs; other
-    /// models keep their ID, without the provider.
-    static func label(for model: String) -> String {
-        let plain = model.split(separator: "/").last.map(String.init) ?? model
-        guard let vendor = model.range(of: "(?:^|[./])(?:claude|gpt)-", options: .regularExpression) else { return plain }
-        var id = String(model[vendor.upperBound...]), suffix = ""
-        if let bracket = id.firstIndex(of: "[") { suffix = String(id[bracket...]); id = String(id[..<bracket]) }
-        id = id.replacingOccurrences(of: "(?:-latest|[-@][0-9]{8})?(?:-v[0-9]+(?::[0-9]+)?)?$", with: "", options: .regularExpression)
-        let parts = id.split(separator: "-").map(String.init)
-        let isVersion = { (part: String) in part.range(of: "^[0-9]+(?:\\.[0-9]+)*$", options: .regularExpression) != nil }
-        let family = parts.filter { !isVersion($0) }, version = parts.filter(isVersion)
-        // GPT IDs lead with the version (gpt-6.1-sol); without a name after one (gpt-5.5, gpt-4o) the ID stays.
-        let gpt = model[vendor].hasSuffix("gpt-")
-        guard !family.isEmpty, !gpt || parts.first.map(isVersion) == true else { return plain }
-        return (family + (version.isEmpty ? [] : [version.joined(separator: ".")])).joined(separator: "-") + suffix
-    }
+    static func label(for model: String) -> String { AgentModelMenu.label(for: model) }
 
     var body: some View {
         let currentPicker = session.modelPicker

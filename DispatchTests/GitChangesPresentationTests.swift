@@ -3,9 +3,10 @@ import SwiftUI
 import XCTest
 @testable import DispatchApp
 
-/// The Changes tab as its mockup draws it, hosted in `FilesView` (its header line shares the
-/// files header's row) with a fake source and the status and diff the git data layer would leave in the session, read
-/// back by OCR and accessibility. Desktop cases: they open windows.
+/// The separate Changes tab (Settings › Features › Git › Separate Changes tab) as its mockup draws it, hosted in
+/// `FilesView` (its header line shares the files header's row) with a fake source and the status and diff the git data
+/// layer would leave in the session, read back by OCR and accessibility. Desktop cases: they open windows. Off (the
+/// default), the changes are Commits' uncommitted row: GitUncommittedPresentationTests.
 @MainActor
 final class GitChangesPresentationTests: XCTestCase {
     private let root = "/Users/ivan/src/api"
@@ -73,6 +74,7 @@ final class GitChangesPresentationTests: XCTestCase {
         session.home = source.home
         session.availability = .available(source)
         session.pinnedRoot = root
+        session.changesTab = true
         session.tab = .changes
         session.git = .repository(GitRepository(root: root))
         session.status = Self.mockupStatus()
@@ -165,21 +167,23 @@ final class GitChangesPresentationTests: XCTestCase {
             ["Diff"], ["Source"],
             ["@@ -8,14 +9,16 @@", "-8,14 +9,16"], ["export async function handleWebhook", "handleWebhook", "handlewebhook"],
             // F3a's rows between hunks, from the hunks' numbers, and the fold inside the second hunk.
-            ["3 unmodified lines"], ["4 unmodified lines"],
+            // The second fold's "4" is checked through accessibility below: Vision now and then drops a lower fold's digit.
+            ["3 unmodified lines"],
             ["Read-only · stage and commit in the shell", "Read-only • stage and commit in the shell",
              "stage and commit in the shell"],
-            ["git add -p"],
         ], in: window, named: "git-changes-mockup")
+        XCTAssertTrue(PresentationTestSupport.accessibilityFrames("git-add-patch", in: window).isEmpty, "no git add -p")
 
-        // The files header's 34 pt row as on every tab: the path to the repository and its branch after the segments,
-        // the search and the diff's toggle at the end; the counts are the groups' and the totals the footer's.
+        // The files header's 34 pt row as on every tab: the path to the repository after the segments (the branch the
+        // last of them), the search and the diff's toggle at the end; the counts are the groups' and the totals the
+        // footer's.
         let header = try await frame("files-header", in: window)
-        let branch = try await frame("files-branch", in: window)
+        let crumbs = try await frame("files-crumbs", in: window)
         let commits = try await frame("files-segment-commits", in: window)
         let list = try await frame("git-changes-list", in: window)
         XCTAssertEqual(header.height, 34, accuracy: 0.5)
-        XCTAssertEqual(branch.midY, header.midY, accuracy: 1)
-        XCTAssertGreaterThan(branch.minX, commits.maxX)
+        XCTAssertEqual(crumbs.midY, header.midY, accuracy: 1)
+        XCTAssertGreaterThan(crumbs.minX, commits.maxX)
         XCTAssertEqual(list.maxY, header.minY, accuracy: 1.5, "no second bar between the header and the list")
         let totals = try await frame("git-changes-totals", in: window)
         XCTAssertLessThan(totals.maxY, list.minY + 30, "the totals sit in the list's footer")
@@ -210,7 +214,8 @@ final class GitChangesPresentationTests: XCTestCase {
         XCTAssertTrue(PresentationTestSupport.accessibilityLabels("git-diff-line-8", in: window)
             .contains { $0.contains("11") && $0.contains("const attempt") }, "The removed line carries its old number")
         XCTAssertFalse(PresentationTestSupport.accessibilityFrames("git-diff-gap-1", in: window).isEmpty)
-        XCTAssertFalse(PresentationTestSupport.accessibilityFrames("git-diff-gap-2", in: window).isEmpty)
+        XCTAssertTrue(PresentationTestSupport.accessibilityLabels("git-diff-gap-2", in: window)
+            .contains { $0.contains("4 unmodified lines") }, "\(PresentationTestSupport.accessibilityLabels("git-diff-gap-2", in: window))")
     }
 
     func testNarrowHeaderKeepsTheLineBesideGlyphSegments() async throws {
@@ -350,19 +355,6 @@ final class GitChangesPresentationTests: XCTestCase {
                        "a search with text stays open")
         session.changesFilter = "nothing-like-this"
         _ = try await frame("git-changes-no-match", in: window)
-    }
-
-    func testAddPatchWithoutATerminalSaysSo() async throws {
-        let session = mockupSession()
-        let window = try window(session)
-        try await click("git-add-patch", in: window, until: {
-            PresentationTestSupport.accessibilityLabels("git-changes-notice", in: window).contains("The terminal isn’t running")
-        }, diagnostic: {
-            "Notice \(PresentationTestSupport.accessibilityLabels("git-changes-notice", in: window)), "
-                + "posted \(String(describing: FilesEditorNotices.shared.notice(for: session.id)))"
-        })
-        XCTAssertTrue(session.tab == .changes, "Nothing was typed, so the tab stays")
-        FilesEditorNotices.shared.clear(session.id)
     }
 
     func testBinaryAndTruncatedDiffs() async throws {

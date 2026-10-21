@@ -36,11 +36,15 @@ struct HostSummary {
         case .connecting: return "Connecting…"
         case .authenticating: return "Logging in…"
         case .bootstrapping: return "Starting the helper…"
-        case .reconnecting(let attempt, _): return attempt > 1 ? "Reconnecting · attempt \(attempt)" : "Reconnecting…"
+        case .reconnecting where session.networkUnavailable: return "Waiting for the network…"
+        case .reconnecting(let attempt, _, _): return attempt > 1 ? "Reconnecting · attempt \(attempt)" : "Reconnecting…"
         case .failed(let reason): return session.hostKeyMismatch != nil ? "Host key changed" : reason
         case .disconnected: return "Offline"
         }
     }
+
+    /// Why it is not connected yet, under the status (`HostSession.problem`).
+    var problem: String? { session.problem }
 
     var statusColor: Color {
         switch session.link {

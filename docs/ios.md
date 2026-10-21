@@ -76,9 +76,12 @@ simulator matches). Zstd is not linked: `AppReplay` compiles for its types, but 
 
 Mac sources the phone uses stay in `Dispatch/` and are listed by path in `project.yml` ("Shared with the Mac app").
 They change only by `#if canImport(AppKit)` guards or additive, behaviour-preserving helpers.
-`Mobile/Shared/System.swift` stands in for the Mac's AppKit-only `System`. Deferred to separate Mac PRs: a
-`SystemProvider` seam replacing that file, and splitting `ChatSession` into shared transcript state and Mac view
-state (until then `MobileTranscript` copies `ChatSession.turn`/`insert`). Mac views built on the Mac chat stack
+`Mobile/Shared/System.swift` stands in for the Mac's AppKit-only `System` (a `SystemProvider` seam replacing it is
+deferred). The transcript is shared: `ChatTranscript` (Dispatch/Chat) holds the merge rules (turn placement, item
+insertion, the historical batch merge, record positions and seen keys) that the Mac's `ChatSession` and the
+phone's `MobileTranscript` both run; `ChatSession` keeps only its view state around them (arrivals, unread, row
+caches) and `MobileTranscript` the phone's record loop. Displayed items (`ChatPatch.displayedItems`), prompt
+confirmation (`AgentInput.records`) and the elapsed text are shared too. Mac views built on the Mac chat stack
 (`ChatPermissionCard`, `SyntaxHighlight`, `AgentActivityGlyph`, …) are ported, not shared.
 
 ### Areas and seams
@@ -147,7 +150,8 @@ The phone runs, on an exec channel with no PTY and no `env` requests:
 exec "$HOME/.dispatch/bin/versions/<sha256>/dispatch-helper" --remote --capabilities <HelperGrant> --stdio
 ```
 
-The grant is the Mac's full profile with hooks (`HelperGrant`; Chat off drops `hooks.configure` and `agent.*`). The
+The grant is the Mac's full profile with hooks less file writes and Git reads (`HelperGrant`: no `file.write` or
+`git.read`; Chat off drops `hooks.configure` and `agent.*`). The
 phone-only hello features (`interaction.options`, `chat.list`, `projects.recent`, `multiplexers.versions`,
 `terminals.coalesce`, `launch.names`, `stdio.liveness`, `terminals.activity`) are specified in `helper/PROTOCOL.md`;
 what they let the helper
@@ -163,13 +167,19 @@ do on the host, and the login-shell PATH probe, are in [security](security.md#di
 - **Follow binding changes.** A Codex conversation starts with an empty session and gets its thread id with the first
   prompt; reopen `chat.open` on a new binding. `chat.open` answers with a `chat.history` notification and
   `backends.open` with `backend.opened`, not a response frame.
-- **Re-enable integrations per connection.** `installation.install` state is in helper memory: Pi's extension needs
-  it on each connection before a launch.
+- **Re-enable integrations per connection.** `installation.install` state is in helper memory. As the Mac does for a
+  newly connected host, every connection with Chat on installs Claude Code's and Codex's hooks (so an agent started
+  outside Dispatch still asks here) and enables Pi's extension where it is installed. Pi's extension is opt-in, as on
+  the Mac: New chat asks before installing it. A per-host refusal given on the Mac stays on the Mac; the phone's
+  consent is its Chat switch.
 - **Surface native trust steps.** Codex shows "Hooks need review" after the helper installs hooks; until the user picks
   "Trust all" in its terminal, approvals stay in Codex's TUI.
-- **Keep the outbox.** The helper's queue dies with the helper (only Codex's native queue survives). The device keeps
-  every queued message until delivered and re-adds after reconnecting; anything possibly in flight at the drop is
-  paused for the user, never sent twice.
+- **Keep the outbox.** A Claude Code or Pi queue of a named conversation lives in the host's queue store: it survives
+  the helper, its item ids are the same for every helper and client, and the host sends it while no client is
+  connected. After reconnecting the device matches its items by id; an item the host no longer holds was sent or
+  removed there and is never added again. Only a queue of a conversation the agent has not named yet dies with its
+  helper; the device re-adds those, and anything possibly in flight at the drop is paused for the user, never sent
+  twice.
 - **Expect input refusals** right after an agent starts (`input`: nothing was typed); send once more shortly after.
 - **Send raw bytes** (binary tag 11) in `terminals.input`.
 - **Scrollback.** tmux replays pane history on every attach, so its scrollback is the client's
@@ -185,10 +195,19 @@ race (replay sees a second ownership ask).
 - **Hosts and trust.** Trust on first use per host and port; a changed key is a hard stop with only Remove and retry.
   An unreadable `known_hosts.json` fails closed (Retry or Reset), never read as empty. New keys are ED25519 behind
   `biometryCurrentSet`, or Secure Enclave P-256. A host's colour is `HostTint` of the machine identity at creation, so
-  it matches the Mac. A failed save stays in memory flagged unsaved, with a Retry notice in Spaces.
+  draws with the same hash. As the Mac's `HostRegistry` does, a new host takes the colour the fewest of the phone's
+  hosts show (the hash breaking ties) and keeps it (`HostRecord.color`); the two apps agree only where their host lists
+  do, and the phone has no colour picker. Two hosts reaching one machine and account (a LAN and a Tailscale address)
+  show its spaces and agents once, under the first in the list, as the Mac keys a host by machine and uid; the other
+  says "Same machine as …", and background refresh notifies once. A failed save stays in memory flagged unsaved, with a
+  Retry notice in Spaces.
 - **Spaces.** herdr workspaces and tmux sessions are spaces, windows and tabs are tabs. A split tmux window shows one
   pane; the phone never splits. The helper's native multiplexer never counts (its sessions die with the connection).
-  Close follows the Mac's policy: `close.request` `check`, terminate only verified idle work, otherwise detach.
+  Close follows the Mac's policy: Close Tab sends `close.request` `check` and terminates only verified idle work,
+  otherwise detaches; a space offers Detach and Terminate… and never ends by itself. An unrenamed tab is named as on
+  the Mac (automatic tab names): the agent's conversation title, then for a herdr tab numbered by position its pane's
+  name or folder; the Agents rows use the same title. New tab sends no folder, so the multiplexer opens it in its
+  focused pane's current directory.
   Paths shorten to `~` by `hello.account.home` and `login_home` (longest match wins), never by guessing
   `/Users/<name>`. In the tree the whole host row shows or hides its spaces; a connected host known to have none
   offers New space below it. A host shows one multiplexer's spaces at a time: its header (and host detail's Spaces
@@ -219,17 +238,29 @@ race (replay sees a second ownership ask).
 - **Chat.** `chat.open` only for a bound terminal; the conversation is accepted once `chat.history` names the same
   process. Answers go on the subscription that delivered the request. Losing link or binding pauses input and keeps
   transcript and drafts. Dots follow Mail: blue for needs you or unseen, amber for working; a conversation's first
-  sight is its baseline.
+  sight is its baseline. As on the Mac, needs you is an open approval or question (`chat.list` `waiting` for rows not
+  open) or the agent's own attention, and working is a running turn (subagents left running after it do not hold back
+  its result); seen markers stay per device. A command (`/…`, `!…`) goes at once when the agent is idle, even with
+  messages queued, and otherwise queues as a command: `/…` in the helper's queue with `command`, `!…` (which the
+  helper's queue refuses) on the device until it reaches the head of an idle queue. Queued messages belong to the
+  agent process they were typed for; Stop pauses the device's own until Resume, and Send now refuses paused or
+  uncertain ones. Claude's thinking shows inline and muted; agent messages render Markdown blocks (headings, lists,
+  quotes, code, tables) by the Mac's rules (`ChatMarkdownBlock`).
 - **Terminal.** Output is coalesced (up to 256 KiB per parse) because tmux sends one notification per line. An
   attach's tmux history replay is one notification; the presence holds a whole helper reply (64 MiB) unparsed, since
   overflow ends the attachment. Only a lost stream of the current attachment detaches the feed, never one that ended
   because the presence stopped. A reattach's first output repaints over the old screen so it never shows empty.
   Calls go out one at a time; scroll steps made meanwhile join into one (a swipe is a step per line, a round trip
   each). A presence Chat opened learns its scrollback owner when the Terminal segment opens it. The terminal stays
-  `dispatch-black` in light mode.
+  `dispatch-black` in light mode. Input, sizes and screens wait for `terminal.attached`, as the Mac's do. tmux keeps one size per
+  window: while another client holds it at another size (or the window is split), the screen is laid out at the
+  server's grid from the top left, as the Mac's, and the view keeps asking for its own. A program's copy (OSC 52,
+  kitty clipboard) is denied: the phone has no consent surface for it, unlike the Mac's "Remote programs can copy".
+  Hardware PageUp and PageDown page herdr's history; Shift pages the terminal's own. Automatic reconnects ask nothing:
+  a host that needs a keyboard-interactive answer fails them and Connect asks again.
 - **Code.** The diff viewer reads current files with `files.text`. There is no Revert: the helper has no operation to
   reverse a patch.
-- **Resilience.** `host-cache.json` (last hello, multiplexers, topology, Agents rows with ≤280-character previews) is
+- **Resilience.** `host-cache.json` (last hello, multiplexers, topology, Agents rows with ≤280-character previews and titles) is
   read synchronously at launch so the first frame lists every host. Live data reconciles in place (same row objects).
   Cached files decode leniently, per entry.
 - **Background refresh.** A `BGAppRefreshTask` (`<bundle id>.refresh`), off by default. It connects hosts with Chat
@@ -259,7 +290,7 @@ e -l objc -- (void)[[BGTaskScheduler sharedScheduler] _simulateLaunchForTaskWith
   tests of the release tooling, `test/ios-release.test.py`, no build). A fast run fails on an unclassified case.
   New tests go in `Mobile/Tests/<Area>…Tests.swift`; after adding files, run `python3 scripts/generate-project.py`
   and commit `project.pbxproj`.
-- **UI tests.** `xcodebuild -scheme DispatchMobileUITests -destination 'platform=iOS Simulator,name=iPhone 17'
+- **UI tests.** `xcodebuild -scheme DispatchMobileUITests -destination 'platform=iOS Simulator,name=iPhone Air'
   -derivedDataPath build test`, against the scripted hosts.
 - **Live fixture.** Makes this Mac a host: a loopback sshd with private HOME and sockets, a private tmux server, and
   Claude Code from `build/test-tools` against a local Messages API. The simulator cannot start processes, so `serve`

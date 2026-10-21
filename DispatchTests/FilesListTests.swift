@@ -197,7 +197,7 @@ final class FilesListTests: XCTestCase {
 
         // Numbers by value, case ignored, bytes decide the rest.
         let names = ["file10", "File2", "file1", "a", "A"]
-        let entries = names.map { FileEntry(name: $0, kind: .file, size: 0, modified: nil, targetKind: nil, mark: nil) }
+        let entries = names.map { FileEntry(name: $0, kind: .file, size: 0, modified: nil, targetKind: nil) }
         XCTAssertEqual(FilesRowBuilder.sorted(entries, by: .name, descending: false).map(\.name), ["A", "a", "file1", "File2", "file10"])
     }
 
@@ -656,15 +656,6 @@ final class FilesListTests: XCTestCase {
         ], loadedAt: now)
     }
 
-    func testFooterSaysWhyGitHasNothingToShow() {
-        // Inside a repository the header's branch and the Changes count say it; still resolving, nothing to guess.
-        XCTAssertNil(FilesFooter.gitSummary(.repository(GitRepository(root: root))))
-        XCTAssertNil(FilesFooter.gitSummary(.loading))
-        XCTAssertEqual(FilesFooter.gitSummary(.none), "not a repository")
-        // Where git cannot run the segments do not show: the footer is where the tab says why.
-        XCTAssertEqual(FilesFooter.gitSummary(.unavailable("git is not installed on homelab")), "git is not installed on homelab")
-    }
-
     func testSegmentsShowTheGitTabsInsideARepository() {
         let session = FilesSession(id: System.uuid())
         func ids() -> [FilesTab] { FilesHeader.segments(for: session).map(\.id) }
@@ -676,23 +667,65 @@ final class FilesListTests: XCTestCase {
         XCTAssertNil(files.count)
 
         session.git = .repository(GitRepository(root: root))
-        XCTAssertEqual(ids(), [.files, .changes, .commits])
+        XCTAssertEqual(ids(), [.files, .commits], "the changes are Commits' uncommitted row, not a segment")
         XCTAssertNil(FilesHeader.segments(for: session)[1].count, "no count until the status is in")
         session.status = mockupStatus()
         let segments = FilesHeader.segments(for: session)
-        XCTAssertEqual(segments.map(\.title), ["Files", "Changes", "Commits"])
-        XCTAssertEqual(segments.map(\.count), [nil, 4, nil], "Changes 4, as the mockup's pill")
-        XCTAssertEqual(segments.map(\.help), ["Files · ⌃⌘1", "Changes · ⌃⌘2", "Commits · ⌃⌘3"])
-        XCTAssertEqual(segments.map(\.accessibilityID), ["files-segment-files", "files-segment-changes", "files-segment-commits"])
+        // The second segment is the branch, counting the uncommitted files: Commits opens on its history.
+        XCTAssertEqual(segments.map(\.title), ["Files", "main"])
+        XCTAssertEqual(segments.map(\.count), [nil, 4], "4 uncommitted files, as the mockup's pill")
+        XCTAssertEqual(segments.map(\.help),
+                       ["Files · ⌃⌘1", "main · up to date with origin/main · 4 files uncommitted · Commits ⌃⌘3"])
+        XCTAssertEqual(segments[1].accessibilityLabel, "main · up to date with origin/main · 4 files uncommitted · Commits ⌃⌘3")
+        XCTAssertEqual(segments.map(\.accessibilityID), ["files-segment-files", "files-segment-commits"])
+        session.status?.ahead = 2
+        session.status?.behind = 1
+        XCTAssertEqual(FilesHeader.segments(for: session)[1].ahead, 2)
+        XCTAssertEqual(FilesHeader.segments(for: session)[1].behind, 1)
+        session.status = mockupStatus(branch: nil)
+        XCTAssertEqual(FilesHeader.segments(for: session)[1].title, "detached at 4f1c2e9")
         session.status?.changes = []
         XCTAssertNil(FilesHeader.segments(for: session)[1].count, "a clean tree has no pill")
+        XCTAssertEqual(FilesHeader.segments(for: session)[1].help, "detached at 4f1c2e9 · up to date with origin/main · Commits ⌃⌘3")
 
-        // Still resolving: Files alone on the Files tab; a git tab asked for keeps its segments while it waits.
+        // Still resolving: Files alone on the Files tab; Commits asked for keeps its segment while it waits.
         session.git = .loading
         XCTAssertEqual(ids(), [.files])
-        session.select(.commits)
-        XCTAssertEqual(ids(), [.files, .changes, .commits])
+        session.select(.changes)
+        XCTAssertEqual(ids(), [.files, .commits])
         XCTAssertNil(FilesHeader.segments(for: session)[1].count)
+        XCTAssertEqual(FilesHeader.segments(for: session)[1].title, "Commits", "no branch to name until it resolves")
+    }
+
+    /// A narrow list keeps the names readable: Size goes first, then Modified (the outline and the column header share
+    /// the rule).
+    func testNarrowListsGiveUpSizeThenModified() {
+        let typography = AppTypography()
+        XCTAssertTrue(FilesColumns.shown(width: 600, typography: typography) == (true, true))
+        XCTAssertTrue(FilesColumns.shown(width: 382, typography: typography) == (true, true))
+        XCTAssertTrue(FilesColumns.shown(width: 360, typography: typography) == (true, false))
+        XCTAssertTrue(FilesColumns.shown(width: 310, typography: typography) == (true, false))
+        XCTAssertTrue(FilesColumns.shown(width: 300, typography: typography) == (false, false))
+        XCTAssertTrue(FilesColumns.shown(width: 600, typography: AppTypography(contentSize: 25)) == (true, false),
+                      "larger text gives up a column sooner")
+    }
+
+    /// On one column the pane toggle (⌥⌘P) shows the detail in the list's place and back, and says so.
+    func testThePaneToggleOnOneColumnShowsTheDetailInTheListsPlace() {
+        let session = FilesSession(id: System.uuid())
+        session.tab = .commits
+        XCTAssertTrue(session.paneShown, "beside the list, a git tab's detail shows from the start")
+        session.splitNarrow = true
+        XCTAssertFalse(session.paneShown, "on one column the list shows")
+        session.togglePreview()
+        XCTAssertTrue(session.narrowDetail)
+        XCTAssertTrue(session.paneShown)
+        session.togglePreview()
+        XCTAssertFalse(session.narrowDetail)
+        XCTAssertFalse(session.previewHidden, "the wide pane's choice is left alone")
+        session.togglePreview()
+        session.tab = .files
+        XCTAssertFalse(session.narrowDetail, "another tab opens on its own list")
     }
 
     func testFormatting() {
@@ -711,8 +744,8 @@ final class FilesListTests: XCTestCase {
         XCTAssertEqual(FilesFormatting.size(24_000_000), "24 MB")
         XCTAssertEqual(FilesFormatting.size(1_500_000_000), "1.5 GB")
         XCTAssertEqual(FilesFormatting.size(UInt64.max), "18 EB")
-        let folder = FileEntry(name: "src", kind: .directory, size: 4_096, modified: nil, targetKind: nil, mark: nil)
-        let link = FileEntry(name: "lib", kind: .symlink, size: 12, modified: nil, targetKind: .directory, mark: nil)
+        let folder = FileEntry(name: "src", kind: .directory, size: 4_096, modified: nil, targetKind: nil)
+        let link = FileEntry(name: "lib", kind: .symlink, size: 12, modified: nil, targetKind: .directory)
         XCTAssertEqual(FilesFormatting.size(of: folder), "—")
         XCTAssertEqual(FilesFormatting.size(of: link), "—", "a link to a folder reads as a folder")
 

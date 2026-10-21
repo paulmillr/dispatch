@@ -195,9 +195,36 @@ impl Relay {
     }
 }
 
+/// The terminal stream a relay serves: an attached terminal's controller, or the observer that reads a terminal's
+/// screen on the host (observe.rs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Holder {
+    Controller(Id),
+    Observer(Id),
+}
+
 impl Herdr {
-    pub(super) fn relay_setup(&mut self, io: &mut dyn Io, id: Id, json: auth::Endpoint) {
-        let relay = self.controllers[&id].relay.as_ref().unwrap();
+    fn relay_mut(&mut self, holder: Holder) -> Option<&mut Relay> {
+        match holder {
+            Holder::Controller(id) => self.controllers.get_mut(&id)?.relay.as_mut(),
+            Holder::Observer(id) => self.observers.get_mut(&id)?.relay.as_mut(),
+        }
+    }
+    fn relay_pid(&self, holder: Holder) -> Option<u32> {
+        match holder {
+            Holder::Controller(id) => self.controllers.get(&id)?.pid,
+            Holder::Observer(id) => self.observers.get(&id)?.pid,
+        }
+    }
+    /// The relay failed: a controller reconnects, an observer ends.
+    fn relay_failed(&mut self, io: &mut dyn Io, holder: Holder, reason: Error) {
+        match holder {
+            Holder::Controller(id) => self.interrupt(io, id, reason),
+            Holder::Observer(id) => self.unobserve(io, id, Some(reason)),
+        }
+    }
+    pub(super) fn relay_setup(&mut self, io: &mut dyn Io, holder: Holder, json: auth::Endpoint) {
+        let relay = self.relay_mut(holder).unwrap();
         let fd = relay.server.fd;
         let path = relay.path.clone();
         let stem = json.path.file_stem().unwrap().to_string_lossy();
@@ -209,9 +236,7 @@ impl Herdr {
             scope,
             Box::new(move |mux, io, result| {
                 if !mux
-                    .controllers
-                    .get(&id)
-                    .and_then(|controller| controller.relay.as_ref())
+                    .relay_mut(holder)
                     .is_some_and(|relay| relay.server.fd == fd && relay.path == path)
                 {
                     return;
@@ -225,7 +250,7 @@ impl Herdr {
                 let binary = match result {
                     Ok(value) => value,
                     Err(reason) => {
-                        mux.interrupt(io, id, reason);
+                        mux.relay_failed(io, holder, reason);
                         return;
                     }
                 };
@@ -236,9 +261,7 @@ impl Herdr {
                     scope,
                     Box::new(move |mux, io, result| {
                         let Some(relay) = mux
-                            .controllers
-                            .get_mut(&id)
-                            .and_then(|controller| controller.relay.as_mut())
+                            .relay_mut(holder)
                             .filter(|relay| relay.server.fd == fd && relay.path == path)
                         else {
                             return;
@@ -248,7 +271,7 @@ impl Herdr {
                             relay.interest(io)
                         });
                         if let Err(reason) = result {
-                            mux.interrupt(io, id, reason);
+                            mux.relay_failed(io, holder, reason);
                         }
                     }),
                 );
@@ -262,40 +285,36 @@ impl Herdr {
         read: bool,
         write: bool,
     ) -> bool {
-        let Some(id) = self
+        let owns = |relay: &Option<Relay>| relay.as_ref().is_some_and(|relay| relay.owns(fd));
+        let Some(holder) = self
             .controllers
             .iter()
-            .find(|(_, controller)| {
-                controller
-                    .relay
-                    .as_ref()
-                    .is_some_and(|relay| relay.owns(fd))
+            .find(|(_, controller)| owns(&controller.relay))
+            .map(|(id, _)| Holder::Controller(*id))
+            .or_else(|| {
+                self.observers
+                    .iter()
+                    .find(|(_, observer)| owns(&observer.relay))
+                    .map(|(id, _)| Holder::Observer(*id))
             })
-            .map(|(id, _)| *id)
         else {
             return false;
         };
-        let relay = self
-            .controllers
-            .get_mut(&id)
-            .unwrap()
-            .relay
-            .as_mut()
-            .unwrap();
+        let relay = self.relay_mut(holder).unwrap();
         if relay.listener == Some(fd) {
             match io.accept(fd) {
                 Ok(candidate) => {
                     relay.candidate = Some(candidate);
                     let _ = io.interest(candidate, false, false);
                     let _ = relay.interest(io);
-                    self.relay_peer(io, id, candidate);
+                    self.relay_peer(io, holder, candidate);
                 }
                 Err(reason)
                     if matches!(
                         reason.kind(),
                         io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
                     ) => {}
-                Err(reason) => self.interrupt(io, id, error(reason.to_string())),
+                Err(reason) => self.relay_failed(io, holder, error(reason.to_string())),
             }
             return true;
         }
@@ -309,16 +328,11 @@ impl Herdr {
             relay.interest(io)
         })();
         if let Err(reason) = result {
-            self.interrupt(io, id, reason);
+            self.relay_failed(io, holder, reason);
             return true;
         }
-        let relay = self
-            .controllers
-            .get_mut(&id)
-            .unwrap()
-            .relay
-            .as_mut()
-            .unwrap();
+        let uid = self.config.uid;
+        let relay = self.relay_mut(holder).unwrap();
         if relay.server.queue.front().is_some()
             && !relay.verifying
             && let Some(owner) = relay.owner.clone()
@@ -326,7 +340,7 @@ impl Herdr {
             relay.verifying = true;
             let fd = relay.server.fd;
             let path = relay.path.clone();
-            let scope = auth::Scope::endpoint(&owner, self.config.uid);
+            let scope = auth::Scope::endpoint(&owner, uid);
             let _ = relay.interest(io);
             self.verify(
                 io,
@@ -334,9 +348,7 @@ impl Herdr {
                 scope,
                 Box::new(move |mux, io, result| {
                     let Some(relay) = mux
-                        .controllers
-                        .get_mut(&id)
-                        .and_then(|controller| controller.relay.as_mut())
+                        .relay_mut(holder)
                         .filter(|relay| relay.server.fd == fd && relay.path == path)
                     else {
                         return;
@@ -347,16 +359,16 @@ impl Herdr {
                         relay.interest(io)
                     });
                     if let Err(reason) = result {
-                        mux.interrupt(io, id, reason);
+                        mux.relay_failed(io, holder, reason);
                     }
                 }),
             );
         }
         true
     }
-    fn relay_peer(&mut self, io: &mut dyn Io, id: Id, fd: RawFd) {
-        let pid = self.controllers[&id].pid.unwrap();
-        let path = self.controllers[&id].relay.as_ref().unwrap().path.clone();
+    fn relay_peer(&mut self, io: &mut dyn Io, holder: Holder, fd: RawFd) {
+        let pid = self.relay_pid(holder).unwrap();
+        let path = self.relay_mut(holder).unwrap().path.clone();
         let uid = self.config.uid;
         let executable = self.owner.as_ref().unwrap().server.executable.clone();
         let input = body::encode_plain(&D::Object(vec![("fd", D::Signed(fd.into()))])).unwrap();
@@ -373,7 +385,7 @@ impl Herdr {
                         && value.get("pid").and_then(D::unsigned) == Some(pid.into())
                 });
                 if !permitted {
-                    mux.relay_client(io, id, fd, &path, false);
+                    mux.relay_client(io, holder, fd, &path, false);
                     return;
                 }
                 let input =
@@ -390,7 +402,7 @@ impl Herdr {
                             .is_ok_and(|process| {
                                 process.pid == pid && process.executable == executable
                             });
-                        mux.relay_client(io, id, fd, &path, permitted);
+                        mux.relay_client(io, holder, fd, &path, permitted);
                     }),
                 );
             }),
@@ -399,15 +411,13 @@ impl Herdr {
     fn relay_client(
         &mut self,
         io: &mut dyn Io,
-        id: Id,
+        holder: Holder,
         fd: RawFd,
         path: &std::path::Path,
         permitted: bool,
     ) {
         let Some(relay) = self
-            .controllers
-            .get_mut(&id)
-            .and_then(|controller| controller.relay.as_mut())
+            .relay_mut(holder)
             .filter(|relay| relay.candidate == Some(fd) && relay.path == path)
         else {
             // The retired relay already closed its candidate; this fd may be reused.
@@ -423,12 +433,12 @@ impl Herdr {
             io.close(fd);
             relay.rejected += 1;
             if relay.rejected >= 16 {
-                self.interrupt(io, id, error("Herdr controller peer was rejected."));
+                self.relay_failed(io, holder, error("Herdr controller peer was rejected."));
                 return;
             }
         }
         if let Err(reason) = relay.interest(io) {
-            self.interrupt(io, id, reason);
+            self.relay_failed(io, holder, reason);
         }
     }
 }

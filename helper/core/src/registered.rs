@@ -173,6 +173,9 @@ impl<T: Multiplexer> Multiplexer for Registered<T> {
     fn running(&self, status: Option<i32>, stdout: &[u8]) -> bool {
         self.part.running(status, stdout)
     }
+    fn host_screens(&mut self, enabled: bool) {
+        self.part.host_screens(enabled);
+    }
     calls! {
         fn control(terminal: Id) -> Process;
         fn claim(process: &Process, write: ControlWrite) -> Option<ControlTarget>;

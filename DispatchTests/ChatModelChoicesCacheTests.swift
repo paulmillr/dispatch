@@ -17,6 +17,34 @@ final class ChatModelChoicesCacheTests: XCTestCase {
         now += 86_400
         XCTAssertNil(cache.menuName(for: "provider/model-a"))
     }
+    func testClaudeModelIDsFindTheirCachedRowWithoutAnAlias() {
+        // Claude 2.1.302 rows name the model; older ones name an alias the detail describes. A model set in Terminal
+        // (or read from a fresh session's banner) arrives as its ID and must not send the picker back to the menu.
+        let rows: [[AgentModelMenu.Choice]] = [
+            [.init(number: 1, name: "Default", detail: "Opus 5.5 · Best for everyday, complex tasks", current: false, isDefault: true),
+             .init(number: 2, name: "Opus 5.5", detail: "For complex work and everyday tasks", current: true, isDefault: false),
+             .init(number: 3, name: "Sonnet 5.5", detail: "Most efficient for simpler tasks", current: false, isDefault: false)],
+            [.init(number: 1, name: "Default", detail: "Use the default model (currently Opus 5.5)", current: false, isDefault: true),
+             .init(number: 2, name: "Opus", detail: "Opus 5.5 · Most capable", current: true, isDefault: false),
+             .init(number: 3, name: "Sonnet", detail: "Sonnet 5.5 · Most efficient", current: false, isDefault: false)]
+        ]
+        for models in rows {
+            for (model, row) in [("claude-sonnet-5-5", models[2].name), ("claude-opus-5-5", models[1].name)] {
+                let cache = ChatModelChoicesCache()
+                cache.store(models: models, quickModels: [])
+                let picker = ChatModelPicker(agentID: "claude", model: model, effort: nil, column: .model, cache: cache,
+                    screen: { "ordinary terminal" }, send: { _ in XCTFail("Cached browsing must not send input") },
+                    confirmed: { _, _ in XCTFail("Browsing must not change selection") }, finished: { _ in })
+                picker.start()
+                XCTAssertFalse(picker.loading)
+                XCTAssertEqual(picker.selectedModel, row)
+                XCTAssertEqual(picker.models.filter(\.current).map(\.name), [row])
+                XCTAssertEqual(cache.menuName(for: model), row)
+                picker.close()
+            }
+        }
+    }
+
     func testTTLIsOneDayWithoutSlidingAndClockReversalExpires() {
         let origin = Date(timeIntervalSince1970: 1_000_000)
         var now = origin
@@ -69,6 +97,35 @@ final class ChatModelChoicesCacheTests: XCTestCase {
         session.resetConversation()
         XCTAssertFalse(session.modelChoices === cache)
         XCTAssertNil(session.modelChoices.catalog)
+    }
+
+    func testChatsOfOneAgentVersionOnOneHostShareChoices() {
+        let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
+        defer { chat.stop() }
+        var pid: pid_t = 100
+        func session(_ agent: String = "claude", host: String? = nil, version: String? = "2.1.302", model: String? = "claude-opus-5-5") -> ChatSession {
+            let session = ChatSession(id: System.uuid())
+            session.agentID = agent; session.host = host; session.version = version
+            if let model { session.model = model }
+            session.sessionID = System.uuid().uuidString
+            pid += 1
+            session.process = AgentProcess(executable: "/bin/claude", pid: pid, startedSeconds: 1, startedMicroseconds: 0)
+            return session
+        }
+        let first = chat.modelChoices(for: session())
+        first.store(models: MenuFixture().models, quickModels: [])
+        // Another chat (another conversation and process) of the same agent version on this Mac reuses the list.
+        XCTAssertTrue(chat.modelChoices(for: session(model: "claude-sonnet-5-5")) === first)
+        XCTAssertNotNil(chat.modelChoices(for: session()).catalog)
+        for other in [session(host: "build-box"), session(version: "2.1.303"), session("codex")] {
+            XCTAssertFalse(chat.modelChoices(for: other) === first)
+            XCTAssertNil(chat.modelChoices(for: other).catalog)
+        }
+        // Until the agent reports its version and model the chat keeps its own list (no title stand-in aliases).
+        for own in [session(version: nil), session(model: nil)] {
+            XCTAssertTrue(chat.modelChoices(for: own) === own.modelChoices)
+            XCTAssertNil(own.modelChoices.catalog)
+        }
     }
 
     func testCachedModelAndEffortBrowsingSendsNoInputAndUpdatesCheckmarks() {

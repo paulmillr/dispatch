@@ -75,6 +75,24 @@ final class ChatRowCacheTests: XCTestCase {
         XCTAssertEqual(groupPresentations(session), before)
     }
 
+    func testDecidedCardsNoCallClaimsStayWithTheTurnTheyArrivedIn() {
+        let session = ChatSession(id: System.uuid())
+        session.turns = [turn("one")]
+        // A native permission panel names no turn or call: pending, it stays last; decided or expired, it stays
+        // after the turn that was last when it arrived instead of above the composer after every later turn.
+        let panel = PendingApproval(key: "prompt:1", operation: "Allow edit?", anchorTurnID: "one") { _ in }
+        let unanchored = PendingApproval(key: "prompt:2", operation: "Allow run?") { _ in }
+        session.approvals = [panel, unanchored]
+        session.turns.append(turn("two"))
+        let rows = { session.transcriptRows.map { $0.approval.map(\.key) ?? $0.turnID ?? $0.id } }
+        XCTAssertEqual(rows().suffix(3), ["two", "prompt:1", "prompt:2"], rows().description)
+        panel.resolve(.allow); unanchored.retire()
+        session.turns.append(turn("three"))
+        let placed = rows()
+        XCTAssertEqual(placed.firstIndex(of: "prompt:1").map { placed[$0 - 1] }, "one", placed.description)
+        XCTAssertEqual(placed.last, "prompt:2", "A card with no anchor keeps its old place")
+    }
+
     func testGeometryPruningRetainsRevisionsSharedBySurvivingTurns() {
         let session = ChatSession(id: System.uuid()), shared = tool("shared"), typography = ChatTypography()
         session.turns = [ChatTurn(id: "one", items: [shared]), ChatTurn(id: "two", items: [shared])]

@@ -13,7 +13,7 @@ extension HostLink {
         case .authenticating: self = .authenticating
         case .bootstrapping: self = .bootstrapping
         case .connected: self = .connected
-        case .reconnecting(let attempt, let since): self = .reconnecting(attempt: attempt, since: since)
+        case .reconnecting(let attempt, let since, let reason): self = .reconnecting(attempt: attempt, since: since, reason: reason)
         case .failed(let reason): self = .failed(reason)
         }
     }

@@ -9,6 +9,12 @@ struct ChatPermissionCard: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var arrived = false
     @State private var details = false
+    private var allowButton: some View {
+        Button("Allow once") { approval.resolve(.allow) }.buttonStyle(ApprovalButtonStyle(primary: true))
+    }
+    private var denyButton: some View { Button("Deny") { approval.resolve(.deny) }.buttonStyle(ApprovalButtonStyle()) }
+    private var terminalButton: some View { Button("Open in terminal", action: openTerminal).buttonStyle(ApprovalButtonStyle()) }
+
     var body: some View {
         // The transport may resolve before a coordinator tick updates decision.
         // The one-second timeline also retires an expired card without user input.
@@ -29,18 +35,32 @@ struct ChatPermissionCard: View {
                             Text("Permission required").font(theme.typography.detail).foregroundStyle(theme.muted)
                         }
                     } else {
-                    HStack {
+                    // A narrow card drops the aside rather than wrapping the question beside it.
+                    ViewThatFits(in: .horizontal) {
+                        HStack {
+                            Label("Allow operation?", systemImage: "diamond.fill").foregroundStyle(theme.accent).fixedSize()
+                            Spacer()
+                            Text("Permission required").font(theme.typography.detail).foregroundStyle(theme.muted).fixedSize()
+                        }
                         Label("Allow operation?", systemImage: "diamond.fill").foregroundStyle(theme.accent)
-                        Spacer()
-                        Text("Permission required").font(theme.typography.detail).foregroundStyle(theme.muted)
                     }
                     }
                     operation
-                    HStack(spacing: 8) {
-                        Button("Allow once") { approval.resolve(.allow) }.buttonStyle(ApprovalButtonStyle(primary: true))
-                        Button("Deny") { approval.resolve(.deny) }.buttonStyle(ApprovalButtonStyle())
-                        Button("Open in terminal", action: openTerminal).buttonStyle(ApprovalButtonStyle())
-                        Spacer(minLength: 0)
+                    // One row while the buttons fit unwrapped, else Open in terminal on a row of its own.
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 8) {
+                            allowButton.fixedSize()
+                            denyButton.fixedSize()
+                            terminalButton.fixedSize()
+                            Spacer(minLength: 0)
+                        }
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(spacing: 8) {
+                                allowButton.fixedSize()
+                                denyButton.fixedSize()
+                            }
+                            terminalButton.fixedSize()
+                        }
                     }
                     }
                 } else {

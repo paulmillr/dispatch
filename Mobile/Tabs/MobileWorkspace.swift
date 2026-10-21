@@ -20,6 +20,9 @@ struct TabsHost: Identifiable, Equatable {
     var live = true
     /// "tmux" or "herdr": where the spaces come from (`HostSession.spacesMultiplexer`); nil while unknown.
     var multiplexer: String? = nil
+    /// The host earlier in the list that reaches the same machine and account (`MobileComposition.sameMachine`): that one
+    /// shows the spaces, this one names it.
+    var sameMachine: String? = nil
 
     /// The rows show last-known data: the host is not connected, or its spaces are not this connection's yet.
     var stale: Bool { state != .connected || !live }
@@ -71,6 +74,8 @@ final class MobileTab: Identifiable {
     private(set) var name: String
     /// Whether the user named the window; otherwise tmux names it after its program.
     private(set) var renamed: Bool
+    /// herdr numbers an unnamed tab by its position ("1", "2"): its pane names it instead (ContainerTab.numbered).
+    private(set) var numbered = false
     private(set) var panes: [MobilePane]
     /// The terminal the server focuses in this window.
     private(set) var focused: UInt64?
@@ -121,13 +126,33 @@ final class MobileTab: Identifiable {
         return ["sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "csh", "nu", "elvish", "xonsh", "pwsh"].contains(base)
     }
 
+    /// The name it shows, by the Mac's automatic names (ContainerTab.displayLabel): a renamed tab keeps its name; else
+    /// the agent's conversation title; else for a numbered herdr tab its pane's label (TerminalTab.displayLabel): the
+    /// terminal's own title (`paneTitle`, OSC 0/2, when the phone has it attached, else the pane's name), or its folder
+    /// when that title names the folder (a shell at its prompt) or there is none. A tmux window keeps the name tmux gives
+    /// it (its program), as on the Mac.
+    func label(conversation: String?, homes: HomePath, paneTitle: String? = nil) -> String {
+        guard !renamed else { return name }
+        if let title = TerminalTab.conversationLabel(conversation) { return title }
+        guard numbered, let pane = activePane else { return name }
+        let folder: String? = pane.cwd.map { cwd in
+            let path = homes.abbreviate(cwd)
+            return path == "/" || path == "~" ? path : (path as NSString).lastPathComponent
+        }
+        let title = (paneTitle ?? pane.name).trimmingCharacters(in: .whitespaces)
+        if !title.isEmpty, title != name, !TerminalTab.titleNamesDirectory(title, pane.cwd ?? "") { return title }
+        return folder ?? (title.isEmpty ? name : title)
+    }
+
     func pick(_ pane: MobilePane) { if picked != pane.key { picked = pane.key } }
 
-    fileprivate func update(node: UInt64, space: SpaceRef, name: String, renamed: Bool, panes: [MobilePane], focused: UInt64?, activity: Date?) {
+    fileprivate func update(node: UInt64, space: SpaceRef, name: String, renamed: Bool, numbered: Bool, panes: [MobilePane],
+                            focused: UInt64?, activity: Date?) {
         if self.node != node { self.node = node }
         if self.space != space { self.space = space }
         if self.name != name { self.name = name }
         if self.renamed != renamed { self.renamed = renamed }
+        if self.numbered != numbered { self.numbered = numbered }
         if self.panes != panes { self.panes = panes }
         if self.focused != focused { self.focused = focused }
         if self.activity != activity { self.activity = activity }
@@ -409,12 +434,16 @@ final class MobileWorkspace: Identifiable {
                 let ref = TabRef(host: host.id, key: window.key)
                 liveTabs.insert(window.key)
                 let renamed = window.kind == .terminal ? true : window.renamed == true
+                let numbered = host.multiplexer == "herdr" && !renamed
                 if let tab = tabObjects[window.key] {
-                    tab.update(node: window.id, space: space, name: window.name, renamed: renamed, panes: panes, focused: focused, activity: latest)
+                    tab.update(node: window.id, space: space, name: window.name, renamed: renamed, numbered: numbered, panes: panes,
+                               focused: focused, activity: latest)
                     return tab
                 }
                 let tab = MobileTab(ref: ref, node: window.id, space: space, name: window.name, renamed: renamed, panes: panes,
                                     focused: focused, activity: latest)
+                tab.update(node: window.id, space: space, name: window.name, renamed: renamed, numbered: numbered, panes: panes,
+                           focused: focused, activity: latest)
                 tabObjects[window.key] = tab
                 return tab
             }

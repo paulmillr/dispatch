@@ -409,19 +409,20 @@ struct TabsTabRow: View {
 
     var body: some View {
         let tab = entry.tab
-        MobileRow(dot: entry.urgency?.rowDot, tint: entry.host.tint, name: tab.name,
+        MobileRow(dot: entry.urgency?.rowDot, tint: entry.host.tint, name: entry.label,
                   detail: detail ? [entry.space?.name, entry.host.name].compactMap { $0 }.joined(separator: " · ") : nil,
-                  time: TabsTime.label(entry.activity, now: now), subtitle: Self.line(tab, host: entry.host, status: model.status),
+                  time: TabsTime.label(entry.activity, now: now), subtitle: Self.line(tab, label: entry.label, host: entry.host, status: model.status),
                   separator: !last, disc: detail, stale: entry.host.stale) {
             HostGlyph(host: entry.host.glyphRecord, size: MobileRow<HostGlyph>.glyphSize)
         }
     }
 
     /// The line: what a chat tab's agent is doing (from Chat), else the program and where it runs.
-    static func line(_ tab: MobileTab, host: TabsHost, status: @MainActor (UUID, UInt64) -> String?) -> String? {
+    static func line(_ tab: MobileTab, label: String, host: TabsHost, status: @MainActor (UUID, UInt64) -> String?) -> String? {
         if let pane = tab.agentPane, let text = status(tab.ref.host, pane.id) { return text }
         let cwd = host.abbreviate(tab.cwd)
-        if let program = tab.program, program != tab.name, !tab.atShell {
+        // The program, when the row's name is not already it (a conversation title, a numbered tab's pane).
+        if let program = tab.program, program != label, !tab.atShell {
             return [program, cwd].compactMap { $0 }.joined(separator: " · ")
         }
         return cwd
@@ -454,6 +455,10 @@ private struct SpacesTree: View {
                         .onMove { source, destination in
                             model.moveSpaces(of: section.host.id, visible: section.spaces.map(\.id.key), from: source, to: destination)
                         }
+                    }
+                    if let other = section.host.sameMachine, !section.collapsed, !editing {
+                        Text("Same machine as \(other): its spaces show there.")
+                            .font(.subheadline).foregroundStyle(.secondary)
                     }
                     if section.offersNewSpace(editing: editing, filter: model.query.filter) {
                         SpacesNewSpaceLine(host: section.host,

@@ -57,12 +57,13 @@ struct TabScreen<Terminal: View, Chat: View>: View {
         .tabsPushedScreen()
         .toolbar {
             if let tab, let workspace {
-                TabScreenHeader(tab: tab, host: workspace.host, space: workspace.space(of: tab), needsYou: model.needsYou(excluding: ref),
+                TabScreenHeader(tab: tab, title: model.label(of: tab, host: workspace.host), host: workspace.host,
+                                space: workspace.space(of: tab), needsYou: model.needsYou(excluding: ref), backTitle: backTitle,
                                 segment: current(tab), terminalSubtitle: tab.activePane.flatMap { terminalSubtitle(tab, $0) },
                                 back: back, details: { path.append(.details(tab.space)) })
             } else {
                 ToolbarItem(placement: .topBarLeading) {
-                    TabsBackPill(label: "\(model.needsYou())", count: true, action: back)
+                    TabsBackPill.needsYou(model.needsYou(), back: backTitle, action: back)
                 }
                 .sharedBackgroundVisibility(.hidden)
             }
@@ -86,14 +87,28 @@ struct TabScreen<Terminal: View, Chat: View>: View {
     }
 
     private func back() { if !path.isEmpty { path.removeLast() } }
+
+    /// The screen Back returns to: the space, a host, or Spaces itself.
+    private var backTitle: String {
+        switch path.dropLast().last {
+        case .space(let space)?, .details(let space)?: model.space(space)?.name ?? "Back"
+        case .host(let id)?: model.workspace(id)?.host.name ?? "Back"
+        case .tab(let tab)?: model.tab(tab).flatMap { tab in model.workspace(tab.ref.host).map { model.label(of: tab, host: $0.host) } } ?? "Back"
+        case nil: "Spaces"
+        }
+    }
 }
 
 /// The top of a tab (M4a): back pill "‹ 1", title, subtitle or pane switcher, host disc.
 struct TabScreenHeader: ToolbarContent {
     let tab: MobileTab
+    /// The tab's shown name (`MobileTabs.label(of:)`).
+    var title: String? = nil
     let host: TabsHost
     let space: MobileSpace?
     let needsYou: Int
+    /// What Back returns to, shown when nothing needs the user elsewhere.
+    var backTitle = "Back"
     let segment: TabSegment
     /// Terminal's "~/src/app · zsh" from the terminal itself, when it knows.
     var terminalSubtitle: String? = nil
@@ -101,8 +116,8 @@ struct TabScreenHeader: ToolbarContent {
     let details: () -> Void
 
     var body: some ToolbarContent {
-        TabsScreenHeader(title: tab.name) {
-            TabsBackPill(label: "\(needsYou)", count: true, action: back)
+        TabsScreenHeader(title: title ?? tab.name) {
+            TabsBackPill.needsYou(needsYou, back: backTitle, action: back)
         } subtitle: {
             if tab.panes.count > 1 {
                 Menu {

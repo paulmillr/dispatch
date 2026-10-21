@@ -77,6 +77,7 @@ final class TerminalHostView: UIView {
         layer.addSublayer(session.layer)
         updateBackground()
         presence.onViewEvent = { [weak self] event in self?.handle(event) }
+        presence.relayout = { [weak self] in self?.setNeedsLayout() }
         installGestures()
         accessibilityLabel = "Terminal"
         accessibilityTraits = .allowsDirectInteraction
@@ -96,12 +97,29 @@ final class TerminalHostView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        guard bounds.width > 0, bounds.height > 0 else {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            session.layer.frame = bounds
+            CATransaction.commit()
+            return
+        }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        session.layer.frame = bounds
-        CATransaction.commit()
-        guard bounds.width > 0, bounds.height > 0 else { return }
-        session.setSize(width: bounds.width, height: bounds.height)
+        if let grid = presence.shownGrid {
+            // The server's grid (another client holds the tmux window at its size): drawn at the same font size from
+            // the top left, clipped or with room to spare, while the view's own grid is still asked for.
+            let pixels = session.pixels(columns: grid.columns, rows: grid.rows)
+            session.layer.frame = CGRect(x: 0, y: 0, width: Double(pixels.width) / session.scale,
+                                         height: Double(pixels.height) / session.scale)
+            CATransaction.commit()
+            session.setGrid(columns: grid.columns, rows: grid.rows, drawn: true)
+            presence.offer(session.fitting(width: bounds.width, height: bounds.height))
+        } else {
+            session.layer.frame = bounds
+            CATransaction.commit()
+            session.setSize(width: bounds.width, height: bounds.height)
+        }
         updateSelectionHandles()
         if let sized = onSized {
             onSized = nil

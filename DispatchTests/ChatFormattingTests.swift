@@ -21,6 +21,16 @@ final class ChatFormattingTests: XCTestCase {
         opened.append((chat, root))
         return try await chat.archived(lines, agent: "codex", session: try XCTUnwrap(meta?["id"] as? String), in: root)
     }
+    /// A user bubble keeps to 60 percent of a wide pane and 80 characters; a narrow pane leaves it 40 characters, up to
+    /// 85 percent.
+    func testUserBubblesWidenInNarrowPanes() {
+        let character: CGFloat = 7.5
+        XCTAssertEqual(ChatUserMessage.maxWidth(1_100, characterWidth: character), 600, "80 characters on a wide pane")
+        XCTAssertEqual(ChatUserMessage.maxWidth(800, characterWidth: character), 480, "60 percent")
+        XCTAssertEqual(ChatUserMessage.maxWidth(400, characterWidth: character), 300, "40 characters")
+        XCTAssertEqual(ChatUserMessage.maxWidth(280, characterWidth: character), 238, "85 percent of a very narrow pane")
+    }
+
     func testSearchHighlightsRenderedTextWithoutLosingFormatting() throws {
         let original = ChatMarkdown.safeInlineMarkdown("🙂 [Alpha](https://example.com) **alpha**\n`ALPHA`")
         let theme = ChatTheme.standard
@@ -211,7 +221,7 @@ final class ChatFormattingTests: XCTestCase {
         XCTAssertEqual(items.map { ToolPresentation($0).title }, ["Open page", "Search web"])
         XCTAssertEqual(items.map { ToolPresentation($0).summary }, ["https://example.com/docs", "Swift concurrency"])
         XCTAssertEqual(items.map { ToolPresentation($0).output }, ["Page content", "Search results"])
-        XCTAssertEqual(ChatToolGroupHeader.summarize(items), "Browse web ×2")
+        XCTAssertEqual(group.steps.map(\.kind), [.web, .web])
     }
 
     func testDiffRetainsSyntaxColorsAndSeparatesOldAndNewLexicalState() throws {

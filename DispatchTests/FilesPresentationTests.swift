@@ -78,6 +78,16 @@ final class FilesPresentationTests: XCTestCase {
     }
 
     /// The outline once SwiftUI has made the representable's views (the first layout, after the window shows).
+    private func frame(_ identifier: String, in window: NSWindow, file: StaticString = #filePath,
+                       line: UInt = #line) async throws -> NSRect {
+        var found: NSRect?
+        try await TestSupport.eventually(file: file, line: line, diagnostic: "No \(identifier) on screen") {
+            found = PresentationTestSupport.accessibilityFrames(identifier, in: window).first
+            return found != nil
+        }
+        return try XCTUnwrap(found, file: file, line: line)
+    }
+
     private func outlineView(in window: NSWindow) async throws -> FilesOutlineView {
         let root = try XCTUnwrap(window.contentView)
         try await TestSupport.eventually(diagnostic: "No FilesOutlineView under the hosting view") {
@@ -117,7 +127,7 @@ final class FilesPresentationTests: XCTestCase {
     }
 
     /// With Liquid Glass the bar is the app's other glass chrome: the tabs on a glass track with the shown one's pill,
-    /// the branch on a glass chip, the tab's control, search and pane toggle on one glass pill; the same places as flat.
+    /// the search and pane toggle on one glass pill; the same places as flat.
     func testHeaderIsGlassOnEveryTab() async throws {
         try XCTSkipUnless(LiquidGlassStore.supported, "Liquid Glass needs macOS 26")
         let original = LiquidGlassStore.shared.enabled
@@ -131,11 +141,11 @@ final class FilesPresentationTests: XCTestCase {
             session.tab = tab
             try await TestSupport.eventually(diagnostic: "the glass header did not settle on \(tab)") {
                 let commits = PresentationTestSupport.accessibilityFrames("files-segment-commits", in: window).first
-                let chip = PresentationTestSupport.accessibilityFrames("files-branch", in: window).first
+                let crumbs = PresentationTestSupport.accessibilityFrames("files-crumbs", in: window).first
                 let search = PresentationTestSupport.accessibilityFrames("files-search", in: window).first
                 let pane = PresentationTestSupport.accessibilityFrames("files-preview-toggle", in: window).first
-                guard let commits, let chip, let search, let pane else { return false }
-                return commits.maxX < chip.minX && search.maxX <= pane.minX && pane.maxX <= 1_180 - 12 + 0.5
+                guard let commits, let crumbs, let search, let pane else { return false }
+                return commits.maxX < crumbs.minX && search.maxX <= pane.minX && pane.maxX <= 1_180 - 12 + 0.5
             }
             _ = try await PresentationTestSupport.capture(window, named: "files-header-glass-\(tab)", in: "files-audit")
         }
@@ -199,57 +209,96 @@ final class FilesPresentationTests: XCTestCase {
         let (session, _) = try await mockupSession()
         repository(session)
         let window = window(session)
-        try await read(["Files", "Changes", "Commits", "src"], in: window, named: "files-header-repository")
-        try await says("Changes 4", "files-segment-changes", in: window)
-        try await says("Commits", "files-segment-commits", in: window)
-        // The branch sits after the path; the footer leaves git to it.
-        try await read(["api", "main"], in: window, named: "files-header-branch")
-        try await says("main · up to date with origin/main · Commits ⌃⌘3", "files-branch", in: window)
-        XCTAssertTrue(PresentationTestSupport.accessibilityFrames("files-footer-git", in: window).isEmpty)
+        // The second segment is the branch, which opens Commits, with the uncommitted files' count; the Files tab's own
+        // line shows nothing of git.
+        try await read(["Files", "main", "src"], in: window, named: "files-header-repository")
+        try await says("main · up to date with origin/main · 4 files uncommitted · Commits ⌃⌘3", "files-segment-commits",
+                       in: window)
+        XCTAssertTrue(PresentationTestSupport.accessibilityFrames("files-branch", in: window).isEmpty)
         try await says("10 items · 1 selected", "files-footer-summary", in: window)
         // The segments sit left of the crumbs, in the mockup's order.
         let files = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-segment-files", in: window).first)
-        let changes = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-segment-changes", in: window).first)
         let commits = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-segment-commits", in: window).first)
         let crumbs = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-crumbs", in: window).first)
-        XCTAssertLessThan(files.maxX, changes.minX); XCTAssertLessThan(changes.maxX, commits.minX)
+        XCTAssertTrue(PresentationTestSupport.accessibilityFrames("files-segment-changes", in: window).isEmpty,
+                      "the changes are Commits' uncommitted row")
+        XCTAssertLessThan(files.maxX, commits.minX)
         XCTAssertLessThan(commits.maxX, crumbs.minX)
-        let branch = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-branch", in: window).first)
-        XCTAssertLessThan(crumbs.maxX, branch.minX)
+        // The link follows the folder it belongs to: right after the crumbs, apart from the trailing controls.
+        let follow = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-follow-shell", in: window).first)
+        let search = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-search", in: window).first)
+        XCTAssertLessThan(crumbs.maxX, follow.minX)
+        XCTAssertLessThan(follow.maxX, crumbs.maxX + 40, "the link sits beside the path")
+        XCTAssertLessThan(follow.maxX, search.minX - 40, "the link is not among the trailing controls")
         // The same place on every tab: the controls keep their order at the trailing end.
         for tab in [FilesTab.files, .changes, .commits] {
             session.tab = tab
             try await TestSupport.eventually(diagnostic: "the header did not settle on \(tab)") {
                 let search = PresentationTestSupport.accessibilityFrames("files-search", in: window).first
                 let pane = PresentationTestSupport.accessibilityFrames("files-preview-toggle", in: window).first
-                let chip = PresentationTestSupport.accessibilityFrames("files-branch", in: window).first
-                guard let search, let pane, let chip else { return false }
-                return search.maxX <= pane.minX && pane.maxX <= 1_180 - 12 + 0.5 && chip.minX > commits.maxX
+                guard let search, let pane else { return false }
+                return search.maxX <= pane.minX && pane.maxX <= 1_180 - 12 + 0.5
             }
         }
         session.tab = .files
 
         session.status?.branch = nil
-        try await says("detached at 4f1c2e9 · up to date with origin/main · Commits ⌃⌘3", "files-branch", in: window)
+        try await says("detached at 4f1c2e9 · up to date with origin/main · 4 files uncommitted · Commits ⌃⌘3",
+                       "files-segment-commits", in: window)
 
-        // git missing on the host: no git segments, and the footer says why.
+        // git missing on the host: no git segments, and the Files tab says nothing of it.
         session.git = .unavailable("git is not installed on homelab")
-        try await read(["git is not installed on homelab"], in: window, named: "files-footer-unavailable")
-        try await says("git is not installed on homelab", "files-footer-git", in: window)
-        XCTAssertTrue(PresentationTestSupport.accessibilityFrames("files-segment-changes", in: window).isEmpty)
+        try await TestSupport.eventually(diagnostic: "the git segments still show") {
+            PresentationTestSupport.accessibilityFrames("files-segment-commits", in: window).isEmpty
+        }
+        XCTAssertTrue(PresentationTestSupport.accessibilityFrames("files-footer-git", in: window).isEmpty)
         session.git = .repository(GitRepository(root: root))
 
-        // Outside a repository (the shell cd'd out of it): Files alone, and the footer says so.
+        // Outside a repository (the shell cd'd out of it): Files alone.
         session.git = .none
-        try await read(["not a repository"], in: window, named: "files-footer-none")
-        try await says("not a repository", "files-footer-git", in: window)
         try await TestSupport.eventually(diagnostic: "the git segments still show") {
-            PresentationTestSupport.accessibilityFrames("files-segment-changes", in: window).isEmpty
-                && PresentationTestSupport.accessibilityFrames("files-segment-commits", in: window).isEmpty
+            PresentationTestSupport.accessibilityFrames("files-segment-commits", in: window).isEmpty
         }
         XCTAssertFalse(PresentationTestSupport.accessibilityFrames("files-segment-files", in: window).isEmpty)
-        let snapshot = try await read(["Files", "not a repository"], in: window, named: "files-header-none")
-        XCTAssertFalse(try snapshot.reads(["Commits"]), "no Commits segment outside a repository")
+        let snapshot = try await read(["Files", "items"], in: window, named: "files-header-none")
+        XCTAssertFalse(try snapshot.reads(["main"]), "no git segment outside a repository")
+        XCTAssertFalse(try snapshot.reads(["not a repository"]), "the Files tab says nothing of git")
+    }
+
+    /// Under 600 pt the preview has no column: opening a file (⏎, a double click) shows it in the list's place under a
+    /// bar back to the list, as the pane toggle does; the narrow list gives up Size, then Modified.
+    func testANarrowViewShowsTheOpenedFileInTheListsPlace() async throws {
+        let (session, _) = try await mockupSession()
+        session.previewRequested = false
+        let window = window(session, width: 360)
+        let outline = try await outlineView(in: window)
+        try await TestSupport.eventually { session.splitNarrow }
+        func columns() -> [String] { outline.tableColumns.filter { !$0.isHidden }.map(\.title) }
+        try await TestSupport.eventually(diagnostic: "columns \(columns())") { columns() == ["Name", "Modified"] }
+        window.setContentSize(NSSize(width: 300, height: 740))
+        try await TestSupport.eventually(diagnostic: "columns \(columns())") { columns() == ["Name"] }
+        window.setContentSize(NSSize(width: 360, height: 740))
+
+        let path = root + "/src/routes/billing.ts"
+        let entry = try XCTUnwrap(session.listings[root + "/src/routes"]?.entries.first { $0.name == "billing.ts" })
+        session.open(FilesRow(id: path, parent: root + "/src/routes", depth: 2, kind: .entry, entry: entry, title: entry.name,
+                              modified: "", size: ""))
+        XCTAssertTrue(session.narrowDetail)
+        let back = try await frame("files-split-back", in: window)
+        let preview = try await frame("file-preview", in: window)
+        XCTAssertGreaterThan(back.minY, preview.maxY - 1, "the bar back sits over the preview")
+        XCTAssertLessThan(preview.minX, 2, "the preview takes the list's place")
+        try await says("Hide preview", "files-preview-toggle", in: window)
+        // The test VM's desktop sometimes drops a synthesized click; another is harmless.
+        try await TestSupport.eventually(timeout: .seconds(10), diagnostic: "the bar back did not take the click") {
+            if !session.narrowDetail { return true }
+            try await PresentationTestSupport.hoverAndClick(window, at: NSPoint(x: back.midX, y: back.midY))
+            return !session.narrowDetail
+        }
+        try await TestSupport.eventually { PresentationTestSupport.accessibilityFrames("file-preview", in: window).isEmpty }
+        try await says("Show preview", "files-preview-toggle", in: window)
+        session.togglePreview()
+        _ = try await frame("files-split-back", in: window)
     }
 
     func testNarrowHeaderFitsTheGitSegments() async throws {
@@ -257,7 +306,7 @@ final class FilesPresentationTests: XCTestCase {
         repository(session)
         let inset: CGFloat = 70
         let window = window(session, width: 1180, inset: inset)
-        try await says("Changes 4", "files-segment-changes", in: window)
+        try await says("main · up to date with origin/main · 4 files uncommitted · Commits ⌃⌘3", "files-segment-commits", in: window)
         for width: CGFloat in [600, 480] {
             window.setContentSize(NSSize(width: width, height: 740))
             try await TestSupport.eventually(diagnostic: "the header did not settle at \(width) pt") {
@@ -271,7 +320,7 @@ final class FilesPresentationTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(segment.minX, 11.5, "nothing spills past the leading edge at \(width) pt")
             XCTAssertLessThanOrEqual(toggle.maxX, width - 12 - inset + 0.5, "the toggle stays out of the switch's room at \(width) pt")
             // Narrowed to glyphs, the segments keep their names for VoiceOver and the count in sight.
-            try await says("Changes 4", "files-segment-changes", in: window)
+            try await says("main · up to date with origin/main · 4 files uncommitted · Commits ⌃⌘3", "files-segment-commits", in: window)
         }
         _ = try await PresentationTestSupport.capture(window, named: "files-header-repository-narrow", in: "files-audit")
     }
@@ -309,13 +358,13 @@ final class FilesPresentationTests: XCTestCase {
             window.contentView.map { !PresentationTestSupport.views(of: FilesOutlineView.self, in: $0).isEmpty } ?? false
         }
 
-        // ⌃⌘2: Changes, the list and its footer gone with the Files tab.
+        // ⌃⌘2: Commits on its uncommitted row, the list and its footer gone with the Files tab.
         XCTAssertTrue(press(19, "2", [.control, .command]))
         XCTAssertEqual(session.tab, .changes)
         try await TestSupport.eventually(diagnostic: "the Files tab's list stayed") {
             !outlineShows() && PresentationTestSupport.accessibilityFrames("files-footer", in: window).isEmpty
         }
-        try await says("Changes 4", "files-segment-changes", in: window)
+        try await says("main · up to date with origin/main · 4 files uncommitted · Commits ⌃⌘3", "files-segment-commits", in: window)
         XCTAssertTrue(PresentationTestSupport.accessibilityFrames("files-follow-shell", in: window).isEmpty,
                       "following the shell is the Files tab's")
         XCTAssertFalse(PresentationTestSupport.accessibilityFrames("files-search", in: window).isEmpty,
@@ -327,7 +376,7 @@ final class FilesPresentationTests: XCTestCase {
         XCTAssertTrue(press(18, "1", [.control, .command]))
         XCTAssertEqual(session.tab, .files)
         try await TestSupport.eventually(diagnostic: "the list did not come back") { outlineShows() }
-        XCTAssertFalse(PresentationTestSupport.accessibilityFrames("files-branch", in: window).isEmpty)
+        XCTAssertTrue(PresentationTestSupport.accessibilityFrames("files-branch", in: window).isEmpty, "no git on Files")
 
         // ⇧⌘U and ⇧⌘L open files on their tab from the terminal.
         runtime.files.switchMode(tab.id, to: .terminal)
@@ -345,7 +394,6 @@ final class FilesPresentationTests: XCTestCase {
         _ = press(19, "2", [.control, .command]); _ = press(32, "U", [.command, .shift])
         XCTAssertEqual(session.tab, .files)
         try await TestSupport.eventually(diagnostic: "the list did not come back") { outlineShows() }
-        try await says("not a repository", "files-footer-git", in: window)
     }
 
     func testEmptyFolderAndLoading() async throws {
@@ -535,7 +583,7 @@ final class FilesPresentationTests: XCTestCase {
         let toggle = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-preview-toggle", in: window).first)
         let follow = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-follow-shell", in: window).first)
         let search = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("files-search", in: window).first)
-        XCTAssertLessThanOrEqual(follow.maxX, search.minX)
+        XCTAssertLessThan(follow.maxX, search.minX)
         XCTAssertLessThanOrEqual(search.maxX, toggle.minX)
         XCTAssertLessThanOrEqual(toggle.maxX, 600 - 12 - inset + 0.5, "the toggle stays out of the switch's room")
         try await read(["Files", "Name"], in: window, named: "files-header-narrow")

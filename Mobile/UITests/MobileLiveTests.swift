@@ -79,7 +79,7 @@ final class MobileLiveTests: XCTestCase {
         field.typeText(text)
     }
 
-    /// The back pill of a pushed screen ("Back, 2 need you", "Back to app").
+    /// The back pill of a pushed screen ("Back, 2 conversations need you", "Back to app").
     private func back(_ app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH 'Back'")).firstMatch
     }
@@ -116,6 +116,8 @@ final class MobileLiveTests: XCTestCase {
         let app = XCUIApplication()
         app.launchEnvironment["DISPATCH_MOBILE_STORE"] = "memory"
         app.launchEnvironment["DISPATCH_MOBILE_AUTHORIZE_KEYS"] = live.root + "/authorized_keys"
+        // The flat list of tabs, whatever an earlier run left in the simulator's defaults (tree view persists).
+        app.launchArguments += ["-DispatchTabsTree", "NO"]
         if let linux = linux() {
             app.launchEnvironment["DISPATCH_MOBILE_HOST_ENV"] = String(decoding: try JSONEncoder().encode(
                 ["\(linux.host):\(linux.port)": ["HOME": linux.root + "/h", "TMUX_TMPDIR": linux.root,
@@ -145,15 +147,24 @@ final class MobileLiveTests: XCTestCase {
         app.tabBars.buttons["Agents"].tap()
         app.buttons["New chat"].tap()
         wait(app.staticTexts["New chat"], 5, "M9a")
-        app.buttons.matching(NSPredicate(format: "label CONTAINS 'this-mac' OR label CONTAINS 'Choose a space'")).firstMatch.tap()
+        app.buttons["Space"].tap()
         app.buttons["New space…"].tap()
         wait(app.staticTexts["New space"], 10, "M7a")
-        type("e2e", into: app.textFields["Space name"])
+        // The name field's placeholder is the automatic name (the folder's); it is the form's only field until Other folder….
+        type("e2e", into: app.textFields.firstMatch)
         app.buttons["Other folder…"].tap()
         type(live.work, into: app.textFields["~/src/project"])
         shot("M7a")
         let space = Date()
         app.buttons["Create"].tap()
+        // Made from New chat, the space becomes the chat's (docs/ios.md, Spaces): New chat shows it, and its first tab
+        // opens from Spaces.
+        wait(app.staticTexts["New chat"], 20, "back in New chat with the space made")
+        app.buttons["Close"].tap()
+        app.tabBars.buttons["Spaces"].tap()
+        let made = app.buttons.matching(NSPredicate(format: "label CONTAINS 'e2e'")).firstMatch
+        wait(made, 20, "the new space's tab in Spaces")
+        made.tap()
         let terminal = app.textViews["Terminal"]
         wait(terminal, 20, "the new space's terminal tab")
         measure("new_space_to_terminal", since: space)
@@ -170,6 +181,7 @@ final class MobileLiveTests: XCTestCase {
 
         // M9a: Claude in a new tab of the space, a message, an approval, an answer.
         back(app).tap()
+        app.tabBars.buttons["Agents"].tap()
         app.buttons["New chat"].tap()
         wait(app.staticTexts["New chat"], 5, "M9a")
         let agent = app.buttons["claude"]
@@ -232,6 +244,8 @@ final class MobileLiveTests: XCTestCase {
         let app = XCUIApplication()
         app.launchEnvironment["DISPATCH_MOBILE_STORE"] = "memory"
         app.launchEnvironment["DISPATCH_MOBILE_AUTHORIZE_KEYS"] = live.root + "/authorized_keys"
+        // The flat list of tabs, whatever an earlier run left in the simulator's defaults (tree view persists).
+        app.launchArguments += ["-DispatchTabsTree", "NO"]
         app.launch()
         wait(app.staticTexts["No hosts yet"], 15, "M1d")
         app.buttons["Add host"].tap()

@@ -5,6 +5,8 @@ import SwiftUI
 struct ChatLinkBanner: View {
     let link: HostLink
     let host: String
+    /// Why the host is not connected yet (`HostSession.problem`): a second line while reconnecting.
+    var problem: String? = nil
     /// The state amber in dark; a darker amber in light, which reads on the light canvas.
     private static let amber = Color.caution
 
@@ -19,25 +21,34 @@ struct ChatLinkBanner: View {
         }
     }
 
-    static func spoken(_ link: HostLink, title: String) -> String {
+    static func spoken(_ link: HostLink, title: String, problem: String? = nil) -> String {
         if case .failed(let reason) = link { return title + ", " + reason }
-        return title
+        return [title, problem].compactMap { $0 }.joined(separator: ", ")
     }
 
     var body: some View {
         if let title = Self.title(link, host: host) {
-            HStack(spacing: 8) {
-                ChatWaitingDots(color: Self.amber)
-                Text(title).font(.footnote.weight(.semibold)).fittingLine()
-                Spacer(minLength: 4)
-                if case .reconnecting(_, let since) = link {
-                    TimelineView(.periodic(from: .now, by: 1)) { context in
-                        Text(ChatTurnSummary.elapsed(context.date.timeIntervalSince(since)))
-                            .monospacedDigit()
-                            .foregroundStyle(Self.amber.opacity(0.7))
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 8) {
+                    ChatWaitingDots(color: Self.amber)
+                    Text(title).font(.footnote.weight(.semibold)).fittingLine()
+                    Spacer(minLength: 4)
+                    if case .reconnecting(_, let since, _) = link {
+                        TimelineView(.periodic(from: .now, by: 1)) { context in
+                            Text(ChatTurnSummary.elapsed(context.date.timeIntervalSince(since)))
+                                .monospacedDigit()
+                                .foregroundStyle(Self.amber.opacity(0.7))
+                        }
+                    } else if case .failed(let reason) = link {
+                        Text(reason).lineLimit(1).foregroundStyle(Self.amber.opacity(0.7))
                     }
-                } else if case .failed(let reason) = link {
-                    Text(reason).lineLimit(1).foregroundStyle(Self.amber.opacity(0.7))
+                }
+                if let problem, !link.isConnected {
+                    Text(problem)
+                        .font(.caption)
+                        .foregroundStyle(Self.amber.opacity(0.8))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.leading, 23)
                 }
             }
             .font(.footnote)
@@ -50,7 +61,7 @@ struct ChatLinkBanner: View {
             .padding(.bottom, 6)
             // The title (and a failure's reason), not the counting seconds: VoiceOver reads it once.
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(Self.spoken(link, title: title))
+            .accessibilityLabel(Self.spoken(link, title: title, problem: problem))
         }
     }
 }

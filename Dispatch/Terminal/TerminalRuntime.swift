@@ -258,7 +258,11 @@ final class TerminalRuntime {
     func close(_ ids: [UUID]) {
         let ids = ids.filter { id in !helpers.values.contains { $0.retains(id) } }
         for helper in helpers.values { ids.forEach(helper.detach) }
-        for id in ids { ssh.closeTab(id); hosts.close(id); herdrLaunch.close(id); chat.close(id); files.forget(id); programs.close(id); views.removeValue(forKey: id)?.destroy() }
+        for id in ids {
+            // Kept for Restore of a detached tab, which comes back with the same id (`FilesCoordinator.restoreViews`).
+            files.retainView(id)
+            ssh.closeTab(id); hosts.close(id); herdrLaunch.close(id); chat.close(id); files.forget(id); programs.close(id); views.removeValue(forKey: id)?.destroy()
+        }
         prune()
     }
 

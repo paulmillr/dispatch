@@ -319,7 +319,9 @@ struct ChatView: View {
                             ChatComposerActivity(session: session, active: focused || agentWorking).fixedSize()
                             ChatComposerAgents(session: session).fixedSize()
                         }
-                    }.scrollIndicators(.hidden).frame(height: max(24, theme.typography.detailLineHeight))
+                    }
+                    // Never, not hidden: with scroll bars shown always (no trackpad) hidden still draws one.
+                    .scrollIndicators(.never).frame(height: max(24, theme.typography.detailLineHeight))
                     composerStop
                 }
                 HStack(spacing: 12) {

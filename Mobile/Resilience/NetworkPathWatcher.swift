@@ -49,6 +49,8 @@ final class NetworkPathWatcher {
     private let source: any NetworkPathSource
     private let changed: @MainActor () -> Void
     private(set) var last: NetworkPath?
+    /// Every reading, the first included (whether the iPhone is offline, for what the hosts say).
+    var observed: (@MainActor (NetworkPath) -> Void)?
 
     init(source: any NetworkPathSource = SystemNetworkPathSource(), changed: @escaping @MainActor () -> Void) {
         self.source = source
@@ -65,6 +67,7 @@ final class NetworkPathWatcher {
 
     func receive(_ path: NetworkPath) {
         defer { last = path }
+        observed?(path)
         guard let last, path.satisfied else { return }
         if !last.satisfied || path.interfaces != last.interfaces { changed() }
     }

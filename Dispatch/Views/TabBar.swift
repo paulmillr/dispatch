@@ -158,7 +158,17 @@ struct TabBar<Row: View>: View {
     private var badgeWidth: CGFloat {
         badgeNumber.map { PaneShortcutBadge.width(number: $0, glass: capsule, typography: typography) + (style == .strip ? 0 : 2) } ?? 0
     }
-    private var showsOverflow: Bool { ids.count > 1 && overflowing && barWidth >= 320 }
+    /// Whenever the tabs overflow, however narrow the strip: a split pane's strip has no other way to the hidden tabs.
+    /// Except where the control would leave the selected tab no room to be closed: the selected tab comes first.
+    private var showsOverflow: Bool { ids.count > 1 && overflowing && roomBesideOverflow }
+    /// The selected tab's close target (the strip's minimum, `tabStrip`) fits beside the control. Its width is
+    /// estimated until measured, so the control never shows for one frame only to give way.
+    private var roomBesideOverflow: Bool {
+        let control = overflowWidth > 0 ? overflowWidth : typography.expanded(72)
+        return stripWidth - markWidth - badgeWidth - control >= Self.closableTabWidth
+    }
+    /// The narrowest a selected tab still shows its close button at.
+    static var closableTabWidth: CGFloat { 48 }
     /// This strip leads the window with its host mark in place of the sidebar toggle (markReplacesSidebarToggle).
     private var replacesToggle: Bool {
         mark != nil && (placement.sidebarSlot || placement.titlebar?.leading == true)
@@ -200,7 +210,7 @@ struct TabBar<Row: View>: View {
                 }
             }
             // Preserve the selected tab's close target in minimum-width panes.
-            tabStrip.frame(minWidth: 48)
+            tabStrip.frame(minWidth: Self.closableTabWidth)
             // Tabs always fill the strip (or scroll), so the button simply follows it: no offset from measured
             // tab frames, which lag a resize or a tmux window update and slid the button over the tabs.
             // On a split pane's capsule the buttons sit on its glass. On a lone glass strip new tab acts on the strip, so

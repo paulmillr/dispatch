@@ -42,6 +42,15 @@ impl Screens {
             }
         }
     }
+    /// Drop the last screen (its source stopped); readers waiting keep waiting.
+    pub(super) fn forget(&mut self, terminal: Id) {
+        self.values.remove(&terminal);
+        self.unseen.remove(&terminal);
+    }
+    /// A reader waits for this terminal's next screen.
+    pub(super) fn waiting(&self, terminal: Id) -> bool {
+        self.waiting.get(&terminal).is_some_and(|waiting| !waiting.is_empty())
+    }
     pub(super) fn close(&mut self, io: &mut dyn Io, terminal: Id, reason: Error) {
         self.values.remove(&terminal);
         self.unseen.remove(&terminal);

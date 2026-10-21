@@ -97,3 +97,44 @@ private extension String {
         parts.append(String(self[offset...])); return parts
     }
 }
+
+/// How chat names a model, on the Mac and the iPhone alike.
+extension AgentModelMenu {
+    /// Family, then version: claude-opus-5-5[1m] → opus-5.5[1m], gpt-6.1-sol → sol-6.1. Also covers dated, legacy
+    /// (claude-3-5-sonnet), Bedrock (us.anthropic.claude-…-v1:0), Vertex (…@20250805) and provider/model IDs; other
+    /// models keep their ID, without the provider.
+    static func label(for model: String) -> String {
+        let plain = model.split(separator: "/").last.map(String.init) ?? model
+        guard let vendor = model.range(of: "(?:^|[./])(?:claude|gpt)-", options: .regularExpression) else { return plain }
+        var id = String(model[vendor.upperBound...]), suffix = ""
+        if let bracket = id.firstIndex(of: "[") { suffix = String(id[bracket...]); id = String(id[..<bracket]) }
+        id = id.replacingOccurrences(of: "(?:-latest|[-@][0-9]{8})?(?:-v[0-9]+(?::[0-9]+)?)?$", with: "", options: .regularExpression)
+        let parts = id.split(separator: "-").map(String.init)
+        let isVersion = { (part: String) in part.range(of: "^[0-9]+(?:\\.[0-9]+)*$", options: .regularExpression) != nil }
+        let family = parts.filter { !isVersion($0) }, version = parts.filter(isVersion)
+        // GPT IDs lead with the version (gpt-6.1-sol); without a name after one (gpt-5.5, gpt-4o) the ID stays.
+        let gpt = model[vendor].hasSuffix("gpt-")
+        guard !family.isEmpty, !gpt || parts.first.map(isVersion) == true else { return plain }
+        return (family + (version.isEmpty ? [] : [version.joined(separator: ".")])).joined(separator: "-") + suffix
+    }
+
+    /// Claude's undated model ID for a name ("Opus 5.5", Claude 2.1.302's rows) or a description that leads with one
+    /// ("Opus 5.5 · …", older rows that name an alias), e.g. claude-opus-5-5.
+    static func claudeModelID(_ text: String) -> String? {
+        let pattern = #"^([A-Za-z]+) ([0-9]+(?:\.[0-9]+)*)(?:\s+·|$)"#
+        guard let match = text.range(of: pattern, options: .regularExpression) else { return nil }
+        let words = text[match].split(separator: " ")
+        guard words.count >= 2 else { return nil }
+        return "claude-" + words[0].lowercased() + "-" + words[1].replacingOccurrences(of: ".", with: "-")
+    }
+
+    /// The menu row of a model the agent reports: the row with its name, else the one Claude row naming that model
+    /// ("Sonnet 5.5" for claude-sonnet-5-5), else the one non-default row describing it ("Opus" · "Opus 5.5 · …").
+    static func row(for model: String, in rows: [Choice]) -> Choice? {
+        if let row = rows.first(where: { $0.name == model }) { return row }
+        let named = rows.filter { claudeModelID($0.name) == model }
+        if named.count == 1 { return named[0] }
+        let described = rows.filter { !$0.isDefault && claudeModelID($0.detail) == model }
+        return named.isEmpty && described.count == 1 ? described[0] : nil
+    }
+}

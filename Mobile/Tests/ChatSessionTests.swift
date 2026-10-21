@@ -168,6 +168,95 @@ final class ChatSessionTests: XCTestCase {
         XCTAssertNil(chat.optimisticPrompt, "A steer joins the running turn; it opens no new bubble of its own")
     }
 
+    /// A command goes at once whenever the agent can take input, even with messages queued (the Mac's
+    /// sendFromComposer); while it works it queues as a command, never as a fenced prompt.
+    func testCommandsGoAtOnceWhenIdleAndQueueAsCommandsWhileWorking() async throws {
+        let helper = ScriptedHelper()
+        script(helper) { request in
+            switch request.method {
+            case "queue.add": .result(ChatFixture.queued("held-\(request.id)", request.params["text"] as! String))
+            case "chat.command": .result(["kind": "sent", "sent": ChatFixture.sent()])
+            default: nil
+            }
+        }
+        let chat = try await opened(helper, records: [], state: ChatFixture.state(busy: true))
+        chat.drafts.edit(text: "/compact")
+        XCTAssertEqual(chat.route(steer: true, command: true), .queue, "A command never steers")
+        chat.send(steer: true)
+        try await TestSupport.eventually { helper.requests("queue.add").count == 1 && chat.queueItems.first?.helperID != nil }
+        XCTAssertEqual(helper.requests("queue.add").first?.params["command"] as? Bool, true)
+        XCTAssertTrue(helper.requests("chat.send").isEmpty)
+        // Idle with a message still queued: the next command goes now.
+        let id = try XCTUnwrap(helper.subscription("chat.open"))
+        helper.notify(id, "chat.state", ["terminal": 7, "session": conversation, "state": ChatFixture.state(busy: false)])
+        try await TestSupport.eventually { !chat.working }
+        XCTAssertFalse(chat.queueRows.isEmpty)
+        chat.drafts.edit(text: "/model")
+        XCTAssertEqual(chat.route(steer: false, command: true), .prompt)
+        chat.send()
+        try await TestSupport.eventually { helper.requests("chat.command").count == 1 && !chat.sending }
+        XCTAssertEqual(helper.requests("chat.command").first?.params["text"] as? String, "/model")
+    }
+
+    /// The helper's queue refuses shell commands: a `!` command typed while the agent works waits on the device and
+    /// runs by `chat.command` once the agent is idle and nothing is ahead of it.
+    func testAQueuedShellCommandRunsWhenTheAgentIsIdle() async throws {
+        let helper = ScriptedHelper()
+        script(helper) { request in
+            request.method == "chat.command" ? .result(["kind": "shell", "command": "ls", "output": "a\nb", "sent": ChatFixture.sent()]) : nil
+        }
+        let chat = try await opened(helper, records: [], state: ChatFixture.state(busy: true))
+        chat.drafts.edit(text: "!ls")
+        chat.send()
+        try await TestSupport.eventually { chat.queueItems.count == 1 }
+        XCTAssertTrue(helper.requests("queue.add").isEmpty, "Never put into the helper's queue")
+        XCTAssertTrue(helper.requests("chat.command").isEmpty, "Not while the agent works")
+        let id = try XCTUnwrap(helper.subscription("chat.open"))
+        helper.notify(id, "chat.state", ["terminal": 7, "session": conversation, "state": ChatFixture.state(busy: false)])
+        try await TestSupport.eventually { helper.requests("chat.command").count == 1 && chat.queueItems.isEmpty }
+        XCTAssertEqual(helper.requests("chat.command").first?.params["text"] as? String, "!ls")
+        XCTAssertEqual(chat.commandResult?.text, "a\nb")
+    }
+
+    /// Stop pauses what the device still holds until Resume, as the Mac's stopQueue; Send now refuses a paused row.
+    func testStopPausesTheDeviceQueueAndSendNowRefusesPausedRows() async throws {
+        let helper = ScriptedHelper()
+        script(helper) { request in request.method == "chat.stop" ? .result(ChatFixture.sent()) : nil }
+        let outbox = ChatOutbox(store: ChatOutboxMemoryStore())
+        let chat = try await opened(helper, records: [], state: ChatFixture.state(busy: true), outbox: outbox)
+        // Held on the device: its add is refused as not sent, so it waits.
+        _ = outbox.add(ChatOutboxItem(key: chat.key, conversation: conversation, text: "later"))
+        chat.stop()
+        try await TestSupport.eventually { helper.requests("chat.stop").count == 1 && !chat.stopping }
+        XCTAssertEqual(chat.queueItems.first?.state, .paused(MobileChatSession.stopped))
+        XCTAssertTrue(chat.queueStopped)
+        let row = try XCTUnwrap(chat.queueRows.first)
+        XCTAssertFalse(chat.canSendNow(row), "A paused row is not sent by Send now")
+        chat.sendQueuedNow(row)
+        XCTAssertTrue(helper.requests("chat.send").isEmpty)
+    }
+
+    /// A message queued for one agent process is never delivered to another in the same pane (the Mac's
+    /// ChatQueuedMessage.matches): it pauses for the user; one queued before any agent was bound adopts this one.
+    func testAMessageQueuedForAnotherProcessIsPaused() async throws {
+        let helper = ScriptedHelper()
+        script(helper) { request in
+            request.method == "queue.add" ? .result(ChatFixture.queued("held-\(request.id)", request.params["text"] as! String)) : nil
+        }
+        let outbox = ChatOutbox(store: ChatOutboxMemoryStore())
+        let chat = try await opened(helper, records: [], state: ChatFixture.state(busy: true), outbox: outbox)
+        let other = ChatOutboxItem.Process(HelperTopology.Binding(session: "", transcript: nil, pid: 1, start: [1, 0],
+                                                                  executable: "/usr/local/bin/claude"))
+        _ = outbox.add(ChatOutboxItem(key: chat.key, conversation: conversation, text: "for the old one", state: .paused("x"),
+                                      process: other))
+        _ = outbox.add(ChatOutboxItem(key: chat.key, conversation: conversation, text: "unbound", state: .paused("x")))
+        for row in chat.queueRows { chat.resendQueued(row) }
+        try await TestSupport.eventually { chat.queueItems.first?.state == .paused(MobileChatSession.otherProcess) }
+        try await TestSupport.eventually { chat.queueItems.last?.helperID != nil }
+        XCTAssertEqual(chat.queueItems.last?.process, ChatOutboxItem.Process(ChatFixture.topologyBinding))
+        XCTAssertEqual(helper.requests("queue.add").map { $0.params["text"] as? String }, ["unbound"])
+    }
+
     func testStopSendsChatStop() async throws {
         let helper = ScriptedHelper()
         script(helper) { request in request.method == "chat.stop" ? .result(ChatFixture.sent()) : nil }
@@ -476,33 +565,40 @@ final class ChatSessionTests: XCTestCase {
          ChatFixture.record("user-p1", "user", turn: "p1", text: "Make billing webhook retries idempotent.", time: 946_719_000_000)]
     }
 
-    func testQueuedMessagesGoBackIntoANewHelperWhenTheTurnStillRuns() async throws {
+    /// The host's queue store outlives its helper: a new helper lists the same items under the same ids, and the
+    /// device adds nothing again.
+    func testANewHelperFindsTheStoredQueueByItsIDs() async throws {
         let first = ScriptedHelper()
         script(first) { request in
-            request.method == "queue.add" ? .result(ChatFixture.queued("held-\(request.id)", request.params["text"] as! String)) : nil
+            request.method == "queue.add" ? .result(ChatFixture.queued("q-\(request.id)", request.params["text"] as! String)) : nil
         }
         let chat = try await opened(first, records: runningTurn, state: ChatFixture.state(busy: true))
         try await queueTwo(first, chat)
+        let ids = chat.queueItems.compactMap(\.helperID)
         first.close()
         chat.update(link: .reconnecting(attempt: 1, since: Date()), client: nil)
         XCTAssertEqual(chat.queueRows.count, 2, "The queue stays visible while the link is down")
-        // The same turn still runs on the host: the old helper never started on its queue.
-        let second = try await reconnect(chat, records: runningTurn, busy: true)
-        try await TestSupport.eventually { second.requests("queue.add").count == 2 && chat.queueItems.allSatisfy { $0.helperID?.hasPrefix("new-") == true } }
-        XCTAssertEqual(second.requests("queue.add").map { $0.params["text"] as? String }, ["Also cover invoice.paid", "Add a unit test"])
-        XCTAssertEqual(second.requests("queue.hold").map { $0.params["held"] as? Bool }, [true, false])
+        let stored = zip(ids, ["Also cover invoice.paid", "Add a unit test"]).map { ChatFixture.queued($0, $1) }
+        let second = try await reconnect(chat, records: runningTurn, busy: true, queue: stored)
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertTrue(second.requests("queue.add").isEmpty && second.requests("queue.hold").isEmpty)
+        XCTAssertEqual(chat.queueItems.compactMap(\.helperID), ids)
+        XCTAssertEqual(chat.queueRows.map(\.text), ["Also cover invoice.paid", "Add a unit test"])
     }
 
     /// A held queue never starts the agent: a release the helper refuses is tried once more, then the queue says so.
+    /// (Messages typed while the link was down are the ones mirrored after a reconnect.)
     func testAFailedQueueReleaseIsRetriedAndThenShown() async throws {
         let first = ScriptedHelper()
-        script(first) { request in
-            request.method == "queue.add" ? .result(ChatFixture.queued("held-\(request.id)", request.params["text"] as! String)) : nil
-        }
+        script(first)
         let chat = try await opened(first, records: runningTurn, state: ChatFixture.state(busy: true))
-        try await queueTwo(first, chat)
         first.close()
         chat.update(link: .reconnecting(attempt: 1, since: Date()), client: nil)
+        for text in ["Also cover invoice.paid", "Add a unit test"] {
+            chat.drafts.edit(text: text)
+            chat.send()
+        }
+        XCTAssertEqual(chat.queueItems.count, 2)
         let second = try await reconnect(chat, records: runningTurn, busy: true) { request in
             request.method == "queue.hold" && request.params["held"] as? Bool == false ? .error(code: "busy", message: "Try again") : nil
         }
@@ -512,40 +608,31 @@ final class ChatSessionTests: XCTestCase {
         XCTAssertEqual(chat.failure, chat.queueError, "The thread shows it")
     }
 
-    func testTheHeadOfALostQueueWaitsForTheUserWhenTheHelperMayHaveSentIt() async throws {
+    /// What the host's queue store no longer holds was sent or removed there: the device lets it go and never adds it
+    /// again, whatever the transcript shows yet.
+    func testAStoredMessageTheHostNoLongerHoldsLeavesTheDevice() async throws {
         let first = ScriptedHelper()
         script(first) { request in
-            request.method == "queue.add" ? .result(ChatFixture.queued("held-\(request.id)", request.params["text"] as! String)) : nil
+            request.method == "queue.add" ? .result(ChatFixture.queued("q-\(request.id)", request.params["text"] as! String)) : nil
         }
         let chat = try await opened(first, records: runningTurn, state: ChatFixture.state(busy: true))
         try await queueTwo(first, chat)
-        // The turn ends; the old helper may start draining before the link drops.
-        let id = try XCTUnwrap(first.subscription("chat.open"))
-        first.notify(id, "chat.records", ["terminal": 7, "session": conversation, "records": [
-            ChatFixture.record("f1:ended", "turn_ended", turn: "p1", time: 946_719_030_000)]])
-        first.notify(id, "chat.state", ["terminal": 7, "session": conversation, "state": ChatFixture.state(busy: false)])
-        try await TestSupport.eventually { !chat.working }
         first.close()
         chat.update(link: .reconnecting(attempt: 1, since: Date()), client: nil)
-        let second = try await reconnect(chat, records: runningTurn + [ChatFixture.record("f1:ended", "turn_ended", turn: "p1", time: 946_719_030_000)], busy: false)
-        try await TestSupport.eventually { second.requests("queue.add").count == 1 }
+        let second = try await reconnect(chat, records: runningTurn, busy: false)
+        try await TestSupport.eventually { chat.queueItems.isEmpty }
         try await Task.sleep(for: .milliseconds(150))
-        XCTAssertEqual(second.requests("queue.add").map { $0.params["text"] as? String }, ["Add a unit test"],
-                       "Only the message behind the head is certainly unsent")
-        guard case .uncertain = chat.queueItems.first?.state else { return XCTFail("The head waits for the user") }
-        XCTAssertNotNil(chat.queueRows.first?.status)
-        // The user's own decision sends it.
-        chat.resendQueued(chat.queueRows[0])
-        try await TestSupport.eventually { second.requests("queue.add").count == 2 }
+        XCTAssertTrue(second.requests("queue.add").isEmpty, "Never added again: the host may have sent it")
     }
 
     func testAMessageTheTranscriptShowsAsSentIsNotQueuedAgain() async throws {
         let first = ScriptedHelper()
         script(first) { request in
-            request.method == "queue.add" ? .result(ChatFixture.queued("held-\(request.id)", request.params["text"] as! String)) : nil
+            request.method == "queue.add" ? .result(ChatFixture.queued("q-\(request.id)", request.params["text"] as! String)) : nil
         }
         let chat = try await opened(first, records: runningTurn, state: ChatFixture.state(busy: true))
         try await queueTwo(first, chat)
+        let ids = chat.queueItems.compactMap(\.helperID)
         first.close()
         chat.update(link: .reconnecting(attempt: 1, since: Date()), client: nil)
         let now = Int64(Date().timeIntervalSince1970 * 1000)
@@ -553,9 +640,38 @@ final class ChatSessionTests: XCTestCase {
             ChatFixture.record("f1:ended", "turn_ended", turn: "p1", time: now - 2000),
             ChatFixture.record("p2:started", "turn_started", turn: "p2", time: now - 1000),
             ChatFixture.record("user-p2", "user", turn: "p2", text: "Also cover invoice.paid", time: now - 1000)]
-        let second = try await reconnect(chat, records: delivered, busy: true)
-        try await TestSupport.eventually { chat.queueItems.count == 1 && second.requests("queue.add").count == 1 }
-        XCTAssertEqual(second.requests("queue.add").first?.params["text"] as? String, "Add a unit test")
+        // The host sent the first; the second is still in its store.
+        let second = try await reconnect(chat, records: delivered, busy: true, queue: [ChatFixture.queued(ids[1], "Add a unit test")])
+        try await TestSupport.eventually { chat.queueItems.count == 1 }
+        XCTAssertEqual(chat.queueItems.first?.helperID, ids[1])
+        XCTAssertTrue(second.requests("queue.add").isEmpty)
+    }
+
+    /// A conversation the agent had not named when the message was queued is held in its helper's memory only: after
+    /// a reconnect the head, which that helper may have been sending, waits for the user; what is behind it is added again.
+    func testAQueueOfAnUnnamedConversationIsAddedAgainBehindItsUncertainHead() async throws {
+        let key = ChatConversationKey(host: UUID(), node: ChatFixture.node)
+        let gone = UUID()
+        let outbox = ChatOutbox(store: ChatOutboxMemoryStore([
+            ChatOutboxItem(key: key, conversation: nil, text: "Also cover invoice.paid", state: .queued(id: "q-1", revision: 1, helper: gone)),
+            ChatOutboxItem(key: key, conversation: nil, text: "Add a unit test", state: .queued(id: "q-2", revision: 2, helper: gone))]))
+        let helper = ScriptedHelper()
+        script(helper) { request in
+            switch request.method {
+            case "queue.list": .result([[String: Any]]())
+            case "queue.add": .result(ChatFixture.queued("q-\(request.id)", request.params["text"] as! String))
+            default: nil
+            }
+        }
+        let chat = MobileChatSession.scripted(helper, host: key.host, outbox: outbox)
+        try await TestSupport.eventually { helper.subscription("chat.open") != nil }
+        helper.notify(helper.subscription("chat.open")!, "chat.history", ChatFixture.history(state: ChatFixture.state(busy: false), pending: true))
+        helper.notify(helper.subscription("chat.open")!, "chat.history", ChatFixture.history())
+        try await TestSupport.eventually { helper.requests("queue.add").count == 1 }
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(helper.requests("queue.add").map { $0.params["text"] as? String }, ["Add a unit test"],
+                       "Only the message behind the head is certainly unsent")
+        guard case .uncertain = chat.queueItems.first?.state else { return XCTFail("The head waits for the user") }
     }
 
     func testAMessageTheHelperConsumedLeavesTheDevice() async throws {
@@ -698,7 +814,12 @@ final class ChatSessionTests: XCTestCase {
         try await chat.select(model: "sonnet", effort: "low")
         XCTAssertEqual(helper.requests("chat.settings.set").first?.params["effort"] as? String, "low")
         XCTAssertEqual(chat.model, "sonnet")
-        XCTAssertEqual(chat.modelLabel, "Sonnet")
+        XCTAssertEqual(chat.modelLabel, "sonnet")
+        // Claude reports the model's ID (a /model in its terminal, a fresh session): the Mac's label, never the raw ID.
+        helper.notify(helper.subscription("chat.open")!, "chat.state",
+                      ["terminal": 7, "session": conversation, "state": ChatFixture.state(busy: false, model: "claude-opus-5-5")])
+        try await TestSupport.eventually { chat.model == "claude-opus-5-5" }
+        XCTAssertEqual(chat.modelLabel, "opus-5.5")
     }
 
     func testAStepsFullOutputComesFromChatTools() async throws {
@@ -718,7 +839,7 @@ final class ChatSessionTests: XCTestCase {
 
 extension ChatThreadRow.Kind {
     var label: String {
-        switch self { case .user: "user"; case .agent: "agent"; case .notice: "notice" }
+        switch self { case .user: "user"; case .agent: "agent"; case .thinking: "thinking"; case .notice: "notice" }
     }
     var summary: ChatTurnSummary? {
         if case .agent(let summary) = self { return summary }

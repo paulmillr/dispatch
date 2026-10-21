@@ -17,6 +17,7 @@ pub(crate) use launch::write;
 mod params;
 pub(crate) mod queue;
 mod read;
+pub(crate) mod store;
 
 fn checked<T: 'static>(
     done: Done<T>,
@@ -96,8 +97,10 @@ pub(crate) fn window(
     })
 }
 pub(crate) type Nodes = Rc<RefCell<BTreeMap<Id, (usize, Node)>>>;
-/// Question ids of native interactions published to the UI, for dismissal.
-pub(crate) type Interactions = Rc<RefCell<BTreeMap<(Id, String, String), Vec<String>>>>;
+/// Question ids of interactions published to the UI, for dismissal, and whether each one holds
+/// the agent (an approval or a blocking question: chat.list `waiting`). A closed interaction
+/// keeps an entry without questions.
+pub(crate) type Interactions = Rc<RefCell<BTreeMap<(Id, String, String), (Vec<String>, bool)>>>;
 /// Per-harness state that installation.install sets (decisions-1002).
 pub(crate) enum Installed {
     /// Explicitly enabled, including optional integrations before their first launch.
@@ -665,9 +668,7 @@ impl Request<'_> {
             .filter(|(id, _)| removed.contains("hooks.configure") || terminals.contains(id))
             .filter_map(|(id, (_, node))| node.agent.clone().map(|(harness, binding)| (harness, binding, terminals.contains(id))))
             .filter(|(harness, binding, _)| seen.insert((*harness, binding.process.pid, binding.process.start))).collect();
-        for ((terminal, _), line) in self.helper.held.borrow_mut().iter_mut() {
-            if terminals.contains(terminal) { line.revoke(); }
-        }
+        queue::revoke(self.io, &self.helper.held, &terminals);
         self.helper.prompts.borrow_mut().retain(|terminal, _| !terminals.contains(terminal));
         self.helper.interactions.borrow_mut().retain(|(terminal, _, _), _| !terminals.contains(terminal));
         self.helper.questions.borrow_mut().retain(|(_, terminal, _, _), _| !terminals.contains(terminal));
@@ -746,7 +747,9 @@ impl Request<'_> {
         let mut reply = self.done(None);
         if goal.is_some() && !harness.borrow().native_queue() {
             let key = (terminal, binding.session.clone());
-            if self.helper.held.borrow().get(&key).is_some_and(|line| line.sending) {
+            // Another helper of this host typing a queued message into the same terminal counts too.
+            let typing = matches!(&goal, Some(Goal::Send { .. })) && queue::claimed_elsewhere(&self.helper.held, &key);
+            if typing || self.helper.held.borrow().get(&key).is_some_and(|line| line.sending) {
                 return Err(Error { code: "busy", message: "Input is already being sent".into() });
             }
             reply = queue::sending(self.helper.held.clone(), key, matches!(&goal, Some(Goal::Send { .. })), reply);
@@ -1015,7 +1018,7 @@ impl Request<'_> {
                 .borrow()
                 .get(&key)
                 .map(|q| q.interaction.questions.iter().map(|q| q.id.clone()).collect())
-                .or_else(|| interactions.borrow().get(&native).cloned())
+                .or_else(|| interactions.borrow().get(&native).map(|(ids, _)| ids.clone()))
                 .ok_or_else(|| Error {
                     code: "expired",
                     message: "The confirmation has ended".into(),

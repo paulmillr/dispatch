@@ -55,6 +55,23 @@ final class TerminalPresenceTests: XCTestCase {
         XCTAssertNil(inbox.take(limit: 4))
     }
 
+    /// Batches are taken by moving a read position, the taken bytes dropped only once they are half the buffer: what
+    /// comes out is every byte once, in order, while appends and takes interleave across compactions.
+    func testInboxTakesInOrderAcrossCompactions() {
+        let inbox = TerminalInbox()
+        var sent = Data(), received = Data()
+        for round in 0..<40 {
+            let chunk = Data((0..<(97 * (round % 7 + 1))).map { UInt8(truncatingIfNeeded: $0 &+ round) })
+            sent.append(chunk)
+            _ = inbox.append(chunk)
+            if round % 3 != 0, let batch = inbox.take(limit: 150) { received.append(batch) }
+            XCTAssertEqual(inbox.count, sent.count - received.count)
+        }
+        while let batch = inbox.take(limit: 150) { received.append(batch) }
+        XCTAssertEqual(received, sent)
+        XCTAssertEqual(inbox.count, 0)
+    }
+
     func testInboxRejectsAnEntireAppendAtItsByteLimit() {
         let inbox = TerminalInbox(limit: 5)
         XCTAssertEqual(inbox.append(Data("abc".utf8)), .signal)
@@ -121,6 +138,27 @@ final class TerminalPresenceTests: XCTestCase {
         XCTAssertNil(presence.ended)
         XCTAssertTrue(presence.attached)
         presence.stop()
+    }
+
+    /// tmux keeps one size per window: while the server holds another grid than the view's (another client, a split
+    /// window) for longer than a resize takes, the screen follows the server's, as the Mac's `tmuxGrid`; it goes back
+    /// once they agree. A size right after the phone's own resize is the old one and never shows.
+    func testTheScreenFollowsTheServersGridOnlyOnceItHolds() async throws {
+        let peer = ScriptedHelper.terminal()
+        defer { peer.close() }
+        let presences = TerminalPresences()
+        let key = TerminalPresences.Key(host: UUID(), node: "app:%7")
+        let presence = presences.open(key, feed: HelperTerminalFeed(client: peer.client, terminal: 7), terminal: 7,
+                                      client: peer.client, scrollback: .client)
+        presences.retain(key)
+        _ = try await peer.wait(for: "terminals.attach")
+        presence.offer(TerminalFeedSize(columns: 50, rows: 30))
+        presence.server(grid: (120, 40))
+        XCTAssertNil(presence.shownGrid, "Right after the phone's resize: the server's old size")
+        try await TestSupport.eventually { presence.shownGrid.map { $0 == (120, 40) } ?? false }
+        presence.server(grid: (50, 30))
+        XCTAssertNil(presence.shownGrid, "Agreed: the view's own grid again")
+        presences.close(key)
     }
 
     /// A terminal shown again right after it was left (release, then retain) attaches the same feed again. The ended

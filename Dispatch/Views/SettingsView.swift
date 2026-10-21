@@ -412,8 +412,14 @@ struct SettingsView: View {
                         .accessibilityIdentifier("settings-files-ask-before-replacing")
                 }
             }
-            integrationCard("Git", detail: "Changes and Commits in files mode, file marks and branch names",
-                            enabled: $draft.gitEnabled, hasOptions: false) {}
+            integrationCard("Git", detail: "Commits and uncommitted changes in files mode, and branch names",
+                            enabled: $draft.gitEnabled) {
+                cardOption("Separate Changes tab", detail: "The uncommitted changes as their own tab, not Commits’ first row",
+                           detailBelow: true) {
+                    settingToggle("Separate Changes tab", isOn: $draft.gitChangesTab)
+                        .accessibilityIdentifier("settings-git-changes-tab")
+                }
+            }
                 .accessibilityIdentifier("settings-git")
         }.task { TerminalRuntime.shared.chat.loadLaunches() }
     }

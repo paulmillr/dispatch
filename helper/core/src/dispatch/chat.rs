@@ -260,6 +260,9 @@ impl Request<'_> {
         let label = harness.borrow().name().to_owned();
         let key = harness.borrow().key().to_owned();
         let native_queue = harness.borrow().native_queue();
+        // A held queue this conversation has in the host's store, announced after readiness.
+        let stored = (!native_queue && !binding.session.is_empty()).then(|| self.line(terminal, &harness, &binding));
+        let held = self.helper.held.clone();
         let updates = self.helper.updates.clone();
         let ready = self.done(Some("chat.history"));
         let done = self.done(Some("chat.history"));
@@ -292,6 +295,9 @@ impl Request<'_> {
                 // Publish readiness before paging. Unsupported history must not end
                 // this chat subscription or hide a successful State observation.
                 ready(io, Ok(chat.clone()));
+                if let Some(key) = stored {
+                    super::queue::reopen(io, &held, key);
+                }
                 if native_queue {
                     let current = chat.binding.clone();
                     history.borrow_mut().queue(

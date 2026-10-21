@@ -205,9 +205,16 @@ final class BackgroundRefresh {
         guard settings.backgroundRefresh else { return [] }
         let current = Dictionary(hosts().map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var posted: [RefreshNotification] = []
+        // Two hosts reaching one machine and account (a LAN and a Tailscale address) notify once, for the first in the
+        // list, as Spaces and Agents show that machine once (`MobileComposition.sameMachine`).
+        var machines: Set<String> = []
         for record in records {
             guard let result = results[record.id], let record = current[record.id], record.chat else { continue }
-            for notification in apply(result, to: record) {
+            let machine = result.hello.flatMap { hello in
+                hello.identity.flatMap { identity in hello.account.map { identity.host + ":" + String($0.uid) } }
+            }
+            let duplicate = machine.map { !machines.insert($0).inserted } ?? false
+            for notification in apply(result, to: record) where !duplicate {
                 notifier.post(notification)
                 posted.append(notification)
             }
@@ -222,8 +229,8 @@ final class BackgroundRefresh {
         let previous = cache.entry(record.id)
         var notifications: [RefreshNotification] = []
         let nodes = Dictionary((result.topology?.nodes ?? []).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        for (key, summary) in result.conversations.sorted(by: { $0.key < $1.key }) where summary.attention != nil {
-            guard previous?.conversations[key]?.attention == nil, !markers.muted(host: record.id, node: key) else { continue }
+        for (key, summary) in result.conversations.sorted(by: { $0.key < $1.key }) where summary.needsYou {
+            guard previous?.conversations[key]?.summary.needsYou != true, !markers.muted(host: record.id, node: key) else { continue }
             let node = result.topology?.nodes.first { $0.key == key }
             let tab = node.flatMap { $0.parent.flatMap { nodes[$0] }?.name ?? $0.name } ?? "Agent"
             let body = Self.lastLine(result.texts[key]) ?? Self.lastLine(summary.preview) ?? summary.attention ?? "Needs you"

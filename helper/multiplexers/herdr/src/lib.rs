@@ -13,6 +13,7 @@ mod hooks;
 pub mod input;
 mod launch;
 pub mod native;
+mod observe;
 mod ops;
 mod prefix;
 mod process;
@@ -122,6 +123,13 @@ pub struct Herdr {
     preparing: bool,
     subscription: Option<Stream>,
     controllers: BTreeMap<Id, Controller>,
+    /// `screen` reads terminals no client renders from herdr (observe.rs); off in a client helper.
+    host_screens: bool,
+    /// Host screen observers by terminal, and when a failed one may start again.
+    observers: BTreeMap<Id, observe::Observer>,
+    unobserved: BTreeMap<Id, (Instant, u32)>,
+    /// Terminals a client published screens for: only its screens are read.
+    clients: std::collections::BTreeSet<Id>,
     detached: std::collections::BTreeSet<Id>,
     waiting: BTreeMap<Id, readiness::Waiting>,
     changes: u64,
@@ -183,6 +191,10 @@ impl Herdr {
             preparing: false,
             subscription: None,
             controllers: BTreeMap::new(),
+            host_screens: false,
+            observers: BTreeMap::new(),
+            unobserved: BTreeMap::new(),
+            clients: Default::default(),
             detached: Default::default(),
             waiting: BTreeMap::new(),
             changes: 0,

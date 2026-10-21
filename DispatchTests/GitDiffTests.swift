@@ -439,33 +439,6 @@ final class GitDiffTests: XCTestCase {
         XCTAssertNil(GitChangesText.reconciled(billing, previous: before, current: []))
     }
 
-    func testGitLinesTypeFromWhereverTheShellIs() {
-        let repository = "/Users/ivan/src/api"
-        XCTAssertEqual(FilesEditor.git("add -p", repository: repository, shellDirectory: "/Users/ivan/src/api/src"),
-                       "git add -p")
-        XCTAssertEqual(FilesEditor.git("add -p", repository: repository, shellDirectory: repository), "git add -p")
-        XCTAssertEqual(FilesEditor.git("add -p", repository: repository, shellDirectory: "/Users/ivan"),
-                       "git -C '/Users/ivan/src/api' add -p")
-        XCTAssertEqual(FilesEditor.git("show c28855c", repository: repository, shellDirectory: "/Users/ivan/src/apiary"),
-                       "git -C '/Users/ivan/src/api' show c28855c", "a sibling folder sharing the prefix is outside")
-        XCTAssertEqual(FilesEditor.git("add -p", repository: "/Users/ivan/it's", shellDirectory: nil),
-                       #"git -C '/Users/ivan/it'\''s' add -p"#)
-    }
-
-    func testGitLinesGoThroughTheTerminalsRefusals() {
-        // What the Changes and Commits buttons call: a tab with no terminal types nothing and says why.
-        let files = FilesCoordinator { nil }
-        let tab = System.uuid()
-        defer { FilesEditorNotices.shared.clear(tab) }
-        XCTAssertEqual(FilesEditor.runGit("add -p", repository: "/Users/ivan/src/api", tab: tab, files: files), .noTerminal)
-        XCTAssertEqual(FilesEditorNotices.shared.notice(for: tab), FilesEditor.Refusal.noTerminal.message)
-        XCTAssertEqual(FilesEditor.runGit("show c28855c\nrm -rf ~", repository: "/Users/ivan/src/api", tab: tab,
-                                          files: files), .unsafePath, "a newline would run the rest")
-        XCTAssertEqual(FilesEditorNotices.shared.notice(for: tab), FilesEditor.Refusal.unsafePath.message)
-        XCTAssertEqual(FilesEditor.refusal(path: "", action: .line("git add -p"), hasTerminal: true, busy: true), .busy)
-        XCTAssertNil(FilesEditor.refusal(path: "", action: .line("git add -p"), hasTerminal: true, busy: false))
-    }
-
     // MARK: Source
 
     func testSourceWithoutLinesSaysWhy() {

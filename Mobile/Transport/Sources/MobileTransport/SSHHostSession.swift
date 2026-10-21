@@ -8,6 +8,14 @@ public struct SSHHostSession: HostSession {
 
   public func closed() async { await connection.closed() }
 
+  public var lossReason: String? {
+    switch connection.endReason {
+    case nil: nil
+    case .channelClosed?: "The connection closed."
+    case let reason?: HostConnectionPolicy.describe(reason)
+    }
+  }
+
   public func close() async {
     await helper.close()
     await connection.close()

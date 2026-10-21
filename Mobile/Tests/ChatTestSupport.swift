@@ -191,7 +191,8 @@ enum ChatFixture {
     /// The approval Claude Code's PermissionRequest hook becomes (helper/harnesses/claude/src/hooks.rs), for the real
     /// hook input of DispatchTests/Fixtures/hooks-observed-0.153.2.json; `options` adds a session-scoped choice.
     static func approval(id: String = "approval-1", options: [String] = ["Allow", "Deny", "Terminal"]) -> [String: Any] {
-        let operation = #"{"command":"printf 'DISPATCH_LOCAL_TOOL_OK\\n'","description":"Allow the local fixture to print its test marker?"}"#
+        // The hook's text is "<tool>\n<input>" (hooks.rs `operation`).
+        let operation = "Bash\n" + #"{"command":"printf 'DISPATCH_LOCAL_TOOL_OK\\n'","description":"Allow the local fixture to print its test marker?"}"#
         return ["id": id, "key": NSNull(), "approval": true, "blocking": true, "turn": NSNull(), "record": NSNull(),
                 "questions": [["id": "approval", "header": "Bash", "text": operation, "secret": false, "multiple": false,
                                "custom": false, "options": options.map { ["id": $0, "label": $0, "detail": NSNull()] },

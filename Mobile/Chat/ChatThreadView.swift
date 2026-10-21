@@ -37,7 +37,7 @@ struct ChatThreadView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ChatLinkBanner(link: session.link, host: session.hostName)
+            ChatLinkBanner(link: session.link, host: session.hostName, problem: session.linkProblem)
             ScrollView {
                 VStack(spacing: 8) {
                     transcript
@@ -142,7 +142,7 @@ struct ChatThreadView: View {
                 .contextMenu { Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = row.item.text } }
         case .agent(let summary):
             VStack(spacing: 5) {
-                ChatBubble(side: .agent) { Text(MobileChatMarkdown.text(row.item.text)) }
+                ChatBubble(side: .agent) { MobileChatMarkdownView(text: row.item.text) }
                     .environment(\.openURL, MobileChatMarkdown.openURL)
                     .onTapGesture { details = row }
                     .contextMenu {
@@ -164,6 +164,13 @@ struct ChatThreadView: View {
                         .padding(.vertical, -14)
                 }
             }
+        case .thinking:
+            // Claude's thinking, inline and muted as the Mac shows it (not a bubble, never collapsed).
+            MobileChatMarkdownView(text: row.item.text, muted: true)
+                .font(.footnote)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 14)
+                .contextMenu { Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = row.item.text } }
         case .notice:
             Text(row.item.text)
                 .font(.caption)
@@ -194,7 +201,7 @@ struct ChatThreadView: View {
     }
 
     /// The thread in order: rows, with each approval after the turn that holds its tool call (the Mac's placement),
-    /// else at the end.
+    /// else after the turn that was last when it arrived, else at the end. A pending one stays last, where it is answered.
     private var entries: [Entry] {
         let rows = session.transcript.rows
         var placed: [String: [MobileChatSession.Approval]] = [:]
@@ -204,7 +211,9 @@ struct ChatThreadView: View {
             let owner = approval.pending.turnID.flatMap { id in turns.contains { $0.id == id } ? id : nil }
                 ?? approval.pending.toolItemID.flatMap { item in turns.first { $0.items.contains { $0.id == item } }?.id }
             if let owner, rows.contains(where: { $0.turnID == owner }) { placed[owner, default: []].append(approval) }
-            else { unplaced.append(approval) }
+            else if !approval.pending.pending, let anchor = approval.anchor, rows.contains(where: { $0.turnID == anchor }) {
+                placed[anchor, default: []].append(approval)
+            } else { unplaced.append(approval) }
         }
         var result: [Entry] = []
         for (index, row) in rows.enumerated() {

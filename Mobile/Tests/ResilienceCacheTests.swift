@@ -80,8 +80,9 @@ final class ResilienceCacheTests: XCTestCase {
         let row = HostCacheEntry.Conversation(ChatConversationSummary(preview: long, finished: true))
         XCTAssertEqual(row.preview?.count, HostCacheEntry.Conversation.previewLimit)
         let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(row)) as? [String: Any])
-        XCTAssertTrue(Set(fields.keys).isSubset(of: ["busy", "subagents", "attention", "preview", "finished", "lastActivity"]),
-                      "a row's state, its preview and time: no transcript")
+        XCTAssertTrue(Set(fields.keys).isSubset(of: ["busy", "subagents", "attention", "preview", "finished", "lastActivity",
+                                                     "waiting", "title"]),
+                      "a row's state, its preview, title and time: no transcript")
     }
 
     /// Before any host answers (the first frame), Spaces and Agents show the cached hosts, their spaces and the agents'

@@ -573,6 +573,101 @@ final class SettingsSynchronizationTests: XCTestCase {
         }
     }
 
+    func testFullscreenRevealHostMarkFollowsTheTextSize() async throws {
+        // One tab, a second space and the sidebar hidden: in full screen the edge reveal shows the Mac's mark where a
+        // strip would lead with it. It sits over the content, outside its environment, yet takes the text size.
+        let app = try TmuxWalkthrough(server: false, liquidGlass: false); defer { app.close() }
+        app.workspace.newLocalSpace()
+        app.controller.settings.values.fontSize = 18
+        app.controller.windowState.sidebarVisibilityOverride = false
+        app.controller.windowState.isFullScreen = true
+        let root = try XCTUnwrap(app.window.contentView)
+        try await TestSupport.eventually {
+            !PresentationTestSupport.views(of: FullScreenSidebarRevealView.self, in: root).isEmpty
+        }
+        let reveal = try XCTUnwrap(PresentationTestSupport.views(of: FullScreenSidebarRevealView.self, in: root).first)
+        reveal.updatePointer(at: NSPoint(x: 2, y: 200))
+        let expected = StripHostMark.size(AppTypography(contentSize: 18))
+        XCTAssertNotEqual(expected, StripHostMark.size(AppTypography()), "the setting must change the mark's size")
+        try await TestSupport.eventually(diagnostic: "marks \(PresentationTestSupport.accessibilityFrames("strip-host", in: app.window))") {
+            PresentationTestSupport.accessibilityFrames("strip-host", in: app.window).contains {
+                abs($0.width - expected.width) < 0.5 && abs($0.height - expected.height) < 0.5
+            }
+        }
+    }
+
+    /// A remote tab alone in full screen: the edge reveal's host mark sits where the two-tab strip puts it, its picker
+    /// is the strip mark's size, and the floating mode switch rides the mark's row at the strip's trailing inset, at
+    /// every text size.
+    func testSingleTabHostMarkPickerAndSwitchMatchTheTwoTabStrip() async throws {
+        for size: CGFloat in [12.5, 18] {
+            let app = try TmuxWalkthrough(server: false, liquidGlass: false)
+            defer { app.close() }
+            app.controller.settings.values.fontSize = size
+            app.controller.windowState.sidebarVisibilityOverride = false
+            app.controller.windowState.isFullScreen = true
+            let tab = try XCTUnwrap(app.workspace.activeTab)
+            let generation = System.uuid()
+            app.workspace.hosts.begin(tab.focusedSurfaceID, generation: generation, destination: "mark-fixture")
+            app.workspace.hosts.update(tab.focusedSurfaceID, generation: generation, destination: "mark-fixture",
+                                       greeting: SSHGreeting(version: 1, host: "mark-fixture", boot: "boot", uid: 501,
+                                                             home: "/tmp", capabilities: []), state: .connected)
+            let root = try XCTUnwrap(app.window.contentView)
+            try await TestSupport.eventually {
+                !PresentationTestSupport.views(of: FullScreenSidebarRevealView.self, in: root).isEmpty
+            }
+            let reveal = try XCTUnwrap(PresentationTestSupport.views(of: FullScreenSidebarRevealView.self, in: root).first)
+            reveal.updatePointer(at: NSPoint(x: 2, y: 200))
+            let mark = StripHostMark.size(AppTypography(contentSize: size))
+            let alone = try await chrome(in: app.window, mark: mark, label: "one tab at \(size)")
+            app.workspace.newTab()
+            try await TestSupport.eventually { app.workspace.current?.activePane?.tabs.count == 2 }
+            let strip = try await chrome(in: app.window, mark: mark, label: "two tabs at \(size)")
+            XCTAssertEqual(alone.mark.minX, strip.mark.minX, accuracy: 0.5, "mark x at \(size)")
+            XCTAssertEqual(alone.mark.midY, strip.mark.midY, accuracy: 0.5, "mark y at \(size)")
+            XCTAssertEqual(alone.mark.width, strip.mark.width, accuracy: 0.5, "mark size at \(size)")
+            XCTAssertEqual(alone.picker.width, strip.picker.width, accuracy: 0.5, "picker width at \(size)")
+            XCTAssertEqual(alone.picker.height, strip.picker.height, accuracy: 0.5, "picker height at \(size)")
+            XCTAssertEqual(alone.modeSwitch.midY, alone.mark.midY, accuracy: 1, "switch row at \(size)")
+            XCTAssertEqual(strip.modeSwitch.midY, strip.mark.midY, accuracy: 1, "the strip's switch row at \(size)")
+            let width = try XCTUnwrap(app.window.contentView).bounds.width
+            XCTAssertEqual(alone.modeSwitch.maxX, width - Chrome.stripInset, accuracy: 1, "switch edge at \(size)")
+        }
+    }
+
+    /// The host mark's frame once it has scaled in to `mark`, its picker's size once clicked (then closed) and the mode
+    /// switch's frame.
+    private func chrome(in window: NSWindow, mark size: CGSize, label: String) async throws
+        -> (mark: NSRect, picker: NSSize, modeSwitch: NSRect) {
+        var mark = NSRect.zero, modeSwitch = NSRect.zero
+        var seen = ""
+        try await TestSupport.eventually(diagnostic: "\(label): marks and switches \(seen)") {
+            window.contentView?.layoutSubtreeIfNeeded()
+            let marks = PresentationTestSupport.accessibilityFrames("strip-host", in: window)
+            let switches = PresentationTestSupport.accessibilityFrames("chat-mode-switch", in: window)
+            seen = "\(marks) \(switches)"
+            guard let found = marks.first(where: { abs($0.width - size.width) < 0.1 }), let control = switches.first
+            else { return false }
+            (mark, modeSwitch) = (found, control)
+            return true
+        }
+        _ = try await PresentationTestSupport.capture(window, named: label, in: "host-mark-alignment")
+        try PresentationTestSupport.click(window, at: NSPoint(x: mark.midX, y: mark.midY))
+        var picker = NSSize.zero
+        try await TestSupport.eventually(diagnostic: "\(label): no picker") {
+            for other in NSApp.windows where other !== window {
+                if let frame = PresentationTestSupport.accessibilityFrames("strip-space-picker", in: other).first {
+                    picker = frame.size
+                    return true
+                }
+            }
+            return false
+        }
+        for other in NSApp.windows where other !== window && other.isVisible { other.orderOut(nil) }
+        print("host-mark-alignment \(label): mark \(mark) picker \(picker) switch \(modeSwitch)")
+        return (mark, picker, modeSwitch)
+    }
+
     func testSidebarHeaderAlignsWithTabsAndFullscreenToggle() async throws {
         let app = try TmuxWalkthrough()
         defer { app.close() }

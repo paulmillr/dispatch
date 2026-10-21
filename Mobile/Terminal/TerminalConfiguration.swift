@@ -24,6 +24,8 @@ struct TerminalConfiguration: Equatable, Sendable {
     /// Where the bundled themes are (`DispatchMobile.app/ghostty`).
     static var themes: URL { Bundle.main.bundleURL.appendingPathComponent("ghostty") }
 
+    /// `clipboard-write = deny`: the phone has no trusted consent surface for a remote program's write, so it fails
+    /// closed instead of turning an `ask` request into an unconditional write in the SurfaceHost.
     var text: String {
         let themePath = Self.themes.appendingPathComponent(theme).path
         return """
@@ -37,10 +39,10 @@ struct TerminalConfiguration: Equatable, Sendable {
         scrollback-limit-bytes = \(scrollbackBytes)
         image-storage-limit = 0
         clipboard-read = ask
-        // The phone has no trusted consent surface for a remote program's write. Fail closed instead of turning an
-        // `ask` request into an unconditional write in the SurfaceHost.
         clipboard-write = deny
         keybind = clear
+        keybind = shift+page_up=scroll_page_up
+        keybind = shift+page_down=scroll_page_down
         """
     }
 

@@ -14,7 +14,10 @@ import Foundation
     /// The views presenting the tab: a moved tab's new view can appear before the old one disappears.
     @ObservationIgnored private var presenters: Set<UUID> = []
     /// Which files tab the tab last showed (F1a: each tab remembers).
-    var tab: FilesTab = .files
+    var tab: FilesTab = .files {
+        // A narrow detail belongs to its list: another tab opens on its own list.
+        didSet { if (tab == .files) != (oldValue == .files) { narrowDetail = false } }
+    }
 
     // Root. Nil follows the shell's directory; a crumb or folder click pins it (F2a).
     var pinnedRoot: String?
@@ -54,6 +57,13 @@ import Foundation
     var previewRequested = false
     /// The pane is off for the tab shown: hidden, or on Files not yet asked for.
     var previewOff: Bool { previewHidden || (tab == .files && !previewRequested) }
+    /// Under `FilesView.collapseWidth` the split has room for one column (`splitNarrow`, as `FilesSplit` last laid it
+    /// out): a row chosen there (a git row's click or ⏎, a file's ⏎ or double click) shows its detail or preview in the
+    /// list's place, under a bar back to the list (or esc). Kept while the view is wide.
+    var narrowDetail = false
+    var splitNarrow = false
+    /// The pane shows: beside the list, or on one column in its place.
+    var paneShown: Bool { splitNarrow ? narrowDetail : !previewOff }
 
     // Transfers under the list (F2b, F2c).
     var transfers: [FileTransfer] = []
@@ -69,12 +79,17 @@ import Foundation
     /// a spinner rather than that repository's status and log as if they were this folder's.
     var gitResolving = false
     var status: GitStatus?
-    /// The `GitChange.id` selected in the Changes list, and its diff.
+    /// The `GitChange.id` selected among the uncommitted changes, and its diff.
     var changesSelection: String?
     var changesDiff: GitDiffState?
-    /// The header's search on Changes: the list shows the changes whose path holds it (any case).
+    /// Settings › Features › Git › Separate Changes tab: `.changes` is its own tab (with its own search) rather than
+    /// Commits' uncommitted row.
+    var changesTab = false
+    /// The separate Changes tab's search: the list shows the changes whose path holds it (any case).
     var changesFilter = ""
     var diffMode: GitDiffMode = .diff
+    /// The diffs' long lines wrap to the pane instead of scrolling sideways (the header's wrap button).
+    var diffWrap = false
     var log: GitLog?
     var logScope: GitLogScope = .branch
     var logFilter = ""
@@ -132,7 +147,7 @@ import Foundation
     /// Whether dot-names show, from the tab's override or the setting.
     func showsHidden(default setting: Bool) -> Bool { showHidden ?? setting }
 
-    /// Files always shows; Changes and Commits inside a repository, and while it is still being resolved: the loader
+    /// Files always shows; Commits (either row) inside a repository, and while it is still being resolved: the loader
     /// resolves only once files shows, so ⇧⌘U on a tab that never showed files waits for the answer (and falls back
     /// to Files if there is no repository) rather than refusing.
     func canShow(_ tab: FilesTab) -> Bool {
@@ -150,11 +165,15 @@ import Foundation
         focusRequest = System.uuid()
     }
 
-    /// The header shows the Changes and Commits segments: inside a repository, or while a git tab waits for the
-    /// repository to resolve (outside one the tab has already fallen back to Files).
+    /// Commits shows (its log and refs are read): on either of its rows, or on its own as the separate Changes tab
+    /// leaves it.
+    var showsLog: Bool { tab == .commits || (tab == .changes && !changesTab) }
+
+    /// The header shows the git segments: inside a repository, or while a git tab waits for the repository to resolve
+    /// (outside one the tab has already fallen back to Files).
     var showsGitTabs: Bool { git.repository != nil || tab != .files }
 
-    /// The Changes segment's count: nil until the status is loaded inside a repository.
+    /// The uncommitted files the Commits segment counts: nil until the status is loaded inside a repository.
     var changedCount: Int? {
         guard git.repository != nil else { return nil }
         return status?.changedFiles
@@ -162,7 +181,7 @@ import Foundation
 }
 
 extension GitStatus {
-    /// The files the status lists as changed, each once (a file staged and changed again is one file), as the Changes
-    /// segment and the Files footer count them; ignored entries are not changes.
+    /// The files the status lists as changed, each once (a file staged and changed again is one file), as the Commits
+    /// segment and the uncommitted row count them; ignored entries are not changes.
     var changedFiles: Int { Set(changes.lazy.filter { $0.kind != .ignored }.map(\.path)).count }
 }

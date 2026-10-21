@@ -597,6 +597,8 @@ impl Multiplexer for Herdr {
             self.defer(io, done, Err(error("Invalid herdr terminal size.")));
             return;
         }
+        // The client renders and publishes this terminal from now on.
+        self.unobserve(io, terminal, None);
         self.reveal(terminal);
         self.topology();
         if let Some(c) = self.controllers.get_mut(&terminal)
@@ -791,6 +793,7 @@ impl Multiplexer for Herdr {
             );
         } else {
             self.screens.read(io, terminal, changed, done);
+            self.observe_screen(io, terminal);
         }
     }
     fn publish(&mut self, io: &mut dyn Io, terminal: Id, screen: Screen) {
@@ -798,7 +801,13 @@ impl Multiplexer for Herdr {
             endpoint.publish(io, terminal, screen);
             return;
         }
+        // A client renders this terminal: its screens are the only ones read from now on.
+        self.clients.insert(terminal);
+        self.unobserve(io, terminal, None);
         self.screens.publish(io, terminal, screen);
+    }
+    fn host_screens(&mut self, enabled: bool) {
+        self.set_host_screens(enabled);
     }
     fn event(&mut self, io: &mut dyn Io, ui: &mut dyn Ui, event: Event) {
         self.route(io, ui, event);
