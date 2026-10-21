@@ -51,9 +51,10 @@ The script needs nothing else from the repository. It:
 1. checks the identity (one valid Developer ID Application, by full name or SHA-1), shows the zip's
    SHA-256 and continues only after the signer types `yes` because it matches the hash received
    separately, and checks the `dispatch-notary` credentials, all before signing anything;
-2. signs every Mach-O file, deepest first, then the app, with the hardened runtime, a secure
-   timestamp and no entitlements (`helper/darwin-universal` is a link to `dispatch-helper`, signed
-   once);
+2. signs every Mach-O file, deepest first, then the app, with the hardened runtime and a secure
+   timestamp (`helper/darwin-universal` is a link to `dispatch-helper`, signed once); the app alone
+   gets one entitlement, `com.apple.security.device.audio-input` (chat dictation), written by the
+   script rather than kept from the maintainer's signature;
 3. notarizes and staples the app, so it also passes Gatekeeper offline after leaving the DMG;
 4. puts it in an LZMA (`ULMO`) DMG with an `Applications` link, signs, notarizes and staples the DMG,
    and checks it with `spctl`.
@@ -94,7 +95,8 @@ Test the download on a disposable Mac (a local terminal and an SSH session) befo
   Apple silicon. The macOS SSH helper is universal for remote Intel Macs (Debug builds make it for
   the building Mac's architecture only; `DISPATCH_HELPER_UNIVERSAL=1` makes both).
 - Release builds carry no `com.apple.security.get-task-allow` (`CODE_SIGN_INJECT_BASE_ENTITLEMENTS:
-  NO`), which notarization rejects; re-signing drops entitlements anyway.
+  NO`), which notarization rejects; re-signing replaces the build's entitlements
+  (`Dispatch/Dispatch.entitlements`, the microphone) with the script's identical one anyway.
 - A build the signer makes from source can't be verified this way: different Xcode versions, SDKs
   and paths produce different binaries.
 

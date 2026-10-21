@@ -10,6 +10,8 @@ enum TabsRoute: Hashable {
     case details(SpaceRef)
     /// M1f: host detail (Hosts' view), from the Info button in edit mode.
     case host(UUID)
+
+    var tab: TabRef? { if case .tab(let ref) = self { ref } else { nil } }
 }
 
 /// What a tab's two segments show: the Terminal and Chat areas build them for a tab's pane (the shell's composition
@@ -27,6 +29,8 @@ struct TabsContent {
 @MainActor @Observable
 final class SpacesNavigator {
     var path: [TabsRoute] = []
+    /// The window shows Spaces beside the tab (`MobileSplit`, set by `MobileRoot`): a tab opened replaces the shown one.
+    var split = false
     var editing = false
     var picking = false
     var newSpace: NewSpaceRequest?
@@ -82,13 +86,61 @@ final class SpacesNavigator {
     func open(_ tab: MobileTab, terminal: Bool) {
         model.visited(tab.space)
         if terminal { model.segments[tab.ref] = .terminal }
-        path.append(.tab(tab.ref))
+        show(tab.ref)
     }
 
     /// Agents: a conversation's tab on its Chat segment.
     func openChat(_ ref: TabRef) {
         model.segments[ref] = .chat
-        path.append(.tab(ref))
+        show(ref)
+    }
+
+    /// A tab row in the split (`TabsTabLink`): the detail column shows it, its segment as the user left it.
+    func select(_ ref: TabRef) { show(ref) }
+
+    /// On top of the stack; in the split, in the detail column in place of the tab shown there (and what it pushed).
+    private func show(_ ref: TabRef) {
+        if split { path = splitPath.sidebar + [.tab(ref)] } else { path.append(.tab(ref)) }
+    }
+
+    /// The path as the split shows it (`MobileSplit`): the sidebar's routes, the tab the detail column shows (the last
+    /// one on the path) and what is pushed over it there. The path stays the one source, so folding the phone shows the
+    /// same screens as one stack, the tab on top, and unfolding it splits them again.
+    struct SplitPath: Equatable {
+        var sidebar: [TabsRoute]
+        var tab: TabRef?
+        var detail: [TabsRoute]
+    }
+
+    static func split(_ path: [TabsRoute]) -> SplitPath {
+        guard let index = path.lastIndex(where: { $0.tab != nil }), let tab = path[index].tab else {
+            return SplitPath(sidebar: path, tab: nil, detail: [])
+        }
+        return SplitPath(sidebar: path[..<index].filter { $0.tab == nil }, tab: tab, detail: Array(path[(index + 1)...]))
+    }
+
+    var splitPath: SplitPath { Self.split(path) }
+
+    /// The sidebar's stack moved (a push, Back): a tab it pushed (a row) goes to the detail column instead, in place of
+    /// the one there.
+    func setSidebar(_ routes: [TabsRoute]) {
+        if let tab = routes.last(where: { $0.tab != nil }) {
+            path = routes.filter { $0.tab == nil } + [tab]
+        } else {
+            let shown = splitPath
+            path = routes + (shown.tab.map { [.tab($0)] } ?? []) + shown.detail
+        }
+    }
+
+    /// The detail column's stack moved: space details over the tab, or Back from them. A tab they open (a row of
+    /// details) takes the column.
+    func setDetail(_ routes: [TabsRoute]) {
+        let shown = splitPath
+        if let tab = routes.last(where: { $0.tab != nil }) {
+            path = shown.sidebar + [tab]
+        } else if let tab = shown.tab {
+            path = shown.sidebar + [.tab(tab)] + routes
+        }
     }
 
     /// Host detail's Spaces rows: the space's tabs (M2c) over the detail.
@@ -114,6 +166,10 @@ final class SpacesNavigator {
     /// pick|edit` opens that screen of the sample; `-DispatchTabsTree YES`, `-DispatchTabsFilter chats` and
     /// `-DispatchTabsCollapse <host name>` set the menu and the tree.
     func screenshotState() {
+        // Once a launch: SpacesRoot appears again whenever the split's sidebar comes back to it, and the launch's tab
+        // took the detail column back from the one the user had opened.
+        guard !screenshotStateApplied else { return }
+        screenshotStateApplied = true
         let defaults = UserDefaults.standard
         if defaults.object(forKey: "DispatchTabsTree") != nil { model.tree = defaults.bool(forKey: "DispatchTabsTree") }
         if let filter = defaults.string(forKey: "DispatchTabsFilter").flatMap(TabsQuery.Filter.init(rawValue:)) { model.query.filter = filter }
@@ -166,6 +222,8 @@ final class SpacesNavigator {
             }
         }
     }
+
+    @ObservationIgnored private var screenshotStateApplied = false
 
     /// Set by the shell for scripts that switch tabs.
     @ObservationIgnored var selectSection: ((String) -> Void)?
@@ -383,7 +441,7 @@ private struct SpacesFlatList: View {
             ScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(rows) { entry in
-                        NavigationLink(value: TabsRoute.tab(entry.id)) {
+                        TabsTabLink(tab: entry.id) {
                             TabsTabRow(model: model, entry: entry, detail: true, now: context.date, last: entry.id == rows.last?.id)
                         }
                         .buttonStyle(.plain)
@@ -406,26 +464,31 @@ struct TabsTabRow: View {
     var detail: Bool
     var now: Date
     var last = false
+    @Environment(\.tabsShownTab) private var shown
+    @Environment(\.tabsNarrowSidebar) private var narrow
 
     var body: some View {
         let tab = entry.tab
-        MobileRow(dot: entry.urgency?.rowDot, tint: entry.host.tint, name: entry.label,
-                  detail: detail ? [entry.space?.name, entry.host.name].compactMap { $0 }.joined(separator: " · ") : nil,
-                  time: TabsTime.label(entry.activity, now: now), subtitle: Self.line(tab, label: entry.label, host: entry.host, status: model.status),
+        // The narrow sidebar (`MobileSplit.narrow`): the space alone; a space's own screen keeps its tabs.
+        let spaceOnly = narrow && detail
+        MobileRow(dot: entry.urgency?.rowDot, tint: entry.host.tint, name: spaceOnly ? entry.space?.name ?? entry.label : entry.label,
+                  detail: detail && !spaceOnly ? [entry.space?.name, entry.host.name].compactMap { $0 }.joined(separator: " · ") : nil,
+                  time: TabsTime.label(entry.activity, now: now), subtitle: Self.line(tab, label: entry.label, status: model.status),
                   separator: !last, disc: detail, stale: entry.host.stale) {
             HostGlyph(host: entry.host.glyphRecord, size: MobileRow<HostGlyph>.glyphSize)
         }
+        // The split's sidebar marks the tab beside it, as a selected row in Mail.
+        .background { if shown == entry.id { Color.groupedRow } }
+        .accessibilityAddTraits(shown == entry.id ? .isSelected : [])
     }
 
-    /// The line: what a chat tab's agent is doing (from Chat), else the program and where it runs.
-    static func line(_ tab: MobileTab, label: String, host: TabsHost, status: @MainActor (UUID, UInt64) -> String?) -> String? {
+    /// The line: what a chat tab's agent is doing (from Chat), else the program running, when the row's name is not
+    /// already it (a conversation title, a numbered tab's pane); a bare shell has none. Never the host or the folder:
+    /// the row's header, its space and the tab's own screen say where it runs.
+    static func line(_ tab: MobileTab, label: String, status: @MainActor (UUID, UInt64) -> String?) -> String? {
         if let pane = tab.agentPane, let text = status(tab.ref.host, pane.id) { return text }
-        let cwd = host.abbreviate(tab.cwd)
-        // The program, when the row's name is not already it (a conversation title, a numbered tab's pane).
-        if let program = tab.program, program != label, !tab.atShell {
-            return [program, cwd].compactMap { $0 }.joined(separator: " · ")
-        }
-        return cwd
+        if let program = tab.program, program != label, !tab.atShell { return program }
+        return nil
     }
 }
 

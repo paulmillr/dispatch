@@ -31,6 +31,8 @@ struct TabScreen<Terminal: View, Chat: View>: View {
     var terminalSubtitle: @MainActor (MobileTab, MobilePane) -> String? = { _, _ in nil }
 
     @State private var segment: TabSegment?
+    @Environment(\.tabsColumnWidth) private var column
+    @Environment(\.tabsSplitDetail) private var splitDetail
 
     var body: some View {
         let tab = model.tab(ref)
@@ -60,8 +62,9 @@ struct TabScreen<Terminal: View, Chat: View>: View {
                 TabScreenHeader(tab: tab, title: model.label(of: tab, host: workspace.host), host: workspace.host,
                                 space: workspace.space(of: tab), needsYou: model.needsYou(excluding: ref), backTitle: backTitle,
                                 segment: current(tab), terminalSubtitle: tab.activePane.flatMap { terminalSubtitle(tab, $0) },
+                                column: column, showsBack: !splitDetail,
                                 back: back, details: { path.append(.details(tab.space)) })
-            } else {
+            } else if !splitDetail {
                 ToolbarItem(placement: .topBarLeading) {
                     TabsBackPill.needsYou(model.needsYou(), back: backTitle, action: back)
                 }
@@ -112,11 +115,14 @@ struct TabScreenHeader: ToolbarContent {
     let segment: TabSegment
     /// Terminal's "~/src/app · zsh" from the terminal itself, when it knows.
     var terminalSubtitle: String? = nil
+    /// The column the bar is in (`TabsScreenHeader.column`).
+    var column: CGFloat? = nil
+    var showsBack = true
     let back: () -> Void
     let details: () -> Void
 
     var body: some ToolbarContent {
-        TabsScreenHeader(title: title ?? tab.name) {
+        TabsScreenHeader(title: title ?? tab.name, column: column, showsBack: showsBack) {
             TabsBackPill.needsYou(needsYou, back: backTitle, action: back)
         } subtitle: {
             if tab.panes.count > 1 {

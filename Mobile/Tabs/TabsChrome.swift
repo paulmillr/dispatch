@@ -125,6 +125,10 @@ struct TabsBackPill: View {
         count > 0 ? TabsBackPill(label: "\(count)", count: true, action: action) : TabsBackPill(label: title, action: action)
     }
 
+    /// A screen's name truncates past this, so the bar keeps room for the title and the trailing pill: a long space
+    /// or tab name pushed every item into the bar's "…" menu.
+    static let labelWidth: CGFloat = 120
+
     let label: String
     var count = false
     let action: () -> Void
@@ -143,9 +147,11 @@ struct TabsBackPill: View {
                         .frame(minWidth: 20, minHeight: 20)
                         .background(Color.dispatchPink, in: Capsule())
                 } else {
-                    Text(label)
-                        .font(.body)
-                        .lineLimit(1)
+                    TabsCappedWidth(max: Self.labelWidth) {
+                        Text(label)
+                            .font(.body)
+                            .lineLimit(1)
+                    }
                 }
             }
         }
@@ -169,43 +175,138 @@ private struct TabsBackChevron: View {
 /// trailing control. In the bar, not over the content: a hidden bar on a pushed screen hides it for the whole stack
 /// at the start of the push, and the screen underneath jumped up for a frame (a screen recording showed it).
 struct TabsScreenHeader<Back: View, Subtitle: View, Trailing: View>: ToolbarContent {
-    /// The title column's widest: the screen less the back pill, the host pill and the bar's margins.
-    @MainActor static var titleWidth: CGFloat {
-        let screen = (UIApplication.shared.connectedScenes.first as? UIWindowScene)?.screen.bounds.width ?? 402
-        return max(160, screen - 170)
+    /// The leading item's widest: the column (`tabsColumnWidth`; the screen without a split) less the bar's margins
+    /// (20 each side), the 44 point host pill and the 12 the bar leaves before it.
+    @MainActor static func leadingWidth(column: CGFloat?) -> CGFloat {
+        let width = column ?? (UIApplication.shared.connectedScenes.first as? UIWindowScene)?.screen.bounds.width ?? 402
+        return max(100, width - 96)
     }
     let title: String
+    /// The column the bar is in (`tabsColumnWidth`).
+    var column: CGFloat? = nil
+    /// No back pill: the split's detail column, beside the sidebar it would return to.
+    var showsBack = true
     @ViewBuilder var back: Back
     @ViewBuilder var subtitle: Subtitle
     @ViewBuilder var trailing: Trailing
 
     var body: some ToolbarContent {
-        ToolbarItem(placement: .topBarLeading) { back }
-            .sharedBackgroundVisibility(.hidden)
+        // One item: the title gets what the back pill leaves, whatever the pill says. As two items, the title's room
+        // assumed the "‹ 1" badge; a pill naming its screen ("‹ ciphers") and a long title (a Claude tab's prompt)
+        // overflowed the bar, which then showed only its "…" menu, the back pill inside it.
         ToolbarItem(placement: .topBarLeading) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title)
-                    .font(.headline)
-                    .lineLimit(1)
-                    .accessibilityAddTraits(.isHeader)
-                subtitle
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+            TabsHeaderLeading(width: Self.leadingWidth(column: column), back: showsBack) {
+                if showsBack { back }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
+                        .font(.headline)
+                        .lineLimit(1)
+                        .accessibilityAddTraits(.isHeader)
+                    subtitle
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                // The bar's height is fixed: its title grows to xxxLarge, as the system's inline titles do.
+                .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+                .padding(.leading, 4)
             }
-            // The bar's height is fixed: its title grows to xxxLarge, as the system's inline titles do.
-            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-            .padding(.leading, 4)
-            // At most what the bar has between the back pill and the host pill: a long folder truncates instead of
-            // pushing every item into the bar's overflow menu.
-            .frame(maxWidth: Self.titleWidth, alignment: .leading)
-            .fixedSize()
         }
         .sharedBackgroundVisibility(.hidden)
         ToolbarItem(placement: .topBarTrailing) { trailing }
             .sharedBackgroundVisibility(.hidden)
     }
+}
+
+/// The back pill at its own width, then the title column in what is left of `width`, 12 points after it (the gap the bar
+/// leaves between items): a long title or folder truncates instead of widening the item past the bar.
+struct TabsHeaderLeading: Layout {
+    let width: CGFloat
+    /// Whether the first subview is the back pill; without it the title column is the only one.
+    var back = true
+    static let spacing: CGFloat = 12
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let (back, title) = sizes(subviews)
+        return CGSize(width: offset(back) + title.width, height: max(back.height, title.height))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let (back, title) = sizes(subviews)
+        if self.back, let pill = subviews.first {
+            pill.place(at: CGPoint(x: bounds.minX, y: bounds.midY), anchor: .leading, proposal: ProposedViewSize(back))
+        }
+        guard let column = titleColumn(subviews) else { return }
+        column.place(at: CGPoint(x: bounds.minX + offset(back), y: bounds.midY), anchor: .leading,
+                     proposal: ProposedViewSize(width: title.width, height: nil))
+    }
+
+    private func titleColumn(_ subviews: Subviews) -> LayoutSubview? {
+        subviews.count > (back ? 1 : 0) ? subviews[subviews.count - 1] : nil
+    }
+
+    /// Where the title column starts: after the pill and the bar's gap.
+    private func offset(_ back: CGSize) -> CGFloat { self.back ? back.width + Self.spacing : 0 }
+
+    private func sizes(_ subviews: Subviews) -> (back: CGSize, title: CGSize) {
+        let back = self.back ? subviews.first?.sizeThatFits(.unspecified) ?? .zero : .zero
+        guard let column = titleColumn(subviews) else { return (back, .zero) }
+        let room = max(0, width - offset(back))
+        let ideal = column.sizeThatFits(.unspecified).width
+        let title = column.sizeThatFits(ProposedViewSize(width: min(ideal, room), height: nil))
+        // A fixed-size subtitle (the pane switcher's menu) may answer wider than offered: the item still stops at `width`.
+        return (back, CGSize(width: min(title.width, room), height: title.height))
+    }
+}
+
+extension EnvironmentValues {
+    /// The width of the column a screen is in: the split's sidebar or detail (`MobileSplit`); nil fills the screen.
+    @Entry var tabsColumnWidth: CGFloat? = nil
+    /// The split's detail column: its tab has no back pill, the sidebar beside it is where Back went.
+    @Entry var tabsSplitDetail = false
+    /// The tab the split's detail column shows: the sidebar's row for it is marked.
+    @Entry var tabsShownTab: TabRef? = nil
+    /// The split's sidebar is narrower than a phone (`MobileSplit.narrow`).
+    @Entry var tabsNarrowSidebar = false
+    /// The split's columns: a tab row opens its tab in the detail column (`TabsTabLink`); nil pushes it.
+    @Entry var tabsSelectTab: ((TabRef) -> Void)? = nil
+}
+
+/// A tab row's link: on the phone it pushes the tab; in the split it opens it beside the sidebar. A push from the
+/// sidebar (which the split moves to the detail column) slid the sidebar off and back for every row tapped.
+struct TabsTabLink<Label: View>: View {
+    let tab: TabRef
+    @ViewBuilder var label: Label
+    @Environment(\.tabsSelectTab) private var select
+
+    var body: some View {
+        if let select {
+            Button { select(tab) } label: { label }
+        } else {
+            NavigationLink(value: TabsRoute.tab(tab)) { label }
+        }
+    }
+}
+
+/// Its content at its own width up to `max`, truncating past it: under a `fixedSize()` (the bar's items, the header
+/// pills), `.frame(maxWidth:)` still lays the text out at its full width, past the frame.
+struct TabsCappedWidth: Layout {
+    let max: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let content = subviews.first else { return .zero }
+        let size = content.sizeThatFits(ProposedViewSize(width: width(content), height: nil))
+        return CGSize(width: Swift.min(size.width, max), height: size.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let content = subviews.first else { return }
+        content.place(at: CGPoint(x: bounds.minX, y: bounds.midY), anchor: .leading,
+                      proposal: ProposedViewSize(width: width(content), height: nil))
+    }
+
+    private func width(_ content: LayoutSubview) -> CGFloat { Swift.min(content.sizeThatFits(.unspecified).width, max) }
 }
 
 /// "mba2 · ~/src/app": the host in its tint, a path in mono (M2c, M4a).

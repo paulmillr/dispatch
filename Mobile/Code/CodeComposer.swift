@@ -1,9 +1,12 @@
+import Dictation
 import SwiftUI
 import UIKit
 
 /// The composer with code (M5e), with a small interface (the draft, a placeholder, the trailing slot's state and its
 /// actions): "+" for attachments, the field, and the slot (mic while the draft is empty, Stop while the agent works
-/// with an empty draft, else the pink send; a long press on send steers into the running turn). The field is a
+/// with an empty draft, else the pink send; a long press on send steers into the running turn). The mic dictates with
+/// Settings' engine (`Dictation`): tapped again it stops, and the transcript becomes the draft; while it listens a
+/// capsule above the field shows what it has heard, and after a failure, why. The field is a
 /// `UITextView` that grows with the draft up to a bound and renders its Markdown as you type (`CodeTextView`). With a
 /// fenced block in the draft the slot moves under the text, so the panel spans the field. While the field is focused a
 /// glass key row above the keyboard offers the backtick, the fence and code pairs, and a paste of several lines offers
@@ -21,14 +24,19 @@ struct CodeComposer: View {
     var steer: (() -> Void)?
     var stop: () -> Void
     var attach: () -> Void = {}
+    /// Whose dictation the mic starts and shows (the conversation).
+    var dictationOwner: AnyHashable = "composer"
 
     @State private var editor = CodeEditorModel()
     @ReduceMotion private var reduceMotion
 
-    static func slot(text: String, working: Bool) -> Slot {
+    static func slot(text: String, working: Bool, dictating: Bool = false) -> Slot {
+        if dictating { return .mic }
         let empty = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         return empty ? (working ? .stop : .mic) : .send
     }
+
+    private var dictation: Dictation { .shared }
 
     /// The slot sits under the text once the draft holds a fenced block.
     static func stacked(_ text: String) -> Bool { !ComposerFence.scan(text).isEmpty }
@@ -69,7 +77,24 @@ struct CodeComposer: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .overlay(alignment: .topLeading) {
-                if editor.pasteOffer != nil {
+                if let status = dictationStatus {
+                    Button { if !dictation.active(dictationOwner) { dictation.dismissError() } } label: {
+                        Label(status.text, systemImage: status.failed ? "exclamationmark.triangle.fill" : "waveform")
+                            .scaledFont(14, weight: .medium, relativeTo: .subheadline)
+                            .foregroundStyle(status.failed ? Color.red : Color.primary)
+                            .lineLimit(2)
+                            .truncationMode(.head)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 6)
+                            .frame(minHeight: 34)
+                            .glassEffect(.regular.interactive(), in: .capsule)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 12)
+                    .alignmentGuide(.top) { $0[.bottom] + 4 }
+                    .accessibilityIdentifier("composer-dictation-status")
+                    .transition(.opacity)
+                } else if editor.pasteOffer != nil {
                     Button { editor.pasteAsCode() } label: {
                         Label("Paste as code", systemImage: "curlybraces")
                             .scaledFont(14, weight: .medium, relativeTo: .subheadline)
@@ -94,24 +119,61 @@ struct CodeComposer: View {
         // Its own height always: the thread above gives way (with the keyboard up, too).
         .fixedSize(horizontal: false, vertical: true)
         .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: editor.pasteOffer != nil)
+        .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: dictationStatus == nil)
         .onChange(of: stacked) { _, _ in editor.measure(text: text) }
+        // A conversation left behind stops listening (the microphone indicator would stay on with nothing to show it).
+        .onDisappear { if dictation.active(dictationOwner) { dictation.cancel() } }
+    }
+
+    private var dictationStatus: (text: String, failed: Bool)? {
+        if dictation.active(dictationOwner) {
+            switch dictation.phase {
+            case .idle: return nil
+            case .starting: return ("Starting…", false)
+            case .listening: return (dictation.partial.isEmpty ? "Listening…" : dictation.partial, false)
+            case .transcribing: return ("Transcribing…", false)
+            }
+        }
+        return dictation.error(for: dictationOwner).map { ($0, true) }
+    }
+
+    /// Starts dictation, or stops it: the transcript goes after the draft (the mic shows only while it is empty).
+    private func dictate() {
+        let choice = MobileSettings.dictation()
+        let text = $text
+        dictation.toggle(owner: dictationOwner, engine: choice.engine, model: choice.model) { dictated in
+            let draft = text.wrappedValue
+            text.wrappedValue = DictationText.insert(dictated, into: draft, selection: NSRange(location: (draft as NSString).length, length: 0)).text
+        }
     }
 
     @ViewBuilder private var slot: some View {
-        switch Self.slot(text: text, working: working) {
+        let dictating = dictation.active(dictationOwner)
+        switch Self.slot(text: text, working: working, dictating: dictating) {
         case .mic:
-            Button { focus.wrappedValue = true; editor.focus() } label: {
-                Image(systemName: "mic")
-                    .font(.body)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 28, height: 28)
-                    // A 44 point target around the 28 point glyph; the outer padding gives the room back to the layout.
-                    .padding(8)
-                    .contentShape(Rectangle())
+            Button(action: dictate) {
+                ZStack {
+                    if dictating && dictation.phase == .listening {
+                        Circle().fill(Color.red)
+                            .scaleEffect(0.85 + 0.3 * CGFloat(dictation.level))
+                            .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: dictation.level)
+                        RoundedRectangle(cornerRadius: 2).fill(Color.white).frame(width: 10, height: 10)
+                    } else if dictating {
+                        ProgressView()
+                    } else {
+                        Image(systemName: "mic")
+                            .font(.body)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(width: 28, height: 28)
+                // A 44 point target around the 28 point glyph; the outer padding gives the room back to the layout.
+                .padding(8)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .padding(-8)
-            .accessibilityLabel("Dictate")
+            .accessibilityLabel(dictating ? (dictation.phase == .listening ? "Stop dictation" : "Cancel dictation") : "Dictate")
         case .stop:
             Button(action: stop) {
                 RoundedRectangle(cornerRadius: 2).fill(Color(uiColor: .systemBackground)).frame(width: 10, height: 10)

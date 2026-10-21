@@ -73,6 +73,18 @@ corpus (the app's Debug replays and the helper's capture tool).
 `Vendor/Zstd/` holds the unmodified library sources and license (see `Vendor/Zstd/PROVENANCE.md`). The license is
 bundled in `ThirdPartyLicenses/Zstandard-BSD.txt`. Source: https://github.com/facebook/zstd/tree/v1.5.7.
 
+## whisper.cpp
+
+The optional Whisper dictation engine (Mac and iPhone) is Dispatch's own Swift port of whisper.cpp,
+`Packages/WhisperEngine`. Its Metal kernels, in `Packages/WhisperEngine/Sources/WhisperEngine/Kernels/`, are adapted
+from the ggml library in whisper.cpp 1.9.5, copyright the ggml authors, under the MIT license; so are the Metal
+backend's dispatch rules and its half-float conversion (from ggml-impl.h, which took it from the FP16 library,
+copyright 2017 Facebook Inc. and Marat Dukhan, MIT). Which files, and what changed, is in that directory's
+`PROVENANCE.md`; the rest of the engine is Dispatch's own Swift. The license is bundled in
+`ThirdPartyLicenses/whisper.cpp-MIT.txt`. Source: https://github.com/ggml-org/whisper.cpp/tree/v1.9.5.
+Whisper's model weights (OpenAI, MIT license) are not bundled: Settings downloads them on request from
+https://huggingface.co/ggerganov/whisper.cpp.
+
 ## iPhone SSH transport
 
 Dispatch for iPhone's SSH engine (`Mobile/Transport/Core`, static library `DispatchMobileSSHCore`) links

@@ -4,7 +4,7 @@ Dispatch is a macOS terminal. It runs with your user account's full permissions:
 
 ## Summary
 
-- **No network traffic of its own:** no telemetry, analytics, crash reporting, or update checks.
+- **No network traffic of its own:** no telemetry, analytics, crash reporting, or update checks. The one download it makes is a Whisper dictation model, when you ask for it.
 - **Agent hooks are installed automatically** into Codex and Claude config while Chat is on (default).
 - **SSH hosts can get a helper** that, once granted, runs remote terminals, reads processes, metrics, readable files, and transcripts, and edits agent config. Any process running as your remote user can use it too.
 - **Unsafe pastes are confirmed automatically**, so a multi-line paste can run commands immediately.
@@ -12,7 +12,7 @@ Dispatch is a macOS terminal. It runs with your user account's full permissions:
 
 ## Network
 
-- The only outbound connections Dispatch makes are the system `ssh`, which you start, and an optional `ws://` WebSocket to a local Codex app-server.
+- The only outbound connections Dispatch makes are the system `ssh`, which you start, an optional `ws://` WebSocket to a local Codex app-server, and the [Whisper model downloads](#dictation) you start in Settings.
 - That WebSocket is only used if you launched Codex with `--remote ws(s)://` on a loopback address. It uses an ephemeral session, no proxy, and refuses redirects. If `--remote-auth-token-env` is set, Dispatch doesn't connect at all, because it never guesses credentials.
 - Every other channel is a Unix socket, a pipe, or a file on the same machine.
 - Dispatch itself makes no model API calls. Agents, including the side conversations below, talk to their own providers with their own credentials.
@@ -235,6 +235,15 @@ The token routes the request to a pane. If the token doesn't match any pane, Dis
 
 Quitting doesn't ask for confirmation when only tmux and herdr tabs are open.
 
+## Dictation
+
+The chat composer's microphone turns speech into a draft on the Mac; no audio or text leaves it.
+
+- **Microphone.** macOS asks once, on the first dictation ("Dispatch listens while you dictate a chat message."). The app is signed with `com.apple.security.device.audio-input`, which the hardened runtime requires for that. It listens only between the two clicks (macOS shows its microphone indicator meanwhile), and a recording is kept in memory only until it is transcribed, never written to disk.
+- **Apple (default).** On macOS 26 and later, Speech's `SpeechAnalyzer`, which runs on the Mac; the first dictation in a language may have macOS download that language's model, as system dictation does. On macOS 14 and 15, `SFSpeechRecognizer` with `requiresOnDeviceRecognition`: it fails rather than send audio to Apple, and macOS also asks for **Speech Recognition** permission.
+- **Whisper.** `Packages/WhisperEngine`, a Swift port of whisper.cpp (its Metal kernels adapted from ggml), in the app. Settings downloads the models you choose over `https` from `huggingface.co/ggerganov/whisper.cpp`; a model is used only once its size and SHA-256 match the values built into the app. Models are kept in `~/Library/Application Support/Dispatch/Whisper/` until you delete them in Settings, and the last one used stays in memory for 3 minutes after a dictation.
+- The transcript goes into the draft at the caret, as typing would; nothing is sent until you send.
+
 ## Data stored on your Mac
 
 | What | Where | Contents | When | Protection |
@@ -244,6 +253,7 @@ Quitting doesn't ask for confirmation when only tmux and herdr tabs are open.
 | Terminal output | `…/Dispatch/terminal-history.json` | The raw text of plain local and SSH tabs: commands, output, and anything else visible, possibly secrets. Not tmux or herdr tabs. | Only on a normal quit, with **Restore tab history** (off) and **Reopen spaces** both on. Deleted from disk early in the next launch, ignored after 7 days, and deleted when the setting is turned off. | 0600, atomic, excluded from backups. Capped at one scrollback per tab and 1/32 of RAM in total. Replayed without control sequences. |
 | Chat drafts | `…/Dispatch/drafts.json` | Working and saved drafts, plus a copy of each prompt from before it is sent until delivery is confirmed, per host, agent, and conversation | 300 ms after typing stops, and at most every 2 s | Owner-only atomic write; excluded from backups; no expiry |
 | Helper files | `~/.dispatch/` | `bin/dispatch-helper`, a stable link to an immutable build in `bin/launchers/` that hook entries run; `run/*/` hook sockets and startup files of running helpers; `routes/` which helper serves each hook; `state/` herdr recovery records; `state/queue/` chat messages you queued for Claude Code or Pi, in full, until they are sent or removed | `bin/dispatch-helper` is refreshed when a helper writes a hook or startup command; each `run/*/` exists while its helper runs | Folders 0700, sockets 0600 |
+| Whisper models | `…/Dispatch/Whisper/` | The ggml model files you downloaded for dictation | When you download one in Settings; deleted there | Default file mode |
 | Diagnostics | `~/Library/Logs/Dispatch/Diagnostics/` | Chat scroll and viewport events and geometry. Row IDs are replaced with keyed hashes; no conversation text, hosts, or paths. | Only while **Diagnostics** is on (off). Turning it off doesn't delete existing files. | 0600, rotated at 4 MiB |
 | UserDefaults (`yachts.dispatch.app`) | `~/Library/Preferences` | Chat and hook switches, SSH grants (`SSHIntegrationPermissions.v2`), host records (`HostRegistry.v1`), herdr presentation, window frame | On change | Default |
 
@@ -261,10 +271,10 @@ These can appear on the lock screen, depending on your macOS notification settin
 
 ## Build and distribution
 
-- Release and Debug builds are ad-hoc signed (`CODE_SIGN_IDENTITY "-"`) with the hardened runtime and no entitlements. They are not notarized, so a copy you receive can't be traced to who built it.
+- Release and Debug builds are ad-hoc signed (`CODE_SIGN_IDENTITY "-"`) with the hardened runtime and one entitlement, `com.apple.security.device.audio-input` (dictation). They are not notarized, so a copy you receive can't be traced to who built it.
 - The tmux bridge and the macOS SSH helper are signed the same way. The Linux SSH helpers are not signed.
 - Release builds leave out the helper's capture and replay test hooks. In Debug builds, setting `DISPATCH_CAPTURE` for the app makes every helper it starts, SSH ones included, write all of its I/O to trace files, unredacted.
-- Dispatch registers no URL schemes, services, AppleScript support, or login items, and needs no privacy permissions.
+- Dispatch registers no URL schemes, services, AppleScript support, or login items. The only privacy permissions it asks for are the microphone and, on macOS 14 and 15, Speech Recognition, both on the first [dictation](#dictation).
 - Setup asks before downloading. Downloads are `https`-only, pinned by SHA-256 (`scripts/build.lock.json`, `scripts/test-tools.lock.json`), and kept under `build/`. The SSH helper has no third-party Rust dependencies and builds offline (`cargo build --offline --frozen`).
 - Desktop, SSH, and agent tests need sudo and take over the desktop; run them only in the [test VM](vm_testing.md).
 
@@ -274,7 +284,8 @@ The iPhone app ([docs/ios.md](ios.md)) is sandboxed like every iOS app and sidel
 
 **Network.**
 
-- The only connections it makes are SSH connections to the hosts you add, to the address and port you typed. No telemetry, analytics, crash reporting, update checks, push service or iCloud.
+- The only connections it makes are SSH connections to the hosts you add, to the address and port you typed, and the Whisper model downloads you start in Settings › Dictation (as on the Mac: `huggingface.co`, size and SHA-256 checked). No telemetry, analytics, crash reporting, update checks, push service or iCloud.
+- **Dictation** works as on the [Mac](#dictation): iOS asks for the **microphone** on the first dictation, Apple's engine is `SpeechAnalyzer` on the phone, Whisper runs in the app, and the recording stays in memory until it is transcribed. Leaving the conversation stops listening.
 - iOS asks once for **Local Network** access ("Dispatch connects to SSH hosts on your local network."); hosts on your LAN need it, hosts on the internet don't.
 - Network changes are watched (`NWPathMonitor`, no traffic) only to reconnect sooner.
 
@@ -306,7 +317,8 @@ The iPhone app ([docs/ios.md](ios.md)) is sandboxed like every iOS app and sidel
 | Chat | `chat-queue.json`, `drafts.json`, `chat-markers.json`, `chat-models.json` | Queued messages until delivered, drafts, seen times and mutes, the last agent, model and effort |
 | Activity | `tab-activity-2.json` | When each pane last changed (seen live), at most 400 panes per host and 60 days |
 | Spaces | `spaces.json` | Per host: the space New tab goes to, collapsed host sections, the phone's order of its spaces (space keys hold tmux session and herdr workspace names) |
-| Settings | UserDefaults | Appearance, font sizes, Spaces' sort, filter and tree toggle, Background refresh (nothing that names a host; older builds' per-host keys move to `spaces.json`) |
+| Settings | UserDefaults | Appearance, font sizes, Spaces' sort, filter and tree toggle, Background refresh, the dictation engine and Whisper model (nothing that names a host; older builds' per-host keys move to `spaces.json`) |
+| Whisper models | `Whisper/` | The ggml model files you downloaded for dictation, excluded from backups like the rest; deleted in Settings › Dictation |
 
 Transcripts, terminal output and stats are kept in memory only. Debug builds read test switches from the environment (`DISPATCH_MOBILE_*`); Release builds compile them out.
 

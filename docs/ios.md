@@ -21,13 +21,17 @@ test/run.sh --platform ios [--suite full] [Class]           # Testing, below
 python3 test/ios-release.py                                 # Release, below
 ```
 
-Needs Xcode 27 with an iOS simulator runtime. Without Simulator.app the simulator runs headless
-(`xcrun simctl io booted screenshot shot.png`).
+Needs Xcode 27 with an iOS simulator runtime. Its simulator window is DeviceHub (`Xcode.app/Contents/Applications`,
+`com.apple.dt.Devices`, which `./run.sh --ios` opens); Simulator.app is gone. Without it the simulator runs headless
+(`xcrun simctl io booted screenshot shot.png`). `--simulator` takes a name or a UDID; when several simulators share
+the name (`scripts/ios_simulator.py`), the booted one wins, then the newest runtime, and every step uses its UDID.
 
 **Fresh checkout.** SwiftPM resolves `MobileTransport`'s binary target before any build script runs, so the pinned
 Rust with its iOS targets and `build/mobile-ssh/DispatchMobileSSHCore.xcframework` must exist first. `./run.sh --ios`
 and `test/run.sh --platform ios` do it through `scripts/setup_mobile.py` (`setup-ssh-rust.py`, then
 `build-mobile-ssh.py --fetch`, the only network step). `DISPATCH_SETUP_OFFLINE=1` fails with the command instead.
+The package also compiles before the app's pre-build script, so setup rebuilds the XCFramework whenever its headers
+differ from `Mobile/Transport/Core/include`: a pull that adds to the C header would otherwise fail in `Engine.swift`.
 Every existing checkout must run `python3 scripts/setup-ssh-rust.py` once, or the helper build's offline toolchain
 check fails on the missing iOS targets.
 
@@ -68,6 +72,7 @@ through `devicectl`.
 | `DispatchMobileUITests` | XCUITests, own scheme so unit runs never start the app. |
 | `TermMobile`, `TermAppleMobile` | `Vendor/Term` and `TermApple` for iOS, without `Launch`, `Pty`, `Frames`, `Session`, `TerminalView`. Fonts are `TermFonts`: a top-level `Resources` folder breaks an iOS bundle's signature. |
 | `MobileTransport` | Local Swift package (`Mobile/Transport`, see its README) over the Rust engine. |
+| `Dictation` | Local Swift package (`Packages/Dictation`), chat dictation's engine, shared with the Mac; its Whisper engine is `Packages/WhisperEngine` (whisper.cpp in Swift, Metal and CPU backends). |
 
 The iOS settings group sets `ARCHS = $(ARCHS_STANDARD)` (the project's native arch is the Mac's arm64e, which no
 simulator matches). Zstd is not linked: `AppReplay` compiles for its types, but no journal ever starts.
@@ -82,7 +87,13 @@ insertion, the historical batch merge, record positions and seen keys) that the 
 phone's `MobileTranscript` both run; `ChatSession` keeps only its view state around them (arrivals, unread, row
 caches) and `MobileTranscript` the phone's record loop. Displayed items (`ChatPatch.displayedItems`), prompt
 confirmation (`AgentInput.records`) and the elapsed text are shared too. Mac views built on the Mac chat stack
-(`ChatPermissionCard`, `SyntaxHighlight`, `AgentActivityGlyph`, …) are ported, not shared.
+(`ChatPermissionCard`, `SyntaxHighlight`, `AgentActivityGlyph`, …) are ported, not shared. Dictation's engine is the
+`Dictation` package (`Packages/Dictation`: `Dictation`, the Apple and Whisper recognizers and `WhisperModelStore`,
+over `Packages/WhisperEngine`, a Swift port of whisper.cpp that reads the same ggml models and runs them on Metal, or
+on the CPU through Accelerate without a GPU), which both apps link; each app makes its `Dictation.shared` and
+`WhisperModelStore.shared` (`DictationSupport.swift`, models in its support folder's `Whisper`), and has its own
+controls (the Mac's `ChatDictationButton` and `WhisperModelRow`, the phone's composer mic slot and
+`DictationSettingsView`) and its own settings storage.
 
 ### Areas and seams
 
@@ -201,6 +212,19 @@ race (replay sees a second ownership ask).
   show its spaces and agents once, under the first in the list, as the Mac keys a host by machine and uid; the other
   says "Same machine as …", and background refresh notifies once. A failed save stays in memory flagged unsaved, with a
   Retry notice in Spaces.
+- **Wide windows (the unfolded iPhone Duo).** A window at least 600 points both ways (`MobileSplit`: the unfolded
+  Duo either way up, not its cover screen or an iPhone in landscape) shows the phone's stack, tab bar and all, in a
+  sidebar column and the tab it opens beside it, without a back pill; the sidebar marks that tab's row. By window
+  size, not size class: the system's split views collapse in a compact width. Both columns show the one
+  `SpacesNavigator.path` (`SplitPath`: the sidebar's routes, the last tab, what it pushed), so folding shows the same
+  screens as a stack and unfolding splits them again. Columns by posture (`MobileSplit.columns`): laptop (taller than
+  wide, the fold across) gives the tab a phone's 405 points and the sidebar the rest (263 unfolded: glyph-only tab
+  bar, rows naming their space); book (wider than tall) puts the hairline on the fold, from the system's division
+  region (`MobileFoldReader`, `reservedRegions(kind: .division, options: .includeInactive)`: inactive while flat,
+  off centre on the Duo, 517.5 of 951 points), else the window's middle. The fold is DeviceHub's (the simulator window): its Closed, Partially
+  Open and Open buttons under the device, for the device the window shows (two Duos share a name: check the window's);
+  `simctl` has no hinge control. Unfolded, the app fills the inner screen (`simctl io <udid> screenshot --display=3`);
+  folded, the cover screen is `--display=primary` and the default capture is the dark inner one.
 - **Spaces.** herdr workspaces and tmux sessions are spaces, windows and tabs are tabs. A split tmux window shows one
   pane; the phone never splits. The helper's native multiplexer never counts (its sessions die with the connection).
   Close follows the Mac's policy: Close Tab sends `close.request` `check` and terminates only verified idle work,
@@ -291,7 +315,8 @@ e -l objc -- (void)[[BGTaskScheduler sharedScheduler] _simulateLaunchForTaskWith
   New tests go in `Mobile/Tests/<Area>…Tests.swift`; after adding files, run `python3 scripts/generate-project.py`
   and commit `project.pbxproj`.
 - **UI tests.** `xcodebuild -scheme DispatchMobileUITests -destination 'platform=iOS Simulator,name=iPhone Air'
-  -derivedDataPath build test`, against the scripted hosts.
+  -derivedDataPath build/ios test`, against the scripted hosts. The iPhone builds keep their DerivedData in `build/ios`:
+  in `build/`, the Mac's, they shared its build database and waited for each other ("database is locked").
 - **Live fixture.** Makes this Mac a host: a loopback sshd with private HOME and sockets, a private tmux server, and
   Claude Code from `build/test-tools` against a local Messages API. The simulator cannot start processes, so `serve`
   restarts sshd when a test asks.
@@ -301,7 +326,7 @@ e -l objc -- (void)[[BGTaskScheduler sharedScheduler] _simulateLaunchForTaskWith
   python3 scripts/mobile-live-fixture.py serve /tmp/sim-int &
   TEST_RUNNER_DISPATCH_LIVE_FIXTURE=/tmp/sim-int/live.json test/run.sh --platform ios SSHDriverLiveTests
   TEST_RUNNER_DISPATCH_LIVE_FIXTURE=/tmp/sim-int/live.json TEST_RUNNER_DISPATCH_LIVE_LINUX='{"name":…,"host":…,"port":…,"user":…,"key":…,"root":"/tmp/dt-int"}' \
-    xcodebuild -scheme DispatchMobileUITests -destination 'platform=iOS Simulator,name=<device>' -derivedDataPath build \
+    xcodebuild -scheme DispatchMobileUITests -destination 'platform=iOS Simulator,name=<device>' -derivedDataPath build/ios \
     -collect-test-diagnostics never test -only-testing:DispatchMobileUITests/MobileLiveTests
   python3 scripts/mobile-live-fixture.py stop /tmp/sim-int
   ```
@@ -312,6 +337,9 @@ e -l objc -- (void)[[BGTaskScheduler sharedScheduler] _simulateLaunchForTaskWith
   is safe inside the user's tmux. Not in `test/suites.json`, which holds XCTest ids only.
 - **Transport.** `cargo test` in `Mobile/Transport/Core` and `swift test` in `Mobile/Transport`
   ([README](../Mobile/Transport/README.md)).
+- **Dictation.** `swift test` in `Packages/Dictation`, on the Mac: text placement, Whisper's cleanup, the model
+  store, and both engines transcribing `say`'s speech (Apple's when the language's model is on the Mac, Whisper's
+  with `ggml-small-q8_0.bin` in `DISPATCH_WHISPER_MODELS` or the Mac app's models folder; each skips otherwise).
 - **Frame checks.** No transient wrong state, frame by frame. `TransitionUITests` and `-DispatchTabsScript` drive
   recordings (`xcrun simctl io <device> recordVideo`); `scripts/transition-frames.swift` and
   `scripts/tab-bar-frames.swift` split and judge them.

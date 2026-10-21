@@ -1,3 +1,4 @@
+import Dictation
 import SwiftUI
 
 /// Settings (not in the mockup; plan Phase 6): appearance, the terminal's default font size, per host Chat and the
@@ -45,6 +46,18 @@ struct SettingsView: View {
                     Text("Terminal")
                 } footer: {
                     Text("Terminals open at this size. Pinch a terminal to zoom it; the last size becomes the default.")
+                }
+
+                Section {
+                    NavigationLink {
+                        DictationSettingsView(settings: settings)
+                    } label: {
+                        LabeledContent("Dictation") {
+                            Text(settings.dictationEngine == .whisper ? "Whisper \(settings.whisperModel.title)" : settings.dictationEngine.title)
+                        }
+                    }
+                } header: {
+                    Text("Chat")
                 }
 
                 Section {

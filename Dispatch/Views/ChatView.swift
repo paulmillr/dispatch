@@ -1,3 +1,4 @@
+import Dictation
 import SwiftUI
 
 struct ChatView: View {
@@ -325,10 +326,11 @@ struct ChatView: View {
                     composerStop
                 }
                 HStack(spacing: 12) {
-                    savedDraftControls
+                    savedDraftControls.focusedOnly(focused)
                     Spacer(minLength: 0)
-                    replyActions
-                }.focusedOnly(focused)
+                    dictationControl
+                    replyActions.focusedOnly(focused)
+                }
             }
         }
     }
@@ -339,8 +341,16 @@ struct ChatView: View {
             composerActivity.fixedSize()
             savedDraftControls.focusedOnly(focused)
             Spacer(minLength: 0)
+            dictationControl
             replyActions.focusedOnly(focused)
         }
+    }
+
+    /// Shown with the reply actions, and while this chat's dictation listens or says why it failed.
+    private var dictationControl: some View {
+        let dictation = Dictation.shared
+        return ChatDictationButton(session: session)
+            .focusedOnly(focused || dictation.active(session.id) || dictation.error(for: session.id) != nil)
     }
 
     @ViewBuilder private var savedDraftControls: some View {

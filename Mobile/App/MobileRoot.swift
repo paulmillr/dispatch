@@ -48,6 +48,11 @@ struct MobileRoot: View {
     @State private var sheet: MobileSheet?
     /// Runs once the presented sheet is gone (New chat's Start opens the thread then).
     @State private var afterSheet: (() -> Void)?
+    /// The window's, for `MobileSplit`.
+    @State private var windowSize = MobileSplit.initialSize
+    /// The split's columns' space and the fold in it (`MobileFoldReader`); zero until measured.
+    @State private var splitSpace = CGSize.zero
+    @State private var fold: CGFloat?
     private let composition: MobileComposition
     @Bindable private var navigator: SpacesNavigator
 
@@ -111,15 +116,73 @@ struct MobileRoot: View {
             // The chat demo's screens carry their own stacks (Debug only).
             tabView
         } else {
-            stack
+            root
         }
         #else
-        stack
+        root
         #endif
     }
 
-    private var stack: some View {
-        NavigationStack(path: $navigator.path) {
+    /// The one stack, or Spaces beside the tab in a wide window (`MobileSplit`). Both show the navigator's path, so
+    /// folding or unfolding keeps the screens the user was on.
+    private var root: some View {
+        let split = MobileSplit.applies(to: windowSize)
+        return Group {
+            if split { splitView } else { stack(path: $navigator.path) }
+        }
+        .background {
+            // The whole window, keyboard and bars included: the keyboard coming up must not fold the split away.
+            Color.clear
+                .ignoresSafeArea()
+                .onGeometryChange(for: CGSize.self, of: \.size) { windowSize = $0 }
+        }
+        .onChange(of: split, initial: true) { _, split in navigator.split = split }
+        .spacesPresentations(navigator, hostViews: composition.hostViews)
+        .environment(\.hostSpaceOpening, navigator)
+        #if DEBUG
+        .onAppear {
+            navigator.selectSection = { name in section = name == "agents" ? .agents : .spaces }
+        }
+        #endif
+    }
+
+    /// The split's columns: measured once the split has laid out, the window's until then.
+    private var columns: MobileSplit.Columns {
+        let space = splitSpace.width > 0 ? splitSpace : windowSize
+        return MobileSplit.columns(width: space.width, height: space.height, fold: fold)
+    }
+
+    /// The phone's stack, tab bar and all, in the sidebar; the tab its rows open beside it, past the fold.
+    private var splitView: some View {
+        let columns = columns
+        return HStack(spacing: 0) {
+            stack(path: Binding(get: { navigator.splitPath.sidebar }, set: { navigator.setSidebar($0) }))
+                .frame(width: columns.sidebar)
+                .environment(\.tabsColumnWidth, columns.sidebar)
+                .environment(\.tabsSelectTab, { navigator.select($0) })
+            // The hairline: on the fold in book posture.
+            Rectangle()
+                .fill(Color.hairline)
+                .frame(width: 0.5)
+                .frame(width: columns.gap)
+                .ignoresSafeArea()
+            // The rest, not a set width: the probe measures what the columns are given, and a total wider than that
+            // centred the row and clipped the sidebar's leading edge.
+            MobileSplitDetail(navigator: navigator, content: composition.content, hostViews: composition.hostViews)
+                .frame(maxWidth: .infinity)
+                .environment(\.tabsColumnWidth, columns.tab)
+                .environment(\.tabsSelectTab, { navigator.select($0) })
+        }
+        .background {
+            MobileFoldReader { size, fold in
+                splitSpace = size
+                self.fold = fold
+            }
+        }
+    }
+
+    private func stack(path: Binding<[TabsRoute]>) -> some View {
+        NavigationStack(path: path) {
             tabView
                 .navigationTitle(section.title)
                 .toolbarTitleDisplayMode(.large)
@@ -134,17 +197,13 @@ struct MobileRoot: View {
                                     hostViews: composition.hostViews)
                 }
         }
-        .spacesPresentations(navigator, hostViews: composition.hostViews)
-        .environment(\.hostSpaceOpening, navigator)
-        #if DEBUG
-        .onAppear {
-            navigator.selectSection = { name in section = name == "agents" ? .agents : .spaces }
-        }
-        #endif
     }
 
     private var tabView: some View {
-        TabView(selection: selection) {
+        let split = MobileSplit.applies(to: windowSize)
+        let sidebar = columns.sidebar
+        let narrow = split && MobileSplit.narrow(sidebar: sidebar)
+        return TabView(selection: selection) {
             ForEach(MobileSection.allCases) { item in
                 Tab(value: Slot.section(item)) {
                     Group {
@@ -158,9 +217,18 @@ struct MobileRoot: View {
                     }
                     .tint(.dispatchPink)
                     .background(Color.canvas)
+                    // Set inside each tab: the tab bar controller's tabs do not see what is set around the TabView.
+                    .environment(\.tabsShownTab, split ? navigator.splitPath.tab : nil)
+                    .environment(\.tabsColumnWidth, split ? sidebar : nil)
+                    .environment(\.tabsNarrowSidebar, narrow)
+                    .environment(\.tabsSelectTab, split ? { navigator.select($0) } : nil)
                 } label: {
                     // Outlines, as in the mockup: the bar would draw the filled variants.
-                    Label { Text(item.title) } icon: { Image(systemName: item.symbol).environment(\.symbolVariants, .none) }
+                    if narrow {
+                        Image(systemName: item.symbol).environment(\.symbolVariants, .none).accessibilityLabel(item.title)
+                    } else {
+                        Label { Text(item.title) } icon: { Image(systemName: item.symbol).environment(\.symbolVariants, .none) }
+                    }
                 }
             }
             Tab(value: Slot.new, role: Self.newRole) {

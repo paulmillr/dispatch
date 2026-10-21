@@ -53,6 +53,11 @@ settingGroups:
 packages:
   MobileTransport:
     path: Mobile/Transport
+  # Chat dictation (Packages/Dictation): the engine (Apple's recognizer and Whisper through Packages/WhisperEngine,
+  # whisper.cpp in Swift with the ggml Metal kernels, which Dictation depends on by path), shared by the Mac and the
+  # iPhone apps. The settings and buttons stay in the apps.
+  Dictation:
+    path: Packages/Dictation
 targets:
   # Static: the hardened runtime's library validation refuses ad-hoc signed
   # frameworks embedded in an ad-hoc signed app (local Release builds would not launch).
@@ -162,6 +167,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: yachts.dispatch.app
+        CODE_SIGN_ENTITLEMENTS: Dispatch/Dispatch.entitlements
         PRODUCT_MODULE_NAME: DispatchApp
         INFOPLIST_FILE: Dispatch/Info.plist
         MARKETING_VERSION: "0.1.1"
@@ -171,6 +177,7 @@ targets:
         DEPLOYMENT_POSTPROCESSING: "$(DISPATCH_STRIP_APP)"
         STRIP_INSTALLED_PRODUCT: "$(DISPATCH_STRIP_APP)"
     dependencies:
+      - package: Dictation
       - target: SSHHelpers
       # Linked into the app (static), nothing to embed.
       - target: Term
@@ -179,6 +186,7 @@ targets:
         embed: false
       - target: Zstd
         embed: false
+      - sdk: Accelerate.framework
       - sdk: AppKit.framework
       - sdk: Carbon.framework
       - sdk: CoreText.framework
@@ -328,11 +336,13 @@ targets:
           STRIP_INSTALLED_PRODUCT: YES
     dependencies:
       - package: MobileTransport
+      - package: Dictation
       - target: SSHHelpers
       - target: TermMobile
         embed: false
       - target: TermAppleMobile
         embed: false
+      - sdk: Accelerate.framework
       - sdk: CoreText.framework
       - sdk: Metal.framework
       - sdk: QuartzCore.framework
@@ -363,7 +373,6 @@ targets:
       groups: [ios, mobileApp]
       base:
         PRODUCT_BUNDLE_IDENTIFIER: yachts.dispatch.mobile.tests$(DISPATCH_BUNDLE_ID_SUFFIX)
-        SWIFT_INCLUDE_PATHS: ""
         GENERATE_INFOPLIST_FILE: YES
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/DispatchMobile.app/DispatchMobile"
         BUNDLE_LOADER: "$(TEST_HOST)"

@@ -1,3 +1,4 @@
+import Dictation
 import Foundation
 import Observation
 
@@ -17,6 +18,8 @@ final class MobileSettings {
     /// Shared with the Appearance work, which makes the app honour it: a string, "system", "dark" or "light".
     static let appearanceKey = "appearance"
     static let backgroundRefreshKey = "background.refresh"
+    static let dictationEngineKey = "dictation.engine"
+    static let whisperModelKey = "dictation.whisperModel"
 
     @ObservationIgnored let defaults: UserDefaults
 
@@ -44,10 +47,26 @@ final class MobileSettings {
         didSet { if backgroundRefresh != oldValue { defaults.set(backgroundRefresh, forKey: Self.backgroundRefreshKey) } }
     }
 
+    /// Chat dictation's engine (Apple's by default), and the Whisper model it uses when Whisper is chosen.
+    var dictationEngine: DictationEngine {
+        didSet { if dictationEngine != oldValue { defaults.set(dictationEngine.rawValue, forKey: Self.dictationEngineKey) } }
+    }
+
+    var whisperModel: WhisperModel {
+        didSet { if whisperModel != oldValue { defaults.set(whisperModel.rawValue, forKey: Self.whisperModelKey) } }
+    }
+
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         appearance = defaults.string(forKey: Self.appearanceKey).flatMap(Appearance.init(rawValue:)) ?? .dark
         backgroundRefresh = defaults.bool(forKey: Self.backgroundRefreshKey)
+        (dictationEngine, whisperModel) = Self.dictation(defaults)
+    }
+
+    /// The dictation choice as saved: what the composer reads when the microphone is tapped.
+    static func dictation(_ defaults: UserDefaults = .standard) -> (engine: DictationEngine, model: WhisperModel) {
+        (defaults.string(forKey: dictationEngineKey).flatMap(DictationEngine.init(rawValue:)) ?? .apple,
+         defaults.string(forKey: whisperModelKey).flatMap(WhisperModel.init(rawValue:)) ?? .small)
     }
 
     /// The slider's range in whole points: the terminal's zoom range. A pinch may leave a half point (13.5); the

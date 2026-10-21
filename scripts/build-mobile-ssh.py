@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from setup_mobile import current
 
 ROOT = Path(os.environ.get("SRCROOT", Path(__file__).resolve().parent.parent))
 CRATE = ROOT / "Mobile/Transport/Core"
@@ -64,7 +65,8 @@ def build(profile, platform=None):
     libraries = [path for target, *_ in TARGETS if (path := OUTPUT / "target" / target / profile / LIBRARY).is_file()]
     newest = max(path.stat().st_mtime for path in libraries + list((CRATE / "include").iterdir()))
     stamp = FRAMEWORK / "Info.plist"
-    if stamp.is_file() and stamp.stat().st_mtime >= newest:
+    # By content too: a checkout's times need not say that the header changed.
+    if stamp.is_file() and stamp.stat().st_mtime >= newest and current(FRAMEWORK, CRATE / "include"):
         return
     OUTPUT.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".xcframework-", dir=OUTPUT) as directory:

@@ -55,6 +55,60 @@ final class TabsRenderTests: XCTestCase {
         XCTAssertFalse(shown.segments.contains("chat"))
     }
 
+    /// A Claude tab's title is its first prompt. Beside a back pill naming its screen (nothing needs the user) it
+    /// overflowed the bar, which then showed only its "…" menu with the back pill inside.
+    func testALongTitleBesideANamedBackPillStaysInTheBar() throws {
+        let prompt = "See how we can speed-up sha3 without writing new code yet."
+        for (space, waiting) in [("ciphers", 0), ("ciphers", 2), ("sha3-keccak-speedups-without-new-code", 0)] {
+            let (model, tab, spaceRef) = headerModel(space: space, tab: prompt)
+            model.needsYouCount = { _ in waiting }
+            let screen = TabScreen(model: model, ref: tab, path: .constant([.space(spaceRef), .tab(tab)]),
+                                   terminal: { _, _ in Text("terminal") }, chat: { _, _ in Text("chat") })
+            try assertInTheBar(screen, "\(space), \(waiting) waiting")
+        }
+    }
+
+    /// M2c and M4d with a long space name: the title beside "‹ Spaces", the back pill naming the space beside Rename.
+    func testALongSpaceNameStaysInTheBar() throws {
+        let helper = ScriptedHelper()
+        let (model, _, space) = headerModel(space: "sha3-keccak-speedups-without-writing-new-code", tab: "claude",
+                                            client: helper.client)
+        let actions = TabsActions(model: model)
+        try assertInTheBar(SpaceTabsScreen(model: model, actions: actions, ref: space, path: .constant([.space(space)]),
+                                           newTab: { _ in }, pick: {}), "space")
+        try assertInTheBar(SpaceDetailsScreen(model: model, actions: actions, ref: space,
+                                              path: .constant([.space(space), .details(space)])), "details")
+    }
+
+    private func headerModel(space: String, tab: String, client: HelperClient? = nil) -> (MobileTabs, TabRef, SpaceRef) {
+        let suite = "tabs-render-header"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        let model = MobileTabs(activity: TabActivityStore(url: nil), defaults: defaults)
+        let sketch = TopologySketch(spaces: [.init(key: "herdr:ciphers", name: space, tabs: [
+            .init(key: "herdr:ciphers:1", name: tab, renamed: true,
+                  panes: [.init(key: "p:ciphers", cwd: "/Users/alex/src/ciphers", agent: "s1")]),
+        ])])
+        model.sync([TabsHostInput(host: TabsFixtures.host, client: client, topology: sketch.topology)])
+        let ref = model.workspace(TabsFixtures.host.id)!.tabs[0].ref
+        return (model, ref, SpaceRef(host: TabsFixtures.host.id, key: "herdr:ciphers"))
+    }
+
+    /// The bar at the device's width keeps every item: no "More" button (the overflow menu's "…").
+    private func assertInTheBar(_ screen: some View, _ name: String, file: StaticString = #filePath, line: UInt = #line) throws {
+        let scene = try XCTUnwrap(TestSupport.windowScene())
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: scene.screen.bounds.width, height: 700)
+        window.rootViewController = UIHostingController(rootView: NavigationStack { screen })
+        window.isHidden = false
+        defer { window.isHidden = true }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        func views(_ view: UIView) -> [UIView] { [view] + view.subviews.flatMap(views) }
+        let bar = try XCTUnwrap(views(window).first { $0 is UINavigationBar }, name, file: file, line: line)
+        let more = views(bar).filter { $0.accessibilityLabel == "More" && !$0.isHidden && $0.alpha > 0 }
+        XCTAssertTrue(more.isEmpty, "\(name): the bar overflowed into its menu", file: file, line: line)
+    }
+
     private func write(_ image: UIImage, _ name: String) throws {
         guard let folder = ProcessInfo.processInfo.environment["DISPATCH_TABS_PNG"], let data = image.pngData() else { return }
         try data.write(to: URL(fileURLWithPath: folder).appendingPathComponent(name + ".png"))
@@ -119,16 +173,20 @@ final class TabsRenderTests: XCTestCase {
         let model = TabsSample.model()
         let rows = Array(model.rows.prefix(6))
         XCTAssertEqual(rows.count, 6)
-        func height(detail: Bool) -> CGFloat {
+        func height(_ rows: [TabsEntry], detail: Bool) -> CGFloat {
             let list = VStack(spacing: 0) {
                 ForEach(rows) { TabsTabRow(model: model, entry: $0, detail: detail, now: Date()) }
             }
             .frame(width: 402)
-            return UIHostingController(rootView: list).sizeThatFits(in: CGSize(width: 402, height: CGFloat.greatestFiniteMagnitude)).height / 6
+            return UIHostingController(rootView: list).sizeThatFits(in: CGSize(width: 402, height: CGFloat.greatestFiniteMagnitude)).height / CGFloat(rows.count)
         }
-        XCTAssertGreaterThan(height(detail: true), 58)
-        XCTAssertLessThan(height(detail: true), 78)
-        XCTAssertEqual(height(detail: false), height(detail: true), accuracy: 2)
+        XCTAssertGreaterThan(height(rows, detail: true), 58)
+        XCTAssertLessThan(height(rows, detail: true), 78)
+        // Rows with a second line, as in the mockup, match with and without the disc; a bare shell's row is one line
+        // (no folder: `TabsTabRow.line`), which the disc keeps at its height in Spaces.
+        let lined = rows.filter { TabsTabRow.line($0.tab, label: $0.label, status: model.status) != nil }
+        XCTAssertFalse(lined.isEmpty)
+        XCTAssertEqual(height(lined, detail: false), height(lined, detail: true), accuracy: 2)
         let list = VStack(spacing: 0) { ForEach(rows) { TabsTabRow(model: model, entry: $0, detail: true, now: Date()) } }
         try write(try render(list.frame(width: 402).background(.black), size: CGSize(width: 402, height: 420)), "rows")
     }

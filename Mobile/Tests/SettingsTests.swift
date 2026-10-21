@@ -1,3 +1,4 @@
+import Dictation
 import XCTest
 @testable import DispatchMobile
 
@@ -20,6 +21,22 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(store.string(forKey: "appearance"), "system")
         XCTAssertEqual(MobileSettings(defaults: store).appearance, .system)
         XCTAssertEqual(MobileSettings.Appearance.allCases.map(\.rawValue), ["system", "dark", "light"])
+    }
+
+    func testDictationDefaultsToAppleAndRemembersWhisper() {
+        let store = defaults()
+        let settings = MobileSettings(defaults: store)
+        XCTAssertEqual(settings.dictationEngine, .apple)
+        XCTAssertEqual(settings.whisperModel, .small)
+        settings.dictationEngine = .whisper
+        settings.whisperModel = .turbo
+        XCTAssertEqual(MobileSettings.dictation(store).engine, .whisper, "what the composer's mic reads")
+        XCTAssertEqual(MobileSettings.dictation(store).model, .turbo)
+        XCTAssertEqual(MobileSettings(defaults: store).dictationEngine, .whisper)
+        store.set("unknown", forKey: MobileSettings.dictationEngineKey)
+        store.set("unknown", forKey: MobileSettings.whisperModelKey)
+        XCTAssertEqual(MobileSettings(defaults: store).dictationEngine, .apple)
+        XCTAssertEqual(MobileSettings(defaults: store).whisperModel, .small)
     }
 
     func testTerminalFontSizeIsTheTerminalsDefault() {

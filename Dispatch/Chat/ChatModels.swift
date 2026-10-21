@@ -186,46 +186,99 @@ struct ChatToolStep: Equatable, Sendable {
 
     init(_ item: ChatItem, seconds: TimeInterval?) {
         kind = Self.kind(of: item)
-        failed = (item.exitCode.map { $0 != 0 } ?? false) || [.failed, .declined].contains(item.patch?.state)
+        failed = (item.exitCode.map { $0 != 0 } ?? false) || Self.refused(item.patch?.state)
         self.seconds = seconds
     }
 
-    /// The operations a step chart tells apart: edits and web browsing.
-    nonisolated static func kind(of item: ChatItem) -> Kind {
-        if WebToolPresentation.matches(item.title) { return .web }
-        let name = item.title.components(separatedBy: ".").last?.lowercased()
-        if ChatPatch.isPatchOperation(item) || name == "write_file" { return .edit }
-        return .other
+    /// The step `item` recorded at `time`, after a step (or the group's message) at `previous`. Without the message's
+    /// time the first step counts as instant, so the group still spans its first to its last step.
+    init(_ item: ChatItem, time: Date?, after previous: Date?, first: Bool) {
+        let seconds: TimeInterval? = if let time {
+            previous.map { max(0, time.timeIntervalSince($0)) } ?? (first ? 0 : nil)
+        } else { nil }
+        self.init(item, seconds: seconds)
     }
 
-    /// The steps of `items` recorded at `times`, the first timed from `start` (when unknown, the first step counts
-    /// as instant, so the group still spans its first to its last step).
-    static func steps(_ items: [ChatItem], times: [Date?], start: Date?) -> [ChatToolStep] {
-        var previous = start
-        return zip(items, times).enumerated().map { index, pair in
-            let (item, time) = pair
-            defer { previous = time }
-            guard let time else { return ChatToolStep(item, seconds: nil) }
-            guard let previous else { return ChatToolStep(item, seconds: index == 0 ? 0 : nil) }
-            return ChatToolStep(item, seconds: max(0, time.timeIntervalSince(previous)))
+    private static func refused(_ state: ChatPatch.State?) -> Bool {
+        switch state {
+        case .failed, .declined: true
+        default: false
         }
+    }
+
+    /// The operations a step chart tells apart: edits and web browsing. Rows of every group are built from this, so
+    /// it reads the title without allocating (`WebToolPresentation.matches`, `ChatPatch.isPatchOperation` and a
+    /// last-component `write_file`, in one pass).
+    nonisolated static func kind(of item: ChatItem) -> Kind {
+        let title = item.title
+        switch title {
+        case "WebSearch", "WebFetch": return .web
+        case "Edit", "MultiEdit", "Write": return .edit
+        default: break
+        }
+        // The names below are short: a longer last component is another tool, and a short one lowercases inline.
+        let name = title.lastIndex(of: ".").map { title[title.index(after: $0)...] } ?? title[...]
+        let lowered = name.utf8.count <= 11 ? name.lowercased() : ""
+        if lowered == "web__run" || (lowered == "run" && title.utf8.count == 7 && title.lowercased() == "web.run") { return .web }
+        if item.patch != nil { return .edit }
+        switch lowered {
+        case "apply_patch", "patch", "write_file": return .edit
+        default: return .other
+        }
+    }
+
+    /// The steps of `items` recorded at `times`, the first timed from `start`.
+    static func steps(_ items: [ChatItem], times: [Date?], start: Date?) -> [ChatToolStep] {
+        var previous = start, steps: [ChatToolStep] = []
+        steps.reserveCapacity(items.count)
+        for (item, time) in zip(items, times) {
+            steps.append(ChatToolStep(item, time: time, after: previous, first: steps.isEmpty))
+            previous = time
+        }
+        return steps
+    }
+}
+
+/// A group's steps, worked out the first time its header or timeline reads them: building a long history's rows times
+/// no step of a group that never shows.
+final class ChatToolSteps {
+    private var source: (() -> [ChatToolStep])?
+    private var computed: (steps: [ChatToolStep], elapsed: TimeInterval?)?
+
+    init(_ steps: [ChatToolStep]) { computed = (steps, Self.elapsed(steps)) }
+    init(_ source: @escaping () -> [ChatToolStep]) { self.source = source }
+
+    var value: (steps: [ChatToolStep], elapsed: TimeInterval?) {
+        if let computed { return computed }
+        let steps = source?() ?? []
+        let value = (steps, Self.elapsed(steps))
+        computed = value; source = nil
+        return value
+    }
+
+    private static func elapsed(_ steps: [ChatToolStep]) -> TimeInterval? {
+        steps.isEmpty || steps.contains { $0.seconds == nil } ? nil : steps.reduce(0) { $0 + ($1.seconds ?? 0) }
     }
 }
 
 struct ChatToolGroup: Identifiable {
     let id: String
     let children: [ChatTranscriptRow]
+    private let timing: ChatToolSteps
     /// One per child, for the header's run chart and the expanded timeline.
-    let steps: [ChatToolStep]
+    var steps: [ChatToolStep] { timing.value.steps }
     /// The group's run time when every step's time is known.
-    let elapsed: TimeInterval?
+    var elapsed: TimeInterval? { timing.value.elapsed }
     // Separate from the stable disclosure identity. A rebuilt cached group
     // refreshes its summary without hashing every child's revision during draw.
     let presentationID = System.uuid()
 
     init(id: String, children: [ChatTranscriptRow], steps: [ChatToolStep] = []) {
-        self.id = id; self.children = children; self.steps = steps
-        elapsed = steps.isEmpty || steps.contains { $0.seconds == nil } ? nil : steps.reduce(0) { $0 + ($1.seconds ?? 0) }
+        self.id = id; self.children = children; timing = ChatToolSteps(steps)
+    }
+
+    init(id: String, children: [ChatTranscriptRow], steps: @escaping () -> [ChatToolStep]) {
+        self.id = id; self.children = children; timing = ChatToolSteps(steps)
     }
 }
 
@@ -256,6 +309,8 @@ struct ChatTranscriptRow: Identifiable {
         let last: Bool
         /// The live turn's current step, shown alone under its group's header.
         let current: Bool
+        /// The live group's last step, still running: it shows no time yet.
+        var running = false
     }
 }
 
@@ -593,9 +648,13 @@ final class ChatSession: Identifiable {
     /// just the step the agent is on: the next step replaces it.
     func groupDisclosure(_ group: ChatToolGroup, turnID: String?) -> ChatToolGroupDisclosure {
         if expandedToolGroups.contains(group.id) { return .all }
-        let live = busy && turnID == activeTurnID && !collapsedToolGroups.contains(group.id)
+        return !collapsedToolGroups.contains(group.id) && groupIsLive(group, turnID: turnID) ? .current : .collapsed
+    }
+
+    /// The live turn's newest group: the agent is on its last step, so neither shows a time yet.
+    func groupIsLive(_ group: ChatToolGroup, turnID: String?) -> Bool {
+        busy && turnID == activeTurnID
             && transcriptRows.last(where: { $0.group != nil && $0.turnID == activeTurnID })?.group?.id == group.id
-        return live ? .current : .collapsed
     }
 
     func groupIsExpanded(_ group: ChatToolGroup, turnID: String?) -> Bool {
@@ -619,13 +678,14 @@ final class ChatSession: Identifiable {
                 var head = row; head.bubbleEnd = false
                 visible.append(head)
                 let shown = disclosure == .all ? group.children.indices : group.children.indices.suffix(1)
+                let live = disclosure == .current || groupIsLive(group, turnID: row.turnID)
                 for index in shown {
                     var child = group.children[index]
                     child.bubbleStart = false
                     child.bubbleEnd = index == shown.last
                     if group.steps.indices.contains(index) {
                         child.timeline = .init(step: group.steps[index], first: index == shown.first, last: index == shown.last,
-                                               current: disclosure == .current)
+                                               current: disclosure == .current, running: live && index == group.children.count - 1)
                     }
                     visible.append(child)
                 }
@@ -698,9 +758,11 @@ final class ChatSession: Identifiable {
 
     /// A native record orders by its transcript position (its item date is the epoch),
     /// so it shows its own time; a reply without a known time shows none.
-    private func replyTime(_ item: ChatItem, turnID: String) -> Date? {
+    private func replyTime(_ item: ChatItem, turnID: String) -> Date? { Self.replyTime(item, turnID: turnID, dates: itemDates) }
+
+    nonisolated private static func replyTime(_ item: ChatItem, turnID: String, dates: [ItemIdentity: Date]) -> Date? {
         let date = item.source.map { $0.time_ms.map { Date(timeIntervalSince1970: Double($0) / 1000) } }
-            ?? itemDates[ItemIdentity(turn: turnID, item: item.id)]
+            ?? dates[ItemIdentity(turn: turnID, item: item.id)]
         return date.flatMap { $0.timeIntervalSince1970 > 0 ? $0 : nil }
     }
 
@@ -739,9 +801,18 @@ final class ChatSession: Identifiable {
             let children = tools.map { row in var row = row; row.toolGroupID = id; return row }
             // Timed from the message the steps follow (or the turn's start), so the first step's bar has a width.
             let start = rows.last?.time ?? (turn.started.timeIntervalSince1970 > 0 ? turn.started : nil)
-            let items = tools.compactMap(\.item)
-            let steps = ChatToolStep.steps(items, times: items.map { replyTime($0, turnID: turn.id) }, start: start)
-            let group = ChatToolGroup(id: id, children: children, steps: steps)
+            let turnID = turn.id, dates = itemDates
+            let group = ChatToolGroup(id: id, children: children) {
+                var steps: [ChatToolStep] = [], previous = start
+                steps.reserveCapacity(children.count)
+                for child in children {
+                    guard let item = child.item else { continue }
+                    let time = Self.replyTime(item, turnID: turnID, dates: dates)
+                    steps.append(ChatToolStep(item, time: time, after: previous, first: steps.isEmpty))
+                    previous = time
+                }
+                return steps
+            }
             if hasMessage { rows[rows.count - 1].group = group }
             else { rows.append(ChatTranscriptRow(id: id, item: nil, approval: nil, group: group, turnID: turn.id)) }
             tools.removeAll(keepingCapacity: true)

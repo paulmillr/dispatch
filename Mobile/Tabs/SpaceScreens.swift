@@ -10,6 +10,7 @@ struct SpaceTabsScreen: View {
     let newTab: (MobileSpace) -> Void
     /// Long-press on New tab: pick another space or make one.
     let pick: () -> Void
+    @Environment(\.tabsColumnWidth) private var column
 
     var body: some View {
         let space = model.space(ref)
@@ -21,7 +22,7 @@ struct SpaceTabsScreen: View {
                     ScrollView {
                         LazyVStack(spacing: 0) {
                             ForEach(rows) { entry in
-                                NavigationLink(value: TabsRoute.tab(entry.id)) {
+                                TabsTabLink(tab: entry.id) {
                                     TabsTabRow(model: model, entry: entry, detail: false, now: context.date, last: entry.id == rows.last?.id)
                                 }
                                 .buttonStyle(.plain)
@@ -48,7 +49,7 @@ struct SpaceTabsScreen: View {
         }
         .tabsPushedScreen()
         .toolbar {
-            TabsScreenHeader(title: space?.name ?? "") {
+            TabsScreenHeader(title: space?.name ?? "", column: column) {
                 TabsBackPill(label: "Spaces") { pop() }
             } subtitle: {
                 if let host { TabsHostPath(host: host, path: host.abbreviate(space?.cwd)) }
@@ -111,10 +112,10 @@ struct SpaceDetailsScreen: View {
                             VStack(spacing: 0) {
                                 ForEach(Array(space.tabs.enumerated()), id: \.element.id) { index, tab in
                                     if index > 0 { Rectangle().fill(Color(uiColor: .separator)).frame(height: 0.5).padding(.leading, 16) }
-                                    NavigationLink(value: TabsRoute.tab(tab.ref)) {
+                                    TabsTabLink(tab: tab.ref) {
                                         let label = model.label(of: tab, host: host)
                                         SpaceDetailsTabRow(tab: tab, label: label,
-                                                           line: TabsTabRow.line(tab, label: label, host: host, status: model.status))
+                                                           line: TabsTabRow.line(tab, label: label, status: model.status))
                                     }
                                     .buttonStyle(.plain)
                                     .contextMenu { TabsTabMenu(actions: actions, tab: tab.ref) }

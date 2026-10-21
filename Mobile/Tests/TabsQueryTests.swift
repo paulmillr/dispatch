@@ -112,6 +112,20 @@ final class TabsQueryTests: XCTestCase {
     }
 
     /// The tree's spaces follow the same menu: a filter keeps the spaces with a matching tab.
+    /// A row's second line says what runs in the tab: the agent's status, else the program unless the row is already
+    /// named after it; never the host or the folder.
+    func testATabsLineIsItsAgentOrProgramNeverWhereItRuns() throws {
+        let (model, _) = model()
+        let tab = { (key: String) in try XCTUnwrap(model.tab(TabRef(host: TabsFixtures.host.id, key: key))) }
+        let claude = try tab("herdr:app:1"), dev = try tab("herdr:app:2"), zsh = try tab("herdr:app:3")
+        let quiet: @MainActor (UUID, UInt64) -> String? = { _, _ in nil }
+        XCTAssertEqual(TabsTabRow.line(claude, label: "claude", status: { _, _ in "fable-5.1 · thinking 48s" }), "fable-5.1 · thinking 48s")
+        XCTAssertEqual(TabsTabRow.line(claude, label: "Make billing webhook retries idempotent", status: quiet), "claude")
+        XCTAssertNil(TabsTabRow.line(claude, label: "claude", status: quiet), "Named after its program already")
+        XCTAssertNil(TabsTabRow.line(zsh, label: "zsh", status: quiet), "A bare shell: one line, no folder")
+        XCTAssertNil(TabsTabRow.line(dev, label: "dev", status: quiet), "A renamed tab names no program")
+    }
+
     func testSpaceRowsFollowTheMenu() {
         let (model, _) = model(["p:codex": .needsYou])
         XCTAssertEqual(model.spaceRows.map(\.space.name), ["app", "curves", "docs"])

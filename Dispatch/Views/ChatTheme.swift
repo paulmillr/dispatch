@@ -189,9 +189,13 @@ struct ChatTypography: Equatable, Sendable {
         NSFont(name: codeFontName, size: size + 1) ?? .monospacedSystemFont(ofSize: size + 1, weight: .regular)
     }
     var characterWidth: CGFloat = 7.5
+    /// The width of the common step names (Shell, Read, Search, Find files, Search web…) in semibold detail text: an
+    /// opened group's title column.
+    var stepTitleWidth: CGFloat = 64
     var replyLineHeight: CGFloat = 18
     var detailLineHeight: CGFloat = 14
     init() {}
+    static let stepNames = ["Shell", "Read", "Search", "Patch", "Edit", "Write", "Web", "Tool", "Find files", "Search web"]
     @MainActor init(preferences: Preferences) {
         AppFont.register()
         size = preferences.fontSize
@@ -206,6 +210,10 @@ struct ChatTypography: Equatable, Sendable {
         let selected = chatFont.flatMap { sizeScale == 1 ? $0 : NSFont(descriptor: $0.fontDescriptor, size: pointSize()) } ?? code
         fontName = selected.fontName
         characterWidth = ("0" as NSString).size(withAttributes: [.font: selected]).width
+        let detail = NSFont(descriptor: selected.fontDescriptor, size: detailSize) ?? .systemFont(ofSize: detailSize)
+        let semibold = NSFont(descriptor: detail.fontDescriptor.addingAttributes([.traits: [NSFontDescriptor.TraitKey.weight: NSFont.Weight.semibold]]),
+                              size: detailSize) ?? detail
+        stepTitleWidth = ceil(Self.stepNames.map { ($0 as NSString).size(withAttributes: [.font: semibold]).width }.max() ?? 64) + 1
         let layout = NSLayoutManager()
         codeDetailLineHeight = layout.defaultLineHeight(for: NSFont(descriptor: code.fontDescriptor, size: codeDetailSize)
             ?? .monospacedSystemFont(ofSize: codeDetailSize, weight: .regular))

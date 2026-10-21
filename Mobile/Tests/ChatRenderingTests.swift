@@ -47,6 +47,17 @@ final class ChatRenderingTests: XCTestCase {
         XCTAssertGreaterThan(agent.height, 60, "Long text wraps onto more lines")
     }
 
+    func testLargeQuestionDetailsDropTo8pt() {
+        let short = "Keeps the current layout"
+        let long = String(repeating: "Moves the sidebar below the editor. ", count: 6)
+        XCTAssertFalse(ChatQuestionDetail.isLarge(short))
+        XCTAssertTrue(ChatQuestionDetail.isLarge(long))
+        XCTAssertTrue(ChatQuestionDetail.isLarge("+------+\n| tabs |\n+------+"), "A layout is large however short")
+        let line = size(ChatQuestionDetail(text: short), width: 300).height
+        // 216 characters: four lines of 8 pt mono in 300 pt, six of footnote mono.
+        XCTAssertLessThan(size(ChatQuestionDetail(text: long), width: 300).height, line * 3)
+    }
+
     func testTheBannerSaysWhereTheLinkIs() {
         XCTAssertNil(ChatLinkBanner.title(.connected, host: "mba2"))
         XCTAssertEqual(ChatLinkBanner.title(.reconnecting(attempt: 2, since: Date()), host: "mba2"), "Reconnecting to mba2")

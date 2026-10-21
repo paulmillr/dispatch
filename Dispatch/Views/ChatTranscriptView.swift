@@ -478,10 +478,8 @@ private struct ChatTranscriptRowView: View {
             } else if isBubble {
                 VStack(alignment: .leading, spacing: 6) {
                     if let item = row.item, let timeline = row.timeline {
-                        HStack(alignment: .top, spacing: Self.railSpacing) {
-                            ChatStepRail(timeline: timeline)
-                            itemView(item)
-                        }
+                        itemView(item).padding(.leading, ChatStepRail.width + Self.railSpacing)
+                            .overlay(alignment: .leading) { ChatStepRail(timeline: timeline) }
                     } else if let item = row.item { itemView(item) }
                     if let group = row.group {
                         groupHeader(group, replyTime: row.replyTime)
@@ -518,7 +516,8 @@ private struct ChatTranscriptRowView: View {
     /// Clicking a closed group, or a live one showing just its current step, shows every step; clicking again closes it.
     private func groupHeader(_ group: ChatToolGroup, replyTime: Date? = nil) -> some View {
         let disclosure = session.groupDisclosure(group, turnID: row.turnID)
-        return ChatToolGroupHeader(group: group, replyTime: replyTime, disclosure: disclosure) {
+        let live = disclosure == .current || (disclosure == .all && session.groupIsLive(group, turnID: row.turnID))
+        return ChatToolGroupHeader(group: group, replyTime: replyTime, disclosure: disclosure, live: live) {
             session.setGroupExpanded(group, disclosure != .all)
         }
     }
@@ -553,7 +552,8 @@ private struct ChatTranscriptRowView: View {
             ChatToolCard(item: item, expanded: toolExpansion(item), directory: directory, embedded: true,
                          layouts: session.toolLayouts, layoutWidth: max(0, bubbleWidth - 32 - railWidth),
                          live: session.busy && row.turnID == session.activeTurnID,
-                         elapsed: theme.radioLog ? nil : row.timeline?.step.seconds)
+                         elapsed: theme.radioLog || row.timeline?.running == true ? nil : row.timeline?.step.seconds,
+                         titleColumn: row.timeline == nil || theme.radioLog ? nil : theme.typography.stepTitleWidth)
         }
     }
     private func toolExpansion(_ item: ChatItem) -> Binding<Bool> {

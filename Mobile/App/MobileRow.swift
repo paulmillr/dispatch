@@ -191,7 +191,7 @@ struct MobileRow<Glyph: View>: View {
             MobileRow(dot: .working, tint: mba2, name: "claude", detail: "app · mba2", time: "now", subtitle: "fable-5.1 · thinking 48s") {
                 HostGlyph(host: HostRecord(name: "mba2", address: "mba2", user: "alex", auth: .password, system: .mac), size: 24)
             }
-            MobileRow(dot: nil, tint: studio, name: "zsh", detail: "docs · studio", time: "Yesterday", subtitle: "~/src/docs") {
+            MobileRow(dot: nil, tint: studio, name: "zsh", detail: "docs · studio", time: "Yesterday", subtitle: nil) {
                 HostGlyph(host: HostRecord(name: "studio", address: "studio", user: "alex", auth: .password, system: .mac), size: 24)
             }
             MobileRow(dot: .unread, tint: ai, name: "claude", detail: "curves · ai", time: "Yesterday", subtitle: "fable-5.1 · finished", separator: false) {

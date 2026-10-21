@@ -109,6 +109,46 @@ final class ChatToolGroupingTests: XCTestCase {
         XCTAssertNil(untimed.elapsed)
     }
 
+    /// The live turn's newest group and its running step show no time; finished steps and finished groups keep theirs.
+    func testLiveGroupShowsNoTimeForItsRunningStep() throws {
+        let session = ChatSession(id: System.uuid())
+        let date = Date(timeIntervalSince1970: 1_750_000_000)
+        session.activeTurnID = "turn"; session.busy = true
+        session.insert(ChatItem(id: "reply", kind: .assistant, text: "Checking"), turnID: "turn", at: date)
+        for (id, seconds) in [("one", 1.0), ("two", 3.0), ("three", 10.0)] {
+            session.insert(tool(id), turnID: "turn", at: date.addingTimeInterval(seconds))
+        }
+        let group = try XCTUnwrap(session.transcriptRows.last?.group)
+        XCTAssertTrue(session.groupIsLive(group, turnID: "turn"))
+        XCTAssertEqual(session.groupDisclosure(group, turnID: "turn"), .current)
+        let current = session.visibleTranscriptRows.compactMap(\.timeline)
+        XCTAssertEqual(current.map(\.running), [true], "The live group shows its running step alone, without a time")
+
+        session.setGroupExpanded(group, true)
+        let opened = session.visibleTranscriptRows.compactMap(\.timeline)
+        XCTAssertEqual(opened.map(\.running), [false, false, true], "Opened, only its last step is still running")
+        XCTAssertEqual(opened.map(\.step.seconds), [1, 2, 7], "Finished steps keep their times")
+        XCTAssertEqual(session.groupDisclosure(group, turnID: "turn"), .all)
+        XCTAssertTrue(session.groupIsLive(group, turnID: "turn"))
+
+        session.busy = false
+        XCTAssertFalse(session.groupIsLive(group, turnID: "turn"))
+        XCTAssertEqual(session.visibleTranscriptRows.compactMap(\.timeline).map(\.running), [false, false, false],
+                       "A finished turn's steps all show their times")
+        XCTAssertEqual(try XCTUnwrap(group.elapsed), 10, accuracy: 0.001)
+    }
+
+    /// An opened group's step names share one column, wide enough for the common names in the chat's font.
+    func testStepTitleColumnFitsTheCommonNames() {
+        AppFont.register()
+        let typography = ChatTypography(preferences: Preferences())
+        let font = NSFont(name: typography.fontName, size: typography.detailSize) ?? .systemFont(ofSize: typography.detailSize)
+        for name in ChatTypography.stepNames {
+            XCTAssertGreaterThanOrEqual(typography.stepTitleWidth, (name as NSString).size(withAttributes: [.font: font]).width, name)
+        }
+        XCTAssertLessThan(typography.stepTitleWidth, typography.characterWidth * 14, "The column stays narrow")
+    }
+
     func testStepChartBarsShareWidthByTimeAndMergeWhenCrowded() {
         func step(_ seconds: TimeInterval?, _ kind: ChatToolStep.Kind = .other, failed: Bool = false) -> ChatToolStep {
             ChatToolStep(kind: kind, failed: failed, seconds: seconds)

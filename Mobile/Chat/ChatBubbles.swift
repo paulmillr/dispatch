@@ -156,6 +156,18 @@ struct ChatQuestionFormView: View {
                             Text(question.header).font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
                         }
                         Text(question.text)
+                        if approval.pending.pending {
+                            ChatQuestionOptionDetails(options: question.options)
+                            let chosen = draft.usingCustom.contains(question.id) ? [] : draft.selected[question.id, default: []]
+                            if let preview = question.options.first(where: { chosen.contains($0.label) && $0.preview?.isEmpty == false })?.preview {
+                                ChatQuestionDetail(text: preview)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 8)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(Color.approvalCode, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                    .padding(.top, 4)
+                            }
+                        }
                     }
                 }
                 if approval.pending.pending {
@@ -198,6 +210,9 @@ struct ChatSideQuestionView: View {
                         Text(question.question.header).font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
                     }
                     Text(question.question.question)
+                    if !question.submitted, let options = question.question.options {
+                        ChatQuestionOptionDetails(options: options.map { .init(label: $0.label, description: $0.description, preview: nil) })
+                    }
                 }
             }
             if let options = question.question.options, !options.isEmpty {
@@ -232,6 +247,47 @@ struct ChatSideQuestionView: View {
                 }
             }
             .disabled(question.submitted)
+        }
+    }
+}
+
+/// The options' descriptions under the question, label over description, for the options that have one; the chips
+/// below only carry the labels.
+struct ChatQuestionOptionDetails: View {
+    let options: [ClaudeQuestions.Option]
+    var body: some View {
+        let described = options.filter { !$0.description.isEmpty }
+        if !described.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(described) { option in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(option.label).font(.footnote.weight(.semibold))
+                        ChatQuestionDetail(text: option.description).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .padding(.top, 4)
+        }
+    }
+}
+
+/// An option's description or preview in mono, since agents draw layouts in them. Large ones (several lines, or longer
+/// than a couple of lines of footnote) drop to 8 pt, scaled with Dynamic Type, so a layout's lines fit the bubble; a
+/// multi-line one scrolls sideways rather than wrapping its columns.
+struct ChatQuestionDetail: View {
+    let text: String
+    @ScaledMetric(relativeTo: .caption2) private var largeSize: CGFloat = 8
+
+    static func isLarge(_ text: String) -> Bool { text.contains("\n") || text.count > 120 }
+
+    var body: some View {
+        let font = Self.isLarge(text) ? Font.system(size: largeSize, design: .monospaced) : .footnote.monospaced()
+        if text.contains("\n") {
+            ScrollView(.horizontal, showsIndicators: false) {
+                Text(text).font(font).lineSpacing(1).fixedSize().textSelection(.enabled)
+            }
+        } else {
+            Text(text).font(font).lineSpacing(1).textSelection(.enabled)
         }
     }
 }

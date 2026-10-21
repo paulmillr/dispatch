@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Unit tests of the iPhone release tooling: scripts/ios-signing.py, the release check (test/ios-release.py) and the
-device discovery of scripts/run.py. No Xcode, network or device; test/ios.py runs them in the iPhone suites
+device and simulator discovery of scripts/run.py. No Xcode, network or device; test/ios.py runs them in the iPhone suites
 (test/suites.json: DispatchMobileScripts/<Class>/<test>)."""
 import contextlib
 import hashlib
@@ -9,6 +9,7 @@ import io
 import json
 from pathlib import Path
 import plistlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -28,6 +29,8 @@ signing = load('ios_signing', 'scripts/ios-signing.py')
 release = load('ios_release', 'test/ios-release.py')
 sys.path.insert(0, str(ROOT / 'scripts'))
 runner = load('run_script', 'scripts/run.py')
+simulators = load('ios_simulator', 'scripts/ios_simulator.py')
+setup_mobile = load('setup_mobile', 'scripts/setup_mobile.py')
 
 
 class SigningConfigTests(unittest.TestCase):
@@ -137,11 +140,37 @@ class DeviceDiscoveryTests(unittest.TestCase):
         self.assertIsNone(runner.choose_iphone([], ''))
 
     def test_a_phone_is_the_destination_so_signing_can_register_it(self):
-        args = type('Args', (), {'ios_device': '', 'simulator': 'dispatch-release'})()
+        args = type('Args', (), {'ios_device': '', 'simulator': 'iPhone Air'})()
         self.assertEqual(runner.ios_target(args, ('udid-a', 'Paul')), ('platform=iOS,id=udid-a', 'iphoneos'))
         self.assertEqual(runner.ios_target(args), ('generic/platform=iOS', 'iphoneos'))
         args.ios_device = None
-        self.assertEqual(runner.ios_target(args), ('platform=iOS Simulator,name=dispatch-release', 'iphonesimulator'))
+        self.assertEqual(runner.ios_target(args, simulator=('SIM-A', 'iPhone Air (iOS 27.0)')),
+                         ('platform=iOS Simulator,id=SIM-A', 'iphonesimulator'))
+
+    def test_a_shared_simulator_name_picks_the_booted_one_then_the_newest_runtime(self):
+        def device(udid, name='iPhone Air', state='Shutdown', available=True):
+            return {'udid': udid, 'name': name, 'state': state, 'isAvailable': available}
+        prefix = 'com.apple.CoreSimulator.SimRuntime.'
+        # Two of one name on one runtime: what xcodebuild's name= destination refuses.
+        document = {'devices': {prefix + 'iOS-27-0': [device('SIM-A'), device('SIM-B', state='Booted')]}}
+        self.assertEqual(simulators.choose_simulator(document, 'iPhone Air'), ('SIM-B', 'iPhone Air (iOS 27.0, booted)'))
+        document = {'devices': {
+            prefix + 'iOS-26-2': [device('SIM-OLD')], prefix + 'iOS-27-0-1': [device('SIM-NEW')],
+            prefix + 'iOS-27-0': [device('SIM-MID'), device('SIM-GONE', available=False)],
+            prefix + 'watchOS-26-0': [device('SIM-WATCH', name='iPhone Air', state='Booted')],
+            prefix + 'xrOS-26-0': [device('SIM-VISION', name='Apple Vision Pro')]}}
+        self.assertEqual(simulators.choose_simulator(document, 'iphone air'), ('SIM-NEW', 'iPhone Air (iOS 27.0.1)'))
+        self.assertEqual(simulators.choose_simulator(document, 'sim-old'), ('SIM-OLD', 'iPhone Air (iOS 26.2)'))
+        self.assertIsNone(simulators.choose_simulator(document, 'SIM-GONE'))
+        self.assertIsNone(simulators.choose_simulator(document, 'Apple Vision Pro'))
+        self.assertIsNone(simulators.choose_simulator({}, 'iPhone Air'))
+
+    def test_an_unknown_simulator_stops_before_the_build(self):
+        def run(command, **kwargs):
+            self.assertEqual(command, ['xcrun', 'simctl', 'list', 'devices', 'available', '--json'])
+            return subprocess.CompletedProcess(command, 0, stdout='{"devices": {}}')
+        with self.assertRaisesRegex(OSError, 'No available iOS simulator named iPhone 99'):
+            simulators.find_simulator('iPhone 99', run)
 
     def test_a_device_build_stops_early_without_a_valid_config(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -151,6 +180,30 @@ class DeviceDiscoveryTests(unittest.TestCase):
             self.assertIn('not a team id', runner.signing_problem(path))
             signing.write('ABCDE12345', '', path)
             self.assertIsNone(runner.signing_problem(path))
+
+
+class EngineFrameworkTests(unittest.TestCase):
+    def test_a_changed_header_makes_the_built_engine_stale(self):
+        # The package compiles against the XCFramework before the app's pre-build script runs: a pull that adds to
+        # the C header must rebuild it during setup, or Swift cannot find the new names.
+        with tempfile.TemporaryDirectory() as directory:
+            headers, framework = Path(directory) / 'include', Path(directory) / 'Engine.xcframework'
+            headers.mkdir()
+            (headers / 'engine.h').write_text('#define DMS_REFUSED (-10)\n')
+            (headers / 'module.modulemap').write_text('module Engine {}\n')
+            self.assertFalse(setup_mobile.current(framework, headers))
+            for platform in ('ios-arm64', 'ios-arm64-simulator'):
+                (framework / platform).mkdir(parents=True)
+                shutil.copytree(headers, framework / platform / 'Headers')
+            self.assertTrue(setup_mobile.current(framework, headers))
+            (headers / 'engine.h').write_text('#define DMS_REFUSED (-10)\n#define DMS_HOST_NOT_FOUND (-11)\n')
+            self.assertFalse(setup_mobile.current(framework, headers))
+            shutil.copy(headers / 'engine.h', framework / 'ios-arm64/Headers')
+            self.assertFalse(setup_mobile.current(framework, headers))
+            shutil.copy(headers / 'engine.h', framework / 'ios-arm64-simulator/Headers')
+            self.assertTrue(setup_mobile.current(framework, headers))
+            (framework / 'ios-arm64/Headers/module.modulemap').unlink()
+            self.assertFalse(setup_mobile.current(framework, headers))
 
 
 def elf(machine):

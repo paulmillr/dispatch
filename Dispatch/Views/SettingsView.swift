@@ -1,3 +1,4 @@
+import Dictation
 import SwiftUI
 import CoreText
 
@@ -421,7 +422,31 @@ struct SettingsView: View {
                 }
             }
                 .accessibilityIdentifier("settings-git")
+            dictationSettings
         }.task { TerminalRuntime.shared.chat.loadLaunches() }
+    }
+
+    /// Chat dictation's engine; choosing Whisper lists its models to download and pick from.
+    private var dictationSettings: some View {
+        settingsGroup("Dictation") {
+            row("Engine", detail: draft.dictationEngine == .apple ? AppleTranscriber.summary : "Whisper runs on this Mac with a model you download") {
+                dropdown("Dictation engine", selection: Binding(get: { draft.dictationEngine.title }, set: { title in
+                    if let engine = DictationEngine.allCases.first(where: { $0.title == title }) { draft.dictationEngine = engine }
+                }), choices: DictationEngine.allCases.map(\.title))
+            }
+            if draft.dictationEngine == .whisper {
+                ForEach(WhisperModel.allCases) { model in
+                    VStack(spacing: 0) {
+                        separator
+                        WhisperModelRow(model: model, selected: draft.whisperModel == model) { draft.whisperModel = model }
+                            .padding(.vertical, 7)
+                    }
+                }
+                Text("Models come from huggingface.co and stay on this Mac. Click a downloaded model to use it.")
+                    .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 9)
+            }
+        }.accessibilityIdentifier("settings-dictation")
     }
 
     /// The modifiers that go with the digit keys. Recording one another group already uses swaps the two.

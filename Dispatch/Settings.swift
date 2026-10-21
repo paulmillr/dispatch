@@ -1,4 +1,5 @@
 import AppKit
+import Dictation
 import Observation
 
 enum AppTheme: String, Codable, CaseIterable {
@@ -197,6 +198,9 @@ struct Preferences: Codable, Equatable {
     /// The uncommitted changes as their own Changes tab beside Commits, as they first were, instead of Commits'
     /// uncommitted row.
     var gitChangesTab = false
+    /// Chat dictation's engine, and the Whisper model it uses when Whisper is chosen (WhisperModelStore downloads it).
+    var dictationEngine = DictationEngine.apple
+    var whisperModel = WhisperModel.small
 
     func resolvedTheme(systemIsDark: Bool) -> String {
         let selected = appTheme.isDark(systemIsDark: systemIsDark) ? theme : lightTheme
@@ -225,6 +229,7 @@ struct Preferences: Codable, Equatable {
         case improveTextContrast
         case spaces, closeLaunching, enableKittyGraphics
         case filesDragAndDrop, filesFollowShell, filesOpenWith, filesAskBeforeReplacing, gitEnabled, gitChangesTab
+        case dictationEngine, whisperModel
         // Stored under a new name since hidden files show by default: every save wrote the old key, so its `false`
         // was usually the old default rather than a choice.
         case filesShowHidden = "filesShowHiddenFiles"
@@ -306,6 +311,8 @@ struct Preferences: Codable, Equatable {
         filesAskBeforeReplacing = try fields.decodeIfPresent(Bool.self, forKey: .filesAskBeforeReplacing) ?? filesAskBeforeReplacing
         gitEnabled = try fields.decodeIfPresent(Bool.self, forKey: .gitEnabled) ?? gitEnabled
         gitChangesTab = try fields.decodeIfPresent(Bool.self, forKey: .gitChangesTab) ?? gitChangesTab
+        dictationEngine = try fields.decodeIfPresent(String.self, forKey: .dictationEngine).flatMap(DictationEngine.init(rawValue:)) ?? dictationEngine
+        whisperModel = try fields.decodeIfPresent(String.self, forKey: .whisperModel).flatMap(WhisperModel.init(rawValue:)) ?? whisperModel
     }
 }
 

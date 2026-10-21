@@ -22,6 +22,8 @@ import time
 import unittest
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / 'scripts'))
+from ios_simulator import find_simulator  # noqa: E402
 TARGET = 'DispatchMobileTests'
 SCRIPTS = 'DispatchMobileScripts'
 SCRIPT_TESTS = ROOT / 'test/ios-release.test.py'
@@ -81,7 +83,8 @@ def main():
     parser = argparse.ArgumentParser(prog='test/run.sh --platform ios', description=__doc__.split('\n\n')[0])
     parser.add_argument('tests', nargs='*', help='Explicit Class or Class/testMethod identifiers (cannot combine with --suite)')
     parser.add_argument('--suite', choices=SUITES, help='Default: fast')
-    parser.add_argument('--simulator', default=os.environ.get('DISPATCH_IOS_SIMULATOR', 'iPhone Air'), metavar='NAME')
+    parser.add_argument('--simulator', default=os.environ.get('DISPATCH_IOS_SIMULATOR', 'iPhone Air'), metavar='NAME',
+                        help='Name or UDID; a booted one, then the newest runtime, when several share the name')
     parser.add_argument('--list', action='store_true', help='Show the selection without building')
     args = parser.parse_args()
     if args.suite and args.tests:
@@ -117,10 +120,14 @@ def main():
     # The Rust toolchain's iOS targets and the SSH engine's XCFramework (SwiftPM needs it before any build script).
     subprocess.run(['python3', 'scripts/setup_mobile.py'], cwd=ROOT, check=True)
     subprocess.run(['python3', 'scripts/generate-project.py'], cwd=ROOT, check=True)
+    udid, description = find_simulator(args.simulator)
+    print(f'Simulator: {description} {udid}', flush=True)
     log = ROOT / 'build/logs' / f'ios-test-{time.strftime("%Y%m%d-%H%M%S")}.log'
     log.parent.mkdir(parents=True, exist_ok=True)
     command = ['xcodebuild', '-project', 'Dispatch.xcodeproj', '-scheme', 'DispatchMobile', '-configuration', 'Debug',
-               '-destination', f'platform=iOS Simulator,name={args.simulator}', '-derivedDataPath', 'build', 'test']
+               '-destination', f'platform=iOS Simulator,id={udid}',
+               # ./run.sh --ios's DerivedData: not the Mac's build/, whose build database one build at a time holds.
+               '-derivedDataPath', 'build/ios', 'test']
     command += [f'-only-testing:{selector}' for selector in xctest]
     started = time.monotonic()
     with log.open('w') as stream:

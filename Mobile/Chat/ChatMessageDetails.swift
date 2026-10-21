@@ -77,7 +77,7 @@ struct ChatMessageDetails: View {
                 Button { dismiss() } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "chevron.left").font(.body.weight(.semibold))
-                        Text(space).font(.body).lineLimit(1)
+                        TabsCappedWidth(max: TabsBackPill.labelWidth) { Text(space).font(.body).lineLimit(1) }
                     }
                     .foregroundStyle(Color.dispatchPink)
                 }

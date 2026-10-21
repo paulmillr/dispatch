@@ -26,6 +26,8 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / 'scripts'))
+from ios_simulator import find_simulator  # noqa: E402
 PRODUCTS = ROOT / 'build/dd/Build/Products'
 APP = 'DispatchMobile.app'
 EXECUTABLE = 'DispatchMobile'
@@ -307,7 +309,8 @@ def check_bundle(app, protocol, built_version, log_name):
 def main(arguments=None):
     parser = argparse.ArgumentParser(prog='test/ios-release.py', description=__doc__.split('\n\n')[0],
                                      epilog=__doc__.split('\n\n', 2)[2], formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--simulator', default=os.environ.get('DISPATCH_IOS_SIMULATOR', 'iPhone Air'), metavar='NAME')
+    parser.add_argument('--simulator', default=os.environ.get('DISPATCH_IOS_SIMULATOR', 'iPhone Air'), metavar='NAME',
+                        help='name or UDID; a booted one, then the newest runtime, when several share the name')
     parser.add_argument('--helper-profile', choices=('release', 'local'), default='release',
                         help="the helpers' Cargo profile (default release: fat LTO, what ./run.sh --prod ships)")
     parser.add_argument('--skip-build', action='store_true', help='check the existing Release builds in build/dd')
@@ -330,10 +333,15 @@ def main(arguments=None):
         problems += ['privacy manifest: ' + problem for problem in privacy_problems(manifest)]
     simulator_app = PRODUCTS / 'Release-iphonesimulator' / APP
     device_app = PRODUCTS / 'Release-iphoneos' / APP
+
+    def simulator():
+        # By UDID, looked up only when a step needs it (--skip-build --no-launch needs none).
+        return find_simulator(args.simulator)[0]
+
     if not args.skip_build:
         run([sys.executable, 'scripts/setup_mobile.py', '--offline'], log, env)
         run([sys.executable, 'scripts/generate-project.py'], log, env)
-        seconds = build(f'platform=iOS Simulator,name={args.simulator}', log, env)
+        seconds = build(f'platform=iOS Simulator,id={simulator()}', log, env)
         print(f'Built Release for the simulator in {seconds:.0f}s', flush=True)
         seconds = build('generic/platform=iOS', log, env, [
             'CODE_SIGNING_ALLOWED=NO', 'LD_GENERATE_MAP_FILE=YES',
@@ -364,7 +372,7 @@ def main(arguments=None):
         symbols = subprocess.run(['xcrun', 'nm', str(executable)], capture_output=True, text=True).stdout.count('\n')
         print(f'Device executable: {symbols} symbols left (a stripped Release keeps only what dyld needs)')
     if not args.no_launch and simulator_app.is_dir():
-        problems += launch(simulator_app, args.simulator, log)
+        problems += launch(simulator_app, simulator(), log)
         print(f'Launched the Release simulator build: screenshot {os.path.relpath(OUTPUT / "launch.png", ROOT)}')
     if device_app.is_dir():
         maps = sorted(MAPS.glob('DispatchMobile-normal-arm64.txt'))
@@ -375,7 +383,7 @@ def main(arguments=None):
             print('  (code rows: live symbols in the link map after dead-stripping; the executable adds headers, '
                   'tables and padding)')
     if args.with_fast_suite:
-        status = subprocess.run([sys.executable, 'test/ios.py', '--simulator', args.simulator], cwd=ROOT).returncode
+        status = subprocess.run([sys.executable, 'test/ios.py', '--simulator', simulator()], cwd=ROOT).returncode
         if status:
             problems.append(f'the fast suite failed ({status})')
     for problem in problems:

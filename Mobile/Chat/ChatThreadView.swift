@@ -62,7 +62,8 @@ struct ChatThreadView: View {
                          stopping: session.stopping, focus: $focused,
                          send: { session.send() },
                          steer: session.working ? { session.send(steer: true) } : nil,
-                         stop: { session.stop() })
+                         stop: { session.stop() },
+                         dictationOwner: ObjectIdentifier(session))
         }
         .background(Color.canvas)
         .onAppear {
