@@ -293,6 +293,11 @@ struct SettingsView: View {
                         .accessibilityIdentifier("settings-remote-clipboard")
                         .help("OSC 52, the kitty clipboard protocol and tmux buffers, in local and remote tabs alike. Programs can never read your clipboard.")
                 }
+                row("Secure keyboard entry", detail: "other apps can't read what you type",
+                    privacy: "While Dispatch is the active app, apps with Input Monitoring see none of your keystrokes, passwords included. Some text expanders and keyboard tools stop working meanwhile.") {
+                    settingToggle("Secure keyboard entry", isOn: $draft.secureKeyboardEntry)
+                        .accessibilityIdentifier("settings-secure-keyboard-entry")
+                }
                 row("Scrollback", detail: draft.scrollback == .automatic ? "sized from this Mac’s memory · new tabs" : "history each new tab keeps") {
                     dropdown("Scrollback", selection: Binding(get: { draft.scrollback.title }, set: { title in
                         if let size = Scrollback.allCases.first(where: { $0.title == title }) { draft.scrollback = size }

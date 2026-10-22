@@ -498,6 +498,7 @@
 		85981C66E87BF52F222DF4B1 /* TabsTestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CDF9109B62226F98C1A282E /* TabsTestSupport.swift */; };
 		860D62922FE5765975DC47D4 /* Sprite.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9301318BBF6C0D413F27DB70 /* Sprite.swift */; };
 		8611E5B91A71C9ED21154858 /* CodeSyntaxTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE6F091C0880770A8D392337 /* CodeSyntaxTests.swift */; };
+		8616CBE1C983EF8D4F02EFB8 /* SecureKeyboardEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86FD1D5300DEAF1A8F88482D /* SecureKeyboardEntry.swift */; };
 		86A06271F4EF3B79A1165694 /* FilesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60065DB88D960B17177F4BB5 /* FilesView.swift */; };
 		86BBF428AA6C8F09440AD339 /* Containers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11176A973B5F4F122FCC52C2 /* Containers.swift */; };
 		8718E1DD895D255877BEC170 /* startup.json in Resources */ = {isa = PBXBuildFile; fileRef = 8DFEDEB6E1E7B837C6E6B1F4 /* startup.json */; };
@@ -872,6 +873,7 @@
 		E79A9A383499B44A12B9AEF0 /* portability_macros.h in CopyFiles */ = {isa = PBXBuildFile; fileRef = 08A5BBB37ACDFA23AC80DAAD /* portability_macros.h */; };
 		E7F167AD4A057015B55E6E08 /* notifications.json in Resources */ = {isa = PBXBuildFile; fileRef = B0DAF57A59E9A3B49968FAD0 /* notifications.json */; };
 		E818536A2056AA9918DF1953 /* Search.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37C3964421367790CD05D4B7 /* Search.swift */; };
+		E82A3A5CE47CED38799C489B /* PrivacyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FBED2F114D35A45BAAA0D96 /* PrivacyTests.swift */; };
 		E9116D734A6A243DA08631BB /* MobileVerticalBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = F91EA25CEDBD739287192A91 /* MobileVerticalBar.swift */; };
 		E9B114C1AF6315EA6F2D1B53 /* GitCommitsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C6917E06DA46A29733B5DD5 /* GitCommitsView.swift */; };
 		EA37BCFD060071C6011C301A /* CoreText.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 18472915057B27E46F334516 /* CoreText.framework */; };
@@ -1588,6 +1590,7 @@
 		8619D261AE12A2F3C4E6EF36 /* StreamHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamHandler.swift; sourceTree = "<group>"; };
 		86BB8B01CDA16FBC829F1445 /* CodeSyntax.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeSyntax.swift; sourceTree = "<group>"; };
 		86F26DE3045ADC4783A3C2DD /* MultiplexerHint.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MultiplexerHint.swift; sourceTree = "<group>"; };
+		86FD1D5300DEAF1A8F88482D /* SecureKeyboardEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecureKeyboardEntry.swift; sourceTree = "<group>"; };
 		872DFD1A4E8F2B116979264F /* PaneView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaneView.swift; sourceTree = "<group>"; };
 		875FA405C09CF44377BF8505 /* ShellCommandWrapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShellCommandWrapper.swift; sourceTree = "<group>"; };
 		885C1DEE213D3873D235AFCF /* FilesSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilesSettingsTests.swift; sourceTree = "<group>"; };
@@ -1660,6 +1663,7 @@
 		9ECC0F0D94909F7760E5C7AA /* JetBrainsMono-Italic.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "JetBrainsMono-Italic.ttf"; sourceTree = "<group>"; };
 		9F017BE3EB692669C9792AB1 /* ChatTranscript.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatTranscript.swift; sourceTree = "<group>"; };
 		9F3BD19EDC270CC212392221 /* HostLoginPromptSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostLoginPromptSheet.swift; sourceTree = "<group>"; };
+		9FBED2F114D35A45BAAA0D96 /* PrivacyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivacyTests.swift; sourceTree = "<group>"; };
 		9FEA71544C932E9898EB487C /* GitChangesPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitChangesPresentationTests.swift; sourceTree = "<group>"; };
 		A04F15BEA7D7B6D642C538A3 /* ChatCaretTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatCaretTextView.swift; sourceTree = "<group>"; };
 		A09B1ACCACD1F5C8D96CE82A /* SpaceSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpaceSidebar.swift; sourceTree = "<group>"; };
@@ -2007,6 +2011,7 @@
 			isa = PBXGroup;
 			children = (
 				831E1B9A7D7C3332FB8818B7 /* ProgramStatusStore.swift */,
+				86FD1D5300DEAF1A8F88482D /* SecureKeyboardEntry.swift */,
 				875FA405C09CF44377BF8505 /* ShellCommandWrapper.swift */,
 				640CA0FCC1B7F5C88CE5D18C /* SwiftTerminal.swift */,
 				5B7F3CD120FF25392D8BEBAE /* TerminalBackend.swift */,
@@ -2437,6 +2442,7 @@
 				D11B87E7BEEF115AAA8D18A9 /* PortableTestSupport.swift */,
 				A5FB6CF23372FB6276592DA1 /* PrefixKeysTests.swift */,
 				09FE016F8EB7A48D75D5D67F /* PresentationTestSupport.swift */,
+				9FBED2F114D35A45BAAA0D96 /* PrivacyTests.swift */,
 				5E32A13326ACFFB4E3C08524 /* ProgramStatusTests.swift */,
 				F8FB0C5AADD531BE58BF57CE /* ReplayMigrationTests.swift */,
 				10B14270E355047059C87307 /* ReviewPresentationTests.swift */,
@@ -4134,6 +4140,7 @@
 				0633E3BB16DC20CA467B0ABC /* SSHReconnectOverlay.swift in Sources */,
 				6B023EB85B525B3DACF0E11E /* SSHStatistics.swift in Sources */,
 				D00E2531F41535A6E19FDD04 /* SSHStatisticsStore.swift in Sources */,
+				8616CBE1C983EF8D4F02EFB8 /* SecureKeyboardEntry.swift in Sources */,
 				E1D11A7833AB213112FBED15 /* Settings.swift in Sources */,
 				0D27861CC970DED50256A872 /* SettingsColorSchemes.swift in Sources */,
 				DE2954E7310DA73129D5952A /* SettingsComponents.swift in Sources */,
@@ -4657,6 +4664,7 @@
 				EB8CE4ABAA1ACC7D52279EFC /* PortableTestSupport.swift in Sources */,
 				DB45738792BECAF3660BB488 /* PrefixKeysTests.swift in Sources */,
 				079C56F307637E02064D0CD3 /* PresentationTestSupport.swift in Sources */,
+				E82A3A5CE47CED38799C489B /* PrivacyTests.swift in Sources */,
 				B80CDE941918325CE779E271 /* ProgramStatusTests.swift in Sources */,
 				0594CCEE35802DFFEFF9A7CC /* ReplayMigrationTests.swift in Sources */,
 				5CEE653AEF8A8FFAD0AEB5F0 /* ReviewPresentationTests.swift in Sources */,

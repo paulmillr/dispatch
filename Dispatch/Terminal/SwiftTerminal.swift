@@ -190,6 +190,8 @@ enum TerminalLinkPolicy {
 private final class SwiftHost: SurfaceHost {
     weak var view: TerminalView?
     weak var surface: Surface?
+    /// While a kitty clipboard write completes: its contents are a program's.
+    private var kittyWriting = false
 
     init(view: TerminalView, surface: Surface) { (self.view, self.surface) = (view, surface) }
 
@@ -215,10 +217,11 @@ private final class SwiftHost: SurfaceHost {
 
     /// The first text/plain content to the pasteboard; a program's write (OSC 52, which
     /// clipboard-write = ask marks for confirming) follows Settings › General › Programs can copy instead.
+    /// A kitty write completes through here unconfirmed, as a copy does; `kittyWriting` tells them apart.
     func setClipboard(_ location: SurfaceMessage.Clipboard, _ contents: [ClipboardContent], confirm: Bool) {
         guard let content = contents.first(where: { $0.mime == Array("text/plain".utf8) }) else { return }
         let text = String(decoding: content.data, as: UTF8.self)
-        if !confirm { TerminalClipboard.write(text) } else if view != nil { TerminalClipboard.programWrite(text) }
+        if !confirm && !kittyWriting { TerminalClipboard.write(text) } else if view != nil { TerminalClipboard.programWrite(text) }
     }
 
     /// The standard clipboard's text and/or its listing, completed at once (kitty writes read
@@ -231,6 +234,8 @@ private final class SwiftHost: SurfaceHost {
                                              available: list ? [plain] : [])
         // A kitty write is a program's write: allowed by policy, it needs no prompt.
         if write, view != nil { completion.confirmed = MainActor.assumeIsolated { TerminalRuntime.shared.allowsClipboardWrites } }
+        kittyWriting = write
+        defer { kittyWriting = false }
         do { try surface.completeClipboard(request, completion) } catch {
             guard case .paste = request else { surface.denyClipboard(request); return .started }
             completion.confirmed = true

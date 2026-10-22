@@ -204,8 +204,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         return DictationStore.shared.navigation ? .commands : nil
     }
 
-    func applicationDidBecomeActive(_ notification: Notification) { TerminalRuntime.shared.setActive(true) }
-    func applicationDidResignActive(_ notification: Notification) { TerminalRuntime.shared.setActive(false) }
+    func applicationDidBecomeActive(_ notification: Notification) {
+        SecureKeyboardEntry.active = true
+        TerminalRuntime.shared.setActive(true)
+    }
+    func applicationDidResignActive(_ notification: Notification) {
+        SecureKeyboardEntry.active = false
+        TerminalRuntime.shared.setActive(false)
+    }
     func windowDidBecomeKey(_ notification: Notification) {
         TerminalRuntime.shared.setActive(true)
     }

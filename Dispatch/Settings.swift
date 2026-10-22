@@ -219,6 +219,8 @@ struct Preferences: Codable, Equatable {
     var allowClipboardWrites = true
     /// A helper connection lost while Dispatch runs logs back in by itself, with keys or the SSH agent only.
     var autoReconnectSSH = false
+    /// Keystrokes kept from other apps while Dispatch is active (SecureKeyboardEntry).
+    var secureKeyboardEntry = true
     var newHostPolicy: NewHostPolicy {
         get { !enableHostDetection ? .plain : autoGrantNewHosts ? .full : .ask }
         set { enableHostDetection = newValue != .plain; autoGrantNewHosts = newValue == .full }
@@ -278,7 +280,7 @@ struct Preferences: Codable, Equatable {
     // Settings saved by earlier local builds gain defaults for new fields.
     // Explicit user choices remain unchanged.
     private enum CodingKeys: String, CodingKey {
-        case enableHostDetection, autoGrantNewHosts, autoReconnectSSH, attentionNotifications, attentionDockBadge, attentionSound, attentionTextContent, shipsBell
+        case enableHostDetection, autoGrantNewHosts, autoReconnectSSH, secureKeyboardEntry, attentionNotifications, attentionDockBadge, attentionSound, attentionTextContent, shipsBell
         case spaceOrder, automaticTabNames, fontFamily, chatFont, fontSize, appTheme, theme, lightTheme, cursor, cursorBlink, scrollback
         case prefixKeys, backendPrefixKeys, keyGroups
         case hideSingleSpace, tabsOnly, startingDirectory, shell, rememberHosts, restoreTerminalOutput
@@ -306,6 +308,7 @@ struct Preferences: Codable, Equatable {
         autoGrantNewHosts = try fields.decodeIfPresent(Bool.self, forKey: .autoGrantNewHosts) ?? autoGrantNewHosts
         allowClipboardWrites = try fields.decodeIfPresent(Bool.self, forKey: .allowClipboardWrites) ?? allowClipboardWrites
         autoReconnectSSH = try fields.decodeIfPresent(Bool.self, forKey: .autoReconnectSSH) ?? autoReconnectSSH
+        secureKeyboardEntry = try fields.decodeIfPresent(Bool.self, forKey: .secureKeyboardEntry) ?? secureKeyboardEntry
         attentionNotifications = try fields.decodeIfPresent(Bool.self, forKey: .attentionNotifications) ?? attentionNotifications
         attentionDockBadge = try fields.decodeIfPresent(Bool.self, forKey: .attentionDockBadge) ?? attentionDockBadge
         attentionSound = try fields.decodeIfPresent(Bool.self, forKey: .attentionSound) ?? attentionSound
@@ -409,6 +412,14 @@ enum Home {
         return directory
     }
 
+    /// Dispatch's folder, owner-only: what it keeps names hosts, folders and conversations. An older one made with the
+    /// default mode is narrowed too.
+    static func protect() {
+        try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true,
+                                                 attributes: [.posixPermissions: 0o700])
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: support.path)
+    }
+
     /// While testing, this process's own environment moves to the test home (HOME there, the test PATH, no
     /// variables that move an agent's home): every process it starts, however, inherits it. Nor does it keep what
     /// names this Mac or the account's login session (Xcode's run destination: the device's UDID and name; the
@@ -439,19 +450,22 @@ final class SettingsStore {
         self.file = file ?? Home.support.appendingPathComponent("Local/settings.json")
         guard FileManager.default.fileExists(atPath: self.file.path) else { return }
         do {
-            let loaded = try JSONDecoder().decode(Preferences.self, from: Data(contentsOf: self.file))
+            let data = try Data(contentsOf: self.file)
+            let loaded = try JSONDecoder().decode(Preferences.self, from: data)
             try Self.validate(loaded)
             values = loaded
+            // Settings name the starting folder and shell: a file an older build wrote readable by others is narrowed.
+            let permissions = try FileManager.default.attributesOfItem(atPath: self.file.path)[.posixPermissions] as? NSNumber
+            if permissions?.intValue != 0o600 { try PrivateFile.write(data, to: self.file) }
         }
         catch { self.error = "Could not load settings: \(error.localizedDescription)" }
     }
 
     func save(_ preferences: Preferences) throws {
         try Self.validate(preferences)
-        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try encoder.encode(preferences).write(to: file, options: .atomic)
+        try PrivateFile.write(encoder.encode(preferences), to: file)
         values = preferences
         error = nil
         onSave?(preferences)

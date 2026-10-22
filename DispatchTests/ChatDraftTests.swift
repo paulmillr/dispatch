@@ -9,6 +9,24 @@ import XCTest
     private func collection(_ store: ChatDraftMemoryStore = ChatDraftMemoryStore()) -> ChatDraftCollection {
         ChatDraftCollection(repository: ChatDraftRepository(store: store))
     }
+    /// Drafts nobody edited for 30 days are gone at the next read; newer ones, and a conversation's newer drafts, stay.
+    func testUntouchedDraftsExpire() throws {
+        let store = ChatDraftMemoryStore(), old = Date().addingTimeInterval(-31 * 24 * 3600)
+        var stale = ChatDraft(text: "old working"); stale.modified = old
+        var kept = ChatDraft(text: "old saved"); kept.modified = old
+        let recent = ChatDraft(text: "recent saved")
+        store.buckets = [
+            "gone": ChatDraftBucket(working: stale, saved: [kept], selected: kept.id),
+            "mixed": ChatDraftBucket(working: stale, saved: [kept, recent], selected: kept.id),
+        ]
+        let repository = ChatDraftRepository(store: store)
+        XCTAssertEqual(Set(repository.buckets.keys), ["mixed"])
+        let mixed = try XCTUnwrap(repository.buckets["mixed"])
+        XCTAssertEqual(mixed.saved.map(\.text), ["recent saved"])
+        XCTAssertTrue(mixed.working.isEmpty)
+        XCTAssertNil(mixed.selected, "The selected draft expired")
+    }
+
     func testKeepSwitchEditRenameDeleteAndStickyMultiline() throws {
         let drafts = collection()
         drafts.edit(text: "\nFirst 🧑🏽‍💻\nsecond", selection: NSRange(location: 2, length: 2))

@@ -127,7 +127,7 @@ pub(super) struct Hooks {
 /// - `attachments/<32 hex>/<name>`: chat attachments' private copies (dispatch/attachments.rs).
 ///
 /// Running helpers hold `lock` in their run, session and build folders; `collect` removes the
-/// folders nobody holds, and attachment folders a week after they last changed.
+/// folders nobody holds, and attachment folders a day after they last changed unless a queued message names them.
 pub(super) const ROOT: &str = ".dispatch";
 
 /// The section of hook senders' ownership questions (question 1, B4): the helper answers them like any hook, recorded.

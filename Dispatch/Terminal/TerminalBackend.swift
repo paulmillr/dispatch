@@ -200,10 +200,19 @@ enum TerminalClipboard {
     static func programWrite(_ text: String) {
         DispatchQueue.main.async {
             guard MainActor.assumeIsolated({ TerminalRuntime.shared.allowsClipboardWrites }) else { return }
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(text, forType: .string)
+            MainActor.assumeIsolated { concealed(text) }
         }
     }
+
+    /// What a program copies is often a secret (a password manager's, a token): it stays on this Mac (no Universal
+    /// Clipboard) and is marked concealed, so clipboard managers that honor nspasteboard.org don't keep it.
+    @MainActor static func concealed(_ text: String, on pasteboard: NSPasteboard = .general) {
+        pasteboard.prepareForNewContents(with: .currentHostOnly)
+        pasteboard.setString(text, forType: .string)
+        pasteboard.setData(Data(), forType: concealedType)
+    }
+
+    static let concealedType = NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")
 }
 
 struct ScreenPublication {

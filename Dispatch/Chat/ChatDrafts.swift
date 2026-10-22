@@ -93,6 +93,8 @@ struct ChatDraftBucket: Codable {
     @ObservationIgnored private var maximumWait: Task<Void, Never>?
     @ObservationIgnored private var loaded = false
     @ObservationIgnored private var migratedScopes: [String: String] = [:]
+    /// How long a draft nobody edits is kept on disk.
+    static let expiry: TimeInterval = 30 * 24 * 3600
     func migrate(_ source: String, to destination: String) { migratedScopes[source] = destination }
     func resolvedScope(_ key: String) -> String {
         var key = key
@@ -113,7 +115,13 @@ struct ChatDraftBucket: Codable {
                     if bucket.saved.contains(where: { $0.id == draft.id }) || bucket.working.id == draft.id { draft.id = System.uuid() }
                     bucket.saved.append(draft)
                 }
-                bucket.recovery = [:]; restored[key] = bucket
+                bucket.recovery = [:]
+                // Drafts nobody touched for `expiry` go; a bucket left with nothing goes too.
+                let cutoff = Date().addingTimeInterval(-Self.expiry)
+                bucket.saved.removeAll { $0.modified < cutoff }
+                if bucket.working.modified < cutoff, !bucket.working.isEmpty { bucket.working = ChatDraft() }
+                if !bucket.saved.contains(where: { $0.id == bucket.selected }) { bucket.selected = nil }
+                restored[key] = bucket.saved.isEmpty && bucket.working.isEmpty ? nil : bucket
             }
             inactiveRevision &+= 1
             for (key, bucket) in restored {

@@ -220,12 +220,12 @@ final class ReviewTests: XCTestCase {
         XCTAssertEqual(ReviewNavigation.change(for: second, in: status)?.id, "staged:src/a.ts", "no area: the list's first")
     }
 
-    /// A review nobody touched for 60 days is gone at the next read, and the file is written without it.
+    /// A review nobody touched for 30 days is gone at the next read, and the file is written without it.
     func testUntouchedReviewsExpire() {
         let store = MemoryReviewStore()
         let now = System.date()
         store.stored = [
-            "local|/old": Review(comments: [comment("a.ts", nil, nil, [], "old")], modified: now.addingTimeInterval(-61 * 24 * 3600)),
+            "local|/old": Review(comments: [comment("a.ts", nil, nil, [], "old")], modified: now.addingTimeInterval(-31 * 24 * 3600)),
             "local|/new": Review(comments: [comment("a.ts", nil, nil, [], "new")], modified: now.addingTimeInterval(-3600)),
         ]
         let repository = ReviewRepository(store: store)

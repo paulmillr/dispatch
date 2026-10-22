@@ -2302,8 +2302,7 @@
         case .attached: break
         case .clipboard(let clipboard):
           guard TerminalRuntime.shared.allowsClipboardWrites else { return }
-          NSPasteboard.general.clearContents()
-          NSPasteboard.general.setString(String(decoding: clipboard.bytes, as: UTF8.self), forType: .string)
+          TerminalClipboard.concealed(String(decoding: clipboard.bytes, as: UTF8.self))
         }
       } catch { fail(error) }
     }

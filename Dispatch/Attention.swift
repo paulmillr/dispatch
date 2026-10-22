@@ -94,15 +94,19 @@ final class AttentionCoordinator: NSObject, UNUserNotificationCenterDelegate {
         entries.first { $0.urgency == .waiting && $0.id != controller?.workspace.activeSurfaceID }
     }
 
+    /// With previews hidden (System Settings › Notifications › Show previews), a banner shows only the placeholder: no
+    /// pane name, folder or agent text, on the lock screen or in screen shares.
+    static let category = UNNotificationCategory(identifier: "pane-attention", actions: [
+        UNNotificationAction(identifier: "show-pane", title: "Show", options: [.foreground])
+    ], intentIdentifiers: [], hiddenPreviewsBodyPlaceholder: "An agent needs you", options: [.customDismissAction])
+
     func start() {
         guard !started else { return }
         started = true
         generation += 1
         let center = UNUserNotificationCenter.current()
         center.delegate = self
-        center.setNotificationCategories([UNNotificationCategory(identifier: "pane-attention", actions: [
-            UNNotificationAction(identifier: "show-pane", title: "Show", options: [.foreground])
-        ], intentIdentifiers: [], options: [.customDismissAction])])
+        center.setNotificationCategories([Self.category])
         observe()
     }
 

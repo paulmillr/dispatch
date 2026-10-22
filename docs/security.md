@@ -57,7 +57,10 @@ Any process running as you can read these values, but the tokens are not enough 
 
 - Programs can't read your clipboard: OSC 52 reads always get an empty reply, and kitty clipboard reads need a one-time grant from a real paste.
 - Programs can write to your clipboard without asking while **Programs can copy** (Settings › General) is on (on). This covers OSC 52, the kitty clipboard protocol, and tmux paste buffers up to 8 MiB.
+- What a program writes stays on this Mac (`currentHostOnly`, so no Universal Clipboard) and is marked `org.nspasteboard.ConcealedType`, so clipboard managers that honor it don't keep it. Text you copy yourself is not marked.
 - The setting applies to every tab alike, local, plain SSH, or with the helper: a local program relaying a remote one (mosh, `docker exec`, a local tmux) can't be told apart from a local one.
+
+**Keystrokes.** While **Secure keyboard entry** (Settings › General, on) is on and Dispatch is the active app, macOS secure event input keeps your keystrokes, passwords included, from other apps' event taps (those with Input Monitoring). It is released as soon as another app becomes active. Some text expanders and keyboard tools don't see Dispatch's keys meanwhile.
 
 **Paste.** The terminal detects unsafe pastes: text with newlines outside bracketed paste, or an embedded end-of-paste sequence. Dispatch confirms them automatically, so you never see a warning. There is no setting to turn this off.
 
@@ -134,7 +137,7 @@ The token routes the request to a pane. If the token doesn't match any pane, Dis
 
 - Before upload the app strips location (GPS), Exif, IPTC and camera TIFF metadata from images, keeping the orientation: a JPEG is copied without re-encoding, a PNG re-encoded losslessly, a WebP with metadata becomes a PNG; a GIF, and any image without metadata, goes byte for byte.
 - The helper writes each upload to `~/.dispatch/attachments/<random>/<name>`, the name reduced to letters, digits, `.`, `_` and `-` (no spaces, quotes, shell or bidi characters reach an agent in the path): a new folder (0700, never an existing one) and a new file (0600), every level checked to be yours and private and never reached through a symlink; at most 8 MB each. The message names that copy; the agent reads it (Claude Code and Codex from the pasted path; Pi, and every file that is not an image, by the path line in the message, with the agent's own tools).
-- Copies are kept so an agent can read one again later in its turn and a queued message can wait; folders untouched for 7 days are removed when a helper starts.
+- Copies are kept so an agent can read one again later in its turn; folders untouched for a day are removed when a helper starts, except those a message in the host queue (`state/queue/`) still names, which stay until it is sent or removed.
 - For Claude Code, whose transcript keeps only the image data, the helper records which copies it sent with which message: `~/.dispatch/state/attachments/<hash>.idx` (0600; a SHA-256 of the message text, the copies' paths and when the send started, newest 200 messages per conversation; written only for a send that may have reached Claude), so history can show the thumbnail again. Only an app that asked for attachments causes it to be read.
 - A connected app reads a copy back (`attachments.read`) only from that folder and only under the same checks, for thumbnails on another device. A queued message with attachments keeps their paths in the queue file.
 - The Mac's Quick Look preview of an attachment writes a private copy to `$TMPDIR/Dispatch attachments/<uuid>/` (0600), replaced by the next preview and deleted when the panel closes; the folder is removed at quit, and anything a crash left there at the next preview.
@@ -219,7 +222,7 @@ The token routes the request to a pane. If the token doesn't match any pane, Dis
 - **Agent control:** with Chat, the helper can type prompts into a verified agent's terminal, tmux pane, or herdr pane. It can start `codex app-server --stdio` for side conversations, and create tmux windows and herdr tabs.
 - **Commands:** the helper is a terminal server. The Chat, hooks, tmux, and herdr grants each let the Mac open remote terminals that run any command and type into them; tmux also lets it send tmux commands. The helper also connects to agents' and herdr's own sockets.
 - **Left behind after disconnect** (until you [remove Dispatch](#removing-dispatch) from the host):
-  - in `~/.dispatch/`: the helper copy and the most recently used helper versions in `bin/`, herdr recovery records in `state/`, session folders for up to a day, and chat attachments in `attachments/` for 7 days (with their delivery index in `state/attachments/`);
+  - in `~/.dispatch/`: the helper copy and the most recently used helper versions in `bin/`, herdr recovery records in `state/`, session folders for up to a day, and chat attachments in `attachments/` for a day, or while a queued message names them (with their delivery index in `state/attachments/`);
   - lock files in agent config folders;
   - the hook entries above;
 
@@ -256,14 +259,16 @@ The chat composer's microphone turns speech into a draft on the Mac; no audio or
 
 ## Data stored on your Mac
 
+The app's folder, `~/Library/Application Support/Dispatch/`, is owner-only (0700), set at every launch.
+
 | What | Where | Contents | When | Protection |
 | --- | --- | --- | --- | --- |
-| Settings | `~/Library/Application Support/Dispatch/Local/settings.json` | Preferences, including the starting folder | On change | Atomic write; default file mode |
+| Settings | `~/Library/Application Support/Dispatch/Local/settings.json` | Preferences, including the starting folder | On change | 0600, atomic; an older file with the default mode is narrowed at launch |
 | Spaces | `…/Dispatch/host-session.json` | Spaces, tabs, titles, and folders; host records; SSH executables, options, and destinations; remote uid and boot ID; herdr recovery tokens; tmux sessions. No credentials or launch commands. | On window close and quit, while **Reopen spaces on launch** is on (on). Deleted when that setting is turned off. | 0600, atomic |
 | Terminal output | `…/Dispatch/terminal-history.json` | The raw text of plain local and SSH tabs: commands, output, and anything else visible, possibly secrets. Not tmux or herdr tabs. | Only on a normal quit, with **Restore tab history** (off) and **Reopen spaces** both on. Deleted from disk early in the next launch, ignored after 7 days, and deleted when the setting is turned off. | 0600, atomic, excluded from backups. Capped at one scrollback per tab and 1/32 of RAM in total. Replayed without control sequences. |
-| Chat drafts | `…/Dispatch/drafts.json` | Working and saved drafts, plus a copy of each prompt from before it is sent until delivery is confirmed, per host, agent, and conversation; a draft with attachments keeps their names, sizes, host paths and small JPEG thumbnails (the files themselves stay on the host) | 300 ms after typing stops, and at most every 2 s | Owner-only atomic write; excluded from backups; no expiry |
-| Reviews | `…/Dispatch/reviews.json` | The Review tab's comments per host and repository folder: each comment's text, file path, line numbers, and the lines of code it is on as they read then; the overall comment | When a comment is saved, edited, or deleted, and 300 ms after typing in the overall comment stops. Create review removes the review (its Undo is in memory only). | Owner-only atomic write; excluded from backups; a review unchanged for 60 days is deleted |
-| Helper files | `~/.dispatch/` | `bin/dispatch-helper`, a stable link to an immutable build in `bin/launchers/` that hook entries run; `run/*/` hook sockets and startup files of running helpers; `routes/` which helper serves each hook; `state/` herdr recovery records; `state/queue/` chat messages you queued for Claude Code or Pi, in full, until they are sent or removed; `attachments/` copies of files you attached in Chat, with `state/attachments/` naming the copies each message sent | `bin/dispatch-helper` is refreshed when a helper writes a hook or startup command; each `run/*/` exists while its helper runs; attachment folders are removed 7 days after they last changed | Folders 0700, sockets 0600 |
+| Chat drafts | `…/Dispatch/drafts.json` | Working and saved drafts, plus a copy of each prompt from before it is sent until delivery is confirmed, per host, agent, and conversation; a draft with attachments keeps their names, sizes, host paths and small JPEG thumbnails (the files themselves stay on the host) | 300 ms after typing stops, and at most every 2 s | Owner-only atomic write; excluded from backups; a draft not edited for 30 days is deleted |
+| Reviews | `…/Dispatch/reviews.json` | The Review tab's comments per host and repository folder: each comment's text, file path, line numbers, and the lines of code it is on as they read then; the overall comment | When a comment is saved, edited, or deleted, and 300 ms after typing in the overall comment stops. Create review removes the review (its Undo is in memory only). | Owner-only atomic write; excluded from backups; a review unchanged for 30 days is deleted |
+| Helper files | `~/.dispatch/` | `bin/dispatch-helper`, a stable link to an immutable build in `bin/launchers/` that hook entries run; `run/*/` hook sockets and startup files of running helpers; `routes/` which helper serves each hook; `state/` herdr recovery records; `state/queue/` chat messages you queued for Claude Code or Pi, in full, until they are sent or removed; `attachments/` copies of files you attached in Chat, with `state/attachments/` naming the copies each message sent | `bin/dispatch-helper` is refreshed when a helper writes a hook or startup command; each `run/*/` exists while its helper runs; attachment folders are removed a day after they last changed, unless a queued message names them | Folders 0700, sockets 0600 |
 | Color schemes | `~/.config/dispatch/themes/` | Your own color schemes, as Ghostty theme files: colors only | When you make or add one in Settings › Appearance › Custom color schemes, or import one in Settings › Extra; deleted (to the Trash) in Custom color schemes | Default file mode, atomic |
 | Whisper models | `…/Dispatch/Whisper/` | The ggml model files you downloaded for dictation | When you download one in Settings; deleted there | Default file mode |
 | Diagnostics | `~/Library/Logs/Dispatch/Diagnostics/` | Chat scroll and viewport events and geometry. Row IDs are replaced with keyed hashes; no conversation text, hosts, or paths. | Only while **Diagnostics** is on (off). Turning it off doesn't delete existing files. | 0600, rotated at 4 MiB |
@@ -281,7 +286,7 @@ With **Notifications** on (default), Dispatch asks macOS for notification permis
 - **Subtitle:** the pane's folder.
 - **Body:** up to 160 characters of the agent's reply, the requested operation, or the question.
 
-These can appear on the lock screen, depending on your macOS notification settings. Turning the setting off removes notifications already delivered. The Dock badge (on) shows how many panes are waiting.
+These can appear on the lock screen, depending on your macOS notification settings. With **Show previews** set to When Unlocked or Never (System Settings › Notifications › Dispatch), a hidden banner shows only "An agent needs you": no pane name, folder or text. Turning the setting off removes notifications already delivered. The Dock badge (on) shows how many panes are waiting.
 
 ## Build and distribution
 
@@ -328,7 +333,7 @@ The iPhone app ([docs/ios.md](ios.md)) is sandboxed like every iOS app and sidel
 | Trusted host keys | `known_hosts.json` | Algorithm and key per host and port |
 | Keys | `keys.json` | Names, types, `authorized_keys` lines and fingerprints; private halves in the Keychain |
 | Launch cache | `host-cache.json` | Per host the last hello (identity, OS, homes), multiplexers, topology (space, tab and pane names, folders), and Agents' rows with at most 280 characters of the last message and the conversation's title (which names the row). No transcript beyond that, no secret. |
-| Chat | `chat-queue.json`, `drafts.json`, `chat-markers.json`, `chat-models.json` | Queued messages until delivered, drafts, seen times and mutes, the last agent, model and effort |
+| Chat | `chat-queue.json`, `drafts.json`, `chat-markers.json`, `chat-models.json` | Queued messages until delivered, drafts (each kept 30 days after its last edit), seen times and mutes, the last agent, model and effort |
 | Activity | `tab-activity-2.json` | When each pane last changed (seen live), at most 400 panes per host and 60 days |
 | Spaces | `spaces.json` | Per host: the space New tab goes to, collapsed host sections, the phone's order of its spaces (space keys hold tmux session and herdr workspace names) |
 | Settings | UserDefaults | Appearance, font sizes, Spaces' sort, filter and tree toggle, Background refresh, the dictation engine and Whisper model (nothing that names a host; older builds' per-host keys move to `spaces.json`) |

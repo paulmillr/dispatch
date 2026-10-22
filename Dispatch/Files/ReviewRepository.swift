@@ -57,7 +57,7 @@ import Observation
     @ObservationIgnored private var loaded = false
 
     /// How long a review nobody touches is kept: past it, the code it is about has likely moved on.
-    static let expiry: TimeInterval = 60 * 24 * 3600
+    static let expiry: TimeInterval = 30 * 24 * 3600
 
     init(store: any ReviewPersistence) {
         self.store = store

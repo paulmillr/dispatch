@@ -57,9 +57,9 @@ pub(super) fn remove(anchor: &File, name: &str) -> io::Result<()> {
 /// A day: sessions and builds used more recently than this are kept even when unlocked, so a
 /// login waiting for its hand-off, an unread exit status, or a build about to be reused stays.
 const RECENT: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
-/// A week: chat attachments stay this long after their folder last changed, so an agent may read
-/// one again later in its turn and a queued message may wait (dispatch/attachments.rs).
-const ATTACHMENTS: std::time::Duration = std::time::Duration::from_secs(7 * 24 * 60 * 60);
+/// A day: chat attachments stay this long after their folder last changed, so an agent may read
+/// one again later in its turn (dispatch/attachments.rs); a queued message's stay until it goes.
+const ATTACHMENTS: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 
 /// Up to 1024 entries of `directory` whose names are `length` lowercase hex digits.
 fn entries(directory: &Path, length: usize) -> Vec<std::path::PathBuf> {
@@ -78,8 +78,8 @@ fn entries(directory: &Path, length: usize) -> Vec<std::path::PathBuf> {
 }
 
 /// Hold `parent/lock` through new-run creation and remove what no running helper holds: run
-/// directories, SSH session directories, uploaded builds, and chat attachments older than a week.
-/// Active, recent, unknown or unsafe storage is retained.
+/// directories, SSH session directories, uploaded builds, and chat attachments older than a day
+/// that no queued message names. Active, recent, unknown or unsafe storage is retained.
 pub(super) fn collect(parent: &Path, uid: u32) -> io::Result<File> {
     let guard = lock(&parent.join("lock"), true, true, uid)?;
     for path in entries(&parent.join("run"), 32) {
@@ -99,10 +99,43 @@ pub(super) fn collect(parent: &Path, uid: u32) -> io::Result<File> {
         }
         let _ = unused(&path, uid, RECENT);
     }
+    let queued = queued(parent);
     for path in entries(&parent.join(crate::api::attachment::DIRECTORY), 32) {
+        if path.file_name().and_then(|name| name.to_str()).is_some_and(|name| queued.contains(name)) {
+            continue;
+        }
         let _ = unused(&path, uid, ATTACHMENTS);
     }
     Ok(guard)
+}
+
+/// The attachment folders queued messages name (`state/queue/*.q`, dispatch/store.rs): a message
+/// may wait longer than `ATTACHMENTS` for its agent. Read as bytes, `attachments/` or JSON's
+/// `attachments\/` then the folder, so a file this helper can't parse still keeps what it names.
+fn queued(parent: &Path) -> std::collections::HashSet<String> {
+    let marker = crate::api::attachment::DIRECTORY.as_bytes();
+    let mut names = std::collections::HashSet::new();
+    let directory = parent.join("state").join(crate::dispatch::store::DIRECTORY);
+    for entry in fs::read_dir(directory).into_iter().flatten().take(1024).flatten() {
+        let path = entry.path();
+        if path.extension().is_none_or(|extension| extension != "q")
+            || entry.metadata().map_or(true, |m| !m.is_file() || m.len() > crate::dispatch::store::LIMIT)
+        {
+            continue;
+        }
+        let Ok(bytes) = fs::read(&path) else { continue };
+        let mut rest = &bytes[..];
+        while let Some(at) = rest.windows(marker.len()).position(|window| window == marker) {
+            rest = &rest[at + marker.len()..];
+            let after = rest.strip_prefix(b"\\").unwrap_or(rest);
+            let Some(after) = after.strip_prefix(b"/") else { continue };
+            let name = &after[..after.len().min(32)];
+            if name.len() == 32 && name.iter().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f')) {
+                names.insert(String::from_utf8_lossy(name).into_owned());
+            }
+        }
+    }
+    names
 }
 
 #[cfg(test)]

@@ -87,6 +87,7 @@ final class TerminalRuntime {
         workspace?.closeLaunching = preferences.closeLaunching
         workspace?.tabsOnly = preferences.tabsOnly
         hosts.reconnect.automatic = preferences.autoReconnectSSH
+        SecureKeyboardEntry.enabled = preferences.secureKeyboardEntry
         if !System.testing {
             ChatViewportTrace.shared.setEnabled(preferences.enableDiagnostics)
         }
@@ -161,6 +162,7 @@ final class TerminalRuntime {
         workspace?.closeLaunching = preferences.closeLaunching
         workspace?.tabsOnly = preferences.tabsOnly
         hosts.reconnect.automatic = preferences.autoReconnectSSH
+        SecureKeyboardEntry.enabled = preferences.secureKeyboardEntry
         for helper in helpers.values { helper.claim(preferences.spaces) }
         SidebarThemeStore.shared.current = preferences.resolvedSidebarTheme
         KeyGroupsStore.shared.current = preferences.keyGroups
