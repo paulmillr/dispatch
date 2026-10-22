@@ -1,5 +1,6 @@
 //! Native effects and completion routing. Reactor and workers are ported from helper2.
 pub mod capture;
+mod attachment;
 mod effects;
 mod executable;
 mod file;
@@ -1253,6 +1254,8 @@ pub fn isolated() -> Option<i32> {
 pub fn native(name: &str, input: &[u8]) -> io::Result<Vec<u8>> {
     if name == "hook.endpoint" {
         hooks::endpoint(input)
+    } else if name.starts_with("attachment.") {
+        attachment::native(name, input)
     } else {
         inspect::native(name, input)
     }

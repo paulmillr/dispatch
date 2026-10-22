@@ -117,6 +117,23 @@ final class MobileChatSession: Identifiable {
     /// The last command this phone sent, which titles the output it prints.
     @ObservationIgnored private var lastCommand: String?
 
+    // Attachments (docs/ios.md, Attachments).
+    /// The opt-in features the connected helper's hello accepted (`HelperSession.Info.features`).
+    private(set) var features: Set<String> = []
+    /// Files on their way to the host (`attachments.put`), in the composer's strip until stored; never saved, so a quit
+    /// mid-upload drops them. Each belongs to the draft it was started for, and lands there.
+    private(set) var uploads: [ChatUpload] = []
+    /// The uploads of the draft the composer shows.
+    var draftUploads: [ChatUpload] {
+        let draft = drafts.shape.id
+        return uploads.filter { $0.draft == draft }
+    }
+    /// Why the last attach did nothing (too many, too large, unreadable, still uploading), shown above the composer
+    /// until the next attach or send.
+    var attachmentError: String?
+    /// What each upload reads, kept for Retry.
+    @ObservationIgnored private var uploadSources: [String: MobileAttachmentSource] = [:]
+
     // Model and effort (M3b): menus are choice metadata only, cached per agent and conversation.
     @ObservationIgnored let modelChoices = ChatModelChoicesCache()
     private(set) var modelsLoading = false
@@ -152,10 +169,11 @@ final class MobileChatSession: Identifiable {
         self.outbox = outbox
     }
 
-    /// The host's link and client changed (HostSession.link, .client).
-    func update(link: HostLink, client: HelperClient?, problem: String? = nil) {
+    /// The host's link and client changed (HostSession.link, .client), with the features its hello accepted.
+    func update(link: HostLink, client: HelperClient?, problem: String? = nil, features: Set<String> = []) {
         let previous = self.client
         if linkProblem != problem { linkProblem = problem }
+        if self.features != features { self.features = features }
         self.link = link
         self.client = link == .connected ? client : nil
         if self.client !== previous { helperToken = UUID() }
@@ -412,11 +430,13 @@ final class MobileChatSession: Identifiable {
     }
 
     /// A live user record that repeats the prompt shown while it was sent takes its bubble's place
-    /// (ChatSession.reconcilePrompt): the row keeps its identity, nothing moves.
+    /// (ChatSession.reconcilePrompt): the row keeps its identity and the thumbnails the composer made, nothing moves.
     private func reconcile(_ item: ChatItem, turn: String) -> ChatItem {
-        guard let pending = optimisticPrompt, AgentInput.records(item, prompt: pending.text) else { return item }
+        guard let pending = optimisticPrompt,
+              AgentInput.records(item, prompt: pending.text, attachments: pending.attachments) else { return item }
         var confirmed = item
         confirmed.rowID = pending.id
+        confirmed.attachments = ChatAttachment.merge(item.attachments, keeping: pending.attachments)
         optimisticPrompt = nil
         return confirmed
     }
@@ -593,10 +613,16 @@ final class MobileChatSession: Identifiable {
     /// Nothing runs and nothing waits for the user: a command can go now.
     private var idle: Bool { !working && !sending && !waitingForUser && terminalAttached && !loadingHistory }
 
-    /// The composer's text, sent by `route(steer:)`. The draft leaves the composer only once its destination took it
-    /// (for the queue, once it is saved on the device); a failure restores it.
+    /// The composer's text and attachments, sent by `route(steer:)`. The draft leaves the composer only once its
+    /// destination took it (for the queue, once it is saved on the device); a failure restores it, attachments too.
     func send(steer: Bool = false) {
-        submit(drafts.current.text, steer: steer) { self.drafts.prepareDelivery(consume: true) }
+        let draft = drafts.current
+        if let upload = draftUploads.first {
+            attachmentError = upload.error == nil ? "Wait until the attachments are uploaded."
+                : "Retry or remove the attachment that did not upload."
+            return
+        }
+        _ = submit(draft.text, attachments: draft.attachments, steer: steer) { self.drafts.prepareDelivery(consume: true) }
     }
 
     /// Text from elsewhere (the watch, docs/watch.md), routed exactly as the composer's but without its draft: the
@@ -605,14 +631,20 @@ final class MobileChatSession: Identifiable {
     /// `failure`.
     @discardableResult
     func send(text: String, steer: Bool) -> Route? {
-        submit(text, steer: steer, delivery: nil)
+        submit(text, attachments: [], steer: steer, delivery: nil)
     }
 
     /// `delivery` prepares the composer's draft for delivery (nil: not the composer's text); a nil result sends nothing.
-    private func submit(_ text: String, steer: Bool, delivery prepare: (() -> ChatDraftDelivery?)?) -> Route? {
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-        failure = nil; commandResult = nil
+    /// With attachments the text may be empty; a command takes none.
+    private func submit(_ text: String, attachments: [ChatAttachment], steer: Bool,
+                        delivery prepare: (() -> ChatDraftDelivery?)?) -> Route? {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty else { return nil }
         let isCommand = AgentInput.isCommand(text, multiline: text.contains("\n"))
+        if isCommand, !attachments.isEmpty {
+            attachmentError = "A command cannot carry attachments. Remove them to run it."
+            return nil
+        }
+        failure = nil; commandResult = nil; attachmentError = nil
         let route = route(steer: steer, command: isCommand)
         var delivery: ChatDraftDelivery?
         if let prepare {
@@ -622,7 +654,7 @@ final class MobileChatSession: Identifiable {
         switch route {
         case .outbox, .queue:
             let item = ChatOutboxItem(key: key, conversation: conversation, text: text, command: isCommand,
-                                      process: phase == .verified ? .init(binding) : nil)
+                                      process: phase == .verified ? .init(binding) : nil, attachments: attachments)
             let accepted = outbox.add(item)
             finish(delivery, success: accepted)
             if !accepted { failure = outbox.error; return nil }
@@ -630,7 +662,7 @@ final class MobileChatSession: Identifiable {
         case .prompt where isCommand:
             command(text, delivery: delivery)
         case .prompt, .steer:
-            prompt(text, steer: route == .steer, delivery: delivery)
+            prompt(text, attachments: attachments, steer: route == .steer, delivery: delivery)
         }
         return route
     }
@@ -640,12 +672,14 @@ final class MobileChatSession: Identifiable {
         if let delivery { drafts.finish(delivery, success: success) }
     }
 
-    private func prompt(_ text: String, steer: Bool, delivery: ChatDraftDelivery?) {
+    private func prompt(_ text: String, attachments: [ChatAttachment], steer: Bool, delivery: ChatDraftDelivery?) {
         var input = route()
         input.text = text
         input.mode = steer ? "steer" : "prompt"
+        input.attachments = Self.paths(attachments)
         let generation = generation
-        let pending = ChatItem(id: "pending-" + UUID().uuidString, kind: .user, text: text)
+        var pending = ChatItem(id: "pending-" + UUID().uuidString, kind: .user, text: text)
+        pending.attachments = attachments
         if !steer {
             optimisticPrompt = pending
             submittedAt = Date()
@@ -749,7 +783,13 @@ final class MobileChatSession: Identifiable {
         var text: String
         /// Why it does not send by itself: paused, uncertain, stopped.
         var status: String?
+        /// Its text can be changed in place: not a row with attachments (the helper's queue refuses that).
         var editable: Bool
+        /// What the message carries.
+        var attachments: [ChatAttachment] = []
+        /// The agent can take it while it works ("send now" steers): what the helper says of its row, else true. A
+        /// device row with attachments is not editable but steers like any other.
+        var steerable = true
         var id: String {
             switch source { case .device(let id): id.uuidString; case .helper(let id): "helper:" + id }
         }
@@ -762,11 +802,16 @@ final class MobileChatSession: Identifiable {
         var rows = items.map { item -> QueueRow in
             let helper = item.helperID.flatMap { id in queue.first { $0.id == id } }
             let status = item.pauseReason ?? helper?.paused.map(Self.pauseText)
-            return QueueRow(source: .device(item.id), text: item.text, status: status, editable: helper?.editable ?? true)
+            return QueueRow(source: .device(item.id), text: item.text, status: status,
+                            editable: (helper?.editable ?? true) && item.attachments.isEmpty, attachments: item.attachments,
+                            steerable: helper?.editable ?? true)
         }
         let mirrored = Set(items.compactMap(\.helperID))
-        rows += queue.filter { !mirrored.contains($0.id) }.map {
-            QueueRow(source: .helper($0.id), text: $0.text, status: $0.paused.map(Self.pauseText), editable: $0.editable)
+        rows += queue.filter { !mirrored.contains($0.id) }.map { queued in
+            let attachments = queued.previewAttachments
+            return QueueRow(source: .helper(queued.id), text: attachments.isEmpty ? queued.text : queued.typedText,
+                            status: queued.paused.map(Self.pauseText), editable: queued.editable && attachments.isEmpty,
+                            attachments: attachments, steerable: queued.editable)
         }
         return rows
     }
@@ -794,7 +839,11 @@ final class MobileChatSession: Identifiable {
         for item in queueItems where !inFlight.contains(item.id) {
             guard case .queued(let id, _, let helper) = item.state, helper == helperToken || stored(item) else { continue }
             if let current = items.first(where: { $0.id == id }) {
-                outbox.update(item.id) { $0.state = .queued(id: id, revision: current.revision, helper: helper); $0.text = current.text }
+                // The helper's preview names attachments by type; the device keeps what was typed.
+                outbox.update(item.id) {
+                    $0.state = .queued(id: id, revision: current.revision, helper: helper)
+                    if $0.attachments.isEmpty { $0.text = current.text }
+                }
             } else { outbox.remove(item.id) }
         }
         drainWhenIdle()
@@ -814,6 +863,7 @@ final class MobileChatSession: Identifiable {
               phase == .verified else { return false }
         var input = route()
         input.text = item.text; input.mode = "prompt"; input.command = item.command
+        input.attachments = Self.paths(item.attachments)
         let token = helperToken
         outbox.update(id) { $0.state = .adding }
         inFlight.insert(id)
@@ -871,7 +921,7 @@ final class MobileChatSession: Identifiable {
             // host no longer holds was sent or removed there, never to be added again.
             let durable = stored(item)
             let match = snapshot.first { $0.id == id && !claimed.contains($0.id) && (helper == helperToken || nativeQueue || durable) }
-                ?? (durable ? nil : snapshot.first { !claimed.contains($0.id) && $0.text == item.text })
+                ?? (durable ? nil : snapshot.first { !claimed.contains($0.id) && $0.carries(item) })
             if let match {
                 claimed.insert(match.id)
                 outbox.update(item.id) { $0.state = .queued(id: match.id, revision: match.revision, helper: self.helperToken) }
@@ -895,13 +945,14 @@ final class MobileChatSession: Identifiable {
         !nativeQueue && !(item.conversation ?? "").isEmpty
     }
 
-    /// The transcript shows the message as the user's, written after it was queued.
+    /// The transcript shows the message as the user's, written after it was queued: its text and as many attachments
+    /// (the same host copies where the record names them), so an attachment-only message is not taken for another.
     private func delivered(_ item: ChatOutboxItem) -> Bool {
-        let text = item.text.trimmingCharacters(in: .whitespacesAndNewlines)
         let since = item.created.addingTimeInterval(-300).timeIntervalSince1970 * 1000
         return transcript.turns.contains { turn in
-            turn.items.contains { $0.kind == .user && $0.text.trimmingCharacters(in: .whitespacesAndNewlines) == text
-                && Double($0.source?.time_ms ?? 0) >= since }
+            turn.items.contains {
+                AgentInput.records($0, prompt: item.text, attachments: item.attachments) && Double($0.source?.time_ms ?? 0) >= since
+            }
         }
     }
 
@@ -1048,7 +1099,7 @@ final class MobileChatSession: Identifiable {
     /// Whether "send now" may deliver this row (ChatQueueView.steerDisabled): not a paused or uncertain one (it may
     /// already have gone out), not one being added, and not a row the agent cannot change while it works.
     func canSendNow(_ row: QueueRow) -> Bool {
-        guard phase == .verified, !queueBusy, row.status == nil, row.editable || !working else { return false }
+        guard phase == .verified, !queueBusy, row.status == nil, row.steerable || !working else { return false }
         if case .device(let id) = row.source {
             guard let item = queueItems.first(where: { $0.id == id }), item.state != .adding else { return false }
             // A command does not steer: it waits for an idle agent like any typed command.
@@ -1076,7 +1127,7 @@ final class MobileChatSession: Identifiable {
             input.text = item.text
         } else if let item {
             method = "chat.send"
-            input.text = item.text; input.mode = mode
+            input.text = item.text; input.mode = mode; input.attachments = Self.paths(item.attachments)
         } else { return }
         queueBusy = true
         if let device { inFlight.insert(device) }
@@ -1144,7 +1195,7 @@ final class MobileChatSession: Identifiable {
     /// A message back into the composer for editing (device-only messages).
     func editInComposer(_ row: QueueRow) {
         guard case .device(let id) = row.source, let item = queueItems.first(where: { $0.id == id }), item.helperID == nil else { return }
-        drafts.restore(ChatDraft(text: item.text, multiline: item.text.contains("\n")))
+        drafts.restore(ChatDraft(text: item.text, multiline: item.text.contains("\n"), attachments: item.attachments))
         outbox.remove(id)
     }
 
@@ -1173,6 +1224,101 @@ final class MobileChatSession: Identifiable {
                 self.failure = self.explain(error)
             }
         }
+    }
+
+    /// The helper takes attachments (hello feature `chat.attachments`) and the conversation takes input: the composer
+    /// offers "+", paste and drop. A command draft takes none.
+    var attachmentsAvailable: Bool { features.contains(ChatAttachment.feature) && client != nil && phase == .verified }
+    var canAttach: Bool { attachmentsAvailable && !drafts.shape.command }
+
+    /// Picked, pasted or dropped files: each is read and prepared off the main actor (`ChatAttachmentImage.prepare`),
+    /// stored on the host (`attachments.put`), then added to the draft. More than a message carries uploads nothing.
+    func attach(_ sources: [MobileAttachmentSource]) {
+        guard canAttach, !sources.isEmpty else { return }
+        attachmentError = nil
+        let draft = drafts.current
+        guard draft.attachments.count + draftUploads.count + sources.count <= ChatAttachment.maximumCount else {
+            attachmentError = ChatAttachmentError.tooMany.localizedDescription
+            return
+        }
+        for source in sources {
+            let upload = ChatUpload(id: UUID().uuidString, draft: draft.id, scope: drafts.scope, name: source.name, kind: source.kind)
+            uploads.append(upload)
+            uploadSources[upload.id] = source
+            start(upload.id)
+        }
+    }
+
+    /// A failed upload, once more (on the current connection), for the draft the composer shows.
+    func retryUpload(_ id: String) {
+        guard let index = uploads.firstIndex(where: { $0.id == id }), uploads[index].error != nil else { return }
+        guard attachmentsAvailable else { attachmentError = "\(hostName) is not connected."; return }
+        uploads[index].error = nil
+        uploads[index].draft = drafts.current.id; uploads[index].scope = drafts.scope
+        start(id)
+    }
+
+    /// Drops an upload (a running one's reply is ignored; the host sweeps its copy) or a stored attachment of the draft.
+    func removeAttachment(_ id: String) {
+        if uploads.contains(where: { $0.id == id }) {
+            uploads.removeAll { $0.id == id }
+            uploadSources[id] = nil
+        } else {
+            drafts.detach(id)
+        }
+    }
+
+    private func start(_ id: String) {
+        guard let source = uploadSources[id], let client else { return }
+        let connection = client.connection
+        Task {
+            do {
+                let prepared = try await Task.detached(priority: .userInitiated) {
+                    try ChatAttachmentImage.prepare(name: source.name, data: try await source.load())
+                }.value
+                guard uploads.contains(where: { $0.id == id }) else { return }
+                updateUpload(id) { $0.name = prepared.name; $0.kind = prepared.kind; $0.thumbnail = prepared.thumbnail }
+                let stored: HelperChat.StoredAttachment = try await connection.request(
+                    "attachments.put", params: HelperChat.AttachmentUpload(name: prepared.name, bytes: prepared.bytes))
+                // Removed meanwhile: the copy stays unnamed on the host until its sweep.
+                guard let upload = uploads.first(where: { $0.id == id }) else { return }
+                // Into the draft it was for, wherever the user switched meanwhile; that draft gone (sent, discarded, or
+                // replaced by a restored message), the chip moves to the current one and Retry attaches it there.
+                guard let fitted = drafts.attach([stored.attachment(id: id, thumbnail: prepared.thumbnail)],
+                                                 toDraft: upload.draft, scope: upload.scope) else {
+                    updateUpload(id) {
+                        $0.draft = self.drafts.current.id; $0.scope = self.drafts.scope
+                        $0.error = "The draft it was for was sent or discarded. Retry attaches it here."
+                    }
+                    return
+                }
+                uploads.removeAll { $0.id == id }
+                uploadSources[id] = nil
+                if !fitted { attachmentError = ChatAttachmentError.tooMany.localizedDescription }
+            } catch let error as ChatAttachmentError {
+                // Too large or unreadable: nothing was uploaded, and trying again would not change that.
+                guard uploads.contains(where: { $0.id == id }) else { return }
+                uploads.removeAll { $0.id == id }
+                uploadSources[id] = nil
+                attachmentError = error.localizedDescription
+            } catch {
+                updateUpload(id) { $0.error = error.localizedDescription }
+            }
+        }
+    }
+
+    private func updateUpload(_ id: String, _ change: (inout ChatUpload) -> Void) {
+        guard let index = uploads.firstIndex(where: { $0.id == id }) else { return }
+        change(&uploads[index])
+    }
+
+    /// A stored attachment's bytes (`attachments.read`), for a thumbnail or a preview the device does not have; nil when
+    /// this helper cannot say (not connected, or without the feature).
+    func attachmentBytes(_ path: String) async throws -> Data? {
+        guard let client, features.contains(ChatAttachment.feature) else { return nil }
+        let read: HelperChat.AttachmentBytes = try await client.connection.request(
+            "attachments.read", params: HelperChat.AttachmentRead(path: path))
+        return read.bytes
     }
 
     func loadEarlier() {
@@ -1264,6 +1410,12 @@ final class MobileChatSession: Identifiable {
         HelperChat.Input(HelperChat.Route(terminal: terminal ?? 0, session: conversation))
     }
 
+    /// `chat.send`'s and `queue.add`'s `attachments`: the host copies, nil without any.
+    private static func paths(_ attachments: [ChatAttachment]) -> [String]? {
+        let paths = attachments.compactMap(\.path)
+        return paths.isEmpty ? nil : paths
+    }
+
     /// One request on the current client. No client: nothing was sent (ChatInputNotSent). `generation`: the
     /// subscription the input was made for; a request built before a reconnect or a reopen is not sent to the new
     /// one (its terminal id and requests belong to the old helper), as docs/architecture.md's Delivery asks.
@@ -1304,5 +1456,26 @@ extension HelperChat.Interaction {
             ?? object?["file_path"] as? String ?? object?["path"] as? String ?? object?["url"] as? String
             ?? object?["pattern"] as? String ?? (object == nil ? operation : nil)
         return (text, code ?? (object != nil ? operation : nil))
+    }
+}
+
+extension HelperChat.Queued {
+    /// Whether this helper row is `item` as the device added it: its text, and as many attachments (the preview names
+    /// them by type only).
+    func carries(_ item: ChatOutboxItem) -> Bool {
+        let attachments = previewAttachments
+        return attachments.count == item.attachments.count && (attachments.isEmpty ? text : typedText) == item.text
+    }
+
+    /// What was typed, without the attachment lines `text` names by type.
+    var typedText: String { preview.filter { $0.kind == "text" }.compactMap(\.text).joined(separator: "\n") }
+
+    /// The attachments the preview names (`{kind: "attachment", type}`), by kind only: the queue keeps no names or paths.
+    var previewAttachments: [ChatAttachment] {
+        preview.enumerated().compactMap { index, entry in
+            guard entry.kind == "attachment" else { return nil }
+            let kind: ChatAttachment.Kind = (entry.type ?? "").localizedCaseInsensitiveContains("image") ? .image : .file
+            return ChatAttachment(id: "\(id)#\(index)", name: ChatAttachment.untitled(kind), kind: kind, size: 0, path: nil)
+        }
     }
 }

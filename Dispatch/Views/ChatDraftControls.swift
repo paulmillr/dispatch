@@ -64,7 +64,7 @@ struct ChatDraftControls: View {
         let drafts = session.drafts
         Button("Working buffer") { drafts.select(nil) }
         Button("Discard current draft") { drafts.discard() }
-            .disabled(drafts.current.text.isEmpty && !drafts.current.multiline)
+            .disabled(drafts.current.text.isEmpty && drafts.current.attachments.isEmpty && !drafts.current.multiline)
         Button("Undo draft deletion") { drafts.undoDelete() }.disabled(!drafts.canUndoDelete)
         if !drafts.recoverable.isEmpty {
             Divider()

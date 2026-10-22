@@ -280,6 +280,7 @@ targets:
       # Shared with the Mac app (docs/ios.md, Shared sources).
       - Dispatch/Attention.swift
       - Dispatch/Chat/AgentModelMenu.swift
+      - Dispatch/Chat/ChatAttachments.swift
       - Dispatch/Chat/ChatCommands.swift
       - Dispatch/Chat/ChatDrafts.swift
       - Dispatch/Chat/ChatMarkdownBlock.swift

@@ -12,7 +12,7 @@ struct ChatComposerShortcuts: View {
                                        colorScheme: theme.isDark ? .dark : .light, font: theme.typography.detail,
                                        keyFont: AppFont.shortcut(size: theme.typography.codeDetailSize)),
                           primary: [.init(rows: composer)],
-                          more: [.init(rows: moreComposer),
+                          more: [.init(rows: moreComposer + attachmentRows),
                                  .init(title: "Navigation", rows: ShortcutRow.navigation),
                                  .init(title: "Window", rows: ShortcutRow.window)])
                 .accessibilityIdentifier("chat-shortcut-sheet")
@@ -32,6 +32,11 @@ struct ChatComposerShortcuts: View {
             .init("hold right ⌘", "dictate one message · release inserts, ⏎ sends, ⎋ cancels"),
             .init("tap right ⌘", "conversation mode · “\(DictationStore.shared.wakeWord), send / steer / scratch that / stop / deny / option 2”"),
         ] : [])
+    }
+
+    /// Only where the conversation's helper keeps attachments (the paperclip shows then too).
+    private var attachmentRows: [ShortcutRow] {
+        session.acceptsAttachments ? [.init("⇧⌘A", "attach files or images · or drop or paste them")] : []
     }
 
     private let moreComposer: [ShortcutRow] = [

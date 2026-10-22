@@ -32,6 +32,19 @@ pub(crate) fn content(v: Option<Value<'_>>) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
+/// A user message's attachments beyond `shown` (its `content` text) for chat.attachments
+/// clients (api::attachment::Attached): Claude records a pasted image path as an `[Image #n]`
+/// placeholder in the text and the image's data as a block after it (`content` shows an
+/// `[Image]` line); the text without those lines, an image per image block.
+pub(crate) fn attached(v: Option<Value<'_>>, shown: &str) -> Option<Box<attachment::Attached>> {
+    let blocks: Vec<_> = v?.array().into_iter().flatten().collect();
+    let images: Vec<_> = blocks.iter().filter(|b| text(**b, "type") == Some("image")).map(|_| None).collect();
+    if images.is_empty() {
+        return attachment::attached(shown, None, images);
+    }
+    let body = blocks.iter().filter(|b| text(**b, "type") == Some("text")).filter_map(|b| text(*b, "text"));
+    attachment::attached(shown, Some(body.collect::<Vec<_>>().join("\n")), images)
+}
 pub(crate) fn error(code: &'static str, message: impl ToString) -> Error {
     Error {
         code,
@@ -504,6 +517,7 @@ impl Parser {
                 out.push(Record {
                     id: format!("user-{id}"),
                     kind: RecordKind::User,
+                    attached: attached(queued.get("prompt"), &body),
                     text: body,
                     ..record
                 });
@@ -574,6 +588,8 @@ impl Parser {
             });
             let notice = text(root, "promptSource") == Some("system")
                 || root.get("origin").and_then(|v| text(v, "kind")) == Some("task-notification");
+            let input = (!notice).then(|| Self::input(root, &body)).flatten();
+            let attached = if notice || input.is_some() { None } else { attached(message.get("content"), &body) };
             out.push(Record {
                 id: format!("{}-{id}", if notice { "notice" } else { "user" }),
                 kind: if notice {
@@ -584,8 +600,9 @@ impl Parser {
                 text: if notice {
                     notice_text(&body)
                 } else {
-                    Self::input(root, &body).unwrap_or(body)
+                    input.unwrap_or(body)
                 },
+                attached,
                 ..record.clone()
             });
         } else if kind == Some("assistant") && text(message, "role") == Some("assistant") {
@@ -837,5 +854,57 @@ mod tests {
         assert_eq!(switched_effort("Set effort level to max"), Some("max".into()));
         assert_eq!(switched_effort("Set effort level to "), None);
         assert_eq!(switched_effort("Set effort level to High"), None);
+    }
+
+    /// Claude 2.1.302's user line for pasted image paths and text (verified against the loopback
+    /// fixture): the text with `[Image #n]` placeholders, then the images' data.
+    fn pasted(uuid: &str, text: &str, images: usize) -> String {
+        let image = r#"{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgo="}}"#;
+        let quoted = text.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n");
+        let mut content = vec![format!(r#"{{"type":"text","text":"{quoted}"}}"#)];
+        content.extend(std::iter::repeat_n(image.to_owned(), images));
+        format!(
+            r#"{{"type":"user","message":{{"role":"user","content":[{}]}},"imagePasteIds":[1,2],"origin":{{"kind":"human"}},"promptSource":"typed","uuid":"{uuid}","timestamp":"2026-10-22T10:00:00.000Z","sessionId":"{SESSION}"}}"#,
+            content.join(",")
+        ) + "\n"
+    }
+
+    /// A user record as a chat.attachments client sees it (core attachments::view).
+    fn shown(record: &Record) -> (String, Vec<Block>) {
+        let root = std::path::Path::new("/home/sam/.dispatch/attachments");
+        match &record.attached {
+            Some(attached) => attachment::typed(Some(root), attached.text.as_deref().unwrap_or(&record.text), &attached.images),
+            None => (record.text.clone(), record.blocks.clone()),
+        }
+    }
+
+    #[test]
+    fn pasted_images_become_blocks_and_leave_the_typed_text_for_attachment_clients() {
+        let file = "/home/sam/.dispatch/attachments/0123456789abcdef0123456789abcdef/notes.txt";
+        let mut parser = Parser::new(SESSION.into());
+        let typed = format!("[Image #1] [Image #2]Describe these\n\n{file}");
+        let records = parser.feed(pasted("u1", &typed, 2).as_bytes()).unwrap();
+        let user = records.iter().find(|record| record.kind == RecordKind::User).unwrap();
+        // Every other client: the record as before the feature.
+        assert_eq!((user.text.clone(), user.blocks.len()), (format!("{typed}\n[Image]\n[Image]"), 0));
+        let (text, blocks) = shown(user);
+        assert_eq!(text, "Describe these");
+        assert_eq!(
+            blocks,
+            [
+                attachment::block(None, None, true),
+                attachment::block(None, None, true),
+                attachment::block(Some(file), Some("notes.txt"), false),
+            ]
+        );
+        let records = Parser::new(SESSION.into()).feed(pasted("u2", "[Image #3]", 1).as_bytes()).unwrap();
+        let user = records.iter().find(|record| record.kind == RecordKind::User).unwrap();
+        assert_eq!(user.text, "[Image #3]\n[Image]");
+        let (text, blocks) = shown(user);
+        assert_eq!((text.as_str(), blocks.len()), ("", 1));
+        // A message without attachments is as before, with nothing on the side.
+        let records = Parser::new(SESSION.into()).feed(pasted("u3", "hello", 0).as_bytes()).unwrap();
+        let user = records.iter().find(|record| record.kind == RecordKind::User).unwrap();
+        assert_eq!((user.text.as_str(), user.blocks.len(), user.attached.is_none()), ("hello", 0, true));
     }
 }

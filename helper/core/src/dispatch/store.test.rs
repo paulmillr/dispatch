@@ -8,7 +8,7 @@ fn bound() -> Bound {
 }
 
 fn add(record: &mut Record, id: &str, text: &str) -> Queued {
-    let op = Op::Add { id: id.into(), text: text.into(), mode: Mode::Prompt, command: false, binding: bound() };
+    let op = Op::Add { id: id.into(), text: text.into(), mode: Mode::Prompt, command: false, binding: bound(), attachments: Vec::new() };
     match record.apply(&op).unwrap() {
         Answer::Added(queued) => queued,
         other => panic!("{other:?}"),
@@ -40,8 +40,9 @@ fn another_format_or_a_damaged_file_is_not_read() {
     let mut bytes = record().encode().unwrap();
     bytes.truncate(bytes.len() - 3);
     assert!(Record::decode(&bytes).is_err());
-    let other = body::encode_plain(&Data::Object(vec![("format", Data::Unsigned(2))])).unwrap();
-    assert_eq!(Record::decode(&other).unwrap_err().code, "storage");
+    let other = body::encode_plain(&Data::Object(vec![("format", Data::Unsigned(3))])).unwrap();
+    let refused = Record::decode(&other).unwrap_err();
+    assert_eq!((refused.code, refused.message.as_str()), ("storage", "The stored queue has another format"));
 }
 
 #[test]
@@ -73,7 +74,7 @@ fn the_queue_keeps_its_limit() {
     for index in 0..ITEMS {
         add(&mut record, &format!("q-{index}"), "x");
     }
-    let op = Op::Add { id: "q-over".into(), text: "x".into(), mode: Mode::Prompt, command: false, binding: bound() };
+    let op = Op::Add { id: "q-over".into(), text: "x".into(), mode: Mode::Prompt, command: false, binding: bound(), attachments: Vec::new() };
     assert_eq!(record.apply(&op).unwrap_err().code, "invalid_input");
 }
 
@@ -380,4 +381,75 @@ fn placeholder_marks_take_the_helpers_identity() {
     assert_eq!(op, Op::Edit { id: "q-1".into(), revision: 1, editing: true, owner: A });
     let op = Op::Hold { held: true, owner: B }.resolved(A);
     assert_eq!(op, Op::Hold { held: true, owner: B });
+}
+
+fn attached(record: &mut Record, id: &str, text: &str, attachments: Vec<Attachment>) -> Queued {
+    let op = Op::Add { id: id.into(), text: text.into(), mode: Mode::Prompt, command: false, binding: bound(), attachments };
+    match record.apply(&op).unwrap() {
+        Answer::Added(queued) => queued,
+        other => panic!("{other:?}"),
+    }
+}
+
+fn files() -> Vec<Attachment> {
+    let path = |name: &str| format!("/home/sam/.dispatch/attachments/0123456789abcdef0123456789abcdef/{name}");
+    vec![
+        Attachment { path: path("diagram.png"), image: true },
+        Attachment { path: path("notes.txt"), image: false },
+    ]
+}
+
+#[test]
+fn a_file_without_attachments_stays_format_1_and_one_with_them_is_format_2() {
+    let format = |record: &Record| {
+        body::decode_plain(&record.encode().unwrap()).unwrap().get("format").and_then(Data::unsigned).unwrap()
+    };
+    let mut record = record();
+    add(&mut record, "q-1", "plain");
+    assert_eq!(format(&record), 1, "what older helpers read, as before");
+    let plain = record.encode().unwrap();
+    assert!(!String::from_utf8_lossy(&plain).contains("attachments"));
+    attached(&mut record, "q-2", "with files", files());
+    assert_eq!(format(&record), 2);
+    let decoded = Record::decode(&record.encode().unwrap()).unwrap();
+    assert_eq!(decoded, record);
+    assert_eq!(decoded.items[1].attachments, files());
+    // Once it is sent the file is format 1 again, as an older helper wrote it.
+    record.items.pop();
+    record.serial = 1;
+    assert_eq!(record.encode().unwrap(), plain);
+}
+
+#[test]
+fn a_format_1_file_reads_with_no_attachments() {
+    let mut record = record();
+    add(&mut record, "q-1", "plain");
+    let decoded = Record::decode(&record.encode().unwrap()).unwrap();
+    assert!(decoded.items[0].attachments.is_empty());
+    let damaged = body::encode_plain(&Data::Object(vec![("format", Data::Unsigned(2)), ("items", Data::Array(vec![
+        Data::Object(vec![("attachments", Data::String("not a list"))]),
+    ]))])).unwrap();
+    assert_eq!(Record::decode(&damaged).unwrap_err().code, "storage");
+}
+
+#[test]
+fn an_item_with_attachments_previews_them_and_is_not_editable() {
+    let mut record = record();
+    let queued = attached(&mut record, "q-1", "Look", files());
+    assert_eq!(
+        queued.preview,
+        [Preview::Text("Look".into()), Preview::Attachment("image".into()), Preview::Attachment("file".into())]
+    );
+    assert!(!queued.editable);
+    // Only the attachments: no empty text preview.
+    let only = attached(&mut record, "q-2", "", files()[..1].to_vec());
+    assert_eq!(only.preview, [Preview::Attachment("image".into())]);
+    let plain = add(&mut record, "q-3", "plain");
+    assert_eq!((plain.preview, plain.editable), (vec![Preview::Text("plain".into())], true));
+    // An edit is refused; removing it is not.
+    let edit = Op::Update { id: "q-1".into(), revision: queued.revision, text: Some("other".into()), command: None, binding: bound() };
+    assert_eq!(record.apply(&edit).unwrap_err().code, "invalid_input");
+    let remove = Op::Update { id: "q-1".into(), revision: queued.revision, text: None, command: None, binding: bound() };
+    record.apply(&remove).unwrap();
+    assert_eq!(record.items.len(), 2);
 }

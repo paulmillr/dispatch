@@ -457,7 +457,7 @@ final class SSHCoordinator {
         }
         // Publish the ready link together with its workspace and authenticated host.
         // An actor hop after publishing shellPID exposes a partially connected session.
-        await HelperApp.shared.borrow(started.session.connection, for: request.connectionID)
+        await HelperApp.shared.borrow(started.session.connection, for: request.connectionID, features: started.session.info.features)
         guard !Task.isCancelled, connections[request.connectionID] === state,
               request.integrationScope.flatMap(permissions.remembered).map({ grant.reduced(to: $0) == grant }) == true else {
             await HelperApp.shared.forget(request.connectionID)

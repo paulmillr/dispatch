@@ -162,7 +162,7 @@ final class SSHDriverTests: XCTestCase {
     func testHelloFeaturesAndTheLivenessPing() {
         XCTAssertEqual(SSHHostSessionDriver.features, ["interaction.options", "chat.list", "projects.recent", "multiplexers.versions",
                                                        "terminals.coalesce", "launch.names", "stdio.liveness",
-                                                       "terminals.activity"])
+                                                       "terminals.activity", "chat.attachments"])
         XCTAssertLessThanOrEqual(SSHHostSessionDriver().pingInterval, SSHHostSessionDriver.livenessPing)
         XCTAssertEqual(SSHHostSessionDriver.livenessPing, .seconds(15))
     }

@@ -16,6 +16,10 @@ final class CodeTextView: UITextView, NSTextStorageDelegate {
     /// A paste of several lines, offered as a fenced block (the pasted range).
     var pasted: ((NSRange?) -> Void)?
     var submit: (() -> Void)?
+    /// Takes the images a paste carries (a screenshot, a copied photo) as attachments; nil: such a paste does nothing.
+    var pasteImages: (([MobileAttachmentSource]) -> Void)?
+    /// Where pastes come from (tests use their own).
+    var pasteboard = UIPasteboard.general
     let placeholderLabel = UILabel()
     /// Styling passes so far (tests: one per edit, none for selection changes).
     private(set) var styled = 0
@@ -196,7 +200,12 @@ final class CodeTextView: UITextView, NSTextStorageDelegate {
     }
 
     override func paste(_ sender: Any?) {
-        let string = UIPasteboard.general.string ?? ""
+        // Images without text attach; anything with text pastes as text, as before.
+        if let pasteImages, pasteboard.hasImages, !pasteboard.hasStrings {
+            let images = MobileAttachmentSource.images(on: pasteboard)
+            if !images.isEmpty { pasteImages(images); pasted?(nil); return }
+        }
+        let string = pasteboard.string ?? ""
         let start = selectedRange.location
         let offer = ComposerMarkdown.offersCode(string) && !markdown.isCode(at: start, in: textStorage.string)
         super.paste(sender)
@@ -235,6 +244,8 @@ final class CodeTextView: UITextView, NSTextStorageDelegate {
             guard let command = sender as? UIKeyCommand else { return markedTextRange == nil }
             return self.action(for: command) != .system
         }
+        // UITextView offers Paste for text only; with images to attach the composer takes those too.
+        if action == #selector(paste(_:)), pasteImages != nil, pasteboard.hasImages { return true }
         return super.canPerformAction(action, withSender: sender)
     }
 

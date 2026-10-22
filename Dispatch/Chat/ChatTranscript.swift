@@ -115,7 +115,9 @@ struct ChatTranscript {
             identity = updated.id
             if changed { turn.items[existing] = updated }
         } else {
-            turn.items.append(item); changed = true
+            let added = unique(item) { id in turn.items.contains { $0.id == id } }
+            identity = added.id
+            turn.items.append(added); changed = true
         }
         let key = ItemIdentity(turn: turnID, item: identity)
         let previousDate = state.itemDates[key], previousOffset = state.itemOffsets[key]
@@ -232,6 +234,18 @@ struct ChatTranscript {
         turns = order.map { updatedTurns[$0] }
     }
 
+    /// `item` under an id no item of its turn has: another message under an id the agent reuses (Codex keys a prompt
+    /// by its text, which attachment-only prompts share) gets one derived from its attachments.
+    static func unique(_ item: ChatItem, taken: (String) -> Bool) -> ChatItem {
+        guard taken(item.id) else { return item }
+        var item = item
+        let base = item.id + "#" + ChatItem.contentID(item.attachments.map { $0.path ?? $0.name }.joined(separator: "\n")).prefix(16)
+        var id = base, count = 1
+        while taken(id) { count += 1; id = base + "-\(count)" }
+        item.id = id
+        return item
+    }
+
     private struct HistoricalTextIdentity: Hashable {
         let kind: ChatItem.Kind
         let text: String
@@ -263,6 +277,7 @@ struct ChatTranscript {
             guard case .item(let item) = record.action else { continue }
             let date = item.source == nil ? record.date : Date(timeIntervalSince1970: 0)
             var existing = identities[item.source?.id ?? item.id]
+            if let found = existing, item.carriesOtherAttachments(than: items[found]) { existing = nil }
             if let key = HistoricalTextIdentity(item), let candidates = textIdentities[key] {
                 // The live path takes the first displayed match, which can be
                 // an equal-text item before the item with the exact native ID.
@@ -292,6 +307,7 @@ struct ChatTranscript {
                 }
             } else {
                 index = items.count
+                let item = unique(item) { identities[$0] != nil }
                 items.append(item); identities[item.id] = index
                 if let key = HistoricalTextIdentity(item) { textIdentities[key, default: []].insert(index) }
                 let key = ItemIdentity(turn: turn.id, item: item.id)

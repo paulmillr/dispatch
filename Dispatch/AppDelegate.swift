@@ -1,4 +1,5 @@
 import AppKit
+import Quartz
 import SwiftUI
 
 @MainActor
@@ -284,7 +285,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         HostStats.shared.stop()
         TerminalRuntime.shared.stop()
         ReviewRepository.flushShared()
+        ChatAttachmentPreview.shared.removeAll()
     }
+    // Quick Look: the responder chain ends here, so the attachment preview takes the panel through the app delegate.
+    override func acceptsPreviewPanelControl(_ panel: QLPreviewPanel!) -> Bool { ChatAttachmentPreview.shared.acceptsControl }
+    override func beginPreviewPanelControl(_ panel: QLPreviewPanel!) { ChatAttachmentPreview.shared.begin(panel) }
+    override func endPreviewPanelControl(_ panel: QLPreviewPanel!) { ChatAttachmentPreview.shared.end(panel) }
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         guard sender === window else { return true }
         guard confirmClosing(Array(workspace.allTabIDs), detaching: true) else { return false }

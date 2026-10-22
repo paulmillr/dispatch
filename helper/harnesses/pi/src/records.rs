@@ -1,6 +1,6 @@
 //! Pi's native message identities are shared by streamed and saved records.
 use dispatch_helper_core::{
-    api::{Record, RecordKind},
+    api::{Record, RecordKind, attachment},
     json::{Format, Json, Kind, Value},
     rpc::Lines,
 };
@@ -159,6 +159,24 @@ pub(crate) fn content(value: Option<Value<'_>>) -> String {
         .join("\n")
 }
 
+/// A user message's attachments beyond `shown` (its `content` text) for chat.attachments
+/// clients (api::attachment::Attached): its text blocks without the `[Image]` lines, an image
+/// per image block (Pi keeps only the data).
+pub(crate) fn attached(value: Option<Value<'_>>, shown: &str) -> Option<Box<attachment::Attached>> {
+    let blocks: Vec<_> = value?.array().into_iter().flatten().collect();
+    let images: Vec<_> = blocks.iter().filter(|block| text(**block, "type") == "image").map(|_| None).collect();
+    if images.is_empty() {
+        return attachment::attached(shown, None, images);
+    }
+    let body = blocks
+        .iter()
+        .filter(|block| text(**block, "type") == "text")
+        .filter_map(|block| block.get("text").and_then(Value::string))
+        .collect::<Vec<_>>()
+        .join("\n");
+    attachment::attached(shown, Some(body), images)
+}
+
 /// Projection matches PiTranscriptParser on selected native entries. Tool bodies stay
 /// in the caller's bounded line and are copied only for the requested native record.
 pub fn project(root: Value<'_>, turn: &mut String, complete: bool) -> Vec<Record> {
@@ -237,6 +255,7 @@ pub fn project(root: Value<'_>, turn: &mut String, complete: bool) -> Vec<Record
         if !value.is_empty() {
             start.id = format!("user-{id}");
             start.kind = RecordKind::User;
+            start.attached = attached(message.get("content"), &value);
             start.text = value;
             records.push(start);
         }
@@ -421,3 +440,7 @@ fn timestamp(value: &str) -> Option<i64> {
     let days = era * 146097 + y * 365 + y / 4 - y / 100 + (153 * month + 2) / 5 + day - 1 - 719468;
     Some((((days * 24 + hour) * 60 + minute) * 60 + second) * 1000 + millis)
 }
+
+#[cfg(test)]
+#[path = "records.test.rs"]
+mod tests;

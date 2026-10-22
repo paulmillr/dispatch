@@ -27,6 +27,8 @@ final class HelperChat {
     var items: [String]?
     var held: Bool?
     var transcript: Transcript?
+    /// Host paths `attachments.put` answered with, sent with `chat.send`/`queue.add` (feature `chat.attachments`).
+    var attachments: [String]?
 
     init(_ route: Route) {
       terminal = route.terminal
@@ -113,6 +115,7 @@ final class HelperChat {
           output: output, completed: completed, exitCode: exit_code.map(Int.init))
         item.source = self
         item.directory = tool?.directory
+        if kind == .user { item.attachments = attachments }
         if !documents.isEmpty {
           item.patch = ChatPatch(
             documents: documents.map {

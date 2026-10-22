@@ -244,6 +244,7 @@ operations! {
         ("text", Text),
         ("mode", Text),
         ("command", Boolean),
+        ("attachments", Array(&Text)),
     ]),
         harness send(text(p, "text")?, mode(p)?, flag(p, "command")) send;
     "chat.command" => Object(&[
@@ -305,6 +306,7 @@ operations! {
         ("text", Text),
         ("mode", Text),
         ("command", Boolean),
+        ("attachments", Array(&Text)),
     ]),
         core queue("add") value;
     "queue.update" => Object(&[

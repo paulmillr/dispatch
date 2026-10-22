@@ -415,3 +415,4 @@ r	binding	state
 r	terminal	bytes
 r	backend	key	nodes	layouts	focus
 s	integration
+s	attachments

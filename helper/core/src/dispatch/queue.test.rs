@@ -14,6 +14,8 @@ struct Disk {
     foreign: BTreeSet<u32>,
     /// Every job any helper ran, in order (`name path`).
     log: Vec<String>,
+    /// What `attachment.clock` answers (Unix milliseconds).
+    wall: i64,
 }
 
 #[derive(Clone)]
@@ -69,6 +71,10 @@ impl Disk {
                     arguments: Vec::new(),
                     files: Vec::new(),
                 }))
+            }
+            Job::Native { name: "attachment.clock", .. } => {
+                self.log.push("clock".into());
+                Ok(Output::Value(wire::body::encode_plain(&Data::Object(vec![("ms", Data::Signed(self.wall))])).unwrap()))
             }
             Job::Native { name: "file.private", value } => {
                 let value = wire::body::decode_plain(&value).unwrap();
@@ -252,7 +258,7 @@ fn submit(io: &mut Fake, held: &Held, op: Op) -> Answers {
 }
 
 fn add(id: &str, text: &str) -> Op {
-    Op::Add { id: id.into(), text: text.into(), mode: Mode::Prompt, command: false, binding: Bound::of(&binding()) }
+    Op::Add { id: id.into(), text: text.into(), mode: Mode::Prompt, command: false, binding: Bound::of(&binding()), attachments: Vec::new() }
 }
 
 fn items(held: &Held) -> Vec<String> {
@@ -616,4 +622,203 @@ fn a_pid_another_account_reused_is_not_the_marks_helper() {
     probe(&mut two, &second, &key(), vec![gone]);
     two.settle();
     assert_eq!(stored(&disk).unwrap().items[0].pause, Some(Pause::Uncertain));
+}
+
+mod attachments {
+    use super::*;
+    use crate::api::Record;
+    use crate::dispatch::attachments::{fill, named_page, remembering, view};
+
+    const ROOT: &str = "/home/sam/.dispatch/attachments";
+
+    fn path(name: &str) -> String {
+        format!("{ROOT}/0123456789abcdef0123456789abcdef/{name}")
+    }
+    fn image(name: &str) -> Attachment {
+        Attachment { path: path(name), image: true }
+    }
+    /// A Claude user record as its harness makes it: the text every client gets (an `[Image]`
+    /// line per image) and, on the side, the message text and its images.
+    fn user(text: &str, images: usize, time: i64) -> Record {
+        let shown = std::iter::once(text.to_owned()).chain(std::iter::repeat_n("[Image]".to_owned(), images)).collect::<Vec<_>>();
+        let shown = shown.join("\n");
+        Record {
+            id: format!("user-{time}"),
+            kind: RecordKind::User,
+            attached: attachment::attached(&shown, Some(text.into()), vec![None; images]),
+            text: shown,
+            time_ms: Some(time),
+            ..Record::default()
+        }
+    }
+    /// As a chat.attachments client sees records from memory (an update).
+    fn shown(held: &Held, mut records: Vec<Record>) -> Vec<Record> {
+        view(Some(Path::new(ROOT)), &mut records);
+        fill(held, KEY.1, &mut records);
+        records
+    }
+    fn unnamed() -> Block {
+        attachment::block(None, None, true)
+    }
+    fn named(name: &str) -> Block {
+        attachment::block(Some(&path(name)), Some(name), true)
+    }
+    /// A send with these attachments ends with `result` (at the wall time `at`).
+    fn send(io: &mut Fake, held: &Held, text: &str, attachments: &[Attachment], result: Result<Sent, Error>, at: i64) {
+        io.disk.borrow_mut().wall = at;
+        let then = remembering(io, held, "claude", KEY.1, text, attachments).expect("remembered for claude");
+        let done = then(Box::new(|_, _| {}));
+        done(io, result);
+        io.settle();
+    }
+    fn written() -> Result<Sent, Error> {
+        Ok(Sent::Native { written: true, may_have_sent: true, reason: None })
+    }
+    fn page(io: &mut Fake, held: &Held, enabled: bool, records: Vec<Record>) -> Rc<RefCell<Option<Page>>> {
+        let answer = Rc::new(RefCell::new(None));
+        let sink = answer.clone();
+        let done = named_page(held, enabled, "claude", KEY.1, Box::new(move |_, page| *sink.borrow_mut() = page.ok()));
+        done(io, Ok(Page { records, earlier: None }));
+        answer
+    }
+
+    #[test]
+    fn delivered_images_name_the_blocks_of_their_message() {
+        let disk = Rc::new(RefCell::new(Disk::default()));
+        let mut io = Fake::new(&disk, 100);
+        let held = helper(&mut io, true);
+        let attachments = [image("a.png"), Attachment { path: path("notes.txt"), image: false }, image("b.png")];
+        send(&mut io, &held, " Describe these ", &attachments, written(), 10_000);
+        let records = shown(&held, vec![user(&format!("[Image #1] [Image #2]Describe these\n\n{}", path("notes.txt")), 2, 11_000)]);
+        assert_eq!(records[0].text, "Describe these");
+        assert_eq!(records[0].blocks, [named("a.png"), named("b.png"), attachment::block(Some(&path("notes.txt")), Some("notes.txt"), false)]);
+        let file = store::path(&io.storage().unwrap(), "claude", KEY.1).with_extension("idx");
+        let file = file.parent().unwrap().parent().unwrap().join("attachments").join(file.file_name().unwrap());
+        assert_eq!(disk.borrow().files.get(&file).map(|file| file.mode), Some(0o600), "{:?}", disk.borrow().log);
+        assert!(io.sections.iter().all(|section| section == "attachments.index"));
+
+        // Another helper (a reconnect) reads the file once, for a client of chat.attachments.
+        let mut other = Fake::new(&disk, 200);
+        let fresh = helper(&mut other, true);
+        let answer = page(&mut other, &fresh, true, vec![user("Describe these", 2, 11_000)]);
+        assert!(answer.borrow().is_none(), "waits for the index");
+        other.settle();
+        assert_eq!(answer.borrow().as_ref().unwrap().records[0].blocks, [named("a.png"), named("b.png")]);
+        let reads = disk.borrow().log.iter().filter(|line| line.ends_with(".idx") && line.starts_with("read")).count();
+        page(&mut other, &fresh, true, vec![user("Describe these", 2, 11_000)]);
+        other.settle();
+        assert_eq!(disk.borrow().log.iter().filter(|line| line.ends_with(".idx") && line.starts_with("read")).count(), reads);
+    }
+
+    #[test]
+    fn other_clients_get_the_records_as_before_and_cause_no_job() {
+        let disk = Rc::new(RefCell::new(Disk::default()));
+        let mut io = Fake::new(&disk, 100);
+        let held = helper(&mut io, true);
+        let records = vec![user("x", 1, 1), user("plain", 0, 2)];
+        let answer = page(&mut io, &held, false, records.clone());
+        assert_eq!(answer.borrow().as_ref().unwrap().records, records);
+        assert_eq!(answer.borrow().as_ref().unwrap().records[0].text, "x\n[Image]");
+        // A client of the feature with nothing to name reads no index either.
+        let answer = page(&mut io, &held, true, vec![user("plain", 0, 2)]);
+        assert_eq!(answer.borrow().as_ref().unwrap().records[0].text, "plain");
+        assert!(!io.step(), "no job: {:?}", disk.borrow().log);
+    }
+
+    #[test]
+    fn only_a_send_that_may_have_reached_the_agent_is_remembered() {
+        let disk = Rc::new(RefCell::new(Disk::default()));
+        let mut io = Fake::new(&disk, 100);
+        let held = helper(&mut io, false);
+        let refused = Error { code: "input", message: String::new() };
+        send(&mut io, &held, "", &[image("refused.png")], Err(refused), 1_000);
+        send(&mut io, &held, "", &[image("unwritten.png")], Ok(Sent::Native { written: false, may_have_sent: false, reason: None }), 1_000);
+        assert_eq!(shown(&held, vec![user("", 1, 1_000)])[0].blocks, [unnamed()]);
+        let uncertain = Error { code: "uncertain", message: String::new() };
+        send(&mut io, &held, "", &[image("typed.png")], Err(uncertain), 1_000);
+        assert_eq!(shown(&held, vec![user("", 1, 1_000)])[0].blocks, [named("typed.png")]);
+        // Nothing to remember: no image, no session, or a harness whose history names them.
+        assert!(remembering(&mut io, &held, "claude", KEY.1, "x", &[Attachment { path: path("a.txt"), image: false }]).is_none());
+        assert!(remembering(&mut io, &held, "claude", "", "x", &[image("a.png")]).is_none());
+        assert!(remembering(&mut io, &held, "codex", KEY.1, "x", &[image("a.png")]).is_none());
+        assert!(!io.step(), "nothing asked: {:?}", disk.borrow().log);
+    }
+
+    #[test]
+    fn records_of_the_same_text_get_the_send_they_followed() {
+        let disk = Rc::new(RefCell::new(Disk::default()));
+        let mut io = Fake::new(&disk, 100);
+        let held = helper(&mut io, false);
+        // Three images sent alone (no text), a minute apart; Claude wrote each record a second
+        // after its send started.
+        for (name, at) in [("first.png", 60_000), ("second.png", 120_000), ("third.png", 180_000)] {
+            send(&mut io, &held, "", &[image(name)], written(), at);
+        }
+        // Newest first, in two pages, and live: each record gets its own image.
+        let newest = shown(&held, vec![user("", 1, 181_000), user("", 1, 121_000)]);
+        assert_eq!((newest[0].blocks.clone(), newest[1].blocks.clone()), (vec![named("third.png")], vec![named("second.png")]));
+        assert_eq!(shown(&held, vec![user("", 1, 61_000)])[0].blocks, [named("first.png")]);
+        // A record before every send, or long after (an image pasted in Terminal), is not named.
+        assert_eq!(shown(&held, vec![user("", 1, 1_000)])[0].blocks, [unnamed()]);
+        assert_eq!(shown(&held, vec![user("", 1, 10_000_000)])[0].blocks, [unnamed()]);
+    }
+
+    #[test]
+    fn a_live_record_is_named_while_its_send_runs_and_a_refused_send_is_forgotten() {
+        let disk = Rc::new(RefCell::new(Disk::default()));
+        let mut io = Fake::new(&disk, 100);
+        let held = helper(&mut io, true);
+        disk.borrow_mut().wall = 5_000;
+        let then = remembering(&mut io, &held, "claude", KEY.1, "Look", &[image("a.png")]).unwrap();
+        let done = then(Box::new(|_, _| {}));
+        // Claude wrote the record before the walk ended; even before the clock answered.
+        assert_eq!(shown(&held, vec![user("Look", 1, 5_100)])[0].blocks, [named("a.png")]);
+        io.settle();
+        assert_eq!(shown(&held, vec![user("Look", 1, 5_100)])[0].blocks, [named("a.png")]);
+        assert!(!disk.borrow().log.iter().any(|line| line.starts_with("write")), "written only once delivered");
+        done(&mut io, Err(Error { code: "input", message: String::new() }));
+        io.settle();
+        assert_eq!(shown(&held, vec![user("Look", 1, 5_100)])[0].blocks, [unnamed()]);
+        assert!(!disk.borrow().log.iter().any(|line| line.starts_with("write")), "{:?}", disk.borrow().log);
+    }
+
+    #[test]
+    fn only_a_client_of_the_feature_may_name_attachments() {
+        use crate::dispatch::attachments::named;
+        let list = |paths: Vec<Data<'static>>| Data::Object(vec![("text", Data::String("x")), ("attachments", Data::Array(paths))]);
+        let plain = Data::Object(vec![("text", Data::String("x"))]);
+        for method in ["chat.send", "queue.add"] {
+            // Without the field: as before, for every client.
+            assert_eq!(named(method, &plain, false), Ok(false));
+            assert_eq!(named(method, &plain, true), Ok(false));
+            // The field at all, from a client that did not name chat.attachments: refused.
+            assert_eq!(named(method, &list(Vec::new()), false).unwrap_err().code, "invalid_input");
+            assert_eq!(named(method, &list(vec![Data::String("/a")]), false).unwrap_err().code, "invalid_input");
+            assert_eq!(named(method, &list(Vec::new()), true), Ok(false));
+            assert_eq!(named(method, &list(vec![Data::String("/a")]), true), Ok(true));
+        }
+        assert_eq!(named("chat.command", &list(vec![Data::String("/a")]), false), Ok(false));
+    }
+
+    #[test]
+    fn blocks_are_named_only_when_the_text_and_the_counts_agree() {
+        let disk = Rc::new(RefCell::new(Disk::default()));
+        let mut io = Fake::new(&disk, 100);
+        let held = helper(&mut io, false);
+        send(&mut io, &held, "two", &[image("a.png"), image("b.png")], written(), 1_000);
+        send(&mut io, &held, "one", &[image("one.png")], written(), 1_000);
+        let mut half = user(&format!("{} [Image #1] two", path("b.png")), 1, 1_000);
+        half.id = "half".into();
+        let records = shown(&held, vec![user("two", 1, 1_000), user("other text", 1, 1_000), user("one", 1, 1_000), half]);
+        assert_eq!(records[0].blocks, [unnamed()], "count differs");
+        assert_eq!(records[1].blocks, [unnamed()], "text differs");
+        assert_eq!(records[2].blocks, [named("one.png")]);
+        // One of the two stayed in Claude's composer as its path: the other is named.
+        assert_eq!((records[3].text.as_str(), records[3].blocks.clone()), ("two", vec![named("a.png"), named("b.png")]));
+        // Another conversation's records are left alone.
+        let mut elsewhere = vec![user("one", 1, 1_000)];
+        view(None, &mut elsewhere);
+        fill(&held, "s-2", &mut elsewhere);
+        assert_eq!(elsewhere[0].blocks, [unnamed()]);
+    }
 }

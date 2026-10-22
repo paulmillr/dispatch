@@ -1,4 +1,5 @@
 import UIKit
+import UniformTypeIdentifiers
 import XCTest
 @testable import DispatchMobile
 
@@ -246,5 +247,32 @@ final class CodeComposerTests: XCTestCase {
         XCTAssertFalse(CodeComposer.stacked("one line"))
         XCTAssertFalse(CodeComposer.stacked("two\nlines with `code`"))
         XCTAssertTrue(CodeComposer.stacked("```ts\nlet a"))
+    }
+
+    /// A paste of images (a screenshot, a copied photo) attaches them and leaves the text alone; Paste is offered for
+    /// them. Without a taker the composer offers nothing new.
+    func testAPastedImageAttachesAndLeavesTheText() async throws {
+        let view = editor("Look")
+        let board = try XCTUnwrap(UIPasteboard(name: UIPasteboard.Name("composer-\(UUID().uuidString)"), create: true))
+        defer { UIPasteboard.remove(withName: board.name) }
+        view.pasteboard = board
+        let png = UIGraphicsImageRenderer(size: CGSize(width: 20, height: 10)).pngData { context in
+            UIColor.systemTeal.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 20, height: 10))
+        }
+        board.setData(png, forPasteboardType: UTType.png.identifier)
+        XCTAssertTrue(board.hasImages)
+        var taken: [MobileAttachmentSource] = []
+        view.pasteImages = { taken = $0 }
+        XCTAssertTrue(view.canPerformAction(#selector(UIResponderStandardEditActions.paste(_:)), withSender: nil))
+        view.paste(nil)
+        XCTAssertEqual(taken.map(\.name), ["Pasted image.png"])
+        XCTAssertEqual(taken.first?.kind, .image)
+        // The pasteboard may hand back its own encoding of the image: the same picture.
+        let data = try await XCTUnwrap(taken.first).load()
+        XCTAssertEqual(UIImage(data: data)?.cgImage?.width, UIImage(data: png)?.cgImage?.width)
+        XCTAssertEqual(view.textStorage.string, "Look", "The image attaches; the draft's text is untouched")
+        XCTAssertTrue(MobileAttachmentSource.images(on: try XCTUnwrap(UIPasteboard(name: UIPasteboard.Name("empty-\(UUID().uuidString)"),
+                                                                                  create: true))).isEmpty)
     }
 }

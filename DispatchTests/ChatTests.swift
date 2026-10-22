@@ -940,3 +940,95 @@ final class ChatTests: XCTestCase {
     }
 
 }
+
+/// A message sent with attachments: its optimistic bubble shows them, and the agent's user record replaces it in place.
+extension ChatTests {
+    private func userRecord(_ kind: String, _ text: String = "", blocks: [[String: Any]] = []) throws -> HelperChat.Record {
+        try JSONDecoder().decode(HelperChat.Record.self, from: JSONSerialization.data(withJSONObject: [
+            "id": kind, "turn": "t1", "kind": kind, "text": text, "title": "", "output": "", "blocks": blocks,
+            "completed": true, "documents": [], "inline_reasoning": false]))
+    }
+
+    func testOptimisticPromptWithAttachmentsReconcilesInPlaceKeepingThumbnails() throws {
+        let path = "/home/example/.dispatch/attachments/0123456789abcdef0123456789abcdef/chart.png"
+        let sent = [ChatAttachment(name: "chart.png", kind: .image, size: 2_048, path: path, thumbnail: Data([0xFF, 0xD8, 0xFF]))]
+        // The record names the copy by path (Codex), by position only (a transcript keeping only the image), or not at
+        // all (an agent that kept the text alone); a message of attachments alone has no text.
+        let cases: [(String, [[String: Any]])] = [
+            ("look at this", [["kind": "image", "path": path, "text": "chart.png"]]),
+            ("look at this", [["kind": "image", "path": NSNull(), "text": NSNull()]]),
+            ("look at this", []),
+            ("", [["kind": "image", "path": path, "text": "chart.png"]]),
+        ]
+        for (text, blocks) in cases {
+            let session = ChatSession(id: System.uuid()), chat = ChatCoordinator(enabled: true)
+            session.showOptimisticPrompt(text, attachments: sent)
+            let row = try XCTUnwrap(session.visibleTranscriptRows.last)
+            XCTAssertEqual(row.item?.attachments, sent)
+            session.awaitingPromptAck = true; session.promptBoundary = .firstRemoteTurn
+            chat.receiveHelper(.records([try userRecord("turn_started"), try userRecord("user", text, blocks: blocks)]), session: session)
+            XCTAssertNil(session.optimisticPrompt, "\(blocks) confirms the send")
+            XCTAssertFalse(session.awaitingPromptAck)
+            XCTAssertEqual(session.visibleTranscriptRows.map(\.id), [row.id], "One row, the bubble's own: no duplicate, no new identity")
+            let shown = try XCTUnwrap(session.visibleTranscriptRows.last?.item)
+            XCTAssertEqual(shown.text, text)
+            XCTAssertEqual(shown.attachments.map(\.id), sent.map(\.id), "The chips keep their identity")
+            XCTAssertEqual(shown.attachments.first?.thumbnail, sent[0].thumbnail, "The thumbnail stays")
+            XCTAssertEqual(shown.attachments.first?.path, path)
+            XCTAssertEqual(shown.attachments.first?.name, "chart.png")
+        }
+
+        // A record naming another number of attachments is another message; so is an empty one naming none.
+        for (text, blocks) in [("look at this", [["kind": "image", "path": path, "text": "chart.png"],
+                                                 ["kind": "image", "path": NSNull(), "text": NSNull()]]),
+                               ("", [])] as [(String, [[String: Any]])] {
+            let session = ChatSession(id: System.uuid()), chat = ChatCoordinator(enabled: true)
+            session.showOptimisticPrompt(text, attachments: sent)
+            session.awaitingPromptAck = true; session.promptBoundary = .firstRemoteTurn
+            chat.receiveHelper(.records([try userRecord("turn_started"), try userRecord("user", text, blocks: blocks)]), session: session)
+            XCTAssertNotNil(session.optimisticPrompt)
+            XCTAssertEqual(session.visibleTranscriptRows.count, 2)
+        }
+    }
+
+    /// Attachment-only prompts all have empty text, and Codex keys a prompt's id by its text: two in one turn stay two
+    /// rows (live, repeated, and from history), while a record still merges with its own copy.
+    func testAttachmentOnlyPromptsStayDistinctRows() throws {
+        let chart = "/home/example/.dispatch/attachments/0123456789abcdef0123456789abcdef/chart.png"
+        let deck = "/home/example/.dispatch/attachments/fedcba9876543210fedcba9876543210/deck.png"
+        func prompt(_ path: Any, id: String = "user-e3b0c44298fc1c14") throws -> HelperChat.Record {
+            try JSONDecoder().decode(HelperChat.Record.self, from: JSONSerialization.data(withJSONObject: [
+                "id": id, "turn": "t1", "kind": "user", "text": "", "title": "", "output": "", "completed": true,
+                "documents": [], "inline_reasoning": false, "blocks": [["kind": "image", "path": path, "text": NSNull()]]]))
+        }
+        func prompts(_ session: ChatSession) -> [ChatItem] {
+            session.visibleTranscriptRows.compactMap(\.item).filter { $0.kind == .user }
+        }
+        let session = ChatSession(id: System.uuid()), chat = ChatCoordinator(enabled: true)
+        chat.receiveHelper(.records([try userRecord("turn_started"), try prompt(chart), try prompt(deck)]), session: session)
+        XCTAssertEqual(prompts(session).map { $0.attachments.map(\.path) }, [[chart], [deck]])
+        XCTAssertEqual(Set(prompts(session).map(\.id)).count, 2, "Distinct rows need distinct ids")
+        // Read again (a repeated snapshot), live and from history: each merges with its own row.
+        chat.receiveHelper(.records([try prompt(deck), try prompt(chart)]), session: session)
+        XCTAssertEqual(prompts(session).count, 2)
+        session.mergeHistorical([try prompt(chart), try prompt(deck)].compactMap(\.display))
+        XCTAssertEqual(prompts(session).map { $0.attachments.map(\.path) }, [[chart], [deck]])
+
+        // History alone: the same two rows.
+        let history = ChatSession(id: System.uuid())
+        history.mergeHistorical([try userRecord("turn_started"), try prompt(chart), try prompt(deck)].compactMap(\.display))
+        XCTAssertEqual(prompts(history).map { $0.attachments.map(\.path) }, [[chart], [deck]])
+
+        // A copy that names its image without a path (Claude's transcript keeps only the data) is the same message.
+        let copy = ChatSession(id: System.uuid())
+        chat.receiveHelper(.records([try userRecord("turn_started"), try prompt(NSNull(), id: "c1")]), session: copy)
+        chat.receiveHelper(.records([try prompt(chart, id: "c1")]), session: copy)
+        XCTAssertEqual(prompts(copy).map { $0.attachments.map(\.path) }, [[chart]])
+        // A text prompt is not an attachment prompt with the same text.
+        XCTAssertFalse(AgentInput.records(try XCTUnwrap(prompts(copy).first), prompt: "", attachments: []))
+        XCTAssertFalse(AgentInput.records(try XCTUnwrap(prompts(copy).first), prompt: "",
+                                          attachments: [ChatAttachment(name: "deck.png", kind: .image, size: 0, path: deck)]))
+        XCTAssertTrue(AgentInput.records(try XCTUnwrap(prompts(copy).first), prompt: "",
+                                         attachments: [ChatAttachment(name: "chart.png", kind: .image, size: 0, path: chart)]))
+    }
+}

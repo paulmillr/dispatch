@@ -98,19 +98,24 @@ struct ChatView: View {
                            bottomContentInset: bottomInset, fadeTopInset: session.search.visible ? 0 : topInset)
             .opacity(session.sideConversation == nil ? 1 : 0.38)
             .animation(InterfaceMotion.animation(reduce: reduceMotion), value: session.sideConversation?.id)
+            // Files and images dropped on the conversation attach to the draft, as on the composer.
+            .onDrop(of: [.fileURL, .image], delegate: ChatAttachmentDrop(session: session, coordinator: coordinator))
     }
 
     private var canSubmit: Bool {
         if !session.draftIsCommand || session.busy || session.editingQueuedID != nil {
+            // Attachments alone make a message; one still uploading would be left out (a command takes none).
             return coordinator.enabled && session.active && session.supportsQueue && !session.inputBlocked
                 && session.helper != nil
-                && session.drafts.shape.hasText
+                && (session.drafts.shape.hasText || session.drafts.shape.hasAttachments)
+                && !(session.draftIsCommand && session.drafts.shape.hasAttachments)
+                && !session.draftUploads.contains(where: \.uploading)
                 && (session.queuedMessages.count < 50 || session.editingQueuedID != nil)
         }
         return session.active && session.submissionID == nil && session.modelPicker == nil && session.command == nil
             && !session.nativeInputInFlight && session.nativePrompt == nil && session.commandEditor == nil && !session.inputBlocked && !session.loadingHistory
             && session.activityCheck == nil && (!session.busy || session.drafts.shape.commandAllowsBusy) && session.drafts.shape.hasText
-            && !session.approvals.contains(where: \.pending)
+            && !session.drafts.shape.hasAttachments && !session.approvals.contains(where: \.pending)
     }
 
     @ViewBuilder private var input: some View {
@@ -185,6 +190,9 @@ struct ChatView: View {
                                 Button("cancel") { coordinator.cancelQueuedEdit(session) }.buttonStyle(.plain)
                             }.font(theme.typography.detail).foregroundStyle(theme.muted).padding(.horizontal, 12).padding(.top, 6)
                         }
+                        if attachmentsShown {
+                            ChatComposerAttachments(session: session, coordinator: coordinator)
+                        }
                         ChatComposer(session: session, focused: focused && session.showChat, submit: { coordinator.sendFromComposer(session) },
                             interrupt: {
                                 if session.editingQueuedID != nil { coordinator.cancelQueuedEdit(session); return true }
@@ -203,8 +211,12 @@ struct ChatView: View {
                                 case "edit": coordinator.editQueued(id, in: session)
                                 default: coordinator.removeQueued(id, from: session)
                                 }
-                            }, optionChanged: { optionHeld = $0 }, showShortcuts: { session.shortcutsPresented.toggle() })
-                            .frame(height: min(max(theme.typography.replyLineHeight + 10, session.composerHeight), max(theme.typography.replyLineHeight + 10, min(320, availableChatHeight * 0.4) - theme.typography.detailLineHeight - 26)))
+                            }, optionChanged: { optionHeld = $0 }, showShortcuts: { session.shortcutsPresented.toggle() },
+                            canAttach: { coordinator.canAttach(session) }, attach: { coordinator.attach($0, to: session) },
+                            chooseAttachments: { ChatAttachButton.choose(session: session, coordinator: coordinator, window: $0) })
+                            // The attachment chips share the composer's bound: the editor gives up their height.
+                            .frame(height: min(max(theme.typography.replyLineHeight + 10, session.composerHeight), max(theme.typography.replyLineHeight + 10, min(320, availableChatHeight * 0.4) - theme.typography.detailLineHeight - 26
+                                - (attachmentsShown ? ChatComposerAttachments.height(session, theme: theme) : 0))))
                             .overlay(alignment: .topTrailing) {
                                 if session.drafts.shape.multiline {
                                     Text("editor")
@@ -328,6 +340,7 @@ struct ChatView: View {
                 HStack(spacing: 12) {
                     savedDraftControls.focusedOnly(focused)
                     Spacer(minLength: 0)
+                    attachControl
                     dictationControl
                     replyActions.focusedOnly(focused)
                 }
@@ -341,9 +354,22 @@ struct ChatView: View {
             composerActivity.fixedSize()
             savedDraftControls.focusedOnly(focused)
             Spacer(minLength: 0)
+            attachControl
             dictationControl
             replyActions.focusedOnly(focused)
         }
+    }
+
+    /// Only for a helper that keeps attachments; disabled (with why) for commands and queued edits.
+    @ViewBuilder private var attachControl: some View {
+        if session.acceptsAttachments && session.sideConversation == nil {
+            ChatAttachButton(session: session, coordinator: coordinator).focusedOnly(focused)
+        }
+    }
+
+    /// The draft's attachment chips (and why an attach was refused) sit above the editor.
+    private var attachmentsShown: Bool {
+        session.drafts.shape.hasAttachments || !session.draftUploads.isEmpty || session.attachmentError != nil
     }
 
     /// Shown with the reply actions, and while this chat's dictation listens or says why it failed; never with

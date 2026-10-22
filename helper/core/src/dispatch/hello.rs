@@ -87,14 +87,18 @@ impl Request<'_> {
                 .get(&self.fd)
                 .map(|set| set.iter().map(|s| s.to_string()).collect())
                 .unwrap_or_default();
+            if accepted.iter().any(|feature| feature == features::ATTACHMENTS) {
+                // History strips path lines under this account's attachments root only.
+                attachments::cache(self.io, &self.helper.held);
+            }
             let ops: Vec<String> = ops
                 .iter()
                 .cloned()
                 .chain(
                     features::OPERATIONS
                         .iter()
-                        .filter(|op| accepted.iter().any(|f| f == *op) && self.helper.allowed(op))
-                        .map(|s| s.to_string()),
+                        .filter(|(op, feature)| accepted.iter().any(|f| f == feature) && self.helper.allowed(op))
+                        .map(|(op, _)| op.to_string()),
                 )
                 .collect();
             crate::encode::object(

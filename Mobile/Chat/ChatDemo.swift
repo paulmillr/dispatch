@@ -61,6 +61,7 @@ enum ChatDemo {
         private var decoder = HelperWire.Decoder()
         private let screen: String
         private var serial: UInt64 = 0
+        private var stored: [String: Data] = [:]
 
         init(screen: String) {
             self.screen = screen
@@ -108,6 +109,18 @@ enum ChatDemo {
             case "queue.add":
                 serial += 1
                 respond(id, item("held-\(serial)", params["text"] as? String ?? ""))
+            // Attachments (feature chat.attachments): kept in memory under a host-like path, read back as stored.
+            case "attachments.put":
+                serial += 1
+                let name = params["name"] as? String ?? "attachment"
+                let bytes = params["bytes"] as? Data ?? Data()
+                let path = "/Users/paul/.dispatch/attachments/\(String(format: "%032llx", serial))/\(name)"
+                lock.withLock { stored[path] = bytes }
+                let image = ["png", "jpg", "jpeg", "gif", "webp"].contains((name as NSString).pathExtension.lowercased())
+                respond(id, ["path": path, "name": name, "kind": image ? "image" : "file", "size": UInt64(bytes.count)])
+            case "attachments.read":
+                let bytes = lock.withLock { stored[params["path"] as? String ?? ""] } ?? Data()
+                respond(id, ["bytes": bytes, "size": UInt64(bytes.count)])
             case "launches.list":
                 respond(id, [["launch": 0, "key": "claude", "label": "Claude Code", "program": "claude"],
                              ["launch": 1, "key": "codex", "label": "Codex", "program": "codex"]])
@@ -202,14 +215,16 @@ enum ChatDemo {
         let link: HostLink = screen == "M4c" ? .reconnecting(attempt: 3, since: Date().addingTimeInterval(-14)) : .connected
         if screen == "M4c" {
             // Connected first so the thread loads, then the link drops.
-            conversations.update(ChatHostSnapshot(id: host, name: "mba2", link: .connected, client: peer.client, topology: topology()))
+            conversations.update(ChatHostSnapshot(id: host, name: "mba2", link: .connected, client: peer.client, topology: topology(),
+                                                  features: [ChatAttachment.feature]))
             Task { @MainActor in
                 _ = conversations.session(for: ChatConversationKey(host: host, node: "tmux:s:$0:%0"))
                 try? await Task.sleep(for: .milliseconds(600))
                 conversations.update(ChatHostSnapshot(id: host, name: "mba2", link: link, client: nil, topology: topology()))
             }
         } else {
-            conversations.update(ChatHostSnapshot(id: host, name: "mba2", link: link, client: peer.client, topology: topology()))
+            conversations.update(ChatHostSnapshot(id: host, name: "mba2", link: link, client: peer.client, topology: topology(),
+                                                  features: [ChatAttachment.feature]))
         }
         if ProcessInfo.processInfo.environment["DISPATCH_MOBILE_CHAT_DEMO_LINK"] == "cycle" {
             // Frame checks of M4c's banner: the link drops after 3 s and comes back 4 s later (the thread reattaches).
@@ -218,7 +233,8 @@ enum ChatDemo {
                 conversations.update(ChatHostSnapshot(id: host, name: "mba2", link: .reconnecting(attempt: 1, since: Date()),
                                                       client: nil, topology: topology()))
                 try? await Task.sleep(for: .seconds(4))
-                conversations.update(ChatHostSnapshot(id: host, name: "mba2", link: .connected, client: peer.client, topology: topology()))
+                conversations.update(ChatHostSnapshot(id: host, name: "mba2", link: .connected, client: peer.client, topology: topology(),
+                                                  features: [ChatAttachment.feature]))
             }
         }
         return (conversations, peer)

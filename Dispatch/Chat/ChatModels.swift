@@ -35,6 +35,8 @@ struct ChatItem: Identifiable, Equatable, Sendable {
     /// The directory the agent recorded for this tool call, when its input omits one.
     var directory: String? { didSet { presentationID = System.uuid() } }
     var hiddenPatchRequests: Set<String> = [] { didSet { presentationID = System.uuid() } }
+    /// Files a user message carries (`ChatAttachment`): the composer's while it is optimistic, the record's afterwards.
+    var attachments: [ChatAttachment] = [] { didSet { presentationID = System.uuid() } }
     private(set) var presentationID = System.uuid()
     /// Claude's summarized thinking reads as short progress notes, so it is
     /// shown inline like a message instead of behind a disclosure.
@@ -43,18 +45,30 @@ struct ChatItem: Identifiable, Equatable, Sendable {
     static func == (lhs: ChatItem, rhs: ChatItem) -> Bool {
         lhs.id == rhs.id && lhs.kind == rhs.kind && lhs.text == rhs.text && lhs.title == rhs.title &&
         lhs.output == rhs.output && lhs.completed == rhs.completed && lhs.exitCode == rhs.exitCode && lhs.patch == rhs.patch && lhs.processID == rhs.processID &&
-        lhs.shellCommand == rhs.shellCommand && lhs.commandSource == rhs.commandSource && lhs.directory == rhs.directory && lhs.hiddenPatchRequests == rhs.hiddenPatchRequests && lhs.source == rhs.source
+        lhs.shellCommand == rhs.shellCommand && lhs.commandSource == rhs.commandSource && lhs.directory == rhs.directory && lhs.hiddenPatchRequests == rhs.hiddenPatchRequests && lhs.source == rhs.source &&
+        lhs.attachments == rhs.attachments
     }
     static func contentID(_ text: String) -> String {
         ChatRecord.contentKey(Data(text.utf8))
     }
 
     fileprivate func matches(_ previous: Self) -> Bool {
+        // Attachment-only prompts all have the same empty text, and Codex keys a prompt's id by its text: two that
+        // carry other files are two messages.
+        if carriesOtherAttachments(than: previous) { return false }
         if id == previous.id { return true }
         // Pi's native message/block identities already match live and saved
         // records. Repeated text in another message is a distinct item.
         if id.hasPrefix("pi-") || previous.id.hasPrefix("pi-") { return false }
         return [.user, .assistant, .reasoning].contains(kind) && kind == previous.kind && text == previous.text
+            && (kind != .user || ChatAttachment.same(attachments, previous.attachments))
+    }
+
+    /// Both are user messages that name attachments, and not the same ones (`ChatAttachment.same`). A copy without
+    /// any may still be the same message by id (a record read before its attachments were known).
+    func carriesOtherAttachments(than previous: Self) -> Bool {
+        kind == .user && previous.kind == .user && !attachments.isEmpty && !previous.attachments.isEmpty
+            && !ChatAttachment.same(attachments, previous.attachments)
     }
 
     fileprivate func merging(_ previous: Self, historical: Bool = false) -> Self {
@@ -82,6 +96,8 @@ struct ChatItem: Identifiable, Equatable, Sendable {
            kind == .assistant || kind == .reasoning { updated.text = previous.text }
         if updated.title.isEmpty { updated.title = previous.title }
         if updated.output.isEmpty { updated.output = previous.output }
+        // A transcript names images without the thumbnails the composer made: keep those (and the row's chip ids).
+        updated.attachments = ChatAttachment.merge(updated.attachments, keeping: previous.attachments)
         updated.completed = updated.completed || previous.completed
         updated.exitCode = updated.exitCode ?? previous.exitCode
         updated.processID = updated.processID ?? previous.processID
@@ -332,6 +348,9 @@ struct ChatQueuedMessage: Identifiable {
     var pending = false
     /// The host's queue store refused it: this Mac delivers it itself, as before the store.
     var local = false
+    /// Files it carries (`ChatDraft.attachments`); a native row's attachment previews as placeholders. Such a
+    /// message is not edited here: the helper keeps attachment rows read-only, and an edit would drop them.
+    var attachments: [ChatAttachment] = []
     /// Not yet accepted by a native queue; the app delivers or uploads it.
     var held: Bool { native == nil }
     var editable: Bool { native?.editable ?? true }
@@ -960,6 +979,23 @@ final class ChatSession: Identifiable {
         }
     }
     var queuedSubmissionID: UUID?
+    /// The helper accepted `chat.attachments` (hello features): the composer may offer attachments.
+    var acceptsAttachments = false
+    /// Files being read and uploaded for drafts (`ChatCoordinator.attach`); never persisted, a quit drops them.
+    var attachmentUploads: [ChatAttachmentUpload] = []
+    /// The uploads of the draft the composer shows (each belongs to the draft it was started for).
+    var draftUploads: [ChatAttachmentUpload] {
+        let draft = drafts.shape.id
+        return attachmentUploads.filter { $0.draft == draft }
+    }
+    /// An upload whose draft is gone shows on the current one instead.
+    func retarget(_ upload: String) {
+        guard let index = attachmentUploads.firstIndex(where: { $0.id == upload }) else { return }
+        attachmentUploads[index].draft = drafts.current.id
+        attachmentUploads[index].scope = drafts.scope
+    }
+    /// Why the last attach was refused (too many, too large); shown beside the attachment chips.
+    var attachmentError: String?
     var editingQueuedID: UUID?
     var editingQueuedDraftID: UUID?
     var selectedQueuedID: UUID?
@@ -1196,11 +1232,13 @@ final class ChatSession: Identifiable {
         ChatTranscript.mergeHistorical(records, turns: &turns, index: &transcriptIndex)
     }
 
-    func showOptimisticPrompt(_ text: String, at date: Date = .now) {
+    func showOptimisticPrompt(_ text: String, attachments: [ChatAttachment] = [], at date: Date = .now) {
         optimisticPromptDelivered = false
         optimisticPromptRetained = false
         submittedThinkingAt = date
-        optimisticPrompt = ChatItem(id: "pending-" + System.uuid().uuidString, kind: .user, text: text)
+        var prompt = ChatItem(id: "pending-" + System.uuid().uuidString, kind: .user, text: text)
+        prompt.attachments = attachments
+        optimisticPrompt = prompt
         optimisticPromptBoundary = .local(date)
         followRevision = atBottom ? revision + 1 : nil
         revision += 1
@@ -1208,13 +1246,14 @@ final class ChatSession: Identifiable {
 
     func matchesPrompt(_ item: ChatItem) -> Bool {
         guard let pending = optimisticPrompt else { return false }
-        return AgentInput.records(item, prompt: pending.text)
+        return AgentInput.records(item, prompt: pending.text, attachments: pending.attachments)
     }
 
     func reconcilePrompt(_ item: ChatItem) -> ChatItem {
         guard matchesPrompt(item), let pending = optimisticPrompt else { return item }
         var confirmed = item
         confirmed.rowID = pending.id
+        confirmed.attachments = ChatAttachment.merge(item.attachments, keeping: pending.attachments)
         optimisticPrompt = nil
         return confirmed
     }
@@ -1228,7 +1267,7 @@ final class ChatSession: Identifiable {
         if optimisticPromptDelivered { optimisticPromptRetained = true; return }
         if restoreDraft {
             if directDraftDelivery != nil { finishDirectDraft(success: false) }
-            else { drafts.restore(ChatDraft(text: pending.text, multiline: pending.text.contains("\n"))) }
+            else { drafts.restore(ChatDraft(text: pending.text, multiline: pending.text.contains("\n"), attachments: pending.attachments)) }
         }
         optimisticPrompt = nil
         followRevision = atBottom ? revision + 1 : nil
@@ -1328,8 +1367,17 @@ enum AgentInput {
 
     /// A user record the agent wrote for `prompt`: its text as sent, or fenced as the harness types a command-like
     /// prompt (the optimistic bubble it confirms, on both apps).
-    static func records(_ item: ChatItem, prompt: String) -> Bool {
+    static func records(_ item: ChatItem, prompt: String, attachments: [ChatAttachment]) -> Bool {
+        // Paths tell two attachment-only prompts apart; a record that names none (an agent that kept only text) has none.
+        guard item.attachments.isEmpty || ChatAttachment.same(item.attachments, attachments) else { return false }
+        return records(item, prompt: prompt, attachments: attachments.count)
+    }
+
+    static func records(_ item: ChatItem, prompt: String, attachments: Int = 0) -> Bool {
         guard item.kind == .user else { return false }
+        // The helper takes attachment references out of a user record's text (helper/PROTOCOL.md, Attachments); a
+        // record that names some must name as many as were sent. One that names none is an agent that kept only text.
+        guard item.attachments.isEmpty ? attachments == 0 || !prompt.isEmpty : item.attachments.count == attachments else { return false }
         let text = item.text.trimmingCharacters(in: .whitespacesAndNewlines)
         return [prompt, fenced(prompt)].contains { $0.trimmingCharacters(in: .whitespacesAndNewlines) == text }
     }

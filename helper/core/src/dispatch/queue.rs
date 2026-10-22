@@ -101,16 +101,18 @@ impl Queues {
     }
 }
 
-/// Held queues and the update stream their snapshots go to.
+/// Held queues and the update stream their snapshots go to; also the attachments this helper
+/// delivered (`attachments::Index`), which history fills paths from.
 #[derive(Clone)]
 pub(crate) struct Held {
     queues: Rc<RefCell<Queues>>,
     updates: Rc<RefCell<VecDeque<Update>>>,
+    pub(crate) delivered: Rc<RefCell<super::attachments::Index>>,
 }
 
 impl Held {
     pub(crate) fn new(updates: Rc<RefCell<VecDeque<Update>>>) -> Self {
-        Self { queues: Default::default(), updates }
+        Self { queues: Default::default(), updates, delivered: Default::default() }
     }
     pub(crate) fn borrow(&self) -> std::cell::Ref<'_, Queues> {
         self.queues.borrow()
@@ -134,7 +136,17 @@ fn storage(error: impl std::fmt::Display) -> Error {
 
 /// Submit `job` in the store's section; its callback runs in the caller's.
 fn stored(io: &mut dyn Io, job: Job, then: Box<dyn FnOnce(&mut dyn Io, io::Result<Output>)>) -> io::Result<()> {
-    let caller = io.section(STORE);
+    within(io, STORE, job, then)
+}
+
+/// Submit `job` in `section`; its callback runs in the caller's.
+pub(super) fn within(
+    io: &mut dyn Io,
+    section: &str,
+    job: Job,
+    then: Box<dyn FnOnce(&mut dyn Io, io::Result<Output>)>,
+) -> io::Result<()> {
+    let caller = io.section(section);
     let work = io.submit(job);
     if let Ok(work) = work {
         let back = caller.clone();
@@ -219,7 +231,7 @@ fn prepare(io: &mut dyn Io, held: &Held, then: Prepared) {
 }
 
 /// Queue `op` on a line; operations of one line run one after another.
-fn change(io: &mut dyn Io, held: &Held, key: &(Id, String), op: Op, done: Option<Then>) {
+pub(super) fn change(io: &mut dyn Io, held: &Held, key: &(Id, String), op: Op, done: Option<Then>) {
     {
         let mut queues = held.queues.borrow_mut();
         let line = queues.lines.entry(key.clone()).or_default();
@@ -354,6 +366,17 @@ fn opened(
     target: &Target,
     session: &str,
 ) -> Result<Option<(Record, Guard)>, Error> {
+    let Some((data, guard)) = private(result)? else { return Ok(None) };
+    let record = Record::decode(&data)?;
+    if record.harness != target.harness || record.session != session {
+        return Err(storage("the stored queue belongs to another conversation"));
+    }
+    Ok(Some((record, guard)))
+}
+
+/// A `file.private` answer's bytes and the guard a checked write needs, when the file is this
+/// account's private regular file; None when there is no file.
+pub(super) fn private(result: io::Result<Output>) -> Result<Option<(Vec<u8>, Guard)>, Error> {
     let bytes = match result {
         Ok(Output::Value(bytes)) => bytes,
         Ok(_) => return Err(storage("unexpected answer")),
@@ -386,11 +409,7 @@ fn opened(
         modified_ns: Some(number("mtime_ns")?),
         changed_ns: Some(number("ctime_ns")?),
     };
-    let record = Record::decode(data)?;
-    if record.harness != target.harness || record.session != session {
-        return Err(storage("the stored queue belongs to another conversation"));
-    }
-    Ok(Some((record, guard)))
+    Ok(Some((data.to_vec(), guard)))
 }
 
 /// End the running operation: remember the record it saw (`Some`), publish a changed snapshot,
@@ -466,7 +485,7 @@ pub(super) fn sending(held: Held, key: (Id, String), awaiting: bool, done: Done<
     })
 }
 
-fn invalid_text(text: &str, command: bool) -> Option<Error> {
+pub(super) fn invalid_text(text: &str, command: bool) -> Option<Error> {
     let fail = |code: &'static str| {
         Some(Error {
             code,
@@ -685,6 +704,8 @@ fn send(
 ) {
     let terminal = local(key.0);
     held.line(&key, |line| line.waiting = true);
+    let name = harness.borrow().key().to_owned();
+    let then = super::attachments::remembering(io, &held, &name, &binding.session, &item.text, &item.attachments);
     let id = item.id.clone();
     let finish: Done<Sent> = Box::new(move |io, result| {
         let outcome = match &result {
@@ -736,6 +757,7 @@ fn send(
         text: item.text.clone(),
         mode: item.mode,
         command: item.command,
+        attachments: item.attachments.clone(),
     };
     let done = walk(
         None,
@@ -745,16 +767,32 @@ fn send(
         binding.clone(),
         goal,
         ask,
-        typed(None, mux, harness.clone(), terminal, binding.clone(), finish),
+        typed(None, mux, harness.clone(), terminal, binding.clone(), match then {
+            Some(then) => then(finish),
+            None => finish,
+        }),
         |_| Sent::Native {
             written: true,
             may_have_sent: true,
             reason: None,
         },
     );
-    harness
-        .borrow_mut()
-        .send(io, &binding, &item.text, item.mode, item.command, done);
+    deliver(io, &harness, &binding, &item, item.mode, done);
+}
+
+/// Hand a queued item to its harness: as typed, or with its attachments.
+fn deliver(
+    io: &mut dyn Io,
+    harness: &Shared<dyn Harness>,
+    binding: &Binding,
+    item: &store::Item,
+    mode: Mode,
+    done: Done<Sent>,
+) {
+    if item.attachments.is_empty() {
+        return harness.borrow_mut().send(io, binding, &item.text, mode, item.command, done);
+    }
+    harness.borrow_mut().send_attached(io, binding, &item.text, mode, &item.attachments, done);
 }
 
 /// Permission withdrawn for these terminals: their queues stop here at once and in the store.
@@ -924,6 +962,7 @@ impl Request<'_> {
                     mode: mode(p)?,
                     command,
                     binding: bound,
+                    attachments: Vec::new(),
                 }
             }
             "update" => {
@@ -973,10 +1012,17 @@ impl Request<'_> {
                 .filter(|item| item.pause.is_none() && item.binding == Bound::of(&binding))
                 .ok_or_else(|| invalid("item"))?;
             let mode = mode(p)?;
-            let goal = Goal::Send { text: item.text.clone(), mode, command: item.command };
-            let done = self.sent(p, Some(goal))?;
+            let goal = Goal::Send {
+                text: item.text.clone(),
+                mode,
+                command: item.command,
+                attachments: item.attachments.clone(),
+            };
+            let name = harness.borrow().key().to_owned();
+            let then = super::attachments::remembering(self.io, &self.helper.held, &name, &binding.session, &item.text, &item.attachments);
+            let done = self.sending(p, true, true)?(Some(goal), then);
             change(self.io, &self.helper.held, &key, change_op, Some(Box::new(move |io, answer| match answer {
-                Ok(Answer::Taken(item)) => harness.borrow_mut().send(io, &binding, &item.text, mode, item.command, done),
+                Ok(Answer::Taken(item)) => deliver(io, &harness, &binding, &item, mode, done),
                 Ok(_) => done(io, Err(invalid("item"))),
                 Err(error) => done(io, Err(error)),
             })));

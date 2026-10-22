@@ -110,8 +110,12 @@ struct ChatQueueCard: View {
                             .tint(Color.dispatchPink)
                             .focused($focused)
                             .onSubmit(commit)
-                    } else {
+                    } else if !row.text.isEmpty {
                         Text(row.text).font(.subheadline).lineSpacing(1).lineLimit(typeSize > .large ? 6 : 2)
+                    }
+                    if !row.attachments.isEmpty, !isEditing {
+                        ChatQueuedAttachments(attachments: row.attachments, host: session.key.host,
+                                              read: { [session] in try await session.attachmentBytes($0) })
                     }
                     if let status = row.status {
                         Text(status).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -212,9 +216,30 @@ private struct QueueRowAccessibility: ViewModifier {
 }
 
 extension ChatQueueCard {
-    /// "Run the migration, paused after Stop": the message, then its status.
+    /// "Run the migration, paused after Stop": the message, its attachments, then its status.
     static func accessibilityLabel(_ row: MobileChatSession.QueueRow) -> String {
-        [row.text, row.status].compactMap { $0 }.joined(separator: ", ")
+        [row.text.isEmpty ? nil : row.text, row.attachments.isEmpty ? nil : ChatAttachmentSummary.text(row.attachments),
+         row.status].compactMap { $0 }.joined(separator: ", ")
+    }
+}
+
+/// A queue row's attachments: small thumbnails, then how many files.
+private struct ChatQueuedAttachments: View {
+    let attachments: [ChatAttachment]
+    var host: UUID?
+    var read: (@MainActor (String) async throws -> Data?)?
+
+    var body: some View {
+        let images = attachments.filter { $0.kind == .image }
+        let files = attachments.count - images.count
+        HStack(spacing: 4) {
+            ForEach(images.prefix(6)) { ChatAttachmentTile(attachment: $0, host: host, read: read, side: 28, corner: 6) }
+            if files > 0 {
+                Label(files == 1 ? "1 file" : "\(files) files", systemImage: "doc").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(.top, 2)
+        .accessibilityHidden(true)
     }
 }
 
@@ -226,7 +251,8 @@ struct ChatQueuedBubbles: View {
         let rows = session.queueRows
         ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
             VStack(spacing: 5) {
-                ChatBubble(side: .user, faded: true) { Text(row.text) }
+                ChatUserMessage(text: row.text, attachments: row.attachments, host: session.key.host,
+                                read: { [session] in try await session.attachmentBytes($0) }, faded: true)
                     .contextMenu {
                         if row.status != nil { Button("Send", systemImage: "paperplane") { session.resendQueued(row) } }
                         if case .device = row.source { Button("Edit", systemImage: "pencil") { session.editInComposer(row) } }

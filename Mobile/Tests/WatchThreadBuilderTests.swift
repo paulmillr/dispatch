@@ -195,4 +195,18 @@ final class WatchThreadBuilderTests: XCTestCase {
         XCTAssertEqual(page.reason, "Claude Code exited. This transcript is read-only.")
         XCTAssertEqual(page.notes, [], "the reason is the page's own, not a note too")
     }
+
+    /// The watch shows text only: a user message with attachments starts with a line that names them.
+    func testAttachmentsBecomeATextLineOnTheWatch() async throws {
+        let helper = ScriptedHelper()
+        var withText = ChatFixture.record("user-a", "user", turn: "a", text: "Why is this grey?", time: 946_719_200_000)
+        withText["blocks"] = [["kind": "image", "language": NSNull(), "text": "screenshot.png", "path": "/stored/1/screenshot.png"]]
+        var only = ChatFixture.record("user-b", "user", turn: "b", text: "", time: 946_719_300_000)
+        only["blocks"] = [["kind": "image", "language": NSNull(), "text": "a.png", "path": NSNull()],
+                          ["kind": "image", "language": NSNull(), "text": "b.png", "path": NSNull()],
+                          ["kind": "file", "language": NSNull(), "text": "notes.txt", "path": "/stored/2/notes.txt"]]
+        let chat = try await opened(helper, records: [withText, only])
+        let users = WatchThreadBuilder.page(chat, row: nil).items.filter { $0.kind == .user }
+        XCTAssertEqual(users.map(\.text), ["📎 Image\nWhy is this grey?", "📎 2 images, 1 file"])
+    }
 }

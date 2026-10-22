@@ -56,14 +56,17 @@ struct ChatOutboxItem: Identifiable, Codable, Equatable, Sendable {
     var command = false
     /// The process it belongs to; nil until a verified conversation adopts it (queued before the agent was bound).
     var process: Process?
+    /// Files already stored on the host (`attachments.put`), sent with the message by path. The file keeps them without
+    /// thumbnails (`ChatOutboxFileStore`); the thread fetches those from the host.
+    var attachments: [ChatAttachment] = []
 
     init(id: UUID = UUID(), key: ChatConversationKey, conversation: String?, text: String, created: Date = Date(),
-         state: State = .waiting, command: Bool = false, process: Process? = nil) {
+         state: State = .waiting, command: Bool = false, process: Process? = nil, attachments: [ChatAttachment] = []) {
         (self.id, self.key, self.conversation, self.text, self.created) = (id, key, conversation, text, created)
-        (self.state, self.command, self.process) = (state, command, process)
+        (self.state, self.command, self.process, self.attachments) = (state, command, process, attachments)
     }
 
-    private enum CodingKeys: String, CodingKey { case id, key, conversation, text, created, state, command, process }
+    private enum CodingKeys: String, CodingKey { case id, key, conversation, text, created, state, command, process, attachments }
 
     init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -76,6 +79,7 @@ struct ChatOutboxItem: Identifiable, Codable, Equatable, Sendable {
         // Items saved before these fields: prompts of an unknown process (adopted by the next verified conversation).
         command = try c.decodeIfPresent(Bool.self, forKey: .command) ?? false
         process = try c.decodeIfPresent(Process.self, forKey: .process)
+        attachments = try c.decodeIfPresent([ChatAttachment].self, forKey: .attachments) ?? []
     }
 
     /// A shell command (`!…`): the helper's queue refuses them (`shell_command`), so they stay on the device and run
@@ -110,7 +114,15 @@ struct ChatOutboxItem: Identifiable, Codable, Equatable, Sendable {
         return document.items
     }
     func save(_ items: [ChatOutboxItem]) throws {
-        try PrivateFile.write(JSONEncoder().encode(Document(items: items)), to: url, excludedFromBackup: true)
+        try PrivateFile.write(JSONEncoder().encode(Document(items: Self.stored(items))), to: url, excludedFromBackup: true)
+    }
+    /// What the file keeps: thumbnails live in drafts only (docs/ios.md, Attachments).
+    static func stored(_ items: [ChatOutboxItem]) -> [ChatOutboxItem] {
+        items.map { item in
+            var item = item
+            for index in item.attachments.indices { item.attachments[index].thumbnail = nil }
+            return item
+        }
     }
 }
 

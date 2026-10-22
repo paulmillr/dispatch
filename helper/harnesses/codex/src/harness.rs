@@ -107,6 +107,70 @@ fn input(text: &str) -> Data<'_> {
     ])])
 }
 
+/// Input items with stored attachments: the text (when there is any), then a `localImage` per
+/// image (LocalImageUserInput); `text` already holds the path lines of other files.
+fn attached<'a>(text: &'a str, attachments: &'a [Attachment]) -> Data<'a> {
+    let mut items = match text.trim().is_empty() {
+        true => Vec::new(),
+        false => match input(text) {
+            Data::Array(items) => items,
+            _ => Vec::new(),
+        },
+    };
+    items.extend(attachments.iter().filter(|attachment| attachment.image).map(|attachment| {
+        Data::Object(vec![("type", Data::String("localImage")), ("path", Data::String(&attachment.path))])
+    }));
+    Data::Array(items)
+}
+
+impl Codex {
+    /// thread/queue/add with these input items.
+    fn enqueue(&mut self, io: &mut dyn Io, binding: &Binding, items: Data<'_>, mode: Mode, done: Done<Queued>) {
+        let mut nonce = [0; 16];
+        if let Err(error) = io.random(&mut nonce) {
+            deferred(done)(io, Err(os(error)));
+            return;
+        }
+        nonce[6] = (nonce[6] & 15) | 64;
+        nonce[8] = (nonce[8] & 63) | 128;
+        let mut client = String::new();
+        for (index, byte) in nonce.into_iter().enumerate() {
+            if [4, 6, 8, 10].contains(&index) {
+                client.push('-');
+            }
+            client.push_str(&format!("{byte:02x}"));
+        }
+        let revisions = self.revision.clone();
+        let session = binding.session.clone();
+        self.change(
+            io,
+            binding,
+            "add",
+            vec![
+                ("clientUserMessageId", Data::String(&client)),
+                ("input", items),
+            ],
+            Box::new(move |io, result| {
+                let result =
+                    result.and_then(|value| {
+                        queue::row(value.root().get("queuedSubmission").ok_or_else(|| {
+                            failure("queue", "No queued submission was returned.")
+                        })?)
+                    });
+                deferred(done)(
+                    io,
+                    result.map(|row| {
+                        let mut revisions = revisions.borrow_mut();
+                        let revision = revisions.entry(session).or_default();
+                        *revision += 1;
+                        row.queued(mode, *revision)
+                    }),
+                );
+            }),
+        );
+    }
+}
+
 fn sent(result: Result<Json, Error>) -> Result<Sent, Error> {
     result.map(|_| Sent::Native {
         written: true,
@@ -553,6 +617,18 @@ impl Harness for Codex {
         self.submit(io, binding, text, mode, command, false, done);
     }
 
+    fn send_attached(
+        &mut self,
+        io: &mut dyn Io,
+        binding: &Binding,
+        text: &str,
+        mode: Mode,
+        attachments: &[Attachment],
+        done: Done<Sent>,
+    ) {
+        self.submit_attached(io, binding, text, mode, attachments, done);
+    }
+
     fn stop(&mut self, io: &mut dyn Io, binding: &Binding, done: Done<Sent>) {
         let turn = self
             .states
@@ -946,48 +1022,21 @@ impl Harness for Codex {
         mode: Mode,
         done: Done<Queued>,
     ) {
-        let mut nonce = [0; 16];
-        if let Err(error) = io.random(&mut nonce) {
-            deferred(done)(io, Err(os(error)));
-            return;
-        }
-        nonce[6] = (nonce[6] & 15) | 64;
-        nonce[8] = (nonce[8] & 63) | 128;
-        let mut client = String::new();
-        for (index, byte) in nonce.into_iter().enumerate() {
-            if [4, 6, 8, 10].contains(&index) {
-                client.push('-');
-            }
-            client.push_str(&format!("{byte:02x}"));
-        }
-        let revisions = self.revision.clone();
-        let session = binding.session.clone();
-        self.change(
-            io,
-            binding,
-            "add",
-            vec![
-                ("clientUserMessageId", Data::String(&client)),
-                ("input", input(text)),
-            ],
-            Box::new(move |io, result| {
-                let result =
-                    result.and_then(|value| {
-                        queue::row(value.root().get("queuedSubmission").ok_or_else(|| {
-                            failure("queue", "No queued submission was returned.")
-                        })?)
-                    });
-                deferred(done)(
-                    io,
-                    result.map(|row| {
-                        let mut revisions = revisions.borrow_mut();
-                        let revision = revisions.entry(session).or_default();
-                        *revision += 1;
-                        row.queued(mode, *revision)
-                    }),
-                );
-            }),
-        );
+        self.enqueue(io, binding, input(text), mode, done);
+    }
+
+    fn queue_add_attached(
+        &mut self,
+        io: &mut dyn Io,
+        binding: &Binding,
+        text: &str,
+        mode: Mode,
+        attachments: &[Attachment],
+        done: Done<Queued>,
+    ) {
+        let files: Vec<&str> = attachments.iter().filter(|a| !a.image).map(|a| a.path.as_str()).collect();
+        let text = attachment::fallback(text, &files);
+        self.enqueue(io, binding, attached(&text, attachments), mode, done);
     }
 
     fn queue_edit(
@@ -1066,7 +1115,7 @@ impl Harness for Codex {
             );
             return;
         }
-        if !row.0 {
+        if !row.0 && !crate::queue::resendable(&row.2) {
             deferred(done)(
                 io,
                 Err(failure(
@@ -1375,3 +1424,7 @@ fn opened(
         io.timer(now);
     }
 }
+
+#[cfg(test)]
+#[path = "attachments.test.rs"]
+mod attachment_tests;

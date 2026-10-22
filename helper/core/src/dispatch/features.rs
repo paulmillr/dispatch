@@ -26,6 +26,12 @@ pub(crate) const TERMINALS_COALESCE: &str = "terminals.coalesce";
 /// The `terminals.activity` operation: when the server last saw activity in each node.
 pub(crate) const TERMINALS_ACTIVITY: &str = "terminals.activity";
 
+/// The `attachments.put` and `attachments.read` operations, and `attachments` on chat.send and
+/// queue.add (dispatch/attachments.rs).
+pub(crate) const ATTACHMENTS: &str = "chat.attachments";
+pub(crate) const ATTACHMENTS_PUT: &str = "attachments.put";
+pub(crate) const ATTACHMENTS_READ: &str = "attachments.read";
+
 /// The features this helper offers.
 pub(crate) const KNOWN: &[&str] = &[
     INTERACTION_OPTIONS,
@@ -36,6 +42,7 @@ pub(crate) const KNOWN: &[&str] = &[
     LAUNCH_NAMES,
     STDIO_LIVENESS,
     TERMINALS_ACTIVITY,
+    ATTACHMENTS,
 ];
 
 /// Choice ids only interaction.options clients see, appended after a producer's ordinary
@@ -64,8 +71,19 @@ pub(crate) fn legacy(interaction: &Interaction) -> Option<Interaction> {
         legacy
     })
 }
-/// Operations that exist only for a client that named their feature.
-pub(crate) const OPERATIONS: &[&str] = &[CHAT_LIST, PROJECTS_RECENT, TERMINALS_ACTIVITY];
+/// Operations that exist only for a client that named their feature, with that feature.
+pub(crate) const OPERATIONS: &[(&str, &str)] = &[
+    (CHAT_LIST, CHAT_LIST),
+    (PROJECTS_RECENT, PROJECTS_RECENT),
+    (TERMINALS_ACTIVITY, TERMINALS_ACTIVITY),
+    (ATTACHMENTS_PUT, ATTACHMENTS),
+    (ATTACHMENTS_READ, ATTACHMENTS),
+];
+
+/// The feature `method` is an operation of, if it is one of OPERATIONS.
+pub(crate) fn operation(method: &str) -> Option<&'static str> {
+    OPERATIONS.iter().find(|(name, _)| *name == method).map(|(_, feature)| *feature)
+}
 
 /// The features each client connection asked for and got.
 pub(crate) type Features = Rc<RefCell<BTreeMap<RawFd, BTreeSet<&'static str>>>>;
@@ -133,6 +151,12 @@ impl Request<'_> {
         }
         if method == TERMINALS_ACTIVITY {
             return self.terminals_activity(params);
+        }
+        if method == ATTACHMENTS_PUT {
+            return self.attachments_put(params);
+        }
+        if method == ATTACHMENTS_READ {
+            return self.attachments_read(params);
         }
         Err(Error {
             code: "unsupported",

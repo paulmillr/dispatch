@@ -57,6 +57,9 @@ pub(super) fn remove(anchor: &File, name: &str) -> io::Result<()> {
 /// A day: sessions and builds used more recently than this are kept even when unlocked, so a
 /// login waiting for its hand-off, an unread exit status, or a build about to be reused stays.
 const RECENT: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+/// A week: chat attachments stay this long after their folder last changed, so an agent may read
+/// one again later in its turn and a queued message may wait (dispatch/attachments.rs).
+const ATTACHMENTS: std::time::Duration = std::time::Duration::from_secs(7 * 24 * 60 * 60);
 
 /// Up to 1024 entries of `directory` whose names are `length` lowercase hex digits.
 fn entries(directory: &Path, length: usize) -> Vec<std::path::PathBuf> {
@@ -75,8 +78,8 @@ fn entries(directory: &Path, length: usize) -> Vec<std::path::PathBuf> {
 }
 
 /// Hold `parent/lock` through new-run creation and remove what no running helper holds: run
-/// directories, SSH session directories, and uploaded builds. Active, recent, unknown or unsafe
-/// storage is retained.
+/// directories, SSH session directories, uploaded builds, and chat attachments older than a week.
+/// Active, recent, unknown or unsafe storage is retained.
 pub(super) fn collect(parent: &Path, uid: u32) -> io::Result<File> {
     let guard = lock(&parent.join("lock"), true, true, uid)?;
     for path in entries(&parent.join("run"), 32) {
@@ -94,7 +97,10 @@ pub(super) fn collect(parent: &Path, uid: u32) -> io::Result<File> {
         if published.as_ref().is_some_and(|target| path.canonicalize().ok().as_ref() == Some(target)) {
             continue;
         }
-        let _ = unused(&path, uid);
+        let _ = unused(&path, uid, RECENT);
+    }
+    for path in entries(&parent.join(crate::api::attachment::DIRECTORY), 32) {
+        let _ = unused(&path, uid, ATTACHMENTS);
     }
     Ok(guard)
 }
@@ -166,8 +172,9 @@ fn run(path: &Path, uid: u32) -> io::Result<()> {
     Ok(())
 }
 
-/// A session or build directory that nothing changed for RECENT and no running helper locks.
-fn unused(path: &Path, uid: u32) -> io::Result<()> {
+/// A session, build or attachment directory that nothing changed for `recent` and no running
+/// helper locks.
+fn unused(path: &Path, uid: u32, recent: std::time::Duration) -> io::Result<()> {
     let anchor = File::options()
         .read(true)
         .custom_flags(FLAGS | DIRECTORY)
@@ -180,7 +187,7 @@ fn unused(path: &Path, uid: u32) -> io::Result<()> {
     for entry in fs::read_dir(path)? {
         newest = newest.max(entry?.path().symlink_metadata()?.modified()?);
     }
-    if newest.elapsed().map_or(true, |age| age < RECENT) {
+    if newest.elapsed().map_or(true, |age| age < recent) {
         return Ok(());
     }
     let owner = match lock(&path.join("lock"), false, false, uid) {

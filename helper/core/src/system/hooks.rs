@@ -122,10 +122,12 @@ pub(super) struct Hooks {
 /// - `sessions/<id>/`: an SSH login's `ready` hand-off, `bus` socket and `exit` status;
 /// - `run/<random>/`: one per helper: hook sockets and shell startup folders;
 /// - `routes/<section>/<random>`: which helpers serve each hook section;
-/// - `state/`: herdr recovery records.
+/// - `state/`: herdr recovery records, the host queue store (`state/queue/`) and the chat
+///   attachments' delivery index (`state/attachments/`);
+/// - `attachments/<32 hex>/<name>`: chat attachments' private copies (dispatch/attachments.rs).
 ///
 /// Running helpers hold `lock` in their run, session and build folders; `collect` removes the
-/// folders nobody holds.
+/// folders nobody holds, and attachment folders a week after they last changed.
 pub(super) const ROOT: &str = ".dispatch";
 
 /// The section of hook senders' ownership questions (question 1, B4): the helper answers them like any hook, recorded.

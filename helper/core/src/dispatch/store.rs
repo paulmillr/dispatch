@@ -7,7 +7,7 @@
 //! writes. Every operation must give the same result when it is applied again to a newer file
 //! (a lost checked write is retried on a fresh read).
 use crate::{
-    api::{Error, Mode, Pause, Preview, Queued},
+    api::{Attachment, Error, Mode, Pause, Preview, Queued},
     json::Data,
     wire::body,
 };
@@ -15,8 +15,11 @@ use std::path::{Path, PathBuf};
 
 /// Directory under `Io::storage`.
 pub(crate) const DIRECTORY: &str = "queue";
-/// The file format this helper writes; a file of another format is left alone.
+/// The file format this helper writes; a file of another format is left alone. A file whose
+/// items have attachments is format 2 (older helpers leave it alone: they could not send them);
+/// any other is still written as format 1.
 const FORMAT: u64 = 1;
+const ATTACHED: u64 = 2;
 /// Old queue limits: 50 items, 1 MiB of text each (ChatCoordinator.swift:1617-1618).
 pub(crate) const ITEMS: usize = 50;
 pub(crate) const TEXT: usize = 1 << 20;
@@ -75,6 +78,8 @@ pub(crate) struct Item {
     pub claim: Option<Owner>,
     /// A client of this helper is editing the item in its composer; sends wait.
     pub editing: Option<Owner>,
+    /// Stored attachments (chat.attachments): such an item is sent as it is, never edited.
+    pub attachments: Vec<Attachment>,
 }
 
 /// One conversation's queue as stored.
@@ -126,7 +131,7 @@ pub(crate) enum Outcome {
 pub(crate) enum Op {
     /// Read only (list, open, refresh).
     Read,
-    Add { id: String, text: String, mode: Mode, command: bool, binding: Bound },
+    Add { id: String, text: String, mode: Mode, command: bool, binding: Bound, attachments: Vec<Attachment> },
     /// `text: None` removes; `command: None` keeps the item's classification.
     Update { id: String, revision: u64, text: Option<String>, command: Option<bool>, binding: Bound },
     Remove { id: String, revision: u64 },
@@ -241,7 +246,7 @@ impl Record {
     pub(crate) fn apply(&mut self, op: &Op) -> Result<Answer, Error> {
         match op {
             Op::Read => {}
-            Op::Add { id, text, mode, command, binding } => {
+            Op::Add { id, text, mode, command, binding, attachments } => {
                 if let Some(item) = self.items.iter().find(|item| item.id == *id) {
                     // A retry after a write this helper could not confirm: already added.
                     return Ok(Answer::Added(queued(item)));
@@ -260,6 +265,7 @@ impl Record {
                     pause: None,
                     claim: None,
                     editing: None,
+                    attachments: attachments.clone(),
                 };
                 let answer = queued(&item);
                 self.items.push(item);
@@ -269,6 +275,9 @@ impl Record {
                 let index = self.find(id, *revision)?;
                 if self.items[index].claim.is_some() {
                     return Err(busy());
+                }
+                if text.is_some() && !self.items[index].attachments.is_empty() {
+                    return Err(Error { code: "invalid_input", message: "A message with attachments cannot be edited".into() });
                 }
                 match text {
                     None => {
@@ -461,7 +470,7 @@ impl Record {
             .items
             .iter()
             .map(|item| {
-                Data::Object(vec![
+                let mut fields = vec![
                     ("id", Data::String(&item.id)),
                     ("revision", Data::Unsigned(item.revision)),
                     ("text", Data::String(&item.text)),
@@ -478,11 +487,19 @@ impl Record {
                     ("pause", item.pause.map_or(Data::Null, |pause| Data::String(pause_name(pause)))),
                     ("claim", optional(&item.claim)),
                     ("editing", optional(&item.editing)),
-                ])
+                ];
+                if !item.attachments.is_empty() {
+                    let attachments = item.attachments.iter().map(|attachment| {
+                        Data::Object(vec![("path", Data::String(&attachment.path)), ("image", Data::Bool(attachment.image))])
+                    });
+                    fields.push(("attachments", Data::Array(attachments.collect())));
+                }
+                Data::Object(fields)
             })
             .collect();
+        let attached = self.items.iter().any(|item| !item.attachments.is_empty());
         body::encode_plain(&Data::Object(vec![
-            ("format", Data::Unsigned(FORMAT)),
+            ("format", Data::Unsigned(if attached { ATTACHED } else { FORMAT })),
             ("harness", Data::String(&self.harness)),
             ("session", Data::String(&self.session)),
             ("mux", Data::String(&self.mux)),
@@ -502,7 +519,7 @@ impl Record {
     pub(crate) fn decode(bytes: &[u8]) -> Result<Self, Error> {
         let corrupt = || Error { code: "storage", message: "The stored queue is unreadable".into() };
         let value = body::decode_plain(bytes)?;
-        if value.get("format").and_then(Data::unsigned) != Some(FORMAT) {
+        if !value.get("format").and_then(Data::unsigned).is_some_and(|format| format == FORMAT || format == ATTACHED) {
             return Err(Error { code: "storage", message: "The stored queue has another format".into() });
         }
         let string = |value: &Data<'_>, key: &str| value.get(key).and_then(Data::string).map(str::to_owned).ok_or_else(corrupt);
@@ -550,6 +567,19 @@ impl Record {
                     },
                     claim: owner(item.get("claim"))?,
                     editing: owner(item.get("editing"))?,
+                    attachments: match item.get("attachments") {
+                        None => Vec::new(),
+                        Some(list) => list
+                            .array()
+                            .ok_or_else(corrupt)?
+                            .map(|value| {
+                                Ok(Attachment {
+                                    path: string(value, "path")?,
+                                    image: value.get("image").and_then(Data::boolean).ok_or_else(corrupt)?,
+                                })
+                            })
+                            .collect::<Result<_, Error>>()?,
+                    },
                 })
             })
             .collect::<Result<Vec<_>, Error>>()?;
@@ -573,12 +603,18 @@ impl Record {
 }
 
 pub(crate) fn queued(item: &Item) -> Queued {
+    let mut preview = Vec::new();
+    if !item.text.is_empty() || item.attachments.is_empty() {
+        preview.push(Preview::Text(item.text.clone()));
+    }
+    let kind = |attachment: &Attachment| if attachment.image { "image" } else { "file" };
+    preview.extend(item.attachments.iter().map(|attachment| Preview::Attachment(kind(attachment).into())));
     Queued {
         id: item.id.clone(),
         mode: item.mode,
         revision: item.revision,
-        preview: vec![Preview::Text(item.text.clone())],
-        editable: true,
+        preview,
+        editable: item.attachments.is_empty(),
         editing: item.editing.is_some(),
         paused: item.pause,
         error: None,

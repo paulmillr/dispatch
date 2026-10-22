@@ -478,4 +478,58 @@ import XCTest
         XCTAssertEqual((text.textStorage?.attribute(.font, at: 9, effectiveRange: nil) as? NSFont)?.fontName, "Menlo-Regular")
         XCTAssertEqual(text.string, content); XCTAssertEqual(text.selectedRange(), selected)
     }
+
+    /// ⌘V and drops read the pasteboard in one place (ComposerTextView.readSelection): image data and Finder's files
+    /// become attachments, a files view's rows type their quoted host paths, and text pastes as text.
+    func testPasteOfImageDataOrFilesAttachesAndTextStaysText() throws {
+        defer { close() }
+        let text = editor()
+        var attached: [[ChatAttachmentSource]] = [], chosen = 0
+        text.canAttach = { true }
+        text.attach = { attached.append($0) }
+        text.chooseAttachments = { _ in chosen += 1 }
+        let board = NSPasteboard(name: .init("dispatch-test-" + System.uuid().uuidString))
+        defer { board.releaseGlobally() }
+        let png = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 4, pixelsHigh: 4, bitsPerSample: 8, samplesPerPixel: 4,
+                                                 hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)?
+            .representation(using: .png, properties: [:]))
+
+        board.clearContents(); board.setData(png, forType: .png)
+        XCTAssertTrue(text.readSelection(from: board, type: .png))
+        XCTAssertEqual(attached.last, [.data(name: "Pasted image.png", png)], "A screenshot on the clipboard")
+        XCTAssertEqual(text.string, "")
+
+        let url = System.temporary.appendingPathComponent("Example notes.txt")
+        board.clearContents(); board.writeObjects([url as NSURL])
+        XCTAssertTrue(text.readSelection(from: board, type: .fileURL))
+        XCTAssertEqual(attached.last, [.file(url)], "A file copied in Finder")
+        XCTAssertEqual(text.string, "")
+
+        // Copied cells carry a picture of themselves too: they paste as text.
+        board.clearContents(); board.declareTypes([.string, .png], owner: nil)
+        board.setString("cells", forType: .string); board.setData(png, forType: .png)
+        XCTAssertTrue(text.readSelection(from: board, type: .string))
+        XCTAssertEqual(text.string, "cells")
+        XCTAssertEqual(attached.count, 2)
+
+        // A files view's row is already on a host: its path is typed, quoted.
+        board.clearContents()
+        board.writeObjects([FilesDragController.localItem(FilesDragPayload(endpoint: .local, session: System.uuid(), paths: ["/srv/example/log book.txt"]))])
+        XCTAssertTrue(text.readSelection(from: board, type: .filesPaths))
+        XCTAssertEqual(text.string, "cells/srv/example/log\\ book.txt")
+        XCTAssertEqual(attached.count, 2)
+        XCTAssertEqual(session.draft, text.string)
+
+        // Without attachments (a command, an older helper) the text view keeps its own paste.
+        text.canAttach = { false }
+        board.clearContents(); board.setData(png, forType: .png)
+        _ = text.readSelection(from: board, type: .png)
+        XCTAssertEqual(attached.count, 2)
+
+        let shortcut = key(0, "A", [.command, .shift], ignoringModifiers: "a")
+        XCTAssertFalse(text.performKeyEquivalent(with: shortcut), "No open panel without attachments")
+        text.canAttach = { true }
+        XCTAssertTrue(text.performKeyEquivalent(with: shortcut))
+        XCTAssertEqual(chosen, 1)
+    }
 }

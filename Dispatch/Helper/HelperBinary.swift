@@ -326,7 +326,8 @@ public enum HelperBinary {
 "write",
 "written",
 "zoomed",
-"integration"
+"integration",
+"attachments"
 ]
     public static let records: [[String]] = [
 ["page", "snapshot", "state"],

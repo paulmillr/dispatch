@@ -147,6 +147,18 @@ pub fn row(value: Value<'_>) -> Result<Row, Error> {
     })
 }
 
+/// Input a steer may send again as it is: text without elements, and local images.
+pub(crate) fn resendable(input: &[u8]) -> bool {
+    let Ok(document) = dispatch_helper_core::json::Json::parse(input) else { return false };
+    document.root().array().is_some_and(|mut items| {
+        items.all(|item| match item.get("type").and_then(Value::string) {
+            Some("text") => item.get("text_elements").and_then(Value::array).is_none_or(|mut a| a.next().is_none()),
+            Some("localImage") => item.get("path").and_then(Value::string).is_some(),
+            _ => false,
+        })
+    })
+}
+
 pub fn page(value: Value<'_>) -> Result<Page, Error> {
     let values = value
         .get("data")

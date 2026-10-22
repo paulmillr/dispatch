@@ -110,11 +110,11 @@ impl Request<'_> {
     /// Protocol result: Page for {terminal, session?, earlier?} (a live binding); Archive for {transcript} alone (with terminal: invalid_input)
     pub(super) fn page(&mut self, p: &Data<'_>) -> Result<(), Error> {
         if let Some((harness, source)) = self.transcript(p)? {
-            let done = self.done(None);
+            let done = self.named_archive(&harness, &source.session)(self.done(None));
             harness.borrow_mut().read(self.io, &source, done);
         } else {
             let (_, _, harness, binding) = self.agent(p)?;
-            let done = self.done(None);
+            let done = self.named(&harness, &binding)(self.done(None));
             harness.borrow_mut().history(
                 self.io,
                 &binding,
@@ -214,6 +214,12 @@ impl Request<'_> {
                 code: "io",
                 message: e.to_string(),
             })?;
+            let attachments = features::enabled(&self.helper.features, self.fd, features::ATTACHMENTS)
+                .then(|| self.helper.held.clone());
+            if let Some(held) = &attachments {
+                let key = harness.borrow().key().to_owned();
+                attachments::warm(self.io, held, &key, &source.session);
+            }
             self.helper.archives.borrow_mut().insert(
                 (self.fd, self.id),
                 Followed {
@@ -223,6 +229,7 @@ impl Request<'_> {
                     reading: false,
                     again: false,
                     state: None,
+                    attachments,
                 },
             );
             follow(
@@ -266,6 +273,7 @@ impl Request<'_> {
         let updates = self.helper.updates.clone();
         let ready = self.done(Some("chat.history"));
         let done = self.done(Some("chat.history"));
+        let named = self.named(&harness, &binding);
         let history = harness.clone();
         let current = binding.clone();
         harness.borrow_mut().state(
@@ -311,11 +319,7 @@ impl Request<'_> {
                     );
                 }
                 let binding = chat.binding.clone();
-                history.borrow_mut().history(
-                    io,
-                    &binding,
-                    None,
-                    deferred(Box::new(move |io, result| {
+                let page: Done<Page> = Box::new(move |io, result| {
                         chat.pending = false;
                         // State notifications may have advanced while history was loading.
                         // Keep the announced capabilities, without repeating the older snapshot.
@@ -325,8 +329,8 @@ impl Request<'_> {
                             Err(error) => chat.history_error = Some(error),
                         }
                         done(io, Ok(chat));
-                    })),
-                );
+                });
+                history.borrow_mut().history(io, &binding, None, deferred(named(page)));
             })),
         );
         Ok(())
@@ -336,7 +340,7 @@ impl Request<'_> {
 /// Read a followed archive from its cursor: the first and each later read with records or a
 /// changed State are chat.archive notifications; an error ends the request. Changes during a read cause one more.
 pub(crate) fn follow(io: &mut dyn Io, archives: &Archives, replies: &Replies, key: (i32, u64)) {
-    let (harness, source, first) = {
+    let (harness, source, first, attachments) = {
         let mut archives = archives.borrow_mut();
         let Some(followed) = archives.get_mut(&key) else {
             return;
@@ -346,15 +350,18 @@ pub(crate) fn follow(io: &mut dyn Io, archives: &Archives, replies: &Replies, ke
             return;
         }
         followed.reading = true;
-        (followed.harness.clone(), followed.source.clone(), followed.state.is_none())
+        (followed.harness.clone(), followed.source.clone(), followed.state.is_none(), followed.attachments.clone())
     };
-    let (archives, replies) = (archives.clone(), replies.clone());
+    let (archives, replies, session) = (archives.clone(), replies.clone(), source.session.clone());
     // Every read is a notification while the watch lives; only an error responds (ends it).
     let reply = super::reply(replies.clone(), key.0, key.1, Some("chat.archive"));
     harness.borrow_mut().read(
         io,
         &source,
-        Box::new(move |io, result: Result<Archive, Error>| {
+        Box::new(move |io, mut result: Result<Archive, Error>| {
+            if let (Some(held), Ok(archive)) = (&attachments, &mut result) {
+                attachments::shown(held, &session, &mut archive.page.records);
+            }
             let mut changed = false;
             let mut behind = false;
             let again = {

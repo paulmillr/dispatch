@@ -18,12 +18,13 @@ final class MobileCommandsTests: XCTestCase {
     /// terminal keeps Esc, Tab, Control, Option, arrows and function keys, and the app keeps ⌘.
     func testEveryChordHasCommandAndTheTerminalKeepsTheRest() throws {
         let chords = MobileCommand.allCases.compactMap(\.shortcut)
-        XCTAssertEqual(chords.count, 19)
+        XCTAssertEqual(chords.count, 20)
         for chord in chords { XCTAssertTrue(chord.modifiers.contains(.command), "\(chord.key.character)") }
         let names = MobileCommand.allCases.compactMap(\.chord)
         XCTAssertEqual(Set(names).count, names.count, "\(names)")
         XCTAssertEqual(MobileCommand.closeSpace.chord, "⇧⌘W")
         XCTAssertEqual(MobileCommand.newChat.chord, "⌥⌘N")
+        XCTAssertEqual(MobileCommand.attach.chord, "⇧⌘A", "Mail's Attach Files…")
         XCTAssertEqual(MobileCommand.previousTab.chord, "⌘[")
         XCTAssertEqual(MobileCommand.toggleSidebar.chord, "⌃⌘S", "The Mac's")
         XCTAssertEqual(MobileCommand.toggleSidebarAlias.key, "\\")
@@ -41,7 +42,7 @@ final class MobileCommandsTests: XCTestCase {
         XCTAssertEqual(MobileCommand.groups(.file).map { $0.map(\.title) },
                        [["New Tab", "New Space…", "New Chat…", "New Host…"], ["Rename Tab…", "Rename Space…"],
                         ["Close Tab", "Close Space…", "Detach Space"]])
-        XCTAssertEqual(MobileCommand.groups(.edit).joined().map(\.title), ["Clear Screen"])
+        XCTAssertEqual(MobileCommand.groups(.edit).joined().map(\.title), ["Clear Screen", "Attach Files…"])
         XCTAssertEqual(MobileCommand.groups(.view).joined().map(\.title),
                        ["Increase Font Size", "Decrease Font Size", "Reset Font Size", "Toggle Sidebar", "Switch Terminal / Chat"])
         XCTAssertEqual(MobileCommand.groups(.navigate).joined().map(\.title),
@@ -93,7 +94,8 @@ final class MobileCommandsTests: XCTestCase {
                        [.renameSpace, .closeSpace, .detachSpace])
         navigator.path = [.space(docs), .tab(tab(studio, "tmux:docs:@1"))]
         XCTAssertEqual(navigator.enabledCommands(presenting: false).subtracting(always),
-                       terminal.union([.renameSpace, .closeSpace, .detachSpace, .renameTab, .closeTab, .previousTab, .nextTab]))
+                       terminal.union([.renameSpace, .closeSpace, .detachSpace, .renameTab, .closeTab, .previousTab, .nextTab,
+                                       .attach]), "An agent's tab: Attach Files… for its chat")
         navigator.picking = true
         XCTAssertEqual(navigator.enabledCommands(presenting: false), [], "New tab's picker is up")
         navigator.picking = false

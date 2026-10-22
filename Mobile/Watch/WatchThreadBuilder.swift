@@ -53,7 +53,8 @@ enum WatchThreadBuilder {
                     WatchItem(id: id, kind: kind, text: WatchText.plain(item.text), time: time, turn: turn.id, caption: caption)
                 }
                 switch item.kind {
-                case .user: result.append(text(.user))
+                case .user:
+                    result.append(WatchItem(id: id, kind: .user, text: Self.userText(item), time: time, turn: turn.id))
                 case .assistant:
                     let caption = index == lastAgent && turn.ended != nil ? ChatTurnSummary(turn).caption : nil
                     result.append(text(.agent, caption: caption))
@@ -69,9 +70,18 @@ enum WatchThreadBuilder {
             }
         }
         if let prompt = session.optimisticPrompt {
-            result.append(WatchItem(id: prompt.id, kind: .user, text: WatchText.plain(prompt.text)))
+            result.append(WatchItem(id: prompt.id, kind: .user, text: Self.userText(prompt)))
         }
         return result
+    }
+
+    /// A user message's text; one with attachments starts with a line that names them ("📎 2 images"): the watch shows
+    /// text only.
+    static func userText(_ item: ChatItem) -> String {
+        let text = WatchText.plain(item.text)
+        guard !item.attachments.isEmpty else { return text }
+        let line = "📎 " + ChatAttachmentSummary.text(item.attachments)
+        return text.isEmpty ? line : line + "\n" + text
     }
 
     /// Verified is live; detached is offline with the host's problem (or `offline`, the phone's own reason).

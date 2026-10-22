@@ -325,6 +325,9 @@ that side question explicitly requests a mutation.\n\nBTW question:\n";
                 if row.text.is_empty() && tag != "user_message" {
                     return vec![];
                 }
+                // Attachments arrive as path lines after the text (the text fallback): only
+                // chat.attachments clients see them as blocks (core attachments::view).
+                row.attached = dispatch_helper_core::api::attachment::attached(&row.text, None, Vec::new());
             }
             Kind::Assistant | Kind::Reasoning => {
                 if *kind == Kind::Reasoning {

@@ -171,8 +171,8 @@ exec "$HOME/.dispatch/bin/versions/<sha256>/dispatch-helper" --remote --capabili
 The grant is the Mac's full profile with hooks less file writes and Git reads (`HelperGrant`: no `file.write` or
 `git.read`; Chat off drops `hooks.configure` and `agent.*`). The
 phone's hello features (`interaction.options`, `chat.list`, `projects.recent`, `multiplexers.versions`,
-`terminals.coalesce`, `launch.names`, `stdio.liveness`, `terminals.activity`; the Mac names only
-`terminals.coalesce`) are specified in `helper/PROTOCOL.md`;
+`terminals.coalesce`, `launch.names`, `stdio.liveness`, `terminals.activity`, `chat.attachments`; the Mac names
+`terminals.coalesce` and `chat.attachments`) are specified in `helper/PROTOCOL.md`;
 what they let the helper
 do on the host, and the login-shell PATH probe, are in [security](security.md#dispatch-for-iphone). The client must:
 
@@ -335,6 +335,31 @@ race (replay sees a second ownership ask).
   push in the detail column's own stack. In the narrowest sidebar (under 300 points) an Agents row puts its host at
   the start of line two so the name stays whole. Chips, the steps disclosure and the composer's buttons light under
   a pointer.
+- **Attachments.** Offered only while the conversation's helper accepted `chat.attachments` (hello `features`) and
+  the conversation is verified, and not for a command draft. The composer's "+" picks photos and screenshots
+  (`PhotosPicker`, several, no library permission) or files (`fileImporter`, read under their security scope); an
+  image pasted into the field (a pasteboard with images and no text; text pastes as ever) and, on an iPad, photos or
+  files dropped on the composer attach too, as does Edit › Attach Files… (⇧⌘A, the file picker). The phone reads each
+  file once, `ChatAttachmentImage.prepare` re-encodes or scales images off the main actor (and drops a photo's GPS,
+  Exif, IPTC and camera metadata, its orientation kept: a JPEG is copied without re-encoding, a PNG re-encoded
+  losslessly), `attachments.put` stores the copy on the host, and the draft the upload was started for keeps it
+  (`ChatDraft.attachments`, with a small thumbnail), also when the user switched drafts meanwhile; if that draft is
+  gone, the chip moves to the current one with Retry. A strip above the field shows the current draft's (thumbnail or
+  document, a spinner while it uploads, Retry after a failure, ✕ to remove; uploads are session state, dropped by a
+  quit); more than ten, an unreadable file or one too large even scaled says so there and
+  uploads nothing. A draft with attachments sends without text (not while an upload runs); `chat.send` and `queue.add`
+  carry the host paths (`attachments`). The optimistic bubble shows the thumbnails and becomes the transcript's row in
+  place (`AgentInput.records` counts the record's image and file blocks; `ChatAttachment.merge` keeps the thumbnails).
+  User messages show images in a grid (one large, else up to four a row) and file chips above the text; a tap opens
+  them full screen (an image at the size the host keeps). An image without a thumbnail (another device's, a reload)
+  is fetched with `attachments.read`, two at a time, into a memory cache keyed by host and path
+  (`MobileAttachmentThumbnails`, never written); one the host no longer keeps (`not_found`, `invalid_request`) stays a
+  placeholder, a read that failed otherwise is tried again after a doubling wait (5 s to 5 min), and an image dropped
+  from the cache is read again when shown. Full screen, an image the host's copy of which cannot be read shows its
+  thumbnail, else why. Queued messages keep their attachments (`chat-queue.json` without thumbnails) and are not edited
+  in place, but "send now" steers them; after a reconnect a queued message counts as delivered (or as a helper row)
+  only with as many attachments (the same host copies where the record names them). The watch shows "📎 2 images"
+  before such a message's text.
 - **Terminal.** Output is coalesced (up to 256 KiB per parse) because tmux sends one notification per line. An
   attach's tmux history replay is one notification; the presence holds a whole helper reply (64 MiB) unparsed, since
   overflow ends the attachment. Only a lost stream of the current attachment detaches the feed, never one that ended
@@ -453,7 +478,7 @@ sheet).
 | --- | --- |
 | Dispatch | Settings… ⌘, |
 | File | New Tab ⌘T, New Space… ⌘N, New Chat… ⌥⌘N, New Host…; Rename Tab…, Rename Space…; Close Tab ⌘W, Close Space… ⇧⌘W, Detach Space |
-| Edit | the system's, and Clear Screen ⌘K |
+| Edit | the system's, and Clear Screen ⌘K; Attach Files… ⇧⌘A |
 | View | Increase, Decrease, Reset Font Size ⌘+ ⌘- ⌘0; Toggle Sidebar ⌃⌘S (and the Mac's hidden `⌘\`), Switch Terminal / Chat ⇧⌘C |
 | Navigate | Spaces ⌘1, Agents ⌘2; Next and Previous Attention ⌘J ⇧⌘J; Previous and Next Tab ⌘[ ⌘] |
 | Help | Keyboard Shortcuts ⌘/ |

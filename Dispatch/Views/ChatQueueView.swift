@@ -147,12 +147,13 @@ struct ChatQueueView: View {
                     .font(theme.typography.detail).monospacedDigit()
                     .foregroundStyle(theme.muted.opacity(0.7))
                     .fixedSize()
-                Text(editing ? "editing below…" : message.text)
+                Text(editing ? "editing below…" : Self.text(message))
                     .font(theme.typography.body).italic(editing)
                     .foregroundStyle(editing ? theme.muted.opacity(0.65) : selected ? theme.ink : theme.muted)
                     .lineLimit(selected && !editing ? 3 : 1).truncationMode(.tail)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                attachmentCount(message)
                 // Reserved while hidden, so hover never changes the text's width.
                 glassActions(message, index: index)
                     .opacity(selected && !editing ? 1 : 0)
@@ -161,7 +162,7 @@ struct ChatQueueView: View {
                     .disabled(!selected || editing)
             }
             .accessibilityElement(children: .contain)
-            .accessibilityLabel("Queued message \(index + 1): \(editing ? "editing below" : message.text)")
+            .accessibilityLabel("Queued message \(index + 1): \(editing ? "editing below" : Self.spoken(message))")
         } else {
             let controls = actions(message, index: index)
                 .opacity(selected && !editing ? 1 : 0)
@@ -190,11 +191,12 @@ struct ChatQueueView: View {
                 .font(theme.typography.detail).monospacedDigit()
                 .foregroundStyle(theme.muted.opacity(0.7))
                 .fixedSize()
-            Text(editing ? "editing below…" : message.text)
+            Text(editing ? "editing below…" : Self.text(message))
                 .font(theme.typography.body).italic(editing)
                 .foregroundStyle(editing ? theme.muted.opacity(0.65) : selected ? theme.ink : theme.muted)
                 .lineLimit(3).fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
+            attachmentCount(message)
         }
         .padding(.horizontal, 11).padding(.vertical, 6)
         .overlay {
@@ -202,7 +204,32 @@ struct ChatQueueView: View {
                 .strokeBorder(selected && !editing ? theme.muted.opacity(0.6) : theme.border,
                               style: StrokeStyle(lineWidth: 1, dash: selected && !editing ? [] : [4, 3]))
         }
-        .accessibilityLabel("Queued message \(index + 1): \(editing ? "editing below" : message.text)")
+        .accessibilityLabel("Queued message \(index + 1): \(editing ? "editing below" : Self.spoken(message))")
+    }
+
+    /// What was typed; a message of attachments alone shows their names.
+    static func text(_ message: ChatQueuedMessage) -> String {
+        message.text.isEmpty && !message.attachments.isEmpty ? message.attachments.map(\.name).joined(separator: ", ") : message.text
+    }
+
+    static func spoken(_ message: ChatQueuedMessage) -> String {
+        let count = message.attachments.count
+        return count == 0 ? message.text : text(message) + (count == 1 ? ", 1 attachment" : ", \(count) attachments")
+    }
+
+    /// A paperclip and how many attachments the message carries, their names on hover.
+    @ViewBuilder private func attachmentCount(_ message: ChatQueuedMessage) -> some View {
+        if !message.attachments.isEmpty {
+            HStack(spacing: 2) {
+                Image(systemName: "paperclip")
+                Text("\(message.attachments.count)").monospacedDigit()
+            }
+            .font(theme.typography.detail).foregroundStyle(theme.muted)
+            .fixedSize()
+            .help(message.attachments.map(\.name).joined(separator: "\n"))
+            .accessibilityHidden(true)
+            .accessibilityIdentifier("chat-queue-attachments-\(message.id)")
+        }
     }
 
     @ViewBuilder private func dragHandle(_ message: ChatQueuedMessage) -> some View {
@@ -279,7 +306,8 @@ struct ChatQueueView: View {
     }
 
     private func editDisabled(_ message: ChatQueuedMessage) -> Bool {
-        !session.drafts.shape.isEmpty || session.editingQueuedID != nil || !message.editable
+        !session.drafts.shape.isEmpty || session.editingQueuedID != nil || !message.editable || !message.attachments.isEmpty
+            || !session.draftUploads.isEmpty
     }
 
     @ViewBuilder private func actionButtons(_ message: ChatQueuedMessage, index: Int) -> some View {

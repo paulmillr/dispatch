@@ -30,6 +30,7 @@ struct ChatThreadView: View {
     @State private var details: ChatThreadRow?
     @State private var step: ChatStep?
     @State private var settings = false
+    @State private var previewing: ChatAttachment?
     @State private var column: CGFloat = 370
     @FocusState private var focused: Bool
     /// The software keyboard floats (an iPad): the composer stays at the bottom (`MobileKeyboardReader`).
@@ -81,8 +82,10 @@ struct ChatThreadView: View {
                          send: { session.send() },
                          steer: session.working ? { session.send(steer: true) } : nil,
                          stop: { session.stop() },
+                         attachments: attachments,
                          dictationOwner: ObjectIdentifier(session), multiline: multiline)
         }
+        .environment(\.chatOpenAttachment, { previewing = $0 })
         .background(Color.canvas)
         // A floating keyboard sits over the thread, as the terminal's capsule leaves it: SwiftUI's inset for it lifted
         // the composer part of the way, under the keyboard. The user moves the keyboard; a docked one still raises it.
@@ -110,6 +113,30 @@ struct ChatThreadView: View {
         .sheet(isPresented: $settings) {
             ChatSettingsSheet(session: session, memory: memory)
         }
+        .fullScreenCover(item: $previewing) { attachment in
+            MobileAttachmentPreview(attachment: attachment, host: session.key.host, read: read)
+        }
+    }
+
+    /// Reads a stored attachment from this conversation's host (`attachments.read`).
+    private var read: @MainActor (String) async throws -> Data? {
+        { [session] path in try await session.attachmentBytes(path) }
+    }
+
+    /// The composer's attachments (docs/ios.md, Attachments): offered while the helper takes them; what the draft holds
+    /// and the uploads still show (and can be removed) after the link drops.
+    private var attachments: ComposerAttachments? {
+        let chips = ComposerAttachments.chips(session)
+        guard session.attachmentsAvailable || !chips.isEmpty || session.attachmentError != nil else { return nil }
+        let stored = session.drafts.current.attachments
+        return ComposerAttachments(
+            chips: chips, error: session.attachmentError, enabled: session.canAttach,
+            remaining: max(0, ChatAttachment.maximumCount - stored.count - session.draftUploads.count),
+            add: { session.attach($0) }, remove: { session.removeAttachment($0) }, retry: { session.retryUpload($0) },
+            open: { id in
+                if let attachment = stored.first(where: { $0.id == id }) { previewing = attachment }
+            },
+            dismissError: { session.attachmentError = nil })
     }
 
     /// The composer's hint (M4a, M4c, M5a, M5c).
@@ -151,7 +178,7 @@ struct ChatThreadView: View {
             }
         }
         if let prompt = session.optimisticPrompt {
-            ChatBubble(side: .user) { Text(prompt.text) }
+            ChatUserMessage(text: prompt.text, attachments: prompt.attachments, host: session.key.host, read: read)
                 .id(prompt.id)
         }
         ForEach(session.questions) { question in
@@ -166,7 +193,7 @@ struct ChatThreadView: View {
     @ViewBuilder private func rowView(_ row: ChatThreadRow) -> some View {
         switch row.kind {
         case .user:
-            ChatBubble(side: .user) { Text(row.item.text) }
+            ChatUserMessage(text: row.item.text, attachments: row.item.attachments, host: session.key.host, read: read)
                 .contextMenu { Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = row.item.text } }
         case .agent(let summary):
             VStack(spacing: 5) {

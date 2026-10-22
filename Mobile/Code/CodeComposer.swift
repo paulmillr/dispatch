@@ -1,6 +1,8 @@
 import Dictation
+import PhotosUI
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 /// The composer with code (M5e), with a small interface (the draft, a placeholder, the trailing slot's state and its
 /// actions): "+" for attachments, the field, and the slot (mic while the draft is empty, Stop while the agent works
@@ -13,7 +15,9 @@ import UIKit
 /// "Paste as code". With a hardware keyboard the keys follow the Mac's composer (`ComposerHardwareKeys`): Return sends
 /// and Shift-Return starts a new line, which puts the draft in editor mode, where Return inserts newlines and ⌘Return
 /// sends; ⌥Return steers, ⌘E toggles editor mode, Esc leaves editor mode, else stops a running turn, else leaves the
-/// field. The key row stays away then: the keyboard has every key it offers.
+/// field. The key row stays away then: the keyboard has every key it offers. With `attachments`, "+" picks photos or
+/// files, an image pasted into the field or a drop on the composer attaches, and a strip above the field shows them
+/// (docs/ios.md, Attachments); a draft with attachments sends without text.
 struct CodeComposer: View {
     enum Slot: Equatable { case mic, send, stop }
 
@@ -26,7 +30,8 @@ struct CodeComposer: View {
     var send: () -> Void
     var steer: (() -> Void)?
     var stop: () -> Void
-    var attach: () -> Void = {}
+    /// What "+", a paste and a drop attach to and the strip shows; nil: attaching is not offered.
+    var attachments: ComposerAttachments? = nil
     /// Whose dictation the mic starts and shows (the conversation).
     var dictationOwner: AnyHashable = "composer"
     /// The draft's editor mode (`ChatDraft.multiline`): Return inserts a newline from a hardware keyboard.
@@ -34,13 +39,26 @@ struct CodeComposer: View {
 
     @State private var editor = CodeEditorModel()
     @State private var keyboard = HardwareKeyboard.shared
+    @State private var choosingPhotos = false
+    @State private var choosingFiles = false
+    @State private var photos: [PhotosPickerItem] = []
+    @State private var dropTargeted = false
+    @State private var visible = false
     @ReduceMotion private var reduceMotion
 
-    static func slot(text: String, working: Bool, dictating: Bool = false) -> Slot {
+    /// The trailing slot: send for text or attachments, else Stop while the agent works, else the mic.
+    static func slot(text: String, working: Bool, dictating: Bool = false, attached: Bool = false) -> Slot {
         if dictating { return .mic }
-        let empty = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let empty = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !attached
         return empty ? (working ? .stop : .mic) : .send
     }
+
+    /// Edit › Attach Files… (⇧⌘A, `MobileCommands`): the composer on screen opens its file picker.
+    static let attachRequested = Notification.Name("DispatchMobileComposerAttach")
+
+    private var attaching: Bool { attachments?.enabled == true && (attachments?.remaining ?? 0) > 0 }
+    /// Stored attachments, not running or failed uploads: what a send carries.
+    private var attached: Bool { attachments?.chips.contains { !$0.uploading && $0.error == nil } == true }
 
     private var dictation: Dictation { .shared }
 
@@ -69,41 +87,51 @@ struct CodeComposer: View {
     var body: some View {
         let stacked = Self.stacked(text)
         VStack(spacing: 0) {
-            HStack(alignment: .bottom, spacing: 10) {
-                Menu {
-                    Button("Photo or screenshot", systemImage: "photo") {}.disabled(true)
-                    Button("File", systemImage: "doc") {}.disabled(true)
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 18, weight: .medium))
-                        .foregroundStyle(Color.primary.opacity(0.75))
-                        .frame(width: 34, height: 34)
-                        .background(Color.primary.opacity(0.1), in: Circle())
-                        .contentShape(.hoverEffect, Circle())
-                        .hoverEffect(.highlight)
+            VStack(spacing: 0) {
+                if let attachments, !attachments.chips.isEmpty || attachments.error != nil {
+                    ComposerAttachmentStrip(attachments: attachments)
+                        .padding(.top, 4)
+                        .transition(.opacity)
                 }
-                .accessibilityLabel("Attach")
-                .padding(.bottom, 1)
-                VStack(alignment: .trailing, spacing: 6) {
-                    HStack(alignment: .bottom, spacing: 6) {
-                        CodeEditorField(text: $text, placeholder: placeholder, focus: focus, editor: editor, send: send,
-                                        keyState: { (multiline.wrappedValue, working) }, keyAction: perform)
-                            .frame(height: editor.height)
-                            .focused(focus)
-                        if !stacked { slot.padding(.bottom, 4) }
+                HStack(alignment: .bottom, spacing: 10) {
+                    Menu {
+                        Button("Photo or screenshot", systemImage: "photo") { choosingPhotos = true }.disabled(!attaching)
+                        Button("File", systemImage: "doc") { choosingFiles = true }.disabled(!attaching)
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: 18, weight: .medium))
+                            .foregroundStyle(Color.primary.opacity(0.75))
+                            .frame(width: 34, height: 34)
+                            .background(Color.primary.opacity(0.1), in: Circle())
+                            .contentShape(.hoverEffect, Circle())
+                            .hoverEffect(.highlight)
                     }
-                    if stacked { slot }
+                    .accessibilityLabel("Attach")
+                    .padding(.bottom, 1)
+                    VStack(alignment: .trailing, spacing: 6) {
+                        HStack(alignment: .bottom, spacing: 6) {
+                            CodeEditorField(text: $text, placeholder: placeholder, focus: focus, editor: editor, send: send,
+                                            keyState: { (multiline.wrappedValue, working) }, keyAction: perform,
+                                            pasteImages: attaching ? attachments?.add : nil)
+                                .frame(height: editor.height)
+                                .focused(focus)
+                            if !stacked { slot.padding(.bottom, 4) }
+                        }
+                        if stacked { slot }
+                    }
+                    .padding(.leading, 14)
+                    .padding(.trailing, stacked ? 6 : 4)
+                    .padding(.top, stacked ? 1 : 0)
+                    .padding(.bottom, stacked ? 6 : 0)
+                    .frame(minHeight: 36)
+                    .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .strokeBorder(dropTargeted ? Color.dispatchPink : Color(uiColor: .tertiaryLabel), lineWidth: dropTargeted ? 1.5 : 0.5))
+                    .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { editor.pillWidth = $0 }
                 }
-                .padding(.leading, 14)
-                .padding(.trailing, stacked ? 6 : 4)
-                .padding(.top, stacked ? 1 : 0)
-                .padding(.bottom, stacked ? 6 : 0)
-                .frame(minHeight: 36)
-                .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color(uiColor: .tertiaryLabel), lineWidth: 0.5))
-                .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { editor.pillWidth = $0 }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            // Over the strip too: the hints float above whatever the composer shows on top.
             .overlay(alignment: .topTrailing) {
                 if dictationStatus == nil, editor.pasteOffer == nil,
                    Self.showsEditorHint(multiline: multiline.wrappedValue, hardwareKeyboard: keyboard.attached) {
@@ -168,8 +196,34 @@ struct CodeComposer: View {
         .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: editor.pasteOffer != nil)
         .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: dictationStatus == nil)
         .onChange(of: stacked) { _, _ in editor.measure(text: text) }
+        .photosPicker(isPresented: $choosingPhotos, selection: $photos, maxSelectionCount: attachments?.remaining ?? 1,
+                      matching: .any(of: [.images, .screenshots]))
+        .onChange(of: photos) { _, items in
+            guard !items.isEmpty else { return }
+            photos = []
+            attachments?.add(items.enumerated().map { MobileAttachmentSource.photo($1, index: $0) })
+        }
+        .fileImporter(isPresented: $choosingFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+            guard case .success(let urls) = result, !urls.isEmpty else { return }
+            attachments?.add(urls.map(MobileAttachmentSource.file))
+        }
+        // An iPad drags photos and files from other apps onto the composer.
+        .onDrop(of: MobileAttachmentSource.dropTypes, isTargeted: $dropTargeted) { providers in
+            guard attaching else { return false }
+            let sources = MobileAttachmentSource.dropped(providers)
+            guard !sources.isEmpty else { return false }
+            attachments?.add(sources)
+            return true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: Self.attachRequested)) { _ in
+            if visible, attaching { choosingFiles = true }
+        }
+        .onAppear { visible = true }
         // A conversation left behind stops listening (the microphone indicator would stay on with nothing to show it).
-        .onDisappear { if dictation.active(dictationOwner) { dictation.cancel() } }
+        .onDisappear {
+            visible = false
+            if dictation.active(dictationOwner) { dictation.cancel() }
+        }
     }
 
     private var dictationStatus: (text: String, failed: Bool)? {
@@ -202,7 +256,7 @@ struct CodeComposer: View {
 
     @ViewBuilder private var slot: some View {
         let dictating = dictation.active(dictationOwner)
-        switch Self.slot(text: text, working: working, dictating: dictating) {
+        switch Self.slot(text: text, working: working, dictating: dictating, attached: attached) {
         case .mic:
             Button(action: dictate) {
                 ZStack {
@@ -362,6 +416,8 @@ struct CodeEditorField: UIViewRepresentable {
     var send: () -> Void
     var keyState: () -> (multiline: Bool, working: Bool) = { (false, false) }
     var keyAction: ((ComposerKeyAction) -> Void)? = nil
+    /// Takes the images a paste carries (nil: a paste of images does nothing, text pastes as ever).
+    var pasteImages: (([MobileAttachmentSource]) -> Void)? = nil
 
     func makeUIView(context: Context) -> CodeTextView {
         let view = CodeTextView()
@@ -382,6 +438,7 @@ struct CodeEditorField: UIViewRepresentable {
         view.submit = send
         view.keyState = keyState
         view.keyAction = keyAction
+        view.pasteImages = pasteImages
         if view.placeholder != placeholder { view.placeholder = placeholder }
         if view.textStorage.string != text {
             view.setDraft(text)

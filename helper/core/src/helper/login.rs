@@ -51,7 +51,9 @@ pub(crate) fn required(method: &str) -> &'static str {
         // carry an admitted multiplexer controller's protocol, independently of Chat.
         "terminals.keys" => "agent.submit",
         "chat.open" | "chat.state" | "chat.page" | "chat.models" | "chat.settings"
-        | "chat.tools" | "queue.list" | "launches.list" | "chat.list" | "projects.recent" => "agent.inspect",
+        | "chat.tools" | "queue.list" | "launches.list" | "chat.list" | "projects.recent"
+        | "attachments.read" => "agent.inspect",
+        "attachments.put" => "agent.submit",
         method if method.starts_with("stats.") => "stats.sample",
         method
             if method.starts_with("chat.")

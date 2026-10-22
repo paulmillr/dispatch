@@ -108,13 +108,9 @@ impl Live {
                 .filter_map(|part| part.get("text").and_then(Value::string))
                 .collect::<Vec<_>>()
                 .join("\n");
-            let row = Record {
-                id: "user-".to_owned() + &history::key(text.as_bytes()),
-                turn,
-                kind: RecordKind::User,
-                text,
-                ..Record::default()
-            };
+            let mut row = Record { turn, ..Record::default() };
+            let id = "user-".to_owned() + &history::key(text.as_bytes());
+            history::typed(&mut row, id, text, history::images(item));
             if !self.records.iter().any(|previous| previous.id == row.id) {
                 self.records.push(row.clone());
             }

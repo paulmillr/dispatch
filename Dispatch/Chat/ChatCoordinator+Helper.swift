@@ -101,6 +101,15 @@ extension ChatCoordinator {
             else { self.suspendDiscovery(session, status: error.localizedDescription) }
         }
         Task { do { try await helper.open() } catch { helper.failed?(error) } }
+        // Attachments need a helper that accepted `chat.attachments`; an archived transcript takes no input.
+        session.acceptsAttachments = false
+        if helper.transcript == nil {
+            Task { [weak session] in
+                let features = await HelperApp.shared.features(helper.endpoint)
+                guard let session, session.helper === helper else { return }
+                session.acceptsAttachments = features.contains(ChatAttachment.feature)
+            }
+        }
     }
 
     /// Internal (not private): unit tests feed helper events through the same path.
@@ -435,6 +444,12 @@ extension ChatCoordinator {
     func submitHelper(_ session: ChatSession, queued: ChatQueuedMessage?, immediately: Bool) {
         let text = queued?.text ?? session.draft
         let command = queued?.isCommand ?? session.draftIsCommand
+        let attachments = queued?.attachments ?? session.drafts.current.attachments
+        // Commands take no attachments (the helper refuses them); the draft keeps both.
+        if command, !attachments.isEmpty {
+            session.submissionFailure = "Commands cannot carry attachments. Remove them to run this command; your draft is preserved."
+            return
+        }
         // /terminal only switches to the terminal: no agent is addressed.
         if command, text.trimmingCharacters(in: .whitespacesAndNewlines) == "/terminal" {
             chooseChat(false, session: session)
@@ -490,7 +505,12 @@ extension ChatCoordinator {
                 : "Cannot safely send to \(session.agentTitle). Open the terminal to continue; your draft is preserved."
             return
         }
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty else { return }
+        // An attachment still uploading would be left out of the message.
+        if queued == nil, session.draftUploads.contains(where: \.uploading) {
+            session.submissionFailure = "Attachments are still uploading. Send again when they are ready."
+            return
+        }
         let id = System.uuid()
         let delivery = queued?.delivery ?? session.drafts.prepareDelivery(consume: !command)
         guard delivery != nil || queued != nil else { return }
@@ -507,10 +527,11 @@ extension ChatCoordinator {
             session.commandResult = nil
             session.observedCommand = (title: text.trimmingCharacters(in: .whitespacesAndNewlines), output: nil)
         } else {
-            session.showOptimisticPrompt(text)
+            session.showOptimisticPrompt(text, attachments: attachments)
         }
         var input = HelperChat.Input(helper.route)
         input.text = text
+        input.attachments = Self.attachmentPaths(attachments)
         let wasBusy = session.busy
         let turn = session.activeTurnID
         // A prompt shows the agent working at once, as the old app did; the harness's State confirms it.
@@ -1007,6 +1028,147 @@ extension ChatCoordinator {
         return names.count > 1 ? names.dropLast().joined(separator: ", ") + " or " + names.last! : names.first ?? "an agent"
     }
 
+    // Attachments (docs/integrations.md, Attachments): read here, uploaded to the conversation's helper, named by path.
+
+    /// Whether the composer offers attachments: a live chat whose helper accepted `chat.attachments`, not a side
+    /// conversation, a command or an edit of a queued message (whose row keeps its own).
+    func canAttach(_ session: ChatSession) -> Bool {
+        enabled && sessions[session.id] === session && session.acceptsAttachments && session.helper != nil && session.active
+            && session.sideConversation == nil && session.editingQueuedID == nil && !session.draftIsCommand
+            && !session.inputBlocked && session.helper?.transcript == nil
+    }
+
+    /// Reads, prepares and uploads `sources` for the current draft; each shows as an uploading chip on that draft until
+    /// the host stored it, then joins it (`ChatDraftCollection.attach(_:toDraft:scope:)`), also when the user switched to
+    /// another draft meanwhile. Too many for one message: nothing is uploaded.
+    func attach(_ sources: [ChatAttachmentSource], to session: ChatSession) {
+        guard !sources.isEmpty, canAttach(session), let helper = session.helper else { return }
+        session.attachmentError = nil
+        let draft = session.drafts.current
+        let pending = session.draftUploads.filter(\.uploading).count
+        guard draft.attachments.count + pending + sources.count <= ChatAttachment.maximumCount else {
+            session.attachmentError = ChatAttachmentError.tooMany.localizedDescription
+            return
+        }
+        for source in sources {
+            let upload = ChatAttachmentUpload(id: System.uuid().uuidString, draft: draft.id, scope: session.drafts.scope,
+                                              name: source.name, source: source)
+            session.attachmentUploads.append(upload)
+            startUpload(upload.id, endpoint: helper.endpoint, session: session)
+        }
+    }
+
+    /// Uploads a failed attachment again, from what was read the first time, to the conversation's helper now.
+    func retryAttachment(_ id: String, in session: ChatSession) {
+        guard let helper = session.helper, canAttach(session),
+              let index = session.attachmentUploads.firstIndex(where: { $0.id == id }), !session.attachmentUploads[index].uploading else { return }
+        session.attachmentError = nil
+        guard session.drafts.current.attachments.count + session.draftUploads.filter(\.uploading).count < ChatAttachment.maximumCount else {
+            session.attachmentError = ChatAttachmentError.tooMany.localizedDescription
+            return
+        }
+        // A chip shows on the current draft only, so Retry is for that one.
+        session.attachmentUploads[index].draft = session.drafts.current.id
+        session.attachmentUploads[index].scope = session.drafts.scope
+        session.attachmentUploads[index].failure = nil
+        startUpload(id, endpoint: helper.endpoint, session: session)
+    }
+
+    /// Removes an attachment from the draft, or stops its upload (a copy the host already stored is swept with the rest).
+    func removeAttachment(_ id: String, from session: ChatSession) {
+        if let index = session.attachmentUploads.firstIndex(where: { $0.id == id }) {
+            session.attachmentUploads.remove(at: index).task?.cancel()
+        } else { session.drafts.detach(id) }
+        session.attachmentError = nil
+    }
+
+    /// Reads, prepares and stores one upload on `endpoint`'s helper. Only removing the chip cancels it; any other
+    /// failure (the link dropped, the host refused, the draft is gone) keeps the chip with the reason and Retry.
+    private func startUpload(_ id: String, endpoint: HelperWorkspace.Endpoint, session: ChatSession) {
+        guard let source = session.attachmentUploads.first(where: { $0.id == id })?.source else { return }
+        let task = Task { [weak session] in
+            @MainActor func update(_ change: (inout ChatAttachmentUpload) -> Void) {
+                guard let session, let index = session.attachmentUploads.firstIndex(where: { $0.id == id }) else { return }
+                change(&session.attachmentUploads[index])
+            }
+            do {
+                let prepared = try await Task.detached(priority: .userInitiated) { try source.prepare() }.value
+                try Task.checkCancellation()
+                update { $0.name = prepared.name; $0.size = prepared.bytes.count; $0.thumbnail = prepared.thumbnail }
+                let stored = try await Self.put(prepared, endpoint: endpoint)
+                guard let session, let upload = session.attachmentUploads.first(where: { $0.id == id }) else { return }
+                try Self.land(stored.attachment(id: id, thumbnail: prepared.thumbnail), upload: upload, endpoint: endpoint, in: session)
+            } catch {
+                // Removed: the chip is gone, and so is anything to say.
+                guard !Task.isCancelled else { return }
+                let reason = error is CancellationError ? "The upload was interrupted." : error.localizedDescription
+                update { $0.failure = reason; $0.task = nil }
+            }
+        }
+        if let index = session.attachmentUploads.firstIndex(where: { $0.id == id }) { session.attachmentUploads[index].task = task }
+    }
+
+    /// A stored attachment into the draft its upload was for. That draft gone (sent, discarded, or replaced by a
+    /// restored one) or the conversation now on another host: the chip moves to the current draft with the reason, and
+    /// Retry attaches it there.
+    static func land(_ attachment: ChatAttachment, upload: ChatAttachmentUpload, endpoint: HelperWorkspace.Endpoint,
+                             in session: ChatSession) throws {
+        let current = session.drafts.repository.resolvedScope(upload.scope) == session.drafts.scope
+        if current, let helper = session.helper, helper.endpoint != endpoint {
+            session.retarget(upload.id)
+            throw HelperFailure(code: "unavailable", message: "The conversation moved to another host. Retry uploads it there.")
+        }
+        guard let fitted = session.drafts.attach([attachment], toDraft: upload.draft, scope: upload.scope) else {
+            session.retarget(upload.id)
+            throw HelperFailure(code: "unavailable", message: "The draft it was for was sent or discarded. Retry attaches it here.")
+        }
+        session.attachmentUploads.removeAll { $0.id == upload.id }
+        if !fitted { session.attachmentError = ChatAttachmentError.tooMany.localizedDescription }
+    }
+
+    /// `attachments.put` on the helper of the conversation's host. Not bound to the chat's subscription: a copy belongs
+    /// to the host, and the draft takes it whatever the chat did meanwhile. A remote upload has the Files view's bound
+    /// for its size: a copy stored after the timeout is never named by a message and is swept with the rest.
+    static func put(_ prepared: ChatAttachmentImage.Prepared, endpoint: HelperWorkspace.Endpoint) async throws -> HelperChat.StoredAttachment {
+        let params = HelperChat.AttachmentUpload(name: prepared.name, bytes: prepared.bytes)
+        let put: @Sendable () async throws -> HelperChat.StoredAttachment = {
+            try await HelperApp.shared.connection(endpoint).request("attachments.put", params: params)
+        }
+        guard endpoint.connection != nil else { return try await put() }
+        let bound = HelperFilesSource.Bound.bytes(UInt64(prepared.bytes.count))
+        return try await SSHTimeout.run(bound.duration ?? .seconds(600), "chat.attachments.put", operation: put)
+    }
+
+    /// The host paths a message names; nil (absent on the wire) without attachments.
+    static func attachmentPaths(_ attachments: [ChatAttachment]) -> [String]? {
+        let paths = attachments.compactMap(\.path)
+        return paths.isEmpty ? nil : paths
+    }
+
+    /// `queue.add` for a held row: its text, command flag and attachments.
+    static func queueInput(_ row: ChatQueuedMessage, route: HelperChat.Route) -> HelperChat.Input {
+        var input = HelperChat.Input(route)
+        input.text = row.text
+        input.mode = "prompt"
+        input.command = row.isCommand
+        input.attachments = attachmentPaths(row.attachments)
+        return input
+    }
+
+    /// A native queue row's attachment previews (`{kind: "attachment", type}`) as chips without a path.
+    static func attachmentPlaceholders(_ native: HelperChat.Queued) -> [ChatAttachment] {
+        native.preview.enumerated().compactMap { index, preview in
+            guard preview.kind == "attachment" else { return nil }
+            let kind: ChatAttachment.Kind = ["image", "localImage"].contains(preview.type ?? "") ? .image : .file
+            return ChatAttachment(id: "\(native.id)#\(index)", name: ChatAttachment.untitled(kind), kind: kind, size: 0, path: nil)
+        }
+    }
+
+    /// A native queue row's typed text, without its attachment previews.
+    static func typedText(_ native: HelperChat.Queued) -> String {
+        native.preview.filter { $0.kind != "attachment" }.compactMap(\.text).joined(separator: "\n")
+    }
+
     // Native queue: same states as the old Codex queue, addressed by the helper's opaque id and revision.
 
     func receiveHelperQueue(_ items: [HelperChat.Queued], session: ChatSession) {
@@ -1018,7 +1180,11 @@ extension ChatCoordinator {
                 ?? ChatQueuedMessage(text: native.text, process: session.process,
                                      binding: session.binding, host: session.host, conversation: session.sessionID, generation: session.queueGeneration)
             if let delivery = row.delivery { session.drafts.finish(delivery, success: true); row.delivery = nil }
-            row.native = native; row.pending = false; row.text = native.text
+            row.native = native; row.pending = false
+            // Attachments show as chips: the text keeps what was typed. A row this Mac handed over keeps its own.
+            let placeholders = Self.attachmentPlaceholders(native)
+            row.text = placeholders.isEmpty ? native.text : Self.typedText(native)
+            row.attachments = ChatAttachment.merge(placeholders, keeping: row.attachments)
             row.process = session.process; row.binding = session.binding; row.host = session.host
             row.conversation = session.sessionID; row.generation = session.queueGeneration
             row.pause = switch native.paused {
@@ -1072,10 +1238,7 @@ extension ChatCoordinator {
               !row.local, !row.pending, row.pause == nil, row.matches(session) else { return false }
         // Pending from now on: Stop and Send now see the row is being handed over.
         if let index = session.queuedMessages.firstIndex(where: { $0.id == row.id }) { session.queuedMessages[index].pending = true }
-        var input = HelperChat.Input(helper.route)
-        input.text = row.text
-        input.mode = "prompt"
-        input.command = row.isCommand
+        let input = Self.queueInput(row, route: helper.route)
         session.upload = changeHelperQueue(session, message: nil) { session in
             defer { session.upload = nil }
             @MainActor func update(_ change: (inout ChatQueuedMessage) -> Void) {

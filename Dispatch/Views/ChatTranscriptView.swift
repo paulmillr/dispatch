@@ -430,7 +430,7 @@ private struct ChatTranscriptRowView: View {
                 .padding(.vertical, 8)
         } else if row.item?.kind == .user, let item = row.item {
             ChatRadioLog.line(time: row.time, station: HarbourRadio.ownStation, own: true, theme: theme) {
-                ChatMarkdown(text: item.text).foregroundStyle(theme.ink)
+                radioUserMessage(item)
             }
             .padding(.vertical, 9)
             .background(LinearGradient(colors: [.clear, theme.ink.opacity(0.04)], startPoint: .leading, endPoint: .trailing))
@@ -525,9 +525,9 @@ private struct ChatTranscriptRowView: View {
     @ViewBuilder private func itemView(_ item: ChatItem) -> some View {
         switch item.kind {
         case .user where theme.radioLog:
-            ChatMarkdown(text: item.text).foregroundStyle(theme.ink)
+            radioUserMessage(item)
         case .user:
-            ChatUserMessage(text: item.text, contentWidth: contentWidth)
+            ChatUserMessage(text: item.text, contentWidth: contentWidth, attachments: item.attachments, endpoint: session.helper?.endpoint)
         case .assistant:
             ChatMarkdown(text: item.text).foregroundStyle(theme.ink)
         case .notice:
@@ -556,6 +556,18 @@ private struct ChatTranscriptRowView: View {
                          titleColumn: row.timeline == nil || theme.radioLog ? nil : theme.typography.stepTitleWidth)
         }
     }
+    /// The log's own transmission: its attachments, then what was typed.
+    @ViewBuilder private func radioUserMessage(_ item: ChatItem) -> some View {
+        if item.attachments.isEmpty {
+            ChatMarkdown(text: item.text).foregroundStyle(theme.ink)
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                ChatMessageAttachments(attachments: item.attachments, endpoint: session.helper?.endpoint,
+                                       maxWidth: ChatRadioLog.messageWidth(contentWidth, theme: theme), alignment: .leading)
+                if !item.text.isEmpty { ChatMarkdown(text: item.text).foregroundStyle(theme.ink) }
+            }
+        }
+    }
     private func toolExpansion(_ item: ChatItem) -> Binding<Bool> {
         return Binding(get: {
             session.toolIsExpanded(row)
@@ -576,6 +588,9 @@ struct ChatUserMessage: View {
     @Environment(\.chatTheme) private var theme
     let text: String
     let contentWidth: CGFloat
+    /// Shown above the text, on the bubble's side; a message of attachments alone has no text bubble.
+    var attachments: [ChatAttachment] = []
+    var endpoint: HelperWorkspace.Endpoint?
 
     /// A user bubble keeps to 60 percent of a wide pane and 80 characters, but a narrow pane's gives it room for 40
     /// characters (up to 85 percent) rather than stacking a short message word by word.
@@ -584,16 +599,27 @@ struct ChatUserMessage: View {
     }
 
     var body: some View {
+        let width = Self.maxWidth(contentWidth, characterWidth: theme.typography.characterWidth)
         HStack(spacing: 0) {
             Spacer(minLength: 0)
-            ChatMarkdown(text: text, fillWidth: false)
-                .font(theme.typography.body)
-                .padding(.horizontal, 12).padding(.vertical, 8)
-                .background(theme.ink.opacity(0.08), in: UnevenRoundedRectangle(
-                    topLeadingRadius: 10, bottomLeadingRadius: 10, bottomTrailingRadius: 3, topTrailingRadius: 10))
-                .frame(maxWidth: Self.maxWidth(contentWidth, characterWidth: theme.typography.characterWidth),
-                       alignment: .trailing)
+            if attachments.isEmpty {
+                bubble.frame(maxWidth: width, alignment: .trailing)
+            } else {
+                VStack(alignment: .trailing, spacing: 6) {
+                    ChatMessageAttachments(attachments: attachments, endpoint: endpoint, maxWidth: width)
+                    if !text.isEmpty { bubble }
+                }
+                .frame(maxWidth: width, alignment: .trailing)
+            }
         }
+    }
+
+    private var bubble: some View {
+        ChatMarkdown(text: text, fillWidth: false)
+            .font(theme.typography.body)
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .background(theme.ink.opacity(0.08), in: UnevenRoundedRectangle(
+                topLeadingRadius: 10, bottomLeadingRadius: 10, bottomTrailingRadius: 3, topTrailingRadius: 10))
     }
 }
 

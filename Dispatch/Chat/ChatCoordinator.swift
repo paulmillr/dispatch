@@ -459,11 +459,18 @@ final class ChatCoordinator {
 
     func queue(_ session: ChatSession, drain: Bool = true) {
         let text = session.draft
+        let attachments = session.drafts.current.attachments
         guard sessions[session.id] === session, session.supportsQueue, enabled,
               session.active, !session.inputBlocked,
               session.helper != nil,
-              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty else { return }
         session.submissionFailure = nil
+        if session.draftIsCommand, !attachments.isEmpty {
+            session.submissionFailure = "Commands cannot carry attachments. Remove them to queue this command; your draft is preserved."; return
+        }
+        if session.draftUploads.contains(where: \.uploading) {
+            session.submissionFailure = "Attachments are still uploading. Send again when they are ready."; return
+        }
         if session.editingQueuedID != nil, session.editingQueuedDraftID != session.drafts.current.id {
             session.submissionFailure = "Return to the queued message's draft or cancel its edit before sending."; return
         }
@@ -484,6 +491,7 @@ final class ChatCoordinator {
         if let id = session.editingQueuedID, let index = session.queuedMessages.firstIndex(where: { $0.id == id }) {
             if let previous = session.queuedMessages[index].delivery { session.drafts.forgetDelivery(previous) }
             session.queuedMessages[index].text = text
+            session.queuedMessages[index].attachments = attachments
             session.queuedMessages[index].delivery = delivery
             session.queuedMessages[index].isCommand = isCommand
             session.queuedMessages[index].process = session.process
@@ -494,7 +502,7 @@ final class ChatCoordinator {
             session.queuedMessages[index].pause = nil
             session.editingQueuedID = nil; session.editingQueuedDraftID = nil
         } else {
-            session.queuedMessages.append(ChatQueuedMessage(text: text, process: session.process, binding: session.binding, host: session.host, delivery: delivery, isCommand: isCommand, conversation: session.sessionID, generation: session.queueGeneration))
+            session.queuedMessages.append(ChatQueuedMessage(text: text, process: session.process, binding: session.binding, host: session.host, delivery: delivery, isCommand: isCommand, conversation: session.sessionID, generation: session.queueGeneration, attachments: attachments))
         }
         session.selectedQueuedID = nil
         if drain { drainQueue(session) }
@@ -517,9 +525,11 @@ final class ChatCoordinator {
     }
 
     func editQueued(_ id: UUID, in session: ChatSession) {
-        guard session.draft.isEmpty, session.editingQueuedID == nil, session.queuedSubmissionID != id,
+        guard session.drafts.current.isEmpty, session.editingQueuedID == nil, session.queuedSubmissionID != id,
               let message = session.queuedMessages.first(where: { $0.id == id }),
-              !session.queueBusy, !message.pending, message.editable else { return }
+              !session.queueBusy, !message.pending, message.editable,
+              // An edit would send the text without its attachments, and an upload must not land in the edit's draft.
+              message.attachments.isEmpty, session.draftUploads.isEmpty else { return }
         session.drafts.restore(message.delivery?.draft ?? ChatDraft(text: message.text, multiline: message.text.contains("\n")))
         session.editingQueuedID = id; session.selectedQueuedID = nil
         session.editingQueuedDraftID = session.drafts.current.id
@@ -600,7 +610,7 @@ final class ChatCoordinator {
     private func submit(_ session: ChatSession, queued: ChatQueuedMessage?, immediately: Bool = false) {
         guard session.helper != nil else {
             // No helper chat verified this terminal's agent: nothing is sent, and the user is told so.
-            if queued == nil, !session.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if queued == nil, !session.drafts.current.isEmpty {
                 session.submissionFailure = "Cannot safely send to \(session.agentTitle). Open the terminal to continue; your draft is preserved."
             }
             return

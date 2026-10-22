@@ -409,6 +409,26 @@ impl Ui for Updates<'_> {
             }),
             _ => None,
         };
+        // Records with attachments: chat.attachments clients get their view (typed text, image
+        // and file blocks); the others the records byte for byte as before the feature.
+        let attached = match &update {
+            Update::Records { binding, records } | Update::History { binding, page: Page { records, .. } }
+                if crate::dispatch::attachments::attached(records)
+                    && recipients.iter().any(|(fd, _)| {
+                        crate::dispatch::features::enabled(&self.features, *fd, crate::dispatch::features::ATTACHMENTS)
+                    }) =>
+            {
+                let mut records = records.clone();
+                crate::dispatch::attachments::shown(&self.held, &binding.session, &mut records);
+                let mut fields: Vec<(&str, &dyn crate::encode::Encode)> =
+                    vec![("terminal", &terminal), ("session", &binding.session), ("records", &records)];
+                if let Update::History { page, .. } = &update {
+                    fields.extend([("replace", &true as &dyn crate::encode::Encode), ("earlier", &page.earlier)]);
+                }
+                Some(crate::encode::notify("chat.records", &fields))
+            }
+            _ => None,
+        };
         let output = if matches!(&update, Update::Stderr { .. }) {
             "terminal.stderr"
         } else {
@@ -554,7 +574,11 @@ impl Ui for Updates<'_> {
             ),
         };
         for (fd, id) in recipients {
+            let attached = attached.as_ref().filter(|_| {
+                crate::dispatch::features::enabled(&self.features, fd, crate::dispatch::features::ATTACHMENTS)
+            });
             let body = match &legacy {
+                _ if attached.is_some() => attached.cloned().unwrap_or_default(),
                 Some(legacy)
                     if !crate::dispatch::features::enabled(
                         &self.features,
@@ -826,8 +850,9 @@ impl DispatchHelper {
                 let capability = match method {
                     "revoke" => return true,
                     "install" => "hooks.configure",
-                    "launch" | "send" | "command" | "stop" | "select" | "answer" | "queue_add"
-                    | "queue_edit" | "queue_send" | "queue_order" | "side" | "side_close" => {
+                    "launch" | "send" | "send_attached" | "command" | "stop" | "select" | "answer"
+                    | "queue_add" | "queue_add_attached" | "queue_edit" | "queue_send" | "queue_order"
+                    | "side" | "side_close" => {
                         "agent.submit"
                     }
                     "identify" if login::permits(&grants, "hooks.configure") => return true,
@@ -2067,8 +2092,8 @@ impl DispatchHelper {
             let stripped = requested.as_ref().map(|_| crate::dispatch::features::without(&root)).transpose()?;
             let checked = stripped.as_ref().unwrap_or(&root);
             if let Some(method) = checked.get("method").and_then(|m| m.string())
-                && crate::dispatch::features::OPERATIONS.contains(&method)
-                && crate::dispatch::features::enabled(&self.features, fd, method)
+                && let Some(feature) = crate::dispatch::features::operation(method)
+                && crate::dispatch::features::enabled(&self.features, fd, feature)
             {
                 if !self.allowed(method) {
                     return Err(Error { code: "permission_denied", message: "This SSH feature is disabled".into() });
@@ -2157,15 +2182,20 @@ impl DispatchHelper {
                 };
                 observers.push((fd, id, scope));
             }
-            crate::dispatch::Request {
+            let mut request = crate::dispatch::Request {
                 helper: self,
                 io: system,
                 replies: replies.clone(),
                 document: document.clone(),
                 fd,
                 id,
+            };
+            // Attachments are checked on the host before the send or queue goes on as usual.
+            let enabled = crate::dispatch::features::enabled(&request.helper.features, fd, crate::dispatch::features::ATTACHMENTS);
+            if crate::dispatch::attachments::named(method, params, enabled)? {
+                return request.attachments_send(method, params);
             }
-            .dispatch(method, params)
+            request.dispatch(method, params)
         })();
         if let Err(error) = result {
             observers.retain(|(peer, request, _)| *peer != fd || *request != id);

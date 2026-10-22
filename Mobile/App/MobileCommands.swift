@@ -9,7 +9,7 @@ import UIKit
 enum MobileCommand: String, CaseIterable, Identifiable {
     case newTab, newSpace, newChat, newHost
     case renameTab, renameSpace, closeTab, closeSpace, detachSpace
-    case clearScreen, toggleSidebar, switchSegment, increaseFontSize, decreaseFontSize, resetFontSize
+    case clearScreen, attach, toggleSidebar, switchSegment, increaseFontSize, decreaseFontSize, resetFontSize
     case spaces, agents, previousTab, nextTab, nextAttention, previousAttention
     case settings, shortcuts
 
@@ -32,7 +32,7 @@ enum MobileCommand: String, CaseIterable, Identifiable {
     var menu: Menu {
         switch self {
         case .newTab, .newSpace, .newChat, .newHost, .renameTab, .renameSpace, .closeTab, .closeSpace, .detachSpace: .file
-        case .clearScreen: .edit
+        case .clearScreen, .attach: .edit
         case .toggleSidebar, .switchSegment, .increaseFontSize, .decreaseFontSize, .resetFontSize: .view
         case .spaces, .agents, .previousTab, .nextTab, .nextAttention, .previousAttention: .navigate
         case .settings: .app
@@ -53,6 +53,7 @@ enum MobileCommand: String, CaseIterable, Identifiable {
         case .closeSpace: "Close Space…"
         case .detachSpace: "Detach Space"
         case .clearScreen: "Clear Screen"
+        case .attach: "Attach Files…"
         case .toggleSidebar: "Toggle Sidebar"
         case .switchSegment: "Switch Terminal / Chat"
         case .increaseFontSize: "Increase Font Size"
@@ -80,6 +81,7 @@ enum MobileCommand: String, CaseIterable, Identifiable {
         case .closeSpace: "xmark.square"
         case .detachSpace: "eject"
         case .clearScreen: "clear"
+        case .attach: "paperclip"
         case .toggleSidebar: "sidebar.leading"
         case .switchSegment: "arrow.left.arrow.right"
         case .increaseFontSize: "textformat.size.larger"
@@ -98,7 +100,7 @@ enum MobileCommand: String, CaseIterable, Identifiable {
 
     /// The chord: the Mac's (⌘T, ⌘N, ⌘W, ⇧⌘W, ⌘K, ⌃⌘S, ⇧⌘C, ⌘+ ⌘- ⌘0, ⌘[ ⌘], ⌘J ⇧⌘J, ⌘, and ⌘/). New Chat takes ⌥⌘N, which the
     /// Mac leaves free (its ⇧⌘N is New Local Space); ⌘1 and ⌘2 select the tab bar's sections, as iPad apps number
-    /// their sidebar's. Renames, Detach and New Host have none, as on the Mac.
+    /// their sidebar's; Attach Files… takes Mail's ⇧⌘A. Renames, Detach and New Host have none, as on the Mac.
     var shortcut: KeyboardShortcut? {
         switch self {
         case .newTab: KeyboardShortcut("t")
@@ -107,6 +109,7 @@ enum MobileCommand: String, CaseIterable, Identifiable {
         case .closeTab: KeyboardShortcut("w")
         case .closeSpace: KeyboardShortcut("w", modifiers: [.command, .shift])
         case .clearScreen: KeyboardShortcut("k")
+        case .attach: KeyboardShortcut("a", modifiers: [.command, .shift])
         case .toggleSidebar: KeyboardShortcut("s", modifiers: [.command, .control])
         case .switchSegment: KeyboardShortcut("c", modifiers: [.command, .shift])
         case .increaseFontSize: KeyboardShortcut("+")
@@ -145,7 +148,7 @@ enum MobileCommand: String, CaseIterable, Identifiable {
         switch menu {
         case .app: [[.settings]]
         case .file: [[.newTab, .newSpace, .newChat, .newHost], [.renameTab, .renameSpace], [.closeTab, .closeSpace, .detachSpace]]
-        case .edit: [[.clearScreen]]
+        case .edit: [[.clearScreen], [.attach]]
         case .view: [[.increaseFontSize, .decreaseFontSize, .resetFontSize], [.toggleSidebar, .switchSegment]]
         case .navigate: [[.spaces, .agents], [.nextAttention, .previousAttention], [.previousTab, .nextTab]]
         case .help: [[.shortcuts]]
@@ -284,6 +287,8 @@ private struct MobileCommandHost: ViewModifier {
         case .detachSpace: if let space = navigator.shownSpace { navigator.actions.close(.space(space), .detach) }
         case .toggleSidebar: navigator.toggleSidebar()
         case .switchSegment: if let tab = navigator.shownTab { TabSegment.requestSwitch(tab) }
+        // The chat composer on screen opens its file picker (when its helper takes attachments).
+        case .attach: NotificationCenter.default.post(name: CodeComposer.attachRequested, object: nil)
         case .clearScreen, .increaseFontSize, .decreaseFontSize, .resetFontSize:
             if let action = command.terminalAction { UIApplication.shared.sendAction(action, to: nil, from: nil, for: nil) }
         case .spaces, .agents:

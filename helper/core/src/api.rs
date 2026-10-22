@@ -283,6 +283,8 @@ pub enum Job {
     /// - "stats.processes": {local:bool} -> {boot,monotonic,truncated,processes:[{pid,start?,
     ///   name,cpu?,cpuNanos?,rss}]}, local or not. macOS rows carry cpu (/bin/ps's percentage),
     ///   Linux rows start and cpuNanos (CPU time so far).
+    /// - "attachment.put", "attachment.read": chat attachments' private copies; "attachment.clock"
+    ///   -> {ms}, the wall clock for the delivery index (system/attachment.rs).
     /// - "stats.disks": {local:bool} -> {disks:[{identity:string,paths:[string],total,free}]};
     ///   identity is the native signed fsid pair, "word:word". No fabricated identity.
     Native {
@@ -777,6 +779,9 @@ pub enum Block {
     Code { language: String, text: String },
     Markdown(String),
     Attachment(String),
+    /// A message's attachment (feature chat.attachments), in order; encoded
+    /// `{kind: "image"|"file", path, text: name}`. A tuple variant: its fields are not wire names.
+    File(attachment::Shown),
 }
 
 /// Existing normalized row fields; c1654cc Dispatch/Chat/ChatModels.swift:23-37, Dispatch/Chat/PiTranscript.swift:163-188.
@@ -799,6 +804,9 @@ pub struct Record {
     pub time_ms: Option<i64>,
     /// Transcript source position; prompt acknowledgement compares this independently of clocks.
     pub position: Option<FilePosition>,
+    /// A user record's attachments for clients of chat.attachments (dispatch/attachments.rs
+    /// `view`); not encoded, so every other client gets the record as before.
+    pub attached: Option<Box<attachment::Attached>>,
 }
 
 mod tool;
@@ -1009,6 +1017,8 @@ impl Input {
 
 mod queue;
 pub use queue::{Pause, Preview, Queued};
+pub mod attachment;
+pub use attachment::Attachment;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Edit {
@@ -1039,6 +1049,8 @@ pub enum Goal {
         text: String,
         mode: Mode,
         command: bool,
+        /// Stored attachments (chat.attachments), never with `command`.
+        attachments: Vec<Attachment>,
     },
     Stop,
     Models,
@@ -1171,6 +1183,20 @@ pub trait Harness {
         command: bool,
         done: Done<Sent>,
     );
+    /// Send input with stored attachments (chat.attachments; never a command or a side
+    /// conversation). The default is the text fallback: the paths after the text.
+    fn send_attached(
+        &mut self,
+        io: &mut dyn Io,
+        binding: &Binding,
+        text: &str,
+        mode: Mode,
+        attachments: &[Attachment],
+        done: Done<Sent>,
+    ) {
+        let paths: Vec<&str> = attachments.iter().map(|attachment| attachment.path.as_str()).collect();
+        self.send(io, binding, &attachment::fallback(text, &paths), mode, false, done);
+    }
     /// Interrupt the current turn; c1654cc Dispatch/Chat/ChatCoordinator.swift:2205.
     fn stop(&mut self, io: &mut dyn Io, binding: &Binding, done: Done<Sent>);
     /// Models through a native API; a terminal-menu harness fails with code "menu" and the core runs `drive(Goal::Models)`; c1654cc Dispatch/Chat/ChatModelPicker.swift:72.
@@ -1231,6 +1257,19 @@ pub trait Harness {
         mode: Mode,
         done: Done<Queued>,
     );
+    /// Add with stored attachments to the native queue; the default queues the text fallback.
+    fn queue_add_attached(
+        &mut self,
+        io: &mut dyn Io,
+        binding: &Binding,
+        text: &str,
+        mode: Mode,
+        attachments: &[Attachment],
+        done: Done<Queued>,
+    ) {
+        let paths: Vec<&str> = attachments.iter().map(|attachment| attachment.path.as_str()).collect();
+        self.queue_add(io, binding, &attachment::fallback(text, &paths), mode, done);
+    }
     /// Change one native queue item at its revision (None text = remove); c1654cc Dispatch/Chat/CodexPatchConnection.swift:632.
     fn queue_edit(
         &mut self,

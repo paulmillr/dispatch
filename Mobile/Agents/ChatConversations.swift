@@ -318,7 +318,7 @@ struct ChatConversation: Identifiable, Equatable {
                 session.update(terminal: node?.id, binding: node?.agent)
             }
             // Without a topology (offline) the last binding stands: the thread stays readable.
-            session.update(link: host.link, client: host.client, problem: host.problem)
+            session.update(link: host.link, client: host.client, problem: host.problem, features: host.features)
         }
         rebuild()
         let bindings = { (topology: HelperTopology?) -> [String] in
@@ -380,7 +380,8 @@ struct ChatConversation: Identifiable, Equatable {
         session.update(terminal: node?.id, binding: node?.agent)
         session.changed = { [weak self] _ in self?.rebuild() }
         sessions[key] = session
-        session.update(link: host?.link ?? .disconnected, client: host?.client, problem: host?.problem)
+        session.update(link: host?.link ?? .disconnected, client: host?.client, problem: host?.problem,
+                       features: host?.features ?? [])
         return session
     }
 

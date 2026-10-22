@@ -15,6 +15,7 @@ final class DemoHelper: @unchecked Sendable {
     private let lock = NSLock()
     private var decoder = HelperWire.Decoder()
     private var serial: UInt64 = 0
+    private var attachments: [String: Data] = [:]
     private var live: [UInt64: Task<Void, Never>] = [:]
     private let launched = Date()
 
@@ -98,6 +99,18 @@ final class DemoHelper: @unchecked Sendable {
             respond(id, [("src/web", 2), ("src/api", 26), ("notes", 120)].map { path, hours in
                 ["path": "\(home)/\(path)", "time_ms": now - UInt64(hours) * 3_600_000, "agents": ["claude"], "exists": true]
             })
+        // Attachments (feature chat.attachments; the demo hosts do not name it): kept in memory, read back as stored.
+        case "attachments.put":
+            let name = params["name"] as? String ?? "attachment"
+            let bytes = params["bytes"] as? Data ?? Data()
+            serial += 1
+            let path = (host.hello.account?.home ?? "/Users/alex") + "/.dispatch/attachments/" + String(format: "%032llx", serial) + "/" + name
+            lock.withLock { attachments[path] = bytes }
+            let image = ["png", "jpg", "jpeg", "gif", "webp"].contains((name as NSString).pathExtension.lowercased())
+            respond(id, ["path": path, "name": name, "kind": image ? "image" : "file", "size": UInt64(bytes.count)])
+        case "attachments.read":
+            guard let bytes = lock.withLock({ attachments[params["path"] as? String ?? ""] }) else { return fail(id, "Gone") }
+            respond(id, ["bytes": bytes, "size": UInt64(bytes.count)])
         default: fail(id, "This is a demo host")
         }
     }

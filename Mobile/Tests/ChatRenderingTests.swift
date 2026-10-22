@@ -131,4 +131,35 @@ final class ChatRenderingTests: XCTestCase {
         let folded = ChatWorkingRow(session: session, directory: nil, expanded: .constant(false), openStep: { _ in })
         XCTAssertEqual(size(folded).height, 45, accuracy: 1, "Folded, the row is its hairline and 44 pt")
     }
+
+    /// A user message's images sit above its bubble on the user's side, within the bubble's share: one large, else up
+    /// to four a row; the composer's strip is one row of chips.
+    func testAttachmentsSitAboveTheBubbleWithinItsShare() {
+        let png = UIGraphicsImageRenderer(size: CGSize(width: 60, height: 40)).pngData { context in
+            UIColor.systemPink.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 60, height: 40))
+        }
+        func image(_ index: Int) -> ChatAttachment {
+            ChatAttachment(id: "i\(index)", name: "shot.png", kind: .image, size: 1, path: nil, thumbnail: png)
+        }
+        func message(_ attachments: [ChatAttachment], text: String = "Like this") -> some View {
+            ChatUserMessage(text: text, attachments: attachments).environment(\.chatColumnWidth, 370)
+        }
+        let share = 370 * 0.78
+        XCTAssertEqual(ChatMessageAttachments.tile(count: 1, width: share), 220)
+        XCTAssertEqual(ChatMessageAttachments.tile(count: 4, width: share), 69)
+        let one = extent(message([image(0)]), width: 370)
+        XCTAssertEqual(one.maxX, 370, accuracy: 1, "On the user's side")
+        XCTAssertGreaterThan(one.height, 220 + 30, "The image, then the bubble")
+        let four = extent(message((0..<4).map(image)), width: 370)
+        XCTAssertLessThanOrEqual(four.width, share + 1)
+        let five = extent(message((0..<5).map(image), text: ""), width: 370)
+        XCTAssertEqual(five.height, 69 * 2 + 4, accuracy: 2, "Two rows, no bubble without text")
+        let file = ChatAttachment(name: "notes.txt", kind: .file, size: 2048, path: "/stored/n.txt")
+        XCTAssertLessThanOrEqual(extent(message([file]), width: 370).width, share + 1)
+        let strip = ComposerAttachmentStrip(attachments: ComposerAttachments(chips: [
+            .init(id: "a", name: "shot.png", kind: .image, thumbnail: png),
+            .init(id: "b", name: "notes.txt", kind: .file, detail: "2 KB", uploading: true)]))
+        XCTAssertEqual(size(strip).height, ComposerAttachmentStrip.height, accuracy: 1)
+    }
 }

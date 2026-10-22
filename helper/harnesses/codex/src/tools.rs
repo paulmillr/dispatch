@@ -990,6 +990,7 @@ fn questions(root: Option<Value<'_>>, output: &mut Output) -> Option<Tool> {
 fn text(block: &Block) -> &str {
     match block {
         Block::Code { text, .. } | Block::Markdown(text) | Block::Attachment(text) => text,
+        Block::File(shown) => shown.name.as_deref().unwrap_or_default(),
     }
 }
 

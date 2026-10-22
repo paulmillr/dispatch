@@ -38,7 +38,8 @@ extension SpacesNavigator {
     /// The commands that apply now. Nothing applies while something is presented (`presenting`: the shell's sheets,
     /// besides the navigator's own); a tab's and a space's items need them on screen and their host connected (a
     /// request to a host that is not would only fail). The terminal's (Clear Screen, the font sizes) need a tab shown:
-    /// its terminal answers them when it has the focus, and refuses a size past its bounds.
+    /// its terminal answers them when it has the focus, and refuses a size past its bounds. Attach Files… needs an agent's
+    /// tab on a connected host: its chat composer opens the picker when its helper takes attachments.
     func enabledCommands(presenting: Bool) -> Set<MobileCommand> {
         guard !presenting, !self.presenting else { return [] }
         var enabled: Set<MobileCommand> = [.newChat, .newHost, .spaces, .agents, .settings, .shortcuts]
@@ -46,6 +47,7 @@ extension SpacesNavigator {
         if let tab = shownTab.flatMap(model.tab) {
             enabled.formUnion([.switchSegment, .clearScreen, .increaseFontSize, .decreaseFontSize, .resetFontSize])
             if connected(tab.ref.host) { enabled.formUnion([.renameTab, .closeTab]) }
+            if connected(tab.ref.host), tab.isChat { enabled.insert(.attach) }
             if (model.space(tab.space)?.tabs.count ?? 0) > 1 { enabled.formUnion([.previousTab, .nextTab]) }
         }
         if let space = shownSpace, model.space(space) != nil, connected(space.host) {
