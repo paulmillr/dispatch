@@ -50,7 +50,7 @@ python3 scripts/benchmark.py run --suite full --environment vm --desktop --label
 
 ### Viewport trace (disappearing transcripts)
 
-Enable **Settings → Behavior → Advanced → Diagnostics** (off by default; applies live). After a disappearance, note the time and copy the logs before they rotate (2 × 4 MiB):
+Enable **Settings → Extra → Troubleshooting → Diagnostics** (off by default; applies live). After a disappearance, note the time and copy the logs before they rotate (2 × 4 MiB):
 
 ```sh
 mkdir -p build/chat-viewport-capture && cp ~/Library/Logs/Dispatch/Diagnostics/* build/chat-viewport-capture/

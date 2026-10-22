@@ -17,14 +17,13 @@ public enum DictationEngine: String, Codable, CaseIterable, Sendable {
 /// The Whisper models Settings offers, as ggml files from whisper.cpp's model repository. All three are its 8-bit
 /// quantizations: half the download of the full-precision files, with the same transcripts in practice.
 public enum WhisperModel: String, Codable, CaseIterable, Identifiable, Sendable {
-    case small, medium, turbo
+    case small, turbo
 
     public var id: Self { self }
 
     public var title: String {
         switch self {
         case .small: "Small"
-        case .medium: "Medium"
         case .turbo: "Large v3 Turbo"
         }
     }
@@ -32,15 +31,13 @@ public enum WhisperModel: String, Codable, CaseIterable, Identifiable, Sendable 
     public var detail: String {
         switch self {
         case .small: "Fastest, good for clear speech"
-        case .medium: "More accurate, slower"
-        case .turbo: "Most accurate, near Medium’s speed"
+        case .turbo: "Most accurate"
         }
     }
 
     var fileName: String {
         switch self {
         case .small: "ggml-small-q8_0.bin"
-        case .medium: "ggml-medium-q8_0.bin"
         case .turbo: "ggml-large-v3-turbo-q8_0.bin"
         }
     }
@@ -49,7 +46,6 @@ public enum WhisperModel: String, Codable, CaseIterable, Identifiable, Sendable 
     var bytes: Int64 {
         switch self {
         case .small: 264_464_607
-        case .medium: 823_369_779
         case .turbo: 874_188_075
         }
     }
@@ -57,7 +53,6 @@ public enum WhisperModel: String, Codable, CaseIterable, Identifiable, Sendable 
     var sha256: String {
         switch self {
         case .small: "49c8fb02b65e6049d5fa6c04f81f53b867b5ec9540406812c643f177317f779f"
-        case .medium: "42a1ffcbe4167d224232443396968db4d02d4e8e87e213d3ee2e03095dea6502"
         case .turbo: "317eb69c11673c9de1e1f0d459b253999804ec71ac4c23c17ecf5fbe24e259a1"
         }
     }

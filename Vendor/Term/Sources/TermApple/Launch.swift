@@ -15,6 +15,8 @@ import Glibc
 
 public struct Launch {
     public var argv: [String], env: [String: String]
+    /// The command argv execs, with what shell integration added to it (bash's --posix, nu's flags).
+    public var command: String
     /// nil: the caller's working directory.
     public var directory: String?
 
@@ -101,6 +103,7 @@ public struct Launch {
         let run = try resources.flatMap { try Self.integrate(shell ?? "sh", $0, &env) } ?? shell ?? "sh"
 
         for (k, v) in overrides { env[k] = v }
+        self.command = run
         argv = Self.exec(run, pw, home: overrides.last { $0.0 == "HOME" }?.1)
         self.directory = cwd
         if let cwd { env["PWD"] = cwd }

@@ -182,7 +182,7 @@ extension TerminalView {
 
 /// Dispatch's clipboard policy: the standard clipboard only, plain text; a paste
 /// needing confirmation is approved, other confirmations (OSC 52 reads) denied, and a program's
-/// write (OSC 52, kitty clipboard) follows TerminalRuntime.allowsClipboardWrite for its surface.
+/// write (OSC 52, kitty clipboard) follows TerminalRuntime.allowsClipboardWrites.
 enum TerminalClipboard {
     static func read() -> String {
         Thread.isMainThread ? MainActor.assumeIsolated { NSPasteboard.general.string(forType: .string) ?? "" }
@@ -196,10 +196,10 @@ enum TerminalClipboard {
         }
     }
 
-    /// A program's write: decided on the main queue, where the surface's connection is known.
-    static func write(_ text: String, from surface: UUID) {
+    /// A program's write: decided on the main queue, where the setting is read.
+    static func programWrite(_ text: String) {
         DispatchQueue.main.async {
-            guard MainActor.assumeIsolated({ TerminalRuntime.shared.allowsClipboardWrite(from: surface) }) else { return }
+            guard MainActor.assumeIsolated({ TerminalRuntime.shared.allowsClipboardWrites }) else { return }
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
         }

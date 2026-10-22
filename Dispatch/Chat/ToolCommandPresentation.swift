@@ -21,7 +21,7 @@ struct ToolCommandPresentation: Sendable {
             if executable == "rg", words.first == "--files" {
                 words.removeFirst()
                 guard words.allSatisfy({ !$0.isEmpty && !$0.hasPrefix("-") }) else { return nil }
-                return Self(title: "Find files", summary: location(words), symbol: "doc.text.magnifyingglass", runningTitle: "Finding files…")
+                return Self(title: "Locate", summary: location(words), symbol: "doc.text.magnifyingglass", runningTitle: "Locating files…")
             }
             while words.first == "-n" || words.first == "--line-number" { words.removeFirst() }
             let terminated = words.first == "--"

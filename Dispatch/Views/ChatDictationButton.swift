@@ -1,9 +1,22 @@
 import Dictation
 import SwiftUI
 
-/// The composer's dictation control, beside Send: a microphone that listens until clicked again, then puts what it
-/// heard at the draft's caret. While it listens it shows the level and what Apple's engine has heard so far; a failure
-/// shows why until clicked.
+/// Settings › Features › Dictation in effect, for the composers and the right ⌘ shortcut; TerminalRuntime applies it.
+@MainActor @Observable
+final class DictationStore {
+    static let shared = DictationStore()
+    var enabled = true
+    var rightCommand = true
+    var navigation = true
+    var readReplies = true
+    var wakeWords = VoiceCommand.defaultWakeWords
+    /// How commands are said, for hints: "Dispatch".
+    var wakeWord: String { WakeWordsSetting.title(wakeWords.first ?? "dispatch") }
+}
+
+/// The composer's dictation control, beside Send: a microphone that listens until clicked again (ChatDictation: what
+/// it hears shows in the draft as it comes). While it listens it shows the level and how to finish; a failure shows
+/// why until clicked.
 struct ChatDictationButton: View {
     @Environment(\.chatTheme) private var theme
     let session: ChatSession
@@ -40,7 +53,8 @@ struct ChatDictationButton: View {
         switch dictation.phase {
         case .idle: ""
         case .starting: "Starting…"
-        case .listening: dictation.partial.isEmpty ? "Listening…" : dictation.partial
+        case .listening: ChatDictation.shared.conversation ? "Conversation · “\(DictationStore.shared.wakeWord), send” · tap right ⌘ to stop"
+            : "Listening · ↩ sends · esc cancels"
         case .transcribing: "Transcribing…"
         }
     }
@@ -66,19 +80,17 @@ struct ChatDictationButton: View {
     }
 
     private func help(active: Bool) -> String {
-        if active { return dictation.phase == .listening ? "Stop and insert" : "Cancel dictation" }
+        if active {
+            if ChatDictation.shared.conversation { return "End conversation mode" }
+            return dictation.phase == .listening ? "Stop and insert" : "Cancel dictation"
+        }
         let preferences = TerminalRuntime.shared.preferences
         let engine = preferences.dictationEngine == .whisper ? "Whisper \(preferences.whisperModel.title)" : "Apple"
-        return "Dictate · \(engine)"
+        return "Conversation mode · \(engine)" + (DictationStore.shared.rightCommand ? " · or tap right ⌘; hold it for one message" : "")
     }
 
     private func toggle() {
-        let preferences = TerminalRuntime.shared.preferences
-        dictation.toggle(owner: session.id, engine: preferences.dictationEngine, model: preferences.whisperModel) { [session] text in
-            let draft = session.drafts.current
-            let next = DictationText.insert(text, into: draft.text, selection: draft.selection)
-            session.drafts.edit(text: next.text, selection: next.selection)
-            session.focusRequest = System.uuid()
-        }
+        if dictation.active(session.id), dictation.phase != .listening { return ChatDictation.shared.cancel() }
+        ChatDictation.shared.toggle(session)
     }
 }

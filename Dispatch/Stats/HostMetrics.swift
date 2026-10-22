@@ -42,6 +42,12 @@ struct HostSample: Codable, Sendable {
     var uptimeText: String { "up \(Int(uptime) / 86400)d \(Int(uptime) / 3600 % 24)h" }
 }
 
+/// How often stats are sampled with no stats view open: often enough that every 15 s bar of the chart holds a
+/// sample. Each sample starts one short helper process (about 2 ms of CPU), so Low Power Mode takes a third of them.
+enum StatisticsCadence {
+    static var background: Duration { ProcessInfo.processInfo.isLowPowerModeEnabled ? .seconds(15) : .seconds(5) }
+}
+
 /// This Mac's counters, read by the helper's stats plugin.
 struct HostSampler: Sendable {
     private var helperStarted = false
@@ -131,8 +137,8 @@ final class HostStats {
                 }
                 guard let self else { return }
                 // With a viewer the chart moves every 2 s. Without one the history only pre-fills the chart for the
-                // next popover: a sample a minute keeps an hour of context at a sixtieth of the helper spawns.
-                let interval: Duration = subscriptions.isEmpty ? .seconds(60) : .seconds(2)
+                // next popover.
+                let interval: Duration = subscriptions.isEmpty ? StatisticsCadence.background : .seconds(2)
                 do { try await System.sleep(for: interval, "sample") } catch { return }
             }
         }

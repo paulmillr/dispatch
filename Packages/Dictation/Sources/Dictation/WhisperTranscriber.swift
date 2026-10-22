@@ -30,8 +30,8 @@ final class WhisperTranscriber: @unchecked Sendable {
         }
     }
 
-    /// The text Whisper hears in `samples` (16 kHz mono).
-    func transcribe(_ samples: [Float], model: URL, language: String? = nil) async throws -> String {
+    /// The text Whisper hears in `samples` (16 kHz mono), and the language it heard (nil when it heard nothing).
+    func transcribe(_ samples: [Float], model: URL, language: String? = nil) async throws -> (text: String, language: String?) {
         try await withCheckedThrowingContinuation { continuation in
             queue.async { [self] in
                 continuation.resume(with: Result { try run(samples, model: model, language: language) })
@@ -39,11 +39,11 @@ final class WhisperTranscriber: @unchecked Sendable {
         }
     }
 
-    private func run(_ samples: [Float], model: URL, language: String?) throws -> String {
+    private func run(_ samples: [Float], model: URL, language: String?) throws -> (text: String, language: String?) {
         let session = try session(for: model)
         defer { scheduleUnload() }
-        // Under a second of audio is noise to Whisper (it hallucinates a phrase): nothing was said.
-        guard samples.count >= Int(Self.sampleRate) / 2 else { return "" }
+        // Under half a second of audio is noise to Whisper (it hallucinates a phrase): nothing was said.
+        guard samples.count >= Int(Self.sampleRate) / 2 else { return ("", nil) }
         // Greedy sampling, no timestamps, no context, blanks suppressed: the session's one configuration. A nil
         // language is detected from the first window ("auto").
         let threads = max(1, min(8, ProcessInfo.processInfo.activeProcessorCount - 2))
@@ -54,7 +54,8 @@ final class WhisperTranscriber: @unchecked Sendable {
             throw DictationError.whisperFailed
         }
         // Every segment's text, concatenated.
-        return Self.clean(result.text)
+        let text = Self.clean(result.text)
+        return (text, text.isEmpty ? nil : result.language)
     }
 
     /// Whisper marks what it heard but couldn't transcribe as "[BLANK_AUDIO]", and a recording of no speech as
@@ -108,32 +109,3 @@ final class WhisperTranscriber: @unchecked Sendable {
     }
 }
 
-/// A dictation for Whisper: the recording, kept at 16 kHz mono and transcribed when the user stops (Whisper has no
-/// partial results). Loads the model while the user speaks.
-final class WhisperRecognizer: DictationRecognizer, @unchecked Sendable {
-    private let model: URL
-    private let converter: DictationConverter
-    private let lock = NSLock()
-    private var samples: [Float] = []
-
-    init(input: AVAudioFormat, model: URL) {
-        self.model = model
-        let whisper = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: WhisperTranscriber.sampleRate, channels: 1,
-                                    interleaved: false)!
-        converter = DictationConverter(from: input, to: whisper)
-        WhisperTranscriber.shared.preload(model)
-    }
-
-    func append(_ buffer: AVAudioPCMBuffer) {
-        guard let converted = converter.convert(buffer), let channel = converted.floatChannelData?[0] else { return }
-        let chunk = UnsafeBufferPointer(start: channel, count: Int(converted.frameLength))
-        lock.withLock { samples.append(contentsOf: chunk) }
-    }
-
-    func finish() async throws -> String {
-        let recording = lock.withLock { samples }
-        return try await WhisperTranscriber.shared.transcribe(recording, model: model)
-    }
-
-    func cancel() { lock.withLock { samples = [] } }
-}

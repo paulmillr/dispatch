@@ -37,7 +37,7 @@ struct FilesWriteRefusal: View {
                 .foregroundStyle(palette.warning).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {
                 Text("Copying in is off for \(host)").foregroundStyle(Chrome.ink)
-                Text("Turn on Copy files in under Settings › Agents & Hosts, then reconnect.")
+                Text("Turn on Copy files in under Settings › Hosts, then reconnect.")
                     .font(AppFont.ui(size: typography.size(offset: -1.5))).foregroundStyle(palette.detail)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -64,7 +64,7 @@ struct FilesReadOnlyTag: View {
             .padding(.horizontal, 6).padding(.vertical, 1)
             .overlay { Capsule().strokeBorder(Chrome.palette.detail.opacity(0.5)) }
             .fixedSize()
-            .help("Copy files in is off for this host. Turn it on under Settings › Agents & Hosts, then reconnect.")
+            .help("Copy files in is off for this host. Turn it on under Settings › Hosts, then reconnect.")
             .accessibilityIdentifier("files-read-only")
     }
 }

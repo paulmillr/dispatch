@@ -7,16 +7,16 @@ import XCTest
 final class WhisperModelStoreTests: XCTestCase {
     func testStoreFindsInstalledModelsAndDeletesThem() throws {
         let directory = try temporaryDirectory()
-        try Data("model".utf8).write(to: directory.appendingPathComponent(WhisperModel.medium.fileName))
+        try Data("model".utf8).write(to: directory.appendingPathComponent(WhisperModel.turbo.fileName))
         let store = WhisperModelStore(directory: directory)
         XCTAssertEqual(store.state(.small), .absent)
         XCTAssertNil(store.installed(.small))
-        XCTAssertEqual(store.state(.medium), .installed)
-        XCTAssertEqual(store.installed(.medium), directory.appendingPathComponent(WhisperModel.medium.fileName))
-        store.delete(.medium)
-        XCTAssertEqual(store.state(.medium), .absent)
-        XCTAssertNil(store.installed(.medium))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent(WhisperModel.medium.fileName).path))
+        XCTAssertEqual(store.state(.turbo), .installed)
+        XCTAssertEqual(store.installed(.turbo), directory.appendingPathComponent(WhisperModel.turbo.fileName))
+        store.delete(.turbo)
+        XCTAssertEqual(store.state(.turbo), .absent)
+        XCTAssertNil(store.installed(.turbo))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent(WhisperModel.turbo.fileName).path))
     }
 
     func testStoreRemovesWhatAnInterruptedDownloadLeft() throws {

@@ -88,9 +88,11 @@ struct ChatComposer: NSViewRepresentable {
         }
         let placeholder = TerminalRuntime.shared.chat.placeholder(session)
         text.placeholder = placeholder
+        let provisional = ChatDictation.shared.provisional(session.id)
+        text.provisional = provisional
         text.highlight()
         text.measure()
-        if revealRestoredSelection { text.scrollRangeToVisible(text.selectedRange()) }
+        if revealRestoredSelection || provisional != nil { text.scrollRangeToVisible(text.selectedRange()) }
         // Edits redraw what they change. This runs on every keystroke, so redraw the whole editor only for
         // what draw() shows besides the text: the placeholder and its colors.
         let drawn = Coordinator.Drawn(placeholder: placeholder, empty: text.string.isEmpty, theme: theme)
@@ -219,6 +221,8 @@ struct ChatComposer: NSViewRepresentable {
             return true
         }
         override func shouldChangeText(in affectedCharRange: NSRange, replacementString: String?) -> Bool {
+            // While dictation writes the draft, typing would be overwritten by its next words.
+            if let session, ChatDictation.shared.blocksTyping(session.id) { return false }
             guard super.shouldChangeText(in: affectedCharRange, replacementString: replacementString) else { return false }
             resetExitShortcut()
             return true

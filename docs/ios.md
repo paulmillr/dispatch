@@ -347,7 +347,7 @@ race (replay sees a second ownership ask).
   `dispatch-black` in light mode. Input, sizes and screens wait for `terminal.attached`, as the Mac's do. tmux keeps one size per
   window: while another client holds it at another size (or the window is split), the screen is laid out at the
   server's grid from the top left, as the Mac's, and the view keeps asking for its own. A program's copy (OSC 52,
-  kitty clipboard) is denied: the phone has no consent surface for it, unlike the Mac's "Remote programs can copy".
+  kitty clipboard) is denied: the phone has no consent surface for it, unlike the Mac's "Programs can copy".
   Hardware PageUp and PageDown page herdr's history; Shift pages the terminal's own. Automatic reconnects ask nothing:
   a host that needs a keyboard-interactive answer fails them and Connect asks again.
 - **Terminal on iPad.** Rules in `TerminalAdaptation`, tests in `TerminalIPadTests` and `TerminalKeyboardUITests`.

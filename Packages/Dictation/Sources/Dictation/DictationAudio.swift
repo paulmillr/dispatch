@@ -1,8 +1,15 @@
 @preconcurrency import AVFoundation
 import Foundation
 
+/// Where a dictation's audio comes from: the microphone, or a recording in tests.
+protocol DictationInput: AnyObject, Sendable {
+    func prepare() throws -> AVAudioFormat
+    func start(_ consume: @escaping @Sendable (AVAudioPCMBuffer) -> Void) throws
+    func stop()
+}
+
 /// The microphone while dictating. Its buffers arrive on the audio thread, in the input's own format.
-final class DictationMicrophone: @unchecked Sendable {
+final class DictationMicrophone: DictationInput, @unchecked Sendable {
     private let engine = AVAudioEngine()
 
     /// The microphone's format, once the iPhone's audio session is set up for recording (`stop` ends it).

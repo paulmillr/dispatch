@@ -2,7 +2,8 @@ import Dictation
 import SwiftUI
 import CoreText
 
-/// Compact settings grouped into Appearance, Keys, General, Features, and Agents & Hosts.
+/// Compact settings grouped into Appearance, General, Features, Keyboard, Extra (imports, export and
+/// troubleshooting), and Hosts.
 struct SettingsView: View {
     // Keep the controls stable while the user adjusts content typography.
     private let typography = AppTypography()
@@ -26,9 +27,20 @@ struct SettingsView: View {
     @State private var loaded = false
     @State private var fittedInitialHeight = false
     @State private var selectedTab = SettingsTab.appearance
-    @State private var themes: [String] = []
+    @State private var schemes = ColorSchemes()
     @State private var fonts: [String] = []
     @State private var customColorsExpanded = false
+    @State private var agentsExpanded = false
+    @State private var filesOptionsExpanded = false
+    @State private var multiplexersExpanded = false
+    @State private var remoteHelperExpanded = false
+    @State private var dictationExpanded = false
+    @State private var interfaceExpanded = false
+    @State private var notificationsExpanded = false
+    /// /etc/shells, read when Settings opens.
+    @State private var shells: [String] = []
+    /// Custom… chosen in Shell: the command being typed, saved on Return.
+    @State private var customShell: String?
 
     private var accent: Color { Chrome.accent }
     private var pickerWidth: CGFloat { typography.expanded(200) }
@@ -83,10 +95,15 @@ struct SettingsView: View {
             settingsPage {
                 switch selectedTab {
                 case .appearance: appearanceSettings
-                case .keys: keySettings
+                case .keyboard: keySettings
+                case .extra:
+                    VStack(spacing: 8) {
+                        SettingsExtraPage(draft: $draft, schemesChanged: reloadSchemes)
+                        troubleshootingSettings
+                    }
                 case .general: generalSettings
                 case .features: featureSettings
-                case .hosts: agentsAndHosts
+                case .hosts: hostSettings
                 }
             }.id(selectedTab)
             .padding(.horizontal, 12)
@@ -125,12 +142,15 @@ struct SettingsView: View {
             draft = store.values
             error = store.error
             fonts = Self.monospacedFontFamilies
-            let bundled = (try? FileManager.default.contentsOfDirectory(atPath: System.resources.appendingPathComponent("ghostty/themes").path)) ?? []
-            themes = ["Default"] + Array(Set(bundled.filter { !$0.hasPrefix(".") } + [draft.theme, draft.lightTheme]).subtracting(["Default"])).sorted()
+            shells = Self.listedShells
+            schemes = ColorSchemes(directory: System.resources.appendingPathComponent("ghostty/themes"))
             loaded = true
         }
         .onChange(of: SidebarThemeStore.shared.nauticalUnlocked) { _, unlocked in
             if unlocked { draft.appTheme = .nautical }
+        }
+        .onChange(of: draft.colorVision) { _, vision in
+            if loaded { conformSchemes(to: vision) }
         }
         .onChange(of: draft) { _, _ in
             guard loaded, draft != store.values else { return }
@@ -153,10 +173,11 @@ struct SettingsView: View {
 
     private enum SettingsTab: String, CaseIterable {
         case appearance = "Appearance"
-        case keys = "Keys"
         case general = "General"
         case features = "Features"
-        case hosts = "Agents & Hosts"
+        case keyboard = "Keyboard"
+        case extra = "Extra"
+        case hosts = "Hosts"
     }
 
     private func settingsPage<Content: View>(@ViewBuilder content: () -> Content) -> some View {
@@ -176,7 +197,7 @@ struct SettingsView: View {
     private var appearanceSettings: some View {
         VStack(spacing: 8) {
             settingsGroup("Text") {
-                row("Terminal font", detail: "With user-installed monospaced fonts") {
+                row("Terminal font", detail: "any monospaced font on this Mac") {
                     dropdown("Terminal font", selection: $draft.fontFamily, choices: fonts, fontName: { $0 })
                 }
                 row("Chat font") {
@@ -199,52 +220,17 @@ struct SettingsView: View {
                 }
             }
             settingsGroup("Style") {
-                // Only an older system, where the switch is off and disabled, says why.
-                row("Liquid Glass", detail: LiquidGlassStore.supported ? nil : "Requires macOS 26 or later") {
-                    settingToggle("Liquid Glass", isOn: $draft.liquidGlass)
-                        .disabled(!LiquidGlassStore.supported)
-                        .accessibilityIdentifier("settings-liquid-glass")
-                }
                 row("Theme", detail: SidebarThemeStore.shared.nauticalUnlocked || draft.appTheme == .nautical
-                    ? "Automatic follows macOS · ⚓ Nautical unlocked" : "Automatic follows macOS") {
+                    ? "automatic follows macOS · ⚓ Nautical unlocked" : "automatic follows macOS") {
                     dropdown("Theme", selection: Binding(get: { draft.appTheme.label }, set: { label in
                         if let theme = AppTheme.allCases.first(where: { $0.label == label }) { draft.appTheme = theme }
                     }), choices: AppTheme.offered(selected: draft.appTheme,
                                                   nauticalUnlocked: SidebarThemeStore.shared.nauticalUnlocked).map(\.label))
                 }
-                row("Host colors", detail: "Remote tabs, borders and sidebar items; off marks them in gray") {
-                    settingToggle("Host colors", isOn: $draft.showHostColors)
-                        .accessibilityIdentifier("settings-host-colors")
-                        .help("Tints remote tabs, borders and sidebar items in each host’s color. Off, they’re marked in gray.")
-                }
-                separator
-                DisclosureGroup(isExpanded: $customColorsExpanded) {
-                    if draft.appTheme == .automatic {
-                        row("Light color scheme") { themePicker("Light color scheme", selection: $draft.lightTheme) }
-                        row("Dark color scheme") { themePicker("Dark color scheme", selection: $draft.theme) }
-                    } else {
-                        row("Color scheme") {
-                            themePicker("Color scheme", selection: draft.appTheme.isDark(systemIsDark: SidebarThemeStore.systemIsDark) ? $draft.theme : $draft.lightTheme)
-                        }
-                    }
-                    row("Improve text contrast", detail: "Adjust text colors while keeping their hue") {
-                        settingToggle("Improve text contrast", isOn: $draft.improveTextContrast)
-                            .accessibilityIdentifier("improve-text-contrast")
-                            .help("Adjust faint terminal colors while preserving their hue. Applies immediately to open terminals.")
-                    }
-                    Text("Overrides terminal and chat colors only.")
-                        .font(typography.font(offset: -1.5)).foregroundStyle(Chrome.muted)
-                        .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
-                } label: {
-                    Button { customColorsExpanded.toggle() } label: {
-                        Text("Custom terminal & chat colors")
-                            .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-                    }.buttonStyle(.plain)
-                }
-                .padding(.vertical, 9)
-                .accessibilityIdentifier("custom-color-schemes")
+                colorSchemes
+                interfaceOptions
             }
-            settingsGroup("Sidebar & tabs") {
+            settingsGroup("Sidebar") {
                 // From the densest list to the roomiest, read out by name.
                 row("Space size") {
                     let order = SidebarStyle.bySize
@@ -260,43 +246,40 @@ struct SettingsView: View {
                             .frame(width: typography.expanded(60), alignment: .trailing)
                     }.frame(width: pickerWidth)
                 }
-                row("Show git branch", detail: draft.gitEnabled ? "Beside each space’s name" : "Needs Git, in Features") {
+                row("Show git branch", detail: draft.gitEnabled ? nil : "needs Git, in Features") {
                     settingToggle("Show git branch", isOn: $draft.showGitBranches)
                         .disabled(!draft.gitEnabled)
                         .accessibilityIdentifier("show-git-branch")
                 }
-                row(draft.tabsOnly ? "Hide sidebar with one tab" : "Hide sidebar with one space") {
-                    settingToggle("Hide sidebar with one space", isOn: $draft.hideSingleSpace)
+                // Off by default: one space needs no sidebar until asked for (the setting is stored as hiding).
+                row(draft.tabsOnly ? "Show with one tab" : "Show with one space") {
+                    settingToggle("Show with one space", isOn: Binding(get: { !draft.hideSingleSpace }, set: { draft.hideSingleSpace = !$0 }))
                 }
-                row("Tabs only", detail: "Every tab in the sidebar instead of spaces, with no tab strips") {
-                    settingToggle("Tabs only", isOn: $draft.tabsOnly)
+                row("Disable spaces", detail: "removes spaces, makes tabs vertical") {
+                    settingToggle("Disable spaces", isOn: $draft.tabsOnly)
                         .accessibilityIdentifier("settings-tabs-only")
-                        .help("Lists every tab in the sidebar, grouped by host when spaces are. Tab strips go; ⌘T adds a tab and ⌘1…9 jump through the list. Spaces keep working underneath (⌘N, splits, layouts).")
+                        .help("Lists every tab in the sidebar instead of tab strips. ⌘T adds a tab and ⌘1…9 jump through the list.")
                 }
             }
         }
     }
 
-    /// What opens at launch and where new spaces start, how terminals behave, attention notifications, and
-    /// diagnostics for troubleshooting. Whole features and their options are under Features.
+    /// What opens at launch and where new spaces start, how terminals behave, and attention notifications. Whole
+    /// features and their options are under Features; troubleshooting is under Extra.
     private var generalSettings: some View {
         VStack(spacing: 8) {
             settingsGroup("Startup") {
-                row("Starting folder", detail: "New spaces start here; new tabs follow the current folder") {
-                    HStack(spacing: 8) {
-                        Text(draft.startingDirectory.replacingOccurrences(of: System.home.path, with: "~"))
-                            .lineLimit(1).truncationMode(.middle).frame(maxWidth: 150)
-                            .foregroundStyle(Chrome.muted).help(draft.startingDirectory)
-                        Button("Choose…", action: chooseFolder)
-                    }
-                }
-                row("Reopen spaces on launch", detail: "Local and remote spaces, tabs and splits") {
+                startingFolderRow
+                shellRow
+                row("Reopen spaces on launch", detail: "local and remote spaces, tabs and splits",
+                    privacy: "Keeps your spaces, tabs, folders and SSH destinations in a private file on this Mac. No passwords, keys or commands.") {
                     settingToggle("Reopen spaces on launch", isOn: $draft.rememberHosts)
                         .accessibilityIdentifier("settings-remember-hosts")
                         .help("Local shells restart in their last folder; remote hosts reopen disconnected. Turning this off deletes the saved session and stops saving; open tabs stay available.")
                 }
                 // Indented under Reopen spaces, which it needs.
-                row("Restore tab history", detail: "Previous output, dimmed", indented: true) {
+                row("Restore tab history", detail: "previous output, dimmed", indented: true,
+                    privacy: "Writes everything local and plain SSH tabs showed to disk on quit, including any secrets you typed or printed.") {
                     settingToggle("Restore tab history", isOn: $draft.restoreTerminalOutput)
                         .accessibilityIdentifier("settings-restore-terminal-output")
                         .help("Saves the text of local and plain SSH tabs when Dispatch quits normally; SSH tabs show it before they reconnect. It is kept for the next launch only, excluded from backups, deleted as Dispatch starts, and ignored after a week. Turning this off deletes it.")
@@ -304,135 +287,340 @@ struct SettingsView: View {
                 }
             }
             settingsGroup("Terminal") {
-                row("Kitty graphics", detail: "Lets terminal programs display images") {
+                row("Programs can copy", detail: "to your clipboard, via OSC 52",
+                    privacy: "Any program in any tab, remote hosts included, can replace your clipboard without asking.") {
+                    settingToggle("Programs can copy", isOn: $draft.allowClipboardWrites)
+                        .accessibilityIdentifier("settings-remote-clipboard")
+                        .help("OSC 52, the kitty clipboard protocol and tmux buffers, in local and remote tabs alike. Programs can never read your clipboard.")
+                }
+                row("Scrollback", detail: draft.scrollback == .automatic ? "sized from this Mac’s memory · new tabs" : "history each new tab keeps") {
+                    dropdown("Scrollback", selection: Binding(get: { draft.scrollback.title }, set: { title in
+                        if let size = Scrollback.allCases.first(where: { $0.title == title }) { draft.scrollback = size }
+                    }), choices: Scrollback.allCases.map(\.title))
+                        .help("Unlimited keeps every line until the tab closes, in memory.")
+                }
+                row("Kitty graphics", detail: "images in terminal; less secure",
+                    privacy: "Output in a local tab can make Dispatch open any file on this Mac you can read.") {
                     settingToggle("Kitty graphics", isOn: $draft.enableKittyGraphics)
+                        .help("Kitty's image protocol. Any output in a local tab, even a file you cat, can make Dispatch open a file on this Mac and decode it as an image; remote tabs can only send image data.")
                 }
                 row("Automatic tab names") {
                     settingToggle("Automatic tab names", isOn: $draft.automaticTabNames)
                     .help("An agent's conversation title, a running program's own title, or the folder at an idle prompt. Off shows the terminal title. Renamed tabs keep their names.")
                 }
             }
-            settingsGroup("Notifications") {
-                row("Notify", detail: "when a pane needs input or finishes a response") {
-                    settingToggle("Attention notifications", isOn: $draft.attentionNotifications)
-                }
-                row("Dock badge", detail: "count of panes waiting for input") {
-                    settingToggle("Attention Dock badge", isOn: $draft.attentionDockBadge)
-                }
-                row("Sound", detail: "play a sound for new background attention") {
+            // One switch for banners and the Dock badge (either one still on, an older split choice, shows it on); the
+            // rest folded until asked for.
+            integrationCard("Notifications", detail: "banner and Dock badge when a pane needs input or finishes a response",
+                            enabled: Binding(get: { draft.attentionNotifications || draft.attentionDockBadge },
+                                             set: { draft.attentionNotifications = $0; draft.attentionDockBadge = $0 }),
+                            fold: Fold(title: "Options",
+                                       on: [draft.attentionSound, draft.attentionTextContent,
+                                            draft.appTheme == .nautical && draft.shipsBell].filter { $0 }.count,
+                                       isExpanded: $notificationsExpanded)) {
+                cardOption("Sound", detail: "play a sound for new background attention", detailBelow: true) {
                     settingToggle("Attention sound", isOn: $draft.attentionSound)
                 }
+                cardOption("Display text content", detail: "the start of the agent's reply and the pane's folder", detailBelow: true,
+                           privacy: "Banners show the pane, its folder and the start of the agent's reply, and can appear on the lock screen.") {
+                    settingToggle("Display text content", isOn: $draft.attentionTextContent)
+                        .accessibilityIdentifier("settings-notification-text")
+                }
                 if draft.appTheme == .nautical {
-                    row("Ship's bell", detail: "two bells when an agent finishes in the background") {
+                    cardOption("Ship's bell", detail: "two bells when an agent finishes in the background", detailBelow: true) {
                         settingToggle("Ship's bell", isOn: $draft.shipsBell)
                             .accessibilityIdentifier("settings-ships-bell")
                     }
                 }
-                if let error = TerminalRuntime.shared.workspace === workspace ? (NSApp.delegate as? AppDelegate)?.attention.notificationError : nil {
-                    Text(error).font(typography.font(offset: -1)).foregroundStyle(Chrome.muted)
-                        .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
-                }
-            }
-            settingsGroup("Troubleshooting") {
-                let setup = SSHSetupLog.shared
-                if !setup.fallbacks.isEmpty {
-                    // Why SSH integration fell back to a plain shell since Dispatch started; the system log has each one.
-                    row("SSH integration fallbacks", detail: setup.fallbacks.sorted { $0.value > $1.value || ($0.value == $1.value && $0.key < $1.key) }
-                        .map { "\($0.key) ×\($0.value)" }.joined(separator: " · ")) {
-                        Text(verbatim: "\(setup.fallbacks.values.reduce(0, +))").foregroundStyle(Chrome.muted)
-                    }
-                    .accessibilityIdentifier("settings-ssh-fallbacks")
-                }
-                row("Diagnostics", detail: "Anonymous app diagnostics saved on this Mac") {
-                    settingToggle("Enable diagnostics", isOn: $draft.enableDiagnostics)
-                        .accessibilityIdentifier("enable-diagnostics")
-                        .help("No host details, personal information, or conversation content.")
-                }
-                if store.values.enableDiagnostics {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(diagnostics.directory.path)
-                            .font(typography.font(offset: -1.5, design: .monospaced))
-                            .textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .accessibilityIdentifier("diagnostics-log-path")
-                        Button("Copy path") {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(diagnostics.directory.path, forType: .string)
-                        }.accessibilityIdentifier("diagnostics-copy-path")
-                        if let error = diagnostics.error {
-                            Text(error).font(typography.font(offset: -1.5)).foregroundStyle(.red)
-                        }
-                    }.frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 8)
-                }
+            }.accessibilityIdentifier("settings-notifications")
+            if let error = TerminalRuntime.shared.workspace === workspace ? (NSApp.delegate as? AppDelegate)?.attention.notificationError : nil {
+                Text(error).font(typography.font(offset: -1)).foregroundStyle(Chrome.muted)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 4)
             }
         }
+    }
+
+    /// Why SSH integration fell back to a plain shell, and the app's anonymous diagnostics; on the Extra page.
+    private var troubleshootingSettings: some View {
+        settingsGroup("Troubleshooting") {
+            let setup = SSHSetupLog.shared
+            if !setup.fallbacks.isEmpty {
+                // Why SSH integration fell back to a plain shell since Dispatch started; the system log has each one.
+                row("SSH integration fallbacks", detail: setup.fallbacks.sorted { $0.value > $1.value || ($0.value == $1.value && $0.key < $1.key) }
+                    .map { "\($0.key) ×\($0.value)" }.joined(separator: " · ")) {
+                    Text(verbatim: "\(setup.fallbacks.values.reduce(0, +))").foregroundStyle(Chrome.muted)
+                }
+                .accessibilityIdentifier("settings-ssh-fallbacks")
+            }
+            row("Diagnostics", detail: "anonymous app diagnostics saved on this Mac",
+                privacy: "Stays on this Mac; nothing is sent anywhere.") {
+                settingToggle("Enable diagnostics", isOn: $draft.enableDiagnostics)
+                    .accessibilityIdentifier("enable-diagnostics")
+                    .help("No host details, personal information, or conversation content.")
+            }
+            if store.values.enableDiagnostics {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(diagnostics.directory.path)
+                        .font(typography.font(offset: -1.5, design: .monospaced))
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("diagnostics-log-path")
+                    Button("Copy path") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(diagnostics.directory.path, forType: .string)
+                    }.accessibilityIdentifier("diagnostics-copy-path")
+                    if let error = diagnostics.error {
+                        Text(error).font(typography.font(offset: -1.5)).foregroundStyle(.red)
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 8)
+            }
+        }
+    }
+
+    /// Style's third row: the window and the cursor, folded like Color schemes; its title opens it too.
+    @ViewBuilder private var interfaceOptions: some View {
+        let fold = Fold(title: "Interface", on: [draft.liquidGlass && LiquidGlassStore.supported, draft.showHostColors,
+                                                 draft.cursorBlink].filter { $0 }.count, isExpanded: $interfaceExpanded)
+        row("Interface", detail: "glass, host colors and cursor") { foldButton(fold, card: "Interface") }
+            .contentShape(Rectangle()).onTapGesture { toggle(fold) }
+            .accessibilityIdentifier("settings-interface")
+        if interfaceExpanded {
+            // Only an older system, where the switch is off and disabled, says why.
+            cardOption("Liquid Glass", detail: LiquidGlassStore.supported ? nil : "requires macOS 26 or later", detailBelow: true) {
+                settingToggle("Liquid Glass", isOn: $draft.liquidGlass)
+                    .disabled(!LiquidGlassStore.supported)
+                    .accessibilityIdentifier("settings-liquid-glass")
+            }
+            cardOption("Color-code remote hosts", detail: "colored or gray icons, tabs and borders", detailBelow: true) {
+                settingToggle("Color-code remote hosts", isOn: $draft.showHostColors)
+                    .accessibilityIdentifier("settings-host-colors")
+                    .help("Tints remote tabs, borders and sidebar items in each host’s color. Off, they’re marked in gray.")
+            }
+            cardOption("Cursor") {
+                dropdown("Cursor", selection: Binding(get: { draft.cursor.title }, set: { title in
+                    if let cursor = TerminalCursor.allCases.first(where: { $0.title == title }) { draft.cursor = cursor }
+                }), choices: TerminalCursor.allCases.map(\.title))
+            }
+            cardOption("Blinking cursor", detail: "programs can still choose their own", detailBelow: true) {
+                settingToggle("Blinking cursor", isOn: $draft.cursorBlink)
+                    .accessibilityIdentifier("settings-cursor-blink")
+            }
+        }
+    }
+
+    /// Style's terminal and chat colors, folded into one row: colorblind mode, a scheme for light and dark (or the app
+    /// theme's one), text contrast, and your own schemes, each applied in a click. Its title opens it too.
+    @ViewBuilder private var colorSchemes: some View {
+        let fold = Fold(title: "Color schemes", on: nil, isExpanded: $customColorsExpanded)
+        row("Color schemes", detail: "terminal and chat") {
+            HStack(spacing: 8) {
+                Button(action: surpriseScheme) {
+                    // Lit like an opened options button, so it reads as an action rather than a muted control.
+                    Label("Surprise me", systemImage: "dice").font(typography.font(offset: -1.5))
+                        .foregroundStyle(Chrome.ink)
+                        .padding(.horizontal, 8).frame(height: 24)
+                        .background(SettingsControlStyle.selected, in: RoundedRectangle(cornerRadius: 6))
+                        .overlay { RoundedRectangle(cornerRadius: 6).strokeBorder(SettingsControlStyle.border, lineWidth: 0.5) }
+                        .contentShape(Rectangle())
+                }.buttonStyle(.plain)
+                    .help("Make a new scheme for this side and use it; the next surprise replaces it unless you keep it")
+                    .accessibilityIdentifier("settings-surprise-scheme")
+                foldButton(fold, card: "Color schemes")
+            }
+        }
+            .contentShape(Rectangle()).onTapGesture { toggle(fold) }
+            .accessibilityIdentifier("custom-color-schemes")
+        if customColorsExpanded {
+            VStack(spacing: 0) {
+                if draft.appTheme == .automatic {
+                    cardOption("Light color scheme", detail: missingScheme(draft.lightTheme)) {
+                        themePicker("Light color scheme", selection: $draft.lightTheme, light: true)
+                    }
+                    cardOption("Dark color scheme", detail: missingScheme(draft.theme)) {
+                        themePicker("Dark color scheme", selection: $draft.theme, light: false)
+                    }
+                } else {
+                    let dark = draft.appTheme.isDark(systemIsDark: SidebarThemeStore.systemIsDark)
+                    cardOption("Color scheme", detail: missingScheme(dark ? draft.theme : draft.lightTheme)) {
+                        themePicker("Color scheme", selection: dark ? $draft.theme : $draft.lightTheme, light: !dark)
+                    }
+                }
+                cardOption("Terminal opacity", detail: draft.terminalOpacity < 1 ? "the desktop shows through terminals" : nil,
+                           detailBelow: true) {
+                    HStack(spacing: 12) {
+                        SettingsSlider(value: $draft.terminalOpacity, range: Preferences.terminalOpacityRange, step: 0.05,
+                                       label: "Terminal opacity", identifier: "settings-terminal-opacity").frame(height: 20)
+                        Text(draft.terminalOpacity.formatted(.percent.precision(.fractionLength(0))))
+                            .foregroundColor(Chrome.ink).font(typography.font(offset: -0.5)).monospacedDigit().fixedSize()
+                            .frame(width: typography.expanded(52), alignment: .trailing)
+                    }.frame(width: pickerWidth)
+                }
+                cardOption("Improve text contrast", detail: "adjust text colors while keeping their hue", detailBelow: true) {
+                    settingToggle("Improve text contrast", isOn: $draft.improveTextContrast)
+                        .accessibilityIdentifier("improve-text-contrast")
+                        .help("Adjust faint terminal colors while preserving their hue. Applies immediately to open terminals.")
+                }
+                cardOption("Colorblind-friendly", detail: "only schemes made for color blindness; new schemes are made for it",
+                           detailBelow: true) {
+                    settingToggle("Colorblind-friendly", isOn: Binding(get: { draft.colorVision != .typical },
+                                                                       set: { draft.colorVision = $0 ? .redGreen : .typical }))
+                        .accessibilityIdentifier("settings-colorblind")
+                }
+                if draft.colorVision != .typical {
+                    cardOption("Color blindness", detail: draft.colorVision.detail, detailBelow: true) {
+                        dropdown("Color blindness", selection: Binding(
+                            get: { draft.colorVision.title },
+                            set: { title in
+                                if let vision = ColorVision.allCases.first(where: { $0.title == title }) { draft.colorVision = vision }
+                            }), choices: [ColorVision.redGreen, .blueYellow].map(\.title))
+                    }
+                }
+                Text("Your color schemes").font(typography.font(offset: -0.5)).fontWeight(.semibold)
+                    .foregroundStyle(SettingsControlStyle.selectedText)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 10).padding(.bottom, 7)
+                YourColorSchemes(draft: $draft, schemesChanged: reloadSchemes, importSchemes: { selectedTab = .extra },
+                                 themes: schemes.custom)
+            }.padding(.bottom, 4)
+        }
+    }
+
+    /// "Surprise me": a new random scheme for the side showing now (and the colorblind mode), in place of the last
+    /// surprise, used at once.
+    private func surpriseScheme() {
+        let systemIsDark = SidebarThemeStore.systemIsDark
+        let dark = draft.appTheme == .automatic ? systemIsDark : draft.appTheme.isDark(systemIsDark: systemIsDark)
+        // Seeded from System so a replayed test sees the same surprise.
+        let bytes = System.uuid().uuid
+        let seed = [bytes.0, bytes.1, bytes.2, bytes.3, bytes.4, bytes.5, bytes.6, bytes.7].reduce(UInt64(0)) { $0 << 8 | UInt64($1) }
+        do {
+            let name = try SurpriseScheme.make(light: !dark, vision: draft.colorVision, seed: seed)
+            reloadSchemes()
+            if dark { draft.theme = name } else { draft.lightTheme = name }
+        } catch { self.error = "Could not make a surprise scheme: \(error.localizedDescription)" }
+    }
+
+    /// The schemes on disk changed (made, edited, added, imported, deleted): list them again, and let terminals and chat
+    /// read the scheme in use again, which may be the one that changed under the same name.
+    private func reloadSchemes() {
+        schemes = ColorSchemes(directory: System.resources.appendingPathComponent("ghostty/themes"))
+        try? TerminalRuntime.shared.apply(TerminalRuntime.shared.preferences)
     }
 
     /// Whole features, each with its options: Chat mode and its agents, tmux and herdr sessions as spaces, files mode,
     /// and git.
     private var featureSettings: some View {
         VStack(spacing: 8) {
-            integrationCard("Chat mode", detail: "coding agent CLIs as chat", enabled: chatEnabled) {
+            // An agent on or off for Chat on every machine; Hosts chooses where its hooks are installed.
+            integrationCard("Chat mode", detail: "coding agent CLIs as chat",
+                            privacy: "Adds hooks to the agents' own config and reads their transcripts, in memory only.",
+                            enabled: chatEnabled, fold: agentFold) {
                 ForEach(TerminalRuntime.shared.chat.listedLaunches, id: \.key) { agentRow($0) }
-            }
+            }.accessibilityIdentifier("settings-agents")
             if let chatError = TerminalRuntime.shared.chat.error {
                 Text(chatError).font(typography.font(offset: -1.5)).foregroundStyle(.red).textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            settingsGroup("tmux & herdr") {
+            // One switch for every multiplexer: on while any is, and it turns them all on or off.
+            integrationCard("Tmux & herdr", detail: "open sessions as native spaces with tmux -CC or herdr",
+                            enabled: Binding(get: { multiplexers.contains { draft.spaces[on: $0] } },
+                                             set: { on in for name in multiplexers { draft.spaces[on: name] = on } }),
+                            fold: Fold(title: "Multiplexers", on: multiplexers.filter { draft.spaces[on: $0] }.count,
+                                       isExpanded: $multiplexersExpanded)) {
                 ForEach(multiplexers, id: \.self) { name in
-                    row("Open \(name) sessions as spaces", detail: sessionDetail(name)) {
+                    cardOption(name, detail: sessionDetail(name), detailBelow: true) {
                         settingToggle("Open \(name) sessions as spaces", isOn: $draft.spaces[on: name])
                     }
                 }
-                Text("The original tab closes after attach.")
+                Text("the original tab closes after attach.")
                     .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
-                    .frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 9)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 7)
             }
-            settingsGroup("Files") {
-                row("Drag and drop", detail: "Copy files in from Finder, out to Finder, or onto a terminal as paths") {
+            integrationCard("Files", detail: "browse, preview and copy a tab’s files · ⇧⌘F",
+                            enabled: $draft.filesEnabled,
+                            fold: Fold(title: "Options", on: [draft.filesDragAndDrop, draft.filesShowHidden].filter { $0 }.count,
+                                       isExpanded: $filesOptionsExpanded)) {
+                cardOption("Drag and drop", detail: "copy files in from Finder, out to Finder, or onto a terminal as paths",
+                           detailBelow: true) {
                     settingToggle("Drag and drop", isOn: $draft.filesDragAndDrop)
                         .accessibilityIdentifier("settings-files-drag-and-drop")
                 }
-                row("Follow the shell’s directory", detail: "Files opens where the tab’s shell is and moves with cd until you navigate") {
-                    settingToggle("Follow the shell’s directory", isOn: $draft.filesFollowShell)
-                        .accessibilityIdentifier("settings-files-follow-shell")
-                }
-                row("Show hidden files", detail: "Dotfiles and ignored folders; ⇧⌘. toggles per tab") {
+                cardOption("Show hidden files", detail: "dotfiles and ignored folders; ⇧⌘. toggles per tab", detailBelow: true) {
                     settingToggle("Show hidden files", isOn: $draft.filesShowHidden)
                         .accessibilityIdentifier("settings-files-show-hidden")
                 }
-                // The popup names itself settings-dropdown-<title> in AppKit, like the other dropdowns.
-                row("Open files with", detail: "Open in editor types the command into the tab’s terminal") {
-                    dropdown("Open files with", selection: Binding(get: { draft.filesOpenWith.title }, set: { title in
-                        if let choice = FilesOpenWith.allCases.first(where: { $0.title == title }) { draft.filesOpenWith = choice }
-                    }), choices: FilesOpenWith.allCases.map(\.title))
-                }
-                row("Ask before replacing", detail: "A copy that would overwrite stops and asks; off keeps both") {
-                    settingToggle("Ask before replacing", isOn: $draft.filesAskBeforeReplacing)
-                        .accessibilityIdentifier("settings-files-ask-before-replacing")
-                }
             }
-            integrationCard("Git", detail: "Commits and uncommitted changes in files mode, and branch names",
-                            enabled: $draft.gitEnabled) {
-                cardOption("Separate Changes tab", detail: "The uncommitted changes as their own tab, not Commits’ first row",
-                           detailBelow: true) {
-                    settingToggle("Separate Changes tab", isOn: $draft.gitChangesTab)
-                        .accessibilityIdentifier("settings-git-changes-tab")
-                }
-            }
+                .accessibilityIdentifier("settings-files")
+            integrationCard("Git", detail: "review mode and commit log · ⇧⌘F",
+                            enabled: $draft.gitEnabled, hasOptions: false) { EmptyView() }
                 .accessibilityIdentifier("settings-git")
+            remoteHelperSettings
             dictationSettings
         }.task { TerminalRuntime.shared.chat.loadLaunches() }
     }
 
+    /// The helper Dispatch uploads to SSH hosts for stats, files and remote chat; off, hosts connect over plain SSH.
+    /// Without Auto-confirm, a new host asks which features to allow; with it, the helper gets them all.
+    private var remoteHelperSettings: some View {
+        integrationCard("Remote helper", detail: "uploads to ~/.dispatch",
+                        privacy: "On each SSH host the helper can see processes, files you can read, agent transcripts and Git, as features allow.",
+                        enabled: $draft.enableHostDetection,
+                        fold: Fold(title: "Options", on: [draft.autoGrantNewHosts, draft.autoReconnectSSH].filter { $0 }.count,
+                                   isExpanded: $remoteHelperExpanded)) {
+            cardOption("Auto-confirm uploads", detail: "new hosts get every feature without asking", detailBelow: true,
+                       privacy: "Skips choosing what the helper may see on a new host.") {
+                settingToggle("Auto-confirm uploads", isOn: $draft.autoGrantNewHosts)
+                    .accessibilityIdentifier("settings-auto-confirm-uploads")
+                    .help("The helper can see processes, files you can read, agent transcripts and Git. It is kept at ~/.dispatch/bin/versions/<hash>/dispatch-helper.")
+            }
+            cardOption("Reconnect automatically", detail: "after a drop, with your keys or SSH agent", detailBelow: true) {
+                settingToggle("Reconnect automatically", isOn: $draft.autoReconnectSSH)
+                    .accessibilityIdentifier("settings-ssh-auto-reconnect")
+                    .help("For connections with the helper, retrying after sleep or a network change. Hosts that ask for a password, connections you disconnect, and hosts reopened at launch wait for Reconnect.")
+            }
+        }
+            .accessibilityIdentifier("settings-remote-helper")
+    }
+
+    /// How the first wake word is said: "Dispatch".
+    private var wakeWord: String { WakeWordsSetting.title(draft.dictationWakeWords.first ?? "dispatch") }
+
     /// Chat dictation's engine; choosing Whisper lists its models to download and pick from.
     private var dictationSettings: some View {
-        settingsGroup("Dictation") {
-            row("Engine", detail: draft.dictationEngine == .apple ? AppleTranscriber.summary : "Whisper runs on this Mac with a model you download") {
+        integrationCard("Dictation", detail: "always local & on-device",
+                        privacy: "Listens only while you dictate; audio stays in memory. The text goes into the draft, which is saved.",
+                        enabled: $draft.dictationEnabled,
+                        fold: Fold(title: "Options",
+                                   on: [draft.dictationRightCommand, draft.dictationNavigation, draft.dictationReadReplies].filter { $0 }.count,
+                                   isExpanded: $dictationExpanded)) {
+            cardOption("Engine", detail: "Apple uses your macOS language; Whisper understands many languages.",
+                       detailBelow: true) {
                 dropdown("Dictation engine", selection: Binding(get: { draft.dictationEngine.title }, set: { title in
                     if let engine = DictationEngine.allCases.first(where: { $0.title == title }) { draft.dictationEngine = engine }
                 }), choices: DictationEngine.allCases.map(\.title))
+            }
+            cardOption("Hold right ⌘ to dictate", detail: "release inserts, ↩ sends, esc cancels; a tap starts conversation mode until the next tap",
+                       detailBelow: true) {
+                settingToggle("Hold right ⌘ to dictate", isOn: $draft.dictationRightCommand)
+                    .accessibilityIdentifier("settings-dictation-right-command")
+            }
+            cardOption("Navigate by voice", detail: "say “\(wakeWord), …” to switch spaces and tabs or the sidebar: “\(wakeWord), billing tab 2”, “\(wakeWord), back”, “\(wakeWord), hide sidebar”",
+                       detailBelow: true) {
+                settingToggle("Navigate by voice", isOn: $draft.dictationNavigation)
+                    .accessibilityIdentifier("settings-dictation-navigation")
+            }
+            cardOption("Wake words", detail: "what voice commands start with, in chat and everywhere else; one word each, separated by commas",
+                       detailBelow: true) {
+                if draft.dictationWakeWords != VoiceCommand.defaultWakeWords {
+                    Button("Restore default") { draft.dictationWakeWords = VoiceCommand.defaultWakeWords }
+                        .buttonStyle(.plain).font(typography.font(offset: -1.5)).foregroundStyle(accent)
+                        .accessibilityIdentifier("settings-wake-words-restore")
+                }
+            }
+            WakeWordsSetting(words: $draft.dictationWakeWords, engine: draft.dictationEngine, model: draft.whisperModel)
+            cardOption("Read replies aloud", detail: "in conversation mode: this chat's replies and questions, and a word when other agents finish or need you",
+                       detailBelow: true, privacy: "Anyone nearby hears the replies, permission requests and questions.") {
+                settingToggle("Read replies aloud", isOn: $draft.dictationReadReplies)
+                    .accessibilityIdentifier("settings-dictation-read-replies")
             }
             if draft.dictationEngine == .whisper {
                 ForEach(WhisperModel.allCases) { model in
@@ -442,11 +630,65 @@ struct SettingsView: View {
                             .padding(.vertical, 7)
                     }
                 }
-                Text("Models come from huggingface.co and stay on this Mac. Click a downloaded model to use it.")
+                Text("models come from huggingface.co and stay on this Mac. Click a downloaded model to use it.")
                     .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 9)
             }
         }.accessibilityIdentifier("settings-dictation")
+    }
+
+    /// Where new spaces start: Home, or a folder chosen under Custom… (listed by its path once chosen), like Shell.
+    private var startingFolderRow: some View {
+        let home = System.home.path, path = draft.startingDirectory
+        let homeTitle = "Home (~)", customTitle = "Custom…"
+        let shown = path == home ? homeTitle : path.replacingOccurrences(of: home, with: "~")
+        return row("Starting folder", detail: "new spaces start here; new tabs follow the current folder") {
+            dropdown("Starting folder", selection: Binding(get: { shown }, set: { choice in
+                switch choice {
+                case homeTitle: draft.startingDirectory = home
+                case customTitle: chooseFolder()
+                default: break
+                }
+            }), choices: [homeTitle] + (path == home ? [] : [shown]) + [customTitle])
+            .help(path)
+        }
+    }
+
+    /// What new local tabs run: the login shell, a shell /etc/shells lists, or a command typed under Custom….
+    /// SSH, tmux and herdr tabs keep their own.
+    @ViewBuilder private var shellRow: some View {
+        let login = "Login shell" + (System.machine.launch.shell.map { " (\(($0 as NSString).lastPathComponent))" } ?? "")
+        let custom = customShell != nil || (!draft.shell.isEmpty && !shells.contains(draft.shell))
+        let missing = draft.shellProgram.map { !$0.hasPrefix("/") || !FileManager.default.isExecutableFile(atPath: $0) } ?? false
+        row("Shell", detail: missing ? "not found; new tabs use the login shell" : "new local tabs") {
+            dropdown("Shell", selection: Binding(get: { custom ? "Custom…" : draft.shell.isEmpty ? login : draft.shell }, set: { choice in
+                switch choice {
+                case login: customShell = nil; draft.shell = ""
+                case "Custom…": customShell = draft.shell
+                default: customShell = nil; draft.shell = choice
+                }
+            }), choices: [login] + shells + ["Custom…"])
+        }
+        if custom {
+            HStack(spacing: 8) {
+                TextField("/opt/homebrew/bin/fish -l", text: Binding(get: { customShell ?? draft.shell }, set: { customShell = $0 }))
+                    .textFieldStyle(.roundedBorder).font(typography.font(offset: -0.5, design: .monospaced))
+                    .onSubmit { if let customShell { draft.shell = customShell.trimmingCharacters(in: .whitespaces) } }
+                    .accessibilityIdentifier("settings-custom-shell")
+            }.padding(.bottom, 9)
+            Text("A program by its full path, then its arguments. Press Return to use it.")
+                .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
+                .frame(maxWidth: .infinity, alignment: .leading).padding(.bottom, 9)
+        }
+    }
+
+    /// The shells /etc/shells lists that exist here.
+    /// bash, sh and zsh, the first of each /etc/shells lists that exists; any other shell goes under Custom….
+    static var listedShells: [String] {
+        let text = (try? String(contentsOfFile: "/etc/shells", encoding: .utf8)) ?? ""
+        let listed = text.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { $0.hasPrefix("/") && FileManager.default.isExecutableFile(atPath: $0) }
+        return ["bash", "sh", "zsh"].compactMap { name in listed.first { ($0 as NSString).lastPathComponent == name } }
     }
 
     /// The modifiers that go with the digit keys. Recording one another group already uses swaps the two.
@@ -497,9 +739,11 @@ struct SettingsView: View {
                     .help("tmux style: c new tab, n/p next/previous tab, % and \" split, x close pane, d detach. herdr style: c new tab, v and - split, ⇧N new space, b sidebar.")
                 }
             }
-            settingsGroup("Keyboard") {
-                row("Use Option as Alt", detail: "Types characters such as é, or @ and { on some layouts") {
-                    settingToggle("Use Option as Alt", isOn: $draft.optionAsAlt)
+            settingsGroup("Option key") {
+                row("Option as Alt", detail: "any other Option key types characters such as é, or @ and { on some layouts") {
+                    dropdown("Option as Alt", selection: Binding(get: { draft.optionAsAlt.title }, set: { title in
+                        if let keys = OptionKeys.allCases.first(where: { $0.title == title }) { draft.optionAsAlt = keys }
+                    }), choices: OptionKeys.allCases.map(\.title))
                 }
             }
         }
@@ -537,11 +781,9 @@ struct SettingsView: View {
 
     /// How SSH connections behave and each machine's choices, this Mac first, with its agent hooks; Chat mode itself
     /// is under Features.
-    private var agentsAndHosts: some View {
+    private var hostSettings: some View {
         VStack(spacing: 8) {
-            SSHHostsSettings(workspace: workspace, permissions: sshPermissions, policy: $draft.newHostPolicy,
-                             clipboard: $draft.allowRemoteClipboardWrites, reconnect: $draft.autoReconnectSSH,
-                             resetting: resettingSSH) {
+            SSHHostsSettings(workspace: workspace, permissions: sshPermissions, resetting: resettingSSH) {
                 if hasActiveSSHConnections() { confirmingSSHReset = true } else { resetHosts() }
             }
         }.task { TerminalRuntime.shared.chat.loadLaunches() }
@@ -560,7 +802,43 @@ struct SettingsView: View {
         }
     }
 
-    /// An agent on or off for Chat on every machine; Hosts chooses where its hooks are installed.
+    /// Chat mode's agents, counted in its header until opened.
+    private var agentFold: Fold {
+        let chat = TerminalRuntime.shared.chat
+        return Fold(title: "Agents", on: chat.listedLaunches.filter { !chat.disabledIntegrations.contains($0.key) }.count,
+                    isExpanded: $agentsExpanded)
+    }
+
+    /// A card's options folded under its header, whose button counts those switched on and opens them.
+    struct Fold {
+        let title: String
+        /// How many are switched on; nil for options that aren't switches.
+        let on: Int?
+        let isExpanded: Binding<Bool>
+    }
+
+    private func toggle(_ fold: Fold) {
+        withAnimation(.snappy(duration: 0.22)) { fold.isExpanded.wrappedValue.toggle() }
+    }
+
+    private func foldButton(_ fold: Fold, card: String) -> some View {
+        let open = fold.isExpanded.wrappedValue
+        return Button { toggle(fold) } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "slider.horizontal.3").font(.system(size: 11, weight: .medium))
+                if let on = fold.on { Text("\(on)").font(typography.font(offset: -2.5)).monospacedDigit() }
+            }
+            .foregroundStyle(open ? Chrome.ink : SettingsControlStyle.detail)
+            .padding(.horizontal, 8).frame(height: 24)
+            .background(open ? SettingsControlStyle.selected : SettingsControlStyle.fill, in: RoundedRectangle(cornerRadius: 6))
+            .overlay { RoundedRectangle(cornerRadius: 6).strokeBorder(SettingsControlStyle.border, lineWidth: 0.5) }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain).help(fold.title)
+        .accessibilityLabel(fold.title).accessibilityValue(fold.on.map { "\($0) on" } ?? "")
+        .accessibilityIdentifier("settings-options-\(card)")
+    }
+
     private func agentRow(_ launch: HelperClient.Launch) -> some View {
         let chat = TerminalRuntime.shared.chat
         return cardOption(launch.label) {
@@ -578,6 +856,7 @@ struct SettingsView: View {
     private func restoreDefaults() {
         draft = Preferences()
         keyError = nil
+        customShell = nil
         // Chat mode (Features) and this Mac's agent hooks (Hosts) restore together: the agents install their hooks here
         // again.
         if selectedTab == .hosts || selectedTab == .features {
@@ -590,46 +869,48 @@ struct SettingsView: View {
     }
 
     private func settingsGroup<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(title).fontWeight(.semibold).foregroundStyle(SettingsControlStyle.selectedText)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.top, 10).padding(.bottom, 7)
-            VStack(spacing: 0, content: content)
-                .padding(.bottom, 4)
-        }.padding(.horizontal, 14)
-            .background(Chrome.sidebar, in: RoundedRectangle(cornerRadius: 8))
-            .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(Chrome.border) }
+        SettingsGroup(title: title, content: content)
     }
 
-    private func integrationCard<Options: View>(_ title: String, detail: String, enabled: Binding<Bool>,
-                                                hasOptions: Bool = true, @ViewBuilder options: () -> Options) -> some View {
+    /// A feature's card: its switch, if it has one, in the header, its options below; folded, they show once its button
+    /// opens them.
+    private func integrationCard<Options: View>(_ title: String, detail: String, privacy: String? = nil, enabled: Binding<Bool>? = nil,
+                                                fold: Fold? = nil, hasOptions: Bool = true,
+                                                @ViewBuilder options: () -> Options) -> some View {
         VStack(spacing: 0) {
-            HStack(spacing: 16) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title).fontWeight(.semibold).foregroundStyle(SettingsControlStyle.selectedText)
-                    Text(detail).font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
-                }
-                Spacer(minLength: 0)
-                settingToggle(title, isOn: enabled)
+            HStack(spacing: 12) {
+                // A folded card's title opens it too.
+                HStack(spacing: 0) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        SettingsTitle(title: title, privacy: privacy).fontWeight(.semibold)
+                            .foregroundStyle(SettingsControlStyle.selectedText)
+                        Text(detail).font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
+                    }
+                    Spacer(minLength: 0)
+                }.contentShape(Rectangle()).onTapGesture { if let fold { toggle(fold) } }
+                if let fold { foldButton(fold, card: title) }
+                // A card without a switch keeps its place, so the option buttons line up.
+                settingToggle(title, isOn: enabled ?? .constant(false))
+                    .opacity(enabled == nil ? 0 : 1).allowsHitTesting(enabled != nil).accessibilityHidden(enabled == nil)
             }.padding(.horizontal, 14).padding(.vertical, 11)
-            if hasOptions {
+            if hasOptions && fold?.isExpanded.wrappedValue != false {
                 separator
                 VStack(spacing: 0, content: options)
                     .padding(.horizontal, 14).padding(.top, 2).padding(.bottom, 4)
-                    .disabled(!enabled.wrappedValue)
+                    .disabled(enabled?.wrappedValue == false)
             }
         }.background(Chrome.sidebar, in: RoundedRectangle(cornerRadius: 8))
             .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(Chrome.border) }
-            .opacity(enabled.wrappedValue ? 1 : 0.5)
+            .opacity(enabled?.wrappedValue == false ? 0.5 : 1)
     }
 
     /// A card's option: its detail beside the title, or below it (wrapping) for a longer one.
     private func cardOption<Control: View>(_ title: String, detail: String? = nil, detailBelow: Bool = false,
-                                           @ViewBuilder control: () -> Control) -> some View {
+                                           privacy: String? = nil, @ViewBuilder control: () -> Control) -> some View {
         HStack(spacing: 12) {
             if detailBelow {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(title).font(typography.font(offset: -0.5))
+                    SettingsTitle(title: title, privacy: privacy).font(typography.font(offset: -0.5))
                     if let detail {
                         Text(detail).font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
                             .fixedSize(horizontal: false, vertical: true)
@@ -637,7 +918,7 @@ struct SettingsView: View {
                 }
             } else {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(title).font(typography.font(offset: -0.5))
+                    SettingsTitle(title: title, privacy: privacy).font(typography.font(offset: -0.5))
                     if let detail { Text(detail).font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail).lineLimit(1) }
                 }
             }
@@ -646,38 +927,50 @@ struct SettingsView: View {
         }.padding(.vertical, 7)
     }
 
-    /// Which sessions "Open … sessions as spaces" takes, for the multiplexers Dispatch knows; the card's header says
-    /// what happens to the tab that started one.
+    /// The commands whose sessions a multiplexer's switch opens as spaces, for the multiplexers Dispatch knows; the
+    /// card's footer says what happens to the tab that started one.
     private func sessionDetail(_ name: String) -> String? {
         let commands = ["tmux": "tmux -CC or tmux -CC attach", "herdr": "herdr or herdr session attach"]
-        return commands[name].map { "For \($0)." }
+        return commands[name]
     }
 
 
-    private var separator: some View { Rectangle().fill(Chrome.palette.separator).frame(height: 1) }
+    private var separator: some View { SettingsSeparator() }
 
 
     /// An indented row depends on the row above it.
-    private func row<Control: View>(_ title: String, detail: String? = nil, indented: Bool = false,
+    private func row<Control: View>(_ title: String, detail: String? = nil, indented: Bool = false, privacy: String? = nil,
                                     @ViewBuilder control: () -> Control) -> some View {
-        VStack(spacing: 0) {
-            separator
-            HStack(spacing: 16) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                    if let detail { Text(detail).font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail) }
-                }.padding(.leading, indented ? 18 : 0)
-                Spacer(minLength: 8)
-                control()
-            }.padding(.vertical, 9)
-        }
+        SettingsRow(title: title, detail: detail, indented: indented, privacy: privacy, control: control)
     }
 
-    private func themePicker(_ title: String, selection: Binding<String>) -> some View {
-        dropdown(title, selection: Binding(
+    /// The light or the dark schemes, then those that read as either below a separator. A saved choice from the
+    /// other side still shows (the dropdown adds its selection).
+    /// Custom schemes for that side (or either) come first, then the bundled ones.
+    /// The schemes for the current vision; colorblind modes leave out Match app theme, whose colors aren't made for it.
+    private func themePicker(_ title: String, selection: Binding<String>, light: Bool) -> some View {
+        let schemes = schemes.filtered(for: draft.colorVision)
+        let side = light ? schemes.light : schemes.dark
+        let custom = schemes.custom.filter { $0.light == nil || $0.light == light }.map(\.name)
+        let groups = [custom, side, schemes.either].filter { !$0.isEmpty }
+        let choices = groups.flatMap { [SettingsDropdown.separator] + $0 }
+        return dropdown(title, selection: Binding(
             get: { selection.wrappedValue == "Default" ? "Match app theme" : selection.wrappedValue },
             set: { selection.wrappedValue = $0 == "Match app theme" ? "Default" : $0 }),
-            choices: themes.map { $0 == "Default" ? "Match app theme" : $0 })
+            choices: draft.colorVision == .typical ? ["Match app theme"] + choices : Array(choices.dropFirst()))
+    }
+
+    /// After the vision changes, a scheme that isn't for it gives way: to the vision's own light or dark scheme, or,
+    /// leaving colorblind mode, to Match app theme.
+    private func conformSchemes(to vision: ColorVision) {
+        let pair = ColorSchemes.colorblind[vision]
+        if ColorSchemes.vision(of: draft.lightTheme) != vision { draft.lightTheme = pair?.light.first ?? "Default" }
+        if ColorSchemes.vision(of: draft.theme) != vision { draft.theme = pair?.dark.first ?? "Default" }
+    }
+
+    /// Why a chosen scheme isn't used: its file is gone.
+    private func missingScheme(_ name: String) -> String? {
+        name == "Default" || !ThemeResolution.value(for: name).missing ? nil : "“\(name)” not found; using Dispatch’s own"
     }
 
     private func dropdown(_ title: String, selection: Binding<String>, choices: [String],
@@ -840,7 +1133,9 @@ private struct SettingsSlider: NSViewRepresentable {
     }
 }
 
-private struct SettingsDropdown: NSViewRepresentable {
+struct SettingsDropdown: NSViewRepresentable {
+    /// A choice that draws as the menu's separator line.
+    static let separator = ""
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.appTypography) private var typography
     let title: String
@@ -849,6 +1144,12 @@ private struct SettingsDropdown: NSViewRepresentable {
     let fontName: ((String) -> String)?
     let fontScale: ((String) -> CGFloat)?
     func makeCoordinator() -> Coordinator { Coordinator(selection: $selection) }
+    /// The width it is given, never the longest menu item's: a long theme or profile name truncates instead of
+    /// spilling over the control beside it.
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSPopUpButton, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? 180, height: proposal.height ?? 27)
+    }
+
     func makeNSView(context: Context) -> NSPopUpButton {
         let button = PopupButton(frame: .zero, pullsDown: false)
         button.cell = PopupCell(textCell: "", pullsDown: false)
@@ -864,10 +1165,13 @@ private struct SettingsDropdown: NSViewRepresentable {
         context.coordinator.selection = $selection
         let items = choices.contains(selection) ? choices : choices + [selection]
         if button.itemTitles != items {
-            button.removeAllItems(); button.addItems(withTitles: items)
+            button.removeAllItems()
+            for title in items {
+                if title == Self.separator { button.menu?.addItem(.separator()) } else { button.addItem(withTitle: title) }
+            }
         }
         if let fontName {
-            for item in button.itemArray {
+            for item in button.itemArray where !item.isSeparatorItem {
                 let size = typography.size(offset: -0.5) * (fontScale?(item.title) ?? 1)
                 let name = fontName(item.title)
                 let font = NSFontManager.shared.font(withFamily: name, traits: [], weight: 5, size: size)
@@ -919,5 +1223,82 @@ private struct SettingsDropdown: NSViewRepresentable {
             arrow.line(to: NSPoint(x: x, y: y + 2 * direction)); arrow.close()
             NSColor(Chrome.palette.detail).setFill(); arrow.fill()
         }
+    }
+}
+
+/// The bundled terminal color schemes sorted by their background: dark ones, light ones, and those that read as either
+/// (no background, or one near the middle), which both pickers offer below the rest.
+struct ColorSchemes {
+    var dark: [String] = [], light: [String] = [], either: [String] = []
+    /// The user's own (CustomThemes), listed first.
+    var custom: [CustomThemes.Entry] = []
+
+    /// The bundled schemes made for color blindness, by vision, light first: listed only in that colorblind mode.
+    static let colorblind: [ColorVision: (light: [String], dark: [String])] = [
+        .redGreen: (["GitHub Light Colorblind", "Modus Operandi Deuteranopia"], ["GitHub Dark Colorblind", "Modus Vivendi Deuteranopia"]),
+        .blueYellow: (["Modus Operandi Tritanopia"], ["Modus Vivendi Tritanopia"]),
+    ]
+
+    /// Who a scheme is for: a bundled colorblind scheme's vision, or the vision a made scheme's recipe names.
+    static func vision(of name: String) -> ColorVision {
+        if let bundled = colorblind.first(where: { $0.value.light.contains(name) || $0.value.dark.contains(name) }) {
+            return bundled.key
+        }
+        return CustomThemes.theme(named: name).flatMap(ThemeRecipe.init(theme:))?.vision ?? .typical
+    }
+
+    /// Only the schemes for `vision`: colorblind modes list their own schemes; typical vision lists none of them.
+    func filtered(for vision: ColorVision) -> ColorSchemes {
+        var schemes = self
+        let made = Dictionary(uniqueKeysWithValues: custom.map { ($0.name, Self.vision(of: $0.name)) })
+        schemes.custom = custom.filter { made[$0.name] == vision }
+        if let own = Self.colorblind[vision] {
+            schemes.light = light.filter(own.light.contains)
+            schemes.dark = dark.filter(own.dark.contains)
+            schemes.either = []
+        } else {
+            let all = Set(Self.colorblind.values.flatMap { $0.light + $0.dark })
+            schemes.light = light.filter { !all.contains($0) }
+            schemes.dark = dark.filter { !all.contains($0) }
+        }
+        return schemes
+    }
+
+    init() {}
+
+    init(directory: URL, custom: [CustomThemes.Entry] = CustomThemes.list()) {
+        self.custom = custom
+        let names = ((try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? [])
+            .filter { !$0.hasPrefix(".") && $0 != "Default" }
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        for name in names {
+            let text = (try? String(contentsOf: directory.appendingPathComponent(name), encoding: .utf8)) ?? ""
+            switch Self.side(text) {
+            case true?: light.append(name)
+            case false?: dark.append(name)
+            case nil: either.append(name)
+            }
+        }
+    }
+
+    /// true: light, false: dark, nil: either. A background darker than its text and well below the middle is dark;
+    /// lighter than its text and well above it, light.
+    static func side(_ theme: String) -> Bool? {
+        let rgb = { (c: (Double, Double, Double)) in ThemeColor(red: c.0, green: c.1, blue: c.2) }
+        guard let background = color("background", in: theme).map(rgb) else { return nil }
+        return TerminalTheme.side(background: background, foreground: color("foreground", in: theme).map(rgb))
+    }
+
+    /// A `key = #rrggbb` line's color as 0...1 components.
+    static func color(_ key: String, in theme: String) -> (Double, Double, Double)? {
+        for line in theme.split(separator: "\n") {
+            let parts = line.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            guard parts.count == 2, parts[0] == key else { continue }
+            var hex = parts[1].hasPrefix("#") ? String(parts[1].dropFirst()) : parts[1]
+            if hex.count == 3 { hex = hex.map { "\($0)\($0)" }.joined() }
+            guard hex.count == 6, let value = UInt32(hex, radix: 16) else { return nil }
+            return (Double(value >> 16 & 0xFF) / 255, Double(value >> 8 & 0xFF) / 255, Double(value & 0xFF) / 255)
+        }
+        return nil
     }
 }

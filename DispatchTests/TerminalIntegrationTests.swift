@@ -565,7 +565,7 @@ final class TerminalIntegrationTests: XCTestCase {
         var preferences = Preferences.flat
         preferences.fontSize = 17
         preferences.theme = "Catppuccin Mocha"
-        preferences.lightTheme = "Builtin Light"
+        preferences.lightTheme = "Catppuccin Latte"
         preferences.appTheme = .light
         try runtime.apply(preferences)
         XCTAssertTrue(runtime.views[firstID]?.surface === surface)

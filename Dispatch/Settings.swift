@@ -25,9 +25,12 @@ enum AppTheme: String, Codable, CaseIterable {
     /// The code that unlocks Nautical when typed in the Settings window.
     static let nauticalCode = "dispatch.yachts"
 
+    /// Themes Settings doesn't offer for now; one already chosen keeps working and stays listed.
+    static let withheld: Set<AppTheme> = [.graphite, .lavender]
+
     /// The themes Settings offers. Nautical is an easter egg: hidden until its code is typed, or while selected.
     static func offered(selected: AppTheme, nauticalUnlocked: Bool) -> [AppTheme] {
-        allCases.filter { $0 != .nautical || nauticalUnlocked || selected == .nautical }
+        allCases.filter { ($0 != .nautical || nauticalUnlocked) && !withheld.contains($0) || $0 == selected }
     }
 }
 
@@ -49,15 +52,59 @@ enum SidebarStyle: String, Codable, CaseIterable {
 }
 
 /// What a first SSH connection to a new host does about the Dispatch helper.
-enum NewHostPolicy: String, CaseIterable {
-    case ask, full, plain
-    var label: String {
+/// The terminal cursor a program has not chosen (Ghostty's cursor-style).
+enum TerminalCursor: String, Codable, CaseIterable {
+    case block, bar, underline
+    var title: String { rawValue.capitalized }
+}
+
+/// Which Option keys act as Alt in the terminal (Ghostty's macos-option-as-alt); the other types characters.
+enum OptionKeys: String, Codable, CaseIterable {
+    case both, left, right, off
+    var title: String {
         switch self {
-        case .ask: "Ask"
-        case .full: "Full features"
-        case .plain: "Plain SSH"
+        case .both: "Both"
+        case .left: "Left only"
+        case .right: "Right only"
+        case .off: "Off"
         }
     }
+    var ghostty: String {
+        switch self {
+        case .both: "true"
+        case .left: "left"
+        case .right: "right"
+        case .off: "false"
+        }
+    }
+}
+
+/// Each new terminal's scrollback: sized from the Mac's memory, a fixed size, or unlimited.
+enum Scrollback: String, Codable, CaseIterable {
+    case automatic, small, large, unlimited
+    var title: String {
+        switch self {
+        case .automatic: "Automatic"
+        case .small: "10 MB"
+        case .large: "1 GB"
+        case .unlimited: "Unlimited"
+        }
+    }
+    /// scrollback-limit-bytes; `automatic` takes the memory-sized default.
+    func limit(automatic: Int) -> String {
+        switch self {
+        case .automatic: String(automatic)
+        case .small: String(10_000_000)
+        case .large: String(1_000_000_000)
+        case .unlimited: "unlimited"
+        }
+    }
+}
+
+/// Settings › Features › Remote helper and its Auto-confirm uploads, as one choice: ask on a new host, grant every
+/// feature without asking, or plain SSH everywhere.
+enum NewHostPolicy: String, CaseIterable {
+    case ask, full, plain
 }
 
 /// How remote tabs show their host: Liquid Glass tints them (host wash and tinted tabs, no top border; a pane
@@ -87,17 +134,6 @@ enum ChatFont: String, Codable, CaseIterable {
         switch self {
         case .comicSans: "ComicSansMS"
         case .sameAsCode, .system: nil
-        }
-    }
-}
-
-/// What opening a file in files mode does. The stored value is the case name, so titles can change freely.
-enum FilesOpenWith: String, Codable, CaseIterable {
-    case editorInTab
-
-    var title: String {
-        switch self {
-        case .editorInTab: "$EDITOR in this tab"
         }
     }
 }
@@ -142,7 +178,16 @@ struct Preferences: Codable, Equatable {
     var theme = "Default"
     var lightTheme = "Default"
     var improveTextContrast = false
-    var optionAsAlt = true
+    /// Colorblind-friendly: the scheme pickers offer only schemes made for this vision, and new schemes are made for it.
+    var colorVision = ColorVision.typical
+    /// How opaque terminals' backgrounds are, `terminalOpacityRange`; below 1 the desktop shows through terminals only.
+    var terminalOpacity = 1.0
+    /// Lower and text over a busy desktop stops reading, whatever the scheme.
+    static let terminalOpacityRange = 0.6...1.0
+    var optionAsAlt = OptionKeys.both
+    var cursor = TerminalCursor.block
+    var cursorBlink = true
+    var scrollback = Scrollback.automatic
     /// tmux- or herdr-style ⌃B prefix keys in native spaces; off by default because ⌃B is a shell
     /// and editor key there.
     var prefixKeys = PrefixStyle.off
@@ -169,9 +214,9 @@ struct Preferences: Codable, Equatable {
     var enableHostDetection = true
     /// With the helper allowed, new hosts get every feature instead of the consent sheet.
     var autoGrantNewHosts = false
-    /// Programs on this Mac and over plain SSH can always set the clipboard (OSC 52,
-    /// kitty clipboard, tmux buffers). On hosts with the helper, only when this is on (the default).
-    var allowRemoteClipboardWrites = true
+    /// Programs in any tab, local or remote, can set the clipboard (OSC 52, kitty clipboard, tmux buffers). Stored under
+    /// its old name, from when it covered helper hosts only.
+    var allowClipboardWrites = true
     /// A helper connection lost while Dispatch runs logs back in by itself, with keys or the SSH agent only.
     var autoReconnectSSH = false
     var newHostPolicy: NewHostPolicy {
@@ -181,24 +226,37 @@ struct Preferences: Codable, Equatable {
     var attentionNotifications = true
     var attentionDockBadge = true
     var attentionSound = true
+    /// Banners carry the agent's text and the pane's folder; off, only the pane and what happened.
+    var attentionTextContent = true
     /// Nautical only: a ship's double bell, instead of the attention sound, when an agent finishes in the background.
     var shipsBell = false
     var startingDirectory = System.home.path
+    /// What a new local tab runs: empty for the login shell, else a program (by full path) and its arguments.
+    var shell = ""
+    /// The shell's program, its first word; nil for the login shell.
+    var shellProgram: String? {
+        let command = shell.trimmingCharacters(in: .whitespaces)
+        return command.isEmpty ? nil : String(command.split(separator: " ", maxSplits: 1)[0])
+    }
+    /// Files mode itself. Off, no tab offers it and tabs showing it return to their terminals.
+    var filesEnabled = true
     /// Files mode: copy in from Finder, out to Finder, or onto a terminal as paths.
     var filesDragAndDrop = true
-    /// Files mode opens at the tab's shell directory and follows cd until the user navigates.
-    var filesFollowShell = true
     /// Each tab's ⇧⌘. overrides this for that tab only (FilesSession.showHidden).
     var filesShowHidden = true
-    var filesOpenWith = FilesOpenWith.editorInTab
-    /// Off keeps both files instead of asking when a copy would overwrite.
-    var filesAskBeforeReplacing = true
-    /// Git in files mode (the Commits tab) and the sidebar's branch names. Off, Dispatch reads nothing of any repository.
+    /// Git in files mode (the Review and Commits tabs) and the sidebar's branch names. Off, Dispatch reads nothing of any repository.
     var gitEnabled = true
-    /// The uncommitted changes as their own Changes tab beside Commits, as they first were, instead of Commits'
-    /// uncommitted row.
-    var gitChangesTab = false
     /// Chat dictation's engine, and the Whisper model it uses when Whisper is chosen (WhisperModelStore downloads it).
+    /// Chat's microphone beside Send. Off, the composer shows none.
+    var dictationEnabled = true
+    /// Hold right ⌘ to dictate into the active chat (release inserts, ↩ sends); tap it to dictate hands-free.
+    var dictationRightCommand = true
+    /// "Dispatch, …" switches spaces and tabs (VoiceNavigation) instead of becoming text.
+    var dictationNavigation = true
+    /// Conversation mode reads its chat's replies aloud and says when other agents finish or need you.
+    var dictationReadReplies = true
+    /// The words "Dispatch, …" commands start with (WakeWords checks them).
+    var dictationWakeWords = VoiceCommand.defaultWakeWords
     var dictationEngine = DictationEngine.apple
     var whisperModel = WhisperModel.small
 
@@ -220,23 +278,25 @@ struct Preferences: Codable, Equatable {
     // Settings saved by earlier local builds gain defaults for new fields.
     // Explicit user choices remain unchanged.
     private enum CodingKeys: String, CodingKey {
-        case enableHostDetection, autoGrantNewHosts, allowRemoteClipboardWrites, autoReconnectSSH, attentionNotifications, attentionDockBadge, attentionSound, shipsBell
-        case spaceOrder, automaticTabNames, fontFamily, chatFont, fontSize, appTheme, theme, lightTheme, optionAsAlt
+        case enableHostDetection, autoGrantNewHosts, autoReconnectSSH, attentionNotifications, attentionDockBadge, attentionSound, attentionTextContent, shipsBell
+        case spaceOrder, automaticTabNames, fontFamily, chatFont, fontSize, appTheme, theme, lightTheme, cursor, cursorBlink, scrollback
         case prefixKeys, backendPrefixKeys, keyGroups
-        case hideSingleSpace, tabsOnly, startingDirectory, rememberHosts, restoreTerminalOutput
+        case hideSingleSpace, tabsOnly, startingDirectory, shell, rememberHosts, restoreTerminalOutput
         case enableDiagnostics
         case sidebarStyle, showGitBranches, liquidGlass, hostColors, showHostColors
-        case improveTextContrast
+        case improveTextContrast, colorVision, terminalOpacity
         case spaces, closeLaunching, enableKittyGraphics
-        case filesDragAndDrop, filesFollowShell, filesOpenWith, filesAskBeforeReplacing, gitEnabled, gitChangesTab
-        case dictationEngine, whisperModel
+        case filesEnabled, filesDragAndDrop, gitEnabled
+        case dictationEnabled, dictationRightCommand, dictationNavigation, dictationReadReplies, dictationWakeWords, dictationEngine, whisperModel
         // Stored under a new name since hidden files show by default: every save wrote the old key, so its `false`
         // was usually the old default rather than a choice.
         case filesShowHidden = "filesShowHiddenFiles"
+        case allowClipboardWrites = "allowRemoteClipboardWrites"
+        case optionAsAlt = "optionKeysAsAlt"
     }
 
     private enum LegacyCodingKeys: String, CodingKey {
-        case autoCloseNativeSpace, sidebarTheme, appearance, largeSidebarItems
+        case autoCloseNativeSpace, sidebarTheme, appearance, largeSidebarItems, optionAsAlt
         case enableTmuxIntegration, enableHerdrIntegration, autoCloseTmuxNativeSpace, autoCloseHerdrNativeSpace
     }
 
@@ -244,11 +304,12 @@ struct Preferences: Codable, Equatable {
         let fields = try decoder.container(keyedBy: CodingKeys.self)
         enableHostDetection = try fields.decodeIfPresent(Bool.self, forKey: .enableHostDetection) ?? enableHostDetection
         autoGrantNewHosts = try fields.decodeIfPresent(Bool.self, forKey: .autoGrantNewHosts) ?? autoGrantNewHosts
-        allowRemoteClipboardWrites = try fields.decodeIfPresent(Bool.self, forKey: .allowRemoteClipboardWrites) ?? allowRemoteClipboardWrites
+        allowClipboardWrites = try fields.decodeIfPresent(Bool.self, forKey: .allowClipboardWrites) ?? allowClipboardWrites
         autoReconnectSSH = try fields.decodeIfPresent(Bool.self, forKey: .autoReconnectSSH) ?? autoReconnectSSH
         attentionNotifications = try fields.decodeIfPresent(Bool.self, forKey: .attentionNotifications) ?? attentionNotifications
         attentionDockBadge = try fields.decodeIfPresent(Bool.self, forKey: .attentionDockBadge) ?? attentionDockBadge
         attentionSound = try fields.decodeIfPresent(Bool.self, forKey: .attentionSound) ?? attentionSound
+        attentionTextContent = try fields.decodeIfPresent(Bool.self, forKey: .attentionTextContent) ?? attentionTextContent
         shipsBell = try fields.decodeIfPresent(Bool.self, forKey: .shipsBell) ?? shipsBell
         spaceOrder = try fields.decodeIfPresent(SpaceOrder.self, forKey: .spaceOrder) ?? spaceOrder
         // Replaces `tabNaming`, whose stored "terminal" was usually the old default rather than a choice.
@@ -283,7 +344,17 @@ struct Preferences: Codable, Equatable {
         theme = savedTheme ?? theme
         lightTheme = try fields.decodeIfPresent(String.self, forKey: .lightTheme) ?? theme
         improveTextContrast = try fields.decodeIfPresent(Bool.self, forKey: .improveTextContrast) ?? improveTextContrast
-        optionAsAlt = try fields.decodeIfPresent(Bool.self, forKey: .optionAsAlt) ?? optionAsAlt
+        colorVision = try fields.decodeIfPresent(String.self, forKey: .colorVision).flatMap(ColorVision.init(rawValue:)) ?? colorVision
+        terminalOpacity = (try fields.decodeIfPresent(Double.self, forKey: .terminalOpacity)).map {
+            $0.isFinite ? min(max($0, Self.terminalOpacityRange.lowerBound), 1) : 1
+        } ?? terminalOpacity
+        // Settings before one side could be chosen saved a switch: on is both keys.
+        let optionSwitch = try legacy.decodeIfPresent(Bool.self, forKey: .optionAsAlt)
+        optionAsAlt = try fields.decodeIfPresent(String.self, forKey: .optionAsAlt).flatMap(OptionKeys.init(rawValue:))
+            ?? optionSwitch.map { $0 ? .both : .off } ?? optionAsAlt
+        cursor = try fields.decodeIfPresent(String.self, forKey: .cursor).flatMap(TerminalCursor.init(rawValue:)) ?? cursor
+        cursorBlink = try fields.decodeIfPresent(Bool.self, forKey: .cursorBlink) ?? cursorBlink
+        scrollback = try fields.decodeIfPresent(String.self, forKey: .scrollback).flatMap(Scrollback.init(rawValue:)) ?? scrollback
         prefixKeys = try fields.decodeIfPresent(String.self, forKey: .prefixKeys).flatMap(PrefixStyle.init(rawValue:)) ?? prefixKeys
         backendPrefixKeys = try fields.decodeIfPresent(Bool.self, forKey: .backendPrefixKeys) ?? backendPrefixKeys
         keyGroups = try fields.decodeIfPresent(KeyGroups.self, forKey: .keyGroups) ?? keyGroups
@@ -303,14 +374,20 @@ struct Preferences: Codable, Equatable {
             if closeLaunching[name] == nil { closeLaunching[on: name] = try legacy.decodeIfPresent(Bool.self, forKey: close) ?? autoClose }
         }
         startingDirectory = try fields.decodeIfPresent(String.self, forKey: .startingDirectory) ?? startingDirectory
+        shell = try fields.decodeIfPresent(String.self, forKey: .shell) ?? shell
+        filesEnabled = try fields.decodeIfPresent(Bool.self, forKey: .filesEnabled) ?? filesEnabled
         filesDragAndDrop = try fields.decodeIfPresent(Bool.self, forKey: .filesDragAndDrop) ?? filesDragAndDrop
-        filesFollowShell = try fields.decodeIfPresent(Bool.self, forKey: .filesFollowShell) ?? filesFollowShell
         filesShowHidden = try fields.decodeIfPresent(Bool.self, forKey: .filesShowHidden) ?? filesShowHidden
-        // A choice a later build no longer offers falls back without discarding the other settings.
-        filesOpenWith = try fields.decodeIfPresent(String.self, forKey: .filesOpenWith).flatMap(FilesOpenWith.init(rawValue:)) ?? filesOpenWith
-        filesAskBeforeReplacing = try fields.decodeIfPresent(Bool.self, forKey: .filesAskBeforeReplacing) ?? filesAskBeforeReplacing
         gitEnabled = try fields.decodeIfPresent(Bool.self, forKey: .gitEnabled) ?? gitEnabled
-        gitChangesTab = try fields.decodeIfPresent(Bool.self, forKey: .gitChangesTab) ?? gitChangesTab
+        dictationEnabled = try fields.decodeIfPresent(Bool.self, forKey: .dictationEnabled) ?? dictationEnabled
+        dictationRightCommand = try fields.decodeIfPresent(Bool.self, forKey: .dictationRightCommand) ?? dictationRightCommand
+        dictationNavigation = try fields.decodeIfPresent(Bool.self, forKey: .dictationNavigation) ?? dictationNavigation
+        dictationReadReplies = try fields.decodeIfPresent(Bool.self, forKey: .dictationReadReplies) ?? dictationReadReplies
+        // A hand-edited list with no usable word keeps the defaults.
+        if let saved = try fields.decodeIfPresent([String].self, forKey: .dictationWakeWords) {
+            let usable = WakeWords.check(saved.joined(separator: ",")).words
+            if !usable.isEmpty { dictationWakeWords = usable }
+        }
         dictationEngine = try fields.decodeIfPresent(String.self, forKey: .dictationEngine).flatMap(DictationEngine.init(rawValue:)) ?? dictationEngine
         whisperModel = try fields.decodeIfPresent(String.self, forKey: .whisperModel).flatMap(WhisperModel.init(rawValue:)) ?? whisperModel
     }

@@ -81,7 +81,7 @@ final class FilesModePresentationTests: XCTestCase {
         func titles() -> [String] { menu().map(\.title) }
         func checked() -> [String] { menu().filter(\.on).map(\.title) }
         func enabled() -> [String] { menu().filter(\.enabled).map(\.title) }
-        let all = ["Terminal", "Chat", "Files", "Uncommitted Changes", "Commits"]
+        let all = ["Terminal", "Chat", "Files", "Review", "Commits"]
         // The tracker's menu reads the switch's state as SwiftUI last drew it, so a change shows after the next update.
         func expect(_ on: [String], enabled expected: [String] = all, file: StaticString = #filePath,
                     line: UInt = #line) async throws {
@@ -102,11 +102,11 @@ final class FilesModePresentationTests: XCTestCase {
 
         session.git = .repository(GitRepository(root: "/Users/ivan/src/api"))
         try await expect(["Terminal"])
-        // Choosing from the menu: Changes opens files on its tab from the terminal; the button lights.
-        try choose("Uncommitted Changes")
+        // Choosing from the menu: Review opens files on its tab from the terminal; the button lights.
+        try choose("Review")
         XCTAssertEqual(files.mode(for: agent.id), .files)
         XCTAssertEqual(session.tab, .changes)
-        try await expect(["Uncommitted Changes"])
+        try await expect(["Review"])
         try await TestSupport.eventually(diagnostic: "the switch does not offer the terminal") {
             !PresentationTestSupport.accessibilityFrames("chat-mode-switch", label: "Show Terminal", in: window).isEmpty
         }

@@ -667,34 +667,59 @@ final class FilesListTests: XCTestCase {
         XCTAssertNil(files.count)
 
         session.git = .repository(GitRepository(root: root))
-        XCTAssertEqual(ids(), [.files, .commits], "the changes are Commits' uncommitted row, not a segment")
+        XCTAssertEqual(ids(), [.files, .changes, .commits], "Files · Review · the branch")
         XCTAssertNil(FilesHeader.segments(for: session)[1].count, "no count until the status is in")
         session.status = mockupStatus()
         let segments = FilesHeader.segments(for: session)
-        // The second segment is the branch, counting the uncommitted files: Commits opens on its history.
-        XCTAssertEqual(segments.map(\.title), ["Files", "main"])
-        XCTAssertEqual(segments.map(\.count), [nil, 4], "4 uncommitted files, as the mockup's pill")
-        XCTAssertEqual(segments.map(\.help),
-                       ["Files · ⌃⌘1", "main · up to date with origin/main · 4 files uncommitted · Commits ⌃⌘3"])
-        XCTAssertEqual(segments[1].accessibilityLabel, "main · up to date with origin/main · 4 files uncommitted · Commits ⌃⌘3")
-        XCTAssertEqual(segments.map(\.accessibilityID), ["files-segment-files", "files-segment-commits"])
+        // Fixed names: Review counts its comments (none yet), Commits is Commits whatever the branch.
+        XCTAssertEqual(segments.map(\.title), ["Files", "Review", "Commits"])
+        XCTAssertEqual(segments.map(\.count), [nil, nil, nil], "no comments, no pill: the changed files are not counted")
+        XCTAssertEqual(segments.map(\.help), ["Files · ⌃⌘1", "Review · ⌃⌘2", "Commits · ⌃⌘3"])
+        XCTAssertEqual(segments.map(\.accessibilityID),
+                       ["files-segment-files", "files-segment-changes", "files-segment-commits"])
+        // The branch and its distance from the upstream are where you are, not a tab.
+        XCTAssertEqual(FilesHeader.repositoryLabel(name: "api", status: session.status), "api · main · up to date with origin/main")
         session.status?.ahead = 2
         session.status?.behind = 1
-        XCTAssertEqual(FilesHeader.segments(for: session)[1].ahead, 2)
-        XCTAssertEqual(FilesHeader.segments(for: session)[1].behind, 1)
+        XCTAssertEqual(FilesHeader.repositoryLabel(name: "api", status: session.status), "api · main · 2 ahead, 1 behind of origin/main")
         session.status = mockupStatus(branch: nil)
-        XCTAssertEqual(FilesHeader.segments(for: session)[1].title, "detached at 4f1c2e9")
-        session.status?.changes = []
-        XCTAssertNil(FilesHeader.segments(for: session)[1].count, "a clean tree has no pill")
-        XCTAssertEqual(FilesHeader.segments(for: session)[1].help, "detached at 4f1c2e9 · up to date with origin/main · Commits ⌃⌘3")
+        XCTAssertEqual(FilesHeader.repositoryLabel(name: "api", status: session.status),
+                       "api · detached at 4f1c2e9 · up to date with origin/main")
+        XCTAssertEqual(FilesHeader.repositoryLabel(name: "api", status: nil), "api", "no branch to name before the status")
+        XCTAssertEqual(FilesHeader.segments(for: session)[2].title, "Commits")
 
-        // Still resolving: Files alone on the Files tab; Commits asked for keeps its segment while it waits.
+        // Still resolving: Files alone on the Files tab; a git tab asked for keeps the segments while it waits.
         session.git = .loading
         XCTAssertEqual(ids(), [.files])
         session.select(.changes)
-        XCTAssertEqual(ids(), [.files, .commits])
+        XCTAssertEqual(ids(), [.files, .changes, .commits])
         XCTAssertNil(FilesHeader.segments(for: session)[1].count)
-        XCTAssertEqual(FilesHeader.segments(for: session)[1].title, "Commits", "no branch to name until it resolves")
+    }
+
+    /// The Review segment's pill is how many review comments the repository's review holds, and only while it holds any.
+    func testReviewSegmentCountsTheReviewsComments() throws {
+        let repository = ReviewRepository(store: MemoryReviewStore())
+        ReviewRepository.use(repository)
+        defer { ReviewRepository.use(nil) }
+        let source = FakeFilesSource.mockupAPI()
+        let session = FilesSession(id: System.uuid())
+        session.availability = .available(source)
+        session.git = .repository(GitRepository(root: root))
+        session.status = mockupStatus()
+        func review() -> FilesSegments<FilesTab>.Segment { FilesHeader.segments(for: session)[1] }
+        XCTAssertNil(review().count)
+        XCTAssertEqual(review().help, "Review · ⌃⌘2")
+        let scope = try XCTUnwrap(session.reviewScope)
+        let comment = ReviewComment(id: System.uuid(), path: "src/lib/db.ts", start: nil, end: nil, quote: [], text: "x",
+                                    created: Date(timeIntervalSince1970: 1_760_700_000))
+        repository.add(comment, to: scope)
+        repository.add(ReviewComment(id: System.uuid(), path: "README.md", start: nil, end: nil, quote: [], text: "y",
+                                     created: comment.created), to: scope)
+        XCTAssertEqual(review().count, 2, "every comment of the review, on changed files or not")
+        XCTAssertEqual(review().help, "Review · 2 comments · ⌃⌘2")
+        XCTAssertEqual(review().accessibilityLabel, "Review, 2 comments")
+        repository.take(scope)
+        XCTAssertNil(review().count, "Create review took them")
     }
 
     /// A narrow list keeps the names readable: Size goes first, then Modified (the outline and the column header share

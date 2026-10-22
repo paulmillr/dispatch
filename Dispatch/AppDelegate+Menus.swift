@@ -4,7 +4,7 @@ import AppKit
 /// layouts keep selecting the expected tab, pane, or space.
 final class ApplicationMenu: NSMenu {
     static let digitKeyCodes: [UInt16] = [18, 19, 20, 21, 23, 22, 26, 28, 25]
-    /// The digit chords of Settings › Keys (⇧⌘1…9 spaces, ⌘1…9 tabs, ⌃1…4 layouts by default) and
+    /// The digit chords of Settings › Keyboard (⇧⌘1…9 spaces, ⌘1…9 tabs, ⌃1…4 layouts by default) and
     /// ⌃⇥ / ⌃⇧⇥ cycling tabs; a focused terminal yields these to the app instead of sending them to the shell.
     @MainActor static func claimsShortcut(keyCode: UInt16, modifiers: NSEvent.ModifierFlags,
                                           groups: KeyGroups = KeyGroupsStore.shared.current) -> Bool {
@@ -123,13 +123,13 @@ extension AppDelegate {
         add(view, "Switch Terminal / Chat", #selector(toggleChat), "C", [.command, .shift], target: self)
         add(view, "Switch Terminal / Files", #selector(toggleFiles), "F", [.command, .shift], target: self)
         // Files on a git tab from any mode (F5b); the tag is the FilesTab's index.
-        add(view, "Uncommitted Changes", #selector(openFilesTab(_:)), "U", [.command, .shift], target: self, tag: 1)
+        add(view, "Review Changes", #selector(openFilesTab(_:)), "U", [.command, .shift], target: self, tag: 1)
         add(view, "Commits", #selector(openFilesTab(_:)), "L", [.command, .shift], target: self, tag: 2)
-        // Their keys yield to a Settings › Keys group that takes ⌃⌘ digits (applyKeyGroups). ⌃⌘2 and ⌃⌘3 reach the
-        // places Uncommitted Changes and Commits above name, and only while files shows, so the menu does not list them
+        // Their keys yield to a Settings › Keyboard group that takes ⌃⌘ digits (applyKeyGroups). ⌃⌘2 and ⌃⌘3 reach the
+        // places Review Changes and Commits above name, and only while files shows, so the menu does not list them
         // twice.
         add(view, "Files Tab", #selector(showFilesTab(_:)), "1", [.control, .command], target: self, tag: 0)
-        add(view, "Uncommitted Changes Row", #selector(showFilesTab(_:)), "2", [.control, .command], target: self, tag: 1,
+        add(view, "Review Tab", #selector(showFilesTab(_:)), "2", [.control, .command], target: self, tag: 1,
             hidden: true)
         add(view, "Commits Tab", #selector(showFilesTab(_:)), "3", [.control, .command], target: self, tag: 2, hidden: true)
         // Its title follows the pane (validateMenuItem); ⌥⌘P reaches it only while files shows. ⇧⌘P is left alone: the
@@ -146,7 +146,7 @@ extension AppDelegate {
         add(navigate, "Next Attention", #selector(nextAttention), "j", target: self)
         add(navigate, "Previous Attention", #selector(previousAttention), "J", [.command, .shift], target: self)
         navigate.addItem(.separator())
-        // Their keys follow Settings › Keys (applyKeyGroups).
+        // Their keys follow Settings › Keyboard (applyKeyGroups).
         add(navigate, "Previous Space", #selector(previousSpace), "[", target: self)
         add(navigate, "Next Space", #selector(nextSpace), "]", target: self)
         navigate.addItem(.separator())
@@ -173,7 +173,7 @@ extension AppDelegate {
         applyKeyGroups(settings.values.keyGroups)
     }
 
-    /// Settings › Keys' modifiers on the numbered Space, Tab and layout items, and on stepping through spaces and tabs
+    /// Settings › Keyboard' modifiers on the numbered Space, Tab and layout items, and on stepping through spaces and tabs
     /// with [ and ] (KeyGroups.steps); an item whose chord is taken has none.
     func applyKeyGroups(_ groups: KeyGroups) {
         let steps = groups.steps
@@ -203,7 +203,7 @@ extension AppDelegate {
         }
     }
 
-    /// ⌃⌘ for the files tabs' digits, or nil while a Settings › Keys group already uses ⌃⌘ for its own.
+    /// ⌃⌘ for the files tabs' digits, or nil while a Settings › Keyboard group already uses ⌃⌘ for its own.
     static func filesTabModifiers(_ groups: KeyGroups) -> NSEvent.ModifierFlags? {
         let modifiers: NSEvent.ModifierFlags = [.control, .command]
         return [groups.spaces, groups.tabs, groups.splits].contains(modifiers) ? nil : modifiers

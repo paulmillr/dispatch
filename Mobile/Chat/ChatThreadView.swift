@@ -230,7 +230,8 @@ struct ChatThreadView: View {
     }
 
     /// The thread in order: rows, with each approval after the turn that holds its tool call (the Mac's placement),
-    /// else after the turn that was last when it arrived, else at the end. A pending one stays last, where it is answered.
+    /// else after the turn that was last when it arrived, else at the end. A pending one stays last, where it is answered;
+    /// a decided one whose turn is not loaded waits for that earlier history instead of sitting at the end.
     private var entries: [Entry] {
         let rows = session.transcript.rows
         var placed: [String: [MobileChatSession.Approval]] = [:]
@@ -242,6 +243,8 @@ struct ChatThreadView: View {
             if let owner, rows.contains(where: { $0.turnID == owner }) { placed[owner, default: []].append(approval) }
             else if !approval.pending.pending, let anchor = approval.anchor, rows.contains(where: { $0.turnID == anchor }) {
                 placed[anchor, default: []].append(approval)
+            } else if !approval.pending.pending, approval.anchor != nil {
+                continue
             } else { unplaced.append(approval) }
         }
         var result: [Entry] = []

@@ -321,6 +321,7 @@ targets:
       - Dispatch/Views/ComposerFences.swift
       - Dispatch/Views/HostGlyph.swift
       - Dispatch/Views/HostTint.swift
+      - Dispatch/Themes/ColorVision.swift
       - Dispatch/WorkspaceModels.swift
       # The watch protocol (docs/watch.md): the phone's side of WatchConnectivity is in Mobile/Watch.
       - path: Watch/Shared

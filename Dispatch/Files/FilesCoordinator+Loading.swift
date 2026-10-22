@@ -29,8 +29,6 @@ extension FilesCoordinator {
         var showHidden = false
         /// Settings › Features › Git.
         var git = true
-        /// Settings › Features › Git › Separate Changes tab.
-        var changesTab = false
     }
 
     /// Everything the loader reads from the app, replaceable in tests.
@@ -80,11 +78,10 @@ extension FilesCoordinator {
             now: { System.date() })
     }
 
-    /// Settings › Files › Follow the shell’s directory and Show hidden files.
+    /// Settings › Features › Files › Show hidden files, and Git. Files always follows the shell’s directory.
     static func preferences() -> Preferences {
         let values = TerminalRuntime.shared.preferences
-        return Preferences(followShell: values.filesFollowShell, showHidden: values.filesShowHidden, git: values.gitEnabled,
-                           changesTab: values.gitChangesTab)
+        return Preferences(showHidden: values.filesShowHidden, git: values.gitEnabled)
     }
 
     // MARK: Entry points
@@ -195,7 +192,6 @@ extension FilesCoordinator {
             watch.full = true
         }
         let preferences = environment.preferences()
-        if session.changesTab != preferences.changesTab { session.changesTab = preferences.changesTab }
         let availability = environment.resolve(session.id, session.lastRefresh)
         let source = availability.source
         var shown = availability

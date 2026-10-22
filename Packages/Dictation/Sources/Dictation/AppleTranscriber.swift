@@ -57,21 +57,14 @@ private struct TranscriptParts: Sendable {
     mutating func add(_ text: AttributedString, final: Bool) {
         let piece = String(text.characters)
         if final {
-            finalized = Self.join(finalized, piece)
+            finalized = TranscriptJoin.join(finalized, piece)
             volatile = ""
         } else {
             volatile = piece
         }
     }
 
-    var display: String { Self.join(finalized, volatile) }
-
-    static func join(_ a: String, _ b: String) -> String {
-        let a = a.trimmingCharacters(in: .whitespacesAndNewlines), b = b.trimmingCharacters(in: .whitespacesAndNewlines)
-        if a.isEmpty { return b }
-        if b.isEmpty { return a }
-        return a + " " + b
-    }
+    var display: String { TranscriptJoin.join(finalized, volatile) }
 }
 
 @available(macOS 26, iOS 26, *)

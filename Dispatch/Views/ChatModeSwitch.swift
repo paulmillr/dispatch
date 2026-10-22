@@ -97,7 +97,7 @@ struct ChatModeSwitch: View {
         let state = state
         let help = state.help(chatHint: coordinator.chatAvailabilityHint(session))
         Button { choose(state.next) } label: {
-            ModeSwitchLabel(state: state, radio: coordinator.enabled, hold: filesCoordinator != nil,
+            ModeSwitchLabel(state: state, radio: coordinator.enabled, hold: filesCoordinator?.enabled == true,
                             tint: state.dimmed ? Chrome.muted : state.lit ? theme.accent : theme.muted)
                 .opacity(state.dimmed ? 0.35 : 1)
                 .background {
@@ -180,9 +180,9 @@ struct ModeSwitchMenuItem: Identifiable {
     var id: Target { target }
 
     /// The right-click and hold menu (F1a): Terminal, Chat, then the three files tabs, the shown one checked. Files is the
-    /// Files tab; Changes and Commits are always listed and enabled as the View menu's ⇧⌘U and ⇧⌘L are
+    /// Files tab; Review and Commits are always listed and enabled as the View menu's ⇧⌘U and ⇧⌘L are
     /// (`FilesCoordinator.canShowFiles(_:tab:)`: not on a folder known to be outside a repository). Without `files` (a
-    /// stand-alone chat) the menu is Terminal and Chat.
+    /// stand-alone chat), or with Files off, the menu is Terminal and Chat.
     @MainActor static func items(_ state: ModeSwitchState, files: FilesCoordinator?, id: UUID,
                                  choose: @escaping @MainActor (Target) -> Void) -> [ModeSwitchMenuItem] {
         func item(_ target: Target, _ title: String, checked: Bool, enabled: Bool) -> ModeSwitchMenuItem {
@@ -190,9 +190,9 @@ struct ModeSwitchMenuItem: Identifiable {
         }
         var items = [item(.mode(.terminal), "Terminal", checked: state.mode == .terminal, enabled: state.reaches(.terminal)),
                      item(.mode(.chat), "Chat", checked: state.mode == .chat, enabled: state.reaches(.chat))]
-        guard let files else { return items }
+        guard let files, files.enabled else { return items }
         let shown = state.mode == .files ? files.existing(id)?.tab ?? .files : nil
-        for (tab, title) in [(FilesTab.files, "Files"), (.changes, "Uncommitted Changes"), (.commits, "Commits")] {
+        for (tab, title) in [(FilesTab.files, "Files"), (.changes, "Review"), (.commits, "Commits")] {
             items.append(item(.files(tab), title, checked: shown == tab,
                               enabled: state.reaches(.files) && files.canShowFiles(id, tab: tab)))
         }
@@ -205,7 +205,7 @@ private struct ModeSwitchLabel: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Nil marks no mode (a slot's placeholder).
     var state: ModeSwitchState?
-    /// Nautical's radio segment (chat is on) and hold segment (files exist).
+    /// Nautical's radio segment (chat is on) and hold segment (Files is on).
     var radio = true
     var hold = true
     var tint: Color = Chrome.muted
@@ -274,11 +274,11 @@ struct ChatModeSwitchSlot: View {
     var dimmed = false
     var body: some View {
         if dimmed {
-            ModeSwitchLabel(radio: TerminalRuntime.shared.chat.enabled).opacity(0.35).foregroundStyle(Chrome.muted)
+            ModeSwitchLabel(radio: TerminalRuntime.shared.chat.enabled, hold: TerminalRuntime.shared.preferences.filesEnabled).opacity(0.35).foregroundStyle(Chrome.muted)
                 .stripGlassButton().fixedSize()
                 .help("Each pane switches in its own header").accessibilityLabel("Mode switch in pane headers")
         } else {
-            ModeSwitchLabel(radio: TerminalRuntime.shared.chat.enabled).stripGlassButton().fixedSize().hidden().accessibilityHidden(true)
+            ModeSwitchLabel(radio: TerminalRuntime.shared.chat.enabled, hold: TerminalRuntime.shared.preferences.filesEnabled).stripGlassButton().fixedSize().hidden().accessibilityHidden(true)
         }
     }
 }

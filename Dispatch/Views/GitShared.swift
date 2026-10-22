@@ -9,24 +9,29 @@ struct GitChangeBadge: View {
     let kind: GitChangeKind
     var side: CGFloat = 20
     var corner: CGFloat = 5
+    /// The letter alone, its colour saying the kind: the Review tab's quieter rows.
+    var plain = false
     @Environment(\.appTypography) private var typography
 
     var body: some View {
         let color = Self.color(kind)
         Text(verbatim: kind.rawValue)
-            .font(AppFont.ui(size: typography.size(offset: -2)))
+            .font(AppFont.ui(size: typography.size(offset: plain ? -1.5 : -2), weight: plain ? .semibold : .regular))
             .foregroundStyle(color)
             .frame(width: side, height: side)
-            .background(RoundedRectangle(cornerRadius: corner).fill(color.opacity(kind == .deleted ? 0.14 : 0.12)))
+            .background(RoundedRectangle(cornerRadius: corner).fill(plain ? .clear : color.opacity(kind == .deleted ? 0.14 : 0.12)))
             .accessibilityLabel(Self.name(kind))
     }
 
+    /// Added, modified and deleted in the app theme's colors; in colorblind mode the terminal scheme's green, yellow
+    /// and red, which that mode's schemes keep apart, as chat diffs do.
     @MainActor static func color(_ kind: GitChangeKind) -> Color {
-        let palette = Chrome.palette
+        let palette = Chrome.palette, scheme = ChatThemeStore.shared.current
+        let colorblind = scheme.colorVision != .typical
         switch kind {
-        case .modified, .typeChanged: return palette.warning
-        case .added, .untracked, .copied: return palette.green
-        case .deleted, .conflicted: return Color(red: 236 / 255, green: 161 / 255, blue: 154 / 255)
+        case .modified, .typeChanged: return colorblind ? scheme.yellow : palette.warning
+        case .added, .untracked, .copied: return colorblind ? scheme.green : palette.green
+        case .deleted, .conflicted: return colorblind ? scheme.red : Color(red: 236 / 255, green: 161 / 255, blue: 154 / 255)
         case .renamed: return SyntaxHighlight.function
         case .ignored: return palette.detail
         }
@@ -97,7 +102,7 @@ struct GitCounts: View {
             Text(verbatim: binary).foregroundStyle(palette.detail)
         } else if let counts = GitChangesText.counts(additions: additions, deletions: deletions) {
             HStack(spacing: 4) {
-                if let plus = counts.plus ?? (totals ? "+0" : nil) { Text(verbatim: plus).foregroundStyle(palette.green) }
+                if let plus = counts.plus ?? (totals ? "+0" : nil) { Text(verbatim: plus).foregroundStyle(GitChangeBadge.color(.added)) }
                 if let minus = counts.minus ?? (totals ? "−0" : nil) {
                     Text(verbatim: minus).foregroundStyle(GitChangeBadge.color(.deleted))
                 }

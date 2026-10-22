@@ -97,7 +97,7 @@ pub(super) fn parse(input: &str, directory: &Path) -> Option<Tool> {
         };
         return Some(Tool {
             kind: if files { "find" } else { "search" }.into(),
-            title: if files { "Find files" } else { "Search" }.into(),
+            title: if files { "Locate" } else { "Search" }.into(),
             symbol: if files {
                 "doc.text.magnifyingglass"
             } else {

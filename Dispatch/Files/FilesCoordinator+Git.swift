@@ -183,7 +183,6 @@ extension FilesCoordinator {
         watch.armed = true
         withObservationTracking {
             _ = session.tab
-            _ = session.changesTab
             _ = session.logWanted
             _ = session.logScope
             _ = session.logFilter
@@ -353,8 +352,7 @@ extension FilesCoordinator {
     // MARK: Status and marks
 
     /// Every tab reads the status on the tick, after a prompt and when Commits is entered or left: the header counts its
-    /// files, Commits shows them as its uncommitted row (and lists them when that row is selected), and the branch's
-    /// ahead and behind.
+    /// files, Review lists them, Commits shows them as its uncommitted row, and the branch's ahead and behind.
     private func status(_ session: FilesSession, _ watch: Watch, _ queries: GitQueries, _ repository: GitRepository) {
         let due = watch.statusDue || watch.statusAttempt != repository
         guard due else { return }
@@ -400,8 +398,8 @@ extension FilesCoordinator {
     }
 
     /// The uncommitted selection under a new status (`GitChangesText.reconciled`): the same change, else its path in the
-    /// area it moved to (`git add`), else the change now where it was, else the first. Nothing selected stays so while
-    /// the uncommitted row is not selected; once it is, the first change is picked, as its files show it selected.
+    /// area it moved to (`git add`), else the change now where it was, else the first. Nothing selected stays so off the
+    /// Review tab; on it, the first change is picked, as its list shows it selected.
     private func reconcileSelection(_ session: FilesSession, previous: [GitChange]) {
         guard let status = session.status, session.changesSelection != nil || session.tab == .changes else { return }
         let selection = GitChangesText.reconciled(session.changesSelection, previous: previous,

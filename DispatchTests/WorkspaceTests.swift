@@ -627,7 +627,7 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertEqual(decoded.theme, "Catppuccin Mocha")
         XCTAssertEqual(decoded.lightTheme, "Catppuccin Mocha")
         XCTAssertEqual(decoded.fontSize, 15)
-        XCTAssertFalse(decoded.optionAsAlt)
+        XCTAssertEqual(decoded.optionAsAlt, .off)
         let previousDefault = try JSONDecoder().decode(Preferences.self, from: Data(#"{"theme":"Default"}"#.utf8))
         XCTAssertEqual(previousDefault.theme, "Default")
         XCTAssertEqual(previousDefault.resolvedTheme(systemIsDark: true), "dispatch-black")

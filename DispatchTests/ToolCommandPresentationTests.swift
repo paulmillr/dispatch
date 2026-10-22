@@ -9,8 +9,8 @@ final class ToolCommandPresentationTests: XCTestCase {
         let examples = [
             ("rg -n 'reconnect' Dispatch/", "Search", "reconnect · in Dispatch/", "Searching…"),
             ("rg -n 'a|b' 'My Sources'", "Search", "a|b · in My Sources", "Searching…"),
-            ("rg --files src", "Find files", "in src", "Finding files…"),
-            ("rg --files", "Find files", "in current directory", "Finding files…"),
+            ("rg --files src", "Locate", "in src", "Locating files…"),
+            ("rg --files", "Locate", "in current directory", "Locating files…"),
             ("grep -n 'reconnect' file.swift", "Search", "reconnect · in file.swift", "Searching…"),
             ("grep 'reconnect'", "Search", "reconnect · in standard input", "Searching…"),
             ("git status --short", "Check working-tree changes", "", "Checking changes…"),

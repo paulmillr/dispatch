@@ -23,7 +23,7 @@ Dispatch is a normal terminal. The goal is to improve user's workflow, not to ch
 2. Try **Native Tabs**: run `tmux -CC` / `tmux -CC attach` or `herdr` locally / remotely
 3. Try **Chat Mode**: Start an agent in a terminal, it would auto-switch the tab to chat.
     - It uses hooks, local usage needs pre setup, remote usage is easier
-    - For local usage: Settings => Agents & Hosts => This Mac => Install (next to codex, claude etc)
+    - For local usage: Settings => Hosts => This Mac => Install (next to codex, claude etc)
     - For usage over SSH: just ssh somewhere, ensure to check the checkbox while connecting to auto-install hooks
     - All sent messages are queued - not steered
     - There is a separate key combo to steer; also it's possible to steer queued message
@@ -35,7 +35,8 @@ Dispatch is a normal terminal. The goal is to improve user's workflow, not to ch
 Extra features:
 
 - Spaces: tree view, reopen on launch, restore history, git branch titles, compact space list
-- Tabs only (Settings › Appearance): no tab strips; the sidebar lists every tab and "+ tab" replaces "+ space"
+- Review tab (files mode, ⇧⌘U): comment on any line of the uncommitted changes, then Create review sends the comments as one review to an agent chat (this tab's or another's), or copies it to paste anywhere; ⌥↓/⌥↑ step through the comments, ⇧⌘⏎ creates the review
+- Disable spaces (Settings › Appearance): no tab strips; the sidebar lists every tab and "+ tab" replaces "+ space"
 - Check out sidebar footer: clicking on a host brings up stats widget
 - Auto-improve text contrast on light themes
 - Single window for *everything*: no multiple windows

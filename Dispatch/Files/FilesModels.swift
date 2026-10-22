@@ -196,10 +196,8 @@ enum FilesAvailability {
     var isAvailable: Bool { source != nil }
 }
 
-/// The three tabs of files mode. Step one shows `.files` only; the others are remembered but not shown.
-/// What files mode shows: the Files tab, or the Commits tab with one of its rows selected: `changes` is its
-/// uncommitted-changes row (the working tree's files and their diffs in the detail), `commits` a commit. With
-/// Settings › Features › Git › Separate Changes tab, `changes` is that tab instead (`FilesSession.showsLog`).
+/// The three tabs of files mode: Files, Review (`changes`: the uncommitted changes, which take comments for an agent)
+/// and Commits.
 enum FilesTab: String, Hashable, Sendable, CaseIterable {
     case files, changes, commits
 }

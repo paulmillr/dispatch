@@ -1,11 +1,10 @@
 import AppKit
 import SwiftUI
 
-/// The Commits tab: the log as a graph under the uncommitted-changes row, with the selected row beside it, read-only
-/// (F4a; F3a's Changes is that row's detail). `FilesHeader` carries its branch and search, the list's footer its scope.
-/// The git data layer fills `log`, `commitDetail`, `commitDiff`, `status` and `changesDiff`; this view asks through
-/// `logWanted`, `logScope`, `logFilter`, `selectedCommit`, `commitFile`, `changesSelection` and the tab (`.changes` while
-/// the uncommitted row is selected).
+/// The Commits tab: the log as a graph under the uncommitted-changes row (which opens the Review tab), with the
+/// selected commit beside it, read-only (F4a). `FilesHeader` carries its branch and search, the list's footer its scope.
+/// The git data layer fills `log`, `commitDetail`, `commitDiff` and `status`; this view asks through `logWanted`,
+/// `logScope`, `logFilter`, `selectedCommit` and `commitFile`.
 struct GitCommitsView: View {
     @Bindable var session: FilesSession
     let focused: Bool
@@ -21,22 +20,17 @@ struct GitCommitsView: View {
                 // Another folder's repository is being resolved: the last log is not this folder's.
                 GitDelayedSpinner().accessibilityIdentifier("git-commits-resolving")
             } else {
-                // The Files tab's split: the same divider, widths and ⌥⌘P as its preview and the Changes tab's diff.
+                // The Files tab's split: the same divider, widths and ⌥⌘P as its preview and the Review tab's diff.
                 FilesSplit(session: session,
                            list: GitCommitsList(session: session, graph: graph, focus: $focus, detailShown: detailShown),
-                           detail: detail
+                           detail: GitCommitDetailPane(session: session, focus: $focus)
                                .onAppear { detailShown = true }
                                .onDisappear { detailShown = false },
                            back: "Commits")
             }
         }
-        // ⌘C while the list or the commit's files have the keyboard: the selected commit's hash; on the uncommitted row's
-        // files, the picked change's repository-relative path.
-        .gitCopyShortcut(active: focus != nil) {
-            guard session.tab == .changes else { return session.selectedCommit }
-            guard focus == .files else { return nil }
-            return session.status?.changes.first { $0.id == session.changesSelection }?.path
-        }
+        // ⌘C while the list or the commit's files have the keyboard: the selected commit's hash.
+        .gitCopyShortcut(active: focus != nil) { session.selectedCommit }
         .onAppear {
             pickFirstFile()
             if focused { focus = .list }
@@ -51,15 +45,6 @@ struct GitCommitsView: View {
         .onChange(of: session.commitDetail) { _, _ in pickFirstFile() }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("git-commits")
-    }
-
-    /// The selected row's detail: the uncommitted changes or the commit.
-    @ViewBuilder private var detail: some View {
-        if session.tab == .changes {
-            GitUncommittedDetailPane(session: session, focus: $focus)
-        } else {
-            GitCommitDetailPane(session: session, focus: $focus)
-        }
     }
 
     /// The mockup opens the selected commit on its first file's diff; a file already picked in it stays.
@@ -323,15 +308,12 @@ private struct GitCommitsList: View {
                     LazyVStack(spacing: 0) {
                         if uncommitted > 0 {
                             GitUncommittedButton(session: session, files: uncommitted, row: layout.top, lanes: layout.lanes,
-                                                 graphWidth: graphWidth, height: rowHeight) {
-                                focus.wrappedValue = .list
-                                if narrow { session.narrowDetail = true }
-                            }
+                                                 graphWidth: graphWidth, height: rowHeight)
                                 .id(Self.uncommittedID)
                         }
                         ForEach(Array(commits.enumerated()), id: \.element.hash) { index, commit in
                             // A button, not a tap gesture: in the focusable scroll view a tap gesture never saw the
-                            // click (as in the Changes list).
+                            // click (as in the Review list).
                             Button { select(commit.hash) } label: {
                                 GitCommitRow(commit: commit, check: session.signatureChecks[commit.hash],
                                              row: index < layout.rows.count ? layout.rows[index] : nil, lanes: layout.lanes,
@@ -350,13 +332,12 @@ private struct GitCommitsList: View {
                 .focusable()
                 .focusEffectDisabled()
                 .focused(focus, equals: .list)
-                // The separate Changes tab is another tab, not a row the arrows reach.
-                .onKeyPress(.upArrow) { move(-1, uncommitted: uncommitted > 0 && !session.changesTab, proxy: proxy) }
-                .onKeyPress(.downArrow) { move(1, uncommitted: uncommitted > 0 && !session.changesTab, proxy: proxy) }
+                // The uncommitted row opens the Review tab: it is another tab, not a row the arrows reach.
+                .onKeyPress(.upArrow) { move(-1, proxy: proxy) }
+                .onKeyPress(.downArrow) { move(1, proxy: proxy) }
                 .onKeyPress(.return) {
                     // Without the detail pane (hidden by ⌥⌘P) the list keeps the keyboard; one column shows the detail.
-                    let picked = session.tab == .changes ? session.changesSelection : session.selectedCommit
-                    guard picked != nil, detailShown || narrow else { return .ignored }
+                    guard session.selectedCommit != nil, detailShown || narrow else { return .ignored }
                     if narrow { session.narrowDetail = true }
                     focus.wrappedValue = .files
                     return .handled
@@ -385,22 +366,14 @@ private struct GitCommitsList: View {
         session.logWanted += GitLoader.page
     }
 
-    /// ↑↓ through the rows: the uncommitted one (while there are changes), then the commits.
-    private func move(_ step: Int, uncommitted: Bool, proxy: ScrollViewProxy) -> KeyPress.Result {
-        // Nil stands for the uncommitted row.
-        let rows: [String?] = (uncommitted ? [nil] : []) + (session.log?.commits ?? []).map(\.hash)
+    /// ↑↓ through the commits.
+    private func move(_ step: Int, proxy: ScrollViewProxy) -> KeyPress.Result {
+        let rows = (session.log?.commits ?? []).map(\.hash)
         guard !rows.isEmpty else { return .ignored }
-        let current = session.tab == .changes ? rows.firstIndex(where: { $0 == nil })
-            : session.selectedCommit.flatMap { hash in rows.firstIndex { $0 == hash } }
+        let current = session.selectedCommit.flatMap { hash in rows.firstIndex { $0 == hash } }
         let next = current.map { min(max($0 + step, 0), rows.count - 1) } ?? (step > 0 ? 0 : rows.count - 1)
-        if let hash = rows[next] {
-            if session.selectedCommit != hash { session.selectedCommit = hash }
-            session.select(.commits)
-            proxy.scrollTo(hash)
-        } else {
-            session.select(.changes)
-            proxy.scrollTo(Self.uncommittedID)
-        }
+        if session.selectedCommit != rows[next] { session.selectedCommit = rows[next] }
+        proxy.scrollTo(rows[next])
         return .handled
     }
 
@@ -414,7 +387,7 @@ private struct GitCommitsList: View {
     }
 }
 
-/// The hollow dot on top: the working tree's changes, which the Changes tab shows.
+/// The hollow dot on top: the working tree's changes, which the Review tab shows.
 private struct GitUncommittedRow: View {
     let files: Int
     let row: GitGraph.Row?
@@ -448,7 +421,7 @@ private struct GitUncommittedRow: View {
     }
 }
 
-/// The uncommitted row as a button: a click selects it, its changes and their diffs in the detail.
+/// The uncommitted row as a button: a click opens the Review tab.
 private struct GitUncommittedButton: View {
     let session: FilesSession
     let files: Int
@@ -456,21 +429,17 @@ private struct GitUncommittedButton: View {
     let lanes: Int
     let graphWidth: CGFloat
     let height: CGFloat
-    let focusList: () -> Void
 
     var body: some View {
-        let selected = session.tab == .changes
         Button {
             session.select(.changes)
-            focusList()
         } label: {
-            GitUncommittedRow(files: files, row: row, lanes: lanes, selected: selected, graphWidth: graphWidth,
+            GitUncommittedRow(files: files, row: row, lanes: lanes, selected: false, graphWidth: graphWidth,
                               height: height)
         }
         .buttonStyle(.plain)
-        .help(session.changesTab ? "Open the Changes tab · ⌃⌘2" : "Show the uncommitted changes · ⌃⌘2")
+        .help("Review the uncommitted changes · ⌃⌘2")
         .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityIdentifier("git-commits-uncommitted")
     }
 }

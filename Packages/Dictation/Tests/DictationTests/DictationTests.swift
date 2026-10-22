@@ -50,7 +50,7 @@ final class DictationTests: XCTestCase {
 
     func testWhisperModelsAreDistinctVerifiedFiles() {
         let models = WhisperModel.allCases
-        XCTAssertEqual(models.map(\.title), ["Small", "Medium", "Large v3 Turbo"])
+        XCTAssertEqual(models.map(\.title), ["Small", "Large v3 Turbo"])
         XCTAssertEqual(Set(models.map(\.fileName)).count, models.count)
         for model in models {
             XCTAssertEqual(model.sha256.count, 64, model.title)

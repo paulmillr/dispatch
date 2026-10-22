@@ -470,8 +470,10 @@ def main():
                 helper_complete = Path(progress) / 'helper-complete'
                 command = ['xcodebuild', '-project', 'Dispatch.xcodeproj',
                         '-scheme', 'Dispatch', '-configuration', configuration,
-                        '-derivedDataPath', 'build', 'build',
-                        f'DISPATCH_HELPER_BUILD_COMPLETE={helper_complete}']
+                        '-derivedDataPath', 'build', 'build']
+                # Environment, not a build setting: a per-run command-line setting changes every target's build
+                # description, so each build recompiled everything from scratch.
+                env['DISPATCH_HELPER_BUILD_COMPLETE'] = str(helper_complete)
                 if production:
                     command.append('DISPATCH_STRIP_APP=YES')
                 if env.get('DISPATCH_BUILD_JOBS'):

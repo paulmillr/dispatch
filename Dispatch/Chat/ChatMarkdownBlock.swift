@@ -167,11 +167,20 @@ enum TextRendering {
         guard normalized.unicodeScalars.contains(where: unsafe) else { return normalized }
         var result = ""
         result.reserveCapacity(normalized.utf8.count)
-        for scalar in normalized.unicodeScalars {
-            if let label = label(for: scalar) { result += "⟦\(label)⟧" }
+        let scalars = Array(normalized.unicodeScalars)
+        for (index, scalar) in scalars.enumerated() {
+            if scalar.value == 0x200D, index > 0, index + 1 < scalars.count,
+               joinsEmoji(scalars[index - 1], scalars[index + 1]) { result.unicodeScalars.append(scalar) }
+            else if let label = label(for: scalar) { result += "⟦\(label)⟧" }
             else { result.unicodeScalars.append(scalar) }
         }
         return result
+    }
+
+    /// A joiner between two emoji (👩🏽‍💻) is how the emoji is spelled, not a hidden control.
+    private static func joinsEmoji(_ previous: Unicode.Scalar, _ next: Unicode.Scalar) -> Bool {
+        func emoji(_ scalar: Unicode.Scalar) -> Bool { scalar.value > 0x7F && scalar.properties.isEmoji }
+        return (emoji(previous) || previous.value == 0xFE0F) && emoji(next)
     }
 
     private static func unsafe(_ scalar: Unicode.Scalar) -> Bool {

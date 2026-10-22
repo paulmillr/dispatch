@@ -82,7 +82,7 @@ final class GitLoadingTests: XCTestCase {
         source.gitAnswers[Self.refs] = ok("refs/heads/main\t\(Self.hash)\t*\t\nrefs/remotes/origin/main\t\(Self.parent)\t \t\n")
         source.gitAnswers["log -n 200 --skip=0 \(Self.format) --date=unix \(Self.hash)"] =
             ok(Self.record(Self.hash, parents: [Self.parent], subject: "Make webhook retries idempotent", at: 1_760_000_000))
-        // The Changes tab selects its first change when it opens.
+        // The Review tab selects its first change when it opens.
         source.gitAnswers["diff --cached -U3 -- CHANGELOG.md"] = ok(Self.diff("CHANGELOG.md"))
         // Above the repository git finds none.
         source.gitAnswers["/Users/ivan rev-parse --show-toplevel"] =
@@ -186,11 +186,11 @@ final class GitLoadingTests: XCTestCase {
 
     // MARK: Status and marks
 
-    /// With Settings › Features › Git › Separate Changes tab: the Changes tab is its own and reads only the status.
+    /// The Review tab reads only the status, on the tick like the Files tab.
     func testStatusRefreshesOnTheTickWhileFilesOrChangesShows() async throws {
         let source = FakeFilesSource.mockupAPI()
         repository(source)
-        let f = fixture(source, directory: api, preferences: { .init(changesTab: true) })
+        let f = fixture(source, directory: api)
         try await TestSupport.eventually { f.session.status != nil }
         try await f.idle()
         let status = try XCTUnwrap(f.session.status)
@@ -209,7 +209,7 @@ final class GitLoadingTests: XCTestCase {
         XCTAssertEqual(calls(source, "status").count, 2, "The Files tab reads the status every 2 s")
         f.session.tab = .changes
         try await f.tick()
-        XCTAssertEqual(calls(source, "status").count, 3, "So does the Changes tab")
+        XCTAssertEqual(calls(source, "status").count, 3, "So does the Review tab")
 
         // Commits reads it on entry and on the tick: its uncommitted row and the branch's ahead and behind show it.
         f.session.tab = .commits
@@ -238,34 +238,26 @@ final class GitLoadingTests: XCTestCase {
         try await TestSupport.eventually { calls(source, "status").count == before + 3 }
     }
 
-    /// By default the changes are Commits' uncommitted row: selecting it is entering Commits (the status and the log are
-    /// read at once), and moving between its rows reads nothing new.
-    func testTheUncommittedRowReadsWhatCommitsReads() async throws {
+    /// The Review tab reads the status (on the tick, as the Files tab does) and the selected change's diff, never the
+    /// log; Commits reads the log on entry.
+    func testTheReviewTabReadsNoLog() async throws {
         let source = FakeFilesSource.mockupAPI()
         repository(source)
         let f = fixture(source, directory: api)
         try await TestSupport.eventually { f.session.status != nil }
         try await f.idle()
-        XCTAssertFalse(f.session.changesTab)
         XCTAssertEqual(calls(source, "status").count, 1)
         XCTAssertTrue(calls(source, "log").isEmpty, "Files reads no log")
 
         f.session.tab = .changes
-        try await TestSupport.eventually { calls(source, "status").count == 2 && f.session.log != nil }
-        try await f.idle()
+        try await f.tick()
         XCTAssertEqual(calls(source, "status").count, 2)
-        let logs = calls(source, "log").count
-        XCTAssertGreaterThan(logs, 0, "the uncommitted row shows above the log")
+        XCTAssertTrue(calls(source, "log").isEmpty, "nor does Review")
+        XCTAssertNil(f.session.log)
 
         f.session.tab = .commits
-        try await f.idle()
-        XCTAssertEqual(calls(source, "status").count, 2, "a commit row reads nothing new")
-        XCTAssertEqual(calls(source, "log").count, logs)
-        f.session.tab = .changes
-        try await f.idle()
-        XCTAssertEqual(calls(source, "status").count, 2, "nor does the uncommitted row again")
-        try await f.tick()
-        XCTAssertEqual(calls(source, "status").count, 3, "the tick reads the status")
+        try await TestSupport.eventually { f.session.log != nil }
+        XCTAssertGreaterThan(calls(source, "log").count, 0, "Commits reads the log")
     }
 
     func testStatusChangesLeaveTheFilesListingsAlone() async throws {
@@ -279,7 +271,7 @@ final class GitLoadingTests: XCTestCase {
         let redraws = Redraws()
         withObservationTracking { _ = f.session.listings } onChange: { redraws.mark() }
 
-        // billing.ts is committed: the Changes tab hears of it, the Files tab shows nothing of git.
+        // billing.ts is committed: the Review tab hears of it, the Files tab shows nothing of git.
         source.gitAnswers[Self.status] =
             ok(Self.porcelain.replacingOccurrences(of: "1 .M N... 100644 100644 100644 ddddddd ddddddd src/routes/billing.ts\0", with: ""))
         try await f.tick()
@@ -649,7 +641,7 @@ final class GitLoadingTests: XCTestCase {
         let f = fixture(source, directory: api)
         try await TestSupport.eventually { f.session.status != nil }
         try await f.idle()
-        XCTAssertNil(f.session.changesSelection, "Off the Changes tab nothing is picked")
+        XCTAssertNil(f.session.changesSelection, "Off the Review tab nothing is picked")
         f.session.tab = .changes
         try await TestSupport.eventually { f.session.changesSelection == "staged:CHANGELOG.md" }
         f.session.changesSelection = "unstaged:src/lib/db.ts"

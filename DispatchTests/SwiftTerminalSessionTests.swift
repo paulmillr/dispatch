@@ -283,6 +283,49 @@ final class SwiftTerminalSessionTests: XCTestCase {
         XCTAssertEqual(SwiftEngine.parse("scrollback-limit-bytes = lots", dark: true).diagnostics.map(\.key), ["scrollback-limit-bytes"])
     }
 
+    /// cursor-style and cursor-style-blink as Ghostty reads them set the cursor a program has not chosen, in a new
+    /// terminal and in an open one reconfigured.
+    /// background-opacity: the frame's background (not text or cells with their own background) carries it as alpha,
+    /// and the layer stops claiming to cover what is behind it; reconfiguring back to opaque restores both.
+    func testBackgroundOpacityTranslucesTheBackgroundOnly() throws {
+        let config = SwiftEngine.parse("background = #204060\nbackground-opacity = 0.8", dark: true)
+        XCTAssertEqual(config.backgroundOpacity, 0.8)
+        XCTAssertTrue(config.diagnostics.isEmpty)
+        XCTAssertEqual(SwiftEngine.parse("background-opacity = 3", dark: true).backgroundOpacity, 1, "clamped like Ghostty")
+        XCTAssertEqual(SwiftEngine.parse("background-opacity = clear", dark: true).diagnostics.map(\.key), ["background-opacity"])
+        let session = try Session(config: config, scale: 1, machine: System.machine.launch)
+        session.setSize(width: 200, height: 100)
+        func corner() -> [UInt8] {
+            let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: 200, height: 100, mipmapped: false)
+            (descriptor.usage, descriptor.storageMode) = ([.renderTarget, .shaderRead], .shared)
+            let target = session.device.makeTexture(descriptor: descriptor)!
+            guard let commands = session.render(into: target) else { XCTFail("Metal frame was not submitted"); return [] }
+            commands.waitUntilCompleted()
+            var bytes = [UInt8](repeating: 0, count: 4)
+            target.getBytes(&bytes, bytesPerRow: 200 * 4, from: MTLRegionMake2D(190, 90, 1, 1), mipmapLevel: 0)
+            return bytes
+        }
+        XCTAssertEqual(Int(corner()[3]), 204, accuracy: 1, "80% of 255")
+        XCTAssertFalse(session.layerIsOpaque)
+        session.configure(SwiftEngine.parse("background = #204060", dark: true))
+        XCTAssertEqual(corner()[3], 255)
+        XCTAssertTrue(session.layerIsOpaque)
+    }
+
+    func testCursorConfigSetsTheDefaultCursorAndFollowsReconfiguring() throws {
+        let session = try Session(config: SwiftEngine.parse("cursor-style = bar\ncursor-style-blink = false", dark: true),
+                                  scale: 1, machine: System.machine.launch)
+        func defaults() -> CursorDefaults { session.locked { session.surface.terminal.view.cursorDefaults } }
+        XCTAssertEqual(defaults().defaultStyle, .bar)
+        XCTAssertEqual(defaults().defaultBlink, false)
+        session.configure(SwiftEngine.parse("cursor-style = underline", dark: true))
+        XCTAssertEqual(defaults().defaultStyle, .underline)
+        XCTAssertNil(defaults().defaultBlink, "no cursor-style-blink: the program's blinking mode decides")
+        XCTAssertTrue(defaults().isDefault)
+        XCTAssertEqual(SwiftEngine.parse("cursor-style = beam\ncursor-style-blink = sometimes", dark: true).diagnostics.map(\.key),
+                       ["cursor-style", "cursor-style-blink"])
+    }
+
     /// Once the child is reaped its PID can belong to another process: the pty must forget it, so
     /// closing never signals or waits for a process group that is no longer ours.
     func testReapedChildIsForgotten() async throws {

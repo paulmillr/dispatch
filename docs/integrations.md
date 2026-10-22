@@ -17,7 +17,7 @@ Launch with `tmux -CC new-session -A -s work`, or `herdr` (`--session NAME`, `se
 
 ## SSH
 
-OpenSSH owns host keys, identities, aliases, ports, and jumps. **On new hosts** (Ask by default; Full features; Plain SSH) decides whether to upload the helper; Escape or a timeout aborts the `ssh` (status 130) rather than silently falling back to plain SSH. What the helper may read and change is listed in [security](security.md#ssh-integration).
+OpenSSH owns host keys, identities, aliases, ports, and jumps. **Remote helper** (Settings › Features, on by default; off is plain SSH) decides whether to upload the helper, and **Auto-confirm uploads** (off by default) whether a new host asks first; Escape or a timeout aborts the `ssh` (status 130) rather than silently falling back to plain SSH. What the helper may read and change is listed in [security](security.md#ssh-integration).
 
 - **Helper:** the bundled Rust helper (macOS 14+, Linux arm64/x86-64) needs no remote compiler or Python; its contract is in [`helper/PROTOCOL.md`](../helper/PROTOCOL.md). Unsupported hosts fall back to ordinary SSH. Cached legacy C helpers grant nothing.
 - **Grants are per configuration:** executable, destination, account, port, proxy, and identity. Hosts that share a sidebar card (same destination, account, port, proxy route, and host-key alias) share presentation only; each connection keeps its own generation and grant. Conflicting machine identities split the card.
@@ -30,7 +30,7 @@ OpenSSH owns host keys, identities, aliases, ports, and jumps. **On new hosts** 
 
 Quit saves remote hosts, layouts, and plain local spaces to `~/Library/Application Support/Dispatch/host-session.json` (when **Reopen spaces on launch** is on). They reopen disconnected, with no automatic login. Tabs keep their placement, renderer, loaded Chat history, and drafts across transport loss. Recovery re-verifies the SSH configuration, grant, account, and host identity over a fresh connection. tmux/herdr reattach to existing servers and panes only, and a missing session stays an error. Chat rejects reads and input from the old connection, and queues stay paused. Direct `/usr/bin/ssh` and plain-SSH connections get no managed recovery. Recovery state does not survive an app restart.
 
-**Reconnect automatically** (SSH settings, off by default) recovers a connection that dropped while Dispatch was running:
+**Reconnect automatically** (Settings › Features › Remote helper, off by default) recovers a connection that dropped while Dispatch was running:
 
 - It starts only after the launcher reports a transport loss with no exit status or receipt, never after Disconnect, a normal exit, or a launch restore.
 - Attempts run the same verified recovery but show nothing: the remembered grant only, and OpenSSH with `BatchMode=yes` (keys and the agent).

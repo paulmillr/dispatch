@@ -1,0 +1,15 @@
+{
+  "kind": "rerecord",
+  "why": "The uncommitted changes became their own Review tab (with line comments for an agent) and Settings › Features › Git › Separate Changes tab went away: the files loader's preferences lost `changesTab`, so the files-defaults fingerprint moved. Review reads the status on the tick and never the log, where Commits' uncommitted row read the log on entry: the three-tabs end-to-end recording holds the old git requests (its replay sends log requests the recording lacks). The Git presentation tests whose steps changed with the tab (the uncommitted row now opens Review; the header shows where you are before the tabs) no longer match their recordings, and GitLoadingTests' uncommitted-row case is now testTheReviewTabReadsNoLog, so its recording is retired. Found by replaying the corpus on 6d3696dd in the test VM; every other files and git recording replayed unchanged.",
+  "tests": [
+    "GitChangesPresentationTests/testNarrowHeaderKeepsTheLineBesideGlyphSegments",
+    "GitCommitsPresentationTests/testANarrowViewShowsAChosenRowsDetailInTheLogsPlace",
+    "GitCommitsPresentationTests/testClickingARowSelectsItAndTheUncommittedRowOpensChanges",
+    "GitCommitsPresentationTests/testNarrowHeaderKeepsTheControlsBesideGlyphSegments",
+    "GitEndToEndTests/testTheThreeTabsShowARealRepository",
+    "GitLoadingTests/testTheUncommittedRowReadsWhatCommitsReads"
+  ],
+  "fingerprints": {
+    "files-defaults": "7b74c0e654709edae7b40e86e9df1aff5706322aeb85413aafae585567a720a1"
+  }
+}

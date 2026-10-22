@@ -104,6 +104,7 @@ struct MainView: View {
         .preferredColorScheme(Chrome.colorScheme)
         .ignoresSafeArea()
         .overlay { HostMoveCanvas(motion: workspace.hostMoveMotion).allowsHitTesting(false) }
+        .overlay(alignment: .top) { VoiceNavigationNote() }
         .overlay(alignment: .leading) {
             if controller.windowState.isFullScreen {
                 let host = revealHost
@@ -242,7 +243,10 @@ struct MainView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Chrome.palette.terminal)
+        // Translucent terminals paint their own backgrounds over the desktop; chat and files paint theirs. With no
+        // space (or no terminal) there is nothing to see through.
+        .background(settings.values.terminalOpacity < 1 && workspace.current != nil && TerminalRuntime.shared.error == nil
+                    ? Color.clear : Chrome.palette.terminal)
         .overlay(alignment: .bottom) {
             // Over the panes' bottom edge, so the title row keeps the top edge.
             if let helper = workspace.helpers.values.first(where: { $0.error != nil }), let error = helper.error {

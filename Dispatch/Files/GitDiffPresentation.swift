@@ -313,7 +313,7 @@ struct GitDiffPresentation: Equatable, Sendable {
     }
 }
 
-/// The words of the Changes tab and the diff header (F3a), kept apart from the views so they are tested as text.
+/// The words of the Review tab and the diff header (F3a), kept apart from the views so they are tested as text.
 enum GitChangesText {
     /// "main", or "detached at 3f2c1a0" on a detached HEAD: the Changes and Commits headers and the Files footer all
     /// name the checkout this way.
@@ -368,15 +368,6 @@ enum GitChangesText {
         case let (old?, nil): return "binary · \(FilesFormatting.size(old)) → deleted"
         case (nil, nil): return "binary"
         }
-    }
-
-    /// The diff header's meta line: "unstaged · +8 −5 · 2 hunks".
-    static func meta(label: String?, additions: Int, deletions: Int, hunks: Int) -> String {
-        var parts: [String] = []
-        if let label, !label.isEmpty { parts.append(label) }
-        parts.append("+\(FilesFormatting.count(additions)) −\(FilesFormatting.count(deletions))")
-        parts.append("\(FilesFormatting.count(hunks)) \(hunks == 1 ? "hunk" : "hunks")")
-        return parts.joined(separator: " · ")
     }
 
     /// What Source says when it has no lines: a deletion has no current file; a read file can be empty; without the

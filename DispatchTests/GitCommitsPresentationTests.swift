@@ -153,7 +153,7 @@ final class GitCommitsPresentationTests: XCTestCase {
                        in: window, named: "git-commit-detail")
         try await says("Make webhook retries idempotent", "git-commit-subject", in: window)
         try await says("c28855c", "git-commit-hash", in: window)
-        try await says("main · 2 ahead of origin/main · 4 files uncommitted · Commits ⌃⌘3", "files-segment-commits", in: window)
+        try await says("api · main · 2 ahead of origin/main", "files-location", in: window)
         try await says("11 loaded · all", "git-commits-footer-summary", in: window)
         XCTAssertTrue(PresentationTestSupport.accessibilityFrames("git-commit-show", in: window).isEmpty, "no git show")
         XCTAssertTrue(PresentationTestSupport.accessibilityFrames("git-diff-copy", in: window).isEmpty, "no copy button")
@@ -163,22 +163,23 @@ final class GitCommitsPresentationTests: XCTestCase {
         // The commit opens on its first file, as the mockup shows it.
         XCTAssertEqual(session.commitFile, "src/routes/billing.ts")
 
-        // The files header's 34 pt row as on every tab: the branch as the third segment, the search and the details'
-        // toggle at the trailing end; the list starts right under it, and the scope menu sits in its footer.
+        // The files header's 34 pt row as on every tab: the repository and its branch, the search and the details'
+        // toggle, then the tabs at the trailing end; the list starts right under it, and the scope menu sits in its footer.
         let header = try await frame("files-header", in: window)
         let segment = try await frame("files-segment-commits", in: window)
-        let crumbs = try await frame("files-crumbs", in: window)
+        let crumbs = try await frame("files-location", in: window)
         let scope = try await frame("git-log-scope", in: window)
         let footer = try await frame("git-commits-footer", in: window)
         let search = try await frame("files-search", in: window)
         let toggle = try await frame("files-preview-toggle", in: window)
         let list = try await frame("git-commits-list", in: window)
         XCTAssertEqual(header.height, 34, accuracy: 0.5)
-        XCTAssertGreaterThan(crumbs.minX, segment.maxX)
+        XCTAssertLessThan(crumbs.maxX, search.minX)
+        XCTAssertLessThanOrEqual(search.maxX, toggle.minX)
         XCTAssertEqual(scope.midY, footer.midY, accuracy: 1)
         XCTAssertLessThanOrEqual(scope.maxX, footer.maxX)
-        XCTAssertLessThanOrEqual(search.maxX, toggle.minX)
-        XCTAssertGreaterThan(toggle.maxX, header.maxX - 12 - 40, "the toggle sits at the trailing end")
+        XCTAssertLessThanOrEqual(toggle.maxX, segment.minX)
+        XCTAssertGreaterThan(segment.maxX, header.maxX - 12 - 40, "the tabs sit at the trailing end")
         XCTAssertEqual(list.maxY, header.minY, accuracy: 1.5, "no second bar between the header and the list")
         XCTAssertTrue(PresentationTestSupport.accessibilityLabels("files-preview-toggle", in: window).contains("Hide details"))
 
@@ -197,9 +198,9 @@ final class GitCommitsPresentationTests: XCTestCase {
             window.setContentSize(NSSize(width: width, height: 700))
             try await TestSupport.eventually(diagnostic: "the header did not settle at \(width) pt") {
                 window.contentView?.layoutSubtreeIfNeeded()
-                let commits = PresentationTestSupport.accessibilityFrames("files-segment-commits", in: window).first
+                let files = PresentationTestSupport.accessibilityFrames("files-segment-files", in: window).first
                 let filter = PresentationTestSupport.accessibilityFrames("files-preview-toggle", in: window).first
-                return commits.flatMap { commits in filter.map { commits.maxX < $0.minX } } ?? false
+                return files.flatMap { files in filter.map { $0.maxX < files.minX } } ?? false
             }
             if width == 360 {
                 // At last the segments drop their names (the line has clipped all it can).
@@ -209,9 +210,10 @@ final class GitCommitsPresentationTests: XCTestCase {
             let files = try await frame("files-segment-files", in: window)
             let commits = try await frame("files-segment-commits", in: window)
             let filter = try await frame("files-preview-toggle", in: window)
-            XCTAssertGreaterThanOrEqual(files.minX, 11.5, "nothing spills past the leading edge at \(width) pt")
-            XCTAssertLessThan(commits.maxX, filter.minX, "at \(width) pt")
-            XCTAssertLessThanOrEqual(filter.maxX, width - 12 - inset + 0.5, "the toggle stays out of the switch's room at \(width) pt")
+            let place = try await frame("files-location", in: window)
+            XCTAssertGreaterThanOrEqual(place.minX, 11.5, "nothing spills past the leading edge at \(width) pt")
+            XCTAssertLessThan(filter.maxX, files.minX, "at \(width) pt")
+            XCTAssertLessThanOrEqual(commits.maxX, width - 12 - inset + 0.5, "the tabs stay out of the switch's room at \(width) pt")
         }
         _ = try await PresentationTestSupport.capture(window, named: "git-commits-header-narrow", in: "files-audit")
     }
@@ -230,14 +232,12 @@ final class GitCommitsPresentationTests: XCTestCase {
         ])
         try await TestSupport.eventually { session.commitFile == "package.json" }
 
-        // The uncommitted row is a row like the commits: selected, its changes take the detail.
+        // The uncommitted row opens the Review tab; the commit stays picked for when Commits shows again.
         try await click("git-commits-uncommitted", in: window) { session.tab == .changes }
-        try await says("Uncommitted changes", "git-changes-subject", in: window)
-        XCTAssertEqual(session.selectedCommit, bump.hash, "the commit stays picked for when its row is selected again")
+        XCTAssertEqual(session.selectedCommit, bump.hash)
     }
 
-    /// Under 600 pt there is one column: a chosen row's detail takes the log's place under a bar back to it; the
-    /// uncommitted row's does too.
+    /// Under 600 pt there is one column: a chosen commit's detail takes the log's place under a bar back to it.
     func testANarrowViewShowsAChosenRowsDetailInTheLogsPlace() async throws {
         let session = mockupSession()
         session.selectedCommit = nil
@@ -254,10 +254,6 @@ final class GitCommitsPresentationTests: XCTestCase {
         try await click("files-split-back", in: window) { !session.narrowDetail }
         try await TestSupport.eventually { PresentationTestSupport.accessibilityFrames("files-split-back", in: window).isEmpty }
         _ = try await frame("git-commit-\(bump.short)", in: window)
-
-        try await click("git-commits-uncommitted", in: window) { session.tab == .changes && session.narrowDetail }
-        try await says("Uncommitted changes", "git-changes-subject", in: window)
-        _ = try await PresentationTestSupport.capture(window, named: "git-commits-narrow-uncommitted", in: "files-audit")
     }
 
     func testADiffShowsOnlyUnderItsCommitAndPath() async throws {

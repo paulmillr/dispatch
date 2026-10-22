@@ -12,13 +12,13 @@ final class SSHCoordinator {
     @ObservationIgnored var presentIntegrationConsent: @MainActor (SSHIntegrationScope, NSWindow?) async -> SSHIntegrationSelection? = {
         await SSHIntegrationConsent.present($0, window: $1)
     }
-    /// The "Full features" new-host policy answers the consent sheet with this.
+    /// Auto-confirm uploads (Settings › Features › Remote helper) answers the consent sheet with this.
     /// Pi stays opt-in because it installs an extension on the remote host.
     static let fullFeatures = SSHIntegrationSelection(
         grant: .init(helperEnabled: true, features: Set(SSHIntegrationFeature.allCases)),
         agents: [.codex: true, .claude: true, .pi: false])
 
-    /// First choice for a login: automatic under Full features, otherwise the sheet.
+    /// First choice for a login: automatic with Auto-confirm uploads, otherwise the sheet.
     private func newHostSelection(_ scope: SSHIntegrationScope, window: NSWindow?) async -> SSHIntegrationSelection? {
         if TerminalRuntime.shared.preferences.autoGrantNewHosts { return Self.fullFeatures }
         return await presentIntegrationConsent(scope, window)

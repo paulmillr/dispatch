@@ -135,15 +135,15 @@ final class GitGraphTests: XCTestCase {
         XCTAssertEqual(GitChangesText.branch(status), "main")
         let detached = GitStatus(head: "c28855c", changes: [], loadedAt: now)
         XCTAssertEqual(GitChangesText.branch(detached), "detached at c28855c")
-        XCTAssertEqual(FilesHeader.branchHelp(detached), "detached at c28855c · Commits ⌃⌘3")
+        XCTAssertEqual(FilesHeader.branchHelp(detached), "detached at c28855c")
         var tracking = status
         tracking.upstream = "origin/main"
         tracking.ahead = 0
         tracking.behind = 0
-        XCTAssertEqual(FilesHeader.branchHelp(tracking), "main · up to date with origin/main · Commits ⌃⌘3")
+        XCTAssertEqual(FilesHeader.branchHelp(tracking), "main · up to date with origin/main")
         tracking.ahead = 2
         tracking.behind = 1
-        XCTAssertEqual(FilesHeader.branchHelp(tracking), "main · 2 ahead, 1 behind of origin/main · Commits ⌃⌘3")
+        XCTAssertEqual(FilesHeader.branchHelp(tracking), "main · 2 ahead, 1 behind of origin/main")
         XCTAssertEqual(status.changedFiles, 2, "the uncommitted row counts a file staged and unstaged once")
         XCTAssertEqual(GitCommitsText.files(1), "1 file")
         let page = GitLog(commits: log(["b: a", "a"]), exhausted: false, scope: .all, filter: "", loadedAt: now)

@@ -5,6 +5,8 @@ import Term
 /// Resolved terminal appearance, shared by chat views without reparsing theme files.
 struct ChatTheme: Equatable, Sendable {
     var typography = ChatTypography()
+    /// Settings' colorblind mode; its schemes keep red, green and yellow apart, so views showing changes use them.
+    var colorVision = ColorVision.typical
     var terminal = Chrome.terminal
     var ink = SidebarTheme.dark.palette.ink
     var muted = SidebarTheme.dark.palette.muted
@@ -33,6 +35,7 @@ struct ChatTheme: Equatable, Sendable {
     @MainActor init(config: Config, preferences: Preferences) {
         self.init()
         typography = ChatTypography(preferences: preferences)
+        colorVision = preferences.colorVision
         let color = { (c: RGB) in NSColor(srgbRed: Double(c.r) / 255, green: Double(c.g) / 255, blue: Double(c.b) / 255, alpha: 1) }
         let background = color(config.background)
         let foreground = color(config.foreground)
@@ -189,13 +192,13 @@ struct ChatTypography: Equatable, Sendable {
         NSFont(name: codeFontName, size: size + 1) ?? .monospacedSystemFont(ofSize: size + 1, weight: .regular)
     }
     var characterWidth: CGFloat = 7.5
-    /// The width of the common step names (Shell, Read, Search, Find files, Search web…) in semibold detail text: an
+    /// The width of the common step names (Shell, Read, Search, Locate, Web…) in semibold detail text: an
     /// opened group's title column.
     var stepTitleWidth: CGFloat = 64
     var replyLineHeight: CGFloat = 18
     var detailLineHeight: CGFloat = 14
     init() {}
-    static let stepNames = ["Shell", "Read", "Search", "Patch", "Edit", "Write", "Web", "Tool", "Find files", "Search web"]
+    static let stepNames = ["Shell", "Read", "Search", "Patch", "Edit", "Write", "Web", "Tool", "Locate"]
     @MainActor init(preferences: Preferences) {
         AppFont.register()
         size = preferences.fontSize

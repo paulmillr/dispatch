@@ -8,9 +8,8 @@ struct FilesSegments<ID: Hashable>: View {
         let title: String
         let symbol: String
         var count: Int?
-        /// The branch segment's distance from its upstream, "↑2 ↓1" after the title.
-        var ahead = 0
-        var behind = 0
+        /// The count pill's colour; nil draws it quiet.
+        var countTint: Color?
         var enabled = true
         let help: String
         /// Read for the segment instead of its title and count.
@@ -33,20 +32,14 @@ struct FilesSegments<ID: Hashable>: View {
                     HStack(spacing: 6) {
                         Image(systemName: segment.symbol).font(.system(size: typography.size(offset: -2)))
                         if !compact {
-                            // A long branch name shortens in the middle rather than pushing the line's controls out.
-                            Text(verbatim: segment.title)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                                .frame(maxWidth: typography.expanded(180))
-                            if segment.ahead > 0 { Text(verbatim: "↑\(segment.ahead)").foregroundStyle(palette.green) }
-                            if segment.behind > 0 { Text(verbatim: "↓\(segment.behind)").foregroundStyle(palette.warning) }
+                            Text(verbatim: segment.title).lineLimit(1)
                         }
                         if let count = segment.count {
                             Text("\(count)")
                                 .font(AppFont.ui(size: typography.size(offset: -2.5)))
-                                .foregroundStyle(on ? palette.sidebarHostLabel : palette.detail)
+                                .foregroundStyle(segment.countTint ?? (on ? palette.sidebarHostLabel : palette.detail))
                                 .padding(.horizontal, 5).padding(.vertical, 1)
-                                .background(Capsule().fill(palette.ink.opacity(0.06)))
+                                .background(Capsule().fill(segment.countTint.map { $0.opacity(0.16) } ?? palette.ink.opacity(0.06)))
                         }
                     }
                     .foregroundStyle(!segment.enabled ? palette.faint : on ? palette.ink : palette.muted)
@@ -70,14 +63,16 @@ struct FilesSegments<ID: Hashable>: View {
     }
 }
 
-/// The 34 pt bar over the tab (F2a, F4a), laid out the same on every tab: the files tabs (Files · the branch, whose
-/// segment opens Commits, with the uncommitted files' count), then where you are (the path as crumbs, a right click offering Finder's folder
-/// menu; on Files the follow-the-shell link after it), the search and the pane's toggle, always last. Counts, totals
-/// and the Commits scope live in the footers. Commits shows the path to the repository's top folder; the Files tab
-/// shows nothing of git.
+/// The 34 pt bar over the tab (F2a, F4a), laid out the same on every tab: where you are, then (on Review, once it holds
+/// comments) Create review; at the trailing end the search and the pane's toggle, then the files tabs (Files · Review ·
+/// Commits), always last. Where you are is the path as crumbs on Files (a right click offering Finder's folder menu, the
+/// follow-the-shell link after it, the host first), and on Review and Commits the repository and its branch. The Files
+/// tab shows nothing of git.
 struct FilesHeader: View {
     @Bindable var session: FilesSession
     let root: String?
+    /// The tab's pane has the keyboard: ⇧⌘⏎ is Create review's.
+    var focused = true
     @Environment(\.appTypography) private var typography
     @Environment(\.chatTheme) private var theme
     /// Room for the floating mode switch over the header's trailing end.
@@ -90,31 +85,24 @@ struct FilesHeader: View {
     var body: some View {
         let palette = Chrome.palette
         HStack(spacing: 12) {
-            // Named segments beside a tab's line overflow a narrow pane: there they drop their names, but only
-            // once the line has given up what it can (the crumbs folded and the filter narrowed); the higher priority is
-            // offered room first.
-            let segments = Self.segments(for: session)
-            // Commits' segment stays lit whichever of its rows is selected; clicking it there keeps that row.
-            let merged = session.tab == .changes && !session.changesTab
-            let selection = Binding(get: { merged ? .commits : session.tab }, set: { tab in
-                if tab == .commits, merged { return }
-                session.select(tab)
-            })
-            ViewThatFits(in: .horizontal) {
-                FilesSegments(segments: segments, selection: selection)
-                FilesSegments(segments: segments, selection: selection, compact: true)
-            }
-            .layoutPriority(2)
             // Where you are: the crumbs fold and clip rather than push the controls out.
-            let location = session.tab == .files ? root : session.git.repository?.root ?? root
-            HStack(spacing: 6) {
-                crumbs(location)
-                // The link belongs to the folder it follows: right after the path, the crumbs folding before it goes.
-                if session.tab == .files, root != nil { followToggle.layoutPriority(1) }
+            Group {
+                if session.tab == .files {
+                    HStack(spacing: 6) {
+                        crumbs(root)
+                        // The link belongs to the folder it follows: right after the path, the crumbs folding before it.
+                        if root != nil { followToggle.layoutPriority(1) }
+                    }
+                } else {
+                    repositoryLine
+                }
             }
-            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+            .frame(minWidth: 0, alignment: .leading)
             .clipped()
+            .layoutPriority(0.5)
             if session.tab == .files, session.source?.readOnly == true { FilesReadOnlyTag() }
+            if session.tab == .changes { ReviewHeaderButton(session: session, focused: focused).layoutPriority(1) }
+            Spacer(minLength: 0)
             // The search and the pane's toggle: one glass pill with Liquid Glass.
             HStack(spacing: glass ? 2 : 12) {
                 searchSlot
@@ -122,6 +110,15 @@ struct FilesHeader: View {
             }
             .glassControlGroup()
             .layoutPriority(1)
+            // Named segments overflow a narrow pane: there they drop their names, but only once the line has given up
+            // what it can (the crumbs folded and the filter narrowed); the higher priority is offered room first.
+            let segments = Self.segments(for: session)
+            let selection = Binding(get: { session.tab }, set: { session.select($0) })
+            ViewThatFits(in: .horizontal) {
+                FilesSegments(segments: segments, selection: selection)
+                FilesSegments(segments: segments, selection: selection, compact: true)
+            }
+            .layoutPriority(2)
         }
         .padding(.leading, 12)
         .padding(.trailing, 12 + trailingInset)
@@ -149,25 +146,21 @@ struct FilesHeader: View {
         .accessibilityIdentifier("files-header")
     }
 
-    /// The files tabs as the header shows them (F2a): Files alone outside a repository; inside one Files · the branch
-    /// and how far it is from its upstream ("main ↑2"), which opens Commits ("Commits" until the status is in), with
-    /// the count of uncommitted files once the status is in (none for a clean tree).
+    /// The files tabs as the header shows them (F2a): Files alone outside a repository; inside one Files · Review, with
+    /// the count of its review comments in the review's blue once there are any · Commits. Fixed names: the branch is
+    /// where you are (`repositoryLine`), not a tab.
     static func segments(for session: FilesSession) -> [FilesSegments<FilesTab>.Segment] {
         let files = FilesSegments<FilesTab>.Segment(id: .files, title: "Files", symbol: "folder", help: "Files · ⌃⌘1",
                                                     accessibilityID: "files-segment-files")
         guard session.showsGitTabs else { return [files] }
-        let count = session.changedCount.flatMap { $0 > 0 ? $0 : nil }
-        let status = session.git.repository == nil ? nil : session.status
-        // The separate Changes tab (Settings › Features › Git) counts the files itself.
-        let separate = session.changesTab
-        let help = status.map { branchHelp($0, uncommitted: separate ? nil : count) }
-        let commits = FilesSegments<FilesTab>.Segment(
-            id: .commits, title: status.map(GitChangesText.branch) ?? "Commits", symbol: "arrow.triangle.branch",
-            count: separate ? nil : count, ahead: status?.ahead ?? 0, behind: status?.behind ?? 0,
-            help: help ?? "Commits · ⌃⌘3", accessibilityLabel: help, accessibilityID: "files-segment-commits")
-        guard separate else { return [files, commits] }
+        let comments = session.reviewCommentCount
+        let commits = FilesSegments<FilesTab>.Segment(id: .commits, title: "Commits", symbol: "clock.arrow.circlepath",
+                                                      help: "Commits · ⌃⌘3", accessibilityID: "files-segment-commits")
         return [files,
-                .init(id: .changes, title: "Changes", symbol: "doc.badge.plus", count: count, help: "Changes · ⌃⌘2",
+                .init(id: .changes, title: "Review", symbol: "text.bubble", count: comments,
+                      countTint: ChatThemeStore.shared.current.blue,
+                      help: comments.map { "Review · \(ReviewText.count($0)) · ⌃⌘2" } ?? "Review · ⌃⌘2",
+                      accessibilityLabel: comments.map { "Review, \(ReviewText.count($0))" },
                       accessibilityID: "files-segment-changes"),
                 commits]
     }
@@ -272,15 +265,43 @@ struct FilesHeader: View {
     }
 
     /// "main · 2 ahead of origin/main · 4 files uncommitted · Commits ⌃⌘3".
-    static func branchHelp(_ status: GitStatus, uncommitted: Int? = nil) -> String {
+    /// Review's and Commits' place: the repository's name, its branch and how far it is from its upstream. No host and
+    /// no path: on these tabs neither changes what they show, and the crumbs' clicks are the Files tab's.
+    private var repositoryLine: some View {
+        let palette = Chrome.palette
+        let name = session.git.repository.map { FilesPath.name($0.root) } ?? ""
+        let status = session.git.repository == nil ? nil : session.status
+        return HStack(spacing: 6) {
+            Text(verbatim: name).foregroundStyle(palette.secondary)
+            if let status {
+                Image(systemName: "arrow.triangle.branch")
+                    .font(.system(size: typography.size(offset: -2)))
+                    .foregroundStyle(palette.faint)
+                Text(verbatim: GitChangesText.branch(status)).truncationMode(.middle)
+                if status.ahead > 0 { Text(verbatim: "↑\(status.ahead)").foregroundStyle(palette.green) }
+                if status.behind > 0 { Text(verbatim: "↓\(status.behind)").foregroundStyle(palette.warning) }
+            }
+        }
+        .font(AppFont.ui(size: typography.size(offset: -0.5)))
+        .lineLimit(1)
+        .help(session.git.repository?.root ?? "")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Self.repositoryLabel(name: name, status: status))
+        .accessibilityIdentifier("files-location")
+    }
+
+    /// "api · main · 2 ahead of origin/main", as VoiceOver reads the repository line.
+    static func repositoryLabel(name: String, status: GitStatus?) -> String {
+        ([name] + (status.map { [branchHelp($0)] } ?? [])).joined(separator: " · ")
+    }
+
+    static func branchHelp(_ status: GitStatus) -> String {
         var parts = [GitChangesText.branch(status)]
         if let upstream = status.upstream {
             let moves = [status.ahead > 0 ? "\(status.ahead) ahead" : nil, status.behind > 0 ? "\(status.behind) behind" : nil]
                 .compactMap { $0 }
             parts.append(moves.isEmpty ? "up to date with \(upstream)" : moves.joined(separator: ", ") + " of \(upstream)")
         }
-        if let uncommitted { parts.append(GitCommitsText.files(uncommitted) + " uncommitted") }
-        parts.append("Commits ⌃⌘3")
         return parts.joined(separator: " · ")
     }
 
@@ -330,7 +351,7 @@ struct FilesHeader: View {
 
     // MARK: Search, sort
 
-    /// What the shown tab's search holds: the list's filter, the separate Changes tab's or the log's.
+    /// What the shown tab's search holds: the list's filter, the Review tab's or the log's.
     private var searchText: String {
         if session.tab == .files { return session.filter }
         return session.showsLog ? session.logFilter : session.changesFilter

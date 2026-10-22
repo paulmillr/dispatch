@@ -66,7 +66,7 @@ final class ReplayMigrationTests: XCTestCase {
     /// The defaults that decide what files mode asks a host for.
     private static var filesDefaults: String {
         let preferences = Preferences(), loader = FilesLoader.Preferences()
-        return hash(["show hidden \(preferences.filesShowHidden)", "follow shell \(preferences.filesFollowShell)",
+        return hash(["show hidden \(preferences.filesShowHidden)", "follow shell \(loader.followShell)",
                      "git \(preferences.gitEnabled)", "loader \(loader)"])
     }
 

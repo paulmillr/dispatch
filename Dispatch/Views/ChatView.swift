@@ -346,11 +346,14 @@ struct ChatView: View {
         }
     }
 
-    /// Shown with the reply actions, and while this chat's dictation listens or says why it failed.
-    private var dictationControl: some View {
+    /// Shown with the reply actions, and while this chat's dictation listens or says why it failed; never with
+    /// Dictation off.
+    @ViewBuilder private var dictationControl: some View {
         let dictation = Dictation.shared
-        return ChatDictationButton(session: session)
-            .focusedOnly(focused || dictation.active(session.id) || dictation.error(for: session.id) != nil)
+        if DictationStore.shared.enabled {
+            ChatDictationButton(session: session)
+                .focusedOnly(focused || dictation.active(session.id) || dictation.error(for: session.id) != nil)
+        }
     }
 
     @ViewBuilder private var savedDraftControls: some View {

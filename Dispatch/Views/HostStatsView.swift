@@ -269,22 +269,16 @@ private struct HostStatsPresentation: View {
 
     private var metricHistory: some View {
         TimelineView(.periodic(from: .distantPast, by: 2)) { timeline in
-            let points = sample.historySegments(memory: memorySelected, at: timeline.date).flatMap { $0 }
+            let bars = sample.historyBars(memory: memorySelected, at: timeline.date)
             VStack(alignment: .leading, spacing: 5) {
                 Text("15-min history")
                     .foregroundStyle(StatsStyle.muted).font(typography.font(offset: -1.5))
                 Canvas { context, size in
                     // One bar per 15-second bucket; missing samples stay empty.
-                    let count = 60
-                    var buckets = [Int: Double]()
-                    for point in points {
-                        guard let value = memorySelected ? point.memoryPercent : point.cpu else { continue }
-                        let position = 1 + point.date.timeIntervalSince(timeline.date) / HostStatisticsSnapshot.historyWindow
-                        let index = min(count - 1, max(0, Int(position * Double(count))))
-                        buckets[index] = max(buckets[index] ?? 0, min(100, max(0, value)))
-                    }
+                    let count = bars.count
                     let width = size.width / Double(count)
-                    for (index, value) in buckets {
+                    for (index, value) in bars.enumerated() {
+                        guard let value else { continue }
                         let height = max(1, size.height * value / 100)
                         let rect = CGRect(x: Double(index) * width, y: size.height - height,
                                           width: max(1, width - 1), height: height)

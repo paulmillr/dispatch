@@ -891,7 +891,12 @@ fn web(title: &str, root: Option<Value<'_>>) -> Option<Tool> {
     };
     Some(Tool {
         kind: "tool".into(),
-        title: if same { actions[0].0 } else { "Web" }.into(),
+        title: if same && actions[0].0 != "Search web" {
+            actions[0].0
+        } else {
+            "Web"
+        }
+        .into(),
         symbol: if search { "magnifyingglass" } else { "globe" }.into(),
         summary: if actions.is_empty() {
             "Web request".into()

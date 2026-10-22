@@ -83,9 +83,9 @@ final class ChatFormattingTests: XCTestCase {
             ("Grep", #"{"pattern":"needle","path":"/work/src","glob":"*.swift","output_mode":"content"}"#,
              ["Search", "magnifyingglass", "needle · in src · *.swift", "needle", "text"]),
             ("Glob", #"{"pattern":"**/*.swift","path":"/work"}"#,
-             ["Find files", "magnifyingglass", "**/*.swift · in .", "**/*.swift", "text"]),
+             ["Locate", "magnifyingglass", "**/*.swift · in .", "**/*.swift", "text"]),
             ("WebSearch", #"{"query":"Swift actors","allowed_domains":["swift.org"]}"#,
-             ["Search web", "magnifyingglass", "Swift actors", "Swift actors", "text"]),
+             ["Web", "magnifyingglass", "Swift actors", "Swift actors", "text"]),
             ("WebFetch", #"{"url":"https://example.com","prompt":"Summarize the page"}"#,
              ["Open page", "globe", "https://example.com", "Summarize the page", "text"]),
             ("Agent", #"{"description":"Review sources","prompt":"Find correctness issues","subagent_type":"Explore"}"#,
@@ -160,7 +160,7 @@ final class ChatFormattingTests: XCTestCase {
 
     func testWebStepsHaveActionLabelsAndReadableTargets() {
         let cases: [(String, String, String)] = [
-            (#"{"search_query":[{"q":"Swift actor isolation"}]}"#, "Search web", "Swift actor isolation"),
+            (#"{"search_query":[{"q":"Swift actor isolation"}]}"#, "Web", "Swift actor isolation"),
             (#"{"image_query":[{"q":"waterfalls"}]}"#, "Search images", "waterfalls"),
             (#"{"open":[{"ref_id":"https://example.com/docs","lineno":40}]}"#, "Open page", "https://example.com/docs · line 40"),
             (#"{"find":[{"ref_id":"turn0search0","pattern":"Installation"}]}"#, "Find on page", "“Installation” · Search result"),
@@ -177,7 +177,7 @@ final class ChatFormattingTests: XCTestCase {
                 let tool = ToolPresentation(item)
                 XCTAssertEqual(tool.title, title)
                 XCTAssertEqual(tool.summary, summary)
-                XCTAssertEqual(tool.symbol, title.hasPrefix("Search") ? "magnifyingglass" : "globe")
+                XCTAssertEqual(tool.symbol, input.contains("_query\"") ? "magnifyingglass" : "globe")
                 XCTAssertEqual(tool.language, "json")
                 XCTAssertNotNil(ToolPresentation.json(tool.input))
                 XCTAssertEqual(tool.output, "Result")
@@ -218,7 +218,7 @@ final class ChatFormattingTests: XCTestCase {
         let group = try XCTUnwrap(session.transcriptRows.first?.group)
         let items = group.children.compactMap(\.item)
         XCTAssertEqual(items.count, 2)
-        XCTAssertEqual(items.map { ToolPresentation($0).title }, ["Open page", "Search web"])
+        XCTAssertEqual(items.map { ToolPresentation($0).title }, ["Open page", "Web"])
         XCTAssertEqual(items.map { ToolPresentation($0).summary }, ["https://example.com/docs", "Swift concurrency"])
         XCTAssertEqual(items.map { ToolPresentation($0).output }, ["Page content", "Search results"])
         XCTAssertEqual(group.steps.map(\.kind), [.web, .web])
@@ -369,7 +369,7 @@ final class ChatFormattingTests: XCTestCase {
         XCTAssertEqual(ToolPresentation.command(["printf", "%s", "", "a b", "it's", "$(touch x)"]), "printf %s '' 'a b' 'it'\\''s' '$(touch x)'")
         XCTAssertEqual(ToolPresentation.command(["bash", "-c", "echo $0", "name"]), "bash -c 'echo $0' name")
         let search = ToolPresentation(ChatItem(id: "search", kind: .tool, text: #"{"cmd":"rg --files src","workdir":"/tmp/project"}"#, title: "functions.exec_command"))
-        XCTAssertEqual(search.title, "Find files")
+        XCTAssertEqual(search.title, "Locate")
         XCTAssertEqual(search.summary, "in src")
         XCTAssertEqual(search.directory, "/tmp/project")
         let exec = ToolPresentation(ChatItem(id: "exec", kind: .tool, text: "const results = await Promise.allSettled([]);", title: "functions.exec"))
@@ -652,7 +652,7 @@ final class ChatFormattingTests: XCTestCase {
             let rows = try snapshot.recognizedText()
             let text = try snapshot.text()
             XCTAssertTrue(text.contains("Shell"), text)
-            XCTAssertTrue(text.contains("Find files"), text)
+            XCTAssertTrue(text.contains("Locate"), text)
             XCTAssertTrue(text.contains("Patch"), text)
             XCTAssertTrue(text.contains("exit 7"), text)
             XCTAssertTrue(text.contains("Idempotent retries"), text)

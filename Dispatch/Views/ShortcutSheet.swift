@@ -8,12 +8,12 @@ struct ShortcutRow: Identifiable {
 
     init(_ key: String, _ explanation: String) { self.key = key; self.explanation = explanation }
 
-    /// What each digit group does; Settings › Keys describes its recorders the same way.
+    /// What each digit group does; Settings › Keyboard describes its recorders the same way.
     static let tabDigits = "switch to tab (or pane when split)"
     static let spaceDigits = "switch to space"
     static let splitDigits = "set layout: single / 2 columns / 2 above / 2 × 2 grid"
 
-    /// The digit chords lead, in Settings › Keys' order and following it; then stepping through tabs and spaces, and
+    /// The digit chords lead, in Settings › Keyboard' order and following it; then stepping through tabs and spaces, and
     /// the prefix keys last.
     @MainActor static var navigation: [ShortcutRow] {
         let keys = KeyGroupsStore.shared.current, steps = keys.steps
@@ -30,13 +30,21 @@ struct ShortcutRow: Identifiable {
             steps.spaces.map { .init(brackets($0), "space scroll: previous / next") },
             .init("⌘\\", "show or hide the sidebar · also ⌃⌘S"),
             .init("⌃B …", "tmux or herdr prefix keys"),
+            voiceNavigation,
         ]
         return rows.compactMap { $0 }
     }
 
+    /// Settings › Dictation › Navigate by voice, while dictation and its right ⌘ shortcut are on.
+    @MainActor static var voiceNavigation: ShortcutRow? {
+        let store = DictationStore.shared
+        guard store.enabled, store.rightCommand, store.navigation else { return nil }
+        return .init("right ⌘ “\(store.wakeWord), …”", "say a space or tab, or the sidebar: “billing tab 2”, “next space”, “back”, “hide sidebar”")
+    }
+
     @MainActor static var window: [ShortcutRow] { windowRows(KeyGroupsStore.shared.current) }
 
-    /// ⌃⌘1…3 are the files tabs' unless a Settings › Keys group takes ⌃⌘ digits (AppDelegate.filesTabModifiers).
+    /// ⌃⌘1…3 are the files tabs' unless a Settings › Keyboard group takes ⌃⌘ digits (AppDelegate.filesTabModifiers).
     @MainActor static func windowRows(_ keys: KeyGroups) -> [ShortcutRow] { [
         .init("⌘N / ⇧⌘N", "new space / new local space"),
         .init("⌘T", "new tab"),
@@ -45,9 +53,11 @@ struct ShortcutRow: Identifiable {
         .init("⌘J / ⇧⌘J", "notification scroll"),
         .init("⇧⌘C", "switch between terminal and chat"),
         .init("⇧⌘F", "switch between terminal and files"),
-        .init("⇧⌘U / ⇧⌘L", "show files on the Changes / Commits tab"),
-        .init("⌃⌘1…3", "files tabs: Files / Changes / Commits"),
+        .init("⇧⌘U / ⇧⌘L", "show files on the Review / Commits tab"),
+        .init("⌃⌘1…3", "files tabs: Files / Review / Commits"),
         .init("⌥⌘P", "show or hide the files preview"),
+        .init("⌥↓ / ⌥↑", "Review: next / previous comment"),
+        .init("⇧⌘⏎", "Review: create the review"),
         .init("⌘K", "clear the terminal screen and scrollback"),
         .init("⌘F", "find · ⌘G / ⇧⌘G next / previous"),
         .init("⌘+ / ⌘- / ⌘0", "bigger / smaller / reset font size"),

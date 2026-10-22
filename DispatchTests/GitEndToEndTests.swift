@@ -264,7 +264,7 @@ final class GitEndToEndTests: XCTestCase {
     }
 
     /// The three tabs end to end on this Mac's helper: a visible, presented session's loader fills the Files listing,
-    /// the Changes tab's status, counts and diffs, and the Commits tab's log, refs, a commit's files with their
+    /// the Review tab's status, counts and diffs, and the Commits tab's log, refs, a commit's files with their
     /// letters and a file's diff, as the tab switches.
     @MainActor
     func testTheThreeTabsShowARealRepository() async throws {
@@ -287,9 +287,9 @@ final class GitEndToEndTests: XCTestCase {
         try await TestSupport.eventually(timeout: .seconds(20)) {
             session.status?.changes.contains { $0.path == "new.txt" } == true && session.listings[path]?.listing != nil
         }
-        XCTAssertEqual(FilesHeader.segments(for: session).map(\.id), [.files, .commits])
+        XCTAssertEqual(FilesHeader.segments(for: session).map(\.id), [.files, .changes, .commits])
         try await TestSupport.eventually(timeout: .seconds(20)) { session.changedCount == 5 }
-        XCTAssertEqual(FilesHeader.segments(for: session)[1].count, 5)
+        XCTAssertNil(FilesHeader.segments(for: session)[1].count, "Review counts its comments, not the changed files")
 
         // Changes: the status with every file's counts, then a text diff and a binary one.
         session.select(.changes)

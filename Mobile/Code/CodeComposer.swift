@@ -5,8 +5,8 @@ import UIKit
 /// The composer with code (M5e), with a small interface (the draft, a placeholder, the trailing slot's state and its
 /// actions): "+" for attachments, the field, and the slot (mic while the draft is empty, Stop while the agent works
 /// with an empty draft, else the pink send; a long press on send steers into the running turn). The mic dictates with
-/// Settings' engine (`Dictation`): tapped again it stops, and the transcript becomes the draft; while it listens a
-/// capsule above the field shows what it has heard, and after a failure, why. The field is a
+/// Settings' engine (`Dictation`): what it hears fills the draft as it comes, and tapped again it stops; while it listens a
+/// capsule above the field says so, and after a failure, why. The field is a
 /// `UITextView` that grows with the draft up to a bound and renders its Markdown as you type (`CodeTextView`). With a
 /// fenced block in the draft the slot moves under the text, so the panel spans the field. While the field is focused a
 /// glass key row above the keyboard offers the backtick, the fence and code pairs, and a paste of several lines offers
@@ -177,20 +177,26 @@ struct CodeComposer: View {
             switch dictation.phase {
             case .idle: return nil
             case .starting: return ("Starting…", false)
-            case .listening: return (dictation.partial.isEmpty ? "Listening…" : dictation.partial, false)
+            case .listening: return ("Listening…", false)
             case .transcribing: return ("Transcribing…", false)
             }
         }
         return dictation.error(for: dictationOwner).map { ($0, true) }
     }
 
-    /// Starts dictation, or stops it: the transcript goes after the draft (the mic shows only while it is empty).
+    /// Starts dictation, or stops it: what it hears goes after the draft as it comes (the mic shows only while it is
+    /// empty), and a cancelled or failed dictation puts the draft back.
     private func dictate() {
         let choice = MobileSettings.dictation()
         let text = $text
-        dictation.toggle(owner: dictationOwner, engine: choice.engine, model: choice.model) { dictated in
-            let draft = text.wrappedValue
-            text.wrappedValue = DictationText.insert(dictated, into: draft, selection: NSRange(location: (draft as NSString).length, length: 0)).text
+        let draft = text.wrappedValue
+        let end = NSRange(location: (draft as NSString).length, length: 0)
+        dictation.toggle(owner: dictationOwner, engine: choice.engine, model: choice.model) { update in
+            switch update {
+            // The iPhone dictates one message at a time: no utterances come.
+            case .heard(let words), .utterance(let words), .finished(let words): text.wrappedValue = DictationText.insert(words, into: draft, selection: end).text
+            case .ended: text.wrappedValue = draft
+            }
         }
     }
 

@@ -101,8 +101,14 @@ struct TerminalContentView: View {
     @State private var presentationID = System.uuid()
     /// The floating switch's width, which a files header under it leaves free.
     @State private var floatingSwitchWidth: CGFloat = 0
+    /// The pointer is at the trailing edge or over the switch's corner (`FloatingSwitchReveal`).
+    @State private var switchRevealed = false
 
     private var switchTrailing: CGFloat { switchRow == nil ? Chrome.paneContentInset : Chrome.stripInset }
+    /// Full screen without the sidebar, where the sidebar button hides at the leading edge: the switch hides over the
+    /// terminal the same way at the trailing one. Over chat or files it stays: it is lit there, the way back, and they
+    /// leave it room.
+    private var revealsSwitch: Bool { floatingSwitch && switchRow != nil }
 
     var body: some View {
         let runtime = TerminalRuntime.shared
@@ -149,12 +155,24 @@ struct TerminalContentView: View {
                         .transition(reduceMotion ? .identity : .opacity.combined(with: .offset(y: 8)))
                         .zIndex(1)
                 }
+                if revealsSwitch {
+                    // Tracks the pointer in every mode, so a switch just clicked back to the terminal stays under it.
+                    FloatingSwitchReveal(corner: CGSize(width: floatingSwitchWidth + switchTrailing + 6,
+                                                        height: glassInset + (switchRow ?? 0) + 6)) { switchRevealed = $0 }
+                        .zIndex(2)
+                }
                 if floatingSwitch && !searchShown {
+                    let hidden = revealsSwitch && mode == .terminal && !switchRevealed
                     ChatModeSwitch(session: session, coordinator: chat, floating: true)
                         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { floatingSwitchWidth = $0 }
                         // Centered on a fixed row, not offset by a measured height: no frame shows it elsewhere.
                         .frame(height: switchRow, alignment: .center)
-                        .padding(.top, (switchRow == nil ? 10 : 0) + glassInset).padding(.trailing, switchTrailing).zIndex(3)
+                        .padding(.top, (switchRow == nil ? 10 : 0) + glassInset).padding(.trailing, switchTrailing)
+                        // Faded, not removed: a held press's menu keeps its button, and the width stays measured.
+                        .opacity(hidden ? 0 : 1)
+                        .allowsHitTesting(!hidden)
+                        .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: InterfaceMotion.viewDuration), value: hidden)
+                        .zIndex(3)
                 }
                 if mode == .terminal, search.visible {
                     ContentSearchBar(search: search, focused: focused && isPresented).padding(.top, glassInset).zIndex(4)
@@ -163,6 +181,13 @@ struct TerminalContentView: View {
             .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: InterfaceMotion.modeSwitchDuration), value: mode)
             .overlay(alignment: .bottomTrailing) {
                 if let armed = workspace.prefixKeys.armed, tab.surfaceIDs.contains(armed) { PrefixIndicator() }
+            }
+        }
+        // Translucent terminals: the strip's inset above the terminal takes its background too, so no band of bare
+        // desktop shows under the glass strip.
+        .background(alignment: .top) {
+            if mode == .terminal, runtime.preferences.terminalOpacity < 1 {
+                ChatThemeStore.shared.current.terminal.opacity(runtime.preferences.terminalOpacity).frame(height: glassInset)
             }
         }
         .clipped()
@@ -199,6 +224,68 @@ struct TerminalContentView: View {
             if !visible, focused, isPresented { runtime.focusActive() }
         }
         .id(tab.id)
+    }
+}
+
+/// Tracking only, as the sidebar button's edge reveal (`FullScreenSidebarReveal`): terminal input passes through, and
+/// the pointer within the trailing edge or the top-trailing `corner` reports `revealed`, leaving it a beat later.
+private struct FloatingSwitchReveal: NSViewRepresentable {
+    let corner: CGSize
+    let revealed: (Bool) -> Void
+
+    func makeNSView(context: Context) -> FloatingSwitchRevealView { FloatingSwitchRevealView() }
+    func updateNSView(_ view: FloatingSwitchRevealView, context: Context) {
+        view.revealed = revealed
+        view.corner = corner
+    }
+}
+
+final class FloatingSwitchRevealView: NSView {
+    var revealed: ((Bool) -> Void)?
+    var corner: CGSize = .zero {
+        didSet { if corner != oldValue { updateTrackingAreas() } }
+    }
+    private var areas: [NSTrackingArea] = []
+    private var dismissal: DispatchWorkItem?
+    private var shown = false
+    override var isFlipped: Bool { true }
+    override var isOpaque: Bool { false }
+
+    private var regions: [NSRect] {
+        [NSRect(x: bounds.width - 14, y: 0, width: 14, height: bounds.height),
+         NSRect(x: bounds.width - corner.width, y: 0, width: corner.width, height: corner.height)]
+    }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        areas.forEach(removeTrackingArea)
+        areas = regions.map { NSTrackingArea(rect: $0, options: [.mouseEnteredAndExited, .activeInKeyWindow], owner: self) }
+        areas.forEach(addTrackingArea)
+    }
+    override func mouseEntered(with event: NSEvent) { updatePointer(at: convert(event.locationInWindow, from: nil)) }
+    override func mouseExited(with event: NSEvent) { updatePointer(at: convert(event.locationInWindow, from: nil)) }
+    func updatePointer(at point: NSPoint) {
+        dismissal?.cancel(); dismissal = nil
+        if regions.contains(where: { $0.contains(point) }) {
+            report(true)
+        } else {
+            let task = DispatchWorkItem { [weak self] in self?.report(false); self?.dismissal = nil }
+            dismissal = task
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: task)
+        }
+    }
+    private func report(_ value: Bool) {
+        guard value != shown else { return }
+        shown = value
+        // Reported after the update that changed it, which may be SwiftUI's own.
+        DispatchQueue.main.async { [weak self] in self?.revealed?(value) }
+    }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        dismissal?.cancel(); dismissal = nil
+        guard let window else { report(false); return }
+        // Mounted under the pointer (a click back to the terminal): no entered event comes for it.
+        updatePointer(at: convert(window.mouseLocationOutsideOfEventStream, from: nil))
     }
 }
 

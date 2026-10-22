@@ -141,13 +141,23 @@ enum TabMode: String, Hashable, Sendable {
 
     /// What the strip button shows for this tab.
     func switchState(_ id: UUID) -> ModeSwitchState {
-        let host = plainSSHHost(id)
-        return ModeSwitchState(mode: mode(for: id), chat: chatAvailable(id), files: host == nil, host: host)
+        // With Files off the button is chat's alone, and no host is blamed for files it would not show anyway.
+        let host = enabled ? plainSSHHost(id) : nil
+        return ModeSwitchState(mode: mode(for: id), chat: chatAvailable(id), files: enabled && host == nil, host: host)
     }
 
-    /// Files can show on this tab; false only for a plain SSH login with no helper on the host, where the button dims
-    /// and explains itself (F1a d). A remote tab with a helper but no Files grant can: the view explains that.
-    func canShowFiles(_ id: UUID) -> Bool { plainSSHHost(id) == nil }
+    /// Settings › Features › Files.
+    var enabled: Bool { TerminalRuntime.shared.preferences.filesEnabled }
+
+    /// Files turned off: the tabs showing it go back to their terminals.
+    func leaveFiles() {
+        for id in sessions.keys where isShowing(id) { switchMode(id, to: .terminal, reason: "settings") }
+    }
+
+    /// Files can show on this tab: Files is on, and the tab is not a plain SSH login with no helper on the host, where
+    /// the button dims and explains itself (F1a d). A remote tab with a helper but no Files grant can: the view explains
+    /// that.
+    func canShowFiles(_ id: UUID) -> Bool { enabled && plainSSHHost(id) == nil }
 
     /// The host of a plain SSH login in this tab, whose files no helper can list; nil when files can show. The login is
     /// plain when the tab's terminal runs ssh (its own or one typed in it) that Dispatch did not integrate, and no helper

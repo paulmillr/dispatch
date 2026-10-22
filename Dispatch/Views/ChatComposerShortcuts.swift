@@ -28,7 +28,10 @@ struct ChatComposerShortcuts: View {
             .init("⌘S", "save draft"),
             .init("/", "commands · type / to browse agent commands"),
             multiline ? .init("⎋", "exit editor · keep your draft") : .init("⎋", "stop · end the current turn, keeping your draft"),
-        ]
+        ] + (DictationStore.shared.enabled && DictationStore.shared.rightCommand ? [
+            .init("hold right ⌘", "dictate one message · release inserts, ⏎ sends, ⎋ cancels"),
+            .init("tap right ⌘", "conversation mode · “\(DictationStore.shared.wakeWord), send / steer / scratch that / stop / deny / option 2”"),
+        ] : [])
     }
 
     private let moreComposer: [ShortcutRow] = [

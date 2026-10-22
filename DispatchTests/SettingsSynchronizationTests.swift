@@ -34,7 +34,7 @@ final class SettingsSynchronizationTests: XCTestCase {
         XCTAssertEqual(NSColor(tint.color).usingColorSpace(.sRGB), automatic)
     }
 
-    /// Settings › Hosts › Host colors: on by default; off keeps remote chrome but draws it without hue.
+    /// Settings › Appearance › Color-code remote hosts: on by default; off keeps remote chrome but draws it without hue.
     func testHostColorsSettingDefaultsOnAndDrawsNeutralWhenOff() throws {
         XCTAssertTrue(try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8)).showHostColors)
         var preferences = Preferences(); preferences.showHostColors = false
@@ -149,6 +149,64 @@ final class SettingsSynchronizationTests: XCTestCase {
             if tint == nil { XCTAssertLessThan(difference(try pixel(snapshot.bitmap, y: 1), background), 0.005) }
             else { XCTAssertGreaterThan(difference(try pixel(snapshot.bitmap, y: 1), background), 0.05) }
         }
+    }
+
+    /// Colorblind mode: hosts step in lightness as well as hue, so the eight stay apart as that vision's viewers see
+    /// them; labels still read on the sidebar and edges still show on the window in every theme. Git's added, modified
+    /// and deleted take the terminal scheme's colors, which that mode's schemes keep apart.
+    func testColorblindHostAndChangeColorsStayApartAndReadable() {
+        let store = SidebarThemeStore.shared, colors = HostColorStore.shared, chat = ChatThemeStore.shared
+        let previous = (store.current, colors.vision, colors.enabled, chat.current)
+        defer { store.current = previous.0; colors.vision = previous.1; colors.enabled = previous.2; chat.current = previous.3 }
+        colors.enabled = true
+        func srgb(_ color: Color, over ground: Color) -> ThemeColor {
+            let fill = NSColor(color).usingColorSpace(.sRGB)!, base = NSColor(ground).usingColorSpace(.sRGB)!
+            let a = fill.alphaComponent
+            return ThemeColor(red: fill.redComponent * a + base.redComponent * (1 - a),
+                              green: fill.greenComponent * a + base.greenComponent * (1 - a),
+                              blue: fill.blueComponent * a + base.blueComponent * (1 - a))
+        }
+        func contrast(_ color: Color, on ground: Color) -> Double { srgb(color, over: ground).contrast(with: srgb(ground, over: ground)) }
+        let tints = HostColor.allCases.map { HostTint(hostID: "colorblind-hosts").showing($0) }
+        /// The closest pair, as `vision`'s least able viewer sees them on the window.
+        func closest(_ drawn: [Color], _ vision: ColorVision) -> Double {
+            let colors = drawn.map { srgb($0, over: Chrome.window) }
+            var closest = Double.infinity
+            for first in colors.indices {
+                for second in colors.indices where second > first { closest = min(closest, vision.distance(colors[first], colors[second])) }
+            }
+            return closest
+        }
+        for vision in [ColorVision.redGreen, .blueYellow] {
+            colors.vision = vision
+            for theme in SidebarTheme.allCases {
+                store.current = theme
+                for tint in tints {
+                    let name = "\(vision) \(theme) \((tint.choice ?? tint.automatic).rawValue)"
+                    XCTAssertGreaterThanOrEqual(contrast(tint.foreground, on: Chrome.sidebar), 4.5, name)
+                    XCTAssertGreaterThanOrEqual(contrast(tint.tabForeground, on: Chrome.window), 4.5, name)
+                    XCTAssertGreaterThanOrEqual(contrast(tint.edge, on: Chrome.window), 3, name)
+                }
+                // The wash and mark colors keep about the generator's accent spacing; edges, held to 3:1 on the window,
+                // somewhat less.
+                XCTAssertGreaterThanOrEqual(closest(tints.map(\.color), vision), 0.09, "\(vision) \(theme) colors")
+                XCTAssertGreaterThanOrEqual(closest(tints.map(\.edge), vision), 0.05, "\(vision) \(theme) edges")
+            }
+        }
+        // The usual colors, at one lightness, look nearly the same to red-green viewers.
+        colors.vision = .typical
+        store.current = .dark
+        XCTAssertLessThan(closest(tints.map(\.color), .redGreen), 0.02)
+        // Changes: the app theme's colors normally; the scheme's in colorblind mode.
+        var scheme = ChatTheme.standard
+        scheme.red = .purple; scheme.green = .blue; scheme.yellow = .orange
+        chat.current = scheme
+        XCTAssertEqual(GitChangeBadge.color(.added), Chrome.palette.green)
+        scheme.colorVision = .redGreen
+        chat.current = scheme
+        XCTAssertEqual(GitChangeBadge.color(.added), .blue)
+        XCTAssertEqual(GitChangeBadge.color(.deleted), .purple)
+        XCTAssertEqual(GitChangeBadge.color(.modified), .orange)
     }
 
     /// Every theme draws each role at one lightness and chroma for every host, so hosts differ only in hue: labels
@@ -615,9 +673,13 @@ final class SettingsSynchronizationTests: XCTestCase {
             let root = try XCTUnwrap(app.window.contentView)
             try await TestSupport.eventually {
                 !PresentationTestSupport.views(of: FullScreenSidebarRevealView.self, in: root).isEmpty
+                    && !PresentationTestSupport.views(of: FloatingSwitchRevealView.self, in: root).isEmpty
             }
             let reveal = try XCTUnwrap(PresentationTestSupport.views(of: FullScreenSidebarRevealView.self, in: root).first)
             reveal.updatePointer(at: NSPoint(x: 2, y: 200))
+            // The switch hides over the terminal as the sidebar button does; the trailing edge shows it for the capture.
+            let switchReveal = try XCTUnwrap(PresentationTestSupport.views(of: FloatingSwitchRevealView.self, in: root).first)
+            switchReveal.updatePointer(at: NSPoint(x: switchReveal.bounds.width - 2, y: 200))
             let mark = StripHostMark.size(AppTypography(contentSize: size))
             let alone = try await chrome(in: app.window, mark: mark, label: "one tab at \(size)")
             app.workspace.newTab()
@@ -919,10 +981,11 @@ final class SettingsSynchronizationTests: XCTestCase {
         let originalUnlock = SidebarThemeStore.shared.nauticalUnlocked
         defer { SidebarThemeStore.shared.nauticalUnlocked = originalUnlock }
         SidebarThemeStore.shared.nauticalUnlocked = false
-        _ = try await themePicker(["Automatic", "Dark", "Light", "Graphite", "Lavender"])
+        // Graphite and Lavender are withheld for now: not offered unless already chosen.
+        _ = try await themePicker(["Automatic", "Dark", "Light"])
         SidebarThemeStore.shared.nauticalUnlocked = true
-        let control = try await themePicker(["Automatic", "Dark", "Light", "Graphite", "Lavender", "Nautical"])
-        for theme in AppTheme.allCases {
+        let control = try await themePicker(["Automatic", "Dark", "Light", "Nautical"])
+        for theme in AppTheme.allCases where !AppTheme.withheld.contains(theme) {
             control.selectItem(withTitle: theme.label)
             control.sendAction(control.action, to: control.target)
             let palette = theme.sidebarTheme(systemIsDark: SidebarThemeStore.systemIsDark)
@@ -992,7 +1055,8 @@ final class SettingsSynchronizationTests: XCTestCase {
         let directory = System.temporary.appendingPathComponent(System.uuid().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = SettingsStore(file: directory.appendingPathComponent("settings.json"))
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 550),
+        // Tall enough to show Style's Color schemes row.
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 760),
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         let content = NSHostingView(rootView: SettingsView(store: store, workspace: Workspace()))
@@ -1006,20 +1070,24 @@ final class SettingsSynchronizationTests: XCTestCase {
         })
         let snapshot = try await PresentationTestSupport.capture(window)
         let disclosure = try XCTUnwrap(try snapshot.recognizedText().first {
-            $0.topCandidates(1).first?.string.contains("Custom terminal") == true
+            $0.topCandidates(1).first?.string.contains("Color schemes") == true
         }).boundingBox
         try PresentationTestSupport.click(window, at: content.convert(NSPoint(x: disclosure.midX * content.bounds.width,
             y: (content.isFlipped ? 1 - disclosure.midY : disclosure.midY) * content.bounds.height), to: nil))
         try await Task.sleep(for: .milliseconds(250))
         _ = try await PresentationTestSupport.capture(window, named: "settings-custom-color-schemes")
-        // Make the expanded document visible before asking the compositor for its pixels.
+        // The opened card runs past the window: scroll through it, reading each view.
         let scroll = try XCTUnwrap(PresentationTestSupport.views(of: NSScrollView.self, in: content).first { !$0.isHiddenOrHasHiddenAncestor })
         let document = try XCTUnwrap(scroll.documentView)
-        window.setContentSize(NSSize(width: content.bounds.width,
-            height: content.bounds.height + max(0, document.bounds.height - scroll.contentView.bounds.height)))
-        window.center()
-        content.layoutSubtreeIfNeeded()
-        let expanded = try await PresentationTestSupport.capture(document).text()
+        let bottom = max(0, document.bounds.height - scroll.contentView.bounds.height)
+        var expanded = "", offset: CGFloat = 0
+        while true {
+            expanded += "\n" + (try await PresentationTestSupport.capture(window).text())
+            if expanded.contains("Improve text contrast") || offset >= bottom { break }
+            offset = min(bottom, offset + scroll.contentView.bounds.height * 0.6)
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: offset))
+            scroll.reflectScrolledClipView(scroll.contentView)
+        }
         XCTAssertTrue(expanded.contains("Improve text contrast"), expanded)
         for appearance: AppTheme in [.automatic, .light, .dark, .graphite, .lavender, .nautical, .automatic] {
             var values = store.values
@@ -1049,7 +1117,8 @@ final class SettingsSynchronizationTests: XCTestCase {
                 let single = try XCTUnwrap(PresentationTestSupport.views(of: NSPopUpButton.self, in: content).first {
                     $0.accessibilityIdentifier() == "settings-dropdown-Color scheme"
                 })
-                let choice = try XCTUnwrap(single.itemTitles.first { $0 != single.titleOfSelectedItem })
+                // The menu's separators have empty titles; pick a scheme.
+                let choice = try XCTUnwrap(single.itemArray.first { !$0.isSeparatorItem && $0.title != single.titleOfSelectedItem }?.title)
                 single.selectItem(withTitle: choice)
                 single.sendAction(single.action, to: single.target)
                 let saved = choice == "Match app theme" ? "Default" : choice

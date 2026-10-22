@@ -13,7 +13,7 @@ struct GitPorcelain: Hashable, Sendable {
     var behind = 0
     /// Staged, unstaged and untracked changes; an untracked folder git lists whole keeps its trailing slash.
     var changes: [GitChange] = []
-    /// Ignored files and folders (folders with a trailing slash): they mark the Files list, never the Changes tab.
+    /// Ignored files and folders (folders with a trailing slash): they mark the Files list, never the Review tab.
     var ignored: [String] = []
     /// The output was cut at the helper's bound (`GitQueries.status` sets it): the entries are the first ones only.
     var truncated = false

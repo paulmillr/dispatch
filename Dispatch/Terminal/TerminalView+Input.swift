@@ -15,7 +15,7 @@ extension TerminalView {
         // AppKit can interpret Control shortcuts as text commands before
         // keyDown. The focused terminal must send them to the terminal directly.
         // Command/Option shortcuts and active IME composition keep their
-        // normal responder-chain handling, as do the app's Settings › Keys digit chords and ⌃⇥.
+        // normal responder-chain handling, as do the app's Settings › Keyboard digit chords and ⌃⇥.
         let flags = event.modifierFlags
         // Prefix keys complete in keyDown; a chord the app takes here instead cancels a waiting prefix.
         if event.type == .keyDown, window?.firstResponder === self,

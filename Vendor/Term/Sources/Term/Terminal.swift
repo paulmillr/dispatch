@@ -155,6 +155,14 @@ public final class Terminal {
         (colors.foreground.default, colors.background.default, colors.cursor.default) = (foreground, background, cursor)
     }
 
+    /// The config's cursor (Termio.changeConfig): the shape and blinking a program has not chosen with
+    /// DECSCUSR; a cursor it has chosen stays until it asks for the default again.
+    public func changeCursorDefaults(style: CursorShape, blink: Bool?) {
+        guard style != cursorDefaults.defaultStyle || blink != cursorDefaults.defaultBlink else { return }
+        (cursorDefaults.defaultStyle, cursorDefaults.defaultBlink) = (style, blink)
+        if cursorDefaults.isDefault { setCursorStyle(.default) }
+    }
+
     deinit { primary.free(); alternate?.free() }
 
     var kittyGraphicsEnabled: Bool { kittyImageStorageLimit > 0 }

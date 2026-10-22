@@ -333,8 +333,8 @@ final class FilesModeTests: XCTestCase {
         }
         func checked() -> [String] { items().filter(\.checked).map(\.title) }
         func enabled() -> [String] { items().filter(\.enabled).map(\.title) }
-        let all = ["Terminal", "Chat", "Files", "Uncommitted Changes", "Commits"]
-        // F1a: the menu always lists the modes and the three files tabs; Changes and Commits are enabled as the View
+        let all = ["Terminal", "Chat", "Files", "Review", "Commits"]
+        // F1a: the menu always lists the modes and the three files tabs; Review and Commits are enabled as the View
         // menu's ⇧⌘U and ⇧⌘L are.
         XCTAssertEqual(items().map(\.title), all)
         XCTAssertEqual(enabled(), all, "no files session yet: nothing resolved, so the git tabs may open")
@@ -353,7 +353,7 @@ final class FilesModeTests: XCTestCase {
         XCTAssertEqual(enabled(), all)
         XCTAssertEqual(checked(), ["Terminal"], "the git tabs are checked only while files shows them")
         files.showFiles(id, tab: .changes)
-        XCTAssertEqual(checked(), ["Uncommitted Changes"])
+        XCTAssertEqual(checked(), ["Review"])
         files.showFiles(id, tab: .files)
         XCTAssertEqual(checked(), ["Files"])
         files.switchMode(id, to: .chat)
@@ -366,6 +366,32 @@ final class FilesModeTests: XCTestCase {
                        ["Terminal", "Chat"])
     }
 
+    func testFilesOffOffersNoFilesAndLeavesTheTabsShowingThem() {
+        let fixture = fixture(agent: true), files = fixture.files, id = fixture.id, runtime = TerminalRuntime.shared
+        let preferences = runtime.preferences
+        defer { runtime.preferences = preferences }
+        files.switchMode(id, to: .files)
+        XCTAssertTrue(files.isShowing(id))
+
+        runtime.preferences.filesEnabled = false
+        files.leaveFiles()
+        XCTAssertFalse(files.isShowing(id), "a tab showing files goes back to its terminal")
+        XCTAssertEqual(files.mode(for: id), .terminal)
+        XCTAssertFalse(files.canShowFiles(id))
+        XCTAssertFalse(files.switchState(id).files)
+        XCTAssertNil(files.switchState(id).host, "no host is blamed for files that are off")
+        XCTAssertEqual(ModeSwitchMenuItem.items(files.switchState(id), files: files, id: id) { _ in }.map(\.title),
+                       ["Terminal", "Chat"])
+        files.toggleFiles(id)
+        files.showFiles(id, tab: .commits)
+        XCTAssertFalse(files.isShowing(id), "⇧⌘F and the files tabs' keys do nothing")
+        XCTAssertEqual(files.nextMode(id), .chat, "the strip button goes to chat alone")
+
+        runtime.preferences.filesEnabled = true
+        files.toggleFiles(id)
+        XCTAssertTrue(files.isShowing(id))
+    }
+
     func testGitTabKeysAreBoundAndYieldToAKeysGroup() throws {
         let controller = AppDelegate(), old = (NSApp.mainMenu, NSApp.windowsMenu, NSApp.helpMenu)
         defer { NSApp.mainMenu = old.0; NSApp.windowsMenu = old.1; NSApp.helpMenu = old.2 }
@@ -376,7 +402,7 @@ final class FilesModeTests: XCTestCase {
         }
         let changes = try item(#selector(AppDelegate.openFilesTab(_:)), tag: 1)
         let commits = try item(#selector(AppDelegate.openFilesTab(_:)), tag: 2)
-        XCTAssertEqual([changes.title, changes.keyEquivalent], ["Uncommitted Changes", "U"])
+        XCTAssertEqual([changes.title, changes.keyEquivalent], ["Review Changes", "U"])
         XCTAssertEqual([commits.title, commits.keyEquivalent], ["Commits", "L"])
         XCTAssertEqual(changes.keyEquivalentModifierMask, [.command, .shift])
         XCTAssertFalse(changes.isHidden)
@@ -388,7 +414,7 @@ final class FilesModeTests: XCTestCase {
         let digits = try (0..<3).map { try item(#selector(AppDelegate.showFilesTab(_:)), tag: $0) }
         XCTAssertEqual(digits.map(\.keyEquivalent), ["1", "2", "3"])
         XCTAssertTrue(digits.allSatisfy { $0.keyEquivalentModifierMask == [.control, .command] })
-        XCTAssertEqual(digits.map(\.isHidden), [false, true, true], "⌃⌘2 and ⌃⌘3 reach what Changes and Commits name")
+        XCTAssertEqual(digits.map(\.isHidden), [false, true, true], "⌃⌘2 and ⌃⌘3 reach what Review Changes and Commits name")
         XCTAssertTrue(digits[1].allowsKeyEquivalentWhenHidden)
         var keys = KeyGroups()
         keys.tabs = [.control, .command]

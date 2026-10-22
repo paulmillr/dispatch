@@ -18,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// Recent keystrokes in the Settings window, matched against `AppTheme.nauticalCode`.
     private var settingsKeystrokes = ""
     private var settingsKeyMonitor: Any?
+    private var dictationShortcut: DictationShortcut?
     private var appearanceObservation: NSKeyValueObservation?
     private var termination: Task<Void, Never>?
     /// Settings' "Remove Dispatch from this Mac": run once the runtime stopped (true also deletes the app's data).
@@ -176,12 +177,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         window.setFrameAutosaveName("Dispatch.Local.MainWindow")
         window.contentView = NSHostingView(rootView: MainView(workspace: workspace, settings: settings, controller: self))
         buildMenus()
+        dictationShortcut = DictationShortcut { [weak self] in self?.dictationTarget() }
+        VoiceNavigation.shared.startTracking()
+        VoiceNavigation.shared.sidebar = { [weak self] visible in
+            guard let self else { return false }
+            if visible != self.sidebarVisible { self.toggleSidebar() }
+            return self.sidebarVisible
+        }
         attention.start()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         DispatchQueue.main.async { runtime.focusActive() }
         let window = window!
         Task { await LocalAgentsConsent.start(over: window, chat: runtime.chat) }
+    }
+
+    /// What the right ⌘ shortcut dictates into: the main window's active pane's chat while it shows, else
+    /// "Dispatch, …" commands (with Navigate by voice on).
+    private func dictationTarget() -> DictationShortcut.Target? {
+        guard NSApp.keyWindow === window else { return nil }
+        if let id = workspace.activeSurfaceID, !TerminalRuntime.shared.files.isShowing(id),
+           let session = TerminalRuntime.shared.chat.sessions[id], session.showChat {
+            return session.waitingForAnswer ? nil : .chat(session)
+        }
+        return DictationStore.shared.navigation ? .commands : nil
     }
 
     func applicationDidBecomeActive(_ notification: Notification) { TerminalRuntime.shared.setActive(true) }
@@ -264,6 +283,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         attention.stop()
         HostStats.shared.stop()
         TerminalRuntime.shared.stop()
+        ReviewRepository.flushShared()
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         guard sender === window else { return true }
@@ -456,13 +476,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
               let files = TerminalRuntime.shared.files.existing(id), files.visible else { return }
         files.togglePreview()
     }
-    /// ⌃⌘1 opens files on its Files tab from any mode; ⌃⌘2 and ⌃⌘3 select Commits' uncommitted row or a commit while
-    /// files shows.
+    /// ⌃⌘1 opens files on its Files tab from any mode; ⌃⌘2 and ⌃⌘3 select Review or Commits while files shows.
     @objc func showFilesTab(_ sender: NSMenuItem) {
         guard NSApp.keyWindow === window, let id = workspace.activeSurfaceID, let tab = Self.filesTab(sender.tag) else { return }
         TerminalRuntime.shared.files.showFiles(id, tab: tab)
     }
-    /// ⇧⌘U and ⇧⌘L: files on Commits, its uncommitted row or a commit, from any mode.
+    /// ⇧⌘U and ⇧⌘L: files on the Review or Commits tab, from any mode.
     @objc func openFilesTab(_ sender: NSMenuItem) { showFilesTab(sender) }
     static func filesTab(_ tag: Int) -> FilesTab? { FilesTab.allCases.indices.contains(tag) ? FilesTab.allCases[tag] : nil }
     /// ⇧⌘U / ⇧⌘L, and ⌃⌘2 / ⌃⌘3 (`showing`: only while files shows): a tab that can show files, on a folder not known to
@@ -481,6 +500,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         for window in [window, settingsWindow].compactMap({ $0 }) {
             window.appearance = NSAppearance(named: theme.isDark ? .darkAqua : .aqua)
             window.backgroundColor = NSColor(theme.palette.window)
+        }
+        // Translucent terminals show the desktop: the main window stops covering it, and MainView paints the window
+        // color everywhere else.
+        if let window, TerminalRuntime.shared.preferences.terminalOpacity < 1 {
+            window.isOpaque = false
+            window.backgroundColor = .clear
+        } else {
+            window?.isOpaque = true
         }
     }
 

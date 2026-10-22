@@ -42,10 +42,13 @@ struct WhisperModelRow: View {
     private func detail(_ state: WhisperModelStore.State) -> String {
         switch state {
         case .failed(let message): "Download failed: \(message)"
-        case .installed where selected: model.detail + " · in use"
-        default: model.detail
+        case .installed where selected: description + " · in use"
+        default: description
         }
     }
+
+    /// The model's description, lowercase like the rest of Settings (the iPhone shows it as a sentence).
+    private var description: String { model.detail.prefix(1).lowercased() + model.detail.dropFirst() }
 
     @ViewBuilder private func action(_ state: WhisperModelStore.State) -> some View {
         switch state {

@@ -76,7 +76,7 @@ enum DispatchRemoval {
         let alert = NSAlert()
         if outcome.removed && problems.isEmpty {
             alert.messageText = "Dispatch was removed from this Mac"
-            alert.informativeText = "You can move Dispatch to the Trash now. SSH hosts keep their own copy: remove it there from Settings › Agents & Hosts before, or run \(command) on them."
+            alert.informativeText = "You can move Dispatch to the Trash now. SSH hosts keep their own copy: remove it there from Settings › Hosts before, or run \(command) on them."
         } else {
             alert.alertStyle = .warning
             alert.messageText = "Dispatch couldn’t remove everything"

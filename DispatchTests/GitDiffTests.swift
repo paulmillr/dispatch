@@ -3,7 +3,7 @@ import XCTest
 @testable import DispatchApp
 
 /// The diff view's pure side: unified diffs as git prints them parsed into hunks and
-/// numbered lines, the fold rule, the Source fallback, and the Changes tab's words. Fixtures are real `git diff` output.
+/// numbered lines, the fold rule, the Source fallback, and the Review tab's words. Fixtures are real `git diff` output.
 @MainActor
 final class GitDiffTests: XCTestCase {
     private typealias Row = GitDiffPresentation.Row
@@ -405,9 +405,6 @@ final class GitDiffTests: XCTestCase {
         XCTAssertEqual(GitChangesText.binary(old: 0, new: 51_000, kind: .added), "binary · 51 KB")
         XCTAssertEqual(GitChangesText.binary(old: 48_000, new: 0, kind: .deleted), "binary · 48 KB → deleted")
         XCTAssertEqual(GitChangesText.binary(old: nil, new: nil), "binary")
-        XCTAssertEqual(GitChangesText.meta(label: "unstaged", additions: 8, deletions: 5, hunks: 2),
-                       "unstaged · +8 −5 · 2 hunks")
-        XCTAssertEqual(GitChangesText.meta(label: nil, additions: 1, deletions: 0, hunks: 1), "+1 −0 · 1 hunk")
     }
 
     func testKeyboardMovesThroughTheGroupsInOrder() {

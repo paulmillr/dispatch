@@ -231,7 +231,13 @@ final class AttentionCoordinator: NSObject, UNUserNotificationCenterDelegate {
         }.joined(separator: " ")
         let compact = plain.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         let bounded = TextRendering.prefix(compact, scalars: 159)
-        return bounded.text + (bounded.truncated ? "…" : "")
+        guard bounded.truncated else { return bounded.text }
+        // Whole characters only: a bound inside one (an emoji's joiner or skin tone) leaves it out rather than half.
+        var text = Substring(bounded.text)
+        if let last = text.last, last != compact[compact.index(compact.startIndex, offsetBy: text.count - 1)] {
+            text = text.dropLast()
+        }
+        return String(text) + "…"
     }
 
     func notificationRequest(for entry: AttentionEntry) -> UNNotificationRequest? {
@@ -250,6 +256,8 @@ final class AttentionCoordinator: NSObject, UNUserNotificationCenterDelegate {
             rowID = response.rowID ?? "\(turn.id.utf8.count):\(turn.id):\(response.id)"
         }
         content.subtitle = entry.path
+        // Without text content a banner says only which pane and what happened (it can show on the lock screen).
+        if !TerminalRuntime.shared.preferences.attentionTextContent { (content.body, content.subtitle) = ("", "") }
         content.categoryIdentifier = "pane-attention"
         content.threadIdentifier = "pane-\(entry.id)"
         content.userInfo = ["surface": entry.id.uuidString, "conversation": session.sessionID ?? "", "row": rowID, "event": key]

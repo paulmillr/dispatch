@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// A tab in files mode: under the strip a 34 pt header, then the files tab it shows. The
-/// Files tab is the outline with the transfer rows and footer under it and the preview on the right; Commits (F4a, its
-/// uncommitted row showing what F3a's Changes did) is its own view. Header, outline, transfer rows, footer and preview are separate views.
+/// Files tab is the outline with the transfer rows and footer under it and the preview on the right; Review (F3a's
+/// Changes, with comments) and Commits (F4a) are views of their own. Header, outline, transfer rows, footer and preview are separate views.
 struct FilesView: View {
     let session: FilesSession
     /// The tab's pane has the focus (as for `ChatView`): the list takes the keyboard only then.
@@ -45,7 +45,7 @@ struct FilesView: View {
 
     private func browser(_ root: String?, offline: (host: String, since: Date?)?) -> some View {
         VStack(spacing: 0) {
-            FilesHeader(session: session, root: root)
+            FilesHeader(session: session, root: root, focused: focused)
             if let offline { FilesOfflineBar(session: session, host: offline.host, since: offline.since) }
             // The tabs change as the modes do: the old body fades down and out, the new one in. The animation is this
             // body's alone; the header (its segments included) and the strip never animate with it.
@@ -61,10 +61,9 @@ struct FilesView: View {
                                back: "Files")
                         .overlay { FilesWriteRefusal(session: session) }
                         .transition(tabTransition)
-                case .changes where session.changesTab:
+                case .changes:
                     GitChangesView(session: session, focused: focused).transition(tabTransition)
-                case .changes, .commits:
-                    // One view for both of Commits' selections, so moving between its rows keeps the list.
+                case .commits:
                     GitCommitsView(session: session, focused: focused).transition(tabTransition)
                 }
             }

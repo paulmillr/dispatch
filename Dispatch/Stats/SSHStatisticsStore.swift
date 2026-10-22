@@ -227,16 +227,16 @@ final class SSHStatisticsStore {
         }
     }
     @ObservationIgnored private let interval: Duration
-    @ObservationIgnored private let backgroundInterval: Duration
+    /// Nil: StatisticsCadence.background, which follows Low Power Mode.
+    @ObservationIgnored private let backgroundInterval: Duration?
     @ObservationIgnored private let diskInterval: Duration
     @ObservationIgnored private let historyRetention: TimeInterval
     @ObservationIgnored private let latencyInterval: Duration
     @ObservationIgnored private let backgroundLatencyInterval: Duration
     @ObservationIgnored private var sleeping = false
 
-    /// Background sampling (no popover open) only pre-fills the chart: once a minute, like the latency echo, so an
-    /// idle host costs one request (and one helper spawn there) a minute instead of four.
-    init(interval: Duration = .seconds(2), backgroundInterval: Duration = .seconds(60),
+    /// Background sampling (no popover open) only pre-fills the chart, at StatisticsCadence.background.
+    init(interval: Duration = .seconds(2), backgroundInterval: Duration? = nil,
          diskInterval: Duration = .seconds(15), historyRetention: TimeInterval = 3600,
          latencyInterval: Duration = .seconds(2), backgroundLatencyInterval: Duration = .seconds(60),
          observesSystemSleep: Bool = false) {
@@ -343,7 +343,8 @@ final class SSHStatisticsStore {
     private func start(_ entry: Series, metricsImmediately: Bool) {
         guard !entry.providers.isEmpty else { return }
         let generation = entry.generation
-        let samplingInterval = entry.subscriptions.isEmpty ? backgroundInterval : interval
+        // The background cadence is read per wait, so a Low Power Mode change applies from the next sample.
+        let foreground = !entry.subscriptions.isEmpty, interval = interval, backgroundInterval = backgroundInterval
         let diskInterval = diskInterval
         if entry.metricsTask == nil {
             let retired = entry.retiredMetrics
@@ -352,7 +353,7 @@ final class SSHStatisticsStore {
                 defer { if entry?.generation == generation { entry?.metricsTask = nil } }
                 await retired?.value
                 if !metricsImmediately {
-                    do { try await System.sleep(for: samplingInterval, "metrics.first") } catch { return }
+                    do { try await System.sleep(for: foreground ? interval : backgroundInterval ?? StatisticsCadence.background, "metrics.first") } catch { return }
                 }
                 while !Task.isCancelled {
                     guard let entry, entry.generation == generation, let provider = entry.provider() else { return }
@@ -388,7 +389,7 @@ final class SSHStatisticsStore {
                         // may take over. Failed connections are never reopened.
                         if entry.provider() == nil { return }
                     }
-                    do { try await System.sleep(for: samplingInterval, "metrics") } catch { return }
+                    do { try await System.sleep(for: foreground ? interval : backgroundInterval ?? StatisticsCadence.background, "metrics") } catch { return }
                 }
             }
         }

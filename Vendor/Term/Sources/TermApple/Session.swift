@@ -25,6 +25,8 @@ public final class Session {
     /// What the host's view shows (see host(in:)).
     public var layer: CALayer { surfaceLayer }
     let surfaceLayer = SurfaceLayer()
+    /// Whether the window may treat the terminal as covering what is behind it (no translucent background).
+    @_spi(Test) public var layerIsOpaque: Bool { surfaceLayer.isOpaque }
     /// The GPU the frames are drawn on (tests draw into their own textures).
     public var device: MTLDevice { metal.device }
     /// The process ended (its wait status), on the main queue.
@@ -85,6 +87,7 @@ public final class Session {
         var o = TerminalOptions(cols: size.grid.cols, rows: size.grid.rows)
         (o.blocks, o.kitty, o.maxScrollbackBytes, o.kittyImageStorageLimit) =
             (blocks, allowHostMedia ? .apple : .appleInline, config.scrollbackLimitBytes, config.imageStorageLimitBytes)
+        (o.cursorStyle, o.cursorBlink) = (config.cursorStyle, config.cursorBlink)
         surface = Surface(terminal: Terminal(o), options: options, size: size,
                           now: { DispatchTime.now().uptimeNanoseconds }, entropy: { n in (0..<n).map { _ in UInt8.random(in: .min ... .max) } })
         surface.setContentScale(x: scale, y: scale)
@@ -404,12 +407,16 @@ public final class Session {
     func apply() {
         let c = config
         (look.selectionBackground, look.selectionForeground, look.cursorColor, look.cursorText) = (c.selectionBackground, c.selectionForeground, c.cursorColor, c.cursorText)
+        // A translucent background needs a layer the window composites rather than one it treats as covering.
+        look.backgroundOpacity = c.backgroundOpacity
+        surfaceLayer.isOpaque = c.backgroundOpacity >= 1
         surface.config.optionAsAlt = OptionAsAlt(rawValue: (c.optionAsAlt ?? .false).rawValue)!
         // The keybinds after `keybind = clear` (Ghostty's default bindings are not ported: Dispatch clears them).
         surface.config.bindings = Bindings(c.keybinds)
         surface.config.clipboardRead = HandlerOptions.ClipboardAccess(rawValue: c.clipboardRead.rawValue)!
         surface.stream.handler.options.clipboardWrite = HandlerOptions.ClipboardAccess(rawValue: c.clipboardWrite.rawValue)!
         surface.terminal.setKittyGraphicsLimit(c.imageStorageLimitBytes)
+        surface.terminal.changeCursorDefaults(style: c.cursorStyle, blink: c.cursorBlink)
         let cursor: RGB? = if case .color(let rgb)? = c.cursorColor { rgb } else { nil }
         surface.terminal.changeDefaults(foreground: c.foreground, background: c.background, cursor: cursor, palette: c.palette)
         state.dirty = .full

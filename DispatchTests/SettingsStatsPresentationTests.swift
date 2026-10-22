@@ -308,7 +308,7 @@ final class SettingsStatsPresentationTests: XCTestCase {
         // Settings gives the card its width; unconstrained, wrapped details size the window.
         window.contentView = NSHostingView(rootView: SSHHostsSettings(workspace: workspace, permissions: SSHIntegrationPermissions(defaults: nil)).frame(width: 500))
         let troubleshooting = try await capture(window, "settings-offline-host-troubleshooting").text()
-        for label in ["Connections", "On new hosts", "Remote programs can copy", "homelab", "Reset all"] {
+        for label in ["Hosts", "homelab", "Reset all"] {
             XCTAssertTrue(troubleshooting.contains(label), troubleshooting)
         }
         XCTAssertFalse(troubleshooting.contains("Forget host…"), "Host actions stay in the collapsed editor")
@@ -325,8 +325,10 @@ final class SettingsStatsPresentationTests: XCTestCase {
         window.contentView = settings
         let groupedSnapshot = try await capture(window, "settings-ssh-hosts-grouped")
         let grouped = try groupedSnapshot.text()
+        // OCR can read the small "ops@homelab.test" without its dot: compare without spaces and dots.
+        let compact = { (text: String) in text.filter { $0 != " " && $0 != "." } }
         for label in ["homelab", "ops@homelab.test", "stats", "OTHER LOGINS", "archive.test"] {
-            XCTAssertTrue(grouped.contains(label), grouped)
+            XCTAssertTrue(compact(grouped).contains(compact(label)), grouped)
         }
         let homelab = try XCTUnwrap(grouped.range(of: "homelab")), carol = try XCTUnwrap(grouped.range(of: "archive.test"))
         XCTAssertTrue(homelab.lowerBound < carol.lowerBound, "Unmatched logins follow the hosts: \(grouped)")
@@ -591,13 +593,14 @@ final class SettingsStatsPresentationTests: XCTestCase {
             try PresentationTestSupport.click(window, at: root.convert(NSPoint(x: box.midX * root.bounds.width,
                 y: (root.isFlipped ? 1 - box.midY : box.midY) * root.bounds.height), to: nil))
         }
-        // Diagnostics is a switch in the General page's Troubleshooting group.
-        try await click("General")
+        // Diagnostics is a switch in the Extra page's Troubleshooting group.
+        try await click("Extra")
         try await Task.sleep(for: .milliseconds(200))
         func toggleDiagnostics() async throws {
             try await bottom()
             let snapshot = try await capture(window, "settings-diagnostics-control")
-            let row = try XCTUnwrap(try snapshot.recognizedText().first { $0.topCandidates(1).first?.string == "Diagnostics" })
+            // The title may read with its privacy hand after it.
+            let row = try XCTUnwrap(try snapshot.recognizedText().first { $0.topCandidates(1).first?.string.hasPrefix("Diagnostics") == true })
             try PresentationTestSupport.click(window, at: root.convert(NSPoint(x: root.bounds.width - 60,
                 y: (root.isFlipped ? 1 - row.boundingBox.midY : row.boundingBox.midY) * root.bounds.height), to: nil))
         }
@@ -701,11 +704,11 @@ final class SettingsStatsPresentationTests: XCTestCase {
         defer { window.close(); window.contentView = nil }
         let root = try XCTUnwrap(window.contentView)
         for (tab, labels) in [
-            ("Appearance", ["Terminal font", "Chat font", "Size", "Theme", "Host colors", "Custom terminal", "Liquid Glass", "Sidebar & tabs", "Space size", "Show git branch", "Hide sidebar with one space"]),
-            ("Keys", ["Number keys", "Spaces", "Tabs", "Splits", "Keyboard", "Use Option as Alt"]),
-            ("General", ["Startup", "Starting folder", "Reopen spaces on launch", "Restore tab history", "Terminal", "Kitty graphics", "Automatic tab names", "Notifications", "Notify", "Dock badge", "Sound", "Troubleshooting", "Diagnostics"]),
-            ("Features", ["Chat mode", "coding agent CLIs as chat", "Codex", "Claude", "Pi", "tmux & herdr", "Open tmux sessions as spaces", "tmux -CC attach", "Open herdr sessions as spaces", "Files", "Drag and drop", "Show hidden files", "Ask before replacing", "Git", "Commits and uncommitted changes in files mode", "Separate Changes tab"]),
-            ("Agents & Hosts", ["Connections", "On new hosts", "Ask", "This Mac"])
+            ("Appearance", ["Terminal font", "Chat font", "Size", "Theme", "Color schemes", "Interface", "Sidebar", "Space size", "Show git branch", "Show with one space"]),
+            ("Keyboard", ["Number keys", "Spaces", "Tabs", "Splits", "Option key", "Option as Alt"]),
+            ("General", ["Startup", "Starting folder", "Shell", "Reopen spaces on launch", "Restore tab history", "Terminal", "Programs can copy", "Scrollback", "Kitty graphics", "Automatic tab names", "Notifications"]),
+            ("Features", ["Chat mode", "coding agent CLIs as chat", "Tmux & herdr", "open sessions as native spaces", "Files", "Git", "review mode and commit log", "Remote helper", "uploads to ~/.dispatch", "Dictation", "always local & on-device"]),
+            ("Hosts", ["Hosts", "This Mac"])
         ] {
             if tab != "Appearance" { try await PresentationTestSupport.selectSettingsTab(tab, in: window) }
             var snapshots = [try await capture(window, "settings-\(tab)")]
@@ -726,18 +729,24 @@ final class SettingsStatsPresentationTests: XCTestCase {
                 XCTAssertTrue(try snapshots.contains { try $0.reads([label]) }, "Missing \(label) in \(tab):\n\(text)")
             }
             if tab == "Appearance" {
-                XCTAssertFalse(text.contains("Use Option as Alt"), "Keyboard behaviour lives under Keys")
+                XCTAssertFalse(text.contains("Option as Alt"), "Keyboard behaviour lives under Keyboard")
                 XCTAssertFalse(text.contains("Remote hosts"), "Hosts have their own page")
                 XCTAssertFalse(text.contains("Improve text contrast"), "Custom colors start collapsed")
+                XCTAssertFalse(text.contains("Blinking cursor"), "Interface starts collapsed")
             }
             if tab == "General" {
                 XCTAssertFalse(text.contains("Open tmux sessions"), "Whole features live under Features")
                 XCTAssertFalse(text.contains("Drag and drop"), "Files settings live under Features")
             }
-            if tab == "Agents & Hosts" {
-                XCTAssertFalse(text.contains("coding agent CLIs as chat"), "Chat mode lives under Features")
+            if tab == "Features" {
+                XCTAssertFalse(text.contains("Auto-confirm"), "Card options start folded")
+                XCTAssertFalse(text.contains("Wake words"), "Card options start folded")
             }
-            if tab == "Keys" {
+            if tab == "Hosts" {
+                XCTAssertFalse(text.contains("coding agent CLIs as chat"), "Chat mode lives under Features")
+                XCTAssertFalse(text.contains("Auto-confirm"), "The remote helper lives under Features")
+            }
+            if tab == "Keyboard" {
                 // OCR misreads ⌃ and ⌘; the recorders report their shortcuts to accessibility.
                 let recorders = PresentationTestSupport.views(of: KeyGroupRecorder.RecorderView.self, in: root)
                 XCTAssertEqual(recorders.map { $0.accessibilityValue() as? String }, ["⇧⌘1…9", "⌘1…9", "⌃1…4"])
@@ -856,7 +865,7 @@ final class SettingsStatsPresentationTests: XCTestCase {
                 // Settings opens on Appearance.
                 && text.contains("Terminal font") && text.contains("Theme")
                 // The last row is below the fold when a short screen caps the window.
-                && (!fitsPage || text.contains("Liquid Glass"))
+                && (!fitsPage || text.contains("Disable spaces"))
                 && !text.contains("Improve text contrast")
                 && window.frame.height <= screen.visibleFrame.height + 2
         }
@@ -898,7 +907,7 @@ final class SettingsStatsPresentationTests: XCTestCase {
             PresentationTestSupport.views(of: NSPopUpButton.self, in: root)
                 .first { $0.accessibilityIdentifier() == "settings-dropdown-Theme" }?.itemTitles
         }
-        try await TestSupport.eventually { themeTitles() == ["Automatic", "Dark", "Light", "Graphite", "Lavender"] }
+        try await TestSupport.eventually { themeTitles() == ["Automatic", "Dark", "Light"] }
         func type(_ text: String, in target: NSWindow) {
             for character in text {
                 NSApp.postEvent(TerminalTestSupport.keyEvent(0, String(character), in: target), atStart: false)
@@ -917,7 +926,7 @@ final class SettingsStatsPresentationTests: XCTestCase {
         type("x" + AppTheme.nauticalCode.uppercased(), in: window)
         try await TestSupport.eventually(diagnostic: themeTitles()?.description ?? "no picker") {
             SidebarThemeStore.shared.nauticalUnlocked && settings.values.appTheme == .nautical
-                && themeTitles() == ["Automatic", "Dark", "Light", "Graphite", "Lavender", "Nautical"]
+                && themeTitles() == ["Automatic", "Dark", "Light", "Nautical"]
                 && SidebarThemeStore.shared.current == .nautical
         }
         XCTAssertEqual(window.appearance?.name, .darkAqua)

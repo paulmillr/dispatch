@@ -704,7 +704,9 @@ final class ChatSession: Identifiable {
         // above the composer for good. Without a call ID (Claude's PermissionRequest hook may omit it), a resolved
         // request's call is the latest tool item with its tool and arguments; a pending one stays last, since an
         // earlier identical call is not the one it is asking about. A resolved one no call claims follows the turn
-        // that was last when it arrived (the iPhone's ChatThreadView placement).
+        // that was last when it arrived (the iPhone's ChatThreadView placement). A decided one whose turn is not loaded
+        // (a replacement reloads only the latest page) belongs to earlier history: it shows once that page is read,
+        // never above the composer meanwhile.
         if let unplaced = grouped[nil], !unplaced.isEmpty {
             let ids = Set(unplaced.compactMap(\.toolItemID))
             let matched = unplaced.filter { !$0.pending }.compactMap(\.item)
@@ -717,14 +719,13 @@ final class ChatSession: Identifiable {
                 }
             }
             let anchors = Set(unplaced.filter { !$0.pending }.compactMap(\.anchorTurnID)).intersection(turns.map(\.id))
-            if !owners.isEmpty || !calls.isEmpty || !anchors.isEmpty {
-                grouped[nil] = nil
-                for approval in unplaced {
-                    let owner = approval.toolItemID.flatMap { owners[$0] }
-                        ?? (approval.pending ? nil : approval.item.flatMap { calls[$0.title + "\n" + $0.text] })
-                        ?? (approval.pending ? nil : approval.anchorTurnID.flatMap { anchors.contains($0) ? $0 : nil })
-                    grouped[owner, default: []].append(approval)
-                }
+            grouped[nil] = nil
+            for approval in unplaced {
+                let owner = approval.toolItemID.flatMap { owners[$0] }
+                    ?? (approval.pending ? nil : approval.item.flatMap { calls[$0.title + "\n" + $0.text] })
+                    ?? (approval.pending ? nil : approval.anchorTurnID.flatMap { anchors.contains($0) ? $0 : nil })
+                if owner == nil, !approval.pending, approval.anchorTurnID != nil { continue }
+                grouped[owner, default: []].append(approval)
             }
         }
         var rows: [ChatTranscriptRow] = []

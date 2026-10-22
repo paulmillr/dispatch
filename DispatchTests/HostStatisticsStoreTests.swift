@@ -121,6 +121,28 @@ final class HostStatisticsStoreTests: XCTestCase {
         XCTAssertNil(snapshot.peakCPU)
     }
 
+    func testChartBarsStayOnAFixedGridAndHoldOnlyEmptyBars() {
+        // A minute boundary (60 000 × 15 s), plus 7 s into the newest bar.
+        let base = Date(timeIntervalSinceReferenceDate: 900_000), now = base.addingTimeInterval(7)
+        var snapshot = HostStatisticsSnapshot(host: "local", account: nil, remote: false, state: .ready, date: now)
+        // Every 5 s: each bar's peak is its own samples'.
+        snapshot.history = stride(from: -60.0, through: 5, by: 5).map { .init(date: base.addingTimeInterval($0), cpu: 50 + $0) }
+        let bars = snapshot.historyBars(memory: false, at: now)
+        XCTAssertEqual(Array(bars.suffix(6)), [nil, 0, 15, 30, 45, 55])
+        // The clock moving inside the newest bar changes no bar; crossing into the next shifts them all by one.
+        XCTAssertEqual(snapshot.historyBars(memory: false, at: now.addingTimeInterval(6)), bars)
+        XCTAssertEqual(Array(snapshot.historyBars(memory: false, at: now.addingTimeInterval(8)).suffix(6)), [0, 15, 30, 45, 55, nil])
+        // A 15 s cadence drifting past a bar: the missed bar takes the next sample. A longer gap, a failed sample
+        // between them or a non-finite value leaves bars empty.
+        func last(_ count: Int, _ points: [(TimeInterval, Double?)]) -> [Double?] {
+            snapshot.history = points.map { .init(date: base.addingTimeInterval($0.0), cpu: $0.1) }
+            return Array(snapshot.historyBars(memory: false, at: now).suffix(count))
+        }
+        XCTAssertEqual(last(4, [(-31, 60), (-14, 70)]), [60, 70, 70, nil])
+        XCTAssertEqual(last(5, [(-46, 60), (-14, 70)]), [60, nil, nil, 70, nil])
+        XCTAssertEqual(last(4, [(-31, 60), (-22, nil), (-14, 70), (1, .infinity)]), [60, nil, 70, nil])
+    }
+
     func testAllHistoryAppendPathsAreBounded() {
         let entry = SSHStatisticsStore.Series(scope: Provider().scope)
         let now = System.date()
