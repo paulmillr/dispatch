@@ -22,8 +22,9 @@ MANIFEST_SHA256 = LOCK['rust']['manifest']['sha256']
 tools = load_script('setup-build-tools')
 ROOT = Path(__file__).resolve().parent.parent
 PREFIX = ROOT / "build/rust"
-# The helper's four targets, plus the iPhone SSH core's (Mobile/Transport/Core): device and Apple Silicon simulator.
-TARGETS = ("aarch64-apple-darwin", "x86_64-apple-darwin",
+# The helper's three targets (macOS on Apple silicon, Linux arm64 and x86-64), plus the iPhone SSH core's
+# (Mobile/Transport/Core): device and Apple Silicon simulator.
+TARGETS = ("aarch64-apple-darwin",
            "aarch64-unknown-linux-musl", "x86_64-unknown-linux-musl",
            "aarch64-apple-ios", "aarch64-apple-ios-sim")
 BINARIES = ("rustc", "cargo", "rustfmt", "cargo-clippy")

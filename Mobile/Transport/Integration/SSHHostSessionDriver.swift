@@ -19,7 +19,7 @@ struct SSHHostSessionDriver: HostSessionDriver {
     /// The longest gap between pings `stdio.liveness` allows (helper/PROTOCOL.md: at least every 15 s).
     static let livenessPing: Duration = .seconds(15)
 
-    /// The bundled helpers (`darwin-universal`, `linux-aarch64`, `linux-x86_64`), the app's `helper` folder.
+    /// The bundled helpers (`darwin-arm64`, `linux-aarch64`, `linux-x86_64`), the app's `helper` folder.
     var binaries = Bundle.main.bundleURL.appendingPathComponent("helper", isDirectory: true)
     /// The latency ping, which is also the liveness traffic `stdio.liveness` needs (at most `livenessPing`).
     var pingInterval: Duration = .seconds(10)

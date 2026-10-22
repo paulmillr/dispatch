@@ -88,7 +88,7 @@ final class HelperChannelTests: XCTestCase {
   /// The real helper, installed by HelperBootstrap, greets HelperConnection with the schema id this
   /// checkout's HelperBinary.swift was generated with.
   func testHelloWithRealHelper() async throws {
-    guard FileManager.default.fileExists(atPath: Self.realHelpers.appendingPathComponent("darwin-universal").path) else {
+    guard FileManager.default.fileExists(atPath: Self.realHelpers.appendingPathComponent("darwin-arm64").path) else {
       throw XCTSkip("No helper build at \(Self.realHelpers.path) (scripts/build-ssh-helper.py --build-only)")
     }
     let fixture = try SSHFixture()

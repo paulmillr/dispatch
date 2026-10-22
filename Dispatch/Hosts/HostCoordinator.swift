@@ -95,7 +95,7 @@ final class HostCoordinator {
     private func wait() async {
         let shown = NSApp?.windows.contains { $0.isVisible && $0.occlusionState.contains(.visible) } ?? true
         let interval: Duration = NSApp?.isActive == false || !shown ? .seconds(10) : .milliseconds(500)
-        let nap = Task { _ = try? await System.sleep(for: interval, "poll") }
+        let nap = Task { _ = try? await System.sleep(for: interval, "poll", woken: true) }
         self.nap = nap
         await nap.value
     }

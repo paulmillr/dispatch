@@ -145,7 +145,7 @@ targets:
       - name: Install SSH helpers
         # Built by the SSHHelpers target, in parallel with the terminal frameworks.
         script: python3 "$SRCROOT/scripts/build-ssh-helper.py" --install-only
-        inputFiles: ["$(SRCROOT)/build/helper-rust/bin/darwin-universal", "$(SRCROOT)/build/helper-rust/bin/linux-aarch64", "$(SRCROOT)/build/helper-rust/bin/linux-x86_64", "$(SRCROOT)/build/helper-rust/bin/version", "$(SRCROOT)/build/helper-rust/bin/protocol-version"]
+        inputFiles: ["$(SRCROOT)/build/helper-rust/bin/darwin-arm64", "$(SRCROOT)/build/helper-rust/bin/linux-aarch64", "$(SRCROOT)/build/helper-rust/bin/linux-x86_64", "$(SRCROOT)/build/helper-rust/bin/version", "$(SRCROOT)/build/helper-rust/bin/protocol-version"]
         outputFiles: ["$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/linux-aarch64", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/linux-x86_64", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/version", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/protocol-version"]
     postBuildScripts:
       - name: Bundle unified helper
@@ -264,8 +264,8 @@ targets:
       - name: Install SSH helpers
         # The phone uploads every helper (the Mac one too) to hosts: all three are plain resources in helper/.
         script: python3 "$SRCROOT/scripts/build-ssh-helper.py" --install-only
-        inputFiles: ["$(SRCROOT)/build/helper-rust/bin/darwin-universal", "$(SRCROOT)/build/helper-rust/bin/linux-aarch64", "$(SRCROOT)/build/helper-rust/bin/linux-x86_64", "$(SRCROOT)/build/helper-rust/bin/version", "$(SRCROOT)/build/helper-rust/bin/protocol-version"]
-        outputFiles: ["$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/darwin-universal", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/linux-aarch64", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/linux-x86_64", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/version", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/protocol-version"]
+        inputFiles: ["$(SRCROOT)/build/helper-rust/bin/darwin-arm64", "$(SRCROOT)/build/helper-rust/bin/linux-aarch64", "$(SRCROOT)/build/helper-rust/bin/linux-x86_64", "$(SRCROOT)/build/helper-rust/bin/version", "$(SRCROOT)/build/helper-rust/bin/protocol-version"]
+        outputFiles: ["$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/darwin-arm64", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/linux-aarch64", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/linux-x86_64", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/version", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/protocol-version"]
     sources:
       - path: Mobile
         # Tests: DispatchMobileTests. Transport: its own Swift package; its Integration folder (the app's SSH driver)
@@ -487,7 +487,7 @@ aggregateTargets:
         script: bash "$SRCROOT/scripts/build-ssh-helper.sh" --build-only
         basedOnDependencyAnalysis: false
         inputFiles: ["$(SRCROOT)/helper", "$(SRCROOT)/Vendor/Zstd", "$(SRCROOT)/scripts/build-ssh-helper.sh", "$(SRCROOT)/scripts/build-ssh-helper.py", "$(SRCROOT)/scripts/setup-ssh-rust.py"]
-        outputFiles: ["$(SRCROOT)/build/helper-rust/bin/darwin-universal", "$(SRCROOT)/build/helper-rust/bin/linux-aarch64", "$(SRCROOT)/build/helper-rust/bin/linux-x86_64", "$(SRCROOT)/build/helper-rust/bin/version", "$(SRCROOT)/build/helper-rust/bin/protocol-version"]
+        outputFiles: ["$(SRCROOT)/build/helper-rust/bin/darwin-arm64", "$(SRCROOT)/build/helper-rust/bin/linux-aarch64", "$(SRCROOT)/build/helper-rust/bin/linux-x86_64", "$(SRCROOT)/build/helper-rust/bin/version", "$(SRCROOT)/build/helper-rust/bin/protocol-version"]
 schemes:
   Dispatch:
     build:

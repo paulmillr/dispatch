@@ -6,7 +6,7 @@ import Foundation
 /// the binary into a channel's stdin instead of an `ssh -S` process.
 public enum HelperBootstrap: Sendable {
   public struct Installed: Sendable, Equatable {
-    /// Bundled helper name: `darwin-universal`, `linux-aarch64` or `linux-x86_64`.
+    /// Bundled helper name: `darwin-arm64`, `linux-aarch64` or `linux-x86_64`.
     public let platform: String
     public let digest: String
     public let size: Int
@@ -27,7 +27,7 @@ public enum HelperBootstrap: Sendable {
     switch SSHBootstrapScript.platform(probe.text) {
     case .helper(let name): platform = name
     case .unidentified: throw SSHTransportError.bootstrap("Could not identify the SSH host platform.")
-    case .unsupported: throw SSHTransportError.bootstrap("SSH integration requires Linux or macOS on ARM64 or x86-64.")
+    case .unsupported: throw SSHTransportError.bootstrap("SSH integration requires Linux on ARM64 or x86-64, or macOS on Apple silicon.")
     }
     let binary = try Data(contentsOf: binaries.appendingPathComponent(platform))
     guard !binary.isEmpty, binary.count <= SSHBootstrapScript.maximumSize else {

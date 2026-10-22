@@ -4,9 +4,9 @@ destination="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/dispatch-helpe
 # Always the helper this build produced, never one named by the environment: Dispatch's own
 # terminals export DISPATCH_HELPER_EXECUTABLE (the running app's helper), and a build started
 # there would otherwise bundle and sign that binary.
-source="$SRCROOT/build/helper-rust/bin/darwin-universal"
-# The macOS SSH upload reads helper/darwin-universal: a link to this one signed copy, not a second one.
-alias="$(dirname "$destination")/helper/darwin-universal"
+source="$SRCROOT/build/helper-rust/bin/darwin-arm64"
+# The macOS SSH upload reads helper/darwin-arm64: a link to this one signed copy, not a second one.
+alias="$(dirname "$destination")/helper/darwin-arm64"
 if [[ "${1:-}" == --dry-run ]]; then
   printf 'Bundle and sign %s -> %s (atomic replacement), link %s\n' "$source" "$destination" "$alias"
   exit 0

@@ -1880,7 +1880,7 @@ def main():
         else:
             candidates = [args.helper] if args.helper else [
                 ROOT / 'build/hs-target/aarch64-apple-darwin/local/dispatch-helper',
-                ROOT / 'build/helper-rust/bin/darwin-universal']
+                ROOT / 'build/helper-rust/bin/darwin-arm64']
         helper = next((path for path in candidates if path and path.is_file()), None)
         if not helper:
             parser.error('build the helper first or pass --helper')

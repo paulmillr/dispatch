@@ -6,7 +6,7 @@ iOS and iPadOS 26+, one app for iPhone and iPad (`TARGETED_DEVICE_FAMILY` 1,2; o
 sideloaded (no App Store: the macOS helper would have to become a non-Mach-O payload, ITMS-90171). Sources are in
 `Mobile/`; privacy, trust, keys and the helper's grant are in [security](security.md#dispatch-for-iphone).
 
-**Hosts need** SSH (password, key or keyboard-interactive), macOS 14+ or Linux arm64/x86-64, and tmux 3.7+ or herdr
+**Hosts need** SSH (password, key or keyboard-interactive), macOS 14+ on Apple silicon or Linux arm64/x86-64, and tmux 3.7+ or herdr
 0.9.3+ ([installing](integrations.md#tmux-and-herdr)). Shells and agents live in tmux windows or herdr tabs so they
 outlive the connection; the app installs nothing but its helper. tmux before 3.7 has no bracketed-paste state: Chat to a bound agent works, other typing is refused,
 and the Mac's readiness warning shows. Linux with systemd-logind `KillUserProcesses=yes` kills servers at logout
@@ -68,7 +68,7 @@ launches through `devicectl`.
   the executable imports (`nm -u`, selectors) is declared in `Mobile/App/PrivacyInfo.xcprivacy`. It launches the
   simulator build and prints the size table. The fast suite cannot run against Release (`@testable`, Debug-only demos).
 - Not applied yet: deduplicating licence texts (2.8 MB), shipping helpers compressed (halves them, needs a new hash
-  rule), `-Osize` for app code (needs measuring). The Mac helper keeps x86_64: Intel Macs are hosts.
+  rule), `-Osize` for app code (needs measuring).
 
 ## Architecture and data flow
 

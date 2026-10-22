@@ -1,0 +1,14 @@
+{
+  "kind": "rewrite",
+  "why": "Intel Macs are no longer supported: the macOS SSH helper is built for Apple silicon only and bundled as helper/darwin-arm64 instead of helper/darwin-universal. Debug builds, which made every recording, already built it for arm64 only, so the bytes, size and digest the recordings observed are what the renamed file holds; only the bundled path the app observes (before an upload, and the file identity some SSH and herdr launches check) changed.",
+  "ops": [
+    "open.observe.payload",
+    "open.observe.file"
+  ],
+  "replace": [
+    {
+      "old": "/helper/darwin-universal",
+      "new": "/helper/darwin-arm64"
+    }
+  ]
+}

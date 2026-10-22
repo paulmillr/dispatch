@@ -12,7 +12,7 @@ notifications shaped like `helper/core/src/dispatch/chat.rs` `Chat`.
 | codex-observed-0.153.2 | `DispatchTests/Fixtures/codex-observed-0.153.2.jsonl` (real Codex 0.153.2 rollout) | 5 |
 
 Producer: `python3 test/mobile-chat-fixtures.py` compiles `test/mobile-chat-record.swift` with the production client
-(HelperConnection), runs `build/helper-rust/bin/darwin-universal --stdio` with a private HOME and writes the replies.
+(HelperConnection), runs `build/helper-rust/bin/darwin-arm64 --stdio` with a private HOME and writes the replies.
 Edits: the snapshot's generation and file identity (device, inode) are neutral values. Identifiers, paths and times
 are those of the inputs (synthetic: /work and /tmp/project paths, 2000-01-01 times).
 

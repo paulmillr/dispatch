@@ -7,7 +7,7 @@ neutral pass. Terminals are the bytes a tmux pane replays on attach (CRLF, SGR c
 lines the demo appends one at a time. Everything is invented: the user is alex, anyone else Sam Example, times are on
 2000-01-01 (the demo re-times them). Rerun after a helper change to the record encoders:
 
-    python3 test/mobile-demo-fixtures.py [--helper build/helper-rust/bin/darwin-universal]
+    python3 test/mobile-demo-fixtures.py [--helper build/helper-rust/bin/darwin-arm64]
 """
 import argparse
 import importlib.util
@@ -852,7 +852,7 @@ def agent_codex():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
-    parser.add_argument('--helper', default=str(ROOT / 'build/helper-rust/bin/darwin-universal'))
+    parser.add_argument('--helper', default=str(ROOT / 'build/helper-rust/bin/darwin-arm64'))
     args = parser.parse_args()
     (OUT / 'chats').mkdir(parents=True, exist_ok=True)
     (OUT / 'terminals').mkdir(parents=True, exist_ok=True)

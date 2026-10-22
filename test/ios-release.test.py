@@ -284,7 +284,7 @@ class ReleaseBundleTests(unittest.TestCase):
     def bundle(self, directory, protocol=42):
         helper = Path(directory) / 'DispatchMobile.app/helper'
         helper.mkdir(parents=True)
-        (helper / 'darwin-universal').write_bytes(b'\xca\xfe\xba\xbe mac')
+        (helper / 'darwin-arm64').write_bytes(b'\xca\xfe\xba\xbe mac')
         (helper / 'linux-aarch64').write_bytes(elf(183))
         (helper / 'linux-x86_64').write_bytes(elf(62))
         for name in release.HELPERS:
@@ -298,14 +298,15 @@ class ReleaseBundleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             app = self.bundle(directory)
             version = (app / 'helper/version').read_text().strip()
-            self.assertEqual(release.helper_problems(app, 42, lambda _: ['x86_64', 'arm64'], version), [])
+            self.assertEqual(release.helper_problems(app, 42, lambda _: ['arm64'], version), [])
 
     def test_names_every_helper_fault(self):
         with tempfile.TemporaryDirectory() as directory:
             app = self.bundle(directory)
             (app / 'helper/linux-x86_64').write_bytes(elf(183))
-            problems = release.helper_problems(app, 7, lambda _: ['arm64'], 'other')
-            self.assertTrue(any('darwin-universal has' in problem for problem in problems), problems)
+            # A universal Mac helper is a fault now: Apple silicon only.
+            problems = release.helper_problems(app, 7, lambda _: ['x86_64', 'arm64'], 'other')
+            self.assertTrue(any('darwin-arm64 has' in problem for problem in problems), problems)
             self.assertTrue(any('linux-x86_64 is not an ELF for machine 62' in problem for problem in problems))
             self.assertTrue(any('not the hash of the bundled binaries' in problem for problem in problems))
             self.assertTrue(any('differs from build/helper-rust' in problem for problem in problems))

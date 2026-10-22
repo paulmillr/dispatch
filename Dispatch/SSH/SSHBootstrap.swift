@@ -60,7 +60,7 @@ enum SSHBootstrap {
         case .helper(let helper): name = helper
         case .unidentified: throw SSHSetupFailure.permanent("Could not identify the SSH host platform.", reason: "unknown host platform")
         case .unsupported:
-            throw SSHSetupFailure.permanent("SSH integration requires Linux or macOS on ARM64 or x86-64.", reason: "unsupported host platform")
+            throw SSHSetupFailure.permanent("SSH integration requires Linux on ARM64 or x86-64, or macOS on Apple silicon.", reason: "unsupported host platform")
         }
         // The bundled file is read like any other: its identity is observed (a replay answers the recorded one, whatever
         // the build bundles now), its bytes are read only to upload them.

@@ -143,6 +143,8 @@ def leaks(paths, lines):
     wrapped ones)."""
     kept = {line.split('\t')[0] for line in lines if '\t' in line and line.split('\t')[0] == line.split('\t')[1]}
     plain = [line.split('\t')[0].encode() for line in lines if line and line.split('\t')[0] not in kept]
+    # A path as JSON writes it (`\/`, Foundation's JSONEncoder): `capture replace` replaces that form too.
+    plain += [needle.replace(b'/', b'\\/') for needle in plain if b'/' in needle]
     found = {}
     for path in files(paths):
         data = expanded(path)

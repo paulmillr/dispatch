@@ -7,7 +7,7 @@ committed real Codex rollouts (DispatchTests/Fixtures) and a constructed Claude 
 M4a mockup's two turns: synthetic ids, paths under /work, times on 2000-01-01). The snapshot's file identity and
 generation are replaced by neutral values. Rerun after a helper change to the record encoders:
 
-    python3 test/mobile-chat-fixtures.py [--helper build/helper-rust/bin/darwin-universal]
+    python3 test/mobile-chat-fixtures.py [--helper build/helper-rust/bin/darwin-arm64]
 """
 import argparse
 import json
@@ -83,7 +83,7 @@ def neutral(pages):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
-    parser.add_argument('--helper', default=str(ROOT / 'build/helper-rust/bin/darwin-universal'))
+    parser.add_argument('--helper', default=str(ROOT / 'build/helper-rust/bin/darwin-arm64'))
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix='mcf', dir='/tmp') as work:
         work = Path(work)

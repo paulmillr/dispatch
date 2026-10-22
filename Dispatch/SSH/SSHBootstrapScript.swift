@@ -16,12 +16,13 @@ enum SSHBootstrapScript {
         case unidentified
     }
 
-    /// The bundled helper name (`darwin-universal`, `linux-aarch64`, `linux-x86_64`) for a probe's output.
+    /// The bundled helper name (`darwin-arm64`, `linux-aarch64`, `linux-x86_64`) for a probe's output.
     static func platform(_ output: String) -> Platform {
         let platforms = output.split(separator: "\n").filter { $0.hasPrefix("DISPATCH_PLATFORM=") }
         guard platforms.count == 1, let platform = platforms.first else { return .unidentified }
         switch platform {
-        case "DISPATCH_PLATFORM=Darwin:arm64", "DISPATCH_PLATFORM=Darwin:x86_64": return .helper("darwin-universal")
+        // Apple silicon only: an Intel Mac is unsupported and keeps plain SSH.
+        case "DISPATCH_PLATFORM=Darwin:arm64": return .helper("darwin-arm64")
         case "DISPATCH_PLATFORM=Linux:aarch64", "DISPATCH_PLATFORM=Linux:arm64": return .helper("linux-aarch64")
         case "DISPATCH_PLATFORM=Linux:x86_64": return .helper("linux-x86_64")
         default: return .unsupported

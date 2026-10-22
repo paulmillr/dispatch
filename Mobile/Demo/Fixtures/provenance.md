@@ -4,7 +4,7 @@ Everything here is invented: the user is alex, anyone else Sam Example, hosts an
 2000-01-01 (the demo re-times them). Written by `test/mobile-demo-fixtures.py`; rerun it after a helper change to the
 chat record encoders:
 
-    python3 test/mobile-demo-fixtures.py [--helper build/helper-rust/bin/darwin-universal]
+    python3 test/mobile-demo-fixtures.py [--helper build/helper-rust/bin/darwin-arm64]
 
 - `chats/<name>.json`: the real helper's `chat.page` pages for transcripts authored in the script (Claude Code JSONL,
   Codex rollouts), recorded and neutralised exactly as `test/mobile-chat-fixtures.py` records the chat fixtures.

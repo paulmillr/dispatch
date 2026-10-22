@@ -37,11 +37,11 @@ WATCH_EXECUTABLE = 'Watch/DispatchWatch.app/DispatchWatch'
 WATCH_MANIFEST = ROOT / 'Watch/App/PrivacyInfo.xcprivacy'
 MAPS = ROOT / 'build/dd/maps'
 OUTPUT = ROOT / 'build/release-check'
-HELPERS = ('darwin-universal', 'linux-aarch64', 'linux-x86_64')
+HELPERS = ('darwin-arm64', 'linux-aarch64', 'linux-x86_64')
 # ELF e_machine values of the two Linux helpers.
 ELF_MACHINES = {'linux-aarch64': 183, 'linux-x86_64': 62}
 # Intel Macs are hosts: the Mac helper keeps both slices.
-MAC_ARCHS = {'arm64', 'x86_64'}
+MAC_ARCHS = {'arm64'}
 
 # Apple's required-reason APIs (developer.apple.com, "Describing use of required reason API"): per category the
 # reasons that exist, and how the executable shows a use: an imported symbol or an Objective-C selector.
@@ -94,9 +94,9 @@ def helper_problems(app, protocol, mac_archs, built_version=None):
     for name in HELPERS:
         if not os.access(directory / name, os.X_OK):
             problems.append(f'helper/{name} is not executable')
-    archs = set(mac_archs(directory / 'darwin-universal'))
+    archs = set(mac_archs(directory / 'darwin-arm64'))
     if archs != MAC_ARCHS:
-        problems.append(f'helper/darwin-universal has {sorted(archs)}, not {sorted(MAC_ARCHS)}')
+        problems.append(f'helper/darwin-arm64 has {sorted(archs)}, not {sorted(MAC_ARCHS)}')
     for name, machine in ELF_MACHINES.items():
         found = elf_machine(directory / name)
         if found != machine:

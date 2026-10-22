@@ -215,11 +215,8 @@ pub(super) fn entries_bounded(directory: &File, limit: usize) -> io::Result<Vec<
 fn entries_with_limit(directory: &File, limit: Option<usize>) -> io::Result<Vec<(std::ffi::OsString, u8)>> {
     use std::os::fd::IntoRawFd;
     unsafe extern "C" {
-        #[cfg_attr(all(target_os = "macos", target_arch = "x86_64"), link_name = "fdopendir$INODE64")]
         fn fdopendir(fd: i32) -> *mut c_void;
-        #[cfg_attr(all(target_os = "macos", target_arch = "x86_64"), link_name = "readdir$INODE64")]
         fn readdir(stream: *mut c_void) -> *const u8;
-        #[cfg_attr(all(target_os = "macos", target_arch = "x86_64"), link_name = "rewinddir$INODE64")]
         fn rewinddir(stream: *mut c_void);
         fn closedir(stream: *mut c_void) -> i32;
         #[cfg(target_os = "macos")]
@@ -327,7 +324,6 @@ pub(super) fn chmod(parent: &File, name: &OsStr, mode: u32) -> io::Result<()> {
 pub(super) fn exists(parent: &File, name: &OsStr) -> io::Result<bool> {
     let name = component(name)?;
     unsafe extern "C" {
-        #[cfg_attr(all(target_os = "macos", target_arch = "x86_64"), link_name = "fstatat$INODE64")]
         fn fstatat(fd: i32, path: *const c_char, value: *mut c_void, flags: i32) -> i32;
     }
     const AT_SYMLINK_NOFOLLOW: i32 = if cfg!(target_os = "macos") { 0x20 } else { 0x100 };
@@ -350,7 +346,6 @@ pub(super) fn exists(parent: &File, name: &OsStr) -> io::Result<bool> {
 pub(super) fn identity(parent: &File, name: &OsStr) -> io::Result<crate::api::FileIdentity> {
     let name = component(name)?;
     unsafe extern "C" {
-        #[cfg_attr(all(target_os = "macos", target_arch = "x86_64"), link_name = "fstatat$INODE64")]
         fn fstatat(fd: i32, path: *const c_char, value: *mut c_void, flags: i32) -> i32;
     }
     const AT_SYMLINK_NOFOLLOW: i32 = if cfg!(target_os = "macos") { 0x20 } else { 0x100 };

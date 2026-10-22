@@ -52,7 +52,7 @@ The script needs nothing else from the repository. It:
    SHA-256 and continues only after the signer types `yes` because it matches the hash received
    separately, and checks the `dispatch-notary` credentials, all before signing anything;
 2. signs every Mach-O file, deepest first, then the app, with the hardened runtime and a secure
-   timestamp (`helper/darwin-universal` is a link to `dispatch-helper`, signed once); the app alone
+   timestamp (`helper/darwin-arm64` is a link to `dispatch-helper`, signed once); the app alone
    gets one entitlement, `com.apple.security.device.audio-input` (chat dictation), written by the
    script rather than kept from the maintainer's signature;
 3. notarizes and staples the app, so it also passes Gatekeeper offline after leaving the DMG;
@@ -91,9 +91,9 @@ Test the download on a disposable Mac (a local terminal and an SSH session) befo
 
 ## Notes
 
-- The app builds for the host architecture only (`ARCHS: $(NATIVE_ARCH_ACTUAL)`); the cask requires
-  Apple silicon. The macOS SSH helper is universal for remote Intel Macs (Debug builds make it for
-  the building Mac's architecture only; `DISPATCH_HELPER_UNIVERSAL=1` makes both).
+- Apple silicon only: the app builds for the host architecture (`ARCHS: $(NATIVE_ARCH_ACTUAL)`) on an
+  Apple silicon Mac (setup refuses an Intel one), the cask requires Apple silicon, and the macOS SSH helper
+  (`helper/darwin-arm64`) is arm64 only, so an Intel Mac SSH host keeps plain SSH.
 - Release builds carry no `com.apple.security.get-task-allow` (`CODE_SIGN_INJECT_BASE_ENTITLEMENTS:
   NO`), which notarization rejects; re-signing replaces the build's entitlements
   (`Dispatch/Dispatch.entitlements`, the microphone) with the script's identical one anyway.
