@@ -1,0 +1,6 @@
+# Generated and rendered: the project comes from project.yml, the screenshots from shoot.py.
+/Mockups.xcodeproj/
+/build/
+/shots/
+/sheets/
+*.png

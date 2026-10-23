@@ -713,7 +713,9 @@ sheet).
   recordings (`xcrun simctl io <device> recordVideo`); `scripts/transition-frames.swift` and
   `scripts/tab-bar-frames.swift` split and judge them.
 - **Fidelity.** `FidelityUITests` pairs every mockup screen with the app's screenshot (`build/mockup-review`,
-  `scripts/fidelity-pairs.swift`). `AppearanceUITests` runs the accessibility audit in both schemes; accepted reports
+  `scripts/fidelity-pairs.swift`). The next iteration's mockups (Files, Review and Commits modes, the host stats
+  widget, the iPad strip layout, the watch) are SwiftUI screens in `mockups/`, rendered by `mockups/shoot.py`.
+  `AppearanceUITests` runs the accessibility audit in both schemes; accepted reports
   are listed in the test.
 
 ## Device checklist

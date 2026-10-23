@@ -1,0 +1,50 @@
+# Design mockups (see README.md): static SwiftUI screens shot in the simulator by shoot.py. Not part of Dispatch.xcodeproj.
+name: Mockups
+options:
+  deploymentTarget:
+    iOS: "26.0"
+    watchOS: "26.0"
+  bundleIdPrefix: dev.dispatch.mockups
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    ARCHS: "$(ARCHS_STANDARD)"
+    ONLY_ACTIVE_ARCH: YES
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGN_STYLE: Manual
+    GENERATE_INFOPLIST_FILE: YES
+targets:
+  # iPhone and iPad: the simulator picks which. The iPad screens expect landscape (shoot.py rotate).
+  Mockups:
+    type: application
+    platform: iOS
+    settings:
+      TARGETED_DEVICE_FAMILY: "1,2"
+      INFOPLIST_KEY_UILaunchScreen_Generation: YES
+      INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+      INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortraitUpsideDown
+    sources:
+      - path: Sources
+      - path: ../Mobile/App/Assets.xcassets
+        name: Assets.xcassets
+  # Turns an iPad simulator to landscape (simctl cannot; XCUIDevice can, and it sticks).
+  MockupsRotate:
+    type: bundle.ui-testing
+    platform: iOS
+    settings:
+      TARGETED_DEVICE_FAMILY: "1,2"
+    sources:
+      - path: Rotate
+    dependencies:
+      - target: Mockups
+  # Apple Watch. The phone's asset catalog cannot be shared (its iOS-only AppIcon set fails actool), so the colours
+  # are in code; WKWatchOnly because a watch app without a companion does not install.
+  MockupsWatch:
+    type: application
+    platform: watchOS
+    settings:
+      TARGETED_DEVICE_FAMILY: "4"
+      INFOPLIST_KEY_WKApplication: YES
+      INFOPLIST_KEY_WKWatchOnly: YES
+    sources:
+      - path: Watch
