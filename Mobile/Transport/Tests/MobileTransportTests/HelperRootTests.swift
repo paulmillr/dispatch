@@ -20,14 +20,17 @@ final class HelperRootTests: XCTestCase {
 
   // MARK: Scripts
 
-  /// What the Mac sends (and its replay corpus records, `ReplayMigrationTests.sshSetup`) is unchanged by the roots: these
-  /// digests were taken from the scripts before `Root` existed.
-  func testHomeScriptsAreTheMacsByteForByte() {
+  /// The home root's scripts as both apps send them, pinned: the probe, the private folders, the cache check (with its
+  /// `blocked` arm, 0016), the upload, and the Mac's helper launch prefix (`cachePreamble` + `verify`) are what the Mac's
+  /// recordings hold (`ReplayMigrationTests` holds the Mac to its migrations; a change here needs one there).
+  func testHomeScriptsArePinned() {
     XCTAssertEqual(sha256(SSHBootstrapScript.probe), "06ed42fc0a087afe78882feab1c56c111bfaa5c2c3c3049ddafee54fc092a6f5")
     XCTAssertEqual(sha256(SSHBootstrapScript.privateDirectoryScript),
                    "56aeabae9a35632d21c095361201d9443bb24ba1b6d4e1e7cf4e630c13261bcd")
-    let cache = SSHBootstrapScript.cachePreamble(digest: digest) + "\n" + SSHBootstrapScript.verify(size: 1, digest: digest)
-    XCTAssertEqual(sha256(cache), "8824c674e47821a4d6fb25250fb20519458b5e18e0181fcf586438c7597a4346")
+    XCTAssertEqual(sha256(SSHBootstrapScript.cacheCheck(size: 1, digest: digest)),
+                   "2df1c655ef759cf083208dc0fd9e9e4e19e003119687dfced719c5947e9213a8")
+    let launch = SSHBootstrapScript.cachePreamble(digest: digest) + "\n" + SSHBootstrapScript.verify(size: 1, digest: digest)
+    XCTAssertEqual(sha256(launch), "8824c674e47821a4d6fb25250fb20519458b5e18e0181fcf586438c7597a4346")
     let upload = SSHBootstrapScript.upload(digest: digest, size: 1, staging: "upload-0")
     XCTAssertEqual(sha256(upload), "e23e329e7f0d98e3c01c166fbbd043074dd0ee7a4c381bd751c2259d8c3a68fd")
     XCTAssertEqual(SSHBootstrapScript.cachePreamble(digest: digest, root: .home), SSHBootstrapScript.cachePreamble(digest: digest))
@@ -95,26 +98,23 @@ final class HelperRootTests: XCTestCase {
     let home = installed(.home), alone = installed(.home, runtime: nil), runtime = installed(.runtimeDirectory)
     let noexec = HelperBootstrap.launchFailure(status: 126, stderr: "sh: 4: exec: ./dispatch-helper: Permission denied\n",
                                                installed: home)
-    XCTAssertEqual(noexec, "~/.dispatch/bin/versions/\(digest) cannot run programs (the folder is mounted noexec or blocked by "
-                   + "policy), so the helper cannot start there.")
-    XCTAssertTrue(HelperBootstrap.launchFailure(status: 126, stderr: "", installed: alone)
-      .hasSuffix("The host has no private runtime folder ($XDG_RUNTIME_DIR) to install it in instead."))
-    XCTAssertTrue(HelperBootstrap.launchFailure(status: 126, stderr: "", installed: runtime)
-      .hasPrefix("/run/user/1000/dispatch/bin/versions/\(digest) cannot run programs"))
-    XCTAssertEqual(HelperBootstrap.launchFailure(status: 127, stderr: "", installed: home),
-                   "The helper at ~/.dispatch/bin/versions/\(digest)/dispatch-helper could not be started.")
+    XCTAssertEqual(noexec, "The home folder cannot run programs (noexec mount or policy), so the helper cannot start there.")
+    XCTAssertEqual(HelperBootstrap.launchFailure(status: 126, stderr: "", installed: alone),
+                   noexec + " No private runtime folder (XDG_RUNTIME_DIR) to use instead.")
+    XCTAssertEqual(HelperBootstrap.launchFailure(status: 126, stderr: "", installed: runtime),
+                   "The runtime folder (XDG_RUNTIME_DIR) cannot run programs (noexec mount or policy), so the helper cannot start there.")
+    XCTAssertEqual(HelperBootstrap.launchFailure(status: 127, stderr: "", installed: home), "The helper could not be started.")
     XCTAssertEqual(HelperBootstrap.launchFailure(status: 127, stderr: "sh: 4: exec: ./dispatch-helper: not found\n", installed: home),
-                   "The helper at ~/.dispatch/bin/versions/\(digest)/dispatch-helper could not be started: "
-                   + "sh: 4: exec: ./dispatch-helper: not found")
+                   "The helper could not be started: sh: 4: exec: ./dispatch-helper: not found")
     XCTAssertEqual(HelperBootstrap.launchFailure(status: 2, stderr: "\n first line \u{1b}[0m\nsecond\nthird\nfourth\n", installed: home),
                    "The helper stopped before it answered: first line [0m / second / third")
     XCTAssertEqual(HelperBootstrap.launchFailure(status: 1, stderr: "dispatch-setup: installed helper does not verify\n",
                                                  installed: home),
-                   "Could not start the helper at ~/.dispatch/bin/versions/\(digest)/dispatch-helper: installed helper does not verify.")
+                   "Could not start the helper: installed helper does not verify.")
     XCTAssertEqual(HelperBootstrap.launchFailure(status: 3, stderr: " \n", installed: home),
                    "The helper stopped before it answered (exit status 3).")
     XCTAssertEqual(HelperBootstrap.launchFailure(status: nil, stderr: "", installed: home),
-                   "The helper stopped before it answered (no exit status: it was killed or the channel closed).")
+                   "The helper stopped before it answered (no exit status: it was killed or the connection closed).")
     let long = HelperBootstrap.launchFailure(status: 1, stderr: String(repeating: "x", count: 1000), installed: home)
     XCTAssertLessThanOrEqual(long.count, 340)
     for status: Int32? in [nil, 0, 1, 2, 126, 127, 255] {
@@ -286,7 +286,7 @@ final class HelperRootInstallTests: XCTestCase {
     let stderr = String(decoding: failed.stderr, as: UTF8.self)
     XCTAssertEqual(stderr, "dispatch-setup: installed helper does not verify\n")
     XCTAssertEqual(HelperBootstrap.launchFailure(status: failed.status, stderr: stderr, installed: wrong),
-                   "Could not start the helper at \(wrong.path): installed helper does not verify.")
+                   "Could not start the helper: installed helper does not verify.")
     // A folder check failing (`fail`, which also writes stdout elsewhere): still nothing on stdout.
     let elsewhere = HelperBootstrap.Installed(platform: installed.platform, digest: installed.digest, size: installed.size,
                                               root: .runtimeDirectory)

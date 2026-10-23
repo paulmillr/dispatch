@@ -186,9 +186,12 @@ same private-folder checks; the phone's probe, `SSHBootstrapScript.runtimeProbe`
 whether that folder is usable, and its `dispatch` folder is created only when the helper is installed there). Nothing
 else falls back: a helper that exits before greeting gives `launchFailure`'s text (the folder that cannot run
 programs, a helper that could not start, or its stderr) and the host goes on as plain SSH. The launch command's
-checks write their `dispatch-setup:` reason to stderr only; stdout carries nothing before the helper's frames. The Mac sends
-`SSHBootstrapScript.probe` and the `.home` scripts byte for byte as before (`HelperRootTests`), so its recordings are
-unchanged; it has no fallback root.
+checks write their `dispatch-setup:` reason to stderr only; stdout carries nothing before the helper's frames. Both apps send
+the same cache check (`SSHBootstrapScript.cacheCheck`, pinned in `HelperRootTests`); the Mac's every connection still
+starts with `probe`, and its home upload and helper launch are as before, while its cache check and login changed by
+text only (replay migrations 0015 and 0016). The Mac tries the runtime root only once the home folder proved unable to
+run programs, for grants without agent hooks ([security](security.md#ssh-integration)), and both apps word a helper that
+exited before greeting alike (`SSHBootstrapScript.launchFailure`).
 
 The grant is the Mac's full profile with hooks less file writes and Git reads (`HelperGrant`: no `file.write` or
 `git.read`; Chat off drops `hooks.configure` and `agent.*`). The

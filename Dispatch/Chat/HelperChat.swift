@@ -268,6 +268,9 @@ final class HelperChat {
   static func setup(
     _ endpoint: HelperWorkspace.Endpoint, key: String, enabled: Bool?, terminal: UInt64?
   ) async throws -> Installation? {
+    if enabled == true, let connection = endpoint.connection, await TerminalRuntime.shared.ssh.helperOutsideHome(connection) {
+      throw HelperFailure(code: "unsupported", message: SSHSetupFailure.hooksUnavailable)
+    }
     let client = HelperClient(try await HelperApp.shared.connection(endpoint))
     await TerminalRuntime.shared.helpers[endpoint]?.discovering()
     guard let launch = try await client.launches().first(where: { $0.key == key }) else { return nil }

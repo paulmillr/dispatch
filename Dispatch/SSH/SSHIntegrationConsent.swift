@@ -186,7 +186,7 @@ enum SSHIntegrationConsent {
             rows.layer?.borderWidth = 1
             rows.layer?.borderColor = accent.withAlphaComponent(0.35).cgColor
             helper = ChoiceButton(title: "Upload the Dispatch helper", detail: "to ~/.dispatch/bin/versions/<hash>/", parent: true)
-            let helperPathHelp = "Installed in your home directory on the SSH host. <hash> is the helper binary’s SHA-256 hash, used to verify and reuse cached copies."
+            let helperPathHelp = "Installed in your home directory on the SSH host, or in its runtime folder ($XDG_RUNTIME_DIR/dispatch) when the home folder cannot run programs. <hash> is the helper binary’s SHA-256 hash, used to verify and reuse cached copies."
             helper.toolTip = helperPathHelp
             helper.setAccessibilityHelp(helperPathHelp)
             helper.target = self

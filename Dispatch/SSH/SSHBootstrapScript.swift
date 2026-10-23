@@ -7,20 +7,21 @@ enum SSHBootstrapScript {
     /// Prints one `DISPATCH_PLATFORM=<uname -s>:<uname -m>` line.
     static let probe = "printf 'DISPATCH_PLATFORM=%s:%s\\n' \"$(uname -s)\" \"$(uname -m)\""
 
-    /// The iPhone's probe: `probe`, then a `DISPATCH_RUNTIME=<$XDG_RUNTIME_DIR>` line when the helper could be installed
+    /// The runtime-folder probe (the iPhone's on every connection, the Mac's only once `~/.dispatch` proved unable to
+    /// run programs; the Mac's other connections send `probe` alone): `probe`, then a `DISPATCH_RUNTIME=<$XDG_RUNTIME_DIR>` line when the helper could be installed
     /// in the runtime folder instead of `~/.dispatch` (`runtimeDirectory(_:)`): the folder is set, absolute, owned by the
     /// account with mode 0700, and `dispatch` in it, if it exists, is a private folder and not a link. It writes nothing:
     /// `dispatch` is made only by an install there (`runtimeEntry`). Whether the folder may run programs is learnt only by
-    /// installing or starting the helper. The Mac sends `probe` alone; `platform(_:)` reads the `DISPATCH_PLATFORM=` line
-    /// only, whatever else the output holds.
+    /// installing or starting the helper. `platform(_:)` reads the `DISPATCH_PLATFORM=` line only, whatever else the
+    /// output holds.
     static let runtimeProbe = probe + """
 
     if (
     \(privateFunctions)
-    case "$XDG_RUNTIME_DIR" in /*) ;; *) exit 1;; esac
-    cd -P "$XDG_RUNTIME_DIR" || exit 1
-    private_directory . || exit 1
-    if test -e dispatch || test -L dispatch; then private_directory dispatch || exit 1; fi
+    case "$XDG_RUNTIME_DIR" in /*) ;; *) fail "no runtime folder (XDG_RUNTIME_DIR)";; esac
+    cd -P "$XDG_RUNTIME_DIR" || fail "cannot enter the runtime folder"
+    private_directory . || fail "runtime folder not private"
+    if test -e dispatch || test -L dispatch; then private_directory dispatch || fail "unsafe folder dispatch"; fi
     ) >/dev/null 2>&1; then printf 'DISPATCH_RUNTIME=%s\\n' "$XDG_RUNTIME_DIR"; fi
     """
 
@@ -33,9 +34,9 @@ enum SSHBootstrapScript {
             ? path : nil
     }
 
-    /// Where the helper cache lives: `~/.dispatch` (`.home`, the Mac's only one), or `$XDG_RUNTIME_DIR/dispatch`
-    /// (`.runtimeDirectory`), which the iPhone tries when the home folder cannot run programs (mounted noexec). The
-    /// runtime folder is emptied at logout, so a helper there is uploaded again after that.
+    /// Where the helper cache lives: `~/.dispatch` (`.home`), or `$XDG_RUNTIME_DIR/dispatch` (`.runtimeDirectory`), which
+    /// both apps try when the home folder cannot run programs (mounted noexec; the Mac only for grants without agent
+    /// hooks). The runtime folder is emptied at logout, so a helper there is uploaded again after that.
     enum Root: Equatable {
         case home
         case runtimeDirectory
@@ -84,9 +85,24 @@ enum SSHBootstrapScript {
     /// Run after `cachePreamble` when `verify` failed: prints `DISPATCH_NOEXEC` when the cached helper is the expected file,
     /// owned by the account with mode 0700, and only `test -x` refuses it. That is a folder that cannot run programs:
     /// mounted noexec (the kernel's `access(X_OK)` says so where `/bin/sh` asks it, as bash and current dash do; a shell
-    /// that reads only the mode bits lets the exec itself fail, status 126) or blocked by policy.
+    /// that reads only the mode bits lets the exec itself fail, status 126) or blocked by policy. It also dates the file
+    /// (`touch -c`): no helper runs from this folder to mark the version used, and the helper's cleanup removes a version
+    /// folder nothing changed for a day, which would cost an upload to learn the same again.
     static func blocked(size: Int, digest: String) -> String {
-        "safe_file dispatch-helper && set -- $(metadata dispatch-helper) && test \"$2\" = 700 && test \"$(wc -c < dispatch-helper | tr -d ' ')\" = '\(size)' && test \"$(checksum dispatch-helper)\" = '\(digest)' && ! test -x dispatch-helper && printf 'DISPATCH_NOEXEC\\n'"
+        "safe_file dispatch-helper && set -- $(metadata dispatch-helper) && test \"$2\" = 700 && test \"$(wc -c < dispatch-helper | tr -d ' ')\" = '\(size)' && test \"$(checksum dispatch-helper)\" = '\(digest)' && ! test -x dispatch-helper && touch -c dispatch-helper && printf 'DISPATCH_NOEXEC\\n'"
+    }
+
+    /// The cache check both apps send: succeeds when the cached helper under `root` is the expected file; otherwise
+    /// prints `DISPATCH_NOEXEC` when it is but the folder cannot run it (`blocked`), and fails (status 1, or a preamble
+    /// failure's reason).
+    static func cacheCheck(size: Int, digest: String, root: Root = .home) -> String {
+        cachePreamble(digest: digest, root: root) + "\n" + verify(size: size, digest: digest)
+            + " && exit 0\n" + blocked(size: size, digest: digest) + "\nexit 1"
+    }
+
+    /// Whether a cache check's output names a folder that cannot run programs.
+    static func blocked(_ output: String) -> Bool {
+        output.split(whereSeparator: \.isNewline).contains("DISPATCH_NOEXEC")
     }
 
     /// Reads the helper from stdin into an exclusive private staging directory, checks its size and
@@ -107,7 +123,15 @@ enum SSHBootstrapScript {
         test ! -e dispatch-helper && test ! -L dispatch-helper || safe_file dispatch-helper || fail "unsafe cached helper"
         mv -f '\(staging)/dispatch-helper' dispatch-helper || fail "cannot install the helper"
         \(verify(size: size, digest: digest)) || fail "installed helper does not verify"
-        """
+        """ + (root == .home ? "" : "\n" + pruneRuntimeVersions(keeping: digest))
+    }
+
+    /// After an upload into the runtime folder (which no helper's cleanup visits): other versions' folders there that
+    /// nothing changed for a day. A helper still running from one keeps running; the next start of that version uploads
+    /// it again. Never follows links; a folder it cannot remove stays.
+    static func pruneRuntimeVersions(keeping digest: String) -> String {
+        "find .. -mindepth 1 -maxdepth 1 -type d -name '" + String(repeating: "?", count: 64) + "' ! -name '" + digest
+            + "' -mtime +0 -exec rm -rf {} + 2>/dev/null || :"
     }
 
     /// Every child is reached from an already checked working directory. Keeping
@@ -213,5 +237,44 @@ enum SSHBootstrapScript {
           else return 1; fi
         }
         """
+    }
+
+    // MARK: A helper that exited before it greeted
+
+    /// Text for a helper that exited before it answered `hello`, the same on the Mac and the iPhone, from its exit
+    /// status (nil: a signal or a lost connection) and stderr. 126 is a folder that cannot run programs (for `.home`
+    /// without a usable runtime folder, `runtimeDirectory` nil, it says so), 127 a helper that could not be started;
+    /// otherwise the setup's `dispatch-setup:` reason, else the first lines of stderr, else a line with the status. Never
+    /// empty; letters and plain punctuation only, so `printable` keeps it whole (at most 160 characters but stderr).
+    static func launchFailure(status: Int32?, stderr: String, root: Root, runtimeDirectory: String?) -> String {
+        let said = firstLines(stderr)
+        switch status {
+        case 126?:
+            return folderCannotRunPrograms(root)
+                + (root == .home && runtimeDirectory == nil ? " No private runtime folder (XDG_RUNTIME_DIR) to use instead." : "")
+        case 127?:
+            return "The helper could not be started" + (said.map { ": " + $0 } ?? ".")
+        default:
+            if let reason = reason(stderr) { return "Could not start the helper: " + printable(reason) + "." }
+            if let said { return "The helper stopped before it answered: " + said }
+            if let status { return "The helper stopped before it answered (exit status \(status))." }
+            return "The helper stopped before it answered (no exit status: it was killed or the connection closed)."
+        }
+    }
+
+    /// "The home folder cannot run programs …" (or the runtime folder's).
+    static func folderCannotRunPrograms(_ root: Root) -> String {
+        (root == .home ? "The home folder" : "The runtime folder (XDG_RUNTIME_DIR)")
+            + " cannot run programs (noexec mount or policy), so the helper cannot start there."
+    }
+
+    /// Up to three non-empty lines of `text`, control characters dropped, at most 300 characters; nil when nothing is left.
+    static func firstLines(_ text: String) -> String? {
+        let lines = text.split(whereSeparator: \.isNewline)
+            .map { String($0.unicodeScalars.filter { $0.value >= 32 && $0.value != 127 }).trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }.prefix(3)
+        let joined = lines.joined(separator: " / ")
+        guard !joined.isEmpty else { return nil }
+        return joined.count > 300 ? String(joined.prefix(297)) + "..." : joined
     }
 }

@@ -57,9 +57,6 @@ public enum HelperBootstrap: Sendable {
       case .runtimeDirectory: (runtimeDirectory ?? "$XDG_RUNTIME_DIR") + "/" + relativePath
       }
     }
-
-    /// The folder holding the helper (`path` without its file name).
-    var folder: String { String(path.dropLast("/dispatch-helper".count)) }
   }
 
   /// Probes the platform (and whether `$XDG_RUNTIME_DIR` could hold the helper), then uploads `<binaries>/<platform>`
@@ -117,14 +114,12 @@ public enum HelperBootstrap: Sendable {
   /// folder, no checksum tool) is not.
   private static func place(_ binary: Data, digest: String, root: Root, on connection: SSHConnection,
                             shell: (String) -> String) async throws -> Bool? {
-    let check = SSHBootstrapScript.cachePreamble(digest: digest, root: root.script) + "\n"
-      + SSHBootstrapScript.verify(size: binary.count, digest: digest) + " && exit 0\n"
-      + SSHBootstrapScript.blocked(size: binary.count, digest: digest) + "\nexit 1"
+    let check = SSHBootstrapScript.cacheCheck(size: binary.count, digest: digest, root: root.script)
     var attempts = 0
     while true {
       let cached = try await connection.run(shell(check))
       if cached.status == 0 { return attempts > 0 }
-      if cached.text.split(whereSeparator: \.isNewline).contains("DISPATCH_NOEXEC") { return nil }
+      if SSHBootstrapScript.blocked(cached.text) { return nil }
       attempts += 1
       do {
         try await upload(binary, digest: digest, root: root, on: connection, shell: shell)
@@ -180,40 +175,17 @@ public enum HelperBootstrap: Sendable {
 
   /// Text for a helper that exited before greeting, from its exit status (nil: a signal or a lost channel) and stderr:
   /// 126 is a folder that cannot run programs, 127 a helper that could not be started; otherwise the setup reason or the
-  /// first lines of stderr, else a line with the status. Never empty.
+  /// first lines of stderr, else a line with the status. Never empty. The Mac gives the same text
+  /// (`SSHBootstrapScript.launchFailure`, shared).
   public static func launchFailure(status: Int32?, stderr: String, installed: Installed) -> String {
-    let said = firstLines(stderr)
-    switch status {
-    case 126?:
-      let instead = installed.root == .home && installed.runtimeDirectory == nil
-        ? " The host has no private runtime folder ($XDG_RUNTIME_DIR) to install it in instead." : ""
-      return "\(installed.folder) cannot run programs (the folder is mounted noexec or blocked by policy), so the helper cannot start there." + instead
-    case 127?:
-      return "The helper at \(installed.path) could not be started" + (said.map { ": " + $0 } ?? ".")
-    default:
-      if let reason = SSHBootstrapScript.reason(stderr) {
-        return "Could not start the helper at \(installed.path): \(SSHBootstrapScript.printable(reason))."
-      }
-      if let said { return "The helper stopped before it answered: " + said }
-      if let status { return "The helper stopped before it answered (exit status \(status))." }
-      return "The helper stopped before it answered (no exit status: it was killed or the channel closed)."
-    }
+    SSHBootstrapScript.launchFailure(status: status, stderr: stderr, root: installed.root.script,
+                                     runtimeDirectory: installed.runtimeDirectory)
   }
 
   /// The root to try next after a launch failed at `installed.root` with `status`: `.runtimeDirectory` after a 126 (the
   /// folder cannot run programs) at `.home` when the probe saw a usable `$XDG_RUNTIME_DIR`, else nil.
   public static func fallbackRoot(after status: Int32?, installed: Installed) -> Root? {
     status == 126 && installed.root == .home && installed.runtimeDirectory != nil ? .runtimeDirectory : nil
-  }
-
-  /// Up to three non-empty lines of `text`, control characters dropped, at most 300 characters; nil when nothing is left.
-  private static func firstLines(_ text: String) -> String? {
-    let lines = text.split(whereSeparator: \.isNewline)
-      .map { String($0.unicodeScalars.filter { $0.value >= 32 && $0.value != 127 }).trimmingCharacters(in: .whitespaces) }
-      .filter { !$0.isEmpty }.prefix(3)
-    let joined = lines.joined(separator: " / ")
-    guard !joined.isEmpty else { return nil }
-    return joined.count > 300 ? String(joined.prefix(299)) + "…" : joined
   }
 
   private static func collect(_ exec: SSHExec) async throws -> String {

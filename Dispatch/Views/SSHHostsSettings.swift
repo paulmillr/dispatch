@@ -419,6 +419,7 @@ struct SSHHostsSettings: View {
                     Text("No way to reach \(name) is known. Run \(DispatchRemoval.command) there yourself.")
                 } else if let preview = removal?.preview {
                     if preview.absent { Text("Nothing: Dispatch isn’t installed there.") }
+                    else if preview.cannotRun { Text(DispatchRemoval.cannotRunAdvice) }
                     else if preview.removed { Text(preview.output.isEmpty ? "Nothing to remove." : preview.output) }
                     else {
                         Text("Couldn’t check (\(preview.output.isEmpty ? "status \(preview.status)" : preview.output)). "
