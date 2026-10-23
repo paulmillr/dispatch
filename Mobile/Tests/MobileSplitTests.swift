@@ -42,8 +42,8 @@ final class MobileSplitTests: XCTestCase {
         typealias Split = SpacesNavigator.SplitPath
         XCTAssertEqual(SpacesNavigator.split([]), Split(sidebar: [], tab: nil, detail: []))
         XCTAssertEqual(SpacesNavigator.split([.space(space("s"))]), Split(sidebar: [.space(space("s"))], tab: nil, detail: []))
-        XCTAssertEqual(SpacesNavigator.split([.space(space("s")), .tab(tab("a")), .details(space("s"))]),
-                       Split(sidebar: [.space(space("s"))], tab: tab("a"), detail: [.details(space("s"))]))
+        XCTAssertEqual(SpacesNavigator.split([.space(space("s")), .tab(tab("a")), .host(space("s").host)]),
+                       Split(sidebar: [.space(space("s"))], tab: tab("a"), detail: [.host(space("s").host)]))
         XCTAssertEqual(SpacesNavigator.split([.tab(tab("a")), .space(space("s")), .tab(tab("b"))]),
                        Split(sidebar: [.space(space("s"))], tab: tab("b"), detail: []), "An earlier tab is not the sidebar's")
     }
@@ -56,29 +56,29 @@ final class MobileSplitTests: XCTestCase {
         navigator.setSidebar([.space(space("s")), .tab(tab("a"))])
         XCTAssertEqual(navigator.splitPath.sidebar, [.space(space("s"))], "The space stays in the sidebar")
         XCTAssertEqual(navigator.splitPath.tab, tab("a"))
-        navigator.setDetail([.details(space("s"))])
+        navigator.setDetail([.host(space("s").host)])
         navigator.setSidebar([])
-        XCTAssertEqual(navigator.path, [.tab(tab("a")), .details(space("s"))], "Back in the sidebar keeps the detail column")
+        XCTAssertEqual(navigator.path, [.tab(tab("a")), .host(space("s").host)], "Back in the sidebar keeps the detail column")
         navigator.setSidebar([.tab(tab("b"))])
         XCTAssertEqual(navigator.path, [.tab(tab("b"))], "Another tab replaces the shown one and what it pushed")
     }
 
-    /// The detail column's stack: space details over the tab and Back; a tab details open takes the column.
+    /// The detail column's stack: host detail over the tab and Back; a tab opened from there takes the column.
     func testTheDetailColumnPushesOverItsTab() {
         let navigator = navigator()
         navigator.path = [.space(space("s")), .tab(tab("a"))]
-        navigator.setDetail([.details(space("s"))])
-        XCTAssertEqual(navigator.path, [.space(space("s")), .tab(tab("a")), .details(space("s"))])
+        navigator.setDetail([.host(space("s").host)])
+        XCTAssertEqual(navigator.path, [.space(space("s")), .tab(tab("a")), .host(space("s").host)])
         navigator.setDetail([])
         XCTAssertEqual(navigator.path, [.space(space("s")), .tab(tab("a"))])
-        navigator.setDetail([.details(space("s")), .tab(tab("b"))])
+        navigator.setDetail([.host(space("s").host), .tab(tab("b"))])
         XCTAssertEqual(navigator.path, [.space(space("s")), .tab(tab("b"))])
     }
 
     /// New tab, Create and Agents open into the detail column in place of its tab; folded, they push as before.
     func testOpeningATabReplacesTheShownOneOnlyInTheSplit() {
         let navigator = navigator()
-        navigator.path = [.space(space("s")), .tab(tab("a")), .details(space("s"))]
+        navigator.path = [.space(space("s")), .tab(tab("a")), .host(space("s").host)]
         navigator.split = true
         navigator.openChat(tab("b"))
         XCTAssertEqual(navigator.path, [.space(space("s")), .tab(tab("b"))])
@@ -185,9 +185,9 @@ final class MobileSplitTests: XCTestCase {
         }
     }
 
-    /// The app at iPad sizes: the system's sidebar width beside the tab either way up, the sidebar's tab bar at its foot
-    /// (the phone's, not iPadOS's floating top bar); a third and Slide Over are the phone's one stack. iPad only: the
-    /// tab bar's style follows the idiom.
+    /// The app at iPad sizes: the system's sidebar width beside the tab either way up, the sidebar the tree alone (its
+    /// bar, no tab bar), the tab's column without a bar of its own (the strip is its header); a third and Slide Over are
+    /// the phone's one stack, tab bar and all. iPad only: the layout follows the idiom.
     func testAnIPadShowsTheSidebarBesideTheTab() throws {
         guard UIDevice.current.userInterfaceIdiom == .pad else { throw XCTSkip("The tab bar's style follows the idiom") }
         let app = composition()
@@ -197,12 +197,13 @@ final class MobileSplitTests: XCTestCase {
                              (CGSize(width: 683, height: 909), "ipad-13-half")] {
             let shown = try bars(app, size: size, png: name, device: .pad)
             let sidebar = MobileSplit.columns(width: size.width, height: size.height, device: .pad).sidebar
-            XCTAssertEqual(shown.bars.count, 2, "\(name): \(shown.bars)")
+            XCTAssertEqual(shown.bars.count, 1, "\(name): the sidebar's bar only: \(shown.bars)")
             XCTAssertEqual(shown.bars.first?.width ?? 0, sidebar, accuracy: 1, name)
-            XCTAssertEqual(shown.bars.last?.minX ?? 0, sidebar + 0.5, accuracy: 1, name)
-            XCTAssertEqual(shown.tabBars.count, 1, "\(name): \(shown.tabBars)")
-            XCTAssertLessThanOrEqual(shown.tabBars.first?.maxX ?? .infinity, sidebar + 1, "\(name): in the sidebar")
-            XCTAssertGreaterThan(shown.tabBars.first?.minY ?? 0, size.height / 2, "\(name): at the sidebar's foot")
+            XCTAssertEqual(shown.bars.first?.minX ?? -1, 0, accuracy: 1, name)
+            XCTAssertTrue(shown.tabBars.isEmpty, "\(name): no tab bar: \(shown.tabBars)")
+            let column = try XCTUnwrap(shown.columns.first, name)
+            XCTAssertEqual(column.minX, sidebar + 0.5, accuracy: 1, "\(name): the tab's column beside it")
+            XCTAssertEqual(column.maxX, size.width, accuracy: 1, name)
             XCTAssertTrue(app.navigator.split)
         }
         let narrow = try bars(app, size: CGSize(width: 375, height: 1031), png: "ipad-slide-over", device: .pad)
@@ -214,11 +215,14 @@ final class MobileSplitTests: XCTestCase {
     /// The iPad split's sidebar hides only beside a tab, stays hidden across a narrow spell, comes back when no tab is
     /// left, and the next tab then arrives with it.
     func testTheSidebarHidesOnlyBesideATab() {
-        let navigator = navigator()
+        // Tabs the host shows (a tab it no longer has gives the window nothing, `canToggleSidebar`).
+        let navigator = SpacesNavigator(model: TabsSample.model())
+        let mba2 = TabsSample.mba2.id
+        func tab(_ key: String) -> TabRef { TabRef(host: mba2, key: key == "a" ? "herdr:app:1" : "herdr:app:2") }
         navigator.split = true
         navigator.toggleSidebar()
         XCTAssertFalse(navigator.sidebarIsHidden, "Nothing to give the window to")
-        navigator.path = [.space(space("s")), .tab(tab("a"))]
+        navigator.path = [.space(SpaceRef(host: mba2, key: "herdr:app")), .tab(tab("a"))]
         XCTAssertTrue(navigator.canToggleSidebar)
         navigator.toggleSidebar()
         XCTAssertTrue(navigator.sidebarIsHidden)
@@ -273,6 +277,9 @@ final class MobileSplitTests: XCTestCase {
         XCTAssertEqual(third.path, [.tab(shown)])
         XCTAssertFalse(third.sidebarIsHidden, "Shown when it was left shown")
         third.closed(.tab(shown))
+        let neighbour = try memory.data(forKey: SpacesNavigator.shownTabKey).map { try JSONDecoder().decode(TabRef.self, from: $0) }
+        XCTAssertEqual(neighbour, TabRef(host: shown.host, key: "herdr:app:3"), "Closed, the strip's neighbour is kept")
+        third.path = []
         XCTAssertNil(memory.object(forKey: SpacesNavigator.shownTabKey), "No tab left")
 
         memory.set(try JSONEncoder().encode(shown), forKey: SpacesNavigator.shownTabKey)
@@ -312,9 +319,9 @@ final class MobileSplitTests: XCTestCase {
             views(window).filter { $0 is Bar && !$0.isHidden && $0.window != nil }.map { $0.convert($0.bounds, to: window) }
         }
         let bars = frames(UINavigationBar.self).filter { window.bounds.intersects($0) }
-        XCTAssertEqual(bars.count, 1, "Only the tab's bar in the window: \(bars)")
-        XCTAssertEqual(bars.first?.width ?? 0, size.width, accuracy: 1, "Across the window")
-        XCTAssertTrue(frames(UITabBar.self).allSatisfy { !window.bounds.intersects($0) }, "The sidebar's tab bar is out of the window")
+        XCTAssertEqual(bars, [], "The sidebar's bar is out of the window, the tab has none (the strip)")
+        let column = frames(PadColumnMarker.Marker.self).first
+        XCTAssertEqual(column?.width ?? 0, size.width, accuracy: 1, "The tab's column across the window")
     }
 
     /// The sidebar's slide keeps the tab at the wider of its two widths until it ends (`sidebarSliding`), as the Mac's
@@ -337,9 +344,10 @@ final class MobileSplitTests: XCTestCase {
         RunLoop.main.run(until: Date().addingTimeInterval(1))
         XCTAssertFalse(app.navigator.sidebarSliding)
         func views(_ view: UIView) -> [UIView] { [view] + view.subviews.flatMap(views) }
+        // The tab's column (`PadColumnMarker`: its stack has no visible bar).
         func tabBar() -> CGRect? {
-            views(window).filter { $0 is UINavigationBar && !$0.isHidden && $0.window != nil }
-                .map { $0.convert($0.bounds, to: window) }.max { $0.width < $1.width }
+            views(window).filter { $0 is PadColumnMarker.Marker && $0.window != nil }
+                .map { $0.convert($0.bounds, to: window) }.first
         }
         app.navigator.toggleSidebar()
         XCTAssertTrue(app.navigator.sidebarSliding, "At once, before the slide starts on the next turn")
@@ -356,7 +364,7 @@ final class MobileSplitTests: XCTestCase {
         XCTAssertEqual(tabBar()?.width ?? 0, columns.tab, accuracy: 1, "Its column once the sidebar is in")
     }
 
-    /// Hidden, the sidebar leaves the window and the tab's bar spans it, its leading item the sidebar button.
+    /// Hidden, the sidebar leaves the window and the tab's column spans it (the strip leads with the sidebar's pill).
     func testAHiddenSidebarGivesTheTabTheWindow() throws {
         guard UIDevice.current.userInterfaceIdiom == .pad else { throw XCTSkip("The sidebar hides on an iPad") }
         let app = composition()
@@ -365,10 +373,11 @@ final class MobileSplitTests: XCTestCase {
         app.navigator.split = true
         app.navigator.toggleSidebar()
         let shown = try bars(app, size: CGSize(width: 1210, height: 834), png: "ipad-sidebar-hidden", device: .pad)
-        XCTAssertEqual(shown.bars.count, 1, "\(shown.bars)")
-        XCTAssertEqual(shown.bars.first?.minX ?? -1, 0, accuracy: 1)
-        XCTAssertEqual(shown.bars.first?.width ?? 0, 1210, accuracy: 1)
-        XCTAssertTrue(shown.tabBars.isEmpty, "The sidebar's tab bar is out of the window: \(shown.tabBars)")
+        XCTAssertEqual(shown.bars, [], "The sidebar's bar is out of the window: \(shown.bars)")
+        let column = try XCTUnwrap(shown.columns.first)
+        XCTAssertEqual(column.minX, 0, accuracy: 1)
+        XCTAssertEqual(column.width, 1210, accuracy: 1)
+        XCTAssertTrue(shown.tabBars.isEmpty, "\(shown.tabBars)")
     }
 
     private func composition(memory: UserDefaults? = nil) -> MobileComposition {
@@ -385,8 +394,10 @@ final class MobileSplitTests: XCTestCase {
         try bars(app, size: size, png: png, device: .phone).bars
     }
 
-    /// The visible navigation and tab bars' frames in the window, left to right, the app laid out for `device`.
-    private func bars(_ app: MobileComposition, size: CGSize, png: String, device: MobileSplit.Device) throws -> (bars: [CGRect], tabBars: [CGRect]) {
+    /// The visible navigation and tab bars' frames in the window, left to right, the app laid out for `device`, and the
+    /// iPad tab's column (`PadColumnMarker`, whose header is the strip).
+    private func bars(_ app: MobileComposition, size: CGSize, png: String,
+                      device: MobileSplit.Device) throws -> (bars: [CGRect], tabBars: [CGRect], columns: [CGRect]) {
         let scene = try XCTUnwrap(TestSupport.windowScene())
         let window = UIWindow(windowScene: scene)
         window.frame = CGRect(origin: .zero, size: size)
@@ -409,6 +420,6 @@ final class MobileSplitTests: XCTestCase {
                 .filter { $0.width > 0 && window.bounds.intersects($0) }
                 .sorted { $0.minX < $1.minX }
         }
-        return (frames(UINavigationBar.self), frames(UITabBar.self))
+        return (frames(UINavigationBar.self), frames(UITabBar.self), frames(PadColumnMarker.Marker.self))
     }
 }

@@ -123,9 +123,12 @@ final class TerminalIPadTests: XCTestCase {
         XCTAssertEqual(controller.capsuleForm, .full, "the phone keeps its capsule")
     }
 
-    /// The iPad keyboard's shortcut bar offers nothing (its Undo, Redo and Paste would cost the terminal rows).
+    /// The iPad keyboard's shortcut bar offers nothing (its Undo, Redo and Paste would cost the terminal rows), set as
+    /// the terminal takes the keys: in its initializer, inside SwiftUI's layout, the first `inputAssistantItem` of a
+    /// scene re-entered the graph (an attribute cycle on the iPad's first frame).
     func testShortcutBarIsEmpty() async throws {
         let controller = try await makeController(ScriptedTerminalFeed(output: Data()))
+        _ = controller.hostView.becomeFirstResponder()
         XCTAssertTrue(controller.hostView.inputAssistantItem.leadingBarButtonGroups.isEmpty)
         XCTAssertTrue(controller.hostView.inputAssistantItem.trailingBarButtonGroups.isEmpty)
     }

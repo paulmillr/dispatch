@@ -107,8 +107,10 @@ public enum DictationUpdate: Equatable, Sendable {
         }
     }
 
+    /// `playback`: the app also speaks while this dictation listens (the iPhone's conversation mode reads replies aloud),
+    /// so the iPhone's audio session plays as well as records (`.playAndRecord`, to the speaker unless headphones are in).
     public func start(owner: AnyHashable, engine: DictationEngine, model: WhisperModel, continuous: Bool = false,
-                      update: @escaping (DictationUpdate) -> Void) {
+                      playback: Bool = false, update: @escaping (DictationUpdate) -> Void) {
         cancel()
         run += 1
         let token = run
@@ -128,6 +130,7 @@ public enum DictationUpdate: Equatable, Sendable {
                 whisper = engine == .whisper ? models.installed(model) : nil
                 if engine == .whisper, whisper == nil { throw DictationError.modelMissing(model) }
                 let microphone = input()
+                (microphone as? DictationMicrophone)?.playback = playback
                 let format = try microphone.prepare()
                 self.format = format
                 let first = next(DictationFeed(), token: token)

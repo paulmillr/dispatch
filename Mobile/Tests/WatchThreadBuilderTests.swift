@@ -114,6 +114,37 @@ final class WatchThreadBuilderTests: XCTestCase {
         XCTAssertEqual(try line(#"{"query":"x"}"#, header: ""), "Allow a tool call?")
     }
 
+    /// Spaces' tab line (P2) reads the session's cached step and the turn's start, the same reads as the watch's rows:
+    /// its words never carry the running time (the rows count it), and the cached step is the transcript's.
+    func testTheSpacesLineIsTheWatchsStepWithoutTheTime() async throws {
+        let helper = ScriptedHelper()
+        let chat = try await opened(helper, records: ChatFixture.records("claude-thread"))
+        let expected = chat.transcript.openTurn.flatMap { turn in
+            let steps = ChatStep.steps(turn, directory: nil, reasoning: false)
+            return (steps.last(where: \.running) ?? steps.last).map(WatchSnapshotBuilder.phrase)
+        }
+        XCTAssertEqual(chat.currentStep, expected, "cached from the transcript")
+
+        let busy = ScriptedHelper()
+        let working = try await opened(busy, records: [], state: ChatFixture.state(busy: true, activity: "reading files"))
+        let row = ChatConversation(key: ChatConversationKey(host: UUID(), node: "p:x"), terminal: 7, hostName: "mba2", name: "claude",
+                                   space: "app", spaceNode: nil, cwd: nil,
+                                   binding: HelperTopology.Binding(session: conversation, transcript: nil, pid: nil, start: nil, executable: nil),
+                                   summary: ChatConversationSummary(busy: true), urgency: PaneUrgency(waiting: false, working: true, unread: false),
+                                   muted: false, unread: false)
+        let status = try XCTUnwrap(MobileComposition.status(row, session: working))
+        XCTAssertEqual(status.text, "Reading files", "the words: no time in them")
+        XCTAssertEqual(status.since, WatchSnapshotBuilder.started(working), "counted from the watch's workingSince")
+        let since = try XCTUnwrap(status.since)
+        XCTAssertEqual(TabsStatusText.text(status, now: since.addingTimeInterval(48)), "Reading files · 48s")
+        XCTAssertEqual(TabsStatusText.text(status, now: since.addingTimeInterval(49)), "Reading files · 49s", "ticks")
+        XCTAssertEqual(TabsStatusText.text(TabsStatus(text: "Allow cargo test?"), now: Date()), "Allow cargo test?")
+        XCTAssertEqual(TabsTime.elapsed(3 * 60 + 5), "3m")
+        XCTAssertEqual(TabsTime.elapsed(3600 + 5 * 60), "1h 5m")
+        // Without a session: the row's summary.
+        XCTAssertEqual(MobileComposition.status(row, session: nil), TabsStatus(text: "working"))
+    }
+
     /// The newest `limit` items; `earlier` when more exist, here or on the host. The page survives the wire and fits a
     /// reply.
     func testTheNewestItemsFitAReply() async throws {

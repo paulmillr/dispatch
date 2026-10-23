@@ -38,7 +38,7 @@ struct HostFreshness: Identifiable, Equatable {
     }
 }
 
-/// The shared stack's subtitle under Spaces' flat list and Agents (Mail's "Updated just now"): every host's last
+/// The shared stack's subtitle under Agents' title (Mail's "Updated just now"): every host's last
 /// update in one line. `hosts` is read in this modifier's body, not the root's, so a host's ping re-evaluates only it;
 /// the times move on with the minute. Nil `hosts` shows none (an empty subtitle, so the stack keeps its identity).
 struct HostsSubtitle: ViewModifier {

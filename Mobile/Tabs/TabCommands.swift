@@ -185,6 +185,16 @@ struct TabCommands: Sendable {
         try await client.place(HelperClient.Placement(node: tab.node, place: .init(kind: "workspace", label: space)))
     }
 
+    /// `memberships.move` of a tab within its space (P2d's reorder), or of detached work back under its parent.
+    func move(_ node: UInt64, parent: UInt64, before: UInt64?) async throws {
+        try await client.move(HelperClient.Membership(node: node, parent: parent, before: before))
+    }
+
+    /// `memberships.place` of detached work (a tmux retained view) back into its session.
+    func place(_ node: UInt64, label: String) async throws {
+        try await client.place(HelperClient.Placement(node: node, place: .init(kind: "workspace", label: label)))
+    }
+
     /// `entities.rename` of a space or tab.
     func rename(_ node: UInt64, to name: String) async throws {
         try await client.rename(HelperClient.Rename(node: node, name: name))
@@ -238,7 +248,7 @@ struct TabsFailure: Error, Equatable, LocalizedError {
 extension MobileWorkspace {
     /// The commands on this connection; `nodes`: the request names node ids from the spaces shown, which must then be
     /// this connection's (`TabsHost.live`).
-    private func commands(nodes: Bool = true) throws -> TabCommands {
+    func commands(nodes: Bool = true) throws -> TabCommands {
         guard let client else { throw TabsFailure.disconnected }
         if nodes, !host.live { throw TabsFailure.loading }
         return TabCommands(client: client)

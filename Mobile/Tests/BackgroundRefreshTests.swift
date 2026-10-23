@@ -276,10 +276,13 @@ final class BackgroundRefreshTests: XCTestCase {
         let notification = RefreshNotification(id: "x", title: "claude · studio", body: "Run the migration?",
                                                key: ChatConversationKey(host: UUID(), node: "n"))
         let content = notification.content
-        XCTAssertEqual(content.categoryIdentifier, RefreshNotification.category.identifier)
-        XCTAssertEqual(RefreshNotification.category.hiddenPreviewsBodyPlaceholder, "An agent needs you")
-        XCTAssertFalse(RefreshNotification.category.options.contains(.hiddenPreviewsShowTitle))
-        XCTAssertFalse(RefreshNotification.category.options.contains(.hiddenPreviewsShowSubtitle))
+        let category = RefreshNotification.categories.first { $0.identifier == content.categoryIdentifier }
+        XCTAssertEqual(content.categoryIdentifier, RefreshNotification.categoryIdentifier)
+        XCTAssertEqual(category?.hiddenPreviewsBodyPlaceholder, "An agent needs you")
+        for category in RefreshNotification.categories {
+            XCTAssertFalse(category.options.contains(.hiddenPreviewsShowTitle))
+            XCTAssertFalse(category.options.contains(.hiddenPreviewsShowSubtitle))
+        }
         XCTAssertEqual(content.body, "Run the migration?")
         XCTAssertEqual(content.userInfo as? [String: String], notification.userInfo)
     }
@@ -335,7 +338,9 @@ final class RecordingScheduler: RefreshScheduling, @unchecked Sendable {
         isAuthorized = grants
         return grants
     }
+    private(set) var badges: [Int] = []
     func post(_ notification: RefreshNotification) { posted.append(notification) }
+    func setBadge(_ count: Int) { badges.append(count) }
     func removeAll() { cleared += 1 }
 }
 

@@ -89,9 +89,8 @@ enum MobileSplit {
     }
 
     /// A sidebar narrower than a phone (laptop posture): its tab bar shows glyphs only, which labelled crowded each
-    /// other under 283 points, and the Spaces rows say space, host and folder (`TabsTabRow`). Never on an iPad: its
-    /// sidebar is 280 at the least, where the labels fit, and the narrow rows cost a full-screen mini (296) every
-    /// tab's name.
+    /// other under 283 points, and Agents' rows put their host first. Never on an iPad: its sidebar is 280 at the
+    /// least, where the labels fit, and the narrow rows cost a full-screen mini (296) every tab's name.
     static func narrow(sidebar width: CGFloat, device: Device = .phone) -> Bool { device == .phone && width < 300 }
 
     /// The window's size before the first layout measures it, so a launch on the unfolded screen does not draw the
@@ -182,4 +181,67 @@ struct MobileSplitDetail: View {
     }
 }
 
+/// The iPad split's detail column (I1–I8): the strip (`PadStrip`: the space's tabs, "+", the modes) over the column's
+/// stack, which holds the tab's mode (`TabScreen` in its strip layout: no header, no capsule) and what it pushes (a
+/// file, a commit's diff, the space's details), so a pushed screen opens under the strip, in the pane. Before any tab
+/// is open, where to find one.
+struct PadSplitDetail: View {
+    @Bindable var navigator: SpacesNavigator
+    let content: TabsContent
+    let hostViews: SpacesHostViews
+    /// The sidebar is hidden: the strip leads with its pill and the space's capsule (I8).
+    let sidebarHidden: Bool
 
+    var body: some View {
+        let tab = navigator.splitPath.tab.flatMap { navigator.model.tab($0) == nil ? nil : $0 }
+        // Above the stack, not a bar of it: a `safeAreaBar` on the stack never reached its hosted root (the root's own
+        // bar, the mode's row, drew under the strip).
+        VStack(spacing: 0) {
+            if let tab {
+                PadStrip(navigator: navigator, ref: tab, content: content, sidebarHidden: sidebarHidden)
+            }
+            stack
+        }
+        .background(Color.canvas)
+        .background { PadColumnMarker().accessibilityHidden(true) }
+    }
+
+    private var stack: some View {
+        NavigationStack(path: Binding(get: { navigator.splitPath.detail }, set: { navigator.setDetail($0) })) {
+            Group {
+                if let tab = navigator.splitPath.tab {
+                    TabScreen(model: navigator.model, ref: tab, path: $navigator.path, content: content)
+                        .environment(\.tabsSplitDetail, true)
+                        .environment(\.tabsPadStrip, true)
+                        .id(tab)
+                } else {
+                    ContentUnavailableView {
+                        Label("No tab open", systemImage: "square.on.square")
+                    } description: {
+                        Text("Open a space in the sidebar.")
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.canvas)
+                }
+            }
+            .navigationDestination(for: TabsRoute.self) { route in
+                TabsDestination(route: route, navigator: navigator, content: content, hostViews: hostViews)
+            }
+        }
+    }
+}
+
+/// The iPad tab's column as a view UIKit lays out (behind the strip and the column's stack, which has no visible bar
+/// of its own): `MobileSplitTests` measure the column by it.
+struct PadColumnMarker: UIViewRepresentable {
+    final class Marker: UIView {}
+
+    func makeUIView(context: Context) -> Marker {
+        let marker = Marker()
+        marker.isUserInteractionEnabled = false
+        marker.isAccessibilityElement = false
+        return marker
+    }
+
+    func updateUIView(_ marker: Marker, context: Context) {}
+}

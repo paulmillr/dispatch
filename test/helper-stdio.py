@@ -40,7 +40,7 @@ CAPABILITIES = ','.join(FULL)
 # The opt-in features the phone names in hello (helper/core/src/dispatch/features.rs). A client that
 # names none (the Mac app) gets exactly the replies its replay corpus recorded.
 FEATURES = ['interaction.options', 'chat.list', 'projects.recent', 'multiplexers.versions', 'terminals.coalesce',
-            'launch.names', 'stdio.liveness', 'terminals.activity']
+            'launch.names', 'stdio.liveness', 'terminals.activity', 'memberships.append']
 # With stdio.liveness the helper ends after 45 s without traffic; the phone pings this often.
 PING = 15
 # sshd's PATH for a non-login exec channel (macOS; Linux adds /usr/local/bin and /usr/games).

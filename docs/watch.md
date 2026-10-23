@@ -208,8 +208,9 @@ threads and actions leave a disconnected host alone (`HostSessions.hold` skips i
   (`DISPATCH_MOBILE_SCRIPTED`, the demo), whose helpers send no statistics: there `WatchSampleStats` answers, numbers
   derived from the host's id (the demo's hosts sample their own).
 - `WatchReviewEvents` (`Mobile/Watch/WatchReviewEvents.swift`, `WatchBridge.reviews`, observable): the Review tab calls
-  `post(key:agent:title:comments:files:window:undo:)` when Send goes out with an undo window (the closure takes it back,
-  false once the agent has it) and `finished(_:)` when the window closed or the phone's own Undo took it; the snapshot
+  `post(key:agent:title:comments:files:window:undo:)` when Send goes out with an undo window (the async closure takes it
+  back, waiting for the helper's `queue.remove`, false once the agent has it or the helper refused; a review an idle
+  agent got at once is posted with no window, so the watch offers no Undo) and `finished(_:)` when the window closed or the phone's own Undo took it; the snapshot
   carries the open ones, `review.undo` calls `undo(_:)`. At most eight are kept.
 
 The page (`WatchThreadBuilder`): per turn, `ChatPatch.displayedItems` in order (as `ChatTurnSummary.displayed`), each
@@ -355,8 +356,9 @@ What the model layer does (`WatchModel`); the screens follow it.
   dot (blue when a tab needs you or holds an unseen result, else amber while one works), the name, the folder (deeper
   than `~/a/b` as "…/b/c"), the time ("now", "5m", "2h", "3d", "2w", "1y": `WatchTime.relative`, the phone's "9:31" or
   "Yesterday" does not fit beside a name) and the unread count. A tab row: the dot (`WatchUrgency`), a bubble for a
-  chat tab or a terminal, the name (two lines), the status (else the program when the name is not already it), the
-  time. An agent's tab (`chat` with an agent pane) pushes its thread; any other a tab screen: name, host, system,
+  chat tab or a terminal, the name (two lines), the status (an agent's current step, what it waits on or its last
+  message, as Spaces' P2 rows say it without their running time; else the program when the name is not already it),
+  the time. An agent's tab (`chat` with an agent pane) pushes its thread; any other a tab screen: name, host, system,
   space, folder, program, "40 min ago", status, and "Terminal on your iPhone". A truncated snapshot ends with "Some rows
   are on your iPhone". The leading toolbar button is Refresh, as in Agents.
 - **Host** (mockups K6). Each Spaces header (the host's mark, name, state dot, multiplexer chip, a chevron) pushes the

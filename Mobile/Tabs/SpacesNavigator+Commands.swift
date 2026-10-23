@@ -12,7 +12,14 @@ extension SpacesNavigator {
         return path.last?.tab
     }
 
-    /// The space of the screen on top: the shown tab's, or a space's tabs or details. In the split the detail column
+    /// The tab Close Tab (⌘W) closes: the shown tab; on an iPad's strip its selected pill, also under a mode's
+    /// pushed screen, as the pill's × does.
+    var closableTab: TabRef? {
+        if sidebarHides, split, let tab = splitPath.tab, model.tab(tab) != nil { return tab }
+        return shownTab
+    }
+
+    /// The space of the screen on top: the shown tab's, or a space's tabs. In the split the detail column
     /// counts first, where the user last opened something.
     var shownSpace: SpaceRef? {
         let top: TabsRoute?
@@ -23,22 +30,23 @@ extension SpacesNavigator {
             top = path.last
         }
         switch top {
-        case .tab(let ref)?: return model.tab(ref)?.space
-        case .space(let ref)?, .details(let ref)?: return ref
-        case .host?, nil: return nil
+        case .tab(let ref)?, .files(let ref, _)?: return model.tab(ref)?.space
+        case .space(let ref)?: return ref
+        case .host?, .detached?, nil: return nil
         }
     }
 
-    /// A Spaces sheet or dialog is up (New tab's picker, New space, Rename, Terminate, a failure).
+    /// A Spaces sheet or dialog is up (New tab's picker, New space, the switcher, Rename, Terminate, a failure).
     var presenting: Bool {
-        picking || newSpace != nil || actions.renaming != nil || actions.terminating != nil || actions.closingSpace != nil
+        picking || newSpace != nil || actions.renaming != nil || actions.terminating != nil || switcher != nil
             || actions.closingShells != nil || actions.failure != nil
     }
 
     /// The commands that apply now. Nothing applies while something is presented (`presenting`: the shell's sheets,
     /// besides the navigator's own); a tab's and a space's items need them on screen and their host connected (a
     /// request to a host that is not would only fail). A plain host's shells are the phone's own: Close Tab and Close
-    /// Space need no connection, and they have no Rename or Detach. The terminal's (Clear Screen, the font sizes) need a tab shown:
+    /// Space need no connection, and they have no Rename or Detach. The terminal's (Find on its Terminal segment, Clear Screen, the font sizes) need a tab shown
+    /// (Find on an agent's Chat segment searches its conversation):
     /// its terminal answers them when it has the focus, and refuses a size past its bounds. Attach Files… needs an agent's
     /// tab on a connected host: its chat composer opens the picker when its helper takes attachments.
     func enabledCommands(presenting: Bool) -> Set<MobileCommand> {
@@ -47,6 +55,17 @@ extension SpacesNavigator {
         if !model.workspaces.isEmpty { enabled.formUnion([.newTab, .newSpace]) }
         if let tab = shownTab.flatMap(model.tab) {
             enabled.formUnion([.clearScreen, .increaseFontSize, .decreaseFontSize, .resetFontSize])
+            // Find searches what the tab shows: on the Terminal segment the terminal (or its search field answers
+            // `find(_:)`), on the Chat segment of an agent's tab its conversation (`findsInChat`, C1).
+            let segment = shownSegment(tab)
+            if segment == .terminal || (segment == .chat && tab.isChat) {
+                enabled.formUnion([.find, .findNext, .findPrevious])
+            }
+            // The Files modes where the strip offers them (`PadMode.available`): Files where the host serves it, Review
+            // and Commits inside a repository.
+            let modes = model.modes(tab, facts: gitFacts).available
+            if modes.contains(.files) { enabled.insert(.switchFiles) }
+            if modes.contains(.review) { enabled.formUnion([.reviewChanges, .commits]) }
             if tab.isShell {
                 enabled.insert(.closeTab)
             } else {
@@ -63,9 +82,24 @@ extension SpacesNavigator {
                 enabled.formUnion([.renameSpace, .closeSpace, .detachSpace])
             }
         }
+        if let ref = closableTab, ref != shownTab, let tab = model.tab(ref), tab.isShell || connected(ref.host) {
+            enabled.insert(.closeTab)
+        }
         if !attentionTabs.isEmpty { enabled.formUnion([.nextAttention, .previousAttention]) }
         if sidebarHides && canToggleSidebar { enabled.insert(.toggleSidebar) }
         return enabled
+    }
+
+    /// The segment the shown tab is on.
+    func shownSegment(_ tab: MobileTab) -> TabSegment {
+        let segment = model.segments[tab.ref] ?? TabSegment.initial(for: tab)
+        return tab.isShell && segment != .files ? .terminal : segment
+    }
+
+    /// Find, Find Next and Find Previous go to the conversation's search: the shown tab is on its Chat segment.
+    var findsInChat: Bool {
+        guard let tab = shownTab.flatMap(model.tab) else { return false }
+        return tab.isChat && shownSegment(tab) == .chat
     }
 
     private func connected(_ host: UUID) -> Bool { model.workspace(host)?.client != nil }

@@ -6,7 +6,7 @@ import SwiftUI
 extension SpacesNavigator {
     /// The window shows a tab beside the sidebar (`MobileSplit`), so the sidebar can give it the window. The shell
     /// hides it on an iPad only (`sidebarHides`).
-    var canToggleSidebar: Bool { split && splitPath.tab != nil }
+    var canToggleSidebar: Bool { split && splitPath.tab.map { model.tab($0) != nil } == true }
 
     /// The sidebar is out of the way now: only ever while a tab is shown beside it.
     var sidebarIsHidden: Bool { canToggleSidebar && sidebarHidden }
@@ -46,24 +46,51 @@ extension SpacesNavigator {
     /// The slide's length: the detail column keeps its wider width for it (`MobileRoot`), as the Mac's split does.
     static let sidebarSlide = 0.3
 
-    static let shownTabKey = "tabs.shownTab", sidebarHiddenKey = "tabs.sidebarHidden"
+    static let shownTabKey = "tabs.shownTab", sidebarHiddenKey = "tabs.sidebarHidden", shownModeKey = "tabs.shownMode",
+               repositoriesKey = "tabs.repositories"
+
+    /// The most tabs whose repository is kept (`rememberRepository`).
+    static let repositoriesKept = 64
+
+    /// A tab's folder is (or is not) a git repository: kept for the next launch's first frame (`MobileTabs.knownRepositories`).
+    func rememberRepository(_ ref: TabRef, _ repository: Bool) {
+        let key = MobileTabs.repositoryKey(ref)
+        guard model.knownRepositories[key] != repository else { return }
+        model.knownRepositories[key] = repository
+        guard sidebarHides, let memory else { return }
+        var kept = memory.dictionary(forKey: Self.repositoriesKey) as? [String: Bool] ?? [:]
+        kept[key] = repository
+        if kept.count > Self.repositoriesKept { kept = [key: repository] }
+        memory.set(kept, forKey: Self.repositoriesKey)
+    }
 
     /// The launch's window on an iPad (`MobileRoot`, before its first frame): the split shows the tab it showed last
-    /// time, with the sidebar as the user left it, if the host's cached topology still has that tab. Once a launch.
+    /// time on the mode it showed (`PadMode`), with the sidebar as the user left it, if the host's cached topology still
+    /// has that tab. Once a launch.
     func restoreSplit(splits: Bool) {
         guard !sidebarHides else { return }
         let tab = memory?.data(forKey: Self.shownTabKey).flatMap { try? JSONDecoder().decode(TabRef.self, from: $0) }
         let hidden = memory?.bool(forKey: Self.sidebarHiddenKey) ?? false
+        let mode = memory?.string(forKey: Self.shownModeKey).flatMap(PadMode.init(rawValue:))
+        if let kept = memory?.dictionary(forKey: Self.repositoriesKey) as? [String: Bool] {
+            model.knownRepositories.merge(kept) { current, _ in current }
+        }
         sidebarHides = true
         split = splits
         // A window that stacks (Slide Over, a third) opens on the tab bar, as the phone does.
         guard splits, path.isEmpty, let tab, model.tab(tab) != nil else { return }
+        // Review and Commits only where the tab's folder was a repository last time: else Files, never a frame of a
+        // mode the strip cannot offer.
+        if let mode {
+            let git = mode == .review || mode == .commits
+            model.setMode(git && model.knownRepositories[MobileTabs.repositoryKey(tab)] != true ? .files : mode, for: tab)
+        }
         path = [.tab(tab)]
         sidebarHidden = hidden
     }
 
-    /// Keeps what `restoreSplit` brings back: the tab on screen (the detail column's, or the stack's top screen) and
-    /// the sidebar's state. Only on an iPad (the phone opens on the tab bar).
+    /// Keeps what `restoreSplit` brings back: the tab on screen (the detail column's, or the stack's top screen), its
+    /// mode and the sidebar's state. Only on an iPad (the phone opens on the tab bar).
     func rememberSplit() {
         guard sidebarHides, let memory else { return }
         let tab = split ? splitPath.tab : path.last?.tab
@@ -72,6 +99,8 @@ extension SpacesNavigator {
         } else if memory.object(forKey: Self.shownTabKey) != nil {
             memory.removeObject(forKey: Self.shownTabKey)
         }
+        let mode = tab.flatMap(model.tab).map { model.chosenMode($0).rawValue }
+        if memory.string(forKey: Self.shownModeKey) != mode { memory.set(mode, forKey: Self.shownModeKey) }
         if memory.bool(forKey: Self.sidebarHiddenKey) != sidebarHidden { memory.set(sidebarHidden, forKey: Self.sidebarHiddenKey) }
     }
 }

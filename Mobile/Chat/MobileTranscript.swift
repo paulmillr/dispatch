@@ -86,17 +86,26 @@ struct MobileTranscript {
 
 // MARK: What the thread shows
 
-/// A turn's steps and duration: the caption under its last agent bubble ("5 steps · 1m 26s", M4a) and the steps of
-/// message details (M5b). Steps are the turn's tool rows as the Mac groups them (ToolOrchestration.coalesced, a patch
-/// wrapper folded into its patch), so the count is what the Mac's tool groups hold; the duration is the turn's
-/// `ended - started`, unknown for a turn read without times.
+/// A turn's steps, duration and changes: the footnote under its last agent bubble ("5 steps in 1m 26s · 2 files +38 −4",
+/// S6) and the steps of message details (M5b). Steps are the turn's tool rows as the Mac groups them
+/// (ToolOrchestration.coalesced, a patch wrapper folded into its patch), so the count is what the Mac's tool groups
+/// hold; the duration is the turn's `ended - started`, unknown for a turn read without times; the files are the distinct
+/// paths its applied patches touched, with their added and removed lines summed (a declined, failed or interrupted
+/// patch changed nothing). The structured fields are what other surfaces (the watch, Spaces rows) show the same way.
 struct ChatTurnSummary: Equatable {
     var steps: [ChatItem]
     var duration: TimeInterval?
+    /// Distinct paths the turn's applied patches touched, in the order first touched.
+    var files: [String] = []
+    var additions = 0
+    var deletions = 0
+    /// Every step read a file (a read-only side question's turn): "Read 3 files".
+    var reads: [String]? = nil
 
     init(steps: [ChatItem], duration: TimeInterval?) {
         self.steps = steps
         self.duration = duration
+        tally()
     }
 
     init(_ turn: ChatTurn) {
@@ -104,15 +113,71 @@ struct ChatTurnSummary: Equatable {
         if let ended = turn.ended, turn.started.timeIntervalSince1970 > 0, ended >= turn.started {
             duration = ended.timeIntervalSince(turn.started)
         } else { duration = nil }
+        tally()
     }
 
-    /// "5 steps · 1m 26s"; nil when there is neither.
+    /// The whole seconds of `duration`.
+    var seconds: Int? { duration.map { Int($0) } }
+
+    private mutating func tally() {
+        var seen = Set<String>(), files: [String] = [], reads: [String] = [], allRead = !steps.isEmpty
+        for step in steps {
+            if let change = Self.change(of: step) {
+                additions += change.additions
+                deletions += change.deletions
+                for path in change.paths where seen.insert(path).inserted { files.append(path) }
+            }
+            if allRead, let path = Self.readPath(step) {
+                if !reads.contains(path) { reads.append(path) }
+            } else { allRead = false }
+        }
+        self.files = files
+        self.reads = allRead ? reads : nil
+    }
+
+    /// What an applied patch step changed: its files and line counts (ChatStep's rule); nil for any other step.
+    static func change(of item: ChatItem) -> (paths: [String], additions: Int, deletions: Int)? {
+        guard item.kind == .tool else { return nil }
+        let tool = ToolPresentation(item)
+        guard tool.isPatch || ChatPatch.isPatchOperation(item) || item.source?.tool?.kind == "patch" else { return nil }
+        if let state = item.patch?.state, [.interrupted, .failed, .declined].contains(state) { return nil }
+        return (tool.documents.map(\.path), tool.additions, tool.deletions)
+    }
+
+    /// The file a read step read; nil for any other step.
+    private static func readPath(_ item: ChatItem) -> String? {
+        if let read = item.source?.tool?.read { return read.path }
+        guard item.source?.tool?.kind == "read" || item.title == "Read" else { return nil }
+        return ToolPresentation(item).readCommand?.path
+            ?? (ToolPresentation.json(item.text) as? [String: Any])?["file_path"] as? String
+    }
+
+    /// "5 steps · 1m 26s"; nil when there is neither (message details' heading).
     var caption: String? {
         var parts: [String] = []
-        if !steps.isEmpty { parts.append("\(steps.count) \(steps.count == 1 ? "step" : "steps")") }
+        if !steps.isEmpty { parts.append(Self.count(steps.count, "step")) }
         if let duration { parts.append(Self.elapsed(duration)) }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
+
+    /// The footnote under the turn's last bubble (S6): "5 steps in 1m 26s · 2 files +38 −4", "Read 3 files · 12s" when
+    /// every step read a file, the duration alone without steps; nil when there is nothing to say.
+    var footnote: String? {
+        var parts: [String] = []
+        if let reads, !reads.isEmpty {
+            parts.append("Read " + Self.count(reads.count, "file"))
+            if let duration { parts.append(Self.elapsed(duration)) }
+        } else if !steps.isEmpty {
+            parts.append(Self.count(steps.count, "step") + (duration.map { " in " + Self.elapsed($0) } ?? ""))
+        } else if let duration {
+            parts.append(Self.elapsed(duration))
+        }
+        if !files.isEmpty { parts.append(Self.count(files.count, "file") + " +\(additions) −\(deletions)") }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// "1 step", "5 steps".
+    static func count(_ count: Int, _ noun: String) -> String { "\(count) \(noun)\(count == 1 ? "" : "s")" }
 
     /// The Mac's elapsed text (`ChatTranscript.elapsed`, shared).
     static func elapsed(_ interval: TimeInterval) -> String { ChatTranscript.elapsed(interval) }

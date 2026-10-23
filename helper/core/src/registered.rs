@@ -192,6 +192,7 @@ impl<T: Multiplexer> Multiplexer for Registered<T> {
         fn rename(node: Id, name: &str) -> ();
         fn focus(node: Id) -> ();
         fn r#move(node: Id, parent: Id, before: Option<Id>) -> ();
+        fn move_member(node: Id, parent: Id, before: Option<Id>, append: bool) -> ();
         fn split(node: Id, ratio: f64) -> ();
         fn zoom(terminal: Id, zoomed: bool) -> ();
         fn close(node: Id, how: Close) -> ();

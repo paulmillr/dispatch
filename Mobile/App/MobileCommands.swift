@@ -9,7 +9,8 @@ import UIKit
 enum MobileCommand: String, CaseIterable, Identifiable {
     case newTab, newSpace, newChat, newHost
     case renameTab, renameSpace, closeTab, closeSpace, detachSpace
-    case clearScreen, attach, toggleSidebar, switchSegment, increaseFontSize, decreaseFontSize, resetFontSize
+    case find, findNext, findPrevious, clearScreen, attach, toggleSidebar, switchSegment, switchFiles, reviewChanges, commits
+    case increaseFontSize, decreaseFontSize, resetFontSize
     case spaces, agents, previousTab, nextTab, nextAttention, previousAttention
     case settings, shortcuts
 
@@ -32,8 +33,9 @@ enum MobileCommand: String, CaseIterable, Identifiable {
     var menu: Menu {
         switch self {
         case .newTab, .newSpace, .newChat, .newHost, .renameTab, .renameSpace, .closeTab, .closeSpace, .detachSpace: .file
-        case .clearScreen, .attach: .edit
-        case .toggleSidebar, .switchSegment, .increaseFontSize, .decreaseFontSize, .resetFontSize: .view
+        case .find, .findNext, .findPrevious, .clearScreen, .attach: .edit
+        case .toggleSidebar, .switchSegment, .switchFiles, .reviewChanges, .commits, .increaseFontSize, .decreaseFontSize,
+             .resetFontSize: .view
         case .spaces, .agents, .previousTab, .nextTab, .nextAttention, .previousAttention: .navigate
         case .settings: .app
         case .shortcuts: .help
@@ -52,10 +54,16 @@ enum MobileCommand: String, CaseIterable, Identifiable {
         case .closeTab: "Close Tab"
         case .closeSpace: "Close Space…"
         case .detachSpace: "Detach Space"
+        case .find: "Find…"
+        case .findNext: "Find Next"
+        case .findPrevious: "Find Previous"
         case .clearScreen: "Clear Screen"
         case .attach: "Attach Files…"
         case .toggleSidebar: "Toggle Sidebar"
         case .switchSegment: "Switch Terminal / Chat"
+        case .switchFiles: "Switch Terminal / Files"
+        case .reviewChanges: "Review Changes"
+        case .commits: "Commits"
         case .increaseFontSize: "Increase Font Size"
         case .decreaseFontSize: "Decrease Font Size"
         case .resetFontSize: "Reset Font Size"
@@ -80,10 +88,16 @@ enum MobileCommand: String, CaseIterable, Identifiable {
         case .closeTab: "xmark"
         case .closeSpace: "xmark.square"
         case .detachSpace: "eject"
+        case .find: "magnifyingglass"
+        case .findNext: "chevron.up"
+        case .findPrevious: "chevron.down"
         case .clearScreen: "clear"
         case .attach: "paperclip"
         case .toggleSidebar: "sidebar.leading"
         case .switchSegment: "arrow.left.arrow.right"
+        case .switchFiles: FilesMode.files.symbol
+        case .reviewChanges: FilesMode.review.symbol
+        case .commits: FilesMode.commits.symbol
         case .increaseFontSize: "textformat.size.larger"
         case .decreaseFontSize: "textformat.size.smaller"
         case .resetFontSize: "textformat.size"
@@ -98,7 +112,7 @@ enum MobileCommand: String, CaseIterable, Identifiable {
         }
     }
 
-    /// The chord: the Mac's (⌘T, ⌘N, ⌘W, ⇧⌘W, ⌘K, ⌃⌘S, ⇧⌘C, ⌘+ ⌘- ⌘0, ⌘[ ⌘], ⌘J ⇧⌘J, ⌘, and ⌘/). New Chat takes ⌥⌘N, which the
+    /// The chord: the Mac's (⌘T, ⌘N, ⌘W, ⇧⌘W, ⌘F ⌘G ⇧⌘G, ⌘K, ⌃⌘S, ⇧⌘C ⇧⌘F ⇧⌘U ⇧⌘L, ⌘+ ⌘- ⌘0, ⌘[ ⌘], ⌘J ⇧⌘J, ⌘, and ⌘/). New Chat takes ⌥⌘N, which the
     /// Mac leaves free (its ⇧⌘N is New Local Space); ⌘1 and ⌘2 select the tab bar's sections, as iPad apps number
     /// their sidebar's; Attach Files… takes Mail's ⇧⌘A. Renames, Detach and New Host have none, as on the Mac.
     var shortcut: KeyboardShortcut? {
@@ -108,10 +122,16 @@ enum MobileCommand: String, CaseIterable, Identifiable {
         case .newChat: KeyboardShortcut("n", modifiers: [.command, .option])
         case .closeTab: KeyboardShortcut("w")
         case .closeSpace: KeyboardShortcut("w", modifiers: [.command, .shift])
+        case .find: KeyboardShortcut("f")
+        case .findNext: KeyboardShortcut("g")
+        case .findPrevious: KeyboardShortcut("g", modifiers: [.command, .shift])
         case .clearScreen: KeyboardShortcut("k")
         case .attach: KeyboardShortcut("a", modifiers: [.command, .shift])
         case .toggleSidebar: KeyboardShortcut("s", modifiers: [.command, .control])
         case .switchSegment: KeyboardShortcut("c", modifiers: [.command, .shift])
+        case .switchFiles: KeyboardShortcut("f", modifiers: [.command, .shift])
+        case .reviewChanges: KeyboardShortcut("u", modifiers: [.command, .shift])
+        case .commits: KeyboardShortcut("l", modifiers: [.command, .shift])
         case .increaseFontSize: KeyboardShortcut("+")
         case .decreaseFontSize: KeyboardShortcut("-")
         case .resetFontSize: KeyboardShortcut("0")
@@ -132,9 +152,14 @@ enum MobileCommand: String, CaseIterable, Identifiable {
 
     /// The action a terminal command sends down the responder chain: the focused terminal answers it
     /// (`TerminalHostView`'s `clearScreen(_:)`, `increaseSize(_:)`, `decreaseSize(_:)`, `resetFontSize(_:)`, which
-    /// size it, save the size where a pinch and Settings do, and refuse past the bounds); nil for the other commands.
+    /// size it, save the size where a pinch and Settings do, and refuse past the bounds; the standard `find(_:)`,
+    /// `findNext(_:)` and `findPrevious(_:)`, which the terminal and its search capsule's field answer); nil for the
+    /// other commands.
     var terminalAction: Selector? {
         switch self {
+        case .find: #selector(UIResponderStandardEditActions.find(_:))
+        case .findNext: #selector(UIResponderStandardEditActions.findNext(_:))
+        case .findPrevious: #selector(UIResponderStandardEditActions.findPrevious(_:))
         case .clearScreen: #selector(MobileTerminalActions.clearScreen(_:))
         case .increaseFontSize: #selector(UIResponderStandardEditActions.increaseSize(_:))
         case .decreaseFontSize: #selector(UIResponderStandardEditActions.decreaseSize(_:))
@@ -148,8 +173,9 @@ enum MobileCommand: String, CaseIterable, Identifiable {
         switch menu {
         case .app: [[.settings]]
         case .file: [[.newTab, .newSpace, .newChat, .newHost], [.renameTab, .renameSpace], [.closeTab, .closeSpace, .detachSpace]]
-        case .edit: [[.clearScreen], [.attach]]
-        case .view: [[.increaseFontSize, .decreaseFontSize, .resetFontSize], [.toggleSidebar, .switchSegment]]
+        case .edit: [[.find, .findNext, .findPrevious], [.clearScreen], [.attach]]
+        case .view: [[.increaseFontSize, .decreaseFontSize, .resetFontSize],
+                     [.toggleSidebar, .switchSegment, .switchFiles, .reviewChanges, .commits]]
         case .navigate: [[.spaces, .agents], [.nextAttention, .previousAttention], [.previousTab, .nextTab]]
         case .help: [[.shortcuts]]
         }
@@ -195,6 +221,9 @@ struct MobileCommands: Commands {
         CommandGroup(replacing: .importExport) { group(file[2]) }
         // Bold, italic and fonts are not something the app's text has.
         CommandGroup(replacing: .textFormatting) {}
+        // Find…, Find Next, Find Previous, Clear Screen and Attach Files… after the pasteboard's items. The built menu
+        // has no Find submenu of the system's (none of its ⌘F, ⌘G), but replacing the text-editing group, which stands
+        // for it, conflicts with `com.apple.menu.find` and UIKit drops the whole replacement: the items stay here.
         CommandGroup(after: .pasteboard) { items(.edit) }
         // In place of Customize Toolbar…: the app's toolbars are fixed.
         CommandGroup(replacing: .toolbar) { group(view[0]) }
@@ -257,7 +286,7 @@ private struct MobileCommandHost: ViewModifier {
                 Button("Terminate…", role: .destructive) { navigator.actions.close(.space(ref), .terminate) }
                 Button("Cancel", role: .cancel) {}
             } message: { _ in
-                Text(SpaceDetailsScreen.closeMessage)
+                Text(SpaceCloseCopy.message)
             }
             .sheet(isPresented: $shortcuts) {
                 MobileShortcutsSheet().tint(.dispatchPink)
@@ -282,7 +311,7 @@ private struct MobileCommandHost: ViewModifier {
         case .newHost: sheet = .newHost
         case .renameTab: if let tab = navigator.shownTab { navigator.actions.rename(.tab(tab)) }
         case .renameSpace: if let space = navigator.shownSpace { navigator.actions.rename(.space(space)) }
-        case .closeTab: if let tab = navigator.shownTab { navigator.actions.close(.tab(tab), .close) }
+        case .closeTab: if let tab = navigator.closableTab { navigator.actions.close(.tab(tab), .close) }
         case .closeSpace:
             // A Shell space (plain SSH) closes its shells, asking while one is live; no Detach or Terminate.
             if let ref = navigator.shownSpace, navigator.model.space(ref)?.kind == .plainShell {
@@ -293,12 +322,33 @@ private struct MobileCommandHost: ViewModifier {
         case .detachSpace: if let space = navigator.shownSpace { navigator.actions.close(.space(space), .detach) }
         case .toggleSidebar: navigator.toggleSidebar()
         case .switchSegment: if let tab = navigator.shownTab { TabSegment.requestSwitch(tab) }
+        // The Mac's View menu: Files toggles with Terminal; Review and Commits show their mode.
+        case .switchFiles:
+            if let ref = navigator.shownTab, let tab = navigator.model.tab(ref) {
+                if navigator.shownSegment(tab) == .files {
+                    TabSegment.requestSwitch(ref, to: .terminal)
+                } else {
+                    TabSegment.requestSwitch(ref, to: FilesMode.files)
+                }
+            }
+        case .reviewChanges: if let tab = navigator.shownTab { TabSegment.requestSwitch(tab, to: FilesMode.review) }
+        case .commits: if let tab = navigator.shownTab { TabSegment.requestSwitch(tab, to: FilesMode.commits) }
         // The chat composer on screen opens its file picker (when its helper takes attachments).
         case .attach: NotificationCenter.default.post(name: CodeComposer.attachRequested, object: nil)
-        case .clearScreen, .increaseFontSize, .decreaseFontSize, .resetFontSize:
+        // On an agent's Chat segment, its conversation's search (C1): Find opens it, Find Next and Previous step.
+        case .find where navigator.findsInChat, .findNext where navigator.findsInChat, .findPrevious where navigator.findsInChat:
+            ChatSearchBar.request(command == .find ? 0 : command == .findNext ? 1 : -1)
+        case .find, .findNext, .findPrevious, .clearScreen, .increaseFontSize, .decreaseFontSize, .resetFontSize:
             if let action = command.terminalAction { UIApplication.shared.sendAction(action, to: nil, from: nil, for: nil) }
         case .spaces, .agents:
-            section = command == .spaces ? .spaces : .agents
+            // The iPad's sidebar has no tab bar: Agents is its filter (All and Agents, `PadFilterMenu`), and the tab
+            // bar stays on Spaces for a window that stacks again.
+            if navigator.sidebarHides, navigator.split {
+                navigator.model.query.filter = command == .spaces ? .all : .agents
+                section = .spaces
+            } else {
+                section = command == .spaces ? .spaces : .agents
+            }
             navigator.showRoot()
         case .previousTab: navigator.stepTab(-1)
         case .nextTab: navigator.stepTab(1)

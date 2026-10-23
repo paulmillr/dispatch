@@ -345,18 +345,23 @@ final class AttentionCoordinator: NSObject, UNUserNotificationCenterDelegate {
     }
 }
 
-/// Nautical's ship's bell: two strikes, synthesized once as a short WAV (a struck bell's inharmonic partials, each
-/// decaying at its own rate), so nothing ships as a sound file.
+/// Nautical's ship's bell: two strikes of `ShipsBellSound`.
 @MainActor enum ShipsBell {
-    private static let sound: NSSound? = NSSound(data: wav())
+    private static let sound: NSSound? = NSSound(data: ShipsBellSound.wav())
 
     static func strike() {
         guard let sound else { return }
         sound.stop()
         sound.play()
     }
+}
+#endif
 
-    nonisolated static func wav(rate: Int = 44_100) -> Data {
+/// The ship's bell's sound: two strikes, synthesized as a short WAV (a struck bell's inharmonic partials, each decaying
+/// at its own rate), so nothing ships as a sound file. The Mac strikes it for Nautical (`ShipsBell`); the iPhone writes
+/// it to `Library/Sounds` as its notifications' Ship's bell.
+enum ShipsBellSound {
+    static func wav(rate: Int = 44_100) -> Data {
         let fundamental = 880.0
         // Ratio to the fundamental, level, decay time in seconds.
         let partials: [(Double, Double, Double)] = [(0.5, 0.35, 1.8), (1, 1, 1.4), (2.0, 0.45, 0.9), (2.76, 0.3, 0.6),
@@ -387,4 +392,3 @@ final class AttentionCoordinator: NSObject, UNUserNotificationCenterDelegate {
         return data
     }
 }
-#endif

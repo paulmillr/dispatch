@@ -80,6 +80,9 @@ final class TerminalHostView: UIView {
     var hasSize: Bool { bounds.width > 0 && bounds.height > 0 && window != nil }
     /// A pinch changed the font size (to remember it).
     var onFontSize: ((Double) -> Void)?
+    /// The search's answers (`TerminalSearch.apply`) and the Find commands (⌘F, ⌘G, ⇧⌘G) sent to this terminal.
+    var onSearchEvent: ((TerminalSession.Event) -> Void)?
+    var onFind: ((TerminalFindCommand) -> Void)?
     var pinchBase: Double?
     private var blinkTimer: Timer?
 
@@ -92,6 +95,11 @@ final class TerminalHostView: UIView {
         updateBackground()
         presence.onViewEvent = { [weak self] event in self?.handle(event) }
         presence.relayout = { [weak self] in self?.setNeedsLayout() }
+        // A colour scheme from Settings: the background around the grid and the handles follow at once.
+        presence.restyled = { [weak self] in
+            self?.updateBackground()
+            self?.updateSelectionHandles()
+        }
         installGestures()
         installKeyboardTracker()
         #if DEBUG
@@ -105,11 +113,10 @@ final class TerminalHostView: UIView {
             inputView = UIView(frame: .zero)
         }
         #endif
-        // The iPad keyboard's shortcut bar would offer Undo, Redo and Paste, which a terminal has no use for or has
-        // in its edit menu and ⌘V; the capsule carries the keys the keyboard lacks. Empty, the bar goes and gives the
-        // rows back (with a hardware keyboard, only the system's minimal bar remains). No effect on an iPhone.
-        inputAssistantItem.leadingBarButtonGroups = []
-        inputAssistantItem.trailingBarButtonGroups = []
+        // The keyboard's shortcut bar is emptied when the terminal first takes the keys (`becomeFirstResponder`), not
+        // here: the first `inputAssistantItem` of a scene makes UIKit's text effects window, which asks the hosting
+        // controller for its status bar, re-entering SwiftUI's graph in the middle of the layout pass that builds this
+        // view (an attribute cycle at full CPU, when a terminal was the window's first text input on an iPad).
         accessibilityLabel = "Terminal"
         accessibilityTraits = .allowsDirectInteraction
     }
@@ -241,8 +248,17 @@ final class TerminalHostView: UIView {
         case .background(let r, let g, let b):
             backgroundColor = UIColor(red: CGFloat(r) / 255, green: CGFloat(g) / 255, blue: CGFloat(b) / 255, alpha: 1)
         case .bell: UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        case .searchTotal, .searchSelected, .endSearch: onSearchEvent?(event)
         default: break
         }
+    }
+
+    /// A Ghostty binding action on the surface (`search:theme.ts`, `navigate_search:next`, `end_search`), its
+    /// messages taken at once: what the surface tells the host (the search's total) arrives before this returns.
+    @discardableResult func bindingAction(_ action: String) -> Bool {
+        let performed = session.locked { session.surface.bindingAction(Array(action.utf8)) }
+        session.pump()
+        return performed
     }
 
     /// The viewport's text (tests, accessibility).
@@ -253,4 +269,9 @@ final class TerminalHostView: UIView {
         get { visibleText() }
         set {}
     }
+}
+
+/// What a Find command asks of a terminal's search (the menu bar's Find…, Find Next, Find Previous).
+enum TerminalFindCommand: Equatable {
+    case open, next, previous
 }

@@ -326,7 +326,8 @@ struct WatchTab: Codable, Equatable, Sendable, Identifiable {
     /// The agent pane's topology key (`MobileTab.agentPane.key`): tapping the tab opens this conversation's thread.
     var conversation: String?
     var urgency: WatchUrgency?
-    /// Line two of the row (`MobileComposition.status`: "opus-5.5 · needs you"), clipped to `WatchLimits.line`.
+    /// Line two of the row (`TabsTabLine.line` of `MobileComposition.status`'s words: "Editing Sidebar.tsx", "Allow cargo
+    /// test --workspace?", the last message; never a ticking time), clipped to `WatchLimits.line`.
     var status: String?
     /// Its time (`MobileTabs.activity(of:)`).
     var activity: Date?

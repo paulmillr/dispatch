@@ -154,7 +154,9 @@ def main():
     command = ['xcodebuild', '-project', 'Dispatch.xcodeproj', '-scheme', scheme, '-configuration', 'Debug',
                '-destination', f'platform={simulator_platform} Simulator,id={udid}',
                # ./run.sh --ios's DerivedData: not the Mac's build/, whose build database one build at a time holds.
-               '-derivedDataPath', args.derived_data, 'test']
+               '-derivedDataPath', args.derived_data,
+               # A failure otherwise has xcodebuild gather a simulator sysdiagnose, which waits out its 600 s timeout.
+               '-collect-test-diagnostics', 'never', 'test']
     command += [f'-only-testing:{selector}' for selector in xctest]
     started = time.monotonic()
     with log.open('w') as stream:

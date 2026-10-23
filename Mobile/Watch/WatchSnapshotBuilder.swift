@@ -234,7 +234,7 @@ struct WatchSnapshotBuilder {
                                     program: tab.program, folder: workspace.host.abbreviate(tab.cwd), chat: tab.isChat,
                                     agent: pane.flatMap { agent(ChatConversationKey(host: workspace.id, node: $0.key), binding: $0.agent) },
                                     conversation: pane?.key, urgency: model.urgency(of: tab).map(WatchUrgency.init),
-                                    status: TabsTabRow.line(tab, label: label, status: model.status), activity: model.activity(of: tab))
+                                    status: TabsTabLine.line(tab, label: label, status: model.status), activity: model.activity(of: tab))
                 }
             }
         }

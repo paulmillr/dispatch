@@ -353,9 +353,9 @@ extension TabsWorkspaceTests {
         XCTAssertTrue(workspace.tabs.first === first, "the same row object")
         XCTAssertEqual(first.shell, .ended(3))
         XCTAssertEqual(space.tabs.count, 2, "an ended shell stays")
-        XCTAssertEqual(TabsTabRow.line(first, label: model.label(of: first, host: workspace.host), status: model.status),
+        XCTAssertEqual(TabsTabLine.line(first, label: model.label(of: first, host: workspace.host), status: model.status),
                        "Exited with status 3")
-        XCTAssertNil(TabsTabRow.line(second, label: "Shell 2", status: model.status), "a live shell has no line")
+        XCTAssertNil(TabsTabLine.line(second, label: "Shell 2", status: model.status), "a live shell has no line")
         XCTAssertNil(model.urgency(of: first))
         model.closeShell(second.ref)
         XCTAssertEqual(space.tabs.map(\.ref), [first.ref])

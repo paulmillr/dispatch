@@ -1,5 +1,7 @@
 #if DEBUG
+import Dictation
 import SwiftUI
+import UIKit
 
 /// Debug builds only: the mockup's thread states (M3a, M3b, M4a, M4b, M4c, M5a, M5b, M5c, M5d, M5e, M5f, M9a) driven through the
 /// real `MobileChatSession` by an in-process helper peer on two pipes, which replays the real helper's recorded pages
@@ -21,6 +23,47 @@ enum ChatDemo {
         guard let data = try? Data(contentsOf: url),
               let pages = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
         return pages.flatMap { $0["records"] as? [[String: Any]] ?? [] }
+    }
+
+    /// C3's side conversation and its question.
+    static let side = "00000000-0000-4000-8000-0000000002b1"
+    static let sideQuestion = "Which handler runs first for a retried invoice.paid event?"
+
+    /// The goal screens talk to Codex (goals are Codex's).
+    static func codex(_ screen: String) -> Bool { ["C4", "C4b"].contains(screen) }
+
+    /// The commands the real harnesses list (helper/harnesses/*/src/harness.rs `commands`).
+    static func commands(key: String) -> [String] {
+        key == "codex"
+            ? ["/btw", "/side", "/fast", "/compact", "/rename", "/init", "/review", "/stop", "/copy", "/model", "/plan", "/goal",
+               "/clear", "/new", "/status", "/terminal", "/hooks", "/permissions", "/resume", "/exit", "/quit"]
+            : ["/btw", "/side", "/terminal", "/model", "/effort", "/init", "/clear", "/compact", "/resume", "/help", "/exit", "/quit"]
+    }
+
+    /// A question and its answer as one ended turn.
+    static func exchange(_ turn: String, question: String, answer: String) -> [[String: Any]] {
+        let base: Int64 = ["p2b": 946_719_300_000, "p3": 946_719_400_000][turn] ?? 946_719_500_000
+        func record(_ id: String, _ kind: String, text: String = "", time: Int64) -> [String: Any] {
+            ["id": id, "turn": turn, "kind": kind, "text": text, "title": "", "output": "", "blocks": [], "completed": true,
+             "exit_code": NSNull(), "patch": NSNull(), "documents": [], "tool": NSNull(), "inline_reasoning": false,
+             "time_ms": time, "position": NSNull()]
+        }
+        return [record(turn + ":started", "turn_started", time: base), record(turn + ":user", "user", text: question, time: base),
+                record(turn + ":answer", "assistant", text: answer, time: base + 9_000), record(turn + ":ended", "turn_ended", time: base + 9_000)]
+    }
+
+    /// The state a screen opens with: C4's goal, subagents and context.
+    static func state(screen: String, busy: Bool) -> [String: Any] {
+        var state = state(busy: busy)
+        if codex(screen) {
+            state["model"] = "gpt-5.5"
+            state["goal"] = ["objective": "All webhook routes idempotent, tests green", "status": "active",
+                             "tokensUsed": 48_210, "timeUsedSeconds": 754, "tokenBudget": 200_000]
+            state["usage"] = ["info": ["total_token_usage": ["input_tokens": 41_000, "output_tokens": 7_210],
+                                       "last_token_usage": ["total_tokens": 158_000], "model_context_window": 250_000]]
+            state["agents"] = ["explorer", "worker"]
+        }
+        return state
     }
 
     static func state(busy: Bool) -> [String: Any] {
@@ -85,7 +128,16 @@ enum ChatDemo {
         private func handle(_ id: UInt64, _ method: String, _ params: [String: Any]) {
             let terminal = params["terminal"] as? UInt64 ?? 11
             switch method {
+            case "chat.open" where params["session"] as? String == ChatDemo.side: openSide(id, terminal: terminal)
             case "chat.open": open(id, terminal: terminal)
+            // C1's earlier page never comes: the search says it is still looking.
+            case "chat.page" where params["earlier"] is String: return
+            case "chat.side":
+                var binding = ChatDemo.binding
+                binding["session"] = ChatDemo.side
+                respond(id, binding)
+            case "chat.command":
+                respond(id, ["kind": "sent", "sent": ["written": true, "may_have_sent": true, "reason": NSNull()]])
             case "chat.state":
                 // app works, e2e waits for an approval; docs and curves have results this phone has not seen.
                 var state = ChatDemo.state(busy: terminal == 11)
@@ -154,8 +206,22 @@ enum ChatDemo {
                     return record
                 }
             }
-            notify(id, "chat.history", history(terminal: terminal, records: [], state: ChatDemo.state(busy: busy), pending: true))
+            if screen == "C6" {
+                // C6: a longer thread read from its top, two more messages arriving while it is scrolled up.
+                records += ChatDemo.exchange("p2b", question: "Does the guard survive a deploy?",
+                                             answer: "Yes: the seen event ids live in the idempotency_keys table, not in memory, so a restart keeps them.")
+                records += ChatDemo.exchange("p3", question: "What about the Stripe CLI’s replay command, does it reuse event ids?",
+                                             answer: "Yes, stripe events resend keeps the original id, so the guard treats it as a retry and skips it. That is what we want for replays of real events.")
+            }
+            notify(id, "chat.history", history(terminal: terminal, records: [], state: ChatDemo.state(screen: screen, busy: busy), pending: true))
             notify(id, "chat.history", history(terminal: terminal, records: records, state: nil, pending: false))
+            if screen == "C6" {
+                DispatchQueue.global().asyncAfter(deadline: .now() + 2.5) { [self] in
+                    notify(id, "chat.records", ["terminal": terminal, "session": ChatDemo.conversation, "replace": NSNull(), "earlier": NSNull(),
+                                                "records": ChatDemo.exchange("p4", question: "And the dashboard’s Resend button?",
+                                                                             answer: "That one creates a new event with a new id, so it is processed again. Worth a note in the runbook.")])
+                }
+            }
             if screen == "M4b" {
                 let operation = #"{"command":"playwright test --headed tests/checkout.spec.ts","description":"Can I run this? It opens a browser on mba2; the flake only reproduces headed."}"#
                 notify(id, "interaction.opened", ["terminal": terminal, "session": ChatDemo.conversation, "interaction": [
@@ -164,6 +230,25 @@ enum ChatDemo {
                                    "options": ["Allow", "Deny", "Terminal", "Allow for this session"].map { ["id": $0, "label": $0, "detail": NSNull()] },
                                    "blocks": [["kind": "code", "language": "json", "text": operation]]]]]])
             }
+        }
+
+        /// C3's side conversation: the question, three reads and the answer, 12 s.
+        private func openSide(_ id: UInt64, terminal: UInt64) {
+            let reads = Set(["tool-c1", "tool-d1", "tool-d2"])
+            let base: Int64 = 946_719_300_000
+            var records: [[String: Any]] = [record("s:started", "turn_started", turn: "s1", time: base),
+                                            record("s:user", "user", turn: "s1", text: ChatDemo.sideQuestion, time: base)]
+            for (index, var tool) in ChatDemo.records().filter({ reads.contains($0["id"] as? String ?? "") }).enumerated() {
+                tool["turn"] = "s1"
+                tool["time_ms"] = base + Int64(index + 1) * 1_000
+                records.append(tool)
+            }
+            records.append(record("s:answer", "assistant", turn: "s1", text: "The route handler in src/routes/invoices.ts runs before the shared middleware, because it is mounted on the router directly. The guard sees the event only on the second pass.", time: base + 12_000))
+            records.append(record("s:ended", "turn_ended", turn: "s1", time: base + 12_000))
+            notify(id, "chat.history", ["terminal": terminal, "binding": ChatDemo.binding, "session": ChatDemo.side, "label": "claude",
+                                        "key": "claude", "commands": [], "native_queue": false, "state": ChatDemo.state(busy: false),
+                                        "state_error": NSNull(), "records": records, "earlier": NSNull(), "history_error": NSNull(),
+                                        "history_pending": false, "capabilities": ["state", "history"]])
         }
 
         private func queued() -> [[String: Any]] {
@@ -184,9 +269,13 @@ enum ChatDemo {
         }
 
         private func history(terminal: UInt64, records: [[String: Any]], state: [String: Any]?, pending: Bool) -> [String: Any] {
-            ["terminal": terminal, "binding": ChatDemo.binding, "session": ChatDemo.conversation, "label": "claude", "key": "claude",
-             "commands": [], "native_queue": false, "state": state ?? NSNull(), "state_error": NSNull(), "records": records,
-             "earlier": NSNull(), "history_error": NSNull(), "history_pending": pending, "capabilities": ["state", "history"]]
+            let key = ChatDemo.codex(screen) ? "codex" : "claude"
+            return ["terminal": terminal, "binding": ChatDemo.binding, "session": ChatDemo.conversation, "label": key, "key": key,
+                    "commands": ChatDemo.commands(key: key), "native_queue": false, "state": state ?? NSNull(),
+                    "state_error": NSNull(), "records": records,
+                    // C1: an earlier page that is still loading ("Searching earlier messages…").
+                    "earlier": screen == "C1" && !pending ? "c1-earlier" : NSNull(), "history_error": NSNull(),
+                    "history_pending": pending, "capabilities": ["state", "history"]]
         }
 
         private func respond(_ id: UInt64, _ value: Any) {
@@ -203,6 +292,10 @@ enum ChatDemo {
     /// The demo's model: one host "mba2" with five agent tabs in the space "app".
     @MainActor static func conversations(screen: String) -> (ChatConversations, Peer) {
         let peer = Peer(screen: screen)
+        if screen.hasPrefix("C5") {
+            MobileVoiceConversation.shared = MobileVoiceConversation(
+                listener: DemoListener(words: screen == "C5" ? "and add a test for the retry path" : nil), speaker: DemoSpeaker())
+        }
         let memory = ChatOutbox(store: ChatOutboxMemoryStore(screen == "M4c" ? [
             ChatOutboxItem(key: ChatConversationKey(host: host, node: "tmux:s:$0:%0"), conversation: conversation,
                            text: "Also cover invoice.paid — it has a separate handler.")] : []))
@@ -295,23 +388,75 @@ struct ChatDemoRoot: View {
             .toolbar(.hidden, for: .tabBar)
         default:
             let session = conversations.session(for: key)
+            let redesign = screen.hasPrefix("C") || screen == "S6"
             NavigationStack {
                 VStack(spacing: 0) {
-                    ChatDemoHeader(session: session, needsYou: 1)
-                    ChatThreadView(session: session, space: "app", tab: "claude", directory: "/Users/paul/src/app",
-                                   homes: HomePath(account: "/Users/paul"), focusOnAppear: ["M3b", "M5e"].contains(screen),
-                                   memory: ChatDemo.memory, expandSteps: screen == "M5f", expandQueue: screen == "M5c")
+                    ChatDemoHeader(session: session, needsYou: redesign ? 2 : 1, title: redesign ? "Billing webhook retries" : "app")
+                    ChatThreadView(session: session, space: "app", tab: redesign ? "Billing webhook retries" : "claude",
+                                   directory: "/Users/alex/src/app",
+                                   homes: HomePath(account: "/Users/alex"), focusOnAppear: ["M3b", "M5e"].contains(screen),
+                                   memory: ChatDemo.memory, expandSteps: screen == "M5f", expandQueue: screen == "M5c",
+                                   startsAtTop: screen == "C6")
                 }
                 .toolbar(.hidden, for: .navigationBar)
-                // M5e: M4a's thread with the code draft in the composer, once the conversation is verified.
+                // M5e: M4a's thread with the code draft in the composer; the C screens' state, once the conversation is
+                // verified.
                 .task {
-                    guard screen == "M5e" else { return }
                     for _ in 0..<100 where session.transcript.isEmpty { try? await Task.sleep(for: .milliseconds(50)) }
-                    session.drafts.edit(text: CodeDemo.draft)
+                    ChatDemo.prepare(screen, session: session)
                 }
             }
             .toolbar(.hidden, for: .tabBar)
         }
+    }
+}
+
+extension ChatDemo {
+    /// Puts a screen's thread in its state: M5e's code draft, C1's search, C2's "/", C3's side question, C4b's sheet,
+    /// C5's conversation mode (with the scripted voice `conversations(screen:)` installed).
+    @MainActor static func prepare(_ screen: String, session: MobileChatSession) {
+        switch screen {
+        case "M5e": session.drafts.edit(text: CodeDemo.draft)
+        case "C1":
+            session.search.open()
+            session.search.query = "guard"
+            // As the mockup draws it: the results without the keyboard.
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(500))
+                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            }
+        case "C2": session.drafts.edit(text: "/")
+        case "C3": session.openSide(.btw, question: sideQuestion)
+        case "C4b": session.managingGoal = true
+        case "C5": MobileVoiceConversation.shared.start(session)
+        case "C5r":
+            MobileVoiceConversation.shared.start(session)
+            MobileVoiceConversation.shared.readLast()
+        default: break
+        }
+    }
+
+    /// Conversation mode without audio: it hears C5's words and reads until stopped.
+    @MainActor final class DemoListener: VoiceListener {
+        var level: Float = 0.6
+        var error: String? { nil }
+        let words: String?
+        init(words: String?) { self.words = words }
+        func start(update: @escaping @MainActor (DictationUpdate) -> Void) {
+            guard let words else { return }
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(300))
+                update(.heard(words))
+            }
+        }
+        func mute(_ muted: Bool) { level = muted ? 0 : 0.6 }
+        func stop() {}
+    }
+
+    @MainActor final class DemoSpeaker: VoiceSpeaker {
+        private var finished: (@MainActor () -> Void)?
+        func speak(_ text: String, finished: @escaping @MainActor () -> Void) { self.finished = finished }
+        func stop() { let finished = finished; self.finished = nil; finished?() }
     }
 }
 
@@ -332,6 +477,7 @@ extension ChatDemo {
 struct ChatDemoHeader: View {
     let session: MobileChatSession
     var needsYou = 0
+    var title = "app"
 
     var body: some View {
         VStack(spacing: 0) {
@@ -345,7 +491,7 @@ struct ChatDemoHeader: View {
                 .frame(height: 44)
                 .glassEffect(.regular, in: Capsule())
                 VStack(alignment: .leading, spacing: 0) {
-                    Text("app").font(.headline)
+                    Text(title).font(.headline)
                     (Text(session.hostName).foregroundStyle(TabsSample.mba2.tint) + Text(" · ")
                         + Text("~/src/app").font(.caption2.monospaced()))
                         .font(.caption)
@@ -353,21 +499,20 @@ struct ChatDemoHeader: View {
                 }
                 .padding(.leading, 4)
                 Spacer()
-                Image(systemName: "apple.logo")
-                    .foregroundStyle(TabsSample.mba2.tint)
-                    .frame(width: 44, height: 44)
-                    .glassEffect(.regular, in: Circle())
+                ChatHeaderControls(session: session) {
+                    Image(systemName: "apple.logo")
+                        .foregroundStyle(TabsSample.mba2.tint)
+                        .frame(width: 44, height: 44)
+                        .glassEffect(.regular, in: Circle())
+                }
             }
             .padding(.horizontal, 12)
             .padding(.bottom, 8)
             // As Tabs' header in the navigation bar: it grows to xxxLarge.
             .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-            Picker("", selection: .constant(1)) {
-                Text("Terminal").tag(0)
-                Text("Chat").tag(1)
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, 16)
+            // Tabs' capsule (the mockups' C screens show the Files segment with the review count).
+            TabSegmentCapsule(selection: .constant(.chat), segments: TabSegment.allCases, badge: 3)
+                .padding(.horizontal, 16)
             .padding(.top, 4)
             .padding(.bottom, 10)
         }

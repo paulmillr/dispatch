@@ -251,8 +251,17 @@ struct ChatConversation: Identifiable, Equatable {
 /// `PaneUrgency` (Dispatch/Attention.swift) from the agent's state, open requests and the phone's seen markers. Owns
 /// the open `MobileChatSession`s so a thread keeps its state while the user moves between tabs.
 @MainActor @Observable final class ChatConversations {
-    private(set) var hosts: [UUID: ChatHostSnapshot] = [:]
-    private(set) var conversations: [ChatConversation] = []
+    private(set) var hosts: [UUID: ChatHostSnapshot] = [:] {
+        didSet { terminalKeys = hosts.mapValues { host in
+            Dictionary((host.topology?.nodes ?? []).map { ($0.id, $0.key) }, uniquingKeysWith: { first, _ in first })
+        } }
+    }
+    private(set) var conversations: [ChatConversation] = [] {
+        didSet { rowIndex = Dictionary(conversations.enumerated().map { ($1.key, $0) }, uniquingKeysWith: { first, _ in first }) }
+    }
+    /// The rows by key and each host's terminals' keys by node id: Spaces asks for them per row on every list update.
+    @ObservationIgnored private var rowIndex: [ChatConversationKey: Int] = [:]
+    @ObservationIgnored private var terminalKeys: [UUID: [UInt64: String]] = [:]
     @ObservationIgnored private var summaries: [ChatConversationKey: ChatConversationSummary] = [:]
     @ObservationIgnored private(set) var sessions: [ChatConversationKey: MobileChatSession] = [:]
     @ObservationIgnored private var probing: Set<UUID> = []
@@ -260,6 +269,10 @@ struct ChatConversation: Identifiable, Equatable {
     @ObservationIgnored private var cached: Set<ChatConversationKey> = []
     /// Called after the rows changed (the composition keeps the live ones in the cache).
     @ObservationIgnored var rowsChanged: (() -> Void)?
+    /// A live row's summary changed, or a live row went away while its host stayed connected (nil `current`): the
+    /// composition's notifications while the app is open (`AgentAlerts.arrived`). Rows restored from the cache or
+    /// coming back with a connection are not arrivals.
+    @ObservationIgnored var arrived: ((_ previous: ChatConversation, _ current: ChatConversation?) -> Void)?
     @ObservationIgnored let presence: (any ChatTerminalPresence)?
     let markers: ChatMarkers
     let outbox: ChatOutbox
@@ -283,8 +296,16 @@ struct ChatConversation: Identifiable, Equatable {
 
     var visible: [ChatConversation] { unreadOnly ? conversations.filter { $0.dot != nil } : conversations }
 
-    /// The back pill's count (M4a): conversations waiting for the user, across hosts, muted ones included.
-    var needsYouCount: Int { conversations.filter { $0.urgency == .waiting }.count }
+    /// Conversations waiting for the user, across hosts, muted ones included, on the hosts reached now (live rows): the
+    /// one count for the back pill (M4a), Spaces' Needs you chip and filter, the app's badge (`AgentAlerts.waiting` of the
+    /// live rows) and the watch's.
+    var needsYouCount: Int { conversations.filter { !$0.stale && $0.urgency == .waiting }.count }
+
+    /// A row by its key.
+    func conversation(_ key: ChatConversationKey) -> ChatConversation? {
+        guard let index = rowIndex[key], conversations.indices.contains(index) else { return nil }
+        return conversations[index]
+    }
 
     /// The dot for a tab's terminal (Tabs) and the most urgent dot on a host (Hosts).
     func dot(host: UUID, terminal: UInt64) -> MobileRowDot? {
@@ -295,7 +316,9 @@ struct ChatConversation: Identifiable, Equatable {
 
     /// The conversation key of a terminal in a host's current topology.
     func key(host: UUID, terminal: UInt64) -> ChatConversationKey? {
-        hosts[host]?.topology?.nodes.first { $0.id == terminal }.map { ChatConversationKey(host: host, node: $0.key) }
+        // Read `hosts` so a view asking follows the topology, then the index built from it.
+        guard hosts[host] != nil, let node = terminalKeys[host]?[terminal] else { return nil }
+        return ChatConversationKey(host: host, node: node)
     }
 
     func dot(host: UUID) -> MobileRowDot? {
@@ -458,8 +481,26 @@ struct ChatConversation: Identifiable, Equatable {
                 > ($1.summary.lastActivity ?? .distantPast, $1.hostName, $1.key.node)
         }
         if rows != conversations {
+            let previous = conversations
             conversations = rows
+            if let arrived { Self.arrivals(from: previous, to: rows, hosts: hosts).forEach { arrived($0.0, $0.1) } }
             rowsChanged?()
+        }
+    }
+
+    /// The live rows that changed between two builds: a summary that differs, or a row gone from a host that is still
+    /// connected and live. A stale row on either side is not compared.
+    static func arrivals(from previous: [ChatConversation], to rows: [ChatConversation],
+                         hosts: [UUID: ChatHostSnapshot]) -> [(ChatConversation, ChatConversation?)] {
+        let current = Dictionary(rows.map { ($0.key, $0) }, uniquingKeysWith: { first, _ in first })
+        return previous.filter { !$0.stale }.compactMap { before in
+            if let now = current[before.key] {
+                return !now.stale && now.summary != before.summary ? (before, now) : nil
+            }
+            // Gone means its agent left the terminal (or the terminal closed), not a detached tab.
+            guard let host = hosts[before.key.host], host.link == .connected, host.live,
+                  host.topology?.nodes.contains(where: { $0.key == before.key.node && $0.agent != nil }) == false else { return nil }
+            return (before, nil)
         }
     }
 

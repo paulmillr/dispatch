@@ -321,7 +321,16 @@ extension TerminalHostView: @MainActor UIEditMenuInteractionDelegate, @MainActor
         endHandle.isHidden = ends.end == nil
     }
 
-    private func showEditMenu() {
+    /// Select all from the key bar's menu: the whole screen and history selected with handles, and the edit menu
+    /// (Copy) over it, as after a long press.
+    func selectAllWithMenu() {
+        pointerSelection = false
+        selectAll(nil)
+        updateSelectionHandles()
+        showEditMenu()
+    }
+
+    func showEditMenu() {
         guard let ends = session.locked({ session.surface.touchSelection }), let start = ends.start ?? ends.end else { return }
         let r = rect(of: start)
         editMenu?.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: CGPoint(x: r.midX, y: r.minY)))
@@ -383,7 +392,8 @@ final class TerminalSelectionHandle: UIView {
     init(end: Bool) {
         self.end = end
         super.init(frame: CGRect(x: 0, y: 0, width: Self.touch, height: Self.touch))
-        let tint = UIColor(named: "AccentColor") ?? .systemPink
+        // The app's tint, the theme's when one is chosen (resolved by the window's trait as it draws).
+        let tint = UIColor.themed("AccentColor", \.accent)
         stem.backgroundColor = tint
         knob.backgroundColor = tint
         knob.layer.cornerRadius = 5

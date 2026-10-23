@@ -51,6 +51,10 @@ final class TerminalPresence {
     /// The attachment ended: the process exited or the attachment failed.
     private(set) var ended: TerminalFeedEvent?
     private(set) var attached = false
+    /// The conversations sending through this terminal now (`chat.send`, a queue start, an answer: the helper verifies
+    /// them against the screen this presence publishes). Reset terminal waits for them.
+    private(set) var chatSends: Set<AnyHashable> = []
+    var chatSending: Bool { !chatSends.isEmpty }
     /// The grid the screen is laid out at when it is not the view's: tmux keeps one size per window for every client,
     /// so while another client (the Mac) holds the window at its size, output comes for that grid. As the Mac's
     /// `tmuxGrid`, the view then draws it at the same font size from the top left, and keeps asking for its own.
@@ -136,9 +140,28 @@ final class TerminalPresence {
             guard queued.withLock({ queued in defer { queued = true }; return !queued }) else { return }
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.schedulePublication() } }
         }
+        // Settings' terminal style reaches every open terminal at once (its font size stays: a pinch made it).
+        styleObserver = NotificationCenter.default.addObserver(forName: TerminalStyle.changed, object: nil, queue: .main) { [weak self] note in
+            let style = TerminalStyle(note.object as? UserDefaults ?? .standard)
+            MainActor.assumeIsolated { self?.restyle(style) }
+        }
+    }
+
+    @ObservationIgnored private var styleObserver: (any NSObjectProtocol)?
+    /// The view showing this presence redraws what it draws itself (its background, the selection handles) after a
+    /// restyle (`TerminalHostView`).
+    @ObservationIgnored var restyled: (() -> Void)?
+
+    /// Settings changed the terminal style: this terminal draws with it, at its own font size, and its view follows.
+    func restyle(_ style: TerminalStyle) {
+        let next = style.applied(to: configuration)
+        guard next != configuration else { return }
+        configure(next)
+        restyled?()
     }
 
     isolated deinit {
+        if let styleObserver { NotificationCenter.default.removeObserver(styleObserver) }
         settling?.cancel()
         resizing?.cancel()
         consumer?.cancel()
@@ -283,6 +306,27 @@ final class TerminalPresence {
         inbox.clear()
         publication.pending?.cancel()
         publication = Publication()
+    }
+
+    /// Reset terminal (the key bar's menu): a new attachment of the same feed, whose first output repaints a terminal
+    /// fully reset (RIS) from the server's screen and history, as a reattach does. A feed that ends on detach (a plain
+    /// shell), or a presence not attached, resets the emulator alone (Ghostty's `reset`): the program's next output
+    /// draws on the fresh terminal.
+    /// A send in flight (`chatSending`) refuses it: the reattach would drop the screen publication the helper is
+    /// verifying the send against.
+    func resetTerminal() {
+        guard !chatSending else { return }
+        guard attached, !feed.endsOnDetach else {
+            session.fullReset()
+            return
+        }
+        // A reattach of the same feed: the server's history position starts over (herdr reports it again).
+        reattach(feed)
+    }
+
+    /// A conversation (`token`) started or finished sending through this terminal.
+    func chat(_ token: AnyHashable, sending: Bool) {
+        if sending { chatSends.insert(token) } else { chatSends.remove(token) }
     }
 
     /// The same terminal through a new feed: node ids are per helper process, so after a reconnect Tabs finds the

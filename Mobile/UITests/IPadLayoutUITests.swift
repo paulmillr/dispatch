@@ -17,9 +17,10 @@ final class IPadLayoutUITests: XCTestCase {
     }
 
     /// The sample hosts with a chat tab open (in the split, the detail column).
-    private func launch(_ arguments: [String] = ["-DispatchTabsShow", "tab:herdr:app:1"]) {
+    private func launch(_ arguments: [String] = ["-DispatchTabsShow", "tab:herdr:app:1"], hardwareKeyboard: Bool = false) {
         app = XCUIApplication()
-        app.launchArguments = ["-DispatchTabsSample", "YES", "-appearance", "dark", "-DispatchHardwareKeyboard", "NO"] + arguments
+        app.launchArguments = ["-DispatchTabsSample", "YES", "-appearance", "dark", "-DispatchHardwareKeyboard",
+                               hardwareKeyboard ? "YES" : "NO"] + arguments
         app.launchEnvironment["DISPATCH_MOBILE_STORE"] = "memory"
         app.launch()
         // The window's size and place outlive the app: every case starts full screen and leaves it so, upright.
@@ -28,13 +29,16 @@ final class IPadLayoutUITests: XCTestCase {
             XCUIDevice.shared.orientation = .portrait
             if app.state == .runningForeground { arrange("Fill") }
         }
-        // A launch that opens a tab waits for it.
+        // A launch that opens a tab waits for it (the strip's modes, or the stack's capsule).
         if arguments.contains(where: { $0.hasPrefix("tab:") }) {
-            XCTAssertTrue(app.buttons["Space details"].waitForExistence(timeout: 10))
+            XCTAssertTrue(app.otherElements["tab-segments"].waitForExistence(timeout: 10))
         }
     }
 
     private var window: CGRect { app.windows.firstMatch.frame }
+
+    /// The strip's pills (`PadTabPills`: a scroll view when they do not fit).
+    private var tabs: XCUIElement { app.descendants(matching: .any)["pad-tabs"] }
 
     private func rotate(_ orientation: UIDeviceOrientation) {
         XCUIDevice.shared.orientation = orientation
@@ -70,29 +74,30 @@ final class IPadLayoutUITests: XCTestCase {
 
     private let backPill = NSPredicate(format: "label BEGINSWITH 'Back'")
 
-    /// The split: the sidebar's tab bar across the system's sidebar width from the window's leading edge, the tab's
-    /// header beside it with no back pill. In Spaces, Edit stays in the sidebar's bar beside the window controls, not
-    /// in an overflow menu.
-    private func assertSplit(sidebar: CGFloat, spaces: Bool = true, file: StaticString = #filePath, line: UInt = #line) {
-        if spaces {
-            XCTAssertTrue(app.buttons["Edit"].waitForExistence(timeout: 5), "Edit in the sidebar's bar", file: file, line: line)
-            XCTAssertLessThan(app.buttons["Edit"].frame.maxX - window.minX, sidebar, file: file, line: line)
-        }
-        let bar = app.tabBars.firstMatch
-        XCTAssertTrue(bar.waitForExistence(timeout: 5), "the sidebar's tab bar", file: file, line: line)
-        XCTAssertEqual(bar.frame.minX - window.minX, 0, accuracy: 1, "\(bar.frame) in \(window)", file: file, line: line)
-        XCTAssertEqual(bar.frame.width, sidebar, accuracy: 1, "the sidebar's width: \(bar.frame) in \(window)", file: file, line: line)
-        let details = app.buttons["Space details"]
-        XCTAssertTrue(details.exists, "the tab beside it", file: file, line: line)
-        XCTAssertGreaterThan(details.frame.minX - window.minX, sidebar, file: file, line: line)
+    /// The split: the sidebar (the tree alone, no tab bar) across the system's sidebar width from the window's leading
+    /// edge, its New space footer across it; the tab's strip beside it with no back pill. Edit stays in the sidebar's
+    /// bar beside the window controls, not in an overflow menu.
+    private func assertSplit(sidebar: CGFloat, file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertTrue(app.buttons["Edit"].waitForExistence(timeout: 5), "Edit in the sidebar's bar", file: file, line: line)
+        XCTAssertLessThan(app.buttons["Edit"].frame.maxX - window.minX, sidebar, file: file, line: line)
+        XCTAssertFalse(app.tabBars.firstMatch.exists, "no tab bar", file: file, line: line)
+        let footer = app.buttons["New space"].firstMatch
+        XCTAssertTrue(footer.waitForExistence(timeout: 5), "the sidebar's footer", file: file, line: line)
+        XCTAssertEqual(footer.frame.midX - window.minX, sidebar / 2, accuracy: 2, "\(footer.frame) in \(window)", file: file, line: line)
+        XCTAssertLessThanOrEqual(footer.frame.maxX - window.minX, sidebar, "\(footer.frame) in \(window)", file: file, line: line)
+        let strip = app.otherElements["pad-strip"]
+        XCTAssertTrue(strip.exists, "the tab's strip beside it", file: file, line: line)
+        // Its content starts after the strip's 16-point margin.
+        XCTAssertEqual(strip.frame.minX - window.minX, sidebar + 0.5 + 16, accuracy: 1, "\(strip.frame) in \(window)", file: file, line: line)
         XCTAssertFalse(app.buttons.matching(backPill).firstMatch.exists, "no back pill beside the sidebar", file: file, line: line)
     }
 
-    /// The stack: the tab on top with its back pill, nothing beside it.
+    /// The stack: the tab on top with its back pill, the phone's header and capsule, nothing beside it.
     private func assertStackedTab(file: StaticString = #filePath, line: UInt = #line) {
         XCTAssertTrue(app.buttons.matching(backPill).firstMatch.waitForExistence(timeout: 5), "the back pill", file: file, line: line)
-        XCTAssertFalse(app.tabBars.firstMatch.exists, "no sidebar", file: file, line: line)
-        XCTAssertTrue(app.buttons["Space details"].exists, file: file, line: line)
+        XCTAssertFalse(app.otherElements["pad-strip"].exists, "no strip", file: file, line: line)
+        // The phone's capsule (in Slide Over a chat tab's header has its ⋯ menu where the host disc was).
+        XCTAssertTrue(app.otherElements["tab-segments"].buttons["Terminal"].exists, "the phone's capsule", file: file, line: line)
     }
 
     private func shot(_ name: String) {
@@ -107,8 +112,8 @@ final class IPadLayoutUITests: XCTestCase {
         }
     }
 
-    /// Full screen either way up: the system's sidebar width beside the tab; a row opens its tab in place, the sidebar
-    /// stays.
+    /// Full screen either way up: the system's sidebar width beside the tab; a space's row opens its tab in place (the
+    /// strip its tabs), the sidebar stays and marks it.
     func testTheSplitInBothOrientations() {
         launch()
         let portrait = window.width
@@ -117,13 +122,14 @@ final class IPadLayoutUITests: XCTestCase {
         rotate(.landscapeLeft)
         assertSplit(sidebar: Self.sidebar(window.width))
         shot("split-landscape")
-        let row = app.staticTexts["claude"].firstMatch
+        let row = app.buttons["docs"].firstMatch
         XCTAssertTrue(row.exists)
         row.tap()
         sleep(1)
         assertSplit(sidebar: Self.sidebar(window.width))
-        XCTAssertGreaterThan(app.staticTexts.matching(identifier: "claude").count, 1, "the row and the tab's title")
-        shot("split-landscape-claude")
+        XCTAssertTrue(row.isSelected, "the sidebar marks the space")
+        XCTAssertTrue(tabs.buttons["claude"].exists, "its tabs in the strip")
+        shot("split-landscape-docs")
         rotate(.portrait)
         assertSplit(sidebar: Self.sidebar(portrait))
     }
@@ -154,22 +160,24 @@ final class IPadLayoutUITests: XCTestCase {
         }
     }
 
-    /// New is one tap away in the sidebar's tab bar (the phone's bottom bar, New its own circle: iPadOS's top bar
-    /// folded it behind a "Next Page" chevron upright) at every sidebar width: full screen either way up, a top half on
-    /// its side and the window dragged down to the split's narrowest. In Agents it opens New chat.
+    /// New space (the sidebar's footer) and the strip's New tab are one tap away at every sidebar width, and the
+    /// sidebar's bar keeps its four controls out of an overflow menu: full screen either way up, a top half on its side
+    /// and the window dragged down to the split's narrowest.
     func testNewIsOneTapAwayAtEverySidebarWidth() {
         launch()
-        app.tabBars.buttons["Agents"].tap()
         func check(_ name: String) {
-            let new = app.tabBars.buttons["New chat"]
+            let new = app.buttons["New space"].firstMatch
             XCTAssertTrue(new.waitForExistence(timeout: 5), name)
-            XCTAssertTrue(new.isHittable, "\(name): New in the bar, not behind a chevron")
+            XCTAssertTrue(new.isHittable, name)
             XCTAssertLessThanOrEqual(new.frame.maxX - window.minX, Self.sidebar(window.width) + 1, "\(name): in the sidebar")
-            XCTAssertFalse(app.buttons["Next Page"].exists, name)
+            for control in ["Hide sidebar", "Filter", "Edit"] {
+                XCTAssertTrue(app.buttons[control].firstMatch.isHittable, "\(name): \(control) in the bar")
+            }
+            XCTAssertTrue(app.buttons["New tab"].firstMatch.isHittable, "\(name): the strip's New tab")
             shot("new-\(name)")
             new.tap()
-            XCTAssertTrue(app.staticTexts["New chat"].waitForExistence(timeout: 5), "\(name): New chat")
-            app.buttons["Close"].tap()
+            XCTAssertTrue(app.staticTexts["New space"].waitForExistence(timeout: 5), "\(name): New space")
+            app.buttons["Cancel"].firstMatch.tap()
             XCTAssertTrue(new.waitForExistence(timeout: 5))
         }
         check("portrait")
@@ -191,8 +199,9 @@ final class IPadLayoutUITests: XCTestCase {
         hide.tap()
         let show = app.buttons["Show sidebar"]
         XCTAssertTrue(show.waitForExistence(timeout: 5))
-        XCTAssertFalse(app.tabBars.firstMatch.isHittable, "the sidebar is out of the window")
-        XCTAssertEqual(show.frame.minX - window.minX, 16, accuracy: 6, "the button at the window's leading edge")
+        XCTAssertFalse(app.buttons["New space"].firstMatch.isHittable, "the sidebar is out of the window")
+        XCTAssertEqual(show.frame.minX - window.minX, 16, accuracy: 6, "the strip's pill at the window's leading edge")
+        XCTAssertTrue(app.buttons["Space switcher"].exists, "and the space's capsule")
         shot("sidebar-hidden-portrait")
         rotate(.landscapeLeft)
         XCTAssertTrue(show.exists)
@@ -211,14 +220,14 @@ final class IPadLayoutUITests: XCTestCase {
         app.terminate()
         launch(["-DispatchSplitMemory", "YES"])
         XCTAssertTrue(app.buttons["Show sidebar"].waitForExistence(timeout: 10), "the tab, the sidebar hidden")
-        XCTAssertFalse(app.tabBars.firstMatch.isHittable)
+        XCTAssertFalse(app.buttons["New space"].firstMatch.isHittable)
         shot("restored-hidden-sidebar")
         app.buttons["Show sidebar"].tap()
         XCTAssertTrue(app.buttons["Hide sidebar"].waitForExistence(timeout: 5))
         app.terminate()
         launch(["-DispatchSplitMemory", "YES"])
-        XCTAssertTrue(app.buttons["Hide sidebar"].waitForExistence(timeout: 10), "the tab beside the sidebar")
-        XCTAssertTrue(app.tabBars.firstMatch.isHittable)
+        XCTAssertTrue(app.otherElements["pad-strip"].waitForExistence(timeout: 10), "the tab beside the sidebar")
+        XCTAssertTrue(app.buttons["New space"].firstMatch.isHittable)
     }
 
     /// A half upright and Slide Over are the iPhone's stack, the open tab on top with its back pill; Back shows Spaces
@@ -233,18 +242,57 @@ final class IPadLayoutUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Edit"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["Spaces"].exists, "the tab bar")
         shot("half-portrait-spaces")
+        // The tree's space row pushes its tabs (P2), whose row opens the tab.
+        let docs = app.buttons.matching(NSPredicate(format: "identifier == 'space-row' AND label == 'docs'")).firstMatch
+        XCTAssertTrue(docs.waitForExistence(timeout: 5))
+        docs.tap()
+        XCTAssertTrue(app.staticTexts["claude"].firstMatch.waitForExistence(timeout: 5))
         app.staticTexts["claude"].firstMatch.tap()
         assertStackedTab()
 
         arrange("Enter Slide Over")
         XCTAssertLessThan(window.width, 400)
-        assertStackedTab()
         shot("slide-over-tab")
+        assertStackedTab()
 
         arrange("Fill")
         assertSplit(sidebar: Self.sidebar(window.width))
-        XCTAssertGreaterThan(app.staticTexts.matching(identifier: "claude").count, 1, "the pushed tab beside the sidebar, and its row")
+        let pushed = tabs.buttons["claude"]
+        XCTAssertTrue(XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "selected == true"), object: pushed)],
+                                       timeout: 5) == .completed, "the pushed tab beside the sidebar")
         shot("fill-after-stack")
+    }
+
+    /// With a hardware keyboard (a terminal takes the keys as it shows), a terminal opened in the stack of a half window
+    /// splits beside the tree when the window fills the screen, and stacks again when it is a half: each way the app
+    /// lays out and answers (a terminal built inside the iPad's first layout once spun SwiftUI in an attribute cycle at
+    /// full CPU, which these queries would wait out and fail on).
+    func testCrossingTheSplitWithAHardwareKeyboard() {
+        launch([], hardwareKeyboard: true)
+        arrange("Left")
+        XCTAssertLessThan(window.width, 655.5)
+        let space = app.buttons.matching(NSPredicate(format: "identifier == 'space-row' AND label == 'app'")).firstMatch
+        XCTAssertTrue(space.waitForExistence(timeout: 5))
+        space.tap()
+        let dev = app.buttons.matching(identifier: "space-tab").element(boundBy: 1)
+        XCTAssertTrue(dev.waitForExistence(timeout: 5), "the space's tabs")
+        dev.tap()
+        XCTAssertTrue(app.textViews["Terminal"].waitForExistence(timeout: 10), "the terminal in the stack")
+        assertStackedTab()
+        for round in 0..<2 {
+            arrange("Fill")
+            assertSplit(sidebar: Self.sidebar(window.width))
+            XCTAssertTrue(app.textViews["Terminal"].waitForExistence(timeout: 10), "\(round): the terminal beside the tree")
+            let files = app.otherElements["tab-segments"].buttons["Files"]
+            files.tap()
+            XCTAssertTrue(files.waitForExistence(timeout: 5) && files.isSelected, "\(round): the split answers")
+            app.otherElements["tab-segments"].buttons["Terminal"].tap()
+            shot("hardware-keyboard-split-\(round)")
+            arrange("Left")
+            assertStackedTab()
+            XCTAssertTrue(app.textViews["Terminal"].waitForExistence(timeout: 10), "\(round): the terminal in the stack")
+            shot("hardware-keyboard-stack-\(round)")
+        }
     }
 
     /// Dragging the window narrower stacks once it is under the split's 655.5 points, and wider splits again, with the
@@ -289,13 +337,12 @@ final class IPadLayoutUITests: XCTestCase {
         app.buttons["Cancel"].tap()
         app.buttons["Done"].firstMatch.tap()
 
-        app.buttons["Agents"].tap()
-        app.buttons["New chat"].tap()
+        app.typeKey("n", modifierFlags: [.command, .option])
         XCTAssertTrue(app.staticTexts["New chat"].waitForExistence(timeout: 5))
         assertFormSheet(app.staticTexts["New chat"])
         shot("sheet-new-chat")
         app.buttons["Close"].tap()
-        assertSplit(sidebar: Self.sidebar(window.width), spaces: false)
+        assertSplit(sidebar: Self.sidebar(window.width))
     }
 
     /// New tab's space picker is a form sheet in the middle of the window, as the other sheets, either way up: not
@@ -315,14 +362,16 @@ final class IPadLayoutUITests: XCTestCase {
         }
     }
 
-    /// The pointer over a row, the sidebar's tree toggle, Edit and the tab's host disc: each shows the system's
+    /// The pointer over a space's row, the filter, Edit, a host's glyph, a pill and a mode: each shows the system's
     /// highlight (plain buttons and interactive glass get none of their own). Screenshots only: the effect is drawn
     /// by the system outside the app's hierarchy.
     func testPointerHover() {
         launch()
         let targets: [(String, XCUIElement)] = [
-            ("row", app.staticTexts["codex"].firstMatch), ("tree", app.navigationBars.buttons["Spaces"].firstMatch),
-            ("edit", app.buttons["Edit"]), ("details", app.buttons["Space details"])]
+            ("row", app.buttons["e2e"].firstMatch), ("filter", app.buttons["Filter"].firstMatch),
+            ("edit", app.buttons["Edit"]), ("host", app.buttons["mba2 stats"].firstMatch),
+            ("pill", tabs.buttons.element(boundBy: 1)),
+            ("mode", app.otherElements["tab-segments"].buttons["Files"])]
         for (name, element) in targets {
             XCTAssertTrue(element.waitForExistence(timeout: 5), name)
             element.hover()

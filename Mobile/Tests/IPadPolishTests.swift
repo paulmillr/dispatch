@@ -20,29 +20,31 @@ final class IPadPolishTests: XCTestCase {
         }
     }
 
-    /// The Terminal / Chat control and the composer's key row keep a phone's width on an iPad, centred, rather than
-    /// spreading two segments (or six keys) over a 1,000-point column; the phone's span their column.
+    /// The tab screen's capsule and the composer's key row keep a phone's width on an iPad, centred, rather than
+    /// spreading three segments (or six keys) over a 1,000-point column; the phone's span their column.
     func testControlsKeepAPhonesWidthOnAnIPad() {
-        XCTAssertEqual(TabSegmentControl.maxWidth(idiom: .phone), .infinity)
-        XCTAssertEqual(TabSegmentControl.maxWidth(idiom: .pad), 400)
+        XCTAssertEqual(TabSegmentCapsule.maxWidth(idiom: .phone), .infinity)
+        XCTAssertEqual(TabSegmentCapsule.maxWidth(idiom: .pad), 400)
         XCTAssertEqual(CodeKeyRow.maxWidth(idiom: .phone), .infinity)
         XCTAssertEqual(CodeKeyRow.maxWidth(idiom: .pad), TerminalAdaptation.padCapsuleWidth)
     }
 
-    /// Rendered across a 13-inch's column, the segmented control is 400 points wide in its middle on an iPad.
-    func testTheSegmentedControlIsCentredInAWideColumn() throws {
-        guard pad else { throw XCTSkip("The phone's control spans its column") }
+    /// Rendered across a 13-inch's column, the capsule is 400 points wide in its middle on an iPad.
+    func testTheCapsuleIsCentredInAWideColumn() throws {
+        guard pad else { throw XCTSkip("The phone's capsule spans its column") }
         let scene = try XCTUnwrap(TestSupport.windowScene())
         let window = UIWindow(windowScene: scene)
         window.frame = CGRect(x: 0, y: 0, width: 1045, height: 300)
-        window.rootViewController = UIHostingController(rootView: TabSegmentControl(selection: .constant(.terminal)).padding(.horizontal, 16))
+        final class Frame { var value = CGRect.zero }
+        let measured = Frame()
+        let capsule = TabSegmentCapsule(selection: .constant(.terminal))
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { measured.value = $0 }
+            .padding(.horizontal, 16)
+        window.rootViewController = UIHostingController(rootView: capsule)
         window.isHidden = false
         defer { window.isHidden = true }
         RunLoop.main.run(until: Date().addingTimeInterval(0.5))
-        func views(_ view: UIView) -> [UIView] { [view] + view.subviews.flatMap(views) }
-        let control = try XCTUnwrap(views(window).first { $0 is UISegmentedControl })
-        let frame = control.convert(control.bounds, to: window)
-        XCTAssertEqual(frame.width, 400, accuracy: 1)
-        XCTAssertEqual(frame.midX, 1045 / 2, accuracy: 1)
+        XCTAssertEqual(measured.value.width, 400, accuracy: 1)
+        XCTAssertEqual(measured.value.midX, 1045 / 2, accuracy: 1)
     }
 }

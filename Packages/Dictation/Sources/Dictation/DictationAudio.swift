@@ -11,12 +11,18 @@ protocol DictationInput: AnyObject, Sendable {
 /// The microphone while dictating. Its buffers arrive on the audio thread, in the input's own format.
 final class DictationMicrophone: DictationInput, @unchecked Sendable {
     private let engine = AVAudioEngine()
+    /// The app speaks while it listens (`Dictation.start`'s `playback`): the iPhone's session plays and records.
+    var playback = false
 
     /// The microphone's format, once the iPhone's audio session is set up for recording (`stop` ends it).
     func prepare() throws -> AVAudioFormat {
         #if os(iOS)
         let audio = AVAudioSession.sharedInstance()
-        try audio.setCategory(.record, mode: .default)
+        if playback {
+            try audio.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothHFP])
+        } else {
+            try audio.setCategory(.record, mode: .default)
+        }
         try audio.setActive(true)
         #endif
         let format = engine.inputNode.outputFormat(forBus: 0)

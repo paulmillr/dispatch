@@ -31,6 +31,23 @@ enum TerminalFixtures {
         return data(s)
     }
 
+    /// The terminal mockups' dev server (T1, T2): `pnpm dev` in ~/src/web and vite's hot updates, three of them naming
+    /// `src/theme.ts` (T1 searches for it), the cursor on a fresh line.
+    static var viteTheme: Data {
+        let green = sgr("32"), yellow = sgr("33"), blue = sgr("34"), grey = sgr("90")
+        let hmr = { (time: String, file: String) in "  \(grey)\(time)\(reset) \(green)hmr\(reset) update \(file)\r\n" }
+        var s = "\(green)~/src/web $ pnpm dev\(reset)\r\n\r\n"
+        s += "  \(dim)vite\(reset) v6.1.0  ready in \(yellow)412\(reset) ms\r\n"
+        s += "  \(dim)➜\(reset)  Local:   \(blue)http://localhost:5173/\(reset)\r\n"
+        s += "  \(dim)➜\(reset)  Network: \(blue)http://10.0.0.12:5173/\(reset)\r\n\r\n"
+        s += hmr("09:37:40", "src/theme.ts")
+        s += hmr("09:37:41", "src/components/Sidebar.tsx")
+        s += hmr("09:38:02", "src/theme.ts")
+        s += "  \(grey)09:38:09\(reset) [vite] warning: src/theme.ts has no default export\r\n"
+        s += hmr("09:38:12", "src/components/ThemeToggle.tsx")
+        return data(s)
+    }
+
     /// A `vim`-like screen at `columns` x `rows`: the alternate screen, numbered Swift source with syntax colours,
     /// `~` past the end, the reversed status line and `-- INSERT --`, the cursor in the text.
     static func vim(columns: Int, rows: Int) -> Data {

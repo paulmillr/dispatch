@@ -137,7 +137,8 @@ public enum VoiceCommand: Equatable, Sendable {
         return .named(words.joined(separator: " "))
     }
 
-    static let phrases: [[String]: VoiceCommand] = {
+    /// The chat commands' phrases, by their words (`VoiceMatch.words`): what a chat may also take without the wake word.
+    public static let phrases: [[String]: VoiceCommand] = {
         var phrases: [[String]: VoiceCommand] = [:]
         func add(_ command: VoiceCommand, _ forms: String...) { for form in forms { phrases[form.split(separator: " ").map(String.init)] = command } }
         add(.send, "send", "send it", "send that", "send this", "send message", "submit")

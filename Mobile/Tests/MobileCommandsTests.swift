@@ -18,7 +18,7 @@ final class MobileCommandsTests: XCTestCase {
     /// terminal keeps Esc, Tab, Control, Option, arrows and function keys, and the app keeps ⌘.
     func testEveryChordHasCommandAndTheTerminalKeepsTheRest() throws {
         let chords = MobileCommand.allCases.compactMap(\.shortcut)
-        XCTAssertEqual(chords.count, 20)
+        XCTAssertEqual(chords.count, 26)
         for chord in chords { XCTAssertTrue(chord.modifiers.contains(.command), "\(chord.key.character)") }
         let names = MobileCommand.allCases.compactMap(\.chord)
         XCTAssertEqual(Set(names).count, names.count, "\(names)")
@@ -26,7 +26,12 @@ final class MobileCommandsTests: XCTestCase {
         XCTAssertEqual(MobileCommand.newChat.chord, "⌥⌘N")
         XCTAssertEqual(MobileCommand.attach.chord, "⇧⌘A", "Mail's Attach Files…")
         XCTAssertEqual(MobileCommand.previousTab.chord, "⌘[")
+        XCTAssertEqual(MobileCommand.find.chord, "⌘F", "The Mac's Find…")
+        XCTAssertEqual(MobileCommand.findPrevious.chord, "⇧⌘G")
         XCTAssertEqual(MobileCommand.toggleSidebar.chord, "⌃⌘S", "The Mac's")
+        XCTAssertEqual(MobileCommand.switchFiles.chord, "⇧⌘F", "The Mac's Switch Terminal / Files")
+        XCTAssertEqual(MobileCommand.reviewChanges.chord, "⇧⌘U", "The Mac's Review Changes")
+        XCTAssertEqual(MobileCommand.commits.chord, "⇧⌘L", "The Mac's Commits")
         XCTAssertEqual(MobileCommand.toggleSidebarAlias.key, "\\")
         XCTAssertEqual(MobileCommand.toggleSidebarAlias.modifiers, .command)
 
@@ -42,9 +47,11 @@ final class MobileCommandsTests: XCTestCase {
         XCTAssertEqual(MobileCommand.groups(.file).map { $0.map(\.title) },
                        [["New Tab", "New Space…", "New Chat…", "New Host…"], ["Rename Tab…", "Rename Space…"],
                         ["Close Tab", "Close Space…", "Detach Space"]])
-        XCTAssertEqual(MobileCommand.groups(.edit).joined().map(\.title), ["Clear Screen", "Attach Files…"])
+        XCTAssertEqual(MobileCommand.groups(.edit).joined().map(\.title),
+                       ["Find…", "Find Next", "Find Previous", "Clear Screen", "Attach Files…"])
         XCTAssertEqual(MobileCommand.groups(.view).joined().map(\.title),
-                       ["Increase Font Size", "Decrease Font Size", "Reset Font Size", "Toggle Sidebar", "Switch Terminal / Chat"])
+                       ["Increase Font Size", "Decrease Font Size", "Reset Font Size", "Toggle Sidebar", "Switch Terminal / Chat",
+                        "Switch Terminal / Files", "Review Changes", "Commits"])
         XCTAssertEqual(MobileCommand.groups(.navigate).joined().map(\.title),
                        ["Spaces", "Agents", "Next Attention", "Previous Attention", "Previous Tab", "Next Tab"])
         let listed = MobileCommand.Menu.allCases.flatMap { menu in MobileCommand.groups(menu).joined().map { ($0, menu) } }
@@ -52,7 +59,7 @@ final class MobileCommandsTests: XCTestCase {
         for (command, menu) in listed { XCTAssertEqual(command.menu, menu, "\(command)") }
     }
 
-    /// What is on screen: the stack's top screen; in the split the detail column's tab (not under its details) and
+    /// What is on screen: the stack's top screen; in the split the detail column's tab (not under a screen it pushed) and
     /// the space of what the user last opened there.
     func testTheShownTabAndSpaceInTheStackAndTheSplit() {
         let navigator = navigator()
@@ -65,12 +72,12 @@ final class MobileCommandsTests: XCTestCase {
         navigator.path = [.space(app), .tab(dev)]
         XCTAssertEqual(navigator.shownTab, dev)
         XCTAssertEqual(navigator.shownSpace, app, "The tab's own space")
-        navigator.path = [.space(app), .tab(dev), .details(app)]
-        XCTAssertNil(navigator.shownTab, "Details are on top")
+        navigator.path = [.space(app), .tab(dev), .files(dev, FilesRoute(mode: .commits, revision: "abc"))]
+        XCTAssertNil(navigator.shownTab, "A commit is on top")
         XCTAssertEqual(navigator.shownSpace, app)
 
         navigator.split = true
-        XCTAssertNil(navigator.shownTab, "The detail column shows details over the tab")
+        XCTAssertNil(navigator.shownTab, "The detail column shows a commit over the tab")
         navigator.path = [.space(space(studio, "tmux:docs")), .tab(dev)]
         XCTAssertEqual(navigator.shownTab, dev, "The detail column's tab")
         XCTAssertEqual(navigator.shownSpace, app, "Its space, not the sidebar's")
@@ -84,7 +91,8 @@ final class MobileCommandsTests: XCTestCase {
         let navigator = navigator()
         let always: Set<MobileCommand> = [.newTab, .newSpace, .newChat, .newHost, .spaces, .agents, .settings, .shortcuts,
                                           .nextAttention, .previousAttention]
-        let terminal: Set<MobileCommand> = [.switchSegment, .clearScreen, .increaseFontSize, .decreaseFontSize, .resetFontSize]
+        let terminal: Set<MobileCommand> = [.switchSegment, .switchFiles, .clearScreen, .increaseFontSize, .decreaseFontSize,
+                                            .resetFontSize]
         XCTAssertEqual(navigator.enabledCommands(presenting: false), always)
         XCTAssertEqual(navigator.enabledCommands(presenting: true), [], "A sheet is up")
 
@@ -95,7 +103,14 @@ final class MobileCommandsTests: XCTestCase {
         navigator.path = [.space(docs), .tab(tab(studio, "tmux:docs:@1"))]
         XCTAssertEqual(navigator.enabledCommands(presenting: false).subtracting(always),
                        terminal.union([.renameSpace, .closeSpace, .detachSpace, .renameTab, .closeTab, .previousTab, .nextTab,
-                                       .attach]), "An agent's tab: Attach Files… for its chat")
+                                       .attach, .find, .findNext, .findPrevious]),
+                       "An agent's tab on its Chat segment: Attach Files…, and Find for its conversation")
+        let agent = tab(studio, "tmux:docs:@1"), find: Set<MobileCommand> = [.find, .findNext, .findPrevious]
+        XCTAssertTrue(navigator.findsInChat, "On Chat, Find searches the conversation (C1)")
+        navigator.model.segments[agent] = .terminal
+        XCTAssertTrue(navigator.enabledCommands(presenting: false).isSuperset(of: find), "Find searches the terminal")
+        XCTAssertFalse(navigator.findsInChat, "On Terminal, the terminal's search")
+        navigator.model.segments[agent] = nil
         navigator.picking = true
         XCTAssertEqual(navigator.enabledCommands(presenting: false), [], "New tab's picker is up")
         navigator.picking = false
@@ -209,6 +224,29 @@ final class MobileCommandsTests: XCTestCase {
         XCTAssertFalse(navigator.sidebarIsHidden)
     }
 
+    /// The View menu's modes, as the strip offers them: Switch Terminal / Files where the host serves Files, Review Changes
+    /// and Commits inside a repository; none on a host without the Files & git grant.
+    func testTheModesApplyWhereTheStripOffersThem() {
+        let navigator = navigator()
+        let facts = SpaceGitFacts()
+        navigator.gitFacts = facts
+        let claude = tab(mba2, "herdr:app:1")
+        navigator.path = [.tab(claude)]
+        let modes: Set<MobileCommand> = [.switchFiles, .reviewChanges, .commits]
+        XCTAssertEqual(navigator.enabledCommands(presenting: false).intersection(modes), [.switchFiles], "Not known as a repository")
+        TabsSample.gitFacts(facts, model: navigator.model)
+        XCTAssertEqual(navigator.enabledCommands(presenting: false).intersection(modes), modes, "Inside ~/src/app")
+        navigator.model.setMode(.commits, for: claude)
+        XCTAssertEqual(navigator.shownSegment(navigator.model.tab(claude)!), .files)
+
+        let denied = MobileWorkspace(host: { var host = TabsFixtures.host; host.files = false; return host }(), client: nil,
+                                     activity: TabActivityStore(url: nil))
+        denied.apply(TabsFixtures.app().topology)
+        navigator.model.insert(denied)
+        navigator.path = [.tab(tab(TabsFixtures.host.id, "herdr:docs:1"))]
+        XCTAssertTrue(navigator.enabledCommands(presenting: false).isDisjoint(with: modes), "No Files & git grant")
+    }
+
     /// Help › Keyboard Shortcuts lists Toggle Sidebar on an iPad only, where the split hides its sidebar.
     func testTheShortcutsSheetListsToggleSidebarOnAnIPad() {
         XCTAssertEqual(MobileShortcutsSheet.listed(.toggleSidebar), UIDevice.current.userInterfaceIdiom == .pad)
@@ -220,7 +258,7 @@ final class MobileCommandsTests: XCTestCase {
     func testSectionsGoBackToTheTabBar() {
         let navigator = navigator()
         let shown = tab(mba2, "herdr:app:2")
-        navigator.path = [.space(space(mba2, "herdr:app")), .tab(shown), .details(space(mba2, "herdr:app"))]
+        navigator.path = [.space(space(mba2, "herdr:app")), .tab(shown), .host(mba2)]
         navigator.showRoot()
         XCTAssertEqual(navigator.path, [])
         navigator.split = true
@@ -261,6 +299,16 @@ final class MobileCommandsTests: XCTestCase {
         XCTAssertFalse(all.contains { $0.title == "Customize Toolbar…" })
         let keys = all.compactMap { $0 as? UIKeyCommand }.filter { $0.input == "w" && $0.modifierFlags == .command }
         XCTAssertEqual(keys.map(\.title), ["Close Tab"])
+        // Find…, Find Next and Find Previous are the app's, once each (the system's text-editing group is left alone:
+        // replacing it drops the replacement).
+        func deep(_ menu: UIMenu) -> [UIMenuElement] { menu.children.flatMap { ($0 as? UIMenu).map(deep) ?? [$0] } }
+        let edit = try XCTUnwrap(menus.first { $0.title == "Edit" })
+        let editKeys = deep(edit).compactMap { $0 as? UIKeyCommand }
+        for (input, flags, title) in [("f", UIKeyModifierFlags.command, "Find…"), ("g", .command, "Find Next"),
+                                      ("g", [.command, .shift], "Find Previous")] {
+            let matching = editKeys.filter { $0.input?.lowercased() == input && $0.modifierFlags == flags }
+            XCTAssertEqual(matching.map(\.title), [title])
+        }
     }
 
     /// The window turns every way on an iPad, as `UISupportedInterfaceOrientations~ipad` says; an iPhone keeps its

@@ -51,30 +51,6 @@ struct TabsMockupGlyph: View {
         }
     }
 
-    /// The tree toggle (M2a): a stem branching to two boxes.
-    static var tree: TabsMockupGlyph {
-        TabsMockupGlyph { path in
-            path.move(to: CGPoint(x: 5, y: 4))
-            path.addLine(to: CGPoint(x: 5, y: 16))
-            path.addQuadCurve(to: CGPoint(x: 7, y: 18), control: CGPoint(x: 5, y: 18))
-            path.addLine(to: CGPoint(x: 11, y: 18))
-            path.move(to: CGPoint(x: 5, y: 10))
-            path.addLine(to: CGPoint(x: 11, y: 10))
-            path.addRoundedRect(in: CGRect(x: 13, y: 7, width: 7, height: 6), cornerSize: CGSize(width: 1.5, height: 1.5))
-            path.addRoundedRect(in: CGRect(x: 13, y: 15, width: 7, height: 6), cornerSize: CGSize(width: 1.5, height: 1.5))
-        }
-    }
-
-    /// Sort and filter (M2a): three lines, shorter each.
-    static var filter: TabsMockupGlyph {
-        TabsMockupGlyph { path in
-            for (y, inset) in [(7.0, 4.0), (12.0, 7.0), (17.0, 10.0)] {
-                path.move(to: CGPoint(x: inset, y: y))
-                path.addLine(to: CGPoint(x: 24 - inset, y: y))
-            }
-        }
-    }
-
     var body: some View {
         Canvas { context, size in
             var shape = Path()
@@ -196,6 +172,8 @@ struct TabsScreenHeader<Back: View, Subtitle: View, Trailing: View>: ToolbarCont
     var showsBack = true
     /// The trailing control's width (`leadingWidth`).
     var trailingWidth: CGFloat = 44
+    /// The branch beside the title (P2: the space's folder's).
+    var branch: String? = nil
     /// The bar ends at the screen's trailing edge (the phone, the split's detail column), where `statusCorner` is.
     var atTrailingEdge = true
     @ViewBuilder var back: Back
@@ -211,9 +189,11 @@ struct TabsScreenHeader<Back: View, Subtitle: View, Trailing: View>: ToolbarCont
                               back: showsBack) {
                 if showsBack { back }
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(title)
-                        .font(.headline)
+                    // One text, the branch after the title: an HStack of the two made the bar measure the item wider
+                    // than it lays it out, and the bar overflowed into its "…" menu.
+                    SpacesBranchChip.title(title, branch: branch)
                         .lineLimit(1)
+                        .fixedSize(horizontal: false, vertical: true)
                         .accessibilityAddTraits(.isHeader)
                     subtitle
                         .font(.caption)
@@ -270,7 +250,9 @@ struct TabsHeaderLeading: Layout {
         let limit = offered.map { $0.isFinite && $0 > 0 ? min($0, width) : width } ?? width
         let room = max(0, limit - offset(back))
         let ideal = column.sizeThatFits(.unspecified).width
-        let title = column.sizeThatFits(ProposedViewSize(width: min(ideal, room), height: nil))
+        // A point of slack: a title of mixed fonts (P2's name and branch) measured a fraction wider than it drew, and
+        // truncated to "…" at exactly its ideal width.
+        let title = column.sizeThatFits(ProposedViewSize(width: min(ideal + 1, room), height: nil))
         // A fixed-size subtitle (the pane switcher's menu) may answer wider than offered: the item still stops at `width`.
         return (back, CGSize(width: min(title.width, room), height: title.height))
     }
@@ -290,6 +272,18 @@ extension EnvironmentValues {
     @Entry var tabsSelectTab: ((TabRef) -> Void)? = nil
     /// The iPad split's detail column: its tab's header carries the sidebar button (`TabsSidebarPill`).
     @Entry var tabsSidebarToggle: TabsSidebarToggle? = nil
+    /// The iPad split's detail column: its tab has the strip above it (`PadStrip`) instead of the header and capsule,
+    /// the modes' context row under it, and Review and Commits beside their panes (`TabScreen`).
+    @Entry var tabsPadStrip = false
+    /// The iPad split's sidebar (`PadSidebar`): Spaces is the tree alone, a space's row shows its tab beside the sidebar
+    /// (`tabsSelectSpace`), the host's glyph shows its stats in a popover.
+    @Entry var spacesSidebar = false
+    /// The iPad sidebar: a space's row selects it (its tab opens in the detail column); nil pushes the space's tabs.
+    @Entry var tabsSelectSpace: ((SpaceRef) -> Void)? = nil
+    /// The space whose tab the detail column shows: the sidebar marks its row.
+    @Entry var tabsShownSpace: SpaceRef? = nil
+    /// Where a tab's host disc opens the space switcher over it (P3, `SpacesNavigator.switcher`); nil opens nothing.
+    @Entry var tabsSwitcher: SpacesNavigator? = nil
 }
 
 /// The iPad split's sidebar, as the tab's header sees it: whether it is hidden, and what hides or shows it.

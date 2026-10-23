@@ -609,16 +609,22 @@ struct HostStatsPopoverContent: View {
                         }
                         .padding(.top, 2)
                         HostStatsBody(session: session, metric: $metric, scrub: $scrub, compact: true)
-                        HStack(spacing: 10) {
-                            HostStatsActionButton(title: "Edit", symbol: "pencil") { editing = true }
-                            if session.link.isConnected {
-                                HostStatsActionButton(title: "Disconnect") { session.park() }
-                            } else {
-                                HostStatsConnectButton(session: session)
-                            }
-                        }
                     }
                     .padding(16)
+                }
+                // Edit and Disconnect stay whole at the popover's foot, the rest scrolling above them (in the scroll
+                // view the popover's height cut them).
+                .safeAreaBar(edge: .bottom) {
+                    HStack(spacing: 10) {
+                        HostStatsActionButton(title: "Edit", symbol: "pencil") { editing = true }
+                        if session.link.isConnected {
+                            HostStatsActionButton(title: "Disconnect") { session.park() }
+                        } else {
+                            HostStatsConnectButton(session: session)
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 16)
                 }
                 .toolbar(.hidden, for: .navigationBar)
                 .navigationDestination(for: HostStatsRoute.self) { route in

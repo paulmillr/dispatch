@@ -372,9 +372,9 @@ final class HostSessions {
     }
 
     /// Saves an edit: the session keeps its connection unless the address, port, user or authentication changed. A new
-    /// multiplexer preference is followed on the live connection. Chat turned off withdraws the hooks and agent
-    /// capabilities from the running helper (`permissions.reduce`; a reconnect when that fails); turned on, the session
-    /// reconnects, as a helper's grant only ever shrinks. The Helper switch reconnects (plain SSH or the helper), unless it
+    /// multiplexer preference is followed on the live connection. Chat or Files & git turned off withdraws their
+    /// capabilities (hooks and the agents', `git.read`) from the running helper (`permissions.reduce`; a reconnect when
+    /// that fails); turned on, the session reconnects, as a helper's grant only ever shrinks. The Helper switch reconnects (plain SSH or the helper), unless it
     /// goes off while the connection is already plain.
     func update(_ record: HostRecord) {
         guard let previous = store.record(record.id) else { return }
@@ -386,8 +386,8 @@ final class HostSessions {
             // connection that is already plain ("Use plain SSH for this host"): that one stays, and so do its shells.
             if previous.helper != saved.helper {
                 if saved.helper || !session.isPlain { reconnect(session) }
-            } else if previous.chat != saved.chat {
-                chatChanged(session)
+            } else if previous.chat != saved.chat || previous.files != saved.files {
+                grantChanged(session, widened: (saved.chat && !previous.chat) || (saved.files && !previous.files))
             }
         } else {
             session.disconnect()
@@ -420,12 +420,12 @@ final class HostSessions {
         changed?()
     }
 
-    private func chatChanged(_ session: HostSession) {
-        guard !session.host.chat, let client = session.client else {
+    private func grantChanged(_ session: HostSession, widened: Bool) {
+        guard !widened, let client = session.client else {
             if session.client != nil || session.link.isPending { reconnect(session) }
             return
         }
-        let reduced = HelperGrant.capabilities(chat: false).sorted()
+        let reduced = HelperGrant.capabilities(chat: session.host.chat, files: session.host.files).sorted()
         Task { [weak self, weak session] in
             do {
                 let _: HelperClient.Empty = try await client.connection.request("permissions.reduce", params: ["capabilities": reduced])
@@ -433,6 +433,17 @@ final class HostSessions {
                 guard let self, let session, session.client === client else { return }
                 self.reconnect(session)
             }
+        }
+    }
+
+    /// Files' Install helper… (S1): the Helper switch on, which reconnects with the helper; a host whose switch is on
+    /// already (its helper could not start last time) connects again and tries once more.
+    func useHelper(host id: UUID) {
+        guard let record = store.record(id) else { return }
+        if record.helper {
+            if let session = sessions[id] { reconnect(session) }
+        } else {
+            setHelper(true, host: id)
         }
     }
 
@@ -604,7 +615,9 @@ final class HostSessions {
     private func context(for session: HostSession, interactive fixed: Bool? = nil) -> HostSessionContext {
         let auth = session.host.auth, id = session.id
         var launch = launch(session.host)
-        if !session.host.chat { launch.capabilities = HelperGrant.capabilityList(chat: false) }
+        if !session.host.chat || !session.host.files {
+            launch.capabilities = HelperGrant.capabilityList(chat: session.host.chat, files: session.host.files)
+        }
         return HostSessionContext(
             launch: launch,
             verifyHostKey: { [weak self, weak session] offer in

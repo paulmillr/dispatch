@@ -110,7 +110,7 @@ struct AgentsToolbar: ToolbarContent {
         ToolbarItem(placement: .topBarTrailing) {
             let on = conversations.unreadOnly
             Button { conversations.unreadOnly.toggle() } label: {
-                // M3a's funnel (no SF Symbol draws one; Spaces' sort menu keeps the lines).
+                // M3a's funnel (no SF Symbol draws one).
                 Image("Funnel")
                     .foregroundStyle(on ? Color.onAccent : Color.primary)
                     .frame(width: 44, height: 44)

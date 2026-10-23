@@ -56,6 +56,8 @@ final class PlainShellFeed: TerminalFeed {
     /// Term's own OSC 52 writes go to the phone's pasteboard: the program is one the user started in a shell they
     /// opened, with no helper or multiplexer between (TerminalConfiguration, clipboard).
     var clipboardWrite: Bool { true }
+    /// Its detach closes the shell.
+    var endsOnDetach: Bool { true }
 
     func attach(_ size: TerminalFeedSize) -> AsyncStream<TerminalFeedEvent> {
         let (operations, queue) = AsyncStream<Operation>.makeStream()

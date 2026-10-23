@@ -160,6 +160,8 @@ struct MobileRoot: View {
         .onChange(of: section) { navigator.showSidebar() }
         .spacesPresentations(navigator, hostViews: composition.hostViews)
         .environment(\.hostSpaceOpening, navigator)
+        // A tab's host disc opens the space switcher (P3) over the stack.
+        .environment(\.tabsSwitcher, navigator)
         // The menu bar and ⌘ chords (MobileCommands).
         .mobileCommands(composition, section: $section, sheet: $sheet)
         #if DEBUG
@@ -167,6 +169,8 @@ struct MobileRoot: View {
         .modifier(HostStatsDebugLaunch(composition: composition))
         .onAppear {
             navigator.selectSection = { name in section = name == "agents" ? .agents : .spaces }
+            // Screenshot launches: `-DispatchSettingsShow G1…G5` opens Settings at that screen (`SettingsView.Route`).
+            if UserDefaults.standard.string(forKey: "DispatchSettingsShow") != nil { sheet = .settings }
         }
         #endif
     }
@@ -192,8 +196,17 @@ struct MobileRoot: View {
         let wide = hidden || (device == .pad && navigator.sidebarSliding)
         return ZStack(alignment: .topLeading) {
             HStack(spacing: 0) {
-                stack(path: Binding(get: { navigator.splitPath.sidebar }, set: { navigator.setSidebar($0) }),
-                      titleInBar: device == .phone)
+                Group {
+                    if device == .pad {
+                        // The iPad's: Spaces' tree alone, its bar row and New space (I1–I5); no tab bar.
+                        PadSidebar(navigator: navigator, hostActions: composition.hosts, hostViews: composition.hostViews,
+                                   content: composition.content, addHost: { sheet = .newHost }, settings: { sheet = .settings },
+                                   width: columns.sidebar)
+                    } else {
+                        stack(path: Binding(get: { navigator.splitPath.sidebar }, set: { navigator.setSidebar($0) }),
+                              titleInBar: true)
+                    }
+                }
                     .frame(width: columns.sidebar)
                     .mobileCompactWidth(device == .pad)
                     .environment(\.tabsColumnWidth, columns.sidebar)
@@ -220,13 +233,17 @@ struct MobileRoot: View {
                 self.fold = fold
             }
         }
+        // The iPad's split has no tab bar to hold the shell's sheets.
+        .modifier(ShellSheets(apply: device == .pad, sheet: $sheet, afterSheet: $afterSheet, composition: composition))
     }
 
     /// The detail column: on an iPad a set width, which changes only outside the slide's animation (the slide moves
     /// it, `SpacesNavigator.toggleSidebar`); on the Duo the rest of the split's space.
     @ViewBuilder private func detail(columns: MobileSplit.Columns, leading: CGFloat, hidden: Bool, wide: Bool) -> some View {
-        let detail = MobileSplitDetail(navigator: navigator, content: composition.content, hostViews: composition.hostViews)
         if device == .pad {
+            // The strip above the tab (I1–I8) instead of the phone's header and capsule.
+            let detail = PadSplitDetail(navigator: navigator, content: composition.content, hostViews: composition.hostViews,
+                                        sidebarHidden: hidden)
             // Across the window whatever its width: a narrower stack centred the columns.
             detail
                 .frame(width: wide ? leading + columns.tab : columns.tab)
@@ -235,7 +252,7 @@ struct MobileRoot: View {
         } else {
             // The rest, not a set width: the probe measures what the columns are given, and a total wider than that
             // centred the row and clipped the sidebar's leading edge.
-            detail
+            MobileSplitDetail(navigator: navigator, content: composition.content, hostViews: composition.hostViews)
                 .frame(maxWidth: .infinity)
                 .padding(.leading, leading)
         }
@@ -247,12 +264,11 @@ struct MobileRoot: View {
     /// name, capsule and Edit in one row overflowed its 280-point sidebar.
     private func stack(path: Binding<[TabsRoute]>, titleInBar: Bool) -> some View {
         let narrow = titleInBar && MobileSplit.narrow(sidebar: columns.sidebar, device: device)
-        // Every host's last update under the large title, where the rows mix hosts: the tree (and edit mode) says it
-        // under each host instead, and the Duo's sidebar has no line for it.
-        let perHost = section == .spaces && (tabs.tree || navigator.editing)
+        // Every host's last update under Agents' large title, where the rows mix hosts: the Spaces tree says it by host
+        // (an offline host's "as of"), and the Duo's sidebar has no line for it.
         let composition = composition
         var subtitle: (@MainActor () -> [HostFreshness])?
-        if !titleInBar, !perHost { subtitle = { composition.freshness } }
+        if !titleInBar, section == .agents { subtitle = { composition.freshness } }
         return NavigationStack(path: path) {
             tabView
                 .navigationTitle(section.title)
@@ -327,28 +343,7 @@ struct MobileRoot: View {
         // New never becomes the selected tab, not even for a frame: refused before UIKit switches tabs (a recording
         // showed the empty tab for 16 frames when only the binding refused it). The binding stays as the fallback.
         .background { NewTabGuard { new() }.allowsHitTesting(false).accessibilityHidden(true) }
-        .sheet(item: $sheet, onDismiss: {
-            let action = afterSheet
-            afterSheet = nil
-            action?()
-        }) { sheet in
-            Group {
-                switch sheet {
-                case .newHost: composition.hostViews.newHost { _ in self.sheet = nil }
-                case .newChat:
-                    NewChatSheet(conversations: conversations, memory: composition.modelMemory, look: composition.look,
-                                 spaceMaker: composition.newChatSpaces, started: { key in
-                        afterSheet = { composition.openChat(key, keyboard: true) }
-                        self.sheet = nil
-                    })
-                case .settings: SettingsView(composition: composition)
-                case .newTab: EmptyView()
-                }
-            }
-            .tint(.dispatchPink)
-        }
-        // Host key questions show over the app; a sheet that registers later (New host) takes them over.
-        .hostTrustPrompt()
+        .modifier(ShellSheets(apply: true, sheet: $sheet, afterSheet: $afterSheet, composition: composition))
     }
 
     /// The Agents section (Mobile/Agents), or a demo screen in Debug builds (ChatDemo).
@@ -367,6 +362,45 @@ struct MobileRoot: View {
                          if let ref = composition.tab(for: conversation.key) { navigator.actions.close(.tab(ref), .close) }
                      },
                      chrome: false, refresh: { await composition.hosts.refresh() })
+    }
+}
+
+/// The shell's sheets (New host, New chat, Settings) and the host key questions: on the tab bar, and on the iPad's split,
+/// which has none.
+private struct ShellSheets: ViewModifier {
+    let apply: Bool
+    @Binding var sheet: MobileSheet?
+    @Binding var afterSheet: (() -> Void)?
+    let composition: MobileComposition
+
+    func body(content: Content) -> some View {
+        if apply {
+            content
+                .sheet(item: $sheet, onDismiss: {
+                    let action = afterSheet
+                    afterSheet = nil
+                    action?()
+                }) { sheet in
+                    Group {
+                        switch sheet {
+                        case .newHost: composition.hostViews.newHost { _ in self.sheet = nil }
+                        case .newChat:
+                            NewChatSheet(conversations: composition.conversations, memory: composition.modelMemory,
+                                         look: composition.look, spaceMaker: composition.newChatSpaces, started: { key in
+                                afterSheet = { composition.openChat(key, keyboard: true) }
+                                self.sheet = nil
+                            })
+                        case .settings: SettingsView(composition: composition)
+                        case .newTab: EmptyView()
+                        }
+                    }
+                    .tint(.dispatchPink)
+                }
+                // Host key questions show over the app; a sheet that registers later (New host) takes them over.
+                .hostTrustPrompt()
+        } else {
+            content
+        }
     }
 }
 

@@ -1,8 +1,8 @@
 import XCTest
 
 /// Dispatch on an iPad with a hardware keyboard (docs/ios.md, iPad), against the scripted hosts
-/// (`DISPATCH_MOBILE_SCRIPTED`): the split in both orientations, the menu bar's chords sent with `typeKey`, New in both
-/// sections, and the sheets as form sheets. `-DispatchHardwareKeyboard YES` pins the keyboard, so the run does not
+/// (`DISPATCH_MOBILE_SCRIPTED`): the split in both orientations (the sidebar's tree, the strip's pills and modes), the
+/// menu bar's chords sent with `typeKey`, New host and New chat, and the sheets as form sheets. `-DispatchHardwareKeyboard YES` pins the keyboard, so the run does not
 /// depend on the simulator's keyboard setting. Skipped on an iPhone. Screenshots are attached to the result bundle,
 /// and written to `DISPATCH_IPAD_SHOTS` (`TEST_RUNNER_DISPATCH_IPAD_SHOTS` through xcodebuild) when it names a folder.
 /// Slide Over and Split View are not scriptable (XCUITest cannot resize the app's window): the narrow window's stack
@@ -23,7 +23,7 @@ final class IPadUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchEnvironment["DISPATCH_MOBILE_SCRIPTED"] = scripted
         app.launchArguments = ["-DispatchHardwareKeyboard", "YES", "-appearance", "dark"]
-            + (arguments.contains("-DispatchTabsTree") ? [] : ["-DispatchTabsTree", "NO"]) + arguments
+            + arguments
         app.launch()
         return app
     }
@@ -48,33 +48,52 @@ final class IPadUITests: XCTestCase {
         XCTAssertEqual(result, .completed, "\(element) \(gone ? "still shows" : "never showed")", file: file, line: line)
     }
 
-    /// The tab rows of the "dispatch" space on the scripted ai host, in the flat list.
-    private func dispatchRows(_ app: XCUIApplication) -> XCUIElementQuery {
-        app.buttons.matching(NSPredicate(format: "label == %@", "terminal, dispatch · ai"))
+    /// The "dispatch" space's row in the sidebar's tree (the scripted ai host's).
+    private func dispatchRow(_ app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "label == %@", "dispatch")).firstMatch
     }
 
-    /// The tab bar's section (the tree toggle in Spaces' header is also labelled "Spaces").
-    private func section(_ app: XCUIApplication, _ title: String) -> XCUIElement {
-        app.buttons.matching(identifier: title == "Spaces" ? "square.on.square" : "bubble.left.and.bubble.right").firstMatch
+    /// The strip's selected pill's identifier (`pad-tab-<key>`): a narrow strip holds only it and the overflow menu.
+    private func selectedPill(_ app: XCUIApplication) -> String? {
+        let pill = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'pad-tab-' AND selected == true")).firstMatch
+        return pill.waitForExistence(timeout: 5) ? pill.identifier : nil
     }
 
+    /// Waits for the selected pill to be `identifier` (or, with `not`, anything else).
+    private func waitForSelectedPill(_ app: XCUIApplication, _ identifier: String?, not: Bool = false) -> Bool {
+        for _ in 0..<50 {
+            let shown = selectedPill(app)
+            if not ? shown != identifier && shown != nil : shown == identifier { return true }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        return false
+    }
+
+    /// The sidebar's filter menu (`PadFilterMenu`): its value starts with the filter's name.
+    private func filter(_ app: XCUIApplication) -> XCUIElement { app.buttons["Filter"].firstMatch }
+
+    /// The strip's mode switch (`PadModeSwitch`): a container of buttons labelled Terminal, Chat, Files, Review, Commits.
     private func segment(_ app: XCUIApplication, _ title: String) -> XCUIElement {
-        app.segmentedControls.buttons[title]
+        app.otherElements["tab-segments"].buttons[title]
     }
 
-    /// The window splits upright and on its side: Spaces beside the empty detail column, then beside the tab a row
-    /// opened, which the sidebar marks; the sidebar keeps a sidebar's width.
+    /// The window splits upright and on its side: the tree beside the empty detail column, then beside the space's tab
+    /// a row opened, with the strip over it; the sidebar marks the space and keeps a sidebar's width.
     func testTheSplitInBothOrientations() throws {
         let app = launch()
         let empty = app.staticTexts["No tab open"]
         wait(empty)
-        let row = dispatchRows(app).firstMatch
+        let row = dispatchRow(app)
         wait(row)
+        XCTAssertFalse(app.tabBars.firstMatch.exists, "The sidebar is the tree alone")
         shot("split-portrait-empty")
         row.tap()
         wait(segment(app, "Terminal"))
+        XCTAssertNotNil(selectedPill(app), "Its first tab, selected in the strip")
+        XCTAssertGreaterThanOrEqual(app.descendants(matching: .any)["pad-tabs"].buttons.count, 2,
+                                    "The other tab beside it, or in the overflow menu")
         XCTAssertTrue(row.isHittable, "The sidebar stays beside the tab")
-        XCTAssertTrue(row.waitForSelection(), "The sidebar marks the shown tab")
+        XCTAssertTrue(row.waitForSelection(), "The sidebar marks the shown space")
         let window = app.windows.firstMatch.frame
         XCTAssertLessThan(row.frame.maxX, window.width * 0.6, "A sidebar, not half the window or more")
         shot("split-portrait-tab")
@@ -90,15 +109,15 @@ final class IPadUITests: XCTestCase {
         XCTAssertTrue(row.waitForSelection(), "Rotating back keeps the tab")
     }
 
-    /// ⌘1 and ⌘2 select the sections; ⌘, opens Settings and ⌘/ Keyboard Shortcuts as form sheets; nothing opens over
-    /// a sheet; ⌥⌘N opens New chat.
+    /// ⌘1 and ⌘2 set the sidebar's filter (All, Agents); ⌘, opens Settings and ⌘/ Keyboard Shortcuts as form sheets;
+    /// nothing opens over a sheet; ⌥⌘N opens New chat.
     func testSectionAndSheetShortcuts() throws {
         let app = launch()
-        wait(dispatchRows(app).firstMatch)
+        wait(dispatchRow(app))
         app.typeKey("2", modifierFlags: .command)
-        XCTAssertTrue(section(app, "Agents").waitForSelection(), "⌘2: Agents")
+        XCTAssertTrue(filter(app).waitForValue(prefix: "Agents"), "⌘2: Agents")
         app.typeKey("1", modifierFlags: .command)
-        XCTAssertTrue(section(app, "Spaces").waitForSelection(), "⌘1: Spaces")
+        XCTAssertTrue(filter(app).waitForValue(prefix: "All"), "⌘1: All")
 
         app.typeKey(",", modifierFlags: .command)
         let settings = app.navigationBars["Settings"]
@@ -125,33 +144,37 @@ final class IPadUITests: XCTestCase {
         wait(app.staticTexts["New chat"], gone: true)
     }
 
-    /// A tab's chords in the split: ⇧⌘C switches its segment, ⌘] and ⌘[ step to the space's other tab in place (the
-    /// sidebar's mark follows, round the end); without a tab shown they do not apply.
+    /// A tab's chords in the split: ⇧⌘C switches its mode, ⇧⌘F shows Files and back, ⌘] and ⌘[ step along the strip
+    /// (round the end); without a tab shown they do not apply.
     func testTabShortcuts() throws {
         let app = launch()
-        let rows = dispatchRows(app)
-        wait(rows.firstMatch)
+        wait(dispatchRow(app))
         app.typeKey("]", modifierFlags: .command)
         XCTAssertTrue(app.staticTexts["No tab open"].waitForExistence(timeout: 1), "No tab: Next Tab does not apply")
 
-        rows.element(boundBy: 0).tap()
+        dispatchRow(app).tap()
         let chat = segment(app, "Chat"), terminal = segment(app, "Terminal")
         wait(terminal)
-        XCTAssertTrue(rows.element(boundBy: 0).waitForSelection())
+        let first = selectedPill(app)
+        XCTAssertNotNil(first)
         let before = chat.isSelected
         app.typeKey("c", modifierFlags: [.command, .shift])
         XCTAssertTrue((before ? terminal : chat).waitForSelection(), "⇧⌘C switches the segment")
         app.typeKey("c", modifierFlags: [.command, .shift])
         XCTAssertTrue((before ? chat : terminal).waitForSelection(), "and back")
+        app.typeKey("f", modifierFlags: [.command, .shift])
+        XCTAssertTrue(segment(app, "Files").waitForSelection(), "⇧⌘F: Files")
+        app.typeKey("f", modifierFlags: [.command, .shift])
+        XCTAssertTrue(terminal.waitForSelection(), "and back to Terminal")
 
         app.typeKey("]", modifierFlags: .command)
-        XCTAssertTrue(rows.element(boundBy: 1).waitForSelection(), "⌘]: the next tab, marked in the sidebar")
-        XCTAssertFalse(rows.element(boundBy: 0).isSelected)
+        XCTAssertTrue(waitForSelectedPill(app, first, not: true), "⌘]: the next tab, selected in the strip")
+        let second = selectedPill(app)
         shot("split-next-tab")
         app.typeKey("[", modifierFlags: .command)
-        XCTAssertTrue(rows.element(boundBy: 0).waitForSelection(), "⌘[: back to the first")
+        XCTAssertTrue(waitForSelectedPill(app, first), "⌘[: back to the first")
         app.typeKey("[", modifierFlags: .command)
-        XCTAssertTrue(rows.element(boundBy: 1).waitForSelection(), "⌘[ round the end")
+        XCTAssertTrue(waitForSelectedPill(app, second), "⌘[ round the end")
     }
 
     /// Toggle Sidebar (⌃⌘S, and the Mac's hidden ⌘\\) hides the sidebar beside a tab and brings it back; with it
@@ -159,36 +182,39 @@ final class IPadUITests: XCTestCase {
     /// Without a tab it does not apply.
     func testToggleSidebarShortcuts() throws {
         let app = launch()
-        let rows = dispatchRows(app)
-        wait(rows.firstMatch)
+        let row = dispatchRow(app)
+        wait(row)
         let hide = app.buttons["Hide sidebar"], show = app.buttons["Show sidebar"]
         app.typeKey("s", modifierFlags: [.command, .control])
-        XCTAssertTrue(rows.firstMatch.isHittable, "No tab: the sidebar is all there is")
+        XCTAssertTrue(row.isHittable, "No tab: the sidebar is all there is")
 
-        rows.element(boundBy: 0).tap()
-        wait(hide)
+        row.tap()
+        wait(segment(app, "Terminal"))
+        let first = selectedPill(app)
         app.typeKey("s", modifierFlags: [.command, .control])
         wait(show)
-        XCTAssertFalse(rows.firstMatch.isHittable, "⌃⌘S: the sidebar is out of the window")
+        XCTAssertFalse(row.isHittable, "⌃⌘S: the sidebar is out of the window")
+        XCTAssertTrue(app.buttons["Space switcher"].exists, "The strip leads with the space's capsule")
         shot("toggle-sidebar-hidden")
         app.typeKey("]", modifierFlags: .command)
         Thread.sleep(forTimeInterval: 0.5)
         XCTAssertTrue(show.exists, "⌘]: the next tab keeps the window")
+        XCTAssertTrue(waitForSelectedPill(app, first, not: true))
+        let next = selectedPill(app)
         app.typeKey("\\", modifierFlags: .command)
-        wait(hide)
-        XCTAssertTrue(rows.element(boundBy: 1).waitForSelection(), "⌘\\: back, marking the tab ⌘] showed")
+        XCTAssertTrue(row.waitForHittable(), "⌘\\: back")
+        XCTAssertEqual(selectedPill(app), next, "the tab ⌘] showed")
 
         app.typeKey("s", modifierFlags: [.command, .control])
         wait(show)
         app.typeKey("2", modifierFlags: .command)
-        wait(hide)
-        XCTAssertTrue(section(app, "Agents").waitForSelection(), "⌘2 brings the sidebar back on Agents")
+        XCTAssertTrue(filter(app).waitForValue(prefix: "Agents"), "⌘2 brings the sidebar back on Agents")
+        XCTAssertTrue(hide.isHittable)
         app.typeKey("s", modifierFlags: [.command, .control])
         wait(show)
         app.typeKey("1", modifierFlags: .command)
-        wait(hide)
-        XCTAssertTrue(section(app, "Spaces").waitForSelection(), "⌘1 on Spaces")
-        XCTAssertTrue(rows.firstMatch.isHittable)
+        XCTAssertTrue(filter(app).waitForValue(prefix: "All"), "⌘1 on All")
+        XCTAssertTrue(row.waitForHittable())
     }
 
     /// The host key questions fit an iPad either way up: a page sheet, every row above the buttons (a form sheet cut
@@ -217,7 +243,7 @@ final class IPadUITests: XCTestCase {
     /// default, saved where Settings shows it; the open terminal redraws at the new size.
     func testFontSizeShortcuts() throws {
         let app = launch()
-        let row = dispatchRows(app).firstMatch
+        let row = dispatchRow(app)
         wait(row)
         row.tap()
         let terminal = segment(app, "Terminal")
@@ -251,8 +277,7 @@ final class IPadUITests: XCTestCase {
         return size
     }
 
-    /// New in both sections: Spaces' Add host while there is no host (its empty state) and Agents' New chat, each a
-    /// form sheet. The tab bar's own New is the shell's (MobileRoot), checked by its tests.
+    /// New host from the sidebar's empty state and New chat (⌥⌘N), each a form sheet over the split.
     func testNewInBothSections() throws {
         let app = launch("empty")
         wait(app.staticTexts["No hosts yet"], timeout: 10)
@@ -263,16 +288,13 @@ final class IPadUITests: XCTestCase {
         shot("new-host")
         app.buttons["Cancel"].tap()
         wait(newHost, gone: true)
-        XCTAssertTrue(section(app, "Spaces").isSelected)
+        XCTAssertFalse(app.tabBars.firstMatch.exists, "No tab bar beside the split")
 
-        app.typeKey("2", modifierFlags: .command)
-        XCTAssertTrue(section(app, "Agents").waitForSelection())
         app.typeKey("n", modifierFlags: [.command, .option])
         wait(app.staticTexts["New chat"])
         shot("new-chat")
         app.buttons["Close"].tap()
         wait(app.staticTexts["New chat"], gone: true)
-        XCTAssertTrue(section(app, "Agents").isSelected)
     }
 }
 
@@ -281,5 +303,17 @@ private extension XCUIElement {
     func waitForSelection(timeout: TimeInterval = 5) -> Bool {
         let expectation = XCTNSPredicateExpectation(predicate: NSPredicate(format: "selected == true"), object: self)
         return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
+    }
+
+    /// Waits for the element's value to start with `prefix` (the filter menu's "Agents, 2 need you").
+    func waitForValue(prefix: String, timeout: TimeInterval = 5) -> Bool {
+        let predicate = NSPredicate(format: "value BEGINSWITH %@", prefix)
+        return XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: self)], timeout: timeout) == .completed
+    }
+
+    /// Waits for the element to be hittable (the sidebar's slide back).
+    func waitForHittable(timeout: TimeInterval = 5) -> Bool {
+        let predicate = NSPredicate(format: "hittable == true")
+        return XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: self)], timeout: timeout) == .completed
     }
 }

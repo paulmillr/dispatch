@@ -20,14 +20,6 @@ enum GitError: Error, Hashable, Sendable {
     }
 }
 
-/// Which commits a log page holds. A filter runs twice, once against messages and once against authors, and the
-/// two are merged by hash (`GitLogPages`).
-enum GitLogMatch: Hashable, Sendable {
-    case everything
-    case message(String)
-    case author(String)
-}
-
 /// An untracked file counted for the Changes list: its lines (nil for a binary or a file past the read's limit), what
 /// the count read, and the file's size and modification time as read.
 struct GitLineCount: Hashable, Sendable {
@@ -36,13 +28,6 @@ struct GitLineCount: Hashable, Sendable {
     var read: Int
     var size: UInt64
     var modified: Date?
-}
-
-/// One page of the log and whether git had more to give.
-struct GitLogPage: Hashable, Sendable {
-    var commits: [GitCommit]
-    /// The page came back shorter than asked (not because the bound cut it): nothing follows.
-    var exhausted: Bool
 }
 
 /// The read-only git commands behind the Changes and Commits tabs and the Files list's marks, over
@@ -55,9 +40,9 @@ struct GitQueries: Sendable {
 
     /// The log record: hash, parents, author, email, author date (unix), decorations, subject, body, then NUL
     /// (`GitParsers.record`).
-    static let format = "--format=%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%D%x1f%s%x1f%b%x00"
+    static let format = GitCommands.format
     /// `%(*objectname)` is the commit an annotated tag peels to (empty for every other ref), which is what the log lists.
-    static let refsFormat = "--format=%(refname)%09%(objectname)%09%(HEAD)%09%(*objectname)"
+    static let refsFormat = GitCommands.refsFormat
     /// What an untracked file is read up to for its diff.
     static let readBound: UInt64 = 2 << 20
     /// The output bound of the status and its counts: the helper's cap (2 MiB is its default), so a large work tree
@@ -202,18 +187,13 @@ struct GitQueries: Sendable {
     /// whose message or author holds `match` (literally, ignoring case).
     func log(scope: GitLogScope, match: GitLogMatch = .everything, skip: Int, count: Int,
              from tip: String? = nil) async throws(GitError) -> GitLogPage {
-        var args = ["log", "-n", String(count), "--skip=\(skip)", Self.format, "--date=unix"]
-        if scope == .all { args.append("--all") }
-        switch match {
-        case .everything: break
-        case .message(let text): args += ["--grep=\(text)", "--regexp-ignore-case", "--fixed-strings"]
-        case .author(let text): args += ["--author=\(text)", "--regexp-ignore-case", "--fixed-strings"]
-        }
-        if scope == .branch, let tip { args.append(try Self.checked(tip)) }
+        var checkedTip: String?
+        if scope == .branch, let tip { checkedTip = try Self.checked(tip) }
+        let args = GitCommands.log(scope: scope, match: match, skip: skip, count: count, tip: checkedTip)
         // Which of them are signed, the author date's offset and the committer: the same range in the raw format, whose
         // headers name a signature without checking it, read beside the page. A page without it shows less rather than
         // failing.
-        let rawArgs = args.map { $0 == Self.format ? "--pretty=raw" : $0 }.filter { $0 != "--date=unix" }
+        let rawArgs = GitCommands.raw(args)
         async let raw = try? self.output(rawArgs)
         let output: GitOutput
         do throws(GitError) {
@@ -240,7 +220,7 @@ struct GitQueries: Sendable {
     /// programs the helper trusts). Nil when the source did not answer.
     func verify(_ hash: String) async -> GitSignatureCheck? {
         guard let hash = try? Self.checked(hash),
-              let output = try? await source.git(root, args: ["verify-commit", "--raw", hash], limit: 0) else { return nil }
+              let output = try? await source.git(root, args: GitCommands.verify(hash), limit: 0) else { return nil }
         return GitParsers.signatureCheck(output.output, status: output.status)
     }
 
@@ -248,7 +228,7 @@ struct GitQueries: Sendable {
     /// detached or not, from one that stayed.
     func head() async throws(GitError) -> String? {
         do throws(GitError) {
-            let hash = try await run(["rev-parse", "--verify", "HEAD"]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let hash = try await run(GitCommands.head).trimmingCharacters(in: .whitespacesAndNewlines)
             return GitParsers.isObjectName(hash) ? hash : nil
         } catch .failed {
             // "Needed a single revision": nothing is committed yet.
@@ -257,7 +237,7 @@ struct GitQueries: Sendable {
     }
 
     func refs() async throws(GitError) -> [GitRefRecord] {
-        GitParsers.refs(try await run(["for-each-ref", Self.refsFormat, "refs/heads", "refs/remotes", "refs/tags"]))
+        GitParsers.refs(try await run(GitCommands.refs))
     }
 
     /// The commit, its files' counts and their letters (A, D, M, R, C, T). git prints `--numstat` or `--name-status`,
@@ -265,12 +245,12 @@ struct GitQueries: Sendable {
     /// what its counts describe: `show` names only the files a merge changed against every parent.
     func commit(_ hash: String) async throws(GitError) -> GitCommitDetail {
         let hash = try Self.checked(hash)
-        async let shown = result(["show", "--name-status", "-z", Self.format, hash])
-        let output = try await run(["show", "--numstat", "-z", Self.format, hash])
+        async let shown = result(GitCommands.show(hash, numstat: false))
+        let output = try await run(GitCommands.show(hash, numstat: true))
         guard let counted = GitParsers.commitDetail(output) else { throw GitError.failed("git described no commit \(hash)") }
         let letters: [GitNameStatus]
         if let parent = counted.commit.parents.first, counted.commit.parents.count > 1 {
-            letters = GitParsers.nameStatus(try await run(["diff", "--name-status", "-z", try Self.checked(parent), hash]))
+            letters = GitParsers.nameStatus(try await run(GitCommands.mergeLetters(parent: try Self.checked(parent), hash: hash)))
         } else {
             letters = GitParsers.commitNameStatus(try await shown.get())
         }
@@ -285,16 +265,8 @@ struct GitQueries: Sendable {
             throw GitError.failed(GitChange.unrepresentable)
         }
         let hash = try Self.checked(commit.hash)
-        let paths = Self.paths(path, old: oldPath)
-        let args: [String], stat: [String]
-        if commit.parents.count > 1 {
-            let parent = try Self.checked(commit.parents[0])
-            args = ["diff", "-U3", parent, hash, "--"] + paths
-            stat = ["diff", "--stat", parent, hash, "--"] + paths
-        } else {
-            args = ["show", "--format=", "-U3", hash, "--"] + paths
-            stat = ["show", "--stat", "--format=", hash, "--"] + paths
-        }
+        let parent = try commit.parents.count > 1 ? Self.checked(commit.parents[0]) : nil
+        let (args, stat) = GitCommands.fileDiff(hash, mergeParent: parent, paths: Self.paths(path, old: oldPath))
         let output = try await output(args)
         var diff = GitParsers.diffs(output.output, truncated: output.truncated).last
             ?? GitDiff(path: path, oldPath: oldPath, text: "", truncated: output.truncated)
@@ -313,12 +285,9 @@ struct GitQueries: Sendable {
             throw GitError.failed(GitChange.unrepresentable)
         }
         let hash = try Self.checked(commit.hash)
-        let paths = Self.paths(path, old: oldPath)
-        // More context than a file within the limit has lines: the patch is one hunk holding all of it.
-        let whole = "-U\(GitChangesText.sourceLimit)"
-        let args = commit.parents.count > 1
-            ? ["diff", whole, try Self.checked(commit.parents[0]), hash, "--"] + paths
-            : ["show", "--format=", whole, hash, "--"] + paths
+        let parent = try commit.parents.count > 1 ? Self.checked(commit.parents[0]) : nil
+        let args = GitCommands.fileSource(hash, mergeParent: parent, paths: Self.paths(path, old: oldPath),
+                                          limit: GitChangesText.sourceLimit)
         let output = try await output(args, limit: GitChangesText.sourceLimit * 2)
         if output.truncated { throw GitError.failed("Over 2 MB · the terminal shows the rest") }
         guard let text = GitParsers.newSide(output.output) else {
@@ -390,17 +359,13 @@ struct GitQueries: Sendable {
 
     /// Paths after `--`. One holding pathspec magic (`*`, `?`, `[`, a leading `:`) is passed literally, or git would
     /// match it as a pattern.
-    static func paths(_ path: String, old: String?) -> [String] {
-        (old.map { [literal($0)] } ?? []) + [literal(path)]
-    }
+    static func paths(_ path: String, old: String?) -> [String] { GitCommands.paths(path, old: old) }
 
-    static func literal(_ path: String) -> String {
-        path.contains(where: { "*?[\\".contains($0) }) || path.hasPrefix(":") ? ":(literal)" + path : path
-    }
+    static func literal(_ path: String) -> String { GitCommands.literal(path) }
 
     /// A hash from git's own output, refused before it reaches git if it is anything else (an option, a range).
     static func checked(_ hash: String) throws(GitError) -> String {
-        guard (4...64).contains(hash.utf8.count), GitParsers.isHex(hash) else { throw GitError.failed("\(hash) is not a commit hash") }
+        guard let hash = GitCommands.checked(hash) else { throw GitError.failed("\(hash) is not a commit hash") }
         return hash
     }
 
@@ -418,71 +383,12 @@ struct GitQueries: Sendable {
     }
 }
 
-/// The log as the Commits tab loads it, page by page: one query, or a filter's two (message and author) merged by
-/// hash, newest first.
-struct GitLogPages: Hashable, Sendable {
-    struct Query: Hashable, Sendable {
-        var match: GitLogMatch
-        /// Each commit once.
-        var commits: [GitCommit] = []
-        var exhausted = false
-        /// What git has printed so far, repeats included: where the next page starts.
-        var fetched = 0
-    }
-
-    var scope: GitLogScope
-    var filter: String
-    /// The commit the branch scope pages from (HEAD when the first page was read), so a commit or checkout between
-    /// two pages cannot shift the second; nil follows HEAD (nothing committed yet). The refs check notices the move
-    /// and starts the pages over.
-    var tip: String?
-    var queries: [Query]
-
-    init(scope: GitLogScope, filter: String, tip: String? = nil) {
-        self.scope = scope
-        self.filter = filter
-        self.tip = tip
-        let text = filter.trimmingCharacters(in: .whitespacesAndNewlines)
-        queries = text.isEmpty ? [Query(match: .everything)] : [Query(match: .message(text)), Query(match: .author(text))]
-    }
-
-    var exhausted: Bool { queries.allSatisfy(\.exhausted) }
-
-    /// The merged commits whose order is certain: those no later page of an unfinished query could precede.
-    var commits: [GitCommit] {
-        if queries.count == 1 { return queries[0].commits }
-        var seen = Set<String>(), merged: [GitCommit] = []
-        var cursors = queries.map { $0.commits[...] }
-        while true {
-            var best: Int?
-            for index in cursors.indices {
-                guard let head = cursors[index].first else { continue }
-                if let current = best, let other = cursors[current].first, other.date >= head.date { continue }
-                best = index
-            }
-            guard let index = best, let next = cursors[index].popFirst() else { break }
-            if seen.insert(next.hash).inserted { merged.append(next) }
-        }
-        let cutoff = queries.filter { !$0.exhausted }.compactMap { $0.commits.last?.date }.max()
-        guard let cutoff else { return merged }
-        return merged.filter { $0.date >= cutoff }
-    }
-
-    /// Loads each unfinished query up to `wanted` commits, a page (`GitLoader.page`) at a time: the helper refuses
-    /// more than 1,000 a call, and starting over after the refs moved may want several thousand. A page that repeats
-    /// commits (`--all` while a ref moved) adds only the new ones.
+extension GitLogPages {
+    /// `fill` through `queries`, a page (`GitLoader.page`) at a time.
     mutating func fill(_ wanted: Int, with queries: GitQueries) async throws(GitError) {
-        for index in self.queries.indices {
-            while !self.queries[index].exhausted, self.queries[index].commits.count < wanted {
-                let query = self.queries[index]
-                let page = try await queries.log(scope: scope, match: query.match, skip: query.fetched,
-                                                 count: min(wanted - query.commits.count, GitLoader.page), from: tip)
-                var seen = Set(query.commits.map(\.hash))
-                self.queries[index].commits += page.commits.filter { seen.insert($0.hash).inserted }
-                self.queries[index].fetched += page.commits.count
-                self.queries[index].exhausted = page.exhausted
-                if page.commits.isEmpty { break }
-            }
+        let scope = scope
+        try await fill(wanted, page: GitLoader.page) { (match, skip, count, tip) throws(GitError) in
+            try await queries.log(scope: scope, match: match, skip: skip, count: count, from: tip)
         }
     }
 }

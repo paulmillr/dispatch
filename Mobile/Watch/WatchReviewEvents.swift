@@ -19,8 +19,8 @@ final class WatchReviewEvents {
         let files: Int
         let sent: Date
         let undoUntil: Date
-        /// Takes the review back; false when it could not (the agent has it already).
-        let undo: @MainActor () -> Bool
+        /// Takes the review back, waiting for the helper's answer; false when it could not (the agent has it already).
+        let undo: @MainActor () async -> Bool
     }
 
     /// Why the watch's Undo did nothing.
@@ -43,7 +43,7 @@ final class WatchReviewEvents {
     /// A review went out with `window` to take it back; returns the event's id.
     @discardableResult
     func post(key: ChatConversationKey, agent: String?, title: String, comments: Int, files: Int, window: TimeInterval,
-              undo: @escaping @MainActor () -> Bool) -> String {
+              undo: @escaping @MainActor () async -> Bool) -> String {
         let now = clock()
         let event = Event(id: UUID().uuidString, key: key, agent: agent, title: title, comments: comments, files: files, sent: now,
                           undoUntil: now.addingTimeInterval(window), undo: undo)
@@ -58,10 +58,10 @@ final class WatchReviewEvents {
     }
 
     /// The watch's Undo.
-    func undo(_ id: String) -> Result<Void, UndoFailure> {
+    func undo(_ id: String) async -> Result<Void, UndoFailure> {
         guard let event = events.first(where: { $0.id == id }) else { return .failure(.unknown) }
         guard clock() < event.undoUntil else { return .failure(.tooLate) }
-        guard event.undo() else { return .failure(.tooLate) }
+        guard await event.undo() else { return .failure(.tooLate) }
         finished(id)
         return .success(())
     }

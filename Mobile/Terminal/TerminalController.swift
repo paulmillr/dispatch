@@ -11,6 +11,12 @@ final class TerminalController {
     @ObservationIgnored let hostView: TerminalHostView
     @ObservationIgnored private let ownsPresence: Bool
     private(set) var capsule = KeyCapsuleModel()
+    /// The search capsule's state (T1); while it shows it takes the key capsule's place.
+    let search = TerminalSearch()
+    /// The key bar's menu (T2) is on screen: its key shows the ellipsis, lit.
+    private(set) var menuOpen = false
+    /// The terminal had the focus when the search opened: Done gives it back (and its keyboard).
+    @ObservationIgnored private var focusBeforeSearch = false
     /// Where the software keyboard is: docked (the capsule rides on it), floating or split (the capsule stays at the
     /// bottom), or hidden (also when a hardware keyboard leaves only the shortcut bar).
     private(set) var keyboard = TerminalAdaptation.Keyboard.hidden
@@ -65,16 +71,32 @@ final class TerminalController {
         hostView.onKeySent = { [weak self] in _ = self?.capsule.consume() }
         hostView.onFontSize = { size in UserDefaults.standard.set(size, forKey: Self.fontSizeKey) }
         hostView.onKeyboardFrame = { [weak self] frame in self?.keyboardChanged(frame) }
+        let search = search, hostView = hostView
+        search.perform = { [weak hostView] action in hostView?.bindingAction(action) }
+        hostView.onSearchEvent = { [weak search] event in search?.apply(event) }
+        hostView.onFind = { [weak self] command in
+            guard let self else { return }
+            switch command {
+            case .open: self.openSearch()
+            case .next, .previous:
+                // A closed search opens on its newest match ("1 of N"); the next ⌘G steps.
+                guard self.search.visible else { return self.openSearch() }
+                if command == .next { self.search.next() } else { self.search.previous() }
+            }
+        }
     }
 
     isolated deinit {
         timer?.cancel()
     }
 
-    /// The configuration with the font size a pinch (or Settings) last chose, else the device class's default.
-    static func storedConfiguration() -> TerminalConfiguration {
-        var configuration = TerminalConfiguration()
-        let stored = UserDefaults.standard.double(forKey: fontSizeKey)
+    /// The configuration with the font size a pinch (or Settings) last chose, else the device class's default, in
+    /// Settings' style (`TerminalStyle`: font, scheme, contrast, cursor, bold).
+    static func storedConfiguration(_ defaults: UserDefaults = .standard) -> TerminalConfiguration {
+        // A bundled family must be registered before the session looks it up.
+        MobileFonts.register()
+        var configuration = TerminalStyle(defaults).applied(to: TerminalConfiguration())
+        let stored = defaults.double(forKey: fontSizeKey)
         configuration.fontSize = TerminalConfiguration.fontSizes.contains(stored) ? stored : defaultFontSize
         return configuration
     }
@@ -96,6 +118,7 @@ final class TerminalController {
 
     /// The segment went away: an own presence stops observing; a shared one stays for Chat.
     func disappear() {
+        search.close()
         hostView.onSized = nil
         if ownsPresence { presence.stop() }
         capsule.hideCluster()
@@ -177,6 +200,74 @@ final class TerminalController {
         }
     }
 
+    // MARK: the key bar's menu (T2)
+
+    /// What the capsule's last key is: the keyboard key (a tap shows the software keyboard, a long press opens the
+    /// menu), the menu itself while the software keyboard is up (a tap opens it: typing has the keyboard already), or
+    /// on an iPad with a hardware keyboard the key that folds the capsule (a long press opens the menu).
+    var menuKey: TerminalMenuKeyRole {
+        if keysCanHide { return .hideKeys }
+        return keyboardVisible ? .menu : .keyboard
+    }
+
+    /// A menu item chosen.
+    func perform(_ item: TerminalMenuItem) {
+        switch item {
+        case .search: openSearch()
+        case .paste: paste()
+        case .selectAll: selectAll()
+        case .clearScreen: clearScreen()
+        case .resetTerminal: resetTerminal()
+        case .hideKeyboard: if keyboardVisible { toggleKeyboard() }
+        }
+    }
+
+    /// The menu opened or closed (its key lights while it shows).
+    func menu(open: Bool) {
+        if open != menuOpen { menuOpen = open }
+    }
+
+    /// Search: the search capsule in the key capsule's place, its field focused (with the software keyboard unless a
+    /// hardware one is attached). The cluster and the latches are let go (`KeyCapsuleModel.reset`): the capsule is
+    /// gone, so nothing it latched may modify a key typed after the search.
+    func openSearch() {
+        if !search.visible {
+            focusBeforeSearch = hostView.isFirstResponder
+            capsule.reset()
+            timer?.cancel()
+            timer = nil
+        }
+        search.open()
+    }
+
+    /// Done (or Esc in the field): the key capsule again; the terminal gets the focus back if it had it.
+    func closeSearch() {
+        guard search.visible else { return }
+        search.close()
+        if focusBeforeSearch { _ = hostView.becomeFirstResponder() }
+        focusBeforeSearch = false
+    }
+
+    /// Paste: the pasteboard's text, bracketed when the program asked for it.
+    func paste() { hostView.paste(nil) }
+
+    /// Select all: the screen and its history, with handles and the edit menu's Copy.
+    func selectAll() { hostView.selectAllWithMenu() }
+
+    /// Clear screen (⌘K on a keyboard): the Mac's `clear_screen`.
+    func clearScreen() { hostView.clearScreen(nil) }
+
+    /// Reset terminal can run: not while Chat is sending through this terminal (a reattach mid-send would leave the
+    /// send uncertain).
+    var canReset: Bool { !presence.chatSending }
+
+    /// Reset terminal: a full reset, repainted from the server's screen where there is one (`TerminalPresence`).
+    func resetTerminal() {
+        guard canReset else { return }
+        closeSearch()
+        presence.resetTerminal()
+    }
+
     /// The capsule's keyboard key: shows the software keyboard, or hides it while hardware keys and the capsule
     /// keep working.
     func toggleKeyboard() {
@@ -219,5 +310,78 @@ enum TerminalSubtitle {
         guard let url = URL(string: value), url.scheme == "file" || url.scheme == "kitty-shell-cwd" else { return nil }
         let path = url.path(percentEncoded: false)
         return path.isEmpty ? nil : path
+    }
+}
+
+/// The capsule's last key (T2): what a tap does, and its glyph and label.
+enum TerminalMenuKeyRole: Equatable {
+    /// The software keyboard is down: a tap brings it, a long press opens the menu.
+    case keyboard
+    /// The software keyboard is up: the key is the menu's ellipsis, a tap opens it.
+    case menu
+    /// An iPad with a hardware keyboard: a tap folds the capsule, a long press opens the menu.
+    case hideKeys
+
+    var opensOnTap: Bool { self == .menu }
+
+    /// The glyph; the ellipsis while the menu shows, whatever opened it.
+    func symbol(menuOpen: Bool) -> String {
+        if menuOpen || self == .menu { return "ellipsis.circle" }
+        return self == .hideKeys ? "chevron.down" : "keyboard"
+    }
+
+    var label: String {
+        switch self {
+        case .keyboard: "Show keyboard"
+        case .menu: "Terminal menu"
+        case .hideKeys: "Hide terminal keys"
+        }
+    }
+}
+
+/// The key bar's menu (T2): Search, Paste, Select all; Clear screen and Reset terminal; Hide keyboard while the
+/// software keyboard is up (its key is the menu then).
+enum TerminalMenuItem: CaseIterable {
+    case search, paste, selectAll, clearScreen, resetTerminal, hideKeyboard
+
+    var title: String {
+        switch self {
+        case .search: "Search"
+        case .paste: "Paste"
+        case .selectAll: "Select all"
+        case .clearScreen: "Clear screen"
+        case .resetTerminal: "Reset terminal"
+        case .hideKeyboard: "Hide keyboard"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .search: "magnifyingglass"
+        case .paste: "doc.on.clipboard"
+        case .selectAll: "selection.pin.in.out"
+        case .clearScreen: "clear"
+        case .resetTerminal: "arrow.counterclockwise"
+        case .hideKeyboard: "keyboard.chevron.compact.down"
+        }
+    }
+
+    /// The line under the title: Clear screen's chord, for a keyboard user; why Reset terminal waits.
+    func note(chatSending: Bool = false) -> String? {
+        switch self {
+        case .clearScreen: "⌘K on a keyboard"
+        case .resetTerminal where chatSending: "Not while the agent is sending"
+        default: nil
+        }
+    }
+
+    /// Reset terminal waits while Chat sends through the terminal.
+    func enabled(chatSending: Bool) -> Bool { !(self == .resetTerminal && chatSending) }
+
+    /// The menu's sections, top to bottom (the order stays when the menu opens above its key).
+    static func sections(keyboardVisible: Bool) -> [[TerminalMenuItem]] {
+        var sections: [[TerminalMenuItem]] = [[.search, .paste, .selectAll], [.clearScreen, .resetTerminal]]
+        if keyboardVisible { sections.append([.hideKeyboard]) }
+        return sections
     }
 }

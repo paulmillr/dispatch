@@ -141,7 +141,7 @@ final class WatchRequestServer {
             }
             return .opened(await show(chat))
         case .undoReview(let id):
-            switch reviews?.undo(id) ?? .failure(.unknown) {
+            switch await reviews?.undo(id) ?? .failure(.unknown) {
             case .success: return .done
             case .failure(.tooLate): return .failure(Self.reviewRead)
             case .failure(.unknown): return .failure(Self.reviewGone)

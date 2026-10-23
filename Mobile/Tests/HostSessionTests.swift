@@ -706,10 +706,10 @@ final class HostSessionTests: XCTestCase {
         XCTAssertFalse(calls[0].client === calls[1].client, "Each connection's own client")
     }
 
-    /// The helper runs with the spike's grant, and the New host sheet discloses every capability in it.
+    /// The helper runs with the spike's grant plus `git.read` (Files & git), and the New host sheet discloses every capability in it.
     func testHelperGrantMatchesTheSpikeAndTheStatement() {
         XCTAssertEqual(HelperLaunch().command(sha256: "<sha256>"),
-                       #"exec "$HOME/.dispatch/bin/versions/<sha256>/dispatch-helper" --remote --capabilities agent.events,agent.inspect,agent.pi,agent.pi.configure,agent.queue,agent.side,agent.submit,agent.version,backend.register,cancel,events,file.read,file.text,herdr.rpc,herdr.start,herdr.terminal,hooks.configure,host.identity,input.window,shell.lifecycle,stats.ping,stats.processes,stats.sample,tmux.pane --stdio"#)
+                       #"exec "$HOME/.dispatch/bin/versions/<sha256>/dispatch-helper" --remote --capabilities agent.events,agent.inspect,agent.pi,agent.pi.configure,agent.queue,agent.side,agent.submit,agent.version,backend.register,cancel,events,file.read,file.text,git.read,herdr.rpc,herdr.start,herdr.terminal,hooks.configure,host.identity,input.window,shell.lifecycle,stats.ping,stats.processes,stats.sample,tmux.pane --stdio"#)
         XCTAssertEqual(HelperLaunch().command(sha256: "abc"), HelperGrant.command(sha256: "abc"))
         XCTAssertFalse(HelperLaunch().pty)
         XCTAssertTrue(HelperLaunch().environment.isEmpty)

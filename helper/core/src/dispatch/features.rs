@@ -25,6 +25,9 @@ pub(crate) const STDIO_LIVENESS: &str = "stdio.liveness";
 pub(crate) const TERMINALS_COALESCE: &str = "terminals.coalesce";
 /// The `terminals.activity` operation: when the server last saw activity in each node.
 pub(crate) const TERMINALS_ACTIVITY: &str = "terminals.activity";
+/// memberships.move without `before` puts a herdr tab after its workspace's last tab; without it the helper keeps
+/// herdr's old index (before the last tab), which the Mac's recorded moves expect.
+pub(crate) const MEMBERSHIPS_APPEND: &str = "memberships.append";
 
 /// The `attachments.put` and `attachments.read` operations, and `attachments` on chat.send and
 /// queue.add (dispatch/attachments.rs).
@@ -43,6 +46,7 @@ pub(crate) const KNOWN: &[&str] = &[
     STDIO_LIVENESS,
     TERMINALS_ACTIVITY,
     ATTACHMENTS,
+    MEMBERSHIPS_APPEND,
 ];
 
 /// Choice ids only interaction.options clients see, appended after a producer's ordinary

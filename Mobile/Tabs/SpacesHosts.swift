@@ -42,6 +42,8 @@ extension SpacesHostActions {
 struct SpacesHostViews {
     var newHost: @MainActor (_ done: @escaping (UUID?) -> Void) -> AnyView
     var detail: @MainActor (UUID) -> AnyView
+    /// The switcher's host row (P3): "34% cpu · 34% mem · 18 ms" from the host's stats, nil before any.
+    var statsLine: @MainActor (UUID) -> String? = { _ in nil }
 }
 
 /// Records what the Spaces tab asked and applies it to the model only (previews and tests; the app's are
@@ -70,14 +72,24 @@ final class FakeSpacesHostActions: SpacesHostActions {
     }
 }
 
-/// One host section of the tree (M2b): the host, its spaces in the phone's order, what is unread inside (the count a
-/// collapsed section shows), and whether it is collapsed.
+/// One host section of the tree (P1): the host, its spaces in the phone's order, what is unread inside (the count a
+/// folded section shows), whether it is folded, and how much of its work is detached (the Detached row).
 struct SpacesSection: Identifiable {
     let host: TabsHost
     let spaces: [SpacesSpaceRow]
     let unread: Int
     let collapsed: Bool
+    var detached = 0
     var id: UUID { host.id }
+
+    /// Not connected nor on its way: the OFFLINE group's (W0).
+    var offline: Bool { host.state == .offline }
+
+    /// A folded host's note: "2 spaces · 1" (the spaces, then what is unread in them).
+    var foldedNote: String {
+        let count = spaces.count == 1 ? "1 space" : "\(spaces.count) spaces"
+        return unread > 0 ? "\(count) · \(unread)" : count
+    }
 
     /// Whether the section shows New space below the host: a connected host whose spaces are known to be none (live:
     /// not the cache's, not a multiplexer switch still on its way), expanded, unfiltered and outside edit mode.

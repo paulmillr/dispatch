@@ -155,6 +155,16 @@ import Observation
         if sentTo[scope] != nil { sentTo[scope] = nil }
     }
 
+    /// Every review gone, as after removing its file (the phone's Remove all data): empty, writable again, no error.
+    func reset() {
+        pending?.cancel(); pending = nil
+        reviews = [:]
+        copied = [:]
+        sentTo = [:]
+        error = nil
+        loaded = true
+    }
+
     private func prune(_ scope: String) {
         if reviews[scope]?.isEmpty == true { reviews[scope] = nil }
     }

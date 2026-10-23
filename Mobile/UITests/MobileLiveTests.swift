@@ -116,8 +116,6 @@ final class MobileLiveTests: XCTestCase {
         let app = XCUIApplication()
         app.launchEnvironment["DISPATCH_MOBILE_STORE"] = "memory"
         app.launchEnvironment["DISPATCH_MOBILE_AUTHORIZE_KEYS"] = live.root + "/authorized_keys"
-        // The flat list of tabs, whatever an earlier run left in the simulator's defaults (tree view persists).
-        app.launchArguments += ["-DispatchTabsTree", "NO"]
         if let linux = linux() {
             app.launchEnvironment["DISPATCH_MOBILE_HOST_ENV"] = String(decoding: try JSONEncoder().encode(
                 ["\(linux.host):\(linux.port)": ["HOME": linux.root + "/h", "TMUX_TMPDIR": linux.root,
@@ -163,8 +161,11 @@ final class MobileLiveTests: XCTestCase {
         app.buttons["Close"].tap()
         app.tabBars.buttons["Spaces"].tap()
         let made = app.buttons.matching(NSPredicate(format: "label CONTAINS 'e2e'")).firstMatch
-        wait(made, 20, "the new space's tab in Spaces")
+        wait(made, 20, "the new space in Spaces")
         made.tap()
+        let madeTab = app.buttons.matching(identifier: "space-tab").firstMatch
+        wait(madeTab, 20, "the new space's tab")
+        madeTab.tap()
         let terminal = app.textViews["Terminal"]
         wait(terminal, 20, "the new space's terminal tab")
         measure("new_space_to_terminal", since: space)
@@ -179,8 +180,9 @@ final class MobileLiveTests: XCTestCase {
         measure("printf_to_output", since: printed)
         shot("M6a-printf")
 
-        // M9a: Claude in a new tab of the space, a message, an approval, an answer.
-        back(app).tap()
+        // M9a: Claude in a new tab of the space, a message, an approval, an answer. Back past the space's screen to the
+        // tab bar.
+        while back(app).exists { back(app).tap() }
         app.tabBars.buttons["Agents"].tap()
         app.buttons["New chat"].tap()
         wait(app.staticTexts["New chat"], 5, "M9a")
@@ -244,8 +246,6 @@ final class MobileLiveTests: XCTestCase {
         let app = XCUIApplication()
         app.launchEnvironment["DISPATCH_MOBILE_STORE"] = "memory"
         app.launchEnvironment["DISPATCH_MOBILE_AUTHORIZE_KEYS"] = live.root + "/authorized_keys"
-        // The flat list of tabs, whatever an earlier run left in the simulator's defaults (tree view persists).
-        app.launchArguments += ["-DispatchTabsTree", "NO"]
         app.launch()
         wait(app.staticTexts["No hosts yet"], 15, "M1d")
         app.buttons["Add host"].tap()
@@ -256,8 +256,11 @@ final class MobileLiveTests: XCTestCase {
             app.navigationBars["Create key"].buttons["Create"].tap()
             waitGone(app.navigationBars["Create key"])
         }
-        let first = app.buttons.matching(NSPredicate(format: "label CONTAINS 'this-mac'")).firstMatch
-        wait(first, 20, "the fixture's tab in Spaces")
+        let space = app.buttons.matching(identifier: "space-row").firstMatch
+        wait(space, 20, "the fixture's space in Spaces")
+        space.tap()
+        let first = app.buttons.matching(identifier: "space-tab").firstMatch
+        wait(first, 20, "the fixture's tab")
         first.tap()
         let terminal = app.textViews["Terminal"]
         wait(terminal, 20, "the terminal")

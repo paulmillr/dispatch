@@ -13,8 +13,6 @@ final class TabsActions {
     var renaming: Target?
     var name = ""
     var terminating: Target?
-    /// M4d's Close space: the dialog with Detach and Terminate…, the Mac's space menu.
-    var closingSpace: SpaceRef?
     /// Close space of a Shell space with live shells: the dialog that ends them.
     var closingShells: SpaceRef?
     var failure: String?
@@ -89,6 +87,7 @@ final class TabsActions {
     }
 
     private func run(_ target: Target, _ how: TabsClose) {
+        model.noteUserClose(target)
         closed(target)
         perform(target) { workspace in
             switch target {

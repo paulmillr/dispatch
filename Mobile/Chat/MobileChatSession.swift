@@ -66,10 +66,20 @@ final class MobileChatSession: Identifiable {
     private(set) var agentLabel: String?
     private(set) var commands: [String] = []
     private(set) var nativeQueue = false
-    private(set) var transcript = MobileTranscript()
+    // No `oldValue` in the observer: it would copy the transcript on every change made in place.
+    private(set) var transcript = MobileTranscript() {
+        didSet { if transcript.revision != stepRevision { refreshStep() } }
+    }
+    @ObservationIgnored private var stepRevision = -1
+    /// The open turn's current step as a phrase ("Editing Sidebar.tsx"), and when that turn started: Spaces' tab lines
+    /// read these, which change only when the step or the turn does, never with every streamed word of the transcript.
+    private(set) var currentStep: String?
+    private(set) var openTurnStarted: Date?
     private(set) var loadingHistory = false
     private(set) var earlier: String?
     var hasEarlier: Bool { earlier != nil }
+    /// An earlier page can load now: there is one and the conversation is verified.
+    var canLoadEarlier: Bool { earlier != nil && phase == .verified }
     private(set) var loadingEarlier = false
     private(set) var earlierError: String?
     private(set) var historyError: String?
@@ -86,6 +96,25 @@ final class MobileChatSession: Identifiable {
     private(set) var title: String?
     private(set) var compacting = false
     private(set) var version: String?
+    /// The agent's goal (Codex's `/goal`, `State.goal`, `ChatGoal`), and when it last changed (its time runs on from there).
+    private(set) var goal: ChatGoal?
+    private(set) var goalUpdatedAt = Date()
+    /// The agent's token counts (`State.usage`, `ChatUsage`).
+    private(set) var usage: ChatUsage?
+    /// A new objective for the goal, typed into Codex's goal editor once it asks (`/goal edit`).
+    @ObservationIgnored private var goalEdit: String?
+
+    // The thread's controls the header shares (C1, C3, C4b).
+    /// Find in the conversation (C1).
+    let search = ChatThreadSearch()
+    /// The side conversation (C3), while one is open; `showingSide` pushes its screen.
+    private(set) var side: MobileSideConversation?
+    var showingSide = false
+    /// Forks this phone started and has not seen closed: a fork outlives a dropped link (the helper has no cleanup on
+    /// disconnect), so the next connection asks for each to be closed (`closeOrphanedSides`).
+    @ObservationIgnored private(set) var openForks: Set<String> = []
+    /// The Manage goal sheet (C4b).
+    var managingGoal = false
     /// A prompt was sent and the agent has not acknowledged it (no turn start or state since).
     private(set) var awaitingAck = false
     /// The acknowledged turn started; the agent counts as working until its next state (ChatSession.starting).
@@ -103,12 +132,12 @@ final class MobileChatSession: Identifiable {
 
     /// The helper's queue snapshot (`chat.queue`, `queue.list`); what the phone shows is `queueRows`.
     private(set) var queue: [HelperChat.Queued] = []
-    private(set) var queueBusy = false
+    private(set) var queueBusy = false { didSet { reportSending() } }
     private(set) var queueError: String?
 
     // Sending.
     private(set) var optimisticPrompt: ChatItem?
-    private(set) var sending = false
+    private(set) var sending = false { didSet { reportSending() } }
     private(set) var stopping = false
     /// Why the last send, answer or queue change failed; cleared by the next one.
     var failure: String?
@@ -150,7 +179,9 @@ final class MobileChatSession: Identifiable {
     @ObservationIgnored private var retained = false
     @ObservationIgnored private var reconciling = false
     /// Device queue items with a helper operation in flight (a snapshot without them proves nothing yet).
-    @ObservationIgnored private var inFlight: Set<UUID> = []
+    @ObservationIgnored private var inFlight: Set<UUID> = [] { didSet { reportSending() } }
+    /// What the terminal presence last heard: whether this conversation is sending through it (Reset terminal waits).
+    @ObservationIgnored private var reportedSending = false
     /// A drain is running; another request runs it once more when it ends.
     @ObservationIgnored private var draining = false
     @ObservationIgnored private var drainAgain = false
@@ -204,6 +235,17 @@ final class MobileChatSession: Identifiable {
 
     var agentName: String { agentLabel ?? agentKey ?? "The agent" }
 
+    /// `currentStep` and `openTurnStarted` from the transcript (its running step, else its latest, as the watch's rows).
+    private func refreshStep() {
+        stepRevision = transcript.revision
+        let turn = transcript.openTurn
+        let steps = turn.map { ChatStep.steps($0, directory: nil, reasoning: false) } ?? []
+        let step = (steps.last(where: \.running) ?? steps.last).map(WatchSnapshotBuilder.phrase)
+        if currentStep != step { currentStep = step }
+        let started = turn.flatMap { $0.started.timeIntervalSince1970 > 0 ? $0.started : nil }
+        if openTurnStarted != started { openTurnStarted = started }
+    }
+
     /// The agent is working: the thinking bubble (M5a) shows.
     var working: Bool { (turnRunning || !subagents.isEmpty) && attention == nil }
     /// A turn runs or is about to (the Mac's optimistic `busy`); what the conversation list counts as working.
@@ -211,6 +253,14 @@ final class MobileChatSession: Identifiable {
     var waitingForUser: Bool {
         approvals.contains { $0.pending.pending } || questions.contains { $0.blocking && !$0.submitted }
     }
+    /// Tells the terminal presence when sending starts and ends (`ChatTerminalPresence.sending`).
+    private func reportSending() {
+        let busy = sending || queueBusy || !inFlight.isEmpty
+        guard busy != reportedSending else { return }
+        reportedSending = busy
+        presence?.sending(key, busy)
+    }
+
     /// The terminal is attached and publishes its screen: chat input can be verified (ChatTerminalPresence).
     var terminalAttached: Bool {
         guard let presence else { return true }
@@ -259,6 +309,14 @@ final class MobileChatSession: Identifiable {
     /// Input pauses; requests from the old subscription can no longer be answered.
     private func suspend(reason: String?) {
         dropTurn = working ? transcript.openTurn?.id : nil
+        // A side conversation belongs to the connection that started it.
+        // A side conversation belongs to the connection that started it: it ends here without a close request over
+        // the dead link; its fork is closed through the next connection.
+        if let side, !side.ended {
+            side.failure = "The connection to \(hostName) ended this side conversation."
+            side.end(connected: false)
+        }
+        goalEdit = nil
         closeObservation()
         generation = UUID()
         retireRequests()
@@ -403,7 +461,10 @@ final class MobileChatSession: Identifiable {
             earlier = history.earlier
         }
         if let state = history.state { receive(state: state) }
-        if !wasVerified, phase == .verified { reconciling = true }
+        if !wasVerified, phase == .verified {
+            reconciling = true
+            closeOrphanedSides()
+        }
         if reconciling, !loadingHistory { Task { await self.reconcileQueue() } }
     }
 
@@ -455,6 +516,13 @@ final class MobileChatSession: Identifiable {
         attention = state.attention
         if let title = state.title { self.title = title }
         compacting = state.compacting
+        // Core's State.usage is ChatUsage's object; State.goal the harness's goal, nil without one (the Mac's reading,
+        // ChatCoordinator+Helper).
+        let usage = state.usage.flatMap { HelperBinary.foundation($0) as? [String: Any] }.flatMap(ChatUsage.init)
+        if usage != nil, usage != self.usage { self.usage = usage }
+        let goal = state.goal.flatMap { HelperBinary.foundation($0) as? [String: Any] }.flatMap(ChatGoal.init)
+        if goal != self.goal { self.goal = goal; goalUpdatedAt = Date() }
+        if goal == nil { managingGoal = false }
         if !working { submittedAt = nil }
         updateWorkingSince()
         applyPendingSettings()
@@ -466,6 +534,21 @@ final class MobileChatSession: Identifiable {
     }
 
     private func receive(interaction: HelperChat.Interaction, generation: UUID) {
+        // Codex's goal editor asks for the objective (`/goal edit`, codex/src/command.rs): the one Manage goal typed.
+        if let objective = goalEdit, interaction.id.hasPrefix("command:"), interaction.questions.count == 1,
+           let question = interaction.questions.first, question.id == "goal" {
+            goalEdit = nil
+            var input = route()
+            input.interaction = interaction.id
+            input.answers = [question.id: .text(objective)]
+            Task {
+                do {
+                    let sent: HelperChat.Sent = try await call("interactions.answer", input, generation: generation)
+                    try sent.confirmed()
+                } catch { self.failure = self.explain(error) }
+            }
+            return
+        }
         if interaction.questions.isEmpty {
             // The request closed (answered elsewhere, expired): undecided cards expire; decided ones stay as receipts.
             questions.removeAll { $0.id == interaction.id }
@@ -617,6 +700,15 @@ final class MobileChatSession: Identifiable {
     /// destination took it (for the queue, once it is saved on the device); a failure restores it, attachments too.
     func send(steer: Bool = false) {
         let draft = drafts.current
+        // `/btw …` and `/side …` open a side conversation with the question (the Mac's openSideConversation).
+        if let side = ChatSideMode.parse(draft.text), offersSide(side.mode), !draft.text.contains("\n") {
+            if !draft.attachments.isEmpty || !draftUploads.isEmpty {
+                attachmentError = "Side conversations take no attachments. Remove them to ask on the side; your draft is kept."
+                return
+            }
+            if openSide(side.mode, question: side.question) { drafts.edit(text: "") }
+            return
+        }
         if let upload = draftUploads.first {
             attachmentError = upload.error == nil ? "Wait until the attachments are uploaded."
                 : "Retry or remove the attachment that did not upload."
@@ -634,10 +726,36 @@ final class MobileChatSession: Identifiable {
         submit(text, attachments: [], steer: steer, delivery: nil)
     }
 
+    /// Why `sendConfirmed` sent nothing, in the words the composer would show.
+    struct SendRefusal: Error, Equatable { let message: String }
+
+    /// `send(text:steer:false)` waiting for the outcome (Create review, docs/ios.md Review): a prompt once `chat.send`
+    /// confirmed it, a queued message once the device saved it, a command once it went. A prompt that failed (the
+    /// terminal went, the link dropped) is a refusal with `failure`'s words: the agent may not have it, and nothing
+    /// sends it again.
+    func sendConfirmed(text: String) async -> Result<Route, SendRefusal> {
+        final class Once { var done = false }
+        let once = Once()
+        return await withCheckedContinuation { continuation in
+            func resume(_ result: Result<Route, SendRefusal>) {
+                guard !once.done else { return }
+                once.done = true
+                continuation.resume(returning: result)
+            }
+            let route = submit(text, attachments: [], steer: false, delivery: nil) { route, failure in
+                resume(failure.map { .failure(SendRefusal(message: $0)) } ?? .success(route))
+            }
+            if route == nil {
+                resume(.failure(SendRefusal(message: failure ?? attachmentError ?? "Nothing was sent.")))
+            }
+        }
+    }
+
     /// `delivery` prepares the composer's draft for delivery (nil: not the composer's text); a nil result sends nothing.
     /// With attachments the text may be empty; a command takes none.
     private func submit(_ text: String, attachments: [ChatAttachment], steer: Bool,
-                        delivery prepare: (() -> ChatDraftDelivery?)?) -> Route? {
+                        delivery prepare: (() -> ChatDraftDelivery?)?,
+                        completed: (@MainActor (Route, String?) -> Void)? = nil) -> Route? {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty else { return nil }
         let isCommand = AgentInput.isCommand(text, multiline: text.contains("\n"))
         if isCommand, !attachments.isEmpty {
@@ -659,10 +777,12 @@ final class MobileChatSession: Identifiable {
             finish(delivery, success: accepted)
             if !accepted { failure = outbox.error; return nil }
             if route == .queue { Task { await self.drainQueue() } }
+            completed?(route, nil)
         case .prompt where isCommand:
             command(text, delivery: delivery)
+            completed?(route, nil)
         case .prompt, .steer:
-            prompt(text, attachments: attachments, steer: route == .steer, delivery: delivery)
+            prompt(text, attachments: attachments, steer: route == .steer, delivery: delivery, completed: completed)
         }
         return route
     }
@@ -672,7 +792,8 @@ final class MobileChatSession: Identifiable {
         if let delivery { drafts.finish(delivery, success: success) }
     }
 
-    private func prompt(_ text: String, attachments: [ChatAttachment], steer: Bool, delivery: ChatDraftDelivery?) {
+    private func prompt(_ text: String, attachments: [ChatAttachment], steer: Bool, delivery: ChatDraftDelivery?,
+                        completed: (@MainActor (Route, String?) -> Void)? = nil) {
         var input = route()
         input.text = text
         input.mode = steer ? "steer" : "prompt"
@@ -692,6 +813,7 @@ final class MobileChatSession: Identifiable {
             do {
                 try await self.deliver(input, generation: generation)
                 self.finish(delivery, success: true)
+                completed?(steer ? .steer : .prompt, nil)
             } catch {
                 // Not retried: the draft comes back and the failure says whether it may have been sent.
                 self.finish(delivery, success: false)
@@ -699,6 +821,7 @@ final class MobileChatSession: Identifiable {
                 if !steer { self.awaitingAck = false; self.submittedAt = nil }
                 self.updateWorkingSince()
                 self.failure = self.explain(error)
+                completed?(steer ? .steer : .prompt, self.failure)
             }
             if self.generation != generation, self.optimisticPrompt?.id == pending.id { self.optimisticPrompt = nil }
             self.changed?(self)
@@ -733,6 +856,9 @@ final class MobileChatSession: Identifiable {
         let ticket = beginSending()
         Task {
             defer { if self.sendTicket == ticket { self.sending = false } }
+            // Codex's goal editor asks its question while `/goal edit` runs: once the command ends, answered or failed,
+            // no later question is the edit's.
+            defer { if text == "/goal edit" { self.goalEdit = nil } }
             do {
                 let outcome: HelperChat.Outcome = try await call("chat.command", input, generation: generation)
                 try outcome.confirmed()
@@ -1075,6 +1201,44 @@ final class MobileChatSession: Identifiable {
         }
     }
 
+    /// Takes back a message this device queued, waiting for the answer (Create review's Undo): one still on the device
+    /// goes at once; one in the helper's queue goes when `queue.remove` succeeds (asked once more if another queue change
+    /// was running). False when the agent has it or is getting it: no longer queued, being added or uncertain, the
+    /// helper refusing (`busy`: it is being typed), or the helper holding it not connected.
+    func withdraw(_ id: UUID) async -> Bool {
+        for attempt in 0..<2 {
+            guard let item = queueItems.first(where: { $0.id == id }) else { return false }
+            switch item.state {
+            case .waiting, .paused:
+                outbox.remove(id)
+                // What waited behind it (a shell command, Stop's paused items) may go now.
+                if phase == .verified { Task { await self.drainQueue() } }
+                return true
+            case .adding, .uncertain:
+                return false
+            case .queued(let helperID, let revision, _):
+                guard phase == .verified else { return false }
+                if queueBusy || inFlight.contains(id) {
+                    guard attempt == 0 else { return false }
+                    try? await Task.sleep(for: .milliseconds(300))
+                    continue
+                }
+                var input = route()
+                input.item = helperID; input.revision = revision
+                queueBusy = true; inFlight.insert(id)
+                defer { queueBusy = false; inFlight.remove(id) }
+                do {
+                    let _: HelperClient.Empty = try await call("queue.remove", input, generation: generation)
+                    outbox.remove(id)
+                    return true
+                } catch {
+                    return false
+                }
+            }
+        }
+        return false
+    }
+
     func removeQueued(_ row: QueueRow) {
         switch row.source {
         case .device(let id):
@@ -1319,6 +1483,138 @@ final class MobileChatSession: Identifiable {
         let read: HelperChat.AttachmentBytes = try await client.connection.request(
             "attachments.read", params: HelperChat.AttachmentRead(path: path))
         return read.bytes
+    }
+
+    // MARK: The composer's slash list (C2)
+
+    /// The slash list's rows for the draft: none until the conversation is verified.
+    var slashCommands: [ChatSlashCommand] {
+        guard phase == .verified else { return [] }
+        return ChatSlashCommand.matching(drafts.current.text, commands: commands, agent: agentKey,
+                                         agentName: ChatSlashCommand.agentName(label: agentLabel, key: agentKey))
+    }
+
+    enum ComposerSend: Equatable {
+        /// The slash list's lit row went into the draft.
+        case completed(String)
+        /// "/terminal": the tab shows Terminal.
+        case terminal
+        case sent
+    }
+
+    /// What the composer's send (its button, Return from a hardware keyboard) does: while the slash list shows, it
+    /// picks the lit (first) row into the draft, as the Mac's Return does, unless the draft is that command already;
+    /// "/terminal" switches the tab to Terminal (`showTerminal`); anything else is `send`.
+    @discardableResult
+    func sendFromComposer(steer: Bool = false, showTerminal: (() -> Void)?) -> ComposerSend {
+        let text = drafts.current.text
+        if let first = slashCommands.first, first.name != text {
+            drafts.edit(text: first.name + " ")
+            return .completed(first.name)
+        }
+        if text.trimmingCharacters(in: .whitespacesAndNewlines) == "/terminal", let showTerminal {
+            drafts.edit(text: "")
+            showTerminal()
+            return .terminal
+        }
+        send(steer: steer)
+        return .sent
+    }
+
+    // MARK: Side conversations (C3)
+
+    /// The helper lists the command for this agent (`chat.open` `commands`).
+    func offersSide(_ mode: ChatSideMode) -> Bool { commands.contains("/" + mode.rawValue) }
+
+    /// Opens a side conversation and shows it, asking `question` at once when there is one (else its composer asks
+    /// first). Another one open ends first. False when the conversation cannot take one now (`failure` says why).
+    @discardableResult
+    func openSide(_ mode: ChatSideMode, question: String = "") -> Bool {
+        guard let side = MobileSideConversation(mode: mode, parent: self) else {
+            failure = "Side conversations need \(agentName) connected and ready."
+            return false
+        }
+        side.forked = { [weak self] fork in self?.openForks.insert(fork) }
+        side.closed = { [weak self] fork in self?.openForks.remove(fork) }
+        self.side?.end()
+        self.side = side
+        if !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { side.start(question) }
+        showingSide = true
+        return true
+    }
+
+    /// Asks the connection now verified to close the forks this phone started and never saw closed (one try each:
+    /// a helper that does not know the fork refuses, and it is forgotten), before anything else is sent on the side.
+    private func closeOrphanedSides() {
+        guard let client, let terminal else { return }
+        let live = side.flatMap { $0.ended ? nil : $0.session }
+        for fork in openForks where fork != live {
+            openForks.remove(fork)
+            MobileSideConversation.close(client.connection, terminal: terminal, session: fork)
+        }
+    }
+
+    /// Ends the side conversation (its process too) and returns to the main thread.
+    func endSide() {
+        side?.end()
+        side = nil
+        showingSide = false
+    }
+
+    /// "Allow changes": a /btw becomes a /side asking its first question again, now with full permissions.
+    func allowChanges() {
+        guard let side, side.readOnly, offersSide(.side) else { return }
+        let question = side.question ?? ""
+        side.end()
+        self.side = nil
+        openSide(.side, question: question)
+    }
+
+    /// "Bring into main thread": the side's last answer, quoted, ahead of the main composer's draft.
+    func bringIntoMain(_ text: String) {
+        let quote = text.split(separator: "\n", omittingEmptySubsequences: false).map { "> " + $0 }.joined(separator: "\n")
+        let current = drafts.current.text
+        drafts.edit(text: quote + "\n\n" + current)
+    }
+
+    // MARK: Goal (C4, C4b)
+
+    /// Pause, resume or stop (`clear`) the goal: Codex's own `/goal` commands, as the Mac's goal controls send them.
+    func goal(_ action: String) {
+        runCommand("/goal " + action)
+    }
+
+    /// Sets the goal's objective: `/goal <objective>` without one; with one, Codex's goal editor (`/goal edit`), which
+    /// asks for the new text (answered with it in `receive(interaction:)`).
+    func setGoal(_ objective: String) {
+        let objective = objective.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !objective.isEmpty, !objective.contains(where: \.isNewline), objective != goal?.objective else { return }
+        if goal == nil {
+            runCommand("/goal " + objective)
+        } else {
+            goalEdit = objective
+            runCommand("/goal edit")
+        }
+    }
+
+    /// A command the UI issues (not the composer's draft), run by the agent's harness (`chat.command`).
+    private func runCommand(_ text: String) {
+        guard phase == .verified, client != nil else {
+            failure = "\(hostName) is not connected."
+            return
+        }
+        failure = nil; commandResult = nil
+        command(text, delivery: nil)
+    }
+
+    /// The goal strip's status line (C4): time on the goal, running subagents and the context used, what the agent
+    /// reports of them (no turn count: the protocol has none).
+    var goalStatus: [String] {
+        var parts: [String] = []
+        if let goal, goal.timeUsedSeconds > 0 { parts.append(ChatTurnSummary.elapsed(TimeInterval(goal.timeUsedSeconds)) + " on the goal") }
+        if !subagents.isEmpty { parts.append(ChatTurnSummary.count(subagents.count, "subagent")) }
+        if let remaining = usage?.contextRemaining { parts.append("\(Int(((1 - remaining) * 100).rounded()))% context") }
+        return parts
     }
 
     func loadEarlier() {

@@ -36,6 +36,8 @@ struct CodeComposer: View {
     var dictationOwner: AnyHashable = "composer"
     /// The draft's editor mode (`ChatDraft.multiline`): Return inserts a newline from a hardware keyboard.
     var multiline: Binding<Bool> = .constant(false)
+    /// A long press on the mic starts conversation mode (C5); nil: the mic only dictates.
+    var converse: (() -> Void)? = nil
 
     @State private var editor = CodeEditorModel()
     @State private var keyboard = HardwareKeyboard.shared
@@ -98,16 +100,18 @@ struct CodeComposer: View {
                         Button("Photo or screenshot", systemImage: "photo") { choosingPhotos = true }.disabled(!attaching)
                         Button("File", systemImage: "doc") { choosingFiles = true }.disabled(!attaching)
                     } label: {
+                        // The mockups' glass disc beside the glass field (S6, C2).
                         Image(systemName: "plus")
-                            .font(.system(size: 18, weight: .medium))
-                            .foregroundStyle(Color.primary.opacity(0.75))
-                            .frame(width: 34, height: 34)
-                            .background(Color.primary.opacity(0.1), in: Circle())
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(Color.primary)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Circle())
                             .contentShape(.hoverEffect, Circle())
                             .hoverEffect(.highlight)
                     }
+                    .buttonStyle(.plain)
+                    .glassEffect(.regular.interactive(), in: Circle())
                     .accessibilityLabel("Attach")
-                    .padding(.bottom, 1)
                     VStack(alignment: .trailing, spacing: 6) {
                         HStack(alignment: .bottom, spacing: 6) {
                             CodeEditorField(text: $text, placeholder: placeholder, focus: focus, editor: editor, send: send,
@@ -121,15 +125,21 @@ struct CodeComposer: View {
                     }
                     .padding(.leading, 14)
                     .padding(.trailing, stacked ? 6 : 4)
-                    .padding(.top, stacked ? 1 : 0)
-                    .padding(.bottom, stacked ? 6 : 0)
-                    .frame(minHeight: 36)
-                    .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .strokeBorder(dropTargeted ? Color.dispatchPink : Color(uiColor: .tertiaryLabel), lineWidth: dropTargeted ? 1.5 : 0.5))
+                    .padding(.top, stacked ? 5 : 4)
+                    .padding(.bottom, stacked ? 10 : 4)
+                    .frame(minHeight: 44)
+                    // A glass field, a capsule while it holds one line (S6), its corners kept as it grows.
+                    .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                    .overlay {
+                        if dropTargeted {
+                            RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(Color.dispatchPink, lineWidth: 1.5)
+                        }
+                    }
                     .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { editor.pillWidth = $0 }
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .padding(.bottom, 4)
             }
             // Over the strip too: the hints float above whatever the composer shows on top.
             .overlay(alignment: .topTrailing) {
@@ -254,35 +264,56 @@ struct CodeComposer: View {
         }
     }
 
+    /// The mic: a tap dictates (again: stops); with `converse`, a long press starts conversation mode instead.
+    @ViewBuilder private func micSlot(dictating: Bool) -> some View {
+        let label = dictating ? (dictation.phase == .listening ? "Stop dictation" : "Cancel dictation") : "Dictate"
+        if let converse, !dictating {
+            // As the send slot's steer: a tap dictates, a long press starts conversation mode.
+            micGlyph(dictating: dictating)
+                .onTapGesture(perform: dictate)
+                .onLongPressGesture(minimumDuration: 0.5, perform: converse)
+                .accessibilityElement()
+                .accessibilityLabel(label)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction(.default, dictate)
+                .accessibilityAction(named: "Conversation mode", converse)
+                .padding(-8)
+        } else {
+            Button(action: dictate) { micGlyph(dictating: dictating) }
+                .buttonStyle(.plain)
+                .padding(-8)
+                .accessibilityLabel(label)
+        }
+    }
+
+    private func micGlyph(dictating: Bool) -> some View {
+        ZStack {
+            if dictating && dictation.phase == .listening {
+                Circle().fill(Color.red)
+                    .scaleEffect(0.85 + 0.3 * CGFloat(dictation.level))
+                    .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: dictation.level)
+                RoundedRectangle(cornerRadius: 2).fill(Color.white).frame(width: 10, height: 10)
+            } else if dictating {
+                ProgressView()
+            } else {
+                Image(systemName: "mic")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 28, height: 28)
+        // A 44 point target around the 28 point glyph; the outer padding gives the room back to the layout.
+        .padding(8)
+        .contentShape(Rectangle())
+        .contentShape(.hoverEffect, Circle().inset(by: 8))
+        .hoverEffect(.highlight)
+    }
+
     @ViewBuilder private var slot: some View {
         let dictating = dictation.active(dictationOwner)
         switch Self.slot(text: text, working: working, dictating: dictating, attached: attached) {
         case .mic:
-            Button(action: dictate) {
-                ZStack {
-                    if dictating && dictation.phase == .listening {
-                        Circle().fill(Color.red)
-                            .scaleEffect(0.85 + 0.3 * CGFloat(dictation.level))
-                            .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: dictation.level)
-                        RoundedRectangle(cornerRadius: 2).fill(Color.white).frame(width: 10, height: 10)
-                    } else if dictating {
-                        ProgressView()
-                    } else {
-                        Image(systemName: "mic")
-                            .font(.body)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .frame(width: 28, height: 28)
-                // A 44 point target around the 28 point glyph; the outer padding gives the room back to the layout.
-                .padding(8)
-                .contentShape(Rectangle())
-                .contentShape(.hoverEffect, Circle().inset(by: 8))
-                .hoverEffect(.highlight)
-            }
-            .buttonStyle(.plain)
-            .padding(-8)
-            .accessibilityLabel(dictating ? (dictation.phase == .listening ? "Stop dictation" : "Cancel dictation") : "Dictate")
+            micSlot(dictating: dictating)
         case .stop:
             Button(action: stop) {
                 RoundedRectangle(cornerRadius: 2).fill(Color(uiColor: .systemBackground)).frame(width: 10, height: 10)

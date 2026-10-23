@@ -33,44 +33,77 @@ extension View {
 
 private struct MobileAppearanceModifier: ViewModifier {
     @AppStorage private var stored: String
+    /// Settings' theme (`MobileTheme`): a Mac theme fixes the scheme, Automatic leaves it to the appearance.
+    @AppStorage private var theme: String
+    /// Chat's font and size and the terminal's font (`ChatTypography`), read where Settings saves them.
+    @AppStorage private var chatFont: String
+    @AppStorage private var chatSize: String
+    @AppStorage private var terminalFont: String
 
     init(defaults: UserDefaults) {
         _stored = AppStorage(wrappedValue: MobileAppearance.fallback.rawValue, MobileAppearance.key, store: defaults)
+        _theme = AppStorage(wrappedValue: MobileTheme.automatic.rawValue, MobileSettings.themeKey, store: defaults)
+        _chatFont = AppStorage(wrappedValue: MobileChatFont.system.rawValue, MobileSettings.chatFontKey, store: defaults)
+        _chatSize = AppStorage(wrappedValue: ChatTextSize.standard.rawValue, MobileSettings.chatTextSizeKey, store: defaults)
+        _terminalFont = AppStorage(wrappedValue: TerminalFont.jetBrainsMono.name, MobileSettings.terminalFontKey, store: defaults)
     }
 
     func body(content: Content) -> some View {
         let appearance = MobileAppearance(stored: stored)
+        let theme = MobileTheme(stored: theme)
+        let typography = ChatTypography(font: MobileChatFont(rawValue: chatFont) ?? .system, size: ChatTextSize(rawValue: chatSize) ?? .standard,
+                                        terminalFont: TerminalFont.named(terminalFont))
         content
-            .preferredColorScheme(appearance.colorScheme)
+            .environment(\.mobileTheme, theme)
+            .environment(\.chatTypography, typography)
+            .preferredColorScheme(theme.colorScheme ?? appearance.colorScheme)
             // The window too: going back to System must clear the override `preferredColorScheme` left on it, and UIKit
-            // presentations (alerts, menus, the share sheet) read the window's style.
-            .background(MobileWindowStyle(style: appearance.interfaceStyle).allowsHitTesting(false).accessibilityHidden(true))
+            // presentations (alerts, menus, the share sheet) read the window's style and theme.
+            .background(MobileWindowStyle(style: theme.interfaceStyle ?? appearance.interfaceStyle, theme: theme)
+                .allowsHitTesting(false).accessibilityHidden(true))
     }
 }
 
-/// Sets the hosting window's `overrideUserInterfaceStyle`.
+/// Sets the hosting window's `overrideUserInterfaceStyle` and theme trait (`MobileThemeTrait`).
 private struct MobileWindowStyle: UIViewRepresentable {
     let style: UIUserInterfaceStyle
+    let theme: MobileTheme
 
     final class Probe: UIView {
+        static let tint = UIColor.themed("AccentColor", \.accent)
+        private weak var tinted: UIWindow?
         var style: UIUserInterfaceStyle = .unspecified { didSet { apply() } }
+        var theme = MobileTheme.automatic { didSet { apply() } }
         override func didMoveToWindow() {
             super.didMoveToWindow()
             apply()
         }
         func apply() {
-            guard let window, window.overrideUserInterfaceStyle != style else { return }
-            window.overrideUserInterfaceStyle = style
+            guard let window else { return }
+            if window.overrideUserInterfaceStyle != style { window.overrideUserInterfaceStyle = style }
+            // Reading an override that was never set raises: ask whether there is one first.
+            if !window.traitOverrides.contains(MobileThemeTrait.self) || window.traitOverrides[MobileThemeTrait.self] != theme {
+                window.traitOverrides[MobileThemeTrait.self] = theme
+            }
+            // UIKit's tint (menus, alerts, the terminal's selection) in the theme's accent, resolved by that trait.
+            if tinted !== window {
+                tinted = window
+                window.tintColor = Self.tint
+            }
         }
     }
 
     func makeUIView(context: Context) -> Probe {
         let probe = Probe()
         probe.style = style
+        probe.theme = theme
         return probe
     }
 
-    func updateUIView(_ probe: Probe, context: Context) { probe.style = style }
+    func updateUIView(_ probe: Probe, context: Context) {
+        probe.style = style
+        probe.theme = theme
+    }
 }
 
 /// A system font of `size` points at the default content size that scales with Dynamic Type as `style` does: for the

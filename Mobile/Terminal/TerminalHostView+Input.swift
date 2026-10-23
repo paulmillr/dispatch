@@ -9,6 +9,14 @@ extension TerminalHostView {
     override var canBecomeFirstResponder: Bool { true }
 
     override func becomeFirstResponder() -> Bool {
+        // The iPad keyboard's shortcut bar would offer Undo, Redo and Paste, which a terminal has no use for or has in
+        // its edit menu and ⌘V; the capsule carries the keys the keyboard lacks. Empty, the bar goes and gives the rows
+        // back (with a hardware keyboard, only the system's minimal bar remains). No effect on an iPhone. Set here, as
+        // the keys come, outside SwiftUI's layout (`init`'s note).
+        if !inputAssistantItem.leadingBarButtonGroups.isEmpty || !inputAssistantItem.trailingBarButtonGroups.isEmpty {
+            inputAssistantItem.leadingBarButtonGroups = []
+            inputAssistantItem.trailingBarButtonGroups = []
+        }
         let became = super.becomeFirstResponder()
         if became { session.setFocus(true) }
         return became
@@ -73,6 +81,8 @@ extension TerminalHostView {
         case #selector(copy(_:)): session.locked { session.surface.hasSelection }
         case #selector(paste(_:)): UIPasteboard.general.hasStrings
         case #selector(selectAll(_:)), #selector(clearScreen(_:)), #selector(resetFontSize(_:)): true
+        // The menu bar's Find…, Find Next and Find Previous (⌘F, ⌘G, ⇧⌘G): the segment's search capsule.
+        case #selector(find(_:)), #selector(findNext(_:)), #selector(findPrevious(_:)): onFind != nil
         case #selector(increaseSize(_:)): configuration.fontSize < TerminalConfiguration.fontSizes.upperBound
         case #selector(decreaseSize(_:)): configuration.fontSize > TerminalConfiguration.fontSizes.lowerBound
         default: false
@@ -89,6 +99,12 @@ extension TerminalHostView {
         session.locked { _ = session.surface.bindingAction(Array("clear_screen".utf8)) }
         session.pump()
     }
+
+    /// Find… (⌘F) opens the search capsule over this terminal; Find Next and Find Previous (⌘G, ⇧⌘G) step it,
+    /// opening it first when it is closed.
+    override func find(_ sender: Any?) { onFind?(.open) }
+    override func findNext(_ sender: Any?) { onFind?(.next) }
+    override func findPrevious(_ sender: Any?) { onFind?(.previous) }
 
     /// ⌘+ and ⌘- (the system's Bigger and Smaller): a point at a time, as the Mac's, kept as a pinch's size is.
     override func increaseSize(_ sender: Any?) { adjustFontSize(by: 1) }

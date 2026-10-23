@@ -9,12 +9,14 @@ struct ChatBubble<Content: View>: View {
     @ViewBuilder var content: Content
     @Environment(\.chatColumnWidth) private var column
     @Environment(\.chatMeasure) private var measure
+    /// Settings' chat font and size (G3).
+    @Environment(\.chatTypography) private var typography
 
     var body: some View {
         HStack(spacing: 0) {
             if side == .user { Spacer(minLength: 0) }
             content
-                .font(.callout)
+                .font(typography.body)
                 .lineSpacing(2)
                 .foregroundStyle(side == .user ? Color.bubbleUserText : Color.primary)
                 .padding(.horizontal, 14)

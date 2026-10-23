@@ -26,18 +26,26 @@ final class MobileTabs {
     var query: TabsQuery {
         didSet { if query != oldValue { saveQuery() } }
     }
-    var tree: Bool {
-        didSet { if tree != oldValue { defaults.set(tree, forKey: Self.treeKey) } }
+    /// The OFFLINE group at the end of the tree (W0): shown unless Settings' "Show offline hosts" (or the group's own
+    /// menu) turns it off.
+    var showOffline: Bool {
+        didSet { if showOffline != oldValue { defaults.set(showOffline, forKey: Self.showOfflineKey) } }
+    }
+    /// The OFFLINE group is folded to its header (W0b), as the user left it.
+    var offlineFolded: Bool {
+        didSet { if offlineFolded != oldValue { defaults.set(offlineFolded, forKey: Self.offlineFoldedKey) } }
     }
     /// The space New tab goes to (the last one opened on the phone, else the most active).
     private(set) var recent: SpaceRef?
 
     /// (host, terminal) → how much it wants attention. Chat sets it; nil means idle or read.
     @ObservationIgnored var urgency: @MainActor (UUID, UInt64) -> TabUrgency? = { _, _ in nil }
-    /// (host, terminal) → what a chat tab is doing, for line two of its row. Chat sets it.
-    @ObservationIgnored var status: @MainActor (UUID, UInt64) -> String? = { _, _ in nil }
+    /// (host, terminal) → what a chat tab is doing, for line two of its row (`TabsStatus`). Chat sets it.
+    @ObservationIgnored var status: @MainActor (UUID, UInt64) -> TabsStatus? = { _, _ in nil }
     /// (host, terminal) → the agent's conversation title, which names an unrenamed tab as on the Mac. Chat sets it.
     @ObservationIgnored var conversationTitle: @MainActor (UUID, UInt64) -> String? = { _, _ in nil }
+    /// (host, terminal) → the agent's launch key ("claude", "codex", "pi") when Chat knows it (its open session).
+    @ObservationIgnored var agentKey: @MainActor (UUID, UInt64) -> String? = { _, _ in nil }
     /// (host, pane key) → the terminal's own title (OSC 0/2) while the phone has it attached. The composition sets it.
     @ObservationIgnored var paneTitle: @MainActor (UUID, String) -> String? = { _, _ in nil }
     /// (host, terminal) → when an agent's conversation last moved (its newest record, the time Agents shows). Chat sets
@@ -65,8 +73,8 @@ final class MobileTabs {
     /// The multiplexer each host's detection last ran for (a new choice detects again).
     @ObservationIgnored private var detected: [UUID: String?] = [:]
 
-    /// The menu and the tree toggle name no host: they stay in UserDefaults with the other preferences.
-    private static let queryKey = "tabs.query", treeKey = "tabs.tree"
+    /// The filter and the OFFLINE group name no host: they stay in UserDefaults with the other preferences.
+    static let queryKey = "tabs.query", showOfflineKey = "tabs.showOffline", offlineFoldedKey = "tabs.offlineFolded"
 
     /// `deviceState` nil: the app's file with `.standard` defaults (an older build's values move there), else in memory.
     init(activity: TabActivityStore = .shared, defaults: UserDefaults = .standard, deviceState: SpacesDeviceState? = nil) {
@@ -74,7 +82,8 @@ final class MobileTabs {
         self.defaults = defaults
         self.deviceState = deviceState ?? (defaults == .standard ? .shared : SpacesDeviceState(url: nil, migrating: defaults))
         query = defaults.data(forKey: Self.queryKey).flatMap { try? JSONDecoder().decode(TabsQuery.self, from: $0) } ?? TabsQuery()
-        tree = defaults.bool(forKey: Self.treeKey)
+        showOffline = defaults.object(forKey: Self.showOfflineKey) as? Bool ?? true
+        offlineFolded = defaults.bool(forKey: Self.offlineFoldedKey)
         recent = self.deviceState.recent
         collapsed = self.deviceState.collapsed
         spaceOrder = self.deviceState.spaceOrder
@@ -130,7 +139,12 @@ final class MobileTabs {
             detected.removeValue(forKey: id)
         }
         if workspaces.map(ObjectIdentifier.init) != next.map(ObjectIdentifier.init) { workspaces = next }
+        synced?()
     }
+
+    /// After every `sync`: the hosts' tabs may have gone (closed on the host); the navigator lets the iPad's strip
+    /// hand the column on (`SpacesNavigator.reconcile`).
+    @ObservationIgnored var synced: (() -> Void)?
 
     /// Host sections the user collapsed (M2b's disclosure), kept on the device.
     private(set) var collapsed: Set<UUID> = []
@@ -208,20 +222,33 @@ final class MobileTabs {
         }
     }
 
-    /// M2b: every host as a section (hosts are managed here too), its spaces in the phone's order; the filter keeps the
-    /// spaces with a matching tab. A space's count is its tabs that need you or hold an unseen result (Mail's unread);
-    /// a collapsed section shows the sum.
-    var sections: [SpacesSection] {
-        workspaces.map { workspace in
-            let rows = orderedSpaces(workspace).compactMap { space -> SpacesSpaceRow? in
+    /// P1: every host as a section (hosts are managed here too), its spaces in the phone's order, each with what is
+    /// unread in it, whether something works there and its git facts' key; the filter keeps the spaces with a matching
+    /// tab (`filter` nil: the query's). A space's count is its tabs that need you or hold an unseen result (Mail's
+    /// unread); a folded section says how many spaces and the sum. Offline hosts are marked: the tree lists them in the
+    /// OFFLINE group as headers only.
+    func sections(filter: TabsQuery.Filter? = nil) -> [SpacesSection] {
+        let filter = filter ?? query.filter
+        return workspaces.map { workspace in
+            let spaces = orderedSpaces(workspace)
+            let rows = spaces.compactMap { space -> SpacesSpaceRow? in
                 let entries = space.tabs.map { entry($0, space: space, host: workspace.host) }
-                guard query.filter == .all || entries.contains(where: { $0.matches(query.filter) }) else { return nil }
+                guard filter == .all || entries.contains(where: { $0.matches(filter) }) else { return nil }
                 return SpacesSpaceRow(space: space, unread: entries.filter { $0.urgency?.unread == true }.count,
                                       working: entries.contains { $0.urgency == .working }, id: space.ref)
             }
             return SpacesSection(host: workspace.host, spaces: rows, unread: rows.map(\.unread).reduce(0, +),
-                                 collapsed: collapsed.contains(workspace.id))
+                                 collapsed: collapsed.contains(workspace.id), detached: workspace.detached.count)
         }
+    }
+
+    /// P1's groups outside edit mode: the hosts that are up or on their way (under a filter, only those with a match),
+    /// then the OFFLINE group's hosts (none while filtering or while "Show offline hosts" is off).
+    var groups: (online: [SpacesSection], offline: [SpacesSection]) {
+        let all = sections()
+        let online = all.filter { !$0.offline && (!query.filtering || !$0.spaces.isEmpty) }
+        let offline = showOffline && !query.filtering ? all.filter(\.offline) : []
+        return (online, offline)
     }
 
     /// New space (M7a's Create, and the quick menu's entries) on `multiplexer` (nil: the one the host shows): its first
@@ -243,6 +270,20 @@ final class MobileTabs {
     func workspace(_ host: UUID) -> MobileWorkspace? { workspaces.first { $0.id == host } }
     func tab(_ ref: TabRef) -> MobileTab? { workspace(ref.host)?.tab(ref.key) }
     func space(_ ref: SpaceRef) -> MobileSpace? { workspace(ref.host)?.space(ref.key) }
+
+    /// The agent a tab runs, for its mark (P2, P3): Chat's key, else read from the bound process or the names the
+    /// topology gives (claude, codex, pi); nil for a tab without an agent, "agent" for one no rule names.
+    func agent(of tab: MobileTab) -> String? {
+        guard let pane = tab.agentPane else { return nil }
+        if let key = agentKey(tab.ref.host, pane.id) { return key }
+        let names = [pane.agent?.executable.map { URL(fileURLWithPath: $0).lastPathComponent }, pane.name, tab.name]
+        for name in names.compactMap({ $0?.lowercased() }) {
+            if name.contains("claude") { return "claude" }
+            if name.contains("codex") { return name.contains("nano") ? "nanocodex" : "codex" }
+            if name == "pi" || name.hasPrefix("pi ") || name.hasPrefix("pi-") { return "pi" }
+        }
+        return "agent"
+    }
 
     /// A tab's urgency: its most urgent pane's. A shell tab has none (no agent, no chat).
     func urgency(of tab: MobileTab) -> TabUrgency? {
@@ -274,11 +315,23 @@ final class MobileTabs {
 
     /// Chat's count of conversations waiting for the user, but `excluding`'s (the back pill); nil: counted from the rows.
     @ObservationIgnored var needsYouCount: (@MainActor (TabRef?) -> Int)?
+    /// The user closed, detached or terminated a tab or space from the phone: its panes' keys (the composition's
+    /// notifications take those agents leaving for the user's doing, not a failure).
+    @ObservationIgnored var userClosed: ((_ host: UUID, _ panes: Set<String>) -> Void)?
+
+    /// Tells `userClosed` which panes a Close, Detach or Terminate of `target` ends.
+    func noteUserClose(_ target: TabsActions.Target) {
+        switch target {
+        case .tab(let ref): if let tab = tab(ref) { userClosed?(ref.host, Set(tab.panes.map(\.key))) }
+        case .space(let ref): if let space = space(ref) { userClosed?(ref.host, Set(space.tabs.flatMap { $0.panes.map(\.key) })) }
+        }
+    }
 
     /// Waiting conversations everywhere but `excluding` (the back pill's count, as Messages counts unread elsewhere).
     func needsYou(excluding: TabRef? = nil) -> Int {
         if let needsYouCount { return needsYouCount(excluding) }
-        return workspaces.flatMap(\.tabs).filter { $0.ref != excluding && urgency(of: $0) == .needsYou }.count
+        return workspaces.filter { !$0.host.stale }.flatMap(\.tabs)
+            .filter { $0.ref != excluding && urgency(of: $0) == .needsYou }.count
     }
 
     var entries: [TabsEntry] {
@@ -289,29 +342,41 @@ final class MobileTabs {
         }
     }
 
-    /// M2a's rows.
-    var rows: [TabsEntry] { TabsOrdering.query(entries, query) }
-
-    /// M2b's rows: spaces with at least one tab the filter shows (all of them unfiltered).
-    var spaceRows: [(space: MobileSpace, host: TabsHost)] {
-        let spaces = workspaces.flatMap { workspace in
-            workspace.spaces.map { (space: $0, host: workspace.host) }
-        }.filter { item in
-            query.filter == .all || item.space.tabs.contains { tab in
-                entry(tab, space: item.space, host: item.host).matches(query.filter)
-            }
-        }
-        return TabsOrdering.sorted(spaces: spaces, by: query.sort, activity: activity(of:))
-    }
-
-    /// M2c's rows: a space's tabs under the same menu.
+    /// A space's tabs in server order (the Mac strip's), with their urgency, time and name (P2, P3).
     func rows(in space: MobileSpace) -> [TabsEntry] {
         guard let host = workspace(space.ref.host)?.host else { return [] }
-        return TabsOrdering.query(space.tabs.map { entry($0, space: space, host: host) }, query)
+        return space.tabs.map { entry($0, space: space, host: host) }
     }
 
-    /// The segment each tab showed last in this run (Create and New tab open theirs in Terminal).
-    @ObservationIgnored var segments: [TabRef: TabSegment] = [:]
+    /// The tab the phone opened last in each space this run: P2's "open" chip, P3's check.
+    private(set) var openedTabs: [SpaceRef: TabRef] = [:]
+
+    /// A tab's screen showed: it is its space's open one, and the space the recent one.
+    func opened(_ tab: MobileTab) {
+        if openedTabs[tab.space] != tab.ref { openedTabs[tab.space] = tab.ref }
+        visited(tab.space)
+    }
+
+    /// The segment each tab showed last in this run (Create and New tab open theirs in Terminal). Observed: the iPad's
+    /// strip and the menu bar follow it (`PadMode`), and the iPad keeps the shown tab's across launches
+    /// (`modeChanged`, `SpacesNavigator.rememberSplit`).
+    var segments: [TabRef: TabSegment] = [:] {
+        didSet { modeChanged?() }
+    }
+    /// The Files segment's mode (Files, Review, Commits) each tab showed last in this run.
+    var filesModes: [TabRef: FilesMode] = [:] {
+        didSet { modeChanged?() }
+    }
+    /// A tab's segment or Files mode changed (the navigator keeps the shown tab's, on an iPad).
+    @ObservationIgnored var modeChanged: (() -> Void)?
+    /// Whether a tab's folder was a git repository when last asked (`SpaceGitFacts` answers first): kept with the iPad's
+    /// split memory (`SpacesNavigator.rememberRepository`), so a launch's strip and mode are right from the first frame.
+    /// Keyed by `repositoryKey`.
+    @ObservationIgnored var knownRepositories: [String: Bool] = [:]
+    /// The iPad's Review and Commits panes (`PadListPane`): the change or commit each tab's list shows beside it.
+    var paneRoutes: [TabRef: [FilesMode: FilesRoute]] = [:]
+    /// The segment shown before Files, for Files' "Not now" (S1, S2).
+    @ObservationIgnored var segmentsBeforeFiles: [TabRef: TabSegment] = [:]
 
     /// The space New tab uses: the last one opened while it can take a tab now (its host connected; a Shell space's
     /// host plain-connected), else the most active such one.
@@ -350,7 +415,7 @@ final class MobileTabs {
         deviceState.recent = space
     }
 
-    /// Settings' Remove all data: the per-host values go (the menu and the tree toggle stay, as appearance does).
+    /// Settings' Remove all data: the per-host values go (the filter and the OFFLINE group's state stay, as appearance does).
     func removeDeviceState() {
         deviceState.removeAll()
         for key in SpacesDeviceState.legacyKeys { defaults.removeObject(forKey: key) }

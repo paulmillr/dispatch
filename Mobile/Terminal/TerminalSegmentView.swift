@@ -13,6 +13,8 @@ struct TerminalSegmentView: View {
     private var endedCard: TerminalEndedCard?
     /// Holds the controller across view updates (made once, on the first body).
     @State private var slot = Slot()
+    /// The app's appearance, before the capsule forces dark: the key bar's menu follows it.
+    @Environment(\.colorScheme) private var scheme
 
     @MainActor final class Slot {
         var controller: TerminalController?
@@ -43,10 +45,12 @@ struct TerminalSegmentView: View {
         // A shell that ended: its last screen stays, the card offers what is next, and the keys have nothing to reach.
         let ended = endedCard.flatMap { card in card.ended || controller.ended != nil ? card : nil }
         let full = controller.capsuleForm == .full && ended == nil
+        // Searching (T1): the search capsule takes the key capsule's place (or the collapsed button's).
+        let searching = controller.search.visible && ended == nil
         TerminalSurfaceView(controller: controller)
             .overlay(alignment: .bottomTrailing) {
                 Group {
-                    if ended != nil {
+                    if ended != nil || searching {
                         EmptyView()
                     } else if full {
                         TerminalDPadCluster(controller: controller)
@@ -66,11 +70,18 @@ struct TerminalSegmentView: View {
                         .frame(maxWidth: TerminalAdaptation.capsuleMaxWidth(idiom: controller.idiom))
                         .padding(.horizontal, 10)
                         .padding(.bottom, 8)
+                } else if searching {
+                    TerminalSearchBar(controller: controller)
+                        .frame(maxWidth: TerminalAdaptation.capsuleMaxWidth(idiom: controller.idiom))
+                        .padding(.horizontal, 10)
+                        .padding(.bottom, 8)
+                        .environment(\.colorScheme, .dark)
                 } else if full {
                     TerminalKeyCapsule(controller: controller)
                         .frame(maxWidth: TerminalAdaptation.capsuleMaxWidth(idiom: controller.idiom))
                         .padding(.horizontal, 10)
                         .padding(.bottom, 8)
+                        .environment(\.terminalMenuScheme, scheme)
                         .environment(\.colorScheme, .dark)
                 }
             }
@@ -151,8 +162,8 @@ struct TerminalSurfaceView: UIViewRepresentable {
 }
 
 /// The key capsule (M6a): Liquid Glass like the tab bar, six keys of equal width with no gaps: Ctrl, Esc, Tab and Alt
-/// in the monospaced system font, the d-pad, and the keyboard key. Ctrl and Alt light up while latched (tinted when
-/// locked by a double tap).
+/// in the monospaced system font, the d-pad, and the keyboard key with the terminal's menu (T2,
+/// `TerminalMenuKey`). Ctrl and Alt light up while latched (tinted when locked by a double tap).
 struct TerminalKeyCapsule: View {
     let controller: TerminalController
     @State private var dpadTouched = false
@@ -165,24 +176,9 @@ struct TerminalKeyCapsule: View {
             key("Tab") { controller.press(.tab) }
             modifier("Alt", .alt)
             dpad
-            if controller.keysCanHide {
-                // A hardware keyboard: the software one stays away; this key folds the capsule into its button.
-                Button { controller.hideKeys() } label: {
-                    Image(systemName: "chevron.down")
-                        .scaledFont(17, relativeTo: .callout)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .contentShape(Rectangle())
-                }
-                .accessibilityLabel("Hide terminal keys")
-            } else {
-                Button { controller.toggleKeyboard() } label: {
-                    Image(systemName: controller.keyboardVisible ? "keyboard.chevron.compact.down" : "keyboard")
-                        .scaledFont(19, relativeTo: .callout)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .contentShape(Rectangle())
-                }
-                .accessibilityLabel(controller.keyboardVisible ? "Hide keyboard" : "Show keyboard")
-            }
+            // The keyboard key, the menu's ellipsis while the software keyboard is up, or (a hardware keyboard on an
+            // iPad) the key that folds the capsule; a long press opens the menu (T2).
+            TerminalMenuKey(controller: controller)
         }
         .buttonStyle(KeyCapsuleButtonStyle())
         // A colour, not the hierarchical `.primary`: the d-pad's Canvas draws with it.
@@ -192,7 +188,10 @@ struct TerminalKeyCapsule: View {
     }
 
     @Environment(\.dynamicTypeSize) private var typeSize
-    private var height: CGFloat { min(typeSize, .accessibility1).scaled(Self.height, relativeTo: .callout) }
+    private var height: CGFloat { Self.height(typeSize) }
+
+    /// The capsule's height at a text size (the search capsule keeps the slot this tall, so the terminal keeps its rows).
+    static func height(_ typeSize: DynamicTypeSize) -> CGFloat { min(typeSize, .accessibility1).scaled(height, relativeTo: .callout) }
 
     private func key(_ label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {

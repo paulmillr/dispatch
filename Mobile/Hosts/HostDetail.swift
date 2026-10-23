@@ -214,6 +214,7 @@ struct HostHelperRows: View {
                 host.chat = chat
                 sessions.update(host)
             }))
+            HostFilesSwitch(session: session)
         }
         if let line = summary.plainLine {
             Text(line)
@@ -230,13 +231,35 @@ struct HostHelperRows: View {
 
 extension HostSessions {
     /// The Helper switch (host detail; "Use plain SSH for this host" turns it off), saved at once: the session reconnects
-    /// with the new choice (`update`). Off turns Chat off with it (`HostRecord.helper`); on turns Chat on again, as New
-    /// host does (`HostFeatureDraft`), and the Chat switch beside it turns it off.
+    /// with the new choice (`update`). Off turns Chat and Files & git off with it (`HostRecord.helper`); on turns them on
+    /// again, as New host does (`HostFeatureDraft`), and the switches beside it turn them off.
     func setHelper(_ helper: Bool, host id: UUID) {
         guard var record = store.record(id), record.helper != helper else { return }
         record.helper = helper
-        if helper { record.chat = true }
+        if helper {
+            record.chat = true
+            record.files = true
+        }
         update(record)
+    }
+}
+
+/// The Files & git switch (host detail, a host's Settings): the helper may read files and git in the tabs' folders
+/// (`HostRecord.files`, `HelperGrant`). Saved at once; on reconnects, off narrows the running helper's grant.
+struct HostFilesSwitch: View {
+    let session: HostSession
+    @Environment(HostSessions.self) private var sessions
+
+    static let title = "Files & git"
+
+    var body: some View {
+        Toggle(Self.title, isOn: Binding(get: { session.host.files }, set: { files in
+            var host = session.host
+            host.files = files
+            sessions.update(host)
+        }))
+        .disabled(!session.host.helper)
+        .accessibilityHint("Lets the helper list and read files and run read-only git commands on \(session.host.name)")
     }
 }
 

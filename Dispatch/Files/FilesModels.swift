@@ -176,6 +176,7 @@ extension FilesSource {
     var readOnly: Bool { false }
 }
 
+#if canImport(AppKit)
 /// Whether a tab can show files, and through what.
 enum FilesAvailability {
     case loading
@@ -195,6 +196,7 @@ enum FilesAvailability {
 
     var isAvailable: Bool { source != nil }
 }
+#endif
 
 /// The three tabs of files mode: Files, Review (`changes`: the uncommitted changes, which take comments for an agent)
 /// and Commits.

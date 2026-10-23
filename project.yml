@@ -258,8 +258,10 @@ targets:
           destination="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/TermFonts"
           mkdir -p "$destination"
           cp "$SRCROOT"/Vendor/Term/Sources/TermApple/Resources/*.ttf "$SRCROOT"/Vendor/Term/Sources/TermApple/Resources/*.txt "$destination/"
-        inputFiles: ["$(SRCROOT)/Vendor/Term/Sources/TermApple/Resources/JetBrainsMono-Variable.ttf", "$(SRCROOT)/Vendor/Term/Sources/TermApple/Resources/JetBrainsMono-Italic-Variable.ttf", "$(SRCROOT)/Vendor/Term/Sources/TermApple/Resources/SymbolsNerdFont-Regular.ttf"]
-        outputFiles: ["$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/JetBrainsMono-Variable.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/JetBrainsMono-Italic-Variable.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/SymbolsNerdFont-Regular.ttf"]
+          # The Mac's terminal fonts Settings offers (TerminalFont.all; not Ioskeley Mono, 6 MB).
+          for font in SourceCodePro-Regular.ttf SourceCodePro-Bold.ttf SourceCodePro-Italic.ttf SourceCodePro-BoldItalic.ttf FiraCode-Regular.ttf FiraCode-Bold.ttf 0xProto-Regular.otf 0xProto-Bold.otf 0xProto-Italic.otf DepartureMono-Regular.otf; do cp "$SRCROOT/Dispatch/Resources/Fonts/$font" "$destination/"; done
+        inputFiles: ["$(SRCROOT)/Vendor/Term/Sources/TermApple/Resources/JetBrainsMono-Variable.ttf", "$(SRCROOT)/Vendor/Term/Sources/TermApple/Resources/JetBrainsMono-Italic-Variable.ttf", "$(SRCROOT)/Vendor/Term/Sources/TermApple/Resources/SymbolsNerdFont-Regular.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/SourceCodePro-Regular.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/SourceCodePro-Bold.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/SourceCodePro-Italic.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/SourceCodePro-BoldItalic.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/FiraCode-Regular.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/FiraCode-Bold.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/0xProto-Regular.otf", "$(SRCROOT)/Dispatch/Resources/Fonts/0xProto-Bold.otf", "$(SRCROOT)/Dispatch/Resources/Fonts/0xProto-Italic.otf", "$(SRCROOT)/Dispatch/Resources/Fonts/DepartureMono-Regular.otf"]
+        outputFiles: ["$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/JetBrainsMono-Variable.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/JetBrainsMono-Italic-Variable.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/SymbolsNerdFont-Regular.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/SourceCodePro-Regular.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/SourceCodePro-Bold.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/SourceCodePro-Italic.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/SourceCodePro-BoldItalic.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/FiraCode-Regular.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/FiraCode-Bold.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/0xProto-Regular.otf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/0xProto-Bold.otf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/0xProto-Italic.otf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/DepartureMono-Regular.otf"]
     preBuildScripts:
       - name: Build SSH engine
         script: python3 "$SRCROOT/scripts/build-mobile-ssh.py" --platform "$PLATFORM_NAME"
@@ -276,6 +278,10 @@ targets:
         # Demo/Fixtures: the simulator demo reads them from the source tree (Debug only, never bundled).
         excludes: [App/Info.plist, Config, Tests, UITests, Transport, ThirdPartyLicenses, Demo/Fixtures]
       - path: Mobile/Transport/Integration
+      # Ghostty's bundled themes, Settings' terminal colour schemes (TerminalSchemes reads the app's themes folder).
+      - path: Vendor/Term/Resources/ghostty/themes
+        type: folder
+        buildPhase: resources
       # The Dispatch themes (TerminalConfiguration reads them from the app's ghostty folder).
       - path: extras/ghostty
         type: folder
@@ -304,6 +310,16 @@ targets:
       - Dispatch/Chat/ToolPresentation.swift
       - Dispatch/Chat/ToolPresentationCache.swift
       - Dispatch/Chat/ToolReadCommand.swift
+      - Dispatch/Files/FilesFormatting.swift
+      - Dispatch/Files/FilesModels.swift
+      - Dispatch/Files/GitDiffPresentation.swift
+      - Dispatch/Files/GitGraph.swift
+      - Dispatch/Files/GitLog.swift
+      - Dispatch/Files/GitModels.swift
+      - Dispatch/Files/GitParsers.swift
+      - Dispatch/Files/Review.swift
+      - Dispatch/Files/ReviewRefresh.swift
+      - Dispatch/Files/ReviewRepository.swift
       - Dispatch/Helper/AppReplay.swift
       - Dispatch/Helper/HelperBackend.swift
       - Dispatch/Helper/HelperBinary.swift
@@ -382,6 +398,8 @@ targets:
       - DispatchTests/ChatDraftTests.swift
       - DispatchTests/ChatSideQuestionTests.swift
       - DispatchTests/ChatOperationsTests.swift
+      - DispatchTests/GitGraphTests.swift
+      - DispatchTests/GitParsersTests.swift
       - DispatchTests/PortableTestSupport.swift
     dependencies:
       - target: DispatchMobile

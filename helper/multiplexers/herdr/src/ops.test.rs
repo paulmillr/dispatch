@@ -30,3 +30,26 @@ fn only_status_running_counts_as_running() {
     assert!(!mux.running(Some(1), b"status: running\n"));
     assert!(!mux.running(None, b""));
 }
+
+#[test]
+fn a_tab_moves_before_its_neighbour_or_to_the_end() {
+    let keys: Vec<String> = ["a", "b", "c"].iter().map(|k| k.to_string()).collect();
+    let refs: Vec<&String> = keys.iter().collect();
+    // Before c: herdr inserts before the tab at c's index, wherever the moved tab is.
+    assert_eq!(tab_insert_index(&refs, Some(&keys[2]), true), 2);
+    assert_eq!(tab_insert_index(&refs, Some(&keys[0]), true), 0);
+    // The end (memberships.append): one past the last tab, not before it.
+    assert_eq!(tab_insert_index(&refs, None, true), 3);
+}
+
+#[test]
+fn without_memberships_append_a_tab_without_before_keeps_the_last_tabs_index() {
+    let keys: Vec<String> = ["a", "b", "c"].iter().map(|k| k.to_string()).collect();
+    let refs: Vec<&String> = keys.iter().collect();
+    // The index the Mac's recorded moves send: herdr puts the tab before the last one.
+    assert_eq!(tab_insert_index(&refs, None, false), 2);
+    assert_eq!(tab_insert_index(&refs[..1], None, false), 0);
+    assert_eq!(tab_insert_index(&[], None, false), 0);
+    // A move before a tab is the same for every client.
+    assert_eq!(tab_insert_index(&refs, Some(&keys[1]), false), 1);
+}

@@ -77,10 +77,11 @@ operations! {
         ("parent", Unsigned),
         ("before", Unsigned),
     ]),
-        mux r#move(
+        mux move_member(
         local(number(p, "node")?),
         local(number(p, "parent")?),
-        optional(p, "before").map(local)
+        optional(p, "before").map(local),
+        features::enabled(&self.helper.features, self.fd, features::MEMBERSHIPS_APPEND)
     ) value;
     "memberships.reorder" => Object(&[
         ("mux", Unsigned),

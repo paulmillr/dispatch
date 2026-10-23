@@ -230,6 +230,8 @@ final class ChatIPadUITests: XCTestCase {
         shots("split-chat")
         app.terminate()
         app = launch(Self.sample, keyboard: true)
+        // The iPad's sidebar has no tab bar: Agents is its filter.
+        app.buttons["Filter"].firstMatch.tap()
         app.buttons["Agents"].firstMatch.tap()
         Thread.sleep(forTimeInterval: 1)
         shots("split-agents")

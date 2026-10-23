@@ -20,8 +20,8 @@ extension HostLink {
 }
 
 extension SpacesHostState {
-    /// Connected; on its way (connecting, logging in, starting the helper, reconnecting); or offline (disconnected,
-    /// failed), when the last-known spaces stay listed.
+    /// Connected; on its way (connecting, logging in, starting the helper, reconnecting), which Spaces lists with the
+    /// others; or offline (disconnected, failed), which Spaces lists in its OFFLINE group, header rows only.
     init(_ link: HostLink) {
         switch link {
         case .connected: self = .connected

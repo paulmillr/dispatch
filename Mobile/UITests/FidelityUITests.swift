@@ -16,11 +16,13 @@ final class FidelityUITests: XCTestCase {
     static let screens: [Screen] = {
         let appearance = Dictionary(uniqueKeysWithValues: AppearanceUITests.screens.map { ($0.id, $0) })
         let sample = AppearanceUITests.sample
+        let reviewDiff = sample + ["-DispatchTabsShow", "tab:herdr:app:1", "-DispatchTabsSegment", "files",
+                               "-DispatchTabsFilesMode", "review"]
         func demo(_ id: String) -> Screen { appearance[id] ?? Screen(id: id, environment: ["DISPATCH_MOBILE_CHAT_DEMO": id]) }
         return [
             appearance["M1d"]!,
             // Edit mode over the tree with ai collapsed, as drawn.
-            Screen(id: "M1e", arguments: sample + ["-DispatchTabsTree", "YES", "-DispatchTabsCollapse", "ai", "-DispatchTabsShow", "edit"]),
+            Screen(id: "M1e", arguments: sample + ["-DispatchTabsCollapse", "ai", "-DispatchTabsShow", "edit"]),
             Screen(id: "M1f", environment: ["DISPATCH_MOBILE_SCRIPTED": "1"], then: { app in
                 let edit = app.buttons["Edit"]
                 if edit.waitForExistence(timeout: 5) { edit.tap() }
@@ -28,7 +30,7 @@ final class FidelityUITests: XCTestCase {
                 if info.waitForExistence(timeout: 5) { info.tap() }
             }),
             appearance["M2a"]!,
-            Screen(id: "M2b", arguments: sample + ["-DispatchTabsTree", "YES", "-DispatchTabsCollapse", "ai"]),
+            Screen(id: "M2b", arguments: sample + ["-DispatchTabsCollapse", "ai"]),
             appearance["M2c"]!,
             demo("M3a"), demo("M4a"), demo("M3b"), demo("M4b"), demo("M4c"),
             appearance["M4d"]!,
@@ -44,8 +46,47 @@ final class FidelityUITests: XCTestCase {
             appearance["M7a"]!,
             appearance["M8a"]!,
             demo("M9a"),
+            // The redesign (mockups/): the dev tab's capsule, and Files on mba2 as plain SSH and without the grant.
+            Screen(id: "H0", arguments: sample + ["-DispatchTabsShow", "tab:herdr:app:2"]),
+            Screen(id: "S1", arguments: sample + ["-DispatchTabsShow", "tab:herdr:app:1", "-DispatchTabsSegment", "files",
+                                                  "-DispatchTabsFiles", "plain"]),
+            Screen(id: "S2", arguments: sample + ["-DispatchTabsShow", "tab:herdr:app:1", "-DispatchTabsSegment", "files",
+                                                  "-DispatchTabsFiles", "denied"]),
+            // Files mode in the sample's web app: src's listing, and theme.ts pushed.
+            Screen(id: "H1", arguments: sample + ["-DispatchTabsShow", "tab:herdr:app:1", "-DispatchTabsSegment", "files",
+                                                  "-DispatchFilesFolder", "src"]),
+            Screen(id: "F2", arguments: sample + ["-DispatchTabsShow", "tab:herdr:app:1", "-DispatchTabsSegment", "files",
+                                                  "-DispatchFilesPreview", "src/theme.ts"]),
+            // Commits (the sample's repository, `CommitsFixture`): the log, and its newest commit pushed (C2-commit: the
+            // chat screens have a C2 of their own).
+            Screen(id: "H3", arguments: sample + ["-DispatchTabsShow", "tab:herdr:app:1", "-DispatchTabsSegment", "files",
+                                                  "-DispatchTabsFilesMode", "commits"]),
+            Screen(id: "C2-commit", arguments: sample + ["-DispatchTabsShow", "tab:herdr:app:1", "-DispatchTabsSegment", "files",
+                                                  "-DispatchTabsFilesMode", "commits", "-DispatchTabsFilesRoute",
+                                                  "commits:c81a2f49e0b3d5a7c1f2e4b6d8a0c3e5f7a9b1d2"]),
+            // Review on mba2's app repository (the sample's three comments): the list, offline, just sent.
+            Screen(id: "H2", arguments: sample + FidelityUITests.review),
+            Screen(id: "S3", arguments: sample + FidelityUITests.review + ["-DispatchTabsFiles", "offline"]),
+            Screen(id: "S4", arguments: sample + FidelityUITests.review + ["-DispatchReviewSent", "YES"]),
+            // Review's diff of Sidebar.tsx on mba2's app repository: the first comment open (R2), lines 45–48 selected
+            // (R3), the composer on them (R4), the outdated comment and the gap (S5).
+            Screen(id: "R2", arguments: reviewDiff + ["-DispatchReviewDiff", "Sidebar.tsx"]),
+            Screen(id: "R3", arguments: reviewDiff + ["-DispatchReviewDiff", "Sidebar.tsx:select"]),
+            Screen(id: "R4", arguments: reviewDiff + ["-DispatchReviewDiff", "Sidebar.tsx:compose"]),
+            Screen(id: "S5", arguments: reviewDiff + ["-DispatchReviewDiff", "Sidebar.tsx:outdated"]),
+            // Review's Create review sheet on mba2's app repository: to claude (R5), the second comment swiped open (R5b),
+            // and from the dev tab, which runs no agent (R5c).
+            Screen(id: "R5", arguments: sample + ["-DispatchTabsShow", "tab:herdr:app:1", "-DispatchTabsSegment", "files",
+                                                  "-DispatchTabsFilesMode", "review", "-DispatchReviewSheet", "agent"]),
+            Screen(id: "R5b", arguments: sample + ["-DispatchTabsShow", "tab:herdr:app:1", "-DispatchTabsSegment", "files",
+                                                   "-DispatchTabsFilesMode", "review", "-DispatchReviewSheet", "swipe"]),
+            Screen(id: "R5c", arguments: sample + ["-DispatchTabsShow", "tab:herdr:app:2", "-DispatchTabsSegment", "files",
+                                                   "-DispatchTabsFilesMode", "review", "-DispatchReviewSheet", "noagent"]),
         ] + hostStats
     }()
+
+    /// The claude tab's Files segment on Review.
+    static let review = ["-DispatchTabsShow", "tab:herdr:app:1", "-DispatchTabsSegment", "files", "-DispatchTabsFilesMode", "review"]
 
     /// The host stats screens (W1a–W7, I5) on the simulator demo's mba2 (`HostStatsDemo`'s launch arguments); their
     /// renders are the mockup app's shots (`mockups/shots/<ID>-<name>-<scheme>.png`).

@@ -83,9 +83,12 @@ protocol TerminalFeed: AnyObject, Sendable {
     /// Whether the emulator may write the phone's pasteboard for the program (OSC 52, kitty clipboard): only a feed
     /// whose programs the user started directly (a plain shell). Reading the pasteboard is never allowed.
     var clipboardWrite: Bool { get }
+    /// Detaching ends the program (a plain shell): nothing reattaches to repaint its screen.
+    var endsOnDetach: Bool { get }
 }
 
 extension TerminalFeed {
     var scrollback: TerminalScrollback { .unknown }
     var clipboardWrite: Bool { false }
+    var endsOnDetach: Bool { false }
 }

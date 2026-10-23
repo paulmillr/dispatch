@@ -32,6 +32,8 @@ final class MobileAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificati
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         MobileDevice.start()
+        // The bundled terminal fonts, off the main thread; a terminal or chat that needs one first waits for it.
+        MobileFonts.registerInBackground()
         UNUserNotificationCenter.current().delegate = self
         return true
     }

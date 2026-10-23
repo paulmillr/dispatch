@@ -168,6 +168,7 @@ struct NewHostSheet: View {
                             .accessibilityHint(Self.helperHint)
                         if features.showsHelperRows {
                             Toggle("Chat", isOn: $features.chat)
+                            Toggle(HostFilesSwitch.title, isOn: $features.files)
                         }
                     } header: {
                         MobileSectionHeader("On the host")
@@ -317,29 +318,33 @@ struct NewHostSheet: View {
     }
 }
 
-/// New host's multiplexer, Helper and Chat rows (M8a): the sheet's own copy of them. Chat is kept apart from the record,
-/// which forces it off without the helper (`HostRecord.helper`): turning Helper off only hides Chat, and turning it on
-/// again shows Chat as it was (on, for a host saved without the helper: Chat's default).
+/// New host's multiplexer, Helper, Chat and Files & git rows (M8a): the sheet's own copy of them. Chat and Files are
+/// kept apart from the record, which forces them off without the helper (`HostRecord.helper`): turning Helper off only
+/// hides them, and turning it on again shows them as they were (on, for a host saved without the helper: their default).
 struct HostFeatureDraft: Equatable {
     var multiplexer: HostRecord.MultiplexerPreference = .automatic
     var helper = true
     /// What Chat is with the helper; kept while Helper is off.
     var chat = true
+    /// What Files & git is with the helper; kept while Helper is off.
+    var files = true
 
     init(_ record: HostRecord? = nil) {
         guard let record else { return }
         multiplexer = record.multiplexer
         helper = record.helper
         chat = record.helper ? record.chat : true
+        files = record.helper ? record.files : true
     }
 
-    /// The multiplexer and Chat rows show with the helper only.
+    /// The multiplexer, Chat and Files & git rows show with the helper only.
     var showsHelperRows: Bool { helper }
 
     func apply(to record: inout HostRecord) {
         record.multiplexer = multiplexer
         record.helper = helper
         record.chat = helper && chat
+        record.files = helper && files
     }
 }
 

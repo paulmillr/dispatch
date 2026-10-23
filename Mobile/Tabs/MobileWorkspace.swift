@@ -23,6 +23,14 @@ struct TabsHost: Identifiable, Equatable {
     /// Plain SSH (`HostSession.plainSSH`, docs/ios.md: the Helper switch is off, or this connection fell back): the header
     /// marks it where the multiplexer goes, connected or not.
     var plain = false
+    /// The helper's grant reads files and git (the host's Files & git switch, `HelperGrant`): Files' modes; off, Files
+    /// explains (S2).
+    var files = true
+    /// The link dropped and is being made again (`HostLink.reconnecting`): Files shows it offline (S3), a first
+    /// connection (`connecting`) not.
+    var reconnecting = false
+    /// When the link went down, for Files' offline accessory (S3); nil while connected or never up.
+    var offlineSince: Date? = nil
     /// The host earlier in the list that reaches the same machine and account (`MobileComposition.sameMachine`): that one
     /// shows the spaces, this one names it.
     var sameMachine: String? = nil
@@ -47,6 +55,11 @@ struct TabsHost: Identifiable, Equatable {
 struct TabRef: Hashable, Sendable, Codable {
     let host: UUID
     let key: String
+}
+
+/// The switcher sheet's item (`SpacesNavigator.switcher`).
+extension TabRef: Identifiable {
+    var id: Self { self }
 }
 
 /// A space across hosts: the host and its tmux session's or herdr workspace's node key.
@@ -115,7 +128,7 @@ final class MobileTab: Identifiable {
         return panes.first { $0.agent != nil }
     }
 
-    /// A chat tab (M2a's speech bubble disc, the Chats filter, Chat as the default segment).
+    /// A chat tab (an agent's mark in P2, the Agents filter, Chat as the default segment).
     var isChat: Bool { agentPane != nil }
 
     /// A plain SSH shell tab (the Shell space's): no chat, no node on any server, closed on the phone.
@@ -227,6 +240,26 @@ final class MobileSpace: Identifiable {
     }
 }
 
+/// Work detached from the host's lists and still running there (`close.request` detach: the Mac's Close space,
+/// Detach, a busy tab's Close): a topology node the helper marks `detached`, the topmost of its branch. P1's Detached row
+/// counts them and its list restores or forgets them, as the Mac's sidebar does.
+struct MobileDetached: Identifiable, Equatable, Sendable {
+    enum Kind: Equatable, Sendable { case space, tab }
+
+    let host: UUID
+    /// Its topology key (the row's identity); the node id is this connection's.
+    let key: String
+    let node: UInt64
+    let kind: Kind
+    let name: String
+    /// The space a detached tab was in, when the topology still names it.
+    let space: String?
+    /// Where restoring puts it back (`memberships.move`): its parent while the server keeps one (herdr's workspaces and
+    /// tabs, under the backend or their workspace); nil for tmux's retained views, which `memberships.place` restores.
+    let parent: UInt64?
+    var id: String { key }
+}
+
 /// One host's spaces and tabs (Phase 2), built from the helper's `HelperTopology` snapshots: herdr workspaces or tmux
 /// sessions are spaces, their tabs or windows are tabs, their panes are a tab's terminals. Snapshots merge into the
 /// objects already shown: an unchanged node keeps its object and no property of it is written, so rows are never
@@ -266,6 +299,19 @@ final class MobileWorkspace: Identifiable {
     /// The backend whose changes the running rebuild dates (`apply` of a watched backend's snapshot).
     @ObservationIgnored private var stamping: UInt64?
     @ObservationIgnored private var waiters: [Waiter] = []
+    /// The detached work the topology lists (P1's Detached row), less what the user removed from the list.
+    private(set) var detached: [MobileDetached] = []
+    /// Detached keys the user removed from the list on this connection (`forget`).
+    @ObservationIgnored private var forgotten: Set<String> = []
+    /// Edit tabs' drags on their way, by space key (`reorder`).
+    private struct Reorder {
+        let keys: [String]
+        let moved: String
+        let token: UUID
+    }
+    @ObservationIgnored private var reorders: [String: Reorder] = [:]
+    /// Detached keys a restore is on its way for: out of the list at once, back if it fails.
+    private(set) var restoring: Set<String> = []
     /// Nodes a close is on its way for: hidden at once, shown again if the close fails.
     private(set) var closing: Set<UInt64> = []
     /// The phone's shell tabs on this host (`ShellSessions.tabs`), the Shell space's.
@@ -362,6 +408,8 @@ final class MobileWorkspace: Identifiable {
         }
         if !order.contains(topology.backend) { order.append(topology.backend) }
         snapshots[topology.backend] = topology
+        // A snapshot that names a tab being reordered is the server's order from now on (whatever else changed).
+        reorders = reorders.filter { !keys.contains($0.value.moved) }
         stamping = host.live && watched.contains(topology.backend) ? topology.backend : nil
         rebuild()
         stamping = nil
@@ -450,6 +498,7 @@ final class MobileWorkspace: Identifiable {
         var spaces: [MobileSpace] = []
         var liveTabs: Set<String> = [], liveSpaces: Set<String> = []
         var signatures: [String: PaneSignature] = [:]
+        var detached: [MobileDetached] = []
         let stamp = now()
         for backend in order {
             guard let topology = snapshots[backend] else { continue }
@@ -525,6 +574,10 @@ final class MobileWorkspace: Identifiable {
                     }
                 }
                 tabs.removeAll { closing.contains($0.node) }
+                if let reorder = reorders[workspace.key] {
+                    let byKey = Dictionary(tabs.map { ($0.ref.key, $0) }, uniquingKeysWith: { first, _ in first })
+                    tabs = Self.reordered(tabs.map(\.ref.key), by: reorder.keys).compactMap { byKey[$0] }
+                }
                 guard !closing.contains(workspace.id) else { return }
                 liveSpaces.insert(workspace.key)
                 let cwd = workspace.cwd ?? tabs.first?.cwd
@@ -539,14 +592,111 @@ final class MobileWorkspace: Identifiable {
             }
 
             for root in roots where root.kind == .workspace { makeSpace(root) }
+            detached += Self.detached(in: topology, nodes: nodes, host: host.id)
         }
         if let shell = rebuildShellSpace() { spaces.append(shell) }
         tabObjects = tabObjects.filter { liveTabs.contains($0.key) }
         spaceObjects = spaceObjects.filter { liveSpaces.contains($0.key) }
         seen = signatures
         if self.spaces.map(ObjectIdentifier.init) != spaces.map(ObjectIdentifier.init) { self.spaces = spaces }
+        // A restore is done once the topology no longer lists its node detached; a forgotten key detached again later
+        // (another detach of the same window) is listed again.
+        let keys = Set(detached.map(\.key))
+        if !restoring.isSubset(of: keys) { restoring.formIntersection(keys) }
+        forgotten.formIntersection(keys)
+        let listed = detached.filter { !forgotten.contains($0.key) && !restoring.contains($0.key) && !closing.contains($0.node) }
+        if self.detached != listed { self.detached = listed }
         resumeWaiters()
     }
+
+    /// The topmost detached workspaces and tabs of one snapshot (a detached space's tabs go with it), in server order.
+    static func detached(in topology: HelperTopology, nodes: [UInt64: HelperTopology.Node], host: UUID) -> [MobileDetached] {
+        topology.nodes.compactMap { node in
+            guard node.detached, node.kind == .workspace || node.kind == .tab else { return nil }
+            let parent = node.parent.flatMap { nodes[$0] }
+            if parent?.detached == true { return nil }
+            var name = node.name
+            if node.kind == .tab, node.renamed != true, Int(name) != nil,
+               let pane = topology.nodes.first(where: { $0.parent == node.id && $0.kind == .terminal }) {
+                // herdr's unrenamed tabs are numbered by position, which no longer means anything once detached.
+                name = pane.name
+            }
+            let restoreParent = node.parent.flatMap { id in nodes[id] != nil || id == topology.backend ? id : nil }
+            return MobileDetached(host: host, key: node.key, node: node.id, kind: node.kind == .workspace ? .space : .tab,
+                                  name: name, space: node.kind == .tab ? parent?.name : nil, parent: restoreParent)
+        }
+    }
+
+    /// Restore: the detached work comes back into the host's lists (and the Mac's), its processes as they were. Out of
+    /// the Detached list at once; back if the helper refuses.
+    func restore(_ item: MobileDetached) async throws {
+        let commands = try commands()
+        restoring.insert(item.key)
+        rebuild()
+        do {
+            if let parent = item.parent {
+                try await commands.move(item.node, parent: parent, before: nil)
+            } else {
+                try await commands.place(item.node, label: "")
+            }
+        } catch {
+            restoring.remove(item.key)
+            rebuild()
+            throw error
+        }
+    }
+
+    /// Remove from list: the row goes; the work keeps running on the host. A tmux retained view is forgotten by the
+    /// helper (its `close.request` terminate drops only the descriptor, as the Mac's Remove does); a herdr node stays
+    /// detached on the server and leaves this connection's list.
+    func forget(_ item: MobileDetached) async throws {
+        // The row leaves once the helper forgot the descriptor: a refused request leaves it listed.
+        if item.parent == nil {
+            _ = try await commands().close(item.node, .terminate)
+        }
+        forgotten.insert(item.key)
+        rebuild()
+    }
+
+    /// Moves a tab before `before` (or last) in its space, on the server: tmux's window order in the session (the
+    /// helper's `memberships.move`), herdr's tab order in its workspace (last means after the last tab only for the
+    /// `memberships.append` hello feature, `SSHHostSessionDriver.features`). The topology brings the new order.
+    func move(tab: MobileTab, before: MobileTab?) async throws {
+        guard let space = space(of: tab), space.kind == .multiplexer else { return }
+        try await commands().move(tab.node, parent: space.node, before: before?.node)
+    }
+
+    /// P2d's drag: the space's tabs show `keys`' order at once and `moved` goes before its new neighbour on the server.
+    /// The order shown is the drag's until the move's answer arrives (done or refused) or a snapshot naming the moved
+    /// tab does, whichever is first; meanwhile a tab the drag did not know keeps its server place.
+    func reorder(space: MobileSpace, keys: [String], moved: String) async throws {
+        guard space.kind == .multiplexer, let tab = tab(moved), let index = keys.firstIndex(of: moved) else { return }
+        let commands = try commands()
+        let before = keys[(index + 1)...].lazy.compactMap { self.tab($0) }.first { $0.space == space.ref }
+        let token = System.uuid()
+        reorders[space.ref.key] = Reorder(keys: keys, moved: moved, token: token)
+        rebuild()
+        defer {
+            if reorders[space.ref.key]?.token == token {
+                reorders[space.ref.key] = nil
+                rebuild()
+            }
+        }
+        try await commands.move(tab.node, parent: space.node, before: before?.node)
+    }
+
+    /// `server`'s keys with the ones `order` names in `order`'s order, in the places they hold; a key `order` does not
+    /// name (a tab made meanwhile) keeps its server place.
+    nonisolated static func reordered(_ server: [String], by order: [String]) -> [String] {
+        let present = Set(server)
+        let wanted = order.filter(present.contains)
+        let moving = Set(wanted)
+        var next = wanted.makeIterator()
+        return server.map { moving.contains($0) ? next.next() ?? $0 : $0 }
+    }
+
+    /// Whether a space's tabs can be reordered here (P2d's handles): a multiplexer's, through this connection.
+    func canReorder(_ space: MobileSpace) -> Bool { space.kind == .multiplexer && client != nil && host.live }
 
     /// The Shell space from `shellTabs`, keeping its objects; nil while it is not listed.
     private func rebuildShellSpace() -> MobileSpace? {

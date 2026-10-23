@@ -1,6 +1,10 @@
 import Foundation
 import XCTest
+#if canImport(AppKit)
 @testable import DispatchApp
+#else
+@testable import DispatchMobile
+#endif
 
 /// The git parsers against output recorded from real git 2.54 (`git -c core.quotepath=false -c color.ui=never`, the
 /// arguments GitQueries sends) in two scratch repositories: one with staged, unstaged, renamed, deleted, binary,
@@ -149,6 +153,7 @@ final class GitParsersTests: XCTestCase {
         XCTAssertEqual(commit.distinctCommitter?.name, "GitHub")
     }
 
+    #if canImport(AppKit)
     /// `verify-commit --raw`: gpg's status lines (as this Mac's gpg 2.5 printed them) and ssh-keygen's words.
     func testSignatureChecksReadGpgAndSshVerdicts() {
         let good = """
@@ -193,6 +198,7 @@ final class GitParsersTests: XCTestCase {
         XCTAssertEqual(GitSignatureText.detail(ssh, kind: .gpg), "sam@x.com · SSH key: SHA256:abcDEF", "the check's own kind")
         XCTAssertEqual(GitSignatureText.short(GitSignatureCheck(verdict: .bad)), "Bad signature")
     }
+    #endif
 
     /// A commit's file for Source: the new side of its one-hunk patch, without the removed lines or git's markers.
     func testNewSideReadsTheWholeFileFromAOneHunkPatch() {

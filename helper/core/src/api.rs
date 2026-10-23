@@ -1506,6 +1506,20 @@ pub trait Multiplexer {
     fn focus(&mut self, io: &mut dyn Io, node: Id, done: Done<()>);
     /// Move a node under another parent; c1654cc Dispatch/Hosts/HerdrHostMoves.swift:186.
     fn r#move(&mut self, io: &mut dyn Io, node: Id, parent: Id, before: Option<Id>, done: Done<()>);
+    /// `memberships.move`: `r#move`, where `append` (the client named the `memberships.append` feature) asks that a
+    /// node moved without `before` go after `parent`'s last member. Producers whose `r#move` already does that keep
+    /// this default; herdr's old index for that case (before the last tab) stays for every other client.
+    fn move_member(
+        &mut self,
+        io: &mut dyn Io,
+        node: Id,
+        parent: Id,
+        before: Option<Id>,
+        _append: bool,
+        done: Done<()>,
+    ) {
+        self.r#move(io, node, parent, before, done);
+    }
     /// Resize a split; c1654cc Dispatch/Herdr/HerdrLayouts.swift:24, Dispatch/Tmux/TmuxCoordinator.swift:1409.
     fn split(&mut self, io: &mut dyn Io, node: Id, ratio: f64, done: Done<()>);
     /// Zoom one terminal; c1654cc Dispatch/Tmux/TmuxSession.swift:195.

@@ -14,6 +14,8 @@ struct ChatUserMessage: View {
     var host: UUID? = nil
     var read: (@MainActor (String) async throws -> Data?)? = nil
     var faded = false
+    @Environment(\.chatSearchMarks) private var marks
+    @Environment(\.chatSearchCurrent) private var current
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 4) {
@@ -21,7 +23,9 @@ struct ChatUserMessage: View {
                 ChatMessageAttachments(attachments: attachments, host: host, read: read, faded: faded)
             }
             if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || attachments.isEmpty {
-                ChatBubble(side: .user, faded: faded) { Text(text) }
+                ChatBubble(side: .user, faded: faded) {
+                    if var marker = ChatSearchMarker(marks, current: current) { Text(marker.mark(text)) } else { Text(text) }
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .trailing)

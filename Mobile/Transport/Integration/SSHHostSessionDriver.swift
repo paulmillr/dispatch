@@ -18,7 +18,8 @@ struct SSHHostSessionDriver: HostSessionDriver {
     /// `stdio.liveness` the helper ends after 45 s without a frame from the phone: the latency ping (`pingInterval`)
     /// keeps it alive while connected, so it must stay at most `livenessPing`.
     static let features = ["interaction.options", "chat.list", "projects.recent", "multiplexers.versions", "terminals.coalesce",
-                           "launch.names", "stdio.liveness", "terminals.activity", ChatAttachment.feature]
+                           "launch.names", "stdio.liveness", "terminals.activity", ChatAttachment.feature,
+                           "memberships.append"]
     /// The longest gap between pings `stdio.liveness` allows (helper/PROTOCOL.md: at least every 15 s).
     static let livenessPing: Duration = .seconds(15)
 

@@ -1,6 +1,10 @@
 import Foundation
 import XCTest
+#if canImport(AppKit)
 @testable import DispatchApp
+#else
+@testable import DispatchMobile
+#endif
 
 /// The Commits tab's lanes and its texts: where each commit's dot sits, which lines
 /// cross each row, which are the current branch's, and how deep lanes collapse.
@@ -125,6 +129,7 @@ final class GitGraphTests: XCTestCase {
 
     // MARK: Texts
 
+    #if canImport(AppKit)
     func testHeaderFooterAndAgeTexts() {
         let status = GitStatus(branch: "main", head: "c28855c", upstream: "origin/main", ahead: 2, changes: [
             GitChange(path: "a.ts", kind: .modified, area: .staged),
@@ -157,7 +162,9 @@ final class GitGraphTests: XCTestCase {
         XCTAssertEqual(GitCommitsText.ago(now.addingTimeInterval(-3 * 86_400), at: now), "3 days ago")
         XCTAssertEqual(GitCommitsText.ago(now.addingTimeInterval(30), at: now), "just now", "clock skew reads now")
     }
+    #endif
 
+    #if canImport(AppKit)
     func testAgesMoveWithTheClock() {
         // The rows and the detail read the clock on every minute's tick: the same commit reads older as time passes.
         let date = now.addingTimeInterval(-59 * 60)
@@ -166,7 +173,9 @@ final class GitGraphTests: XCTestCase {
         XCTAssertEqual([0, 60, 23 * 3_600 + 60].map { GitCommitsText.ago(date, at: now.addingTimeInterval(Double($0))) },
                        ["59 min ago", "1 hour ago", "1 day ago"])
     }
+    #endif
 
+    #if canImport(AppKit)
     func testTheFilterDraftKeepsWhatIsTypedAndAppliesItTrimmed() {
         // "fix " typed: the pause applies "fix", and the field keeps the space for the next word.
         XCTAssertEqual(GitCommitsFilter.applied("fix ", filter: ""), "fix")
@@ -180,7 +189,9 @@ final class GitGraphTests: XCTestCase {
         XCTAssertEqual(GitCommitsFilter.applied("  ", filter: "fix"), "", "spaces alone clear the filter")
         XCTAssertNil(GitCommitsFilter.applied(nil, filter: "fix"))
     }
+    #endif
 
+    #if canImport(AppKit)
     func testANarrowListDrawsFewerLanes() {
         // The graph takes a fifth of the list at most: two lanes at 320 pt, five at 500, never past eight.
         XCTAssertEqual(GitGraphCell.maxLanes(width: 320, scale: 1), 2)
@@ -197,7 +208,9 @@ final class GitGraphTests: XCTestCase {
         XCTAssertEqual(GitRefChips.maxWidth(list: 620), 207)
         XCTAssertEqual(GitRefChips.maxWidth(list: 120), 64)
     }
+    #endif
 
+    #if canImport(AppKit)
     func testFullTimesAndTheCommitterLine() {
         let date = Date(timeIntervalSince1970: 1792349447)
         XCTAssertEqual(GitCommitsText.fullTime(date, zone: "+0000"), "2026-10-18 18:50:47 +0000")
@@ -218,7 +231,9 @@ final class GitGraphTests: XCTestCase {
                                                           zone: "+0000"), of: commit, at: now),
                        "Committed by Robin Example")
     }
+    #endif
 
+    #if canImport(AppKit)
     func testChipsPutTheCheckedOutBranchFirst() {
         let refs = [GitRef(name: "v2.4.0", kind: .tag, current: false), GitRef(name: "origin/main", kind: .remote, current: false),
                     GitRef(name: "main", kind: .branch, current: true), GitRef(name: "dev", kind: .branch, current: false)]
@@ -226,4 +241,5 @@ final class GitGraphTests: XCTestCase {
         XCTAssertTrue(GitRefChip.filled(refs[2]))
         XCTAssertFalse(GitRefChip.filled(refs[3]))
     }
+    #endif
 }

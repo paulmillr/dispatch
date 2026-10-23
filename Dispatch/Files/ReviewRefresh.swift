@@ -50,16 +50,19 @@ enum ReviewRefresh {
         }
     }
 
-    /// The review with every commented file read again. Never throws: what cannot be read keeps its numbers.
-    static func refresh(_ review: Review, status: GitStatus, queries: GitQueries) async -> Review {
+    /// The review with every commented file read again through `read` (the working-tree file) and `diff` (a change's
+    /// diff; nil when git could not say). Never throws: what cannot be read keeps its numbers. Both apps run it: the Mac
+    /// through `GitQueries`, the phone through its helper's `files.git` and `files.text`.
+    static func refresh(_ review: Review, status: GitStatus, read: (String) async -> File,
+                        diff: (GitChange) async -> GitDiff?) async -> Review {
         var refreshed = review
         var comments: [UUID: ReviewComment] = [:]
         for (path, fileComments) in review.files where fileComments.contains(where: { !$0.onFile }) {
-            let file = await read(path, queries: queries)
+            let file = await read(path)
             var diffs: [GitDiffPresentation] = []
             if fileComments.contains(where: { $0.end?.side == .old }) {
                 for change in status.changes where change.path == path && change.area != .untracked {
-                    if let diff = try? await queries.diff(change), !diff.binary {
+                    if let diff = await diff(change), !diff.binary {
                         diffs.append(GitDiffPresentation.parse(diff.text))
                     }
                 }
@@ -68,6 +71,13 @@ enum ReviewRefresh {
         }
         refreshed.comments = review.comments.map { comments[$0.id] ?? $0 }
         return refreshed
+    }
+
+    #if canImport(AppKit)
+    /// The review with every commented file read again. Never throws: what cannot be read keeps its numbers.
+    static func refresh(_ review: Review, status: GitStatus, queries: GitQueries) async -> Review {
+        await refresh(review, status: status, read: { await read($0, queries: queries) },
+                      diff: { try? await queries.diff($0) })
     }
 
     private static func read(_ path: String, queries: GitQueries) async -> File {
@@ -83,6 +93,7 @@ enum ReviewRefresh {
             return .unknown
         }
     }
+    #endif
 
     /// A file's lines as the diff numbers them: split at newlines, a final newline ending the last line.
     static func lines(_ text: String) -> [String] {
