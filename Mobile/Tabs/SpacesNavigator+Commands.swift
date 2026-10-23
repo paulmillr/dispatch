@@ -32,12 +32,13 @@ extension SpacesNavigator {
     /// A Spaces sheet or dialog is up (New tab's picker, New space, Rename, Terminate, a failure).
     var presenting: Bool {
         picking || newSpace != nil || actions.renaming != nil || actions.terminating != nil || actions.closingSpace != nil
-            || actions.failure != nil
+            || actions.closingShells != nil || actions.failure != nil
     }
 
     /// The commands that apply now. Nothing applies while something is presented (`presenting`: the shell's sheets,
     /// besides the navigator's own); a tab's and a space's items need them on screen and their host connected (a
-    /// request to a host that is not would only fail). The terminal's (Clear Screen, the font sizes) need a tab shown:
+    /// request to a host that is not would only fail). A plain host's shells are the phone's own: Close Tab and Close
+    /// Space need no connection, and they have no Rename or Detach. The terminal's (Clear Screen, the font sizes) need a tab shown:
     /// its terminal answers them when it has the focus, and refuses a size past its bounds. Attach Files… needs an agent's
     /// tab on a connected host: its chat composer opens the picker when its helper takes attachments.
     func enabledCommands(presenting: Bool) -> Set<MobileCommand> {
@@ -45,13 +46,22 @@ extension SpacesNavigator {
         var enabled: Set<MobileCommand> = [.newChat, .newHost, .spaces, .agents, .settings, .shortcuts]
         if !model.workspaces.isEmpty { enabled.formUnion([.newTab, .newSpace]) }
         if let tab = shownTab.flatMap(model.tab) {
-            enabled.formUnion([.switchSegment, .clearScreen, .increaseFontSize, .decreaseFontSize, .resetFontSize])
-            if connected(tab.ref.host) { enabled.formUnion([.renameTab, .closeTab]) }
-            if connected(tab.ref.host), tab.isChat { enabled.insert(.attach) }
+            enabled.formUnion([.clearScreen, .increaseFontSize, .decreaseFontSize, .resetFontSize])
+            if tab.isShell {
+                enabled.insert(.closeTab)
+            } else {
+                enabled.insert(.switchSegment)
+                if connected(tab.ref.host) { enabled.formUnion([.renameTab, .closeTab]) }
+                if connected(tab.ref.host), tab.isChat { enabled.insert(.attach) }
+            }
             if (model.space(tab.space)?.tabs.count ?? 0) > 1 { enabled.formUnion([.previousTab, .nextTab]) }
         }
-        if let space = shownSpace, model.space(space) != nil, connected(space.host) {
-            enabled.formUnion([.renameSpace, .closeSpace, .detachSpace])
+        if let ref = shownSpace, let space = model.space(ref) {
+            if space.kind == .plainShell {
+                if !space.tabs.isEmpty { enabled.insert(.closeSpace) }
+            } else if connected(ref.host) {
+                enabled.formUnion([.renameSpace, .closeSpace, .detachSpace])
+            }
         }
         if !attentionTabs.isEmpty { enabled.formUnion([.nextAttention, .previousAttention]) }
         if sidebarHides && canToggleSidebar { enabled.insert(.toggleSidebar) }
@@ -60,10 +70,10 @@ extension SpacesNavigator {
 
     private func connected(_ host: UUID) -> Bool { model.workspace(host)?.client != nil }
 
-    /// New Tab (⌘T): as the Mac's, in the space on screen; elsewhere as the tab bar's New (the most recent space, else
-    /// the space picker).
+    /// New Tab (⌘T): as the Mac's, in the space on screen (a shell in a plain host's Shell space); elsewhere as the tab
+    /// bar's New (the most recent space, else the space picker).
     func newTabHere() {
-        if let ref = shownSpace, connected(ref.host), let space = model.space(ref) {
+        if let ref = shownSpace, let space = model.space(ref), model.workspace(ref.host)?.canAddTab(to: space) == true {
             newTab(in: space)
         } else {
             newTabFromBar()

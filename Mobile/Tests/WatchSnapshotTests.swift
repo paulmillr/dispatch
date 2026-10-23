@@ -142,6 +142,31 @@ final class WatchSnapshotTests: XCTestCase {
                        "in the foreground Face ID can ask")
     }
 
+    /// Plain SSH hosts (docs/ios.md) are not the watch's: a host with its Helper switch off and one whose connection fell
+    /// back to plain SSH are left out of the hosts, and their spaces and tabs with them; a host on its helper stays.
+    func testPlainSSHHostsAreSkipped() async throws {
+        let studio = ResilienceFixture.host("studio", order: 0)
+        var pi = ResilienceFixture.host("pi", order: 1)
+        pi.helper = false
+        let lab = ResilienceFixture.host("lab", order: 2)
+        let driver = NamedHostDriver(drivers: [
+            "studio": ScriptedHostSessionDriver(),
+            "pi": ScriptedHostSessionDriver { _ in [.plain(reason: nil), .hold] },
+            "lab": ScriptedHostSessionDriver { _ in [.plain(reason: "unsupported system"), .hold] },
+        ])
+        let hosts = ResilienceFixture.sessions([studio, pi, lab], driver: driver)
+        let app = ResilienceFixture.composition(hosts)
+        try await TestSupport.eventually { hosts.ordered.allSatisfy { $0.link == .connected } }
+        XCTAssertEqual(hosts.ordered.map(\.plainSSH), [false, true, true])
+        try await TestSupport.eventually { app.tabs.workspaces.contains { $0.id == studio.id && !$0.spaces.isEmpty } }
+        let snapshot = WatchSnapshotBuilder(composition: app).build()
+        XCTAssertEqual(snapshot.hosts.map(\.name), ["studio"])
+        XCTAssertFalse(snapshot.spaces.isEmpty)
+        XCTAssertTrue(snapshot.spaces.allSatisfy { $0.host == studio.id.uuidString }, "\(snapshot.spaces.map(\.host))")
+        XCTAssertTrue(snapshot.tabs.allSatisfy { $0.host == studio.id.uuidString })
+        XCTAssertTrue(snapshot.conversations.allSatisfy { $0.host == studio.id.uuidString })
+    }
+
     /// The phone's connection failures name the host's address, port and user (docs/security.md, Apple Watch: none of
     /// them crosses); its display name stands in.
     func testAHostsAddressNeverReachesTheWatch() async throws {

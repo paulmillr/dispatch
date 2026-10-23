@@ -23,10 +23,11 @@ final class SSHDriverLiveTests: XCTestCase {
         return try JSONDecoder().decode(Live.self, from: Data(contentsOf: URL(fileURLWithPath: path)))
     }
 
-    private func sessions(_ live: Live) throws -> (HostSessions, HostRecord) {
+    private func sessions(_ live: Live, helper: Bool = true) throws -> (HostSessions, HostRecord) {
         let keys = KeyStore(url: nil, vault: MemoryVault(), keyProtection: .none, secureEnclaveAvailable: false)
         let key = try keys.importKey(Data(contentsOf: URL(fileURLWithPath: live.keyFile)), label: "fixture")
-        let record = HostRecord(name: "this-mac", address: live.host, port: live.port, user: live.user, auth: .key(key.id))
+        let record = HostRecord(name: "this-mac", address: live.host, port: live.port, user: live.user, auth: .key(key.id),
+                                helper: helper)
         let sessions = HostSessions(store: HostStore(url: nil), keys: keys, knownHosts: KnownHostStore(url: nil),
                                     driver: SSHHostSessionDriver(pingInterval: .seconds(1)), active: true)
         return (sessions, record)
@@ -97,6 +98,36 @@ final class SSHDriverLiveTests: XCTestCase {
         XCTAssertFalse(probe.client === firstClient, "a new helper connection")
         XCTAssertEqual(Set(probe.topology?.nodes.filter { $0.kind == .workspace }.map(\.key) ?? []), spaces,
                        "the same spaces, by key, through the new helper")
+        probe.disconnect()
+    }
+
+    /// The Helper switch off: connected after the login with nothing installed or started, and a PTY shell on the
+    /// connection that runs commands at its size and reports its exit status.
+    func testAHostWithoutTheHelperOpensShells() async throws {
+        let live = try live()
+        let (sessions, record) = try sessions(live, helper: false)
+        let probe = sessions.probe(record)
+        probe.connect()
+        try await TestSupport.eventually(timeout: .seconds(15)) { sessions.trustRequest != nil }
+        sessions.resolve(try XCTUnwrap(sessions.trustRequest), trust: true)
+        try await TestSupport.eventually(timeout: .seconds(30), diagnostic: "link: \(probe.link)") { probe.link == .connected }
+        XCTAssertEqual(probe.mode, .plain(reason: nil))
+        XCTAssertNil(probe.client)
+        XCTAssertNil(probe.hello)
+        XCTAssertNil(probe.multiplexerLine)
+
+        let shell = try await XCTUnwrap(probe.shellOpener).open(term: "xterm-256color", columns: 91, rows: 27)
+        let screen = Recorder<Data>()
+        let reading = Task.detached { for await data in shell.output { screen.append(data) } }
+        defer { reading.cancel() }
+        let seen = { String(decoding: screen.values.reduce(Data(), +), as: UTF8.self) }
+        try await shell.write(Data("stty size; echo dispatch-$((40 + 2))\n".utf8))
+        try await TestSupport.eventually(timeout: .seconds(15), diagnostic: seen()) {
+            seen().contains("dispatch-42") && seen().contains("27 91")
+        }
+        try await shell.write(Data("exit 3\n".utf8))
+        let exit = await shell.exit()
+        XCTAssertEqual(exit, .status(3))
         probe.disconnect()
     }
 

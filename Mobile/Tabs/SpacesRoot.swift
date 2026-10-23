@@ -72,13 +72,25 @@ final class SpacesNavigator {
         if let space = model.recentSpace { newTab(in: space) } else { picking = true }
     }
 
-    /// New tab: a terminal tab in `space`, opened once the host shows it.
+    /// New tab: a terminal tab in `space`, opened once the host shows it; in a plain host's Shell space a new shell,
+    /// opened at once.
     func newTab(in space: MobileSpace) {
         guard let workspace = model.workspace(space.ref.host) else { return }
+        if space.kind == .plainShell {
+            newShell(host: space.ref.host)
+            return
+        }
         Task {
             do { open(try await workspace.newTab(in: space), terminal: true) } catch {
                 actions.failure = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             }
+        }
+    }
+
+    /// A new shell on a plain host (its Shell space's New tab, an ended shell's New shell), opened in Terminal.
+    func newShell(host: UUID) {
+        do { open(try model.newShell(on: host), terminal: true) } catch {
+            actions.failure = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
     }
 
@@ -165,9 +177,12 @@ final class SpacesNavigator {
         }
     }
 
-    /// Host detail's Spaces rows: the space's tabs (M2c) over the detail.
+    /// Host detail's Spaces rows: the space's tabs (M2c) over the detail; `MobileSpace.shellNode` is a plain host's Shell
+    /// space.
     func openSpace(host: UUID, node: UInt64) {
-        guard let space = model.workspace(host)?.spaces.first(where: { $0.node == node }) else { return }
+        guard let workspace = model.workspace(host),
+              let space = node == MobileSpace.shellNode ? workspace.shellSpace : workspace.spaces.first(where: { $0.node == node && $0.kind == .multiplexer })
+        else { return }
         path.append(.space(space.ref))
     }
 
@@ -502,6 +517,7 @@ private struct SpacesFlatList: View {
                 .padding(.top, 8)
                 .padding(.leading, 6)
             }
+            .hostsRefreshable(model.refresh)
             .overlay { if rows.isEmpty { TabsNothing(query: model.query) } }
         }
     }
@@ -535,8 +551,10 @@ struct TabsTabRow: View {
 
     /// The line: what a chat tab's agent is doing (from Chat), else the program running, when the row's name is not
     /// already it (a conversation title, a numbered tab's pane); a bare shell has none. Never the host or the folder:
-    /// the row's header, its space and the tab's own screen say where it runs.
+    /// the row's header, its space and the tab's own screen say where it runs. An ended shell says how it ended
+    /// ("Exited", "Exited with status 1", "Session ended"); a live one has none.
     static func line(_ tab: MobileTab, label: String, status: @MainActor (UUID, UInt64) -> String?) -> String? {
+        if let shell = tab.shell { return shell.summary }
         if let pane = tab.agentPane, let text = status(tab.ref.host, pane.id) { return text }
         if let program = tab.program, program != label, !tab.atShell { return program }
         return nil
@@ -585,7 +603,7 @@ private struct SpacesTree: View {
                     SpacesHostHeader(section: section, editing: editing, toggle: { model.toggle(section.host.id) },
                                      remove: {
                         if let question = hostActions.removalConfirmation(for: section.host.id) { removing = (section.host.id, question) }
-                    })
+                    }, updated: model.updated.map { updated in { updated(section.host.id) } })
                         .dropDestination(for: String.self) { items, _ in
                             guard let item = items.first, let id = UUID(uuidString: item) else { return false }
                             model.moveHost(id, before: section.host.id, actions: hostActions)
@@ -634,6 +652,8 @@ private struct SpacesTree: View {
         .listStyle(.insetGrouped)
         .listSectionSpacing(20)
         .scrollContentBackground(.hidden)
+        // Not while editing: the drags start where the pull would.
+        .hostsRefreshable(editing ? nil : model.refresh)
         .environment(\.editMode, .constant(editing ? .active : .inactive))
         .alert(removing?.question.title ?? "", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }),
                presenting: removing) { removing in
@@ -647,7 +667,7 @@ private struct SpacesTree: View {
 }
 
 /// A host's section header (M2b, M1e): the name, the host glyph and the multiplexer its spaces come from
-/// (`MultiplexerMark`; none while that is unknown). The whole row shows or hides the host's spaces, not only its
+/// (`MultiplexerMark`; none while that is unknown; `PlainSSHMark` for a plain SSH host). The whole row shows or hides the host's spaces, not only its
 /// disclosure: outside edit mode it is one button (VoiceOver: the host's name, a heading, the multiplexer and "Expanded"
 /// or "Collapsed" with the unread it rolls up); in edit mode its remove, Info and reorder controls keep their own taps
 /// and the rest of the row toggles.
@@ -656,32 +676,38 @@ struct SpacesHostHeader: View {
     let editing: Bool
     let toggle: () -> Void
     let remove: () -> Void
+    /// When the host's helper last answered, for the line under its name (`HostFreshness`); nil shows no line.
+    var updated: (@MainActor () -> Date?)? = nil
 
     var body: some View {
-        if editing {
-            row
-                .contentShape(Rectangle())
-                .onTapGesture(perform: toggle)
-        } else {
-            // A button reads its label as one element: the name replaces it (the glyph and the count would be read).
-            Button(action: toggle) { row.contentShape(Rectangle()) }
-                .buttonStyle(.plain)
-                .accessibilityLabel(section.host.name)
-                .accessibilityValue(Self.value(collapsed: section.collapsed, unread: section.unread,
-                                               multiplexer: section.host.multiplexer))
-                .accessibilityAddTraits(.isHeader)
-                .accessibilityHint(section.collapsed ? "Shows its spaces" : "Hides its spaces")
+        TimelineView(.everyMinute) { context in
+            let freshness = updated.map { HostFreshness.label(state: section.host.state, updated: $0(), now: context.date) }
+            if editing {
+                row(freshness)
+                    .contentShape(Rectangle())
+                    .onTapGesture(perform: toggle)
+            } else {
+                // A button reads its label as one element: the name replaces it (the glyph and the count would be read).
+                Button(action: toggle) { row(freshness).contentShape(Rectangle()) }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(section.host.name)
+                    .accessibilityValue(Self.value(collapsed: section.collapsed, unread: section.unread,
+                                                   multiplexer: section.host.plain ? HostSummary.plainSSH : section.host.multiplexer,
+                                                   freshness: freshness))
+                    .accessibilityAddTraits(.isHeader)
+                    .accessibilityHint(section.collapsed ? "Shows its spaces" : "Hides its spaces")
+            }
         }
     }
 
-    /// "tmux, Collapsed, 3 unread", "Expanded": where the spaces come from when known, the row's state, and the unread
-    /// a collapsed host rolls up.
-    static func value(collapsed: Bool, unread: Int, multiplexer: String? = nil) -> String {
-        [multiplexer, collapsed ? "Collapsed" : "Expanded", collapsed && unread > 0 ? "\(unread) unread" : nil]
+    /// "tmux, Collapsed, 3 unread, Updated just now", "Expanded": where the spaces come from when known, the row's
+    /// state, the unread a collapsed host rolls up, and the host's last update.
+    static func value(collapsed: Bool, unread: Int, multiplexer: String? = nil, freshness: String? = nil) -> String {
+        [multiplexer, collapsed ? "Collapsed" : "Expanded", collapsed && unread > 0 ? "\(unread) unread" : nil, freshness]
             .compactMap { $0 }.joined(separator: ", ")
     }
 
-    private var row: some View {
+    private func row(_ freshness: String?) -> some View {
         HStack(spacing: 8) {
             if editing {
                 Button(action: remove) {
@@ -694,15 +720,23 @@ struct SpacesHostHeader: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("Remove \(section.host.name)")
             }
-            if column != nil, UIDevice.current.userInterfaceIdiom == .pad {
-                // An iPad's sidebar (320 points, 280 beside the window controls): the chip gives way before the name,
-                // which edit mode's controls left as "…" beside it.
-                ViewThatFits(in: .horizontal) {
+            VStack(alignment: .leading, spacing: 2) {
+                if column != nil, UIDevice.current.userInterfaceIdiom == .pad {
+                    // An iPad's sidebar (320 points, 280 beside the window controls): the chip gives way before the
+                    // name, which edit mode's controls left as "…" beside it.
+                    ViewThatFits(in: .horizontal) {
+                        identity(chip: true)
+                        identity(chip: false)
+                    }
+                } else {
                     identity(chip: true)
-                    identity(chip: false)
                 }
-            } else {
-                identity(chip: true)
+                if let freshness {
+                    Text(freshness)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
             }
             Spacer(minLength: 0)
             if !editing, section.collapsed, section.unread > 0 {
@@ -755,7 +789,9 @@ struct SpacesHostHeader: View {
                 .foregroundStyle(section.host.tint)
                 .opacity(section.host.state == .offline ? 0.5 : 1)
                 .accessibilityHidden(true)
-            if chip, let multiplexer = section.host.multiplexer {
+            if chip, section.host.plain {
+                PlainSSHMark()
+            } else if chip, let multiplexer = section.host.multiplexer {
                 MultiplexerMark(name: multiplexer)
             }
         }

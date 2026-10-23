@@ -19,14 +19,19 @@ extension HelperTopology {
     }
 }
 
-/// What the areas see of each host's topology: as the helper sent it, or without agents for a host with Chat off. The
-/// stripped snapshot is kept per host, so a sync that changes nothing costs nothing.
+/// What the areas see of each host's topology: as the helper sent it, without agents for a host with Chat off, and none
+/// for a plain SSH host (`HostSession.plainSSH`: its spaces are never a server's, and Agents has nothing of it, even a
+/// cached snapshot from when it had its helper). The stripped snapshot is kept per host, so a sync that changes nothing
+/// costs nothing.
 @MainActor
 final class HostTopologies {
     private var stripped: [UUID: (source: HelperTopology, result: HelperTopology)] = [:]
 
     func topology(_ session: HostSession) -> HelperTopology? {
-        guard let topology = session.topology else { return nil }
+        guard !session.plainSSH, let topology = session.topology else {
+            stripped[session.id] = nil
+            return nil
+        }
         guard !session.host.chat else {
             stripped[session.id] = nil
             return topology

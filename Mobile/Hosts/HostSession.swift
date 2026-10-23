@@ -26,11 +26,25 @@ enum HostLink: Equatable, Sendable {
 /// topology from here and never see SSH.
 @MainActor @Observable
 final class HostSession: Identifiable {
+    /// How the current connection reaches the host: through its helper, or plain SSH (docs/ios.md) with the reason the
+    /// helper could not start (nil: the host's Helper switch is off).
+    enum Mode: Equatable {
+        case helper
+        case plain(reason: String?)
+    }
+
     /// The saved record; `HostSessions` updates it in place when an edit keeps the connection (a rename, the
     /// multiplexer preference, the last connection time).
     private(set) var host: HostRecord
     nonisolated var id: UUID { hostID }
     private(set) var link: HostLink = .disconnected
+    /// The current connection's mode; nil until connected and again once the connection ends (each connection decides
+    /// anew).
+    private(set) var mode: Mode?
+    /// Opens shells on the current connection while it is plain; nil otherwise.
+    private(set) var shellOpener: (any ShellOpener)?
+    /// The shell tabs the phone made on this host (plain SSH): live while their connection is, then ended cards.
+    let shells: ShellSessions
     /// Non-nil only while connected.
     private(set) var client: HelperClient?
     /// The last `hello` (identity, OS line, schema); kept while offline for the host's labels.
@@ -52,6 +66,9 @@ final class HostSession: Identifiable {
     /// spaces are not known, though no snapshot is kept (Spaces offers no New space row meanwhile).
     private(set) var switchingMultiplexer = false
     private(set) var latency: Duration?
+    /// When the host's helper last answered (a ready, a snapshot, a ping), on this connection or an earlier one; at
+    /// launch the cache's (`restore`). What Spaces and Agents show as each host's last update; nil: never heard from.
+    private(set) var updated: Date?
     /// Set when the server's key differs from the trusted one: a hard stop until the user removes it and retries.
     private(set) var hostKeyMismatch: HostKeyOffer?
     /// This iPhone has no usable network (`NetworkPathWatcher`, through `HostSessions.networkPath`).
@@ -78,6 +95,8 @@ final class HostSession: Identifiable {
     @ObservationIgnored private var preference: AsyncStream<HostRecord.MultiplexerPreference>.Continuation?
     /// Called on the main actor with each `hello` (HostSessions saves the OS and the connection time).
     @ObservationIgnored var helloReceived: ((HostSession, HelperSession.Info) -> Void)?
+    /// Called on the main actor when a connection comes up plain (no hello): HostSessions saves the connection time.
+    @ObservationIgnored var plainConnected: ((HostSession) -> Void)?
     /// Runs after each connection is ready, in order, with that connection's client (`HostSessions.postConnect`:
     /// enabling Pi with `installation.install` on every connection, docs/ios.md, Helper contract). Cancelled when the
     /// connection goes away; the link is already `.connected` while it runs.
@@ -98,6 +117,12 @@ final class HostSession: Identifiable {
         hostID = host.id
         self.driver = driver
         self.context = context
+        shells = ShellSessions(host: host.id)
+        shells.opener = { [weak self] in self?.shellOpener }
+        shells.changed = { [weak self] in
+            guard let self else { return }
+            self.changed?(self)
+        }
     }
 
     func connect() {
@@ -161,13 +186,15 @@ final class HostSession: Identifiable {
     /// The last-known state from the device's cache (`HostCache`, at launch): the lists show it at once and the live
     /// data replaces it as it arrives. Ignored once the session has heard from its helper.
     func restore(hello: HelperSession.Info?, multiplexers: [HelperClient.Multiplexer], versions: [String: String],
-                 following: String?, topology: HelperTopology?) {
-        guard client == nil, self.hello == nil, self.topology == nil else { return }
+                 following: String?, topology: HelperTopology?, updated: Date? = nil) {
+        guard client == nil, mode == nil, self.hello == nil, self.topology == nil else { return }
+        if self.updated == nil { self.updated = updated }
         self.hello = hello
         self.multiplexers = multiplexers.filter { $0.name != "native" }
         multiplexerVersions = versions
-        self.following = following
-        self.topology = topology
+        // Without the helper (the switch is off) the host has no spaces from a server: the cache's are an earlier helper's.
+        self.following = host.helper ? following : nil
+        self.topology = host.helper ? topology : nil
         changed?(self)
     }
 
@@ -179,7 +206,14 @@ final class HostSession: Identifiable {
     func update(_ record: HostRecord) {
         guard record.id == hostID, record != host else { return }
         let preferenceChanged = record.multiplexer != host.multiplexer
+        let helperOff = host.helper && !record.helper
         host = record
+        if helperOff {
+            // Plain SSH from now on: the spaces kept from a helper are not the host's any more.
+            if topology != nil { topology = nil }
+            if topologyIsLive { topologyIsLive = false }
+            if switchingMultiplexer { switchingMultiplexer = false }
+        }
         if preferenceChanged { preference?.yield(record.multiplexer) }
         changed?(self)
     }
@@ -191,10 +225,15 @@ final class HostSession: Identifiable {
             // `.connected` only arrives with `.ready`: a client, a hello and the multiplexers in the same update.
             guard next != .connected, next != link else { return }
             link = next
-            if client != nil { drop() }
+            if client != nil || mode != nil { drop() }
         case .ready(let client, let hello, let multiplexers, let versions, let topology):
             if let previous = self.client, previous !== client { clientEnded?(self) }
+            // A plain connection before this one (no link change between them): its shells are gone with it.
+            if shellOpener != nil { shells.connectionEnded() }
             self.client = client
+            mode = .helper
+            shellOpener = nil
+            updated = System.date()
             self.hello = hello
             self.multiplexers = multiplexers.filter { $0.name != "native" }
             multiplexerVersions = versions
@@ -214,14 +253,34 @@ final class HostSession: Identifiable {
                     }
                 }
             }
+        case .plain(let reason, let shells):
+            if client != nil {
+                client = nil
+                clientEnded?(self)
+            }
+            postConnectTask?.cancel()
+            postConnectTask = nil
+            // Another plain connection's shells (no link change between them) died with it.
+            if shellOpener != nil { self.shells.connectionEnded() }
+            mode = .plain(reason: reason)
+            shellOpener = shells
+            // No helper on this connection: a kept snapshot (the cache's, an earlier helper's) is not the host's spaces.
+            if topology != nil { topology = nil }
+            if topologyIsLive { topologyIsLive = false }
+            if switchingMultiplexer { switchingMultiplexer = false }
+            if latency != nil { latency = nil }
+            link = .connected
+            plainConnected?(self)
         case .topology(let snapshot):
             // A snapshot still in flight when the link dropped is not this (absent) connection's.
             guard client != nil else { return }
+            updated = System.date()
             if topology != snapshot { topology = snapshot }
             if !topologyIsLive { topologyIsLive = true }
             if switchingMultiplexer { switchingMultiplexer = false }
         case .noBackend:
             guard client != nil else { return }
+            updated = System.date()
             // No server: the kept snapshot's spaces are not there any more (or never were on this connection).
             if topology != nil { topology = nil }
             if !topologyIsLive { topologyIsLive = true }
@@ -236,7 +295,8 @@ final class HostSession: Identifiable {
             }
             following = name
         case .latency(let value):
-            guard link == .connected else { return }
+            guard link == .connected, mode == .helper else { return }
+            updated = System.date()
             latency = value
         }
     }
@@ -263,10 +323,19 @@ final class HostSession: Identifiable {
         if latency != nil { latency = nil }
         if topologyIsLive { topologyIsLive = false }
         if switchingMultiplexer { switchingMultiplexer = false }
+        if mode != nil { mode = nil }
+        if shellOpener != nil { shellOpener = nil }
+        // The shells were channels of this connection: they ended with it and stay as cards.
+        shells.connectionEnded()
     }
 }
 
 extension HostSession {
+    /// The current connection is plain SSH (no helper).
+    var isPlain: Bool {
+        if case .plain = mode { true } else { false }
+    }
+
     /// The multiplexer whose sessions are this host's spaces: the one the driver follows, else the host's preference
     /// when installed, else herdr, else tmux (plan 3.2).
     var activeMultiplexer: HelperClient.Multiplexer? {
@@ -281,11 +350,13 @@ extension HostSession {
     /// The multiplexer the host's spaces come from (Spaces' tmux or herdr mark): the followed one, whose snapshot the
     /// spaces are (live, cached or kept over a reconnect). Nil before one is followed, and while a switch has not
     /// answered: the spaces are unknown then, and the mark never names the one they are leaving.
-    var spacesMultiplexer: String? { switchingMultiplexer ? nil : following }
+    /// Nil for a plain SSH host (`plainSSH`: by choice or on this connection), connected or not.
+    var spacesMultiplexer: String? { switchingMultiplexer || plainSSH ? nil : following }
 
     /// "herdr 0.9.3", "tmux 3.7", "tmux", or "none" (M1f); nil before the host has been reached.
+    /// Nil in plain mode too: no helper reports the multiplexers.
     var multiplexerLine: String? {
-        guard hello != nil else { return nil }
+        guard hello != nil, !plainSSH else { return nil }
         guard let active = activeMultiplexer else { return "none" }
         return [active.name, multiplexerVersions[active.name]].compactMap { $0 }.joined(separator: " ")
     }

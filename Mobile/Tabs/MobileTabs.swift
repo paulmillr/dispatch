@@ -2,7 +2,7 @@ import Foundation
 import Observation
 
 /// One host as the Tabs area takes it from its host session (docs/ios.md, Areas and seams): identity, the connected client
-/// (nil while not connected), the latest topology, and the host's multiplexer override.
+/// (nil while not connected), the latest topology, the host's multiplexer override, and for plain SSH its shell tabs.
 struct TabsHostInput {
     var host: TabsHost
     var client: HelperClient?
@@ -11,6 +11,11 @@ struct TabsHostInput {
     var multiplexer: String? = nil
     /// The helper features the hello accepted (`projects.recent`, `multiplexers.versions`, …).
     var features: Set<String> = []
+    /// How the host is reached: the connection's mode (`HostSession.mode`), or plain while not connected when the host's
+    /// Helper switch is off (it will be plain again). `.plain` lists the Shell space instead of a topology's spaces.
+    var mode: HostSession.Mode? = nil
+    /// The phone's shell tabs on the host (`ShellSessions.tabs`): the Shell space's tabs, live or ended.
+    var shells: [ShellSessions.ShellTab] = []
 }
 
 /// Every host's workspace for the Tabs section, plus what other areas inject: per-terminal urgency (Chat owns it) and
@@ -38,9 +43,18 @@ final class MobileTabs {
     /// (host, terminal) → when an agent's conversation last moved (its newest record, the time Agents shows). Chat sets
     /// it; a chat tab's time is the later of this and the last change the phone saw in the tab.
     @ObservationIgnored var agentActivity: @MainActor (UUID, UInt64) -> Date? = { _, _ in nil }
+    /// host → when its helper last answered (`HostSession.updated`), for each host's last update in Spaces. The
+    /// composition sets it; nil (the Debug sample) shows none.
+    @ObservationIgnored var updated: (@MainActor (UUID) -> Date?)?
+    /// Pull to refresh: asks every host and returns once they answered (`HostSessions.refresh`). The composition sets
+    /// it; nil offers none.
+    @ObservationIgnored var refresh: (@MainActor () async -> Void)?
     /// (host, multiplexer name) → the host follows that multiplexer from now on (its saved preference, as Host detail
     /// sets it): New space on another multiplexer than the one shown. The composition sets it.
     @ObservationIgnored var follow: @MainActor (UUID, String) -> Void = { _, _ in }
+    /// host → its shell tabs (`HostSession.shells`), for New tab, Close tab and Close space in a Shell space. The
+    /// composition sets it.
+    @ObservationIgnored var shellSessions: @MainActor (UUID) -> ShellSessions? = { _ in nil }
 
     @ObservationIgnored private let activity: TabActivityStore
     @ObservationIgnored private let defaults: UserDefaults
@@ -77,7 +91,11 @@ final class MobileTabs {
             if workspace.features != input.features { workspace.features = input.features }
             let reconnected = workspace.client !== input.client
             workspace.connect(input.client)
-            if let topology = input.topology, topologies[input.host.id] != topology {
+            workspace.update(mode: input.mode, shells: input.shells)
+            if workspace.isPlain {
+                // No helper: the next helper connection's snapshot is applied afresh, even one equal to the last.
+                topologies.removeValue(forKey: input.host.id)
+            } else if let topology = input.topology, topologies[input.host.id] != topology {
                 let previous = topologies[input.host.id]
                 topologies[input.host.id] = topology
                 // Applied first: a snapshot naming the same nodes under a new backend id (a reconnect, or the live data
@@ -226,8 +244,11 @@ final class MobileTabs {
     func tab(_ ref: TabRef) -> MobileTab? { workspace(ref.host)?.tab(ref.key) }
     func space(_ ref: SpaceRef) -> MobileSpace? { workspace(ref.host)?.space(ref.key) }
 
-    /// A tab's urgency: its most urgent pane's.
-    func urgency(of tab: MobileTab) -> TabUrgency? { tab.panes.compactMap { urgency(tab.ref.host, $0.id) }.max() }
+    /// A tab's urgency: its most urgent pane's. A shell tab has none (no agent, no chat).
+    func urgency(of tab: MobileTab) -> TabUrgency? {
+        guard !tab.isShell else { return nil }
+        return tab.panes.compactMap { urgency(tab.ref.host, $0.id) }.max()
+    }
     func urgency(of space: MobileSpace) -> TabUrgency? { space.tabs.compactMap { urgency(of: $0) }.max() }
 
     /// A tab's time (its row's, and the Activity sort's): the server's last-activity time for it (`terminals.activity`,
@@ -292,11 +313,35 @@ final class MobileTabs {
     /// The segment each tab showed last in this run (Create and New tab open theirs in Terminal).
     @ObservationIgnored var segments: [TabRef: TabSegment] = [:]
 
-    /// The space New tab uses: the last one opened while it exists on a connected host, else the most active one.
+    /// The space New tab uses: the last one opened while it can take a tab now (its host connected; a Shell space's
+    /// host plain-connected), else the most active such one.
     var recentSpace: MobileSpace? {
-        let connected = workspaces.filter { $0.client != nil }
-        if let recent, let space = connected.first(where: { $0.id == recent.host })?.space(recent.key) { return space }
-        return connected.flatMap(\.spaces).max { a, b in (activity(of: a) ?? .distantPast) < (activity(of: b) ?? .distantPast) }
+        let open = workspaces.flatMap { workspace in workspace.spaces.filter(workspace.canAddTab(to:)) }
+        if let recent, let space = open.first(where: { $0.ref == recent }) { return space }
+        return open.max { a, b in (activity(of: a) ?? .distantPast) < (activity(of: b) ?? .distantPast) }
+    }
+
+    /// New tab in a plain host's Shell space: a new shell (`ShellSessions.newTab`), its tab listed at once.
+    func newShell(on host: UUID) throws -> MobileTab {
+        guard let workspace = workspace(host), workspace.opensShells, let shells = shellSessions(host),
+              let shell = shells.newTab() else { throw TabsFailure.disconnected }
+        workspace.update(mode: workspace.mode, shells: shells.tabs)
+        guard let tab = workspace.tab(shell.key) else { throw TabsFailure.disconnected }
+        return tab
+    }
+
+    /// Close tab of a shell: its tab goes and, when live, its shell (the channel closes). Needs no connection.
+    func closeShell(_ ref: TabRef) {
+        guard let workspace = workspace(ref.host), let shells = shellSessions(ref.host) else { return }
+        shells.close(key: ref.key)
+        workspace.update(mode: workspace.mode, shells: shells.tabs)
+    }
+
+    /// Close space of the Shell space: every shell tab of the host.
+    func closeShells(host: UUID) {
+        guard let workspace = workspace(host), let shells = shellSessions(host) else { return }
+        shells.closeAll()
+        workspace.update(mode: workspace.mode, shells: shells.tabs)
     }
 
     func visited(_ space: SpaceRef) {

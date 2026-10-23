@@ -88,6 +88,143 @@ final class HostSessionTests: XCTestCase {
         XCTAssertEqual(driver.runs(session.id), 1, "Retry wakes the same run rather than starting another")
     }
 
+    /// A host without the helper (plain SSH): connected in one update with a shell opener and nothing of a helper (no
+    /// client, multiplexer line, latency or spaces).
+    func testAPlainConnectionIsConnectedWithShellsOnly() async throws {
+        let opener = ScriptedShellOpener()
+        let driver = steps([.event(.link(.connecting)), .event(.link(.authenticating)), .plain(reason: nil, shells: opener),
+                            .event(.latency(.milliseconds(5))), .hold])
+        let session = registry(driver, hosts: [host()]).ordered[0]
+        let states = Recorder { (link: session.link, opener: session.shellOpener != nil, mode: session.mode) }
+        XCTAssertNil(session.mode)
+        session.connect()
+        try await TestSupport.eventually { session.link == .connected }
+        XCTAssertEqual(session.mode, .plain(reason: nil))
+        XCTAssertTrue(session.isPlain)
+        XCTAssertTrue(session.link.isConnected)
+        XCTAssertNil(session.client)
+        XCTAssertNil(session.hello)
+        XCTAssertNil(session.multiplexerLine)
+        XCTAssertNil(session.topology)
+        XCTAssertFalse(states.seen.contains { $0.link == .connected && (!$0.opener || $0.mode == nil) },
+                       "the mode and opener come with .connected in one update")
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertNil(session.latency, "no helper to ping")
+
+        let shell = try await XCTUnwrap(session.shellOpener).open(term: "xterm-256color", columns: 100, rows: 30)
+        XCTAssertTrue(shell === opener.shells.first)
+        XCTAssertEqual(opener.shells.first?.size, ScriptedShell.Size(columns: 100, rows: 30))
+
+        session.disconnect()
+        XCTAssertNil(session.mode)
+        XCTAssertNil(session.shellOpener)
+    }
+
+    /// A helper that could not start leaves the connection plain with its reason. Each connection decides again: the
+    /// mode goes with the link and the next connection sets it, a helper one when the host was fixed meanwhile.
+    func testEachConnectionDecidesItsMode() async throws {
+        let reason = "SSH integration requires Linux on ARM64 or x86-64, or macOS on Apple silicon."
+        let ready = Step.ready(hello: HostFixture.hello(), multiplexers: HostFixture.multiplexers(["tmux"]),
+                               versions: ["tmux": "3.7"], topology: HostFixture.topology())
+        let driver = steps([.plain(reason: reason), .awaitRetry,
+                            .event(.link(.reconnecting(attempt: 0, since: Date()))), .awaitRetry,
+                            ready, .awaitRetry,
+                            .event(.link(.reconnecting(attempt: 0, since: Date()))), .awaitRetry,
+                            .plain(reason: nil), .hold])
+        let session = registry(driver, hosts: [host()]).ordered[0]
+        let cache = HostCache(url: nil)
+        session.connect()
+        try await TestSupport.eventually { session.link == .connected }
+        XCTAssertEqual(session.mode, .plain(reason: reason))
+        XCTAssertNotNil(session.shellOpener)
+
+        session.retryNow()
+        try await TestSupport.eventually { session.link.isPending }
+        XCTAssertNil(session.mode, "no connection, no mode")
+        XCTAssertNil(session.shellOpener)
+        XCTAssertFalse(session.link.isConnected)
+
+        session.retryNow()
+        try await TestSupport.eventually { session.link == .connected }
+        XCTAssertEqual(session.mode, .helper)
+        XCTAssertNotNil(session.client)
+        XCTAssertNil(session.shellOpener)
+        XCTAssertEqual(session.multiplexerLine, "tmux 3.7")
+        cache.record(session)
+        XCTAssertNotNil(cache.entry(session.id)?.topology)
+
+        session.retryNow()
+        try await TestSupport.eventually { session.link.isPending }
+        XCTAssertNil(session.mode)
+        session.retryNow()
+        try await TestSupport.eventually { session.mode == .plain(reason: nil) }
+        XCTAssertEqual(session.link, .connected)
+        XCTAssertNil(session.client)
+        XCTAssertNil(session.topology, "the last helper's spaces are not there without one")
+        XCTAssertNil(session.multiplexerLine, "the kept hello names no multiplexer now")
+        XCTAssertNotNil(session.hello, "kept for the host's labels")
+        cache.record(session)
+        XCTAssertNil(cache.entry(session.id)?.topology, "nor are they kept for the next launch")
+        XCTAssertNotNil(cache.entry(session.id)?.hello)
+        XCTAssertEqual(driver.runs(session.id), 1, "one run: the decisions are per connection")
+    }
+
+    /// The Helper switch: off on a connection that is already plain keeps it (its shells live on); on, or off while on the
+    /// helper, starts a new run that decides again.
+    func testTheHelperSwitchReconnectsUnlessAlreadyPlain() async throws {
+        let ready = Step.ready(hello: HostFixture.hello(), multiplexers: HostFixture.multiplexers(["tmux"]), versions: [:],
+                               topology: HostFixture.topology())
+        let fallback = ScriptedHostSessionDriver { host in host.helper ? [.plain(reason: "unsupported"), .hold] : [.plain(reason: nil), .hold] }
+        let sessions = registry(fallback, hosts: [host()], active: true)
+        let session = sessions.ordered[0]
+        try await TestSupport.eventually { session.mode == .plain(reason: "unsupported") }
+        let opener = try XCTUnwrap(session.shellOpener as? ScriptedShellOpener)
+        sessions.setHelper(false, host: session.id)
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(fallback.runs(session.id), 1, "no reconnect")
+        XCTAssertEqual(session.link, .connected)
+        XCTAssertTrue(session.shellOpener as? ScriptedShellOpener === opener)
+        XCTAssertFalse(session.host.helper)
+        sessions.setHelper(true, host: session.id)
+        try await TestSupport.eventually { fallback.runs(session.id) == 2 }
+
+        let helped = ScriptedHostSessionDriver { host in host.helper ? [ready, .hold] : [.plain(reason: nil), .hold] }
+        let other = registry(helped, hosts: [host("ai")], active: true)
+        let onHelper = other.ordered[0]
+        try await TestSupport.eventually { onHelper.mode == .helper }
+        other.setHelper(false, host: onHelper.id)
+        try await TestSupport.eventually { onHelper.mode == .plain(reason: nil) }
+        XCTAssertEqual(helped.runs(onHelper.id), 2, "off while on the helper: a new run, plain")
+        XCTAssertNil(onHelper.topology)
+    }
+
+    /// A plain connection records its connection time, as a helper's hello does.
+    func testAPlainConnectionSavesTheConnectionTime() async throws {
+        let sessions = registry(steps([.plain(reason: nil), .hold]), hosts: [host()], active: true)
+        let session = sessions.ordered[0]
+        XCTAssertNil(sessions.store.record(session.id)?.lastConnected)
+        try await TestSupport.eventually { session.isPlain }
+        XCTAssertNotNil(sessions.store.record(session.id)?.lastConnected)
+        XCTAssertNotNil(session.host.lastConnected)
+    }
+
+    /// The launch cache's spaces go when the host connects plain, as with no backend; a restore after that is ignored.
+    func testAPlainConnectionClearsTheRestoredSpaces() async throws {
+        let session = registry(steps([.plain(reason: nil), .hold]), hosts: [host()]).ordered[0]
+        session.restore(hello: HostFixture.hello(), multiplexers: HostFixture.multiplexers(["tmux"]), versions: ["tmux": "3.7"],
+                        following: "tmux", topology: HostFixture.topology())
+        XCTAssertEqual(session.spacesMultiplexer, "tmux")
+        XCTAssertEqual(session.multiplexerLine, "tmux 3.7")
+        session.connect()
+        try await TestSupport.eventually { session.link == .connected }
+        XCTAssertNil(session.topology)
+        XCTAssertFalse(session.topologyIsLive)
+        XCTAssertNil(session.spacesMultiplexer)
+        XCTAssertNil(session.multiplexerLine)
+        session.restore(hello: HostFixture.hello(), multiplexers: [], versions: [:], following: "tmux", topology: HostFixture.topology())
+        XCTAssertNil(session.topology, "a plain connection takes no cached spaces")
+    }
+
     func testFailureEndsTheRunAndRetryStartsAnother() async throws {
         let driver = steps([.event(.link(.connecting)), .event(.link(.failed("Connection refused")))])
         let session = registry(driver, hosts: [host()]).ordered[0]
@@ -581,5 +718,52 @@ final class HostSessionTests: XCTestCase {
             XCTAssertNotNil(disclosure, "\(capability) is not disclosed")
             if let disclosure { XCTAssertTrue(HelperGrant.statement.contains(disclosure.phrase), disclosure.phrase) }
         }
+    }
+}
+
+/// Plain SSH shell tabs (`HostSession.shells`, docs/ios.md): they live with their connection.
+extension HostSessionTests {
+    /// A drop ends every live shell tab (no status) and detaches it; the tabs stay as cards. The reconnection reopens
+    /// none, a card shown again starts nothing, and New tab works on the new connection.
+    func testShellTabsEndWithTheirConnection() async throws {
+        let first = ScriptedShellOpener(), second = ScriptedShellOpener()
+        let driver = steps([.plain(reason: nil, shells: first), .awaitRetry,
+                            .event(.link(.reconnecting(attempt: 0, since: Date()))), .awaitRetry,
+                            .plain(reason: nil, shells: second), .hold])
+        let session = registry(driver, hosts: [host()]).ordered[0]
+        let presences = TerminalPresences()
+        session.shells.presences = presences
+        XCTAssertNil(session.shells.newTab(), "no shell before a plain connection")
+        session.connect()
+        try await TestSupport.eventually { session.link == .connected }
+        let exited = try XCTUnwrap(session.shells.newTab())
+        let live = try XCTUnwrap(session.shells.newTab())
+        try await TestSupport.eventually { first.shells.count == 2 }
+        first.shells[0].end(.status(0))
+        try await TestSupport.eventually { session.shells.tab(exited.id)?.state == .ended(0) }
+
+        session.retryNow()
+        try await TestSupport.eventually { session.link.isPending }
+        XCTAssertEqual(session.shells.tabs.map(\.state), [.ended(0), .ended(nil)])
+        XCTAssertEqual(session.shells.tabs.map(\.id), [exited.id, live.id], "the cards stay")
+        try await TestSupport.eventually { first.shells[1].isClosed }
+
+        session.retryNow()
+        try await TestSupport.eventually { session.link == .connected }
+        XCTAssertEqual(session.shells.tabs.map(\.state), [.ended(0), .ended(nil)])
+        // The ended card's segment shows again: its use starts nothing (the feed refuses a second attachment).
+        let key = session.shells.presenceKey(live.id)
+        presences.retain(key)
+        try await TestSupport.eventually { presences.presence(key)?.ended != nil }
+        presences.release(key)
+        XCTAssertTrue(second.shells.isEmpty, "nothing reopens an ended shell")
+        XCTAssertTrue(first.shells.count == 2)
+
+        let next = try XCTUnwrap(session.shells.newTab())
+        XCTAssertEqual(next.number, 3)
+        try await TestSupport.eventually { second.shells.count == 1 }
+        session.disconnect()
+        XCTAssertEqual(session.shells.tab(next.id)?.state, .ended(nil))
+        try await TestSupport.eventually { second.shells[0].isClosed }
     }
 }

@@ -283,7 +283,13 @@ private struct MobileCommandHost: ViewModifier {
         case .renameTab: if let tab = navigator.shownTab { navigator.actions.rename(.tab(tab)) }
         case .renameSpace: if let space = navigator.shownSpace { navigator.actions.rename(.space(space)) }
         case .closeTab: if let tab = navigator.shownTab { navigator.actions.close(.tab(tab), .close) }
-        case .closeSpace: closingSpace = navigator.shownSpace
+        case .closeSpace:
+            // A Shell space (plain SSH) closes its shells, asking while one is live; no Detach or Terminate.
+            if let ref = navigator.shownSpace, navigator.model.space(ref)?.kind == .plainShell {
+                navigator.actions.close(.space(ref), .close)
+            } else {
+                closingSpace = navigator.shownSpace
+            }
         case .detachSpace: if let space = navigator.shownSpace { navigator.actions.close(.space(space), .detach) }
         case .toggleSidebar: navigator.toggleSidebar()
         case .switchSegment: if let tab = navigator.shownTab { TabSegment.requestSwitch(tab) }

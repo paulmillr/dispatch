@@ -176,6 +176,32 @@ final class BackgroundRefreshTests: XCTestCase {
         XCTAssertEqual(notifications.map(\.body), ["Run the migration?"])
     }
 
+    /// Plain SSH hosts are never refreshed (docs/ios.md): a host with its Helper switch off (its Chat is off with it) is
+    /// neither scheduled for nor connected, and a connection that fell back to plain SSH reads nothing.
+    func testPlainSSHHostsAreSkipped() async throws {
+        var pi = ResilienceFixture.host("pi", order: 1)
+        pi.helper = false
+        pi.chat = true
+        XCTAssertFalse(pi.chat, "the record keeps Chat off without the helper")
+        XCTAssertFalse(BackgroundRefresh.refreshes(pi))
+        XCTAssertTrue(BackgroundRefresh.refreshes(studio))
+
+        let scheduler = RecordingScheduler()
+        refresh(hosts: [pi], source: FakeRefreshSource(), scheduler: scheduler).schedule()
+        XCTAssertEqual(scheduler.cancelled, ["yachts.dispatch.mobile.refresh"], "only a plain host: nothing to refresh")
+        XCTAssertTrue(scheduler.submitted.isEmpty)
+
+        let source = FakeRefreshSource(results: [studio.id: found(), pi.id: found()])
+        let posted = await refresh(hosts: [studio, pi], source: source).run()
+        XCTAssertEqual(source.asked, [studio.id], "the plain host is not connected")
+        XCTAssertEqual(posted.map(\.key.host), [studio.id])
+
+        let fallback = ScriptedHostSessionDriver { _ in [.event(.link(.connecting)), .plain(reason: "unsupported system"), .hold] }
+        let hosts = ResilienceFixture.sessions([studio], driver: fallback, active: false)
+        let result = await HostSessionsRefreshSource(hosts: hosts).refresh(studio, until: .now + .seconds(5))
+        XCTAssertNil(result, "connected without a helper: nothing to read")
+    }
+
     /// A background session never asks: a host key that is not trusted yet fails it, with no sheet queued.
     func testABackgroundSessionAsksNothing() async throws {
         let offer = HostKeyOffer(host: "studio.local", port: 22, algorithm: "ssh-ed25519", key: Data([1, 2, 3]))

@@ -15,6 +15,9 @@ final class ScriptedHostSessionDriver: HostSessionDriver {
         /// `.ready` with a client a peer answers (the simulator demo's `DemoHelper`), made for each connection.
         case readyWith(client: @Sendable () -> HelperClient, hello: HelperSession.Info,
                        multiplexers: [HelperClient.Multiplexer], versions: [String: String], topology: HelperTopology?)
+        /// `.plain` (connected without a helper) with this opener: a fresh `ScriptedShellOpener` unless one is given, so a
+        /// test can keep it and read what its shells saw.
+        case plain(reason: String?, shells: any ShellOpener = ScriptedShellOpener())
         case sleep(Duration)
         /// Waits for `HostSession.retryNow()`.
         case awaitRetry
@@ -41,10 +44,12 @@ final class ScriptedHostSessionDriver: HostSessionDriver {
             var peers: [Pipe] = []
             defer { withExtendedLifetime(peers) {} }
             var retries = context.retries.makeAsyncIterator()
+            var latency: Duration?
             for step in steps {
                 if Task.isCancelled { break }
                 switch step {
                 case .event(let event):
+                    if case .latency(let value) = event { latency = value }
                     continuation.yield(event)
                 case .hostKey(let offer):
                     guard await context.verifyHostKey(offer) else {
@@ -63,11 +68,17 @@ final class ScriptedHostSessionDriver: HostSessionDriver {
                 case .readyWith(let client, let hello, let multiplexers, let versions, let topology):
                     continuation.yield(.ready(client: client(), hello: hello, multiplexers: multiplexers,
                                               versions: versions, topology: topology))
+                case .plain(let reason, let shells):
+                    continuation.yield(.plain(reason: reason, shells: shells))
                 case .sleep(let duration):
                     try? await Task.sleep(for: duration)
                 case .awaitRetry:
                     _ = await retries.next()
                 case .hold:
+                    // A retry while held answers as the SSH driver's link check does: with a round trip.
+                    while !Task.isCancelled, await retries.next() != nil {
+                        if let latency { continuation.yield(.latency(latency)) }
+                    }
                     while !Task.isCancelled { try? await Task.sleep(for: .seconds(3600)) }
                 }
             }
@@ -172,5 +183,125 @@ enum HostFixture {
     private static func decode<Value: Decodable>(_ object: [String: Any]) -> Value {
         // Fixtures are literals above: a failure is a programming error.
         try! JSONDecoder().decode(Value.self, from: JSONSerialization.data(withJSONObject: object))
+    }
+}
+
+/// A scripted PTY shell (`ShellChannel`) for plain SSH tests: output pushed with `emit`, the end set with `end`; it
+/// records what was written, each resize, and whether it was closed. Closing it ends it as lost when no exit was set,
+/// as the SSH channel's does.
+final class ScriptedShell: ShellChannel, @unchecked Sendable {
+    struct Size: Equatable, Sendable {
+        let columns: Int
+        let rows: Int
+    }
+
+    let output: AsyncStream<Data>
+    /// The terminal type and size it was opened with.
+    let term: String
+    let size: Size
+    private let continuation: AsyncStream<Data>.Continuation
+    private let state = Mutex<State>(State())
+    private struct State {
+        var writes: [Data] = []
+        var resizes: [Size] = []
+        var closed = false
+        var exit: ShellExit?
+        var waiters: [CheckedContinuation<ShellExit, Never>] = []
+        /// What `write` and `resize` throw (a channel that broke).
+        var failure: (any Error)?
+    }
+
+    /// `output` is emitted at once; with `exit` the shell has already ended after it.
+    init(term: String = "xterm-256color", columns: Int = 80, rows: Int = 24, output: [Data] = [], exit: ShellExit? = nil) {
+        self.term = term
+        size = Size(columns: columns, rows: rows)
+        (self.output, continuation) = AsyncStream<Data>.makeStream()
+        for data in output { continuation.yield(data) }
+        if let exit { end(exit) }
+    }
+
+    var writes: [Data] { state.withLock { $0.writes } }
+    /// Everything written, joined.
+    var written: Data { writes.reduce(Data(), +) }
+    var resizes: [Size] { state.withLock { $0.resizes } }
+    var isClosed: Bool { state.withLock { $0.closed } }
+    var ended: ShellExit? { state.withLock { $0.exit } }
+
+    /// Makes `write` and `resize` throw from now on.
+    func fail(_ error: any Error) { state.withLock { $0.failure = error } }
+
+    /// PTY output from the host.
+    func emit(_ data: Data) { continuation.yield(data) }
+    func emit(_ text: String) { emit(Data(text.utf8)) }
+
+    /// The shell ends with `exit`: the output finishes and `exit()` answers. Later calls change nothing.
+    func end(_ exit: ShellExit) {
+        let waiters = state.withLock { state -> [CheckedContinuation<ShellExit, Never>] in
+            guard state.exit == nil else { return [] }
+            state.exit = exit
+            defer { state.waiters = [] }
+            return state.waiters
+        }
+        continuation.finish()
+        for waiter in waiters { waiter.resume(returning: exit) }
+    }
+
+    func write(_ data: Data) async throws {
+        try state.withLock { state in
+            if let failure = state.failure { throw failure }
+            state.writes.append(data)
+        }
+    }
+
+    func resize(columns: Int, rows: Int) async throws {
+        try state.withLock { state in
+            if let failure = state.failure { throw failure }
+            state.resizes.append(Size(columns: columns, rows: rows))
+        }
+    }
+
+    func exit() async -> ShellExit {
+        await withCheckedContinuation { (waiter: CheckedContinuation<ShellExit, Never>) in
+            let exit = state.withLock { state -> ShellExit? in
+                if let exit = state.exit { return exit }
+                state.waiters.append(waiter)
+                return nil
+            }
+            if let exit { waiter.resume(returning: exit) }
+        }
+    }
+
+    func close() async {
+        state.withLock { $0.closed = true }
+        end(.lost)
+    }
+}
+
+/// Opens `ScriptedShell`s (`HostSessionEvent.plain`): each open makes one through `make` (by default an empty shell of
+/// the asked size) and keeps it, so a test reaches the shells its code opened; `failure` makes the next opens throw.
+final class ScriptedShellOpener: ShellOpener, @unchecked Sendable {
+    private let make: @Sendable (_ term: String, _ columns: Int, _ rows: Int) -> ScriptedShell
+    private let state = Mutex<(shells: [ScriptedShell], failure: (any Error)?)>(([], nil))
+
+    init(make: @escaping @Sendable (_ term: String, _ columns: Int, _ rows: Int) -> ScriptedShell = {
+        ScriptedShell(term: $0, columns: $1, rows: $2)
+    }) {
+        self.make = make
+    }
+
+    /// Every shell opened, in order.
+    var shells: [ScriptedShell] { state.withLock { $0.shells } }
+
+    /// What the next opens throw; nil opens again.
+    func fail(_ error: (any Error)?) { state.withLock { $0.failure = error } }
+
+    func open(term: String, columns: Int, rows: Int) async throws -> any ShellChannel {
+        let make = make
+        return try state.withLock { state in
+            if let failure = state.failure { throw failure }
+            let shell = make(term, columns, rows)
+            state.shells.append(shell)
+            return shell
+        }
     }
 }

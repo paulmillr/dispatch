@@ -75,8 +75,10 @@ final class TerminalPresence {
     /// several times over. The view's own grid follows every frame, as the Mac's does in a live resize.
     nonisolated static let resizeQuiet = Duration.milliseconds(100)
 
-    /// What the view showing this presence handles (selection, background, bell, clipboard).
+    /// What the view showing this presence handles (selection, background, bell).
     @ObservationIgnored var onViewEvent: ((TerminalSession.Event) -> Void)?
+    /// Where a program's clipboard write goes (only from a feed with `clipboardWrite`); tests give their own.
+    @ObservationIgnored var pasteboard: @MainActor (String) -> Void = TerminalPresence.systemPasteboard
     @ObservationIgnored private var consumer: Task<Void, Never>?
     @ObservationIgnored private var parser: Task<Void, Never>?
     @ObservationIgnored private var attachments = 0
@@ -104,9 +106,13 @@ final class TerminalPresence {
     }
 
     /// `grid`: the size to attach at until a view sizes it (the node's size in the topology keeps a shared tmux
-    /// window as it is); nil: 80 x 24.
+    /// window as it is); nil: 80 x 24. `scrollback` unknown takes the feed's own (a plain shell's is the client's),
+    /// and the feed decides whether programs may write the pasteboard (`TerminalFeed.clipboardWrite`).
     init(feed: any TerminalFeed, scrollback: TerminalScrollback = .unknown, grid: (columns: Int, rows: Int)? = nil,
          configuration: TerminalConfiguration = TerminalController.storedConfiguration(), scale: Double = 3) {
+        let scrollback = scrollback == .unknown ? feed.scrollback : scrollback
+        var configuration = configuration
+        configuration.clipboardWrite = feed.clipboardWrite
         self.feed = feed
         self.scrollback = scrollback
         self.configuration = configuration
@@ -288,6 +294,8 @@ final class TerminalPresence {
         self.feed = feed
         session.output = { [weak feed] data in feed?.send(data) }
         scroll.reattached()
+        learn(feed.scrollback)
+        configure(configuration)
         if wasAttached { start() }
     }
 
@@ -299,7 +307,10 @@ final class TerminalPresence {
         scroll.learn(scrollback)
     }
 
+    /// A new configuration (font size, theme); whether programs may write the pasteboard stays the feed's.
     func configure(_ configuration: TerminalConfiguration) {
+        var configuration = configuration
+        configuration.clipboardWrite = feed.clipboardWrite
         guard configuration != self.configuration else { return }
         self.configuration = configuration
         session.configure(configuration)
@@ -335,11 +346,17 @@ final class TerminalPresence {
         switch event {
         case .title(let text): title = text.isEmpty ? nil : text
         case .pwd(let url): directory = TerminalSubtitle.path(fromWorkingDirectory: url)
-        case .clipboard: return
+        // A program's OSC 52 write: the session posts it only under `clipboard-write = allow`; checked again here so a
+        // configuration slip cannot open the pasteboard to a helper feed.
+        case .clipboard(let text):
+            if feed.clipboardWrite { pasteboard(text) }
+            return
         default: break
         }
         onViewEvent?(event)
     }
+
+    static func systemPasteboard(_ text: String) { UIPasteboard.general.string = text }
 
     /// The screen as the helper reads it (the Mac's `publishScreen`).
     var screen: TerminalScreen {
@@ -458,7 +475,9 @@ final class TerminalPresences {
     /// feed unless `feed` names another terminal id or another client (a new helper after a reconnect: its node ids
     /// start over, so the same id comes back for an unchanged layout), which it reattaches to. An attachment that
     /// ended (the program exited, the attach failed) is not started again on the same feed: views ask for their
-    /// presence on every update.
+    /// presence on every update. A plain shell (`shell:<uuid>`, `PlainShellFeed`) never reattaches here (it names no
+    /// terminal or client), scrolls locally from the start (the feed's `scrollback`), and ends when its last user lets
+    /// go: its detach closes the channel.
     func open(_ key: Key, feed: @autoclosure () -> any TerminalFeed, terminal: UInt64? = nil, client: HelperClient? = nil,
               scrollback: TerminalScrollback = .unknown, grid: (columns: Int, rows: Int)? = nil) -> TerminalPresence {
         if let existing = presences[key] {

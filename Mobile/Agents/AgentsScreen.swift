@@ -19,6 +19,8 @@ struct AgentsScreen: View {
     var close: (ChatConversation) -> Void
     /// Its own title and filter button; off in the app, whose shared stack's bar carries them (`AgentsToolbar`).
     var chrome = true
+    /// Pull to refresh (`HostSessions.refresh`); none in the Debug demo.
+    var refresh: (@MainActor () async -> Void)?
     @Environment(\.tabsNarrowSidebar) private var narrow
 
     /// A row's line one detail (after the name) and line two. In a split's narrowest sidebar (under 300 points, the
@@ -63,6 +65,7 @@ struct AgentsScreen: View {
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
+        .hostsRefreshable(refresh)
         .overlay {
             if rows.isEmpty {
                 VStack(spacing: 8) {

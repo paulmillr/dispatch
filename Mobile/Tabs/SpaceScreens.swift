@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// M2c: a space's tabs, pushed from the spaces list. The header carries the space with its host and path; the host
-/// pill opens space details; the floating glass button opens a new terminal tab here.
+/// pill opens space details; the floating glass button opens a new terminal tab here (a new shell in a plain host's
+/// Shell space, while it is connected).
 struct SpaceTabsScreen: View {
     let model: MobileTabs
     let actions: TabsActions
@@ -40,7 +41,7 @@ struct SpaceTabsScreen: View {
             }
         }
         .overlay(alignment: .bottomTrailing) {
-            if let space, model.workspace(ref.host)?.client != nil {
+            if let space, model.workspace(ref.host)?.canAddTab(to: space) == true {
                 TabsFloatingButton(title: "New tab", symbol: "plus") { newTab(space) }
                     .simultaneousGesture(LongPressGesture().onEnded { _ in pick() })
                     .padding(.trailing, 16)
@@ -73,7 +74,8 @@ struct SpaceTabsScreen: View {
 }
 
 /// M4d: what the host pill opens. Identity (the host disc, the space name, host and path), its tabs, and the
-/// destructive action last: Close space, with the Mac's choices for a multiplexer space (Detach, Terminate…).
+/// destructive action last: Close space, with the Mac's choices for a multiplexer space (Detach, Terminate…); a Shell
+/// space's closes its shells (`TabsActions.close`), with or without a connection, and has no Rename.
 struct SpaceDetailsScreen: View {
     let model: MobileTabs
     @Bindable var actions: TabsActions
@@ -83,7 +85,9 @@ struct SpaceDetailsScreen: View {
     var body: some View {
         let space = model.space(ref)
         let host = model.workspace(ref.host)?.host
+        let shells = space?.kind == .plainShell
         let connected = model.workspace(ref.host)?.client != nil
+        let closes = shells ? space?.tabs.isEmpty == false : connected
         VStack(spacing: 0) {
             if let space, let host {
                 ScrollView {
@@ -125,8 +129,8 @@ struct SpaceDetailsScreen: View {
                             }
                             .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
                         }
-                        if connected {
-                            Button { actions.closingSpace = ref } label: {
+                        if closes {
+                            Button { if shells { actions.close(.space(ref), .close) } else { actions.closingSpace = ref } } label: {
                                 Text("Close space")
                                     .font(.headline)
                                     .foregroundStyle(Color.destructive)
@@ -137,7 +141,7 @@ struct SpaceDetailsScreen: View {
                             }
                             .buttonStyle(.plain)
                             .glassEffect(.regular.interactive(), in: Capsule())
-                            .accessibilityHint("Asks whether to close, detach or terminate")
+                            .accessibilityHint(shells ? "Ends every shell of this space" : "Asks whether to close, detach or terminate")
                         }
                     }
                     .padding(.horizontal, 16)
@@ -154,7 +158,7 @@ struct SpaceDetailsScreen: View {
                 TabsBackPill(label: space?.name ?? "Back") { if !path.isEmpty { path.removeLast() } }
             }
             .sharedBackgroundVisibility(.hidden)
-            if space != nil, connected {
+            if space != nil, connected, !shells {
                 ToolbarItem(placement: .topBarTrailing) {
                     TabsHeaderPill(action: { actions.rename(.space(ref)) }) {
                         Text("Rename").padding(.leading, 4)

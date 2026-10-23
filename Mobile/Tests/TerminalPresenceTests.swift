@@ -93,6 +93,93 @@ final class TerminalPresenceTests: XCTestCase {
         presence.stop()
     }
 
+    /// A plain shell's presence (`shell:<uuid>`) scrolls its own history from the first line (the server-history UI
+    /// never shows); its PTY opens at the session's grid when the presence attaches and later grids become
+    /// window-changes; closing the presence closes the shell.
+    func testAPlainShellPresenceOwnsItsScrollbackAndSizesItsPTY() async throws {
+        let opener = ScriptedShellOpener()
+        let presences = TerminalPresences()
+        let key = TerminalPresences.Key(host: UUID(), node: "shell:\(UUID().uuidString)")
+        let presence = presences.open(key, feed: PlainShellFeed(opener: opener))
+        XCTAssertEqual(presence.scrollback, .client)
+        XCTAssertEqual(presence.scroll.server, .appOwned, "Local scrolling before any answer")
+        XCTAssertTrue(opener.shells.isEmpty, "Nothing opened before anyone uses it")
+        presences.retain(key)
+        try await TestSupport.eventually { !opener.shells.isEmpty }
+        let shell = try XCTUnwrap(opener.shells.first)
+        let attached = presence.session.currentSize
+        XCTAssertEqual(shell.size, .init(columns: attached.columns, rows: attached.rows), "The PTY opens at the session's grid")
+        XCTAssertEqual(shell.term, PlainShellFeed.term)
+        shell.emit("$ ")
+        try await TestSupport.eventually { presence.session.frameStats().bytesFed == 2 }
+        presence.session.setGrid(columns: attached.columns + 10, rows: attached.rows + 5)
+        let resized = presence.session.currentSize
+        try await TestSupport.eventually { !shell.resizes.isEmpty }
+        XCTAssertEqual(shell.resizes, [.init(columns: resized.columns, rows: resized.rows)], "A later grid is a window-change")
+        XCTAssertTrue(presences.open(key, feed: PlainShellFeed(opener: opener)) === presence, "Views asking again keep the shell")
+        XCTAssertEqual(opener.shells.count, 1)
+        presences.close(key)
+        try await TestSupport.eventually { shell.isClosed }
+    }
+
+    /// A plain shell's end shows as the ended card and is never restarted: views ask for their presence on every update.
+    func testAnEndedPlainShellIsNotReopened() async throws {
+        let opener = ScriptedShellOpener()
+        let presences = TerminalPresences()
+        let key = TerminalPresences.Key(host: UUID(), node: "shell:\(UUID().uuidString)")
+        let presence = presences.open(key, feed: PlainShellFeed(opener: opener))
+        presences.retain(key)
+        try await TestSupport.eventually { presence.attached && !opener.shells.isEmpty }
+        opener.shells[0].end(.status(130))
+        try await TestSupport.eventually { presence.ended != nil }
+        XCTAssertEqual(presence.ended, .exited(130))
+        for _ in 0..<3 { XCTAssertTrue(presences.open(key, feed: PlainShellFeed(opener: opener)) === presence) }
+        presences.release(key)
+        presences.retain(key)
+        XCTAssertEqual(opener.shells.count, 1, "No second shell")
+        presences.close(key)
+    }
+
+    /// OSC 52 writes reach the pasteboard only from a feed that allows them (a plain shell): its surface is configured
+    /// `clipboard-write = allow`, a helper-like feed keeps `deny` and its program's write goes nowhere. A program's
+    /// read is answered empty either way. Asserted through the presence's `pasteboard` sink.
+    func testClipboardWritesReachThePasteboardOnlyFromAPlainShell() async throws {
+        let write = "\u{1B}]52;c;\(Data("copied on the host".utf8).base64EncodedString())\u{7}"
+        var copied: [String] = []
+
+        let opener = ScriptedShellOpener()
+        let plain = TerminalPresence(feed: PlainShellFeed(opener: opener), configuration: TerminalConfiguration())
+        plain.pasteboard = { copied.append($0) }
+        XCTAssertTrue(plain.configuration.clipboardWrite)
+        XCTAssertEqual(plain.configuration.config().clipboardWrite.rawValue, "allow")
+        var bigger = plain.configuration
+        bigger.fontSize += 2
+        bigger.clipboardWrite = false
+        plain.configure(bigger)
+        XCTAssertTrue(plain.configuration.clipboardWrite, "A new font size keeps the feed's clipboard choice")
+        plain.start()
+        try await TestSupport.eventually { !opener.shells.isEmpty }
+        let shell = opener.shells[0]
+        shell.emit(write)
+        try await TestSupport.eventually { !copied.isEmpty }
+        XCTAssertEqual(copied, ["copied on the host"])
+        shell.emit("\u{1B}]52;c;?\u{7}")
+        try await TestSupport.eventually { !shell.written.isEmpty }
+        XCTAssertEqual(String(decoding: shell.written, as: UTF8.self), "\u{1B}]52;c;\u{1B}\\", "A read gets an empty answer")
+        plain.stop()
+
+        let helperLike = ScriptedTerminalFeed(output: Data(write.utf8) + Data("done".utf8))
+        let denied = TerminalPresence(feed: helperLike, configuration: TerminalConfiguration())
+        denied.pasteboard = { copied.append($0) }
+        XCTAssertFalse(denied.configuration.clipboardWrite)
+        XCTAssertEqual(denied.configuration.config().clipboardWrite.rawValue, "deny")
+        denied.start()
+        try await TestSupport.eventually { denied.session.locked { String(decoding: denied.session.surface.readText(.viewport), as: UTF8.self) } == "done" }
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(copied, ["copied on the host"], "Nothing from a feed without clipboard writes")
+        denied.stop()
+    }
+
     func testScrollbackFollowsTheBackendKind() {
         XCTAssertEqual(TerminalScrollback(multiplexer: "tmux"), .client)
         XCTAssertEqual(TerminalScrollback(multiplexer: "herdr"), .server)

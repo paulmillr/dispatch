@@ -308,3 +308,90 @@ final class TabsReconnectTests: XCTestCase {
         XCTAssertEqual(next.tab("herdr:app:2")?.activity, seen)
     }
 }
+
+/// Plain SSH (docs/ios.md): a host without the helper lists one synthetic space, "Shell", whose tabs are the phone's
+/// shells (`ShellSessions`), live or ended.
+extension TabsWorkspaceTests {
+    /// One Shell space and nothing of a topology (a cached one is not the plain host's spaces); its tabs come from the
+    /// shells, named "Shell n" until the program sets a title, with no chat; an ended shell stays as a card with how it
+    /// ended, and its row keeps its object throughout.
+    func testAPlainHostListsOneShellSpaceFromItsShells() async throws {
+        let opener = ScriptedShellOpener()
+        let created = Date(timeIntervalSince1970: 1_800_000_000)
+        let shells = ShellFixtures.sessions(opener: opener, now: { created })
+        let model = ShellFixtures.model()
+        model.shellSessions = { _ in shells }
+        model.sync([ShellFixtures.input(shells, topology: TabsFixtures.app().topology)])
+        let workspace = try XCTUnwrap(model.workspace(ShellFixtures.host.id))
+        XCTAssertEqual(workspace.spaces.map(\.name), ["Shell"])
+        let space = try XCTUnwrap(workspace.shellSpace)
+        XCTAssertEqual(space.kind, .plainShell)
+        XCTAssertEqual(space.ref.key, MobileSpace.shellKey)
+        XCTAssertTrue(space.tabs.isEmpty, "listed before any shell")
+        XCTAssertTrue(workspace.opensShells)
+        XCTAssertTrue(workspace.connected)
+        XCTAssertTrue(workspace.canAddTab(to: space))
+
+        let first = try model.newShell(on: ShellFixtures.host.id)
+        let second = try model.newShell(on: ShellFixtures.host.id)
+        XCTAssertEqual(space.tabs.map { model.label(of: $0, host: workspace.host) }, ["Shell 1", "Shell 2"])
+        XCTAssertTrue(space.tabs.allSatisfy { !$0.isChat && $0.agentPane == nil && $0.shell == .live })
+        XCTAssertTrue(ShellSessions.isKey(first.ref.key))
+        XCTAssertEqual(first.panes.map(\.key), [first.ref.key], "its pane is its presence's node")
+        XCTAssertEqual(first.activity, created)
+        XCTAssertEqual(first.space, space.ref)
+
+        let shell = try await ShellFixtures.shell(opener, 0)
+        XCTAssertEqual(shell.term, PlainShellFeed.term)
+        shell.emit("\u{1B}]2;vim notes\u{07}")
+        try await TestSupport.eventually { shells.tabs.first?.title == "vim notes" }
+        model.sync([ShellFixtures.input(shells)])
+        XCTAssertEqual(model.label(of: first, host: workspace.host), "vim notes", "the program's title (OSC 2)")
+        shell.end(.status(3))
+        try await TestSupport.eventually { shells.tabs.first?.state == .ended(3) }
+        model.sync([ShellFixtures.input(shells)])
+        XCTAssertTrue(workspace.tabs.first === first, "the same row object")
+        XCTAssertEqual(first.shell, .ended(3))
+        XCTAssertEqual(space.tabs.count, 2, "an ended shell stays")
+        XCTAssertEqual(TabsTabRow.line(first, label: model.label(of: first, host: workspace.host), status: model.status),
+                       "Exited with status 3")
+        XCTAssertNil(TabsTabRow.line(second, label: "Shell 2", status: model.status), "a live shell has no line")
+        XCTAssertNil(model.urgency(of: first))
+        model.closeShell(second.ref)
+        XCTAssertEqual(space.tabs.map(\.ref), [first.ref])
+    }
+
+    /// While the host is not connected: a host whose Helper switch is off keeps its Shell space (every card ended, the
+    /// launch cache's without a screen) and opens nothing; a host that fell back to plain SSH (switch on, mode unknown
+    /// offline) lists the cards beside its other spaces while any are left. Cards close offline. A helper connection's
+    /// snapshot after a plain one is applied again, even the same one.
+    func testTheShellSpaceWhileDisconnected() throws {
+        let shells = ShellFixtures.sessions(opener: nil)
+        let created = Date(timeIntervalSince1970: 1_800_000_000)
+        shells.restore([ShellTabEntry(id: UUID(), number: 4, title: "htop", created: created),
+                        ShellTabEntry(id: UUID(), number: 7, title: nil, created: created)])
+        let model = ShellFixtures.model()
+        model.shellSessions = { _ in shells }
+        model.sync([ShellFixtures.input(shells, state: .offline, topology: TabsFixtures.app().topology)])
+        let workspace = try XCTUnwrap(model.workspace(ShellFixtures.host.id))
+        let space = try XCTUnwrap(workspace.shellSpace)
+        XCTAssertEqual(workspace.spaces.map(\.name), ["Shell"])
+        XCTAssertEqual(space.tabs.map(\.name), ["htop", "Shell 7"])
+        XCTAssertTrue(space.tabs.allSatisfy { $0.shell == .ended(nil) })
+        XCTAssertFalse(workspace.opensShells)
+        XCTAssertFalse(workspace.connected)
+        XCTAssertFalse(workspace.canAddTab(to: space))
+        XCTAssertNil(model.recentSpace, "New tab goes nowhere offline")
+        XCTAssertThrowsError(try model.newShell(on: ShellFixtures.host.id))
+
+        model.sync([ShellFixtures.input(shells, mode: nil, state: .offline, topology: TabsFixtures.app().topology)])
+        XCTAssertEqual(workspace.spaces.map(\.name), ["app", "docs", "Shell"])
+        XCTAssertTrue(workspace.shellSpace === space)
+        model.closeShell(space.tabs[1].ref)
+        model.closeShells(host: ShellFixtures.host.id)
+        XCTAssertTrue(shells.tabs.isEmpty)
+        XCTAssertEqual(workspace.spaces.map(\.name), ["app", "docs"], "no cards left, no Shell space")
+        model.sync([ShellFixtures.input(shells, state: .offline)])
+        XCTAssertEqual(workspace.spaces.map(\.name), ["Shell"], "Helper off: listed, empty")
+    }
+}

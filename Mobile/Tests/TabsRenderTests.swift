@@ -212,3 +212,56 @@ final class TabsRenderTests: XCTestCase {
         try write(try render(list.frame(width: 402).background(.black), size: CGSize(width: 402, height: 420)), "rows")
     }
 }
+
+/// A plain shell's tab once its shell ended (docs/ios.md, Plain SSH).
+extension TabsRenderTests {
+    /// The ended card replaces the key capsule under the last screen: "Session ended", how it ended, New shell and
+    /// Close; it shows as soon as the connection is known gone (`ended`), before the presence says so. A helper
+    /// terminal that ended shows no card.
+    func testAnEndedShellShowsItsCard() async throws {
+        AccessibilityLabelTests.enableAccessibility()
+        final class Taps { var newShell = 0, close = 0 }
+        let taps = Taps()
+        let card = TerminalEndedCard(newShell: { taps.newShell += 1 }, close: { taps.close += 1 })
+        let exited = TerminalPresence(feed: ScriptedTerminalFeed([.output(Data("$ exit\r\n".utf8)), .attached, .exit(3)]))
+        exited.start()
+        try await TestSupport.eventually { exited.ended == .exited(3) }
+        let running = TerminalPresence(feed: ScriptedTerminalFeed([.output(Data("$ ".utf8)), .attached]))
+        running.start()
+
+        let found = await TestSupport.windowScene()
+        let scene = try XCTUnwrap(found)
+        func shown(_ view: TerminalSegmentView) async throws -> [NSObject] {
+            let window = UIWindow(windowScene: scene)
+            window.frame = CGRect(x: 0, y: 0, width: 402, height: 700)
+            window.rootViewController = UIHostingController(rootView: view)
+            window.isHidden = false
+            defer { window.isHidden = true }
+            var elements: [NSObject] = []
+            try await TestSupport.eventually(timeout: .seconds(2)) {
+                elements = AccessibilityLabelTests.elements(in: window)
+                return elements.contains { $0.accessibilityLabel == "Control" || $0.accessibilityLabel == "New shell" }
+            }
+            return elements
+        }
+
+        let ended = try await shown(TerminalSegmentView(presence: exited, ended: card))
+        let labels = ended.compactMap(\.accessibilityLabel)
+        XCTAssertTrue(labels.contains { $0.contains("Session ended") && $0.contains("Exited with status 3") }, "\(labels)")
+        let newShell = try XCTUnwrap(ended.first { $0.accessibilityLabel == "New shell" })
+        XCTAssertNotNil(ended.first { $0.accessibilityLabel == "Close" })
+        XCTAssertNil(ended.first { $0.accessibilityLabel == "Control" }, "no keys for a shell that ended")
+        _ = newShell.accessibilityActivate()
+        try await TestSupport.eventually { taps.newShell == 1 }
+
+        var dropped = card
+        dropped.ended = true
+        let gone = try await shown(TerminalSegmentView(presence: running, ended: dropped))
+        XCTAssertNotNil(gone.first { $0.accessibilityLabel == "New shell" }, "the connection went: the card shows")
+
+        let helper = try await shown(TerminalSegmentView(presence: exited))
+        XCTAssertNil(helper.first { $0.accessibilityLabel == "New shell" }, "a helper terminal shows no card")
+        XCTAssertNotNil(helper.first { $0.accessibilityLabel == "Control" })
+        XCTAssertEqual(taps.close, 0)
+    }
+}

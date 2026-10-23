@@ -597,3 +597,107 @@ private final class Followed {
     var names: [String] = []
     var sent: [String] = []
 }
+
+/// Plain SSH (docs/ios.md): New tab, Close tab and Close space in a Shell space act on the phone's shells, from the
+/// screens, the ⌘ commands and the rows' menus alike.
+extension TabsCommandTests {
+    func testNewTabCloseTabAndCloseSpaceOnAPlainHost() async throws {
+        let opener = ScriptedShellOpener()
+        let shells = ShellFixtures.sessions(opener: opener)
+        let model = ShellFixtures.model()
+        model.shellSessions = { _ in shells }
+        model.sync([ShellFixtures.input(shells)])
+        let navigator = SpacesNavigator(model: model)
+        let space = try XCTUnwrap(model.workspace(ShellFixtures.host.id)?.shellSpace)
+
+        // The space's New tab: a shell, its tab opened in Terminal at once.
+        navigator.newTab(in: space)
+        let ref = try XCTUnwrap(navigator.path.last?.tab)
+        XCTAssertEqual(model.tab(ref)?.isShell, true)
+        XCTAssertEqual(model.segments[ref], .terminal)
+        let first = try await ShellFixtures.shell(opener, 0)
+        XCTAssertEqual(first.term, "xterm-256color")
+
+        // ⌘T in the space on screen; its commands: no Rename or Detach.
+        navigator.path = [.space(space.ref)]
+        var enabled = navigator.enabledCommands(presenting: false)
+        XCTAssertTrue(enabled.isSuperset(of: [.newTab, .closeSpace]))
+        XCTAssertTrue(enabled.isDisjoint(with: [.renameSpace, .detachSpace]))
+        navigator.newTabHere()
+        XCTAssertEqual(shells.tabs.count, 2)
+        XCTAssertEqual(navigator.path.last?.tab, model.workspace(ShellFixtures.host.id)?.shellSpace?.tabs.last?.ref)
+        let second = try await ShellFixtures.shell(opener, 1)
+
+        // A shell's screen: Close Tab, nothing of a helper's tab or chat.
+        navigator.path = [.space(space.ref), .tab(ref)]
+        enabled = navigator.enabledCommands(presenting: false)
+        XCTAssertTrue(enabled.isSuperset(of: [.closeTab, .previousTab, .nextTab]))
+        XCTAssertTrue(enabled.isDisjoint(with: [.renameTab, .switchSegment, .attach]))
+        navigator.actions.close(.tab(ref), .close)
+        XCTAssertNil(model.tab(ref))
+        XCTAssertEqual(navigator.path, [.space(space.ref)], "its screen left the stack")
+        try await TestSupport.eventually { first.isClosed }
+        XCTAssertFalse(second.isClosed)
+
+        // Close space asks while a shell is live, then ends every shell; the space stays listed.
+        navigator.actions.close(.space(space.ref), .close)
+        XCTAssertEqual(navigator.actions.closingShells, space.ref)
+        XCTAssertTrue(navigator.presenting)
+        XCTAssertEqual(shells.tabs.count, 1, "nothing closed before the answer")
+        navigator.actions.closeShells(space.ref)
+        XCTAssertNil(navigator.actions.closingShells)
+        XCTAssertTrue(shells.tabs.isEmpty)
+        XCTAssertEqual(model.workspace(ShellFixtures.host.id)?.shellSpace?.tabs.count, 0)
+        XCTAssertEqual(navigator.path, [], "the space's screens left")
+        try await TestSupport.eventually { second.isClosed }
+    }
+
+    /// Offline (the Helper switch off): New tab opens nothing and says why; ⌘T falls back to the picker; the cards
+    /// still close, a space of ended cards at once.
+    func testAPlainHostOfflineOpensNoShellAndClosesItsCards() throws {
+        let shells = ShellFixtures.sessions(opener: nil)
+        shells.restore([ShellTabEntry(id: UUID(), number: 1, title: nil, created: Date(timeIntervalSince1970: 1_800_000_000))])
+        let model = ShellFixtures.model()
+        model.shellSessions = { _ in shells }
+        model.sync([ShellFixtures.input(shells, state: .offline)])
+        let navigator = SpacesNavigator(model: model)
+        let space = try XCTUnwrap(model.workspace(ShellFixtures.host.id)?.shellSpace)
+        navigator.newTab(in: space)
+        XCTAssertEqual(navigator.actions.failure, TabsFailure.disconnected.message)
+        XCTAssertEqual(shells.tabs.count, 1)
+        navigator.actions.failure = nil
+        navigator.path = [.space(space.ref)]
+        XCTAssertTrue(navigator.enabledCommands(presenting: false).contains(.closeSpace), "closing needs no connection")
+        navigator.newTabHere()
+        XCTAssertTrue(navigator.picking, "no space here takes a tab: the picker")
+        navigator.picking = false
+        navigator.actions.close(.space(space.ref), .close)
+        XCTAssertNil(navigator.actions.closingShells, "no live shell: nothing to ask")
+        XCTAssertTrue(shells.tabs.isEmpty)
+    }
+
+    /// The Terminal segment's own use of a shell's presence comes and goes with it on screen; the shell lives on
+    /// (`ShellSessions` holds it attached), and only Close tab ends it.
+    func testLeavingAShellsScreenKeepsItAndCloseTabEndsIt() async throws {
+        let opener = ScriptedShellOpener()
+        let presences = TerminalPresences()
+        let shells = ShellFixtures.sessions(opener: opener, presences: presences)
+        let tab = try XCTUnwrap(shells.newTab())
+        let key = shells.presenceKey(tab.id)
+        let shell = try await ShellFixtures.shell(opener, 0)
+        let presence = try XCTUnwrap(presences.presence(key))
+        for _ in 0..<2 {
+            presences.retain(key)
+            presences.release(key)
+        }
+        XCTAssertTrue(presence.attached)
+        presence.feed.send(Data("ls\r".utf8))
+        try await TestSupport.eventually { String(decoding: shell.written, as: UTF8.self).contains("ls\r") }
+        XCTAssertFalse(shell.isClosed)
+        XCTAssertEqual(shells.tab(tab.id)?.state, .live)
+        shells.close(tab.id)
+        try await TestSupport.eventually { shell.isClosed }
+        XCTAssertNil(presences.presence(key))
+        XCTAssertTrue(shells.tabs.isEmpty)
+    }
+}

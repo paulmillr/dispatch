@@ -160,10 +160,13 @@ final class BackgroundRefresh {
         self.source = source
     }
 
+    /// A host the run connects: Chat on, with its helper. A plain SSH host (Helper off, docs/ios.md) is never refreshed.
+    static func refreshes(_ record: HostRecord) -> Bool { record.helper && record.chat }
+
     /// Asks for the next run (the app went to the background, a run started, the setting or the hosts changed); with
     /// the setting off or no host with Chat on, cancels any pending one.
     func schedule() {
-        guard settings.backgroundRefresh, hosts().contains(where: \.chat) else {
+        guard settings.backgroundRefresh, hosts().contains(where: Self.refreshes) else {
             scheduler.cancel(identifier)
             return
         }
@@ -189,7 +192,7 @@ final class BackgroundRefresh {
         schedule()
         guard settings.backgroundRefresh, await notifier.authorized() else { return [] }
         let deadline = ContinuousClock.now + budget
-        let records = hosts().filter(\.chat)
+        let records = hosts().filter(Self.refreshes)
         guard !records.isEmpty else { return [] }
         let source = source
         // In parallel, each within the deadline; the system ending the task early cancels them all.
@@ -209,7 +212,7 @@ final class BackgroundRefresh {
         // list, as Spaces and Agents show that machine once (`MobileComposition.sameMachine`).
         var machines: Set<String> = []
         for record in records {
-            guard let result = results[record.id], let record = current[record.id], record.chat else { continue }
+            guard let result = results[record.id], let record = current[record.id], Self.refreshes(record) else { continue }
             let machine = result.hello.flatMap { hello in
                 hello.identity.flatMap { identity in hello.account.map { identity.host + ":" + String($0.uid) } }
             }
@@ -238,7 +241,10 @@ final class BackgroundRefresh {
                                                      body: body, key: ChatConversationKey(host: record.id, node: key)))
         }
         var entry = previous ?? HostCacheEntry(saved: clock())
-        if let hello = result.hello { entry.hello = hello }
+        if let hello = result.hello {
+            entry.hello = hello
+            entry.heard = clock()
+        }
         if !result.multiplexers.isEmpty { entry.multiplexers = result.multiplexers.map(HostCacheEntry.Multiplexer.init) }
         if !result.versions.isEmpty { entry.versions = result.versions }
         if let following = result.following { entry.following = following }
@@ -296,7 +302,8 @@ final class HostSessionsRefreshSource: RefreshSource {
             group.cancelAll()
             return first
         }
-        guard connected, let client = session.client, let hello = session.hello else { return nil }
+        // A connection that fell back to plain SSH has no helper to read: nothing to refresh.
+        guard connected, !session.isPlain, let client = session.client, let hello = session.hello else { return nil }
         // Node ids only from this connection's helper (a background session restores nothing, but never trust a kept one).
         let topology = session.topologyIsLive ? session.topology : nil
         var result = HostRefresh(hello: hello, multiplexers: session.multiplexers, versions: session.multiplexerVersions,

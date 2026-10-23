@@ -102,6 +102,42 @@ final class HostStoreTests: XCTestCase {
         XCTAssertEqual(try url.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup, true)
     }
 
+    /// A record saved before the Helper switch existed reads with the helper on and its Chat as saved; without the helper
+    /// Chat always reads off, from a file, the initializer or a later edit, and turning the helper off turns Chat off.
+    func testARecordSavedBeforeTheHelperSwitchKeepsTheHelper() throws {
+        let old = #"{"id":"6F1C0D7E-2B7A-4E1B-9C55-8A1D2E3F4A5B","name":"studio","address":"studio.local","port":22,"#
+            + #""user":"alex","auth":{"password":{}},"multiplexer":"tmux","chat":false,"order":0,"#
+            + #""tintSeed":"6F1C0D7E-2B7A-4E1B-9C55-8A1D2E3F4A5B"}"#
+        let decoded = try JSONDecoder().decode(HostRecord.self, from: Data(old.utf8))
+        XCTAssertTrue(decoded.helper)
+        XCTAssertFalse(decoded.chat, "kept as saved")
+        var chatOn = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(old.utf8)) as? [String: Any])
+        chatOn["chat"] = true
+        let on = try JSONDecoder().decode(HostRecord.self, from: JSONSerialization.data(withJSONObject: chatOn))
+        XCTAssertTrue(on.helper)
+        XCTAssertTrue(on.chat)
+
+        var plain = chatOn
+        plain["helper"] = false
+        let decodedPlain = try JSONDecoder().decode(HostRecord.self, from: JSONSerialization.data(withJSONObject: plain))
+        XCTAssertFalse(decodedPlain.helper)
+        XCTAssertFalse(decodedPlain.chat, "no Chat without the helper, whatever the file says")
+        let saved = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(decodedPlain)) as? [String: Any])
+        XCTAssertEqual(saved["helper"] as? Bool, false)
+        XCTAssertEqual(saved["chat"] as? Bool, false)
+
+        XCTAssertFalse(HostRecord(name: "ai", address: "ai.local", user: "alex", auth: .password, helper: false, chat: true).chat)
+        var edited = on
+        edited.helper = false
+        XCTAssertFalse(edited.chat, "turning the helper off turns Chat off")
+        edited.chat = true
+        XCTAssertFalse(edited.chat, "and keeps it off")
+        edited.helper = true
+        XCTAssertFalse(edited.chat, "turning the helper on leaves Chat to the user")
+        edited.chat = true
+        XCTAssertTrue(edited.chat)
+    }
+
     func testUpdateRemoveAndReorder() {
         let store = HostStore(url: directory.appendingPathComponent("hosts.json"))
         let a = host("a"), b = host("b"), c = host("c")

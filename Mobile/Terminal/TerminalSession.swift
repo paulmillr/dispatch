@@ -362,6 +362,7 @@ final class TerminalSession: @unchecked Sendable {
         surface.config.bindings = Bindings(c.keybinds)
         surface.config.clipboardRead = HandlerOptions.ClipboardAccess(rawValue: c.clipboardRead.rawValue) ?? .ask
         surface.stream.handler.options.clipboardWrite = HandlerOptions.ClipboardAccess(rawValue: c.clipboardWrite.rawValue) ?? .ask
+        host.writes = c.clipboardWrite == .allow
         surface.terminal.setKittyGraphicsLimit(c.imageStorageLimitBytes)
         let cursor: RGB? = if case .color(let rgb)? = c.cursorColor { rgb } else { nil }
         surface.terminal.changeDefaults(foreground: c.foreground, background: c.background, cursor: cursor, palette: c.palette)
@@ -395,10 +396,13 @@ final class TerminalSession: @unchecked Sendable {
     }
 }
 
-/// The surface's host: actions become `TerminalSession.Event`s on the main queue. Remote program clipboard access is
-/// denied: the phone has no consent surface for it; a paste is the user's own gesture.
+/// The surface's host: actions become `TerminalSession.Event`s on the main queue. Remote program clipboard reads are
+/// denied: the phone has no consent surface for them; a paste is the user's own gesture. Writes reach the host only
+/// under `clipboard-write = allow` (plain shells, `TerminalConfiguration.clipboardWrite`) and become `.clipboard`.
 private final class TerminalSurfaceHost: SurfaceHost, @unchecked Sendable {
     weak var surface: Surface?
+    /// `clipboard-write = allow` (under the session's lock, like every surface callback).
+    var writes = false
     var onEvent: (@MainActor (TerminalSession.Event) -> Void)?
 
     private func post(_ event: TerminalSession.Event) {
@@ -425,11 +429,19 @@ private final class TerminalSurfaceHost: SurfaceHost, @unchecked Sendable {
 
     func setClipboard(_ location: SurfaceMessage.Clipboard, _ contents: [ClipboardContent], confirm: Bool) {
         // `clipboard-write = deny` keeps Ghostty from reaching this. Keep the host fail-closed too, so a parser or
-        // configuration regression cannot silently replace the phone's global pasteboard.
+        // configuration regression cannot silently replace the phone's global pasteboard: only an allowed, unconfirmed
+        // write of the standard clipboard's text gets through.
+        guard writes, !confirm, location == .standard,
+              let text = contents.first(where: { String(decoding: $0.mime, as: UTF8.self).hasPrefix("text/") }) else { return }
+        post(.clipboard(String(decoding: text.data, as: UTF8.self)))
     }
 
     func clipboardRequest(_ location: SurfaceMessage.Clipboard, _ request: ClipboardRequest, mimes: [[UInt8]], list: Bool) -> ClipboardReadResult {
         guard let surface else { return .unsupported }
+        // A kitty clipboard write (OSC 5522) is a write like OSC 52's; reads, pastes and listings are denied.
+        if case .kittyWrite = request, writes, location == .standard, (try? surface.completeClipboard(request, ClipboardCompletion())) != nil {
+            return .started
+        }
         surface.denyClipboard(request)
         return .started
     }

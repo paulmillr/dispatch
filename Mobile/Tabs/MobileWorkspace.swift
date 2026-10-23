@@ -20,6 +20,9 @@ struct TabsHost: Identifiable, Equatable {
     var live = true
     /// "tmux" or "herdr": where the spaces come from (`HostSession.spacesMultiplexer`); nil while unknown.
     var multiplexer: String? = nil
+    /// Plain SSH (`HostSession.plainSSH`, docs/ios.md: the Helper switch is off, or this connection fell back): the header
+    /// marks it where the multiplexer goes, connected or not.
+    var plain = false
     /// The host earlier in the list that reaches the same machine and account (`MobileComposition.sameMachine`): that one
     /// shows the spaces, this one names it.
     var sameMachine: String? = nil
@@ -85,6 +88,8 @@ final class MobileTab: Identifiable {
     /// window's), or the last change the phone saw happen in any of its panes (between two live snapshots, or the
     /// phone's own), whichever is later; nil until one is known.
     private(set) var activity: Date?
+    /// A plain SSH shell tab's state (`ShellSessions`); nil for a multiplexer's tab.
+    private(set) var shell: ShellSessions.State?
 
     init(ref: TabRef, node: UInt64, space: SpaceRef, name: String, renamed: Bool, panes: [MobilePane], focused: UInt64?, activity: Date?) {
         self.ref = ref
@@ -112,6 +117,9 @@ final class MobileTab: Identifiable {
 
     /// A chat tab (M2a's speech bubble disc, the Chats filter, Chat as the default segment).
     var isChat: Bool { agentPane != nil }
+
+    /// A plain SSH shell tab (the Shell space's): no chat, no node on any server, closed on the phone.
+    var isShell: Bool { shell != nil }
 
     /// What runs in it, when the server says so: tmux names an unrenamed window after its foreground program.
     var program: String? { renamed ? nil : name }
@@ -160,13 +168,31 @@ final class MobileTab: Identifiable {
     }
 
     fileprivate func touch(_ date: Date) { if activity.map({ $0 < date }) ?? true { activity = date } }
+
+    /// A shell tab: one pane keyed by the tab's key (its presence's node), named after the tab; no folder (the terminal's
+    /// own OSC 7 is the Terminal segment's subtitle).
+    fileprivate func update(shell tab: ShellSessions.ShellTab, space: SpaceRef) {
+        let pane = MobilePane(id: 0, key: tab.key, name: tab.label, cwd: nil, agent: nil)
+        update(node: 0, space: space, name: tab.label, renamed: true, numbered: false, panes: [pane], focused: nil,
+               activity: tab.activity)
+        if shell != tab.state { shell = tab.state }
+    }
 }
 
-/// A space: a herdr workspace or a tmux session, with its tabs in server order.
+/// A space: a herdr workspace or a tmux session, with its tabs in server order; or a plain SSH host's one synthetic
+/// space, "Shell", whose tabs are the phone's own shells (`ShellSessions`).
 @MainActor @Observable
 final class MobileSpace: Identifiable {
+    enum Kind: Equatable, Sendable {
+        /// A multiplexer's space from the helper's topology.
+        case multiplexer
+        /// A plain SSH host's "Shell": no node, no backend, no multiplexer mark; New tab opens a shell.
+        case plainShell
+    }
+
     let ref: SpaceRef
     nonisolated var id: SpaceRef { ref }
+    let kind: Kind
     private(set) var node: UInt64
     /// The topology's backend id this space lives in (the parent `terminals.create` takes for a new space there).
     private(set) var backend: UInt64
@@ -175,8 +201,14 @@ final class MobileSpace: Identifiable {
     /// Its directory: the workspace's own, else its first tab's.
     private(set) var cwd: String?
 
-    init(ref: SpaceRef, node: UInt64, backend: UInt64, name: String, tabs: [MobileTab], cwd: String?) {
+    /// The Shell space's key (`SpaceRef.key`) and node: no topology node has id 0.
+    static let shellKey = "shell"
+    static let shellNode: UInt64 = 0
+    static let shellName = "Shell"
+
+    init(ref: SpaceRef, node: UInt64, backend: UInt64, name: String, tabs: [MobileTab], cwd: String?, kind: Kind = .multiplexer) {
         self.ref = ref
+        self.kind = kind
         self.node = node
         self.backend = backend
         self.name = name
@@ -216,6 +248,8 @@ final class MobileWorkspace: Identifiable {
     var features: Set<String> = []
     /// The host's recent project folders (`recentProjects`), newest first.
     var recents: [TabsRecentProject] = []
+    /// How the host is reached (`TabsHostInput.mode`): plain SSH shows the Shell space and no topology.
+    private(set) var mode: HostSession.Mode?
 
     @ObservationIgnored private let activity: TabActivityStore
     @ObservationIgnored private let now: () -> Date
@@ -234,6 +268,10 @@ final class MobileWorkspace: Identifiable {
     @ObservationIgnored private var waiters: [Waiter] = []
     /// Nodes a close is on its way for: hidden at once, shown again if the close fails.
     private(set) var closing: Set<UInt64> = []
+    /// The phone's shell tabs on this host (`ShellSessions.tabs`), the Shell space's.
+    @ObservationIgnored private var shellTabs: [ShellSessions.ShellTab] = []
+    @ObservationIgnored private var shellSpaceObject: MobileSpace?
+    @ObservationIgnored private var shellTabObjects: [UUID: MobileTab] = [:]
     /// The running `terminals.activity` read, the periodic one, and whether another was asked for meanwhile.
     @ObservationIgnored private var activityRead: Task<Void, Never>?
     @ObservationIgnored private var activityPoll: Task<Void, Never>?
@@ -260,6 +298,33 @@ final class MobileWorkspace: Identifiable {
     }
 
     var tabs: [MobileTab] { spaces.flatMap(\.tabs) }
+
+    /// Plain SSH: shells instead of a helper's spaces (also while offline when the host's Helper switch is off).
+    var isPlain: Bool { if case .plain = mode { true } else { false } }
+    /// New tab opens a shell here now: plain SSH and connected.
+    var opensShells: Bool { isPlain && host.state == .connected }
+    /// Tabs can be made on the host now: through its helper, or as shells.
+    var connected: Bool { client != nil || opensShells }
+    /// The Shell space, while listed: on a plain host always, elsewhere while ended shell cards are left.
+    var shellSpace: MobileSpace? { spaces.first { $0.kind == .plainShell } }
+
+    /// Whether New tab can make a tab in `space` now: a shell in the Shell space, else a terminal through the helper.
+    func canAddTab(to space: MobileSpace) -> Bool { space.kind == .plainShell ? opensShells : client != nil }
+
+    /// The host's mode and shell tabs (`MobileTabs.sync`). Plain SSH drops the helper's spaces (the connection has
+    /// none); the Shell space lists the shells while the host is plain, or while any are left.
+    func update(mode: HostSession.Mode?, shells: [ShellSessions.ShellTab]) {
+        let modeChanged = self.mode != mode
+        guard modeChanged || shellTabs != shells else { return }
+        if modeChanged { self.mode = mode }
+        shellTabs = shells
+        if isPlain, !snapshots.isEmpty {
+            snapshots = [:]
+            order = []
+            watched = []
+        }
+        rebuild()
+    }
 
     func tab(_ key: String) -> MobileTab? { tabs.first { $0.ref.key == key } }
     func space(_ key: String) -> MobileSpace? { spaces.first { $0.ref.key == key } }
@@ -475,11 +540,38 @@ final class MobileWorkspace: Identifiable {
 
             for root in roots where root.kind == .workspace { makeSpace(root) }
         }
+        if let shell = rebuildShellSpace() { spaces.append(shell) }
         tabObjects = tabObjects.filter { liveTabs.contains($0.key) }
         spaceObjects = spaceObjects.filter { liveSpaces.contains($0.key) }
         seen = signatures
         if self.spaces.map(ObjectIdentifier.init) != spaces.map(ObjectIdentifier.init) { self.spaces = spaces }
         resumeWaiters()
+    }
+
+    /// The Shell space from `shellTabs`, keeping its objects; nil while it is not listed.
+    private func rebuildShellSpace() -> MobileSpace? {
+        guard isPlain || !shellTabs.isEmpty else {
+            shellSpaceObject = nil
+            shellTabObjects = [:]
+            return nil
+        }
+        let ref = SpaceRef(host: host.id, key: MobileSpace.shellKey)
+        let tabs = shellTabs.map { shell -> MobileTab in
+            let tab = shellTabObjects[shell.id] ?? MobileTab(ref: TabRef(host: host.id, key: shell.key), node: 0, space: ref,
+                                                             name: shell.label, renamed: true, panes: [], focused: nil,
+                                                             activity: shell.activity)
+            tab.update(shell: shell, space: ref)
+            return tab
+        }
+        shellTabObjects = Dictionary(uniqueKeysWithValues: zip(shellTabs.map(\.id), tabs))
+        if let space = shellSpaceObject {
+            space.update(node: MobileSpace.shellNode, backend: 0, name: MobileSpace.shellName, tabs: tabs, cwd: nil)
+            return space
+        }
+        let space = MobileSpace(ref: ref, node: MobileSpace.shellNode, backend: 0, name: MobileSpace.shellName, tabs: tabs,
+                                cwd: nil, kind: .plainShell)
+        shellSpaceObject = space
+        return space
     }
 
     @MainActor private final class Waiter {

@@ -7,6 +7,40 @@ enum SSHBootstrapScript {
     /// Prints one `DISPATCH_PLATFORM=<uname -s>:<uname -m>` line.
     static let probe = "printf 'DISPATCH_PLATFORM=%s:%s\\n' \"$(uname -s)\" \"$(uname -m)\""
 
+    /// The iPhone's probe: `probe`, then a `DISPATCH_RUNTIME=<$XDG_RUNTIME_DIR>` line when the helper could be installed
+    /// in the runtime folder instead of `~/.dispatch` (`runtimeDirectory(_:)`): the folder is set, absolute, owned by the
+    /// account with mode 0700, and `dispatch` in it, if it exists, is a private folder and not a link. It writes nothing:
+    /// `dispatch` is made only by an install there (`runtimeEntry`). Whether the folder may run programs is learnt only by
+    /// installing or starting the helper. The Mac sends `probe` alone; `platform(_:)` reads the `DISPATCH_PLATFORM=` line
+    /// only, whatever else the output holds.
+    static let runtimeProbe = probe + """
+
+    if (
+    \(privateFunctions)
+    case "$XDG_RUNTIME_DIR" in /*) ;; *) exit 1;; esac
+    cd -P "$XDG_RUNTIME_DIR" || exit 1
+    private_directory . || exit 1
+    if test -e dispatch || test -L dispatch; then private_directory dispatch || exit 1; fi
+    ) >/dev/null 2>&1; then printf 'DISPATCH_RUNTIME=%s\\n' "$XDG_RUNTIME_DIR"; fi
+    """
+
+    /// The runtime folder a `runtimeProbe` found usable, if any: its one `DISPATCH_RUNTIME=` line, an absolute path.
+    static func runtimeDirectory(_ output: String) -> String? {
+        let lines = output.split(whereSeparator: \.isNewline).filter { $0.hasPrefix("DISPATCH_RUNTIME=") }
+        guard lines.count == 1, let line = lines.first else { return nil }
+        let path = String(line.dropFirst("DISPATCH_RUNTIME=".count))
+        return path.hasPrefix("/") && path.utf8.count <= 4096 && !path.unicodeScalars.contains { $0.value < 32 || $0.value == 127 }
+            ? path : nil
+    }
+
+    /// Where the helper cache lives: `~/.dispatch` (`.home`, the Mac's only one), or `$XDG_RUNTIME_DIR/dispatch`
+    /// (`.runtimeDirectory`), which the iPhone tries when the home folder cannot run programs (mounted noexec). The
+    /// runtime folder is emptied at logout, so a helper there is uploaded again after that.
+    enum Root: Equatable {
+        case home
+        case runtimeDirectory
+    }
+
     /// The largest helper either app uploads.
     static let maximumSize = 32 * 1024 * 1024
 
@@ -34,19 +68,35 @@ enum SSHBootstrapScript {
         ".dispatch/bin/versions/" + digest + "/dispatch-helper"
     }
 
+    /// The helper's path under its root's folder: `$HOME` (`relativePath(digest:)`) or `$XDG_RUNTIME_DIR`.
+    static func relativePath(digest: String, root: Root) -> String {
+        switch root {
+        case .home: relativePath(digest: digest)
+        case .runtimeDirectory: "dispatch/bin/versions/" + digest + "/dispatch-helper"
+        }
+    }
+
     /// Run after `cachePreamble`: succeeds when the cached helper is the expected file.
     static func verify(size: Int, digest: String) -> String {
         "safe_file dispatch-helper && test -x dispatch-helper && test \"$(wc -c < dispatch-helper | tr -d ' ')\" = '\(size)' && test \"$(checksum dispatch-helper)\" = '\(digest)'"
+    }
+
+    /// Run after `cachePreamble` when `verify` failed: prints `DISPATCH_NOEXEC` when the cached helper is the expected file,
+    /// owned by the account with mode 0700, and only `test -x` refuses it. That is a folder that cannot run programs:
+    /// mounted noexec (the kernel's `access(X_OK)` says so where `/bin/sh` asks it, as bash and current dash do; a shell
+    /// that reads only the mode bits lets the exec itself fail, status 126) or blocked by policy.
+    static func blocked(size: Int, digest: String) -> String {
+        "safe_file dispatch-helper && set -- $(metadata dispatch-helper) && test \"$2\" = 700 && test \"$(wc -c < dispatch-helper | tr -d ' ')\" = '\(size)' && test \"$(checksum dispatch-helper)\" = '\(digest)' && ! test -x dispatch-helper && printf 'DISPATCH_NOEXEC\\n'"
     }
 
     /// Reads the helper from stdin into an exclusive private staging directory, checks its size and
     /// SHA-256 on the host, then renames it into place. The exclusive private staging directory prevents
     /// following a planted temporary link. Concurrent uploads publish whole files. Existing cache
     /// permissions are verified, never repaired by chmod.
-    static func upload(digest: String, size: Int, staging: String) -> String {
+    static func upload(digest: String, size: Int, staging: String, root: Root = .home) -> String {
         precondition(staging.utf8.allSatisfy { (48...57).contains($0) || (97...122).contains($0) || $0 == 45 })
         return """
-        \(cachePreamble(digest: digest))
+        \(cachePreamble(digest: digest, root: root))
         test ! -e dispatch-helper && test ! -L dispatch-helper || safe_file dispatch-helper || fail "unsafe cached helper"
         mkdir '\(staging)' || fail "cannot create the upload folder"
         trap 'rm -f \(staging)/dispatch-helper; rmdir \(staging) 2>/dev/null' EXIT HUP INT TERM
@@ -71,7 +121,15 @@ enum SSHBootstrapScript {
     ///
     /// Every failure says why with `fail`: one `dispatch-setup: <reason>` line on stdout, which the app and the login
     /// read, and on stderr, which the iPhone and a person read.
-    static let privateDirectoryScript = """
+    static let privateDirectoryScript = privateFunctions + "\n" + """
+    cd -P "$HOME" || fail "no home folder"
+    set -- $(metadata .)
+    test "$#" = 3 && test "$1" = "$owner" && test "$((0$2 & 022))" = 0 || fail "home folder writable by others"
+    enter_private .dispatch
+    """
+
+    /// `privateDirectoryScript`'s checks and functions, without entering a folder.
+    static let privateFunctions = """
     umask 077
     fail() {
       printf 'dispatch-setup: %s\\n' "$*"
@@ -102,11 +160,24 @@ enum SSHBootstrapScript {
       fi
       cd -P "$1" || fail "cannot enter folder $1"
     }
-    cd -P "$HOME" || fail "no home folder"
-    set -- $(metadata .)
-    test "$#" = 3 && test "$1" = "$owner" && test "$((0$2 & 022))" = 0 || fail "home folder writable by others"
-    enter_private .dispatch
     """
+
+    /// Enters `$XDG_RUNTIME_DIR/dispatch`: the runtime folder must be absolute, owned by the account and 0700 (as the XDG
+    /// base directory specification and systemd make it), and `dispatch` in it passes `enter_private`.
+    static let runtimeEntry = """
+    case "$XDG_RUNTIME_DIR" in /*) ;; *) fail "no runtime folder (XDG_RUNTIME_DIR)";; esac
+    cd -P "$XDG_RUNTIME_DIR" || fail "cannot enter the runtime folder"
+    private_directory . || fail "runtime folder not private"
+    enter_private dispatch
+    """
+
+    /// The private-folder checks, then the root's folder (`~/.dispatch` or `$XDG_RUNTIME_DIR/dispatch`) entered.
+    static func privateDirectoryScript(root: Root) -> String {
+        switch root {
+        case .home: privateDirectoryScript
+        case .runtimeDirectory: privateFunctions + "\n" + runtimeEntry
+        }
+    }
 
     /// The reason a setup command gave (`dispatch-setup: <reason>`, its last such line), if it gave one.
     static func reason(_ output: String) -> String? {
@@ -130,9 +201,9 @@ enum SSHBootstrapScript {
         return kept.isEmpty ? "unknown reason" : kept
     }
 
-    static func cachePreamble(digest: String) -> String {
+    static func cachePreamble(digest: String, root: Root = .home) -> String {
         precondition(digest.utf8.count == 64 && digest.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) })
-        return privateDirectoryScript + """
+        return privateDirectoryScript(root: root) + """
 
         enter_private bin && enter_private versions && enter_private '\(digest)'
         command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 || fail "no sha256sum or shasum"

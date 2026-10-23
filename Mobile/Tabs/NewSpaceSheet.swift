@@ -240,7 +240,10 @@ struct NewSpaceSheet: View {
                 if let host = workspace?.host {
                     TabsHostDisc(host: host, size: 28, glyph: 15)
                     Text(host.name).font(.body).foregroundStyle(.primary)
-                    if workspace?.client == nil {
+                    if workspace?.isPlain == true {
+                        // One synthetic space (Shell): New space is not for this host.
+                        Text("plain SSH").font(.footnote).foregroundStyle(.tertiary)
+                    } else if workspace?.client == nil {
                         Text("offline").font(.footnote).foregroundStyle(.tertiary)
                     }
                     if let multiplexer = host.multiplexer { MultiplexerMark(name: multiplexer) }
@@ -431,9 +434,9 @@ struct NewTabPicker: View {
     var body: some View {
         NavigationStack {
             List {
-                ForEach(model.workspaces.filter { $0.client != nil && !$0.spaces.isEmpty }) { workspace in
+                ForEach(model.workspaces.filter { workspace in workspace.spaces.contains(where: workspace.canAddTab(to:)) }) { workspace in
                     Section(workspace.host.name) {
-                        ForEach(workspace.spaces) { space in
+                        ForEach(workspace.spaces.filter(workspace.canAddTab(to:))) { space in
                             Button { choose(space) } label: {
                                 HStack(spacing: 12) {
                                     TabsHostDisc(host: workspace.host, size: 32, glyph: 16)

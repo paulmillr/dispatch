@@ -49,19 +49,23 @@ final class MobileComposition {
         conversations = ChatConversations(presence: TerminalChatPresence(presences: presences), markers: markers,
                                           outbox: outbox, drafts: drafts)
         navigator = SpacesNavigator(model: tabs, memory: splitMemory)
+        // Shell tabs keep their presences with the rest (plain SSH).
+        hosts.presences = presences
         restore()
         wire()
         sync()
     }
 
     /// Every saved host's last-known state from the cache, before the first frame: Spaces and Agents are populated at
-    /// once (their rows dim their times until live data arrives) and reconcile in place.
+    /// once (their rows dim their times until live data arrives) and reconcile in place. A plain host's shell tabs come
+    /// back as ended cards without a screen.
     private func restore() {
         for session in hosts.ordered {
             guard let entry = cache.entry(session.id) else { continue }
+            session.shells.restore(entry.shells)
             conversations.restore(host: session.id, summaries: entry.conversations.mapValues(\.summary))
             session.restore(hello: entry.hello, multiplexers: entry.multiplexers.map(\.multiplexer), versions: entry.versions,
-                            following: entry.following, topology: entry.topology)
+                            following: entry.following, topology: entry.topology, updated: cache.updated(session.id))
         }
     }
 
@@ -100,6 +104,9 @@ final class MobileComposition {
             return conversations.conversations.first { $0.key == key }?.summary.lastActivity
         }
         let tabs = tabs, hosts = hosts
+        tabs.shellSessions = { hosts.session($0)?.shells }
+        tabs.updated = { hosts.session($0)?.updated }
+        tabs.refresh = { await hosts.refresh() }
         // New space on a multiplexer the host does not show: the host follows it from now on, as Host detail's choice.
         tabs.follow = { id, name in
             guard var record = hosts.session(id)?.host,
@@ -116,6 +123,7 @@ final class MobileComposition {
     private struct Signature: Equatable {
         let record: HostRecord
         let link: HostLink
+        let mode: HostSession.Mode?
         let client: ObjectIdentifier?
         let topology: HelperTopology?
         let live: Bool
@@ -124,6 +132,7 @@ final class MobileComposition {
         let following: String?
         let home: String?
         let sameMachine: String?
+        let shells: [ShellSessions.ShellTab]
     }
 
     /// Hosts that reach a machine and account an earlier host in the list already shows (a LAN and a Tailscale address
@@ -131,7 +140,8 @@ final class MobileComposition {
     /// here the first connected one shows its spaces and agents and the others name it. Host id → that host's name.
     static func sameMachine(_ sessions: [HostSession]) -> [UUID: String] {
         var first: [String: String] = [:], result: [UUID: String] = [:]
-        for session in sessions where session.link.isConnected {
+        // A plain SSH host's hello is an earlier helper's: it names no machine now.
+        for session in sessions where session.link.isConnected && !session.isPlain {
             guard let identity = session.hello?.identity, let account = session.hello?.account else { continue }
             let key = identity.host + ":" + String(account.uid)
             if let name = first[key] { result[session.id] = name } else { first[key] = session.host.name }
@@ -147,12 +157,12 @@ final class MobileComposition {
         var changed = false
         for session in sessions {
             let sameMachine = duplicates[session.id]
-            let signature = Signature(record: session.host, link: session.link, client: session.client.map(ObjectIdentifier.init),
+            let signature = Signature(record: session.host, link: session.link, mode: session.mode, client: session.client.map(ObjectIdentifier.init),
                                       topology: session.topology, live: session.topologyIsLive,
                                       switching: session.switchingMultiplexer,
                                       features: session.hello?.features ?? [],
                                       following: session.following, home: session.hello?.account?.home,
-                                      sameMachine: sameMachine)
+                                      sameMachine: sameMachine, shells: session.shells.tabs)
             if synced[session.id] != signature {
                 synced[session.id] = signature
                 changed = true
@@ -161,6 +171,9 @@ final class MobileComposition {
                 if sameMachine != nil { chat.topology = nil }
                 conversations.update(chat)
                 cache.record(session)
+                // A dropped link (or going to the background) keeps when the host last answered.
+                cache.record(heard: session.updated, host: session.id)
+                cache.record(shells: session.shells.entries, host: session.id)
                 if let client = session.client, session.topologyIsLive {
                     // The connection's first live topology: the host's presences attach again by topology key (a stale
                     // snapshot's node ids are another helper's).
@@ -278,6 +291,14 @@ final class MobileComposition {
             })
     }
 
+    /// Every host's last update, for the subtitle under Spaces' flat list and Agents (`HostsSubtitle`).
+    var freshness: [HostFreshness] {
+        hosts.ordered.map { session in
+            HostFreshness(id: session.id, name: session.host.name, tint: HostSummary(session: session).tint,
+                          state: SpacesHostState(session.link), updated: session.updated)
+        }
+    }
+
     /// What Spaces takes from a host session (its topology without agents when the host's Chat is off).
     func input(_ session: HostSession) -> TabsHostInput {
         var input = Self.input(session)
@@ -290,7 +311,16 @@ final class MobileComposition {
         let host = TabsHost(session)
         let override = record.multiplexer == .automatic ? nil : record.multiplexer.rawValue
         return TabsHostInput(host: host, client: session.client, topology: session.topology,
-                             multiplexer: session.following ?? override, features: Set(session.hello?.features ?? []))
+                             multiplexer: session.following ?? override, features: Set(session.hello?.features ?? []),
+                             mode: tabsMode(session), shells: session.shells.tabs)
+    }
+
+    /// The mode Spaces lists a host in: its connection's, else plain when the host's Helper switch is off (its next
+    /// connection is plain too), else unknown. So while it is not connected a plain host keeps its Shell space, every
+    /// card ended; a host that only fell back to plain SSH shows its Shell space only while ended cards are left, until
+    /// a connection decides again.
+    static func tabsMode(_ session: HostSession) -> HostSession.Mode? {
+        session.mode ?? (session.host.helper ? nil : .plain(reason: nil))
     }
 
     /// What Agents takes from a host session: with Chat off, no agents (the host's conversations are terminals only).
@@ -351,6 +381,7 @@ final class MobileComposition {
     /// The Terminal and Chat segments of a tab (`TabScreen`).
     var content: TabsContent {
         let hosts = hosts, presences = presences, conversations = conversations, tabs = tabs, memory = modelMemory
+        let navigator = navigator
         #if DEBUG
         // The Spaces sample's hosts are not sessions: its tabs show M6a's dev server so the Terminal segment has a
         // screen (screenshots, the fidelity pairs).
@@ -366,6 +397,9 @@ final class MobileComposition {
                     return AnyView(TerminalSegmentView(feed: ScriptedTerminalFeed.sample(output: output)))
                 }
                 #endif
+                if tab.isShell {
+                    return AnyView(ShellSegment(hosts: hosts, presences: presences, navigator: navigator, tab: tab, pane: pane))
+                }
                 return AnyView(TerminalSegment(hosts: hosts, presences: presences, tab: tab, pane: pane))
             },
             chat: { tab, pane in
@@ -398,13 +432,18 @@ final class MobileComposition {
     }
 
     /// Hosts' screens embedded in Spaces: New host (M8a) and host detail (M1f) with the host's spaces opening in
-    /// Spaces.
+    /// Spaces: the topology's, then a plain host's Shell space (Tabs' own, no topology names it).
     var hostViews: SpacesHostViews {
-        let hosts = hosts, navigator = navigator
+        let hosts = hosts, navigator = navigator, tabs = tabs
         return SpacesHostViews(
             newHost: { done in hosts.newHostSheet(created: { done($0) }) },
             detail: { id in
-                AnyView(hosts.hostDetail(id) { HostSpacesList(session: $0) }.environment(\.hostSpaceOpening, navigator))
+                AnyView(hosts.hostDetail(id, count: { session in
+                    HostSummary(session: session).spaces.count + (tabs.workspace(session.id)?.shellSpace == nil ? 0 : 1)
+                }) { session in
+                    HostSpacesList(session: session)
+                    if let space = tabs.workspace(session.id)?.shellSpace { HostShellSpaceRow(session: session, space: space) }
+                }.environment(\.hostSpaceOpening, navigator))
             })
     }
 
@@ -469,6 +508,75 @@ private struct TerminalSegment: View {
     }
 }
 
+/// Host detail's row for a plain host's Shell space, after the topology's rows (`HostSpacesList`), as they draw theirs:
+/// it opens the space (`MobileSpace.shellNode`).
+private struct HostShellSpaceRow: View {
+    let session: HostSession
+    let space: MobileSpace
+    @Environment(\.hostSpaceOpening) private var spaceOpening
+
+    var body: some View {
+        if let spaceOpening {
+            Button { spaceOpening.open(host: session.id, space: MobileSpace.shellNode) } label: {
+                HStack {
+                    row
+                    Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+                }
+            }
+            .foregroundStyle(.primary)
+        } else {
+            row
+        }
+    }
+
+    private var row: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "apple.terminal")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+                .frame(width: 28, height: 28)
+                .background(Color.secondary.opacity(0.15), in: Circle())
+                .accessibilityHidden(true)
+            Text(space.name).font(.headline)
+            Text(space.tabs.count == 1 ? "1 shell" : "\(space.tabs.count) shells")
+                .font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+            Spacer(minLength: 0)
+        }
+    }
+}
+
+/// A plain shell tab's Terminal segment: its presence, which `ShellSessions` keeps attached while the tab lives (this
+/// view's own use comes and goes with it on screen, as any segment's). Once the shell ended (its exit, or the
+/// connection's) the ended card offers New shell and Close over the last screen; a tab the launch cache brought back
+/// has no screen, only the card.
+private struct ShellSegment: View {
+    let hosts: HostSessions
+    let presences: TerminalPresences
+    let navigator: SpacesNavigator
+    let tab: MobileTab
+    let pane: MobilePane
+
+    var body: some View {
+        let key = TerminalPresences.Key(host: tab.ref.host, node: pane.key)
+        let state = hosts.session(tab.ref.host)?.shells.tab(key: pane.key)?.state ?? tab.shell
+        let ref = tab.ref
+        let card = TerminalEndedCard(ended: state?.isLive == false,
+                                     newShell: { navigator.newShell(host: ref.host) },
+                                     close: { navigator.actions.close(.tab(ref), .close) })
+        if let presence = presences.presence(key) {
+            TerminalSegmentView(presence: presence, ended: card).id(key)
+                .onAppear { presences.retain(key) }
+                .onDisappear { presences.release(key) }
+        } else {
+            TerminalEndedCardView(card: card, detail: state?.exitDetail)
+                .frame(maxWidth: 404)
+                .padding(.horizontal, 16)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.black)
+        }
+    }
+}
+
 /// Chat's terminal side over the Terminal area's presences: a verified conversation keeps its terminal attached and
 /// its screen published (docs/ios.md, Helper contract) as one of the presence's users; its release lets the attachment go
 /// unless the Terminal segment shows it.
@@ -515,9 +623,10 @@ extension TerminalPresences {
         for key in keys(host: host) { close(key) }
     }
 
-    /// The host's presences of terminals that are gone (not in `keeping`, the live topology's terminal keys) go.
+    /// The host's presences of terminals that are gone (not in `keeping`, the live topology's terminal keys) go. Shell
+    /// tabs' presences are not the topology's: their `ShellSessions` closes them.
     func prune(host: UUID, keeping: Set<String>) {
-        for key in keys(host: host) where !keeping.contains(key.node) { close(key) }
+        for key in keys(host: host) where !keeping.contains(key.node) && !ShellSessions.isKey(key.node) { close(key) }
     }
 }
 
@@ -529,7 +638,9 @@ extension TabsHost {
         self.init(id: record.id, name: record.name, tint: HostSummary(session: session).tint, system: record.system,
                   home: session.hello?.account?.home, loginHome: session.hello?.account?.login_home,
                   state: SpacesHostState(session.link), order: record.order,
-                  live: session.topologyIsLive && !session.switchingMultiplexer, multiplexer: session.spacesMultiplexer)
+                  // A plain connection's Shell space is this connection's own: live, not stale.
+                  live: (session.topologyIsLive || session.isPlain) && !session.switchingMultiplexer,
+                  multiplexer: session.spacesMultiplexer, plain: session.plainSSH)
     }
 }
 

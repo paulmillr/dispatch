@@ -10,7 +10,8 @@ sideloaded (no App Store: the macOS helper would have to become a non-Mach-O pay
 0.9.3+ ([installing](integrations.md#tmux-and-herdr)). Shells and agents live in tmux windows or herdr tabs so they
 outlive the connection; the app installs nothing but its helper. tmux before 3.7 has no bracketed-paste state: Chat to a bound agent works, other typing is refused,
 and the Mac's readiness warning shows. Linux with systemd-logind `KillUserProcesses=yes` kills servers at logout
-unless the user runs `loginctl enable-linger $USER`.
+unless the user runs `loginctl enable-linger $USER`. A host without the helper ([Plain SSH](#plain-ssh): its Helper switch
+off, or a helper that could not be installed) needs only SSH and a login shell: nothing is installed there.
 
 ## Building and running
 
@@ -106,16 +107,16 @@ controls (the Mac's `ChatDictationButton` and `WhisperModelRow`, the phone's com
 
 | Area | Directory | Owns |
 | --- | --- | --- |
-| Hosts | `Mobile/Hosts`, `Keys`, `Store` | Host, key and known-host stores, `HostSession(s)`, New host, host detail, trust sheet |
+| Hosts | `Mobile/Hosts`, `Keys`, `Store` | Host, key and known-host stores, `HostSession(s)`, plain SSH shell tabs (`ShellSessions`), New host, host detail, trust sheet |
 | Tabs | `Mobile/Tabs`, `Mobile/App` | Shell, New button, Spaces, space details, New space, `TabScreen`, the menu bar and ⌘ commands (`MobileCommands`) |
 | Chat | `Mobile/Chat`, `Mobile/Agents` | `MobileChatSession`, Agents list, thread, approvals, queue, New chat |
-| Terminal | `Mobile/Terminal` | `TerminalHostView`, `TerminalFeed`, `TerminalPresence`, key capsule |
-| Transport | `Mobile/Transport` | SSH, auth, host-key delegate, exec channels, bootstrap, reconnect |
+| Terminal | `Mobile/Terminal` | `TerminalHostView`, `TerminalFeed` (`PlainShellFeed` for plain SSH), `TerminalPresence`, key capsule |
+| Transport | `Mobile/Transport` | SSH, auth, host-key delegate, exec and shell (PTY) channels, bootstrap, plain SSH fallback, reconnect |
 | Code | `Mobile/Code` | Diff viewer, code composer |
 | Resilience, Settings | `Mobile/Resilience`, `Mobile/Settings` | Network watching, launch cache, background refresh, Settings |
 
 - `HostSession` is the one object the UI observes per host. Other areas get a `HelperClient` and `HelperTopology`
-  from it and never see SSH: only `Mobile/Transport/Integration` imports `MobileTransport`, and the package stays
+  from it (on a plain SSH connection a `ShellOpener` instead, `Mobile/Hosts/ShellChannel.swift`) and never see SSH: only `Mobile/Transport/Integration` imports `MobileTransport`, and the package stays
   platform-neutral. Every connection-state mapping is in `HostLinkMapping.swift`.
 - `MobileComposition` is the root: on every `HostSessions.changed` (same main-actor turn) it feeds `MobileTabs.sync`
   and `ChatConversations.update`; Chat's urgency flows back into Spaces' dots. One `NavigationStack` holds the tab bar.
@@ -137,19 +138,27 @@ ECDSA fix), and ring over aws-lc-rs needs no cmake. Third-party Rust enters only
 - The host-key callback is answered later (`dms_reply_bool`), so the trust sheet can wait; the handshake deadline
   pauses meanwhile. `disconnected` fires exactly once.
 - An exec channel is a socketpair fd pumped by Rust with backpressure both ways; `HelperTransport` reads it unchanged.
+- A shell channel (`dms_shell_open`, plain SSH) is a session channel with a PTY: `pty-req` with the TERM and grid it
+  is given (no pixel size, no terminal modes, no `env` requests), then `shell`, then the same pump. `dms_shell_resize`
+  asks for a `window-change`: one engine task per shell sends them in call order, a size superseded before it went is
+  skipped (the latest wins), one asked before the shell started is sent once it has, and changes after the close are
+  dropped. `dms_shell_free` releases the handle only, the fd decides the channel's life. Unlike an exec, the end of the caller's input closes the channel (a PTY has no end of
+  file): closing the fd ends the shell at once and reports `Lost`. A refused `pty-req` or `shell` is `DMS_REFUSED`.
 - Limits: host certificates refused, user certificates not wired; no x86_64 simulator or Intel Mac slice;
   `panic = "abort"`; release-built even in Debug.
 
 ### Connection
 
 `SSHHostSessionDriver` connects (host key through `KnownHostStore`), logs in, uploads the helper for the host's
-`uname` to `~/.dispatch/bin/versions/<sha256>/`, starts it, greets it, reads `multiplexers.list` and
-`backends.list`, waits up to 2 s for the first topology, then is ready. It pings with `echo` every 10 s.
+`uname` to `~/.dispatch/bin/versions/<sha256>/` (or the runtime folder, see [Helper contract](#helper-contract)), starts it, greets it, reads `multiplexers.list` and
+`backends.list`, waits up to 2 s for the first topology, then is ready. It pings with `echo` every 10 s. A host with
+its Helper switch off stops after the login, and a helper that cannot be installed, started or used leaves the
+connection up without it: both are [plain SSH](#plain-ssh).
 
 - Lost link or helper: `reconnecting` at once (keepalive 15 s × 3), backoff 1 s up to 60 s, raced by `retryNow()`
-  (network change, foregrounding; on a connected link it probes `echo` within 3 s and closes a dead one).
-  Refusals (host key, login, missing key, protocol version) are final; after a host-key mismatch nothing retries
-  until the user acts.
+  (network change, foregrounding, pull to refresh; on a connected link it probes `echo` within 3 s, `:` on a plain
+  one, and closes a dead one). Refusals (host key, login, missing key) are final; after a host-key mismatch nothing
+  retries until the user acts. Each connection decides again between the helper and plain SSH.
 - Foreground connects every host, background disconnects.
 - **Which multiplexer.** Connecting never starts a server. herdr's `backends.open` starts one, so herdr is followed
   only while its server runs (`running`) or the host asks for it; otherwise tmux, retried every 2 s. A preference
@@ -167,6 +176,19 @@ The phone runs, on an exec channel with no PTY and no `env` requests:
 ```sh
 exec "$HOME/.dispatch/bin/versions/<sha256>/dispatch-helper" --remote --capabilities <HelperGrant> --stdio
 ```
+
+**Install root** (`HelperBootstrap.Root`). A home folder mounted `noexec` takes the upload and its checksum but cannot
+run it. When the probe found a usable runtime folder, the phone moves there: on hosts whose `/bin/sh` asks the kernel,
+`test -x` already refuses the cached file (`SSHBootstrapScript.blocked`) and `install` moves on by itself; elsewhere
+the helper exits with 126 before greeting, `fallbackRoot` names `.runtimeDirectory` and the driver installs and starts
+it once more, on the same connection, from `$XDG_RUNTIME_DIR/dispatch/bin/versions/<sha256>/` (the
+same private-folder checks; the phone's probe, `SSHBootstrapScript.runtimeProbe`, reports without writing anything
+whether that folder is usable, and its `dispatch` folder is created only when the helper is installed there). Nothing
+else falls back: a helper that exits before greeting gives `launchFailure`'s text (the folder that cannot run
+programs, a helper that could not start, or its stderr) and the host goes on as plain SSH. The launch command's
+checks write their `dispatch-setup:` reason to stderr only; stdout carries nothing before the helper's frames. The Mac sends
+`SSHBootstrapScript.probe` and the `.home` scripts byte for byte as before (`HelperRootTests`), so its recordings are
+unchanged; it has no fallback root.
 
 The grant is the Mac's full profile with hooks less file writes and Git reads (`HelperGrant`: no `file.write` or
 `git.read`; Chat off drops `hooks.configure` and `agent.*`). The
@@ -372,7 +394,12 @@ race (replay sees a second ownership ask).
   `dispatch-black` in light mode. Input, sizes and screens wait for `terminal.attached`, as the Mac's do. tmux keeps one size per
   window: while another client holds it at another size (or the window is split), the screen is laid out at the
   server's grid from the top left, as the Mac's, and the view keeps asking for its own. A program's copy (OSC 52,
-  kitty clipboard) is denied: the phone has no consent surface for it, unlike the Mac's "Programs can copy".
+  kitty clipboard) is denied behind the helper: the phone has no consent surface for it, unlike the Mac's "Programs
+  can copy". A plain SSH shell (`PlainShellFeed`, a PTY the user opened with nothing between) may write it
+  (`TerminalFeed.clipboardWrite` sets `clipboard-write = allow` on that presence's surface; the copy goes to
+  `UIPasteboard.general`); reads stay denied for every feed. A plain shell's feed opens its PTY at the presence's
+  attach size, reports `.attached` as soon as the channel is open (before any output), scrolls locally from the start
+  (`TerminalFeed.scrollback`), and its detach closes the shell, so a later attach is refused.
   Hardware PageUp and PageDown page herdr's history; Shift pages the terminal's own. Automatic reconnects ask nothing:
   a host that needs a keyboard-interactive answer fails them and Connect asks again.
 - **Terminal on iPad.** Rules in `TerminalAdaptation`, tests in `TerminalIPadTests` and `TerminalKeyboardUITests`.
@@ -411,11 +438,23 @@ race (replay sees a second ownership ask).
 - **Code.** The diff viewer reads current files with `files.text`. There is no Revert: the helper has no operation to
   reverse a patch. On an iPad its lines take the column's width and its file headers light under a pointer; the
   code composer's keys are Chat's above (⌘Return sends from either mode).
-- **Resilience.** `host-cache.json` (last hello, multiplexers, topology, Agents rows with ≤280-character previews and titles) is
+- **Resilience.** `host-cache.json` (last hello, multiplexers, topology, Agents rows with ≤280-character previews and titles,
+  a plain SSH host's shell tabs without screens) is
   read synchronously at launch so the first frame lists every host. Live data reconciles in place (same row objects).
   Cached files decode leniently, per entry.
+- **Pull to refresh and last update.** Spaces (tree and flat list, not in edit mode) and Agents pull to refresh:
+  `HostSessions.refresh` calls `retryNow()` on every host and ends once each answered, failed, retried and is still
+  down, or waits on a sheet (10 s at most). A connected link's `echo` probe counts as an answer (the driver reports it
+  as a latency sample); a plain SSH host counts as answered while connected (its link is checked with `:`, which sets
+  no last update). Each host's last update (`HostSession.updated`: its last ready, snapshot or ping) shows under
+  its name in the tree ("Updated 3m ago", "Offline · updated 2h ago"); the flat list and Agents, whose rows mix hosts,
+  sum it up in the navigation subtitle under the large title ("Updated just now · vps offline", two hosts by name, then
+  "+N more"; none in the Duo's sidebar). The cache keeps it (`heard`, written as the link changes, not per ping; an older cache's `saved` stands
+  in, except in an entry without a hello, such as a plain host's shell tabs alone, which reports none), and a
+  background refresh that reaches the host sets it.
 - **Background refresh.** A `BGAppRefreshTask` (`<bundle id>.refresh`), off by default. It connects hosts with Chat
-  on through a session that asks nothing, so Face ID key hosts are skipped (`interactionNotAllowed`), reads
+  and the helper on (`BackgroundRefresh.refreshes`; a connection that falls back to plain SSH reads nothing) through a
+  session that asks nothing, so Face ID key hosts are skipped (`interactionNotAllowed`), reads
   `chat.list`, notifies conversations that newly need the user, and ends within 25 s. It never touches seen markers.
 - **Appearance.** Dark by default (`appearance` in UserDefaults), every colour with a light variant. Deliberate
   departures from the mockups: the light user bubble is `#BF3BBF` (the mockup's `#C94FC9` fails 4.5:1), and system
@@ -456,6 +495,81 @@ step every 1.5 s, for recordings), `-DispatchTerminalEcho keys` (the sample's te
 ```
 e -l objc -- (void)[[BGTaskScheduler sharedScheduler] _simulateLaunchForTaskWithIdentifier:@"yachts.dispatch.mobile.refresh"]
 ```
+
+### Plain SSH
+
+A host can go without the helper: the phone opens interactive login shells on its own SSH connection, each with a
+PTY, and runs nothing else there. Terminal only: no Chat, no Agents (nor the diff viewer they open), no spaces from a
+server, no latency, background refresh or watch snapshot. `HostSession.mode` says how the current connection reaches
+the host, `.helper` or `.plain(reason:)` (nil while not connected). A plain connection saves the host's last
+connection time (`lastConnected`), as a helper's does, but no OS (no helper reports it).
+
+- **The Helper switch.** Per host (`HostRecord.helper`, on by default; records saved before it read on), in New host's
+  "On the host" section (with the Multiplexer picker and Chat) and in host detail's Connection. Off, New host hides
+  Multiplexer and Chat and its footer says the phone only opens shells and installs nothing
+  (`NewHostSheet.plainStatement`); host detail hides the multiplexer picker and Chat. Off turns Chat off with it (the
+  record keeps `chat` off without the helper); on, from host detail, turns Chat on again. Settings lists such a host
+  as "Plain SSH", its Chat switch disabled with a footer pointing to host detail, and no Multiplexer section. Turning
+  the switch on, or off on a helper connection, reconnects the host; turning it off on a connection that is already
+  plain (**Use plain SSH for this host**) keeps the connection and its shells and only clears the notice. With the
+  switch off the driver stops after the login (`.plain(reason: nil)`): no probe, no upload, nothing in `~/.dispatch`.
+- **Fallback.** With the switch on, a helper step that fails while the SSH connection stays up leaves the connection
+  as plain SSH with the failure's text (`SSHHostSessionDriver.fallback`, `.plain(reason:)`): the platform probe failing,
+  `uname` unidentified or unsupported, the bundled binary missing, empty or too large ("SSH helper is missing or
+  invalid."), an upload or cache failure (a transient one is tried once more first), a refused exec channel, a failed or closed exec or too much probe output, a helper
+  that exited before greeting (`HelperExited`: `HelperBootstrap.launchFailure`'s text from its exit status and the
+  first lines of its stderr, after the one runtime-folder retry a 126 at home gets, [Install root](#helper-contract)),
+  and a helper that is there but unusable (`HelperUnavailable`: `hello` failed and it still runs 2 s later, another
+  protocol version, no transport limits). The helper's channel is closed, the connection kept. Not fallbacks: login,
+  host key and missing-key refusals stay final, and a connection that dropped meanwhile is a loss that reconnects
+  (`ConnectionLost`). A failure a dropped connection also gives (a helper channel that ended with no exit status, a
+  `channelClosed` during the bootstrap: `SSHHostSessionDriver.ambiguous`) is first checked with the `:` probe
+  (below): no answer makes it a loss that reconnects, without the notice. After a fallback host detail says "Plain
+  SSH · helper could not be installed: <reason>" (`HostSummary.plainLine`; just "Plain SSH" with the switch off) and
+  offers **Use plain SSH for this host**, which turns the switch off. Each connection decides again: a host fixed later gets its helper back at its next connection,
+  and the line goes.
+- **The Shell space.** A plain host shows one synthetic space, "Shell" (`MobileSpace.Kind.plainShell`), instead of a
+  server's spaces: a plain connection drops the kept snapshot, in memory and in the launch cache. Its tabs are the
+  phone's own shells (`ShellSessions`, held by the `HostSession`), each a PTY channel on the host's connection, keyed
+  `shell:<uuid>` (tab, pane and presence). A tab is "Shell n" (numbered per host), or the program's title (OSC 0/2)
+  while it sets one; its time is its last output (dated at most every 5 s), else its creation. It has no chat, dot,
+  Terminal / Chat switch or Rename, and line two says how an ended one ended ("Exited", "Exited with status 3",
+  "Session ended"). **New tab** (the space's button, ⌘T, New tab's picker, an ended card's New shell) opens a shell at
+  once in Terminal, only while the host is plain-connected. **Close tab** (the row's menu holds only it; ⌘W) ends a
+  live shell without asking; **Close space** (space details, ⇧⌘W) closes every shell tab, asking first ("Close all
+  shells?") while one is live. Both work without a connection. New space is not for this host: New space names it
+  "plain SSH" and cannot create, and the tree's New space row never shows (the Shell space is always listed). While
+  disconnected, a host whose switch is off keeps its Shell space, every card ended, without New tab, and shows no
+  multiplexer spaces or mark from the cache (`HostSession.restore` drops the cache's topology and followed multiplexer
+  for it); a host that only fell back lists it only while ended cards are left, until a connection decides again. The
+  host's header in Spaces shows a "Plain SSH" chip where the tmux or herdr mark goes (`PlainSSHMark`) while the switch
+  is off or the connection is plain (`HostSession.plainSSH`); host detail's Spaces header shows it while plain-connected,
+  and host detail lists the Shell space with its number of shells.
+- **Lifetime.** A shell ends with its channel (its program exits) or with the connection: a drop, a reconnect, going
+  to the background (every host disconnects), an edit that reconnects (the Helper switch, except turned off on a plain
+  connection; the address, user or authentication: a replacement session takes the cards). Its tab stays as a card:
+  the last screen with "Session ended", the exit status if there was one (or why the open failed), and **New shell** and **Close** where the key
+  capsule was (`TerminalEndedCard`). The feed closes an ended shell's channel as soon as it has read the exit, not
+  when the tab closes. Nothing restarts a shell: the connection reconnects with its usual backoff, so New
+  tab works again, and `PlainShellFeed` refuses a second attachment. `ShellSessions` keeps each tab's presence attached
+  for the tab's life, so leaving its screen never ends the shell; closing the tab closes the presence, whose detach
+  closes the channel. The launch cache keeps the tabs (`HostCacheEntry.shells`: id, number, title, creation; never a
+  screen), which a relaunch lists as ended cards without a screen.
+- **Terminal.** The Terminal segment of a helper tab: key capsule and d-pad, hardware keyboard, the iPad's rules and the
+  100 ms resize quiet period. The PTY opens at the presence's grid when it attaches (80 × 24 before a view laid it
+  out); later sizes are `window-change`. Scrollback is the emulator's own from the start (no server history to page).
+  OSC 52 and kitty clipboard writes go to `UIPasteboard.general` (`TerminalFeed.clipboardWrite`, true only here, sets
+  `clipboard-write = allow`); reads are denied, as for every feed. TERM is `xterm-256color`, fixed
+  (`PlainShellFeed.term`), with no `env` requests and no terminal modes (the server's defaults). Input and sizes made
+  while the channel opens are sent once it is open, in order; a write that fails is dropped, never retried.
+- **Liveness and what is left out.** No helper, so no `echo` ping and no latency: the SSH keepalive (15 s × 3) watches
+  the link, and a `retryNow()` on a connected plain link runs `:` on an exec channel (`SSHLogin.alive`; the engine has
+  no channel-level ping). Any answer from the server counts as alive, a refused exec or a nonzero status included;
+  only silence past 3 s, a closed channel or a network error count as dead, and close the link. `HostSession.plainSSH`
+  (the switch off, or a plain connection) keeps the host out of Agents and Chat (`HostTopologies` hands on no
+  topology), background refresh, the watch's snapshot and refresh ([watch](watch.md)), and same-machine pairing (a
+  plain connection's hello is an earlier helper's). The watch's snapshot also leaves out a Shell space on a host with
+  its helper (ended cards left from a plain connection).
 
 ## iPad
 
@@ -567,7 +681,21 @@ sheet).
   [-k case] [--keep]` runs the helper exactly as the phone does, in a private root. Every tmux call uses `-S`, so it
   is safe inside the user's tmux. Not in `test/suites.json`, which holds XCTest ids only.
 - **Transport.** `cargo test` in `Mobile/Transport/Core` and `swift test` in `Mobile/Transport`
-  ([README](../Mobile/Transport/README.md)).
+  ([README](../Mobile/Transport/README.md)). The engine's shell cases run an in-process russh server (start and echo
+  with no pixel size, modes or `env`, resize, exit status, the caller's close, a refused `pty-req`, a lost connection,
+  and the C ABI); `ShellTests` open the login shell under the fixture sshd (TERM, `stty size` before and after a
+  resize, `exit 3`, the connection's loss, `close()`, `PermitTTY no`); `HelperRootTests` pin the Mac's scripts, the
+  runtime root, `launchFailure`, `fallbackRoot` and a failed launch whose stdout stays empty.
+- **Plain SSH.** `SSHDriverTests` script the login and the helper on it (`ScriptedLogin`, `ScriptedHelperProcess`):
+  Helper off connects without a bootstrap, the bootstrap failures and an incompatible helper go on as plain SSH with
+  their text, the runtime-folder retry, a helper that exits before greeting, login refusals and a loss that
+  reconnects, and the `:` check on a retry. `ScriptedHostSessionDriver` has a `.plain` step with
+  `ScriptedShellOpener` and `ScriptedShell`, used by `PlainShellFeedTests` (the attach size and `.attached` before
+  output, input and sizes in order, a lost shell, detach and reattach, a failed open), `HostSessionTests`,
+  `TerminalPresenceTests` (scrollback, an ended shell not reopened, clipboard writes only from a plain shell), the Tabs
+  classes (`TabsWorkspaceTests`, `TabsCommandTests`, `TabsSpacesTreeTests`, `TabsRenderTests`), `HostScreensTests`,
+  `ResilienceCacheTests`, `HostStoreTests`, `BackgroundRefreshTests` and `WatchSnapshotTests`, all fast.
+  `SSHDriverLiveTests/testAHostWithoutTheHelperOpensShells` (full) opens a shell on the live fixture.
 - **Dictation.** `swift test` in `Packages/Dictation`, on the Mac: text placement, Whisper's cleanup, the model
   store, and both engines transcribing `say`'s speech (Apple's when the language's model is on the Mac, Whisper's
   with `ggml-small-q8_0.bin` in `DISPATCH_WHISPER_MODELS` or the Mac app's models folder; each skips otherwise).

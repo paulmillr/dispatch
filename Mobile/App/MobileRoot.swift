@@ -245,10 +245,17 @@ struct MobileRoot: View {
     /// name, capsule and Edit in one row overflowed its 280-point sidebar.
     private func stack(path: Binding<[TabsRoute]>, titleInBar: Bool) -> some View {
         let narrow = titleInBar && MobileSplit.narrow(sidebar: columns.sidebar, device: device)
+        // Every host's last update under the large title, where the rows mix hosts: the tree (and edit mode) says it
+        // under each host instead, and the Duo's sidebar has no line for it.
+        let perHost = section == .spaces && (tabs.tree || navigator.editing)
+        let composition = composition
+        var subtitle: (@MainActor () -> [HostFreshness])?
+        if !titleInBar, !perHost { subtitle = { composition.freshness } }
         return NavigationStack(path: path) {
             tabView
                 .navigationTitle(section.title)
                 .toolbarTitleDisplayMode(titleInBar ? .inline : .large)
+                .modifier(HostsSubtitle(hosts: subtitle))
                 // The section's name is the leading item instead (the title stays the screen's name for VoiceOver).
                 .toolbar(removing: titleInBar ? .title : nil)
                 .toolbar {
@@ -357,7 +364,7 @@ struct MobileRoot: View {
                      close: { conversation in
                          if let ref = composition.tab(for: conversation.key) { navigator.actions.close(.tab(ref), .close) }
                      },
-                     chrome: false)
+                     chrome: false, refresh: { await composition.hosts.refresh() })
     }
 }
 

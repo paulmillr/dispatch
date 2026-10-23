@@ -22,6 +22,11 @@ enum HostSessionEvent: Sendable {
     /// shows a connected host without its counts.
     case ready(client: HelperClient, hello: HelperSession.Info, multiplexers: [HelperClient.Multiplexer],
                versions: [String: String], topology: HelperTopology?)
+    /// The connection is up without a helper (plain SSH, docs/ios.md): the link becomes `.connected` in the same update,
+    /// with no client, hello, multiplexers or topology; `shells` opens PTY shells on this connection. `reason` is nil
+    /// when the host's Helper switch is off, else why the helper could not start (the bootstrap error's text). Each
+    /// connection decides again: a later one may be `.ready`.
+    case plain(reason: String?, shells: any ShellOpener)
     case topology(HelperTopology)
     /// The followed multiplexer has no server on this connection (none chosen, herdr not running, or tmux's open
     /// failed): the host has no spaces now, so a snapshot kept from the cache or an earlier connection goes.

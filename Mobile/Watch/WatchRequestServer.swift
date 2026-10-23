@@ -151,11 +151,11 @@ final class WatchRequestServer {
 
     // MARK: Hosts
 
-    /// Pull to refresh: the hosts with Chat on (or `host`) connect, held in the background or retried in the
+    /// Pull to refresh: the hosts with Chat on (or `host`; never a plain SSH host) connect, held in the background or retried in the
     /// foreground, and their rows are read again; returns once every link settled or at the deadline.
     private func refresh(_ host: UUID?, all: Bool, deadline: ContinuousClock.Instant) async {
         let hosts = composition.hosts
-        let sessions = hosts.ordered.filter { all ? $0.host.chat : $0.id == host }
+        let sessions = hosts.ordered.filter { !$0.plainSSH && (all ? $0.host.chat : $0.id == host) }
         if hosts.active {
             for session in sessions { session.retryNow() }
         } else {

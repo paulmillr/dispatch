@@ -27,9 +27,18 @@ struct HostRecord: Identifiable, Equatable, Codable, Sendable {
     var user: String
     var auth: Auth
     var multiplexer: MultiplexerPreference = .automatic
+    /// Upload and run the helper (docs/ios.md, Plain SSH): off, the phone only opens PTY shells on its own SSH
+    /// connection, without Chat, Agents, Files, spaces from a server or background refresh. Turning it off turns `chat`
+    /// off too.
+    var helper = true {
+        didSet { if !helper, chat { chat = false } }
+    }
     /// Chat with the host's agents (Settings): off runs the helper without hooks or agent capabilities
-    /// (`HelperGrant.capabilities(chat:)`), and the host's agents show as terminals only.
-    var chat = true
+    /// (`HelperGrant.capabilities(chat:)`), and the host's agents show as terminals only. Always off without the
+    /// helper (`helper`): setting it then keeps it off.
+    var chat = true {
+        didSet { if chat, !helper { chat = false } }
+    }
     var order: Int = 0
     var lastConnected: Date?
     /// Seeds `HostTint`: the machine identity the helper reported when the host was verified (the Mac app colours the
@@ -44,8 +53,8 @@ struct HostRecord: Identifiable, Equatable, Codable, Sendable {
     var osLabel: String?
 
     init(id: UUID = UUID(), name: String, address: String, port: Int = 22, user: String, auth: Auth,
-         multiplexer: MultiplexerPreference = .automatic, chat: Bool = true, order: Int = 0, lastConnected: Date? = nil,
-         tintSeed: String? = nil, system: HostSystem? = nil, osLabel: String? = nil) {
+         multiplexer: MultiplexerPreference = .automatic, helper: Bool = true, chat: Bool = true, order: Int = 0,
+         lastConnected: Date? = nil, tintSeed: String? = nil, system: HostSystem? = nil, osLabel: String? = nil) {
         self.id = id
         self.name = name
         self.address = address
@@ -53,7 +62,8 @@ struct HostRecord: Identifiable, Equatable, Codable, Sendable {
         self.user = user
         self.auth = auth
         self.multiplexer = multiplexer
-        self.chat = chat
+        self.helper = helper
+        self.chat = chat && helper
         self.order = order
         self.lastConnected = lastConnected
         self.tintSeed = tintSeed ?? id.uuidString
@@ -79,7 +89,8 @@ struct HostRecord: Identifiable, Equatable, Codable, Sendable {
 }
 
 extension HostRecord {
-    /// Records saved before a field existed read with its default (`chat` on).
+    /// Records saved before a field existed read with its default (`helper` and `chat` on); a record without the helper
+    /// reads with Chat off whatever the file says.
     init(from decoder: any Decoder) throws {
         let fields = try decoder.container(keyedBy: CodingKeys.self)
         id = try fields.decode(UUID.self, forKey: .id)
@@ -90,7 +101,8 @@ extension HostRecord {
         auth = try fields.decode(Auth.self, forKey: .auth)
         // A preference this build does not know (a newer build's, after a downgrade) is Automatic, not an unreadable file.
         multiplexer = (try? fields.decodeIfPresent(MultiplexerPreference.self, forKey: .multiplexer)) ?? .automatic
-        chat = try fields.decodeIfPresent(Bool.self, forKey: .chat) ?? true
+        helper = try fields.decodeIfPresent(Bool.self, forKey: .helper) ?? true
+        chat = try (fields.decodeIfPresent(Bool.self, forKey: .chat) ?? true) && helper
         order = try fields.decodeIfPresent(Int.self, forKey: .order) ?? 0
         lastConnected = try fields.decodeIfPresent(Date.self, forKey: .lastConnected)
         tintSeed = try fields.decodeIfPresent(String.self, forKey: .tintSeed) ?? id.uuidString

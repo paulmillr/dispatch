@@ -20,12 +20,20 @@ struct TerminalConfiguration: Equatable, Sendable {
     var paddingY = 10
     /// Kept small on a phone: the multiplexer keeps the long history (herdr), or tmux's own history is replayed.
     var scrollbackBytes = 10_000_000
+    /// Programs may write the phone's pasteboard (OSC 52, kitty clipboard): set by the presence from its feed
+    /// (`TerminalFeed.clipboardWrite`), true only for plain SSH shells. Never a user setting.
+    var clipboardWrite = false
 
     /// Where the bundled themes are (`DispatchMobile.app/ghostty`).
     static var themes: URL { Bundle.main.bundleURL.appendingPathComponent("ghostty") }
 
-    /// `clipboard-write = deny`: the phone has no trusted consent surface for a remote program's write, so it fails
-    /// closed instead of turning an `ask` request into an unconditional write in the SurfaceHost.
+    /// `clipboard-write = deny` by default: the phone has no trusted consent surface for a remote program's write, so it
+    /// fails closed instead of turning an `ask` request into an unconditional write in the SurfaceHost. Behind a helper
+    /// the writer is whatever runs in a server-owned multiplexer session, shared with other clients and agents, so its
+    /// writes stay denied. A plain SSH shell (`clipboardWrite`) is a PTY the user opened from the phone with nothing
+    /// between, as in any SSH client: `allow` sends its OSC 52 writes to `UIPasteboard.general` (docs/security.md).
+    /// `clipboard-read` is answered by the host, which denies every read (an empty reply) for every feed: a remote
+    /// program never reads the phone's pasteboard.
     var text: String {
         let themePath = Self.themes.appendingPathComponent(theme).path
         return """
@@ -39,7 +47,7 @@ struct TerminalConfiguration: Equatable, Sendable {
         scrollback-limit-bytes = \(scrollbackBytes)
         image-storage-limit = 0
         clipboard-read = ask
-        clipboard-write = deny
+        clipboard-write = \(clipboardWrite ? "allow" : "deny")
         keybind = clear
         keybind = shift+page_up=scroll_page_up
         keybind = shift+page_down=scroll_page_down

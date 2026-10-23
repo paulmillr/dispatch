@@ -16,7 +16,8 @@ struct WatchSnapshotBuilder {
         let hosts = composition.hosts, conversations = composition.conversations
         let phone = WatchPhone(foreground: hosts.active, locked: !protectedDataAvailable, offline: hosts.networkUnavailable,
                                knownHostsUnreadable: hosts.knownHosts.unreadable, needsYou: conversations.needsYouCount)
-        let sessions = hosts.ordered
+        // Plain SSH hosts (no helper: no agents, no server spaces, docs/ios.md) are not the watch's.
+        let sessions = hosts.ordered.filter { !$0.plainSSH }
         let sameMachine = MobileComposition.sameMachine(sessions)
         return WatchSnapshot(generated: now, phone: phone,
                              hosts: sessions.map { host($0, sameMachine: sameMachine[$0.id]) },
@@ -112,15 +113,20 @@ struct WatchSnapshotBuilder {
 
     // MARK: Spaces
 
-    /// The workspaces shown: a host that names an earlier one's machine (`sameMachine`) shows its spaces there.
-    private var workspaces: [MobileWorkspace] { composition.tabs.workspaces.filter { $0.host.sameMachine == nil } }
+    /// The workspaces shown: a host that names an earlier one's machine (`sameMachine`) shows its spaces there, and a plain
+    /// SSH host's Shell space stays on the phone.
+    private var workspaces: [MobileWorkspace] {
+        let plain = Set(composition.hosts.ordered.filter(\.plainSSH).map(\.id))
+        return composition.tabs.workspaces.filter { $0.host.sameMachine == nil && !plain.contains($0.id) }
+    }
 
     /// Every host's spaces in the phone's order (`MobileTabs.orderedSpaces`), unfiltered: Spaces' filter is the phone's
     /// view, not the watch's.
     func spaces() -> [WatchSpace] {
         let model = composition.tabs
         return workspaces.flatMap { workspace in
-            model.orderedSpaces(workspace).map { space in
+            // A helper host's leftover Shell space (ended shell cards) stays on the phone too.
+            model.orderedSpaces(workspace).filter { $0.kind != .plainShell }.map { space in
                 let urgencies = space.tabs.compactMap { model.urgency(of: $0) }
                 return WatchSpace(host: workspace.id.uuidString, key: space.ref.key, name: space.name,
                                   folder: workspace.host.abbreviate(space.cwd), unread: urgencies.filter(\.unread).count,

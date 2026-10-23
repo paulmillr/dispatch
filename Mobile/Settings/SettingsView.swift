@@ -69,7 +69,7 @@ struct SettingsView: View {
                             HostSettingsView(hostID: session.id)
                         } label: {
                             LabeledContent(session.host.name) {
-                                Text(session.host.chat ? "Chat on" : "Chat off")
+                                Text(!session.host.helper ? HostSummary.plainSSH : session.host.chat ? "Chat on" : "Chat off")
                             }
                         }
                     }
@@ -154,17 +154,26 @@ struct HostSettingsView: View {
                         host.chat = chat
                         sessions.update(host)
                     }))
+                    // Chat needs the helper (`HostRecord.chat`): host detail's Helper switch turns it back on.
+                    .disabled(!session.host.helper)
                 } footer: {
-                    Text("Off: Dispatch's helper runs on \(session.host.name) without agent hooks, and its agents show as terminals only. Turning Chat on again reconnects.")
-                }
-                Section {
-                    if session.multiplexerLine == "none" {
-                        LabeledContent("Multiplexer") { Text("none").monospaced() }
+                    if session.host.helper {
+                        Text("Off: Dispatch's helper runs on \(session.host.name) without agent hooks, and its agents show as terminals only. Turning Chat on again reconnects.")
                     } else {
-                        HostMultiplexerPicker(session: session)
+                        Text("\(session.host.name) uses plain SSH without the helper, so it has no Chat. Turn the helper on in the host's details to use Chat.")
                     }
-                } footer: {
-                    Text("Automatic follows herdr while its server runs, else tmux.")
+                }
+                // A plain SSH host has no multiplexer's spaces.
+                if session.host.helper {
+                    Section {
+                        if session.multiplexerLine == "none" {
+                            LabeledContent("Multiplexer") { Text("none").monospaced() }
+                        } else {
+                            HostMultiplexerPicker(session: session)
+                        }
+                    } footer: {
+                        Text("Automatic follows herdr while its server runs, else tmux.")
+                    }
                 }
             }
             .navigationTitle(session.host.name)

@@ -60,7 +60,8 @@ struct TabScreen<Terminal: View, Chat: View>: View {
         // scroll edge effect, as content does under the system's bars; the terminal, a fixed grid, starts below them.
         // Beside the Duo's sidebar it is in the header itself, where the host pill was (`segmentInHeader`).
         .safeAreaBar(edge: .top, spacing: 0) {
-            if let tab, !segmentInHeader {
+            // A shell tab has no Chat: no switch.
+            if let tab, !segmentInHeader, !tab.isShell {
                 TabSegmentControl(selection: Binding(get: { current(tab) }, set: { choose($0) }))
                     .padding(.horizontal, 16)
                     .padding(.top, 4)
@@ -74,7 +75,7 @@ struct TabScreen<Terminal: View, Chat: View>: View {
                                 space: workspace.space(of: tab), needsYou: model.needsYou(excluding: ref), backTitle: backTitle,
                                 segment: current(tab), terminalSubtitle: tab.activePane.flatMap { terminalSubtitle(tab, $0) },
                                 column: column, showsBack: !splitDetail,
-                                segmentSelection: segmentInHeader ? Binding(get: { current(tab) }, set: { choose($0) }) : nil,
+                                segmentSelection: segmentInHeader && !tab.isShell ? Binding(get: { current(tab) }, set: { choose($0) }) : nil,
                                 sidebar: splitDetail ? sidebar : nil,
                                 back: back, details: { path.append(.details(tab.space)) })
             } else if !splitDetail {
@@ -99,7 +100,8 @@ struct TabScreen<Terminal: View, Chat: View>: View {
     }
 
     private func current(_ tab: MobileTab) -> TabSegment {
-        segment ?? model.segments[ref] ?? TabSegment.initial(for: tab)
+        if tab.isShell { return .terminal }
+        return segment ?? model.segments[ref] ?? TabSegment.initial(for: tab)
     }
 
     private func choose(_ next: TabSegment) {

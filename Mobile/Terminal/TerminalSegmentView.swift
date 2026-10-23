@@ -6,8 +6,11 @@ import UIKit
 /// d-pad's arrow cluster pops up over the terminal's bottom right while held or pinned. On an iPad with a hardware
 /// keyboard the capsule collapses to a small button over the terminal's bottom right, and the terminal gets its rows.
 /// The feed is the tab's terminal node; leaving the segment stops observing it and never ends anything on the host.
+/// A plain shell's tab passes an ended card (`TerminalEndedCard`): once its shell ended, the card ("Session ended",
+/// New shell, Close) takes the capsule's place under the last screen. Helper terminals pass none.
 struct TerminalSegmentView: View {
     private let make: @MainActor () -> TerminalController
+    private var endedCard: TerminalEndedCard?
     /// Holds the controller across view updates (made once, on the first body).
     @State private var slot = Slot()
 
@@ -16,7 +19,10 @@ struct TerminalSegmentView: View {
     }
 
     /// A presence Tabs keeps (shared with Chat through `TerminalPresences`).
-    init(presence: TerminalPresence) { make = { TerminalController(presence: presence) } }
+    init(presence: TerminalPresence, ended: TerminalEndedCard? = nil) {
+        make = { TerminalController(presence: presence) }
+        endedCard = ended
+    }
 
     /// A feed's terminal through a presence of its own (previews, a tab without Chat).
     init(feed: any TerminalFeed, scrollback: TerminalScrollback = .unknown) {
@@ -34,11 +40,15 @@ struct TerminalSegmentView: View {
 
     var body: some View {
         let controller = controller
-        let full = controller.capsuleForm == .full
+        // A shell that ended: its last screen stays, the card offers what is next, and the keys have nothing to reach.
+        let ended = endedCard.flatMap { card in card.ended || controller.ended != nil ? card : nil }
+        let full = controller.capsuleForm == .full && ended == nil
         TerminalSurfaceView(controller: controller)
             .overlay(alignment: .bottomTrailing) {
                 Group {
-                    if full {
+                    if ended != nil {
+                        EmptyView()
+                    } else if full {
                         TerminalDPadCluster(controller: controller)
                             .padding(.trailing, 14)
                     } else {
@@ -51,7 +61,12 @@ struct TerminalSegmentView: View {
                 .environment(\.colorScheme, .dark)
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                if full {
+                if let ended {
+                    TerminalEndedCardView(card: ended, detail: ended.detail ?? Self.detail(controller.ended))
+                        .frame(maxWidth: TerminalAdaptation.capsuleMaxWidth(idiom: controller.idiom))
+                        .padding(.horizontal, 10)
+                        .padding(.bottom, 8)
+                } else if full {
                     TerminalKeyCapsule(controller: controller)
                         .frame(maxWidth: TerminalAdaptation.capsuleMaxWidth(idiom: controller.idiom))
                         .padding(.horizontal, 10)
@@ -66,6 +81,64 @@ struct TerminalSegmentView: View {
             .background(Color(controller.hostView.backgroundColor ?? .black))
             .onAppear { controller.appear() }
             .onDisappear { controller.disappear() }
+    }
+}
+
+extension TerminalSegmentView {
+    /// The card's line from the presence's end: a failed attachment's reason, an exit status.
+    static func detail(_ ended: TerminalFeedEvent?) -> String? {
+        switch ended {
+        case .failed(let message)?: message
+        case .exited(0?)?: "Exited"
+        case .exited(let status?)?: "Exited with status \(status)"
+        default: nil
+        }
+    }
+}
+
+/// What a terminal that ended offers (a plain shell's tab): a new shell in its space, or closing the tab.
+struct TerminalEndedCard {
+    /// The shell ended though the presence may not have said so (its connection closed): the card shows anyway.
+    var ended = false
+    /// The line under "Session ended"; nil: from the presence's end (`TerminalSegmentView.detail`).
+    var detail: String? = nil
+    var newShell: @MainActor () -> Void
+    var close: @MainActor () -> Void
+}
+
+/// The ended card: "Session ended", how, and New shell / Close. Over the last screen (`TerminalSegmentView`), or alone
+/// for a tab the launch cache brought back without a screen.
+struct TerminalEndedCardView: View {
+    let card: TerminalEndedCard
+    var detail: String?
+
+    var body: some View {
+        VStack(spacing: 12) {
+            VStack(spacing: 3) {
+                Text("Session ended").font(.headline)
+                if let detail {
+                    Text(detail).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                }
+            }
+            .accessibilityElement(children: .combine)
+            HStack(spacing: 10) {
+                Button { card.newShell() } label: {
+                    Label("New shell", systemImage: "plus").frame(maxWidth: .infinity).frame(minHeight: 30)
+                }
+                .buttonStyle(.glassProminent)
+                .tint(.dispatchPink)
+                Button { card.close() } label: {
+                    Label("Close", systemImage: "xmark").frame(maxWidth: .infinity).frame(minHeight: 30)
+                }
+                .buttonStyle(.glass)
+            }
+            .font(.callout.weight(.semibold))
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24))
+        // Over the terminal, which keeps its own (dark) theme in either appearance.
+        .environment(\.colorScheme, .dark)
     }
 }
 

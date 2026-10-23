@@ -73,6 +73,10 @@ final class HostSessions {
     @ObservationIgnored var clientEnded: ((HostSession) -> Void)? {
         didSet { for case let session? in sessionOf.values.map(\.session) { session.clientEnded = clientEnded } }
     }
+    /// Where every session's shell tabs keep their presences (the composition's `TerminalPresences`).
+    @ObservationIgnored var presences: TerminalPresences = .shared {
+        didSet { for case let session? in sessionOf.values.map(\.session) { session.shells.presences = presences } }
+    }
 
     private(set) var sessions: [UUID: HostSession] = [:]
     /// Waiting host key questions, oldest first; the sheet shows the first.
@@ -193,15 +197,53 @@ final class HostSessions {
         }
     }
 
+    /// Pull to refresh (Spaces, Agents): every host is asked at once, as on a network change (`retryNow`: a connected
+    /// one checks that its link still answers, a waiting reconnect tries now, a failed one connects again). Returns
+    /// when each host has answered since (`HostSession.updated`), failed, tried and is still down, or waits on the
+    /// user (a host key or login sheet); at the latest after `timeout`, or when the pull is cancelled.
+    func refresh(timeout: Duration = .seconds(10)) async {
+        guard active else { return }
+        let start = System.date()
+        let sessions = ordered
+        let links = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0.link) })
+        for session in sessions { session.retryNow() }
+        let deadline = ContinuousClock.now + timeout
+        func answered(_ session: HostSession) -> Bool {
+            if let updated = session.updated, updated >= start { return true }
+            // Plain SSH: no helper to answer (the SSH keepalive watches the link).
+            if session.link == .connected, session.isPlain { return true }
+            if self.sessions[session.id] !== session || session.hostKeyMismatch != nil || asks(session.id) { return true }
+            switch session.link {
+            case .failed, .disconnected: return true
+            case .reconnecting: return session.link != links[session.id]
+            case .connected, .connecting, .authenticating, .bootstrapping: return false
+            }
+        }
+        while !sessions.allSatisfy(answered), ContinuousClock.now < deadline, !Task.isCancelled {
+            await change(until: deadline) {
+                for session in sessions {
+                    _ = session.link
+                    _ = session.updated
+                }
+            }
+        }
+    }
+
     /// Returns at the session's next link change or question, at `deadline`, or when the caller is cancelled (the watch
     /// request was answered without it).
     private func change(of session: HostSession, until deadline: ContinuousClock.Instant) async {
+        await change(until: deadline) { _ = session.link }
+    }
+
+    /// Returns at the next change of what `observing` reads or of the questions, at `deadline`, or when the caller is
+    /// cancelled.
+    private func change(until deadline: ContinuousClock.Instant, observing: () -> Void) async {
         let once = ResumeOnce()
         await withTaskCancellationHandler {
             await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
                 once.start(continuation)
                 withObservationTracking {
-                    _ = session.link
+                    observing()
                     _ = trustRequests
                     _ = loginPrompts
                 } onChange: { once.resume() }
@@ -317,18 +359,27 @@ final class HostSessions {
     /// Saves an edit: the session keeps its connection unless the address, port, user or authentication changed. A new
     /// multiplexer preference is followed on the live connection. Chat turned off withdraws the hooks and agent
     /// capabilities from the running helper (`permissions.reduce`; a reconnect when that fails); turned on, the session
-    /// reconnects, as a helper's grant only ever shrinks.
+    /// reconnects, as a helper's grant only ever shrinks. The Helper switch reconnects (plain SSH or the helper), unless it
+    /// goes off while the connection is already plain.
     func update(_ record: HostRecord) {
         guard let previous = store.record(record.id) else { return }
         store.update(record)
         guard let saved = store.record(record.id), let session = sessions[record.id] else { return }
         if previous.sameConnection(as: saved) {
             session.update(saved)
-            if previous.chat != saved.chat { chatChanged(session) }
+            // The Helper switch decides at each connection (plain SSH or the helper): a new run, except when it goes off on a
+            // connection that is already plain ("Use plain SSH for this host"): that one stays, and so do its shells.
+            if previous.helper != saved.helper {
+                if saved.helper || !session.isPlain { reconnect(session) }
+            } else if previous.chat != saved.chat {
+                chatChanged(session)
+            }
         } else {
             session.disconnect()
             sessionOf[session.id] = nil
             let replacement = makeSession(saved)
+            // The shells ended with the old connection; their cards stay with the host.
+            replacement.shells.adopt(session.shells)
             sessions[record.id] = replacement
             if active { replacement.connect() }
         }
@@ -511,9 +562,11 @@ final class HostSessions {
                                                                password: { nil }, retries: AsyncStream { $0.finish() })
         }
         session.helloReceived = { [weak self] session, hello in self?.received(hello, on: session) }
+        session.plainConnected = { [weak self] session in self?.connectedPlain(session) }
         session.refusal = { [weak self] in self?.connectionRefusal }
         session.postConnect = postConnect
         session.clientEnded = clientEnded
+        session.shells.presences = presences
         session.networkUnavailable = networkUnavailable
         session.changed = { [weak self] session in
             guard let self, self.sessions[session.id] === session else { return }
@@ -570,6 +623,14 @@ final class HostSessions {
     }
 
     /// Saves what the helper said about the host and when it was reached.
+    /// A plain SSH connection: the connection time (no helper reports the OS).
+    private func connectedPlain(_ session: HostSession) {
+        guard var record = store.record(session.id) else { return }
+        record.lastConnected = Date()
+        store.update(record)
+        if let saved = store.record(record.id) { session.update(saved) }
+    }
+
     private func received(_ hello: HelperSession.Info, on session: HostSession) {
         guard var record = store.record(session.id) else { return }
         if let identity = hello.identity {

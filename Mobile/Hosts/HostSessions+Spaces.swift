@@ -64,9 +64,10 @@ extension HostSessions: SpacesHostActions {
         }
     }
 
-    /// Host detail (M1f) to push, with Tabs' rows for its Spaces section.
-    func hostDetail<Rows: View>(_ host: UUID, @ViewBuilder spaces: @escaping (HostSession) -> Rows) -> AnyView {
-        AnyView(HostDetail(hostID: host, spaces: spaces).environment(self))
+    /// Host detail (M1f) to push, with Tabs' rows for its Spaces section and how many there are (nil: the topology's).
+    func hostDetail<Rows: View>(_ host: UUID, count: ((HostSession) -> Int)? = nil,
+                                @ViewBuilder spaces: @escaping (HostSession) -> Rows) -> AnyView {
+        AnyView(HostDetail(hostID: host, count: count, spaces: spaces).environment(self))
     }
 
     /// New host (M8a) to present as a sheet; `created` gets the saved host (M7a selects it).

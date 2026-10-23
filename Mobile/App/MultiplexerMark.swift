@@ -20,3 +20,9 @@ struct MultiplexerMark: View {
             .accessibilityLabel(name)
     }
 }
+
+/// A plain SSH host (docs/ios.md, Plain SSH: no helper, so no multiplexer's spaces) where `MultiplexerMark` goes, in
+/// the same chip: Spaces' host headers and host detail's Spaces header.
+struct PlainSSHMark: View {
+    var body: some View { MultiplexerMark(name: HostSummary.plainSSH) }
+}

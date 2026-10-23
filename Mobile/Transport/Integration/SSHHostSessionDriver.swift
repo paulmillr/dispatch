@@ -9,7 +9,10 @@ import Synchronization
 /// (and keyboard-interactive through the Hosts sheet), installs the bundled helper for the host's platform under its
 /// hash-named path, starts it on a plain exec channel and greets it with the iPhone's features. While connected it
 /// follows the topology of the host's multiplexer (`backends.open` of the chosen backend) and measures latency with
-/// `echo`. Cancelling the run (`HostSession.disconnect()`) closes the connection; nothing on the host stops.
+/// `echo`. A host with its Helper switch off stops after the login: the connection is plain SSH (`.plain(nil)`, shells
+/// only). So does a connection whose helper cannot start while the SSH connection stays up (`fallback`:
+/// `.plain(reason)`); login, host key and network failures stay refusals and reconnects. Each connection decides again.
+/// Cancelling the run (`HostSession.disconnect()`) closes the connection; nothing on the host stops.
 struct SSHHostSessionDriver: HostSessionDriver {
     /// The hello features the phone asks for (docs/ios.md, Helper contract). With
     /// `stdio.liveness` the helper ends after 45 s without a frame from the phone: the latency ping (`pingInterval`)
@@ -33,6 +36,11 @@ struct SSHHostSessionDriver: HostSessionDriver {
     /// How long a connected link may take to answer `echo` after a network change before it counts as lost.
     var probeTimeout: Duration = .seconds(3)
     var clock: any ReconnectClock = SystemReconnectClock()
+    /// After a failed `hello`, how long the helper's channel may take to end before the helper counts as running but not
+    /// answering rather than exited.
+    var exitWait: Duration = .seconds(2)
+    /// The SSH login each connection starts from (SSHDriverTests script it, and the helper on it).
+    var login: HostLoginStep = SSHLogin.connect
 
     func run(_ host: HostRecord, context: HostSessionContext) -> AsyncStream<HostSessionEvent> {
         let (stream, continuation) = AsyncStream<HostSessionEvent>.makeStream()
@@ -48,7 +56,7 @@ struct SSHHostSessionDriver: HostSessionDriver {
         // Once connected, the automatic reconnects ask the user nothing, as the Mac's (BatchMode): a host that needs a
         // keyboard-interactive answer (a one-time code) fails them, and Connect asks again.
         let connectedOnce = ConnectedOnce()
-        let connection = HostConnection<HelperLink>(clock: clock, refused: Self.refused) { phase in
+        let connection = HostConnection<DriverLink>(clock: clock, refused: Self.refused) { phase in
             try await driver.establish(host, context: context, keys: keys, interactive: !connectedOnce.isSet, phase: phase)
         }
         let states = await connection.states()
@@ -57,8 +65,19 @@ struct SSHHostSessionDriver: HostSessionDriver {
         // change of network can leave dead until the keepalive gives up (45 s).
         let retrying = Task {
             for await _ in context.retries {
-                if await connection.state == .connected, let link = await connection.session {
-                    if await !Self.alive(link.client, timeout: probeTimeout) { await link.close() }
+                var session: DriverLink?
+                if await connection.state == .connected { session = await connection.session }
+                if case .plain(let link)? = session {
+                    // No helper to ask: a round trip on the SSH connection itself (no latency: it is not the helper's).
+                    if await !link.login.alive(timeout: probeTimeout) { await link.close() }
+                } else if case .helper(let link)? = session {
+                    // An answer is a round trip like the ping's: the host's last update is now (pull to refresh).
+                    let started = ContinuousClock.now
+                    if await Self.alive(link.client, timeout: probeTimeout) {
+                        events.yield(.latency(ContinuousClock.now - started))
+                    } else {
+                        await link.close()
+                    }
                 } else {
                     await connection.retryNow()
                 }
@@ -76,9 +95,14 @@ struct SSHHostSessionDriver: HostSessionDriver {
             case .disconnected:
                 continue
             case .connected:
-                guard let link = await connection.session else { continue }
+                guard let session = await connection.session else { continue }
                 connectedOnce.set()
                 live?.cancel()
+                live = nil
+                guard case .helper(let link) = session else {
+                    if case .plain(let plain) = session { events.yield(.plain(reason: plain.reason, shells: plain.login.shells)) }
+                    break
+                }
                 let gate = ReadyGate()
                 live = Task { await driver.serve(link, preference: preference, gate: gate, events: events) }
                 let first = await gate.first(timeout: firstTopology)
@@ -108,9 +132,10 @@ struct SSHHostSessionDriver: HostSessionDriver {
         events.finish()
     }
 
-    /// SSH, the helper and its greeting: the session `HostConnection` keeps until it is lost.
+    /// SSH, then the helper and its greeting unless the host goes without (`HostRecord.helper`) or the helper cannot
+    /// start (`fallback`): the session `HostConnection` keeps until it is lost.
     private func establish(_ host: HostRecord, context: HostSessionContext, keys: KeyCache, interactive: Bool = true,
-                           phase: @escaping @Sendable (HostConnectionPhase) async -> Void) async throws -> HelperLink {
+                           phase: @escaping @Sendable (HostConnectionPhase) async -> Void) async throws -> DriverLink {
         var credentials: [SSHCredential] = []
         switch host.auth {
         case .key:
@@ -129,30 +154,134 @@ struct SSHHostSessionDriver: HostSessionDriver {
                     prompts: challenge.prompts.map { .init(text: $0.text, echo: $0.echo) }))
             })
         }
-        let ssh = try await SSHHostSession.establish(
-            endpoint: SSHEndpoint(host: host.address, port: host.port, username: host.user), credentials: credentials,
-            trust: HostKeyQuestion(verify: context.verifyHostKey), binaries: binaries,
-            capabilities: context.launch.capabilities, environment: context.launch.environment,
-            keepalive: keepalive, keepaliveMax: keepaliveMax, phase: phase)
-        let connection = HelperConnection(read: ssh.helper.read, write: ssh.helper.write)
+        let login = try await self.login(
+            SSHEndpoint(host: host.address, port: host.port, username: host.user), credentials,
+            HostKeyQuestion(verify: context.verifyHostKey), keepalive, keepaliveMax, phase)
+        guard host.helper else { return .plain(PlainLink(login: login, reason: nil)) }
         do {
-            let hello: HelperSession.Info = try await connection.request("hello", params: Hello(features: Self.features))
+            return .helper(try await helper(on: login, host: host, context: context, phase: phase))
+        } catch {
+            var open = login.isOpen
+            // A channel that ended without a word may be the connection going: its disconnect can arrive after the
+            // channel's end, so ask the connection itself before calling it a helper failure.
+            if open, Self.ambiguous(error) { open = await login.alive(timeout: probeTimeout) }
+            if let reason = Self.fallback(error, open: open) { return .plain(PlainLink(login: login, reason: reason)) }
+            await login.close()
+            // The connection dropped meanwhile: whatever the step reported, this is a loss to reconnect from.
+            if !open, !(error is CancellationError) {
+                throw ConnectionLost(login.lossReason ?? HostConnectionPolicy.describe(error))
+            }
+            throw error
+        }
+    }
+
+    /// The helper on `login`, greeted, with its multiplexers. A helper that exits before greeting (`HelperExited`: a home
+    /// mounted noexec answers 126) is installed and started once more under the fallback root the bootstrap names
+    /// (`HelperBootstrap.fallbackRoot`), on the same connection; a second failure, or none named, is the failure. Each
+    /// attempt's channel is closed when it fails; the login is the caller's.
+    private func helper(on login: any HostLogin, host: HostRecord, context: HostSessionContext,
+                        phase: @escaping @Sendable (HostConnectionPhase) async -> Void) async throws -> HelperLink {
+        var root = HelperBootstrap.Root.home, retried = false
+        while true {
+            let process = try await login.bootstrapHelper(binaries: binaries, capabilities: context.launch.capabilities,
+                                                          environment: context.launch.environment, root: root, phase: phase)
+            do {
+                return try await greet(process, on: login, host: host)
+            } catch let exited as HelperExited {
+                guard !retried, login.isOpen,
+                      let next = HelperBootstrap.fallbackRoot(after: exited.status, installed: exited.installed) else { throw exited }
+                root = next
+                retried = true
+            }
+        }
+    }
+
+    /// `hello`, the transport limits and the multiplexers of a started helper. A helper that is there but unusable (it
+    /// exited before answering: `HelperExited`; no answer, another protocol version, no transport limits:
+    /// `HelperUnavailable`) closes its channel.
+    private func greet(_ process: any HelperProcess, on login: any HostLogin, host: HostRecord) async throws -> HelperLink {
+        let connection = process.connection
+        do {
+            let hello: HelperSession.Info
+            do {
+                hello = try await connection.request("hello", params: Hello(features: Self.features))
+            } catch let error where !(error is CancellationError) {
+                // The channel closed under the request: a helper that exited (it could not run, its cached copy failed the
+                // check) says why in its status and on stderr.
+                if let end = await Self.end(of: process, within: exitWait) {
+                    throw HelperExited(status: end.status, stderr: await process.stderr(), installed: process.installed)
+                }
+                throw HelperUnavailable("The helper on \(host.name) did not answer: \(HostConnectionPolicy.describe(error))")
+            }
             guard hello.version == HelperBinary.version else {
-                throw HostRefusal("The helper on \(host.name) speaks another protocol version. Update Dispatch.")
+                throw HelperUnavailable("The helper on \(host.name) speaks another protocol version. Update Dispatch.")
             }
             guard let limit = hello.limit, let chunkKind = hello.chunkKind, let chunkLimit = hello.chunkLimit else {
-                throw HostRefusal("The helper on \(host.name) did not report its transport limits.")
+                throw HelperUnavailable("The helper on \(host.name) did not report its transport limits.")
             }
             try await connection.configure(limit: limit, chunkKind: chunkKind, chunkLimit: chunkLimit, ops: hello.ops)
             let client = HelperClient(connection)
             async let kinds: [TabsMultiplexer] = connection.request("multiplexers.list", params: [String: String]())
             async let backends = client.backends()
             let rows = try await kinds
-            return HelperLink(ssh: ssh, client: client, hello: hello, rows: rows, backends: (try? await backends) ?? [])
+            return HelperLink(login: login, process: process, client: client, hello: hello, rows: rows,
+                              backends: (try? await backends) ?? [])
         } catch {
             connection.close()
-            await ssh.close()
+            await process.close()
             throw error
+        }
+    }
+
+    /// The helper's end, when its channel ends within `wait` (`status` nil: no exit status, a signal or a lost channel);
+    /// nil while it still runs.
+    static func end(of process: any HelperProcess, within wait: Duration) async -> HelperEnd? {
+        let once = Once()
+        return await withCheckedContinuation { (continuation: CheckedContinuation<HelperEnd?, Never>) in
+            // Unstructured: an exit status wait does not end on cancellation, only with the channel (closed right after).
+            Task {
+                let status = await process.exitStatus()
+                once.run { continuation.resume(returning: HelperEnd(status: status)) }
+            }
+            Task {
+                try? await Task.sleep(for: wait)
+                once.run { continuation.resume(returning: nil) }
+            }
+        }
+    }
+
+    /// A helper step failure that a lost connection also produces (the channel ended with no status or word): checked
+    /// with `HostLogin.alive` before it counts as the helper's.
+    static func ambiguous(_ error: any Error) -> Bool {
+        if let exited = error as? HelperExited { return exited.status == nil }
+        return (error as? SSHTransportError) == .channelClosed
+    }
+
+    /// The text a connection goes on as plain SSH with when the helper step failed with `error` while the SSH connection
+    /// is still `open`; nil when it is not a helper failure (the connection reconnects or is refused, as without a
+    /// fallback). Helper failures: the bootstrap's (platform unidentified or unsupported, missing binary, upload or cache
+    /// failure), a refused or closed exec channel, too much probe output, a helper that exited before greeting
+    /// (`HelperExited`, the bootstrap's text for its status and stderr), and `HelperUnavailable`.
+    static func fallback(_ error: any Error, open: Bool) -> String? {
+        guard open else { return nil }
+        // The bundled helper file could not be read (`HelperBootstrap.install` reads it with `Data(contentsOf:)`): the
+        // bootstrap's own text for a missing helper. Classified here, the one mapping, rather than in the transport.
+        if let file = error as? CocoaError, file.isFileError { return "SSH helper is missing or invalid." }
+        if let unavailable = error as? HelperUnavailable { return unavailable.message }
+        if let exited = error as? HelperExited {
+            return HelperBootstrap.launchFailure(status: exited.status, stderr: exited.stderr, installed: exited.installed)
+        }
+        guard let error = error as? SSHTransportError else { return nil }
+        switch error {
+        case .bootstrap(let reason):
+            return reason
+        case .commandFailed(status: -1, let stderr):
+            // The engine's refused channel request (`DMS_REFUSED`).
+            return stderr.isEmpty ? "The host refused to run the helper." : "The host refused to run the helper: \(stderr)"
+        case .commandFailed, .outputLimit, .channelClosed:
+            return HostConnectionPolicy.describe(error)
+        default:
+            return nil
         }
     }
 
@@ -210,6 +339,34 @@ struct SSHHostSessionDriver: HostSessionDriver {
     private struct Hello: Encodable, Sendable { let features: [String] }
 }
 
+/// The helper started but cannot be used on this connection (no answer to `hello`, another protocol version, no transport
+/// limits): the connection goes on as plain SSH with this text (`SSHHostSessionDriver.fallback`).
+struct HelperUnavailable: Error, LocalizedError, Equatable {
+    let message: String
+    init(_ message: String) { self.message = message }
+    var errorDescription: String? { message }
+}
+
+/// How a helper's channel ended: its exit status, nil after a signal or a lost channel.
+struct HelperEnd: Equatable, Sendable {
+    let status: Int32?
+}
+
+/// The helper's channel ended before it answered `hello` (`status` nil: no exit status). Retried once under the
+/// fallback root, else the connection goes on as plain SSH with `HelperBootstrap.launchFailure`'s text.
+struct HelperExited: Error, Equatable {
+    let status: Int32?
+    let stderr: String
+    let installed: HelperBootstrap.Installed
+}
+
+/// The SSH connection dropped while the helper was being started: retried like any loss.
+struct ConnectionLost: Error, LocalizedError, Equatable {
+    let message: String
+    init(_ message: String) { self.message = message }
+    var errorDescription: String? { message }
+}
+
 /// A failure only the user can fix; its text is the host's failed line.
 struct HostRefusal: Error, LocalizedError, Equatable {
     let message: String
@@ -217,17 +374,52 @@ struct HostRefusal: Error, LocalizedError, Equatable {
     var errorDescription: String? { message }
 }
 
+/// What the reconnect policy keeps per connection: the helper's link, or the plain SSH login.
+enum DriverLink: MobileTransport.HostSession {
+    case helper(HelperLink)
+    case plain(PlainLink)
+
+    private var session: any MobileTransport.HostSession {
+        switch self {
+        case .helper(let link): link
+        case .plain(let link): link
+        }
+    }
+
+    func closed() async { await session.closed() }
+    func close() async { await session.close() }
+    var lossReason: String? { session.lossReason }
+}
+
+/// A connection without a helper (plain SSH): the login, and why there is no helper (nil: the host's switch is off).
+final class PlainLink: MobileTransport.HostSession {
+    let login: any HostLogin
+    let reason: String?
+
+    init(login: any HostLogin, reason: String?) {
+        self.login = login
+        self.reason = reason
+    }
+
+    func closed() async { await login.closed() }
+    func close() async { await login.close() }
+    var lossReason: String? { login.lossReason }
+}
+
 /// The live connection the reconnect policy watches: SSH, the helper's stdio channel and the greeted client.
 final class HelperLink: MobileTransport.HostSession {
-    let ssh: SSHHostSession
+    let login: any HostLogin
+    let process: any HelperProcess
     let client: HelperClient
     let hello: HelperSession.Info
     /// `multiplexers.list` with the `multiplexers.versions` fields.
     let rows: [TabsMultiplexer]
     let backends: [HelperBackend]
 
-    init(ssh: SSHHostSession, client: HelperClient, hello: HelperSession.Info, rows: [TabsMultiplexer], backends: [HelperBackend]) {
-        self.ssh = ssh
+    init(login: any HostLogin, process: any HelperProcess, client: HelperClient, hello: HelperSession.Info,
+         rows: [TabsMultiplexer], backends: [HelperBackend]) {
+        self.login = login
+        self.process = process
         self.client = client
         self.hello = hello
         self.rows = rows
@@ -251,14 +443,14 @@ final class HelperLink: MobileTransport.HostSession {
     /// Lost when the SSH connection ends or the helper exits; then both are closed, so a helper that died never
     /// leaves its SSH connection open behind the next one.
     func closed() async {
-        let ssh = ssh
+        let login = login, process = process
         let once = Once()
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            Task { await ssh.connection.closed(); once.run { continuation.resume() } }
-            Task { _ = await ssh.helper.exitStatus(); once.run { continuation.resume() } }
+            Task { await login.closed(); once.run { continuation.resume() } }
+            Task { _ = await process.exitStatus(); once.run { continuation.resume() } }
         }
         // Before closing: afterwards the SSH connection's end is this close.
-        ended.withLock { $0 = ssh.lossReason ?? "The helper on the host stopped." }
+        ended.withLock { $0 = login.lossReason ?? "The helper on the host stopped." }
         await close()
     }
 
@@ -267,7 +459,8 @@ final class HelperLink: MobileTransport.HostSession {
 
     func close() async {
         client.connection.close()
-        await ssh.close()
+        await process.close()
+        await login.close()
     }
 }
 

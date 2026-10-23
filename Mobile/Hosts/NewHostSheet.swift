@@ -3,7 +3,9 @@ import SwiftUI
 /// New host (M8a, from Add host in Spaces), and Edit from host detail. Name, host and port, username, and Password or
 /// Key file: the key list shows each key's type and SHA256 fingerprint to match against `authorized_keys`, the
 /// checked one is used. Create connects once to verify, asking about the host key on first use inside the sheet,
-/// and saves only when that connection succeeds; the verified connection becomes the host's session.
+/// and saves only when that connection succeeds; the verified connection becomes the host's session. Below them the
+/// multiplexer, the Helper switch and Chat (`HostFeatureDraft`): with Helper off the host is plain SSH (docs/ios.md),
+/// the multiplexer and Chat rows go and the words say that nothing is installed.
 struct NewHostSheet: View {
     enum Method: Hashable { case password, key }
 
@@ -23,6 +25,7 @@ struct NewHostSheet: View {
     @State private var keyID: UUID?
     @State private var importingKey = false
     @State private var creatingKey = false
+    @State private var features: HostFeatureDraft
     /// The connection Create makes to verify the host; it becomes the host's session when it connects.
     @State private var probe: HostSession?
     @State private var failure: String?
@@ -40,6 +43,7 @@ struct NewHostSheet: View {
         _address = State(initialValue: editing?.address ?? "")
         _port = State(initialValue: String(editing?.port ?? 22))
         _user = State(initialValue: editing?.user ?? "")
+        _features = State(initialValue: HostFeatureDraft(editing))
         switch editing?.auth {
         case .key(let key)?:
             _method = State(initialValue: .key)
@@ -76,6 +80,7 @@ struct NewHostSheet: View {
         record.port = port
         record.user = trimmedUser
         record.auth = auth
+        features.apply(to: &record)
         return record
     }
 
@@ -154,8 +159,20 @@ struct NewHostSheet: View {
                         PublicKeyActions(key: key)
                     }
                     Section {
+                        if features.showsHelperRows {
+                            Picker("Multiplexer", selection: $features.multiplexer) {
+                                ForEach(HostRecord.MultiplexerPreference.allCases, id: \.self) { Text($0.title).tag($0) }
+                            }
+                        }
+                        Toggle("Helper", isOn: $features.helper)
+                            .accessibilityHint(Self.helperHint)
+                        if features.showsHelperRows {
+                            Toggle("Chat", isOn: $features.chat)
+                        }
+                    } header: {
+                        MobileSectionHeader("On the host")
                     } footer: {
-                        Text(Self.helperStatement)
+                        Text(Self.statement(helper: features.helper))
                     }
                     if let failure {
                         Section {
@@ -211,7 +228,20 @@ struct NewHostSheet: View {
         .onDisappear { if !saved, editing == nil { discardProbe() } }
     }
 
-    /// What the helper does on the host (plan 3.1: on the phone the helper is not optional), linking the details.
+    /// The words under the Helper switch: what the helper does on the host, or with the switch off what plain SSH does.
+    static func statement(helper: Bool) -> AttributedString {
+        helper ? helperStatement : AttributedString(plainStatement)
+    }
+
+    /// With Helper off (docs/ios.md, Plain SSH): a shell over SSH, nothing installed.
+    static var plainStatement: String {
+        "Without the helper, this \(MobileDevice.name) only opens shells on the host over SSH and installs nothing there. Chat, agents and tmux or herdr spaces need the helper."
+    }
+
+    /// VoiceOver's hint on the Helper switch (New host, host detail).
+    static let helperHint = "Off: plain SSH, nothing is installed on the host"
+
+    /// What the helper does on the host, linking the details.
     static let helperStatement: AttributedString = {
         var text = AttributedString(HelperGrant.statement)
         var link = AttributedString("What the helper can do")
@@ -284,6 +314,32 @@ struct NewHostSheet: View {
         probe?.disconnect()
         probe = nil
         sessions.keys.removePassword(for: id)
+    }
+}
+
+/// New host's multiplexer, Helper and Chat rows (M8a): the sheet's own copy of them. Chat is kept apart from the record,
+/// which forces it off without the helper (`HostRecord.helper`): turning Helper off only hides Chat, and turning it on
+/// again shows Chat as it was (on, for a host saved without the helper: Chat's default).
+struct HostFeatureDraft: Equatable {
+    var multiplexer: HostRecord.MultiplexerPreference = .automatic
+    var helper = true
+    /// What Chat is with the helper; kept while Helper is off.
+    var chat = true
+
+    init(_ record: HostRecord? = nil) {
+        guard let record else { return }
+        multiplexer = record.multiplexer
+        helper = record.helper
+        chat = record.helper ? record.chat : true
+    }
+
+    /// The multiplexer and Chat rows show with the helper only.
+    var showsHelperRows: Bool { helper }
+
+    func apply(to record: inout HostRecord) {
+        record.multiplexer = multiplexer
+        record.helper = helper
+        record.chat = helper && chat
     }
 }
 

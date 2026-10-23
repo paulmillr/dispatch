@@ -317,3 +317,44 @@ final class TabsSpacesTreeTests: XCTestCase {
         XCTAssertEqual(NewSpaceMultiplexers(nil).choices, [])
     }
 }
+
+/// A plain SSH host in the tree (docs/ios.md): its section holds the Shell space, which counts no unread and shows no
+/// working dot (shells have no chat), and no New space line; New space has no destination on it.
+extension TabsSpacesTreeTests {
+    func testAPlainHostsSectionHoldsItsShellSpace() throws {
+        let shells = ShellFixtures.sessions()
+        let model = ShellFixtures.model()
+        model.shellSessions = { _ in shells }
+        let mine = TabsFixtures.app()
+        var plain = ShellFixtures.input(shells)
+        plain.host.order = 1
+        let inputs = { [TabsHostInput(host: TabsFixtures.host, client: nil, topology: mine.topology), plain] }
+        model.sync(inputs())
+        _ = try model.newShell(on: ShellFixtures.host.id)
+        _ = try model.newShell(on: ShellFixtures.host.id)
+        plain.shells = shells.tabs
+        model.sync(inputs())
+        // Every terminal wants the user, as far as Chat is asked: shells are never asked.
+        model.urgency = { _, _ in .needsYou }
+        XCTAssertEqual(model.sections.map(\.host.name), ["mba2", "pi"])
+        let section = model.sections[1]
+        XCTAssertEqual(section.spaces.map(\.space.name), ["Shell"])
+        XCTAssertEqual(section.spaces[0].space.tabs.count, 2)
+        XCTAssertEqual(section.spaces[0].unread, 0)
+        XCTAssertFalse(section.spaces[0].working)
+        XCTAssertEqual(section.unread, 0)
+        XCTAssertGreaterThan(model.sections[0].unread, 0, "the helper host's tabs count")
+        XCTAssertFalse(section.offersNewSpace(editing: false, filter: .all), "its one space is there")
+        XCTAssertTrue(NewSpaceDestination.all(model.workspaces, host: ShellFixtures.host.id).isEmpty, "no New space on it")
+        let navigator = SpacesNavigator(model: model)
+        XCTAssertFalse(navigator.attentionTabs.contains { ShellSessions.isKey($0.key) })
+        XCTAssertEqual(model.entries.filter { $0.host.id == ShellFixtures.host.id }.count, 2, "the flat list has its shells")
+        XCTAssertTrue(model.entries.filter { $0.host.id == ShellFixtures.host.id }.allSatisfy { !$0.host.stale },
+                      "a plain connection's tabs are live")
+        model.query.filter = .chats
+        XCTAssertTrue(model.sections[1].spaces.isEmpty, "no chat rows")
+        model.query.filter = .terminals
+        XCTAssertEqual(model.sections[1].spaces.map(\.space.name), ["Shell"])
+        XCTAssertEqual(model.recentSpace?.kind, .plainShell, "New tab can open a shell")
+    }
+}

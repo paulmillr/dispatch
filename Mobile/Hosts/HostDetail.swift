@@ -3,10 +3,15 @@ import SwiftUI
 /// Host detail (M1f), pushed from Spaces (Info in edit mode, or a host section's long-press menu): identity and live
 /// status, Connection (what the user entered, editable), the multiplexer, the host's spaces (their header marks the
 /// multiplexer they come from), and Remove host last, in red. The spaces rows come from Tabs (`spaces`); without them the topology's workspaces are listed.
+/// The Helper switch and Chat sit under the multiplexer; a plain SSH host (docs/ios.md) says so there, with the reason
+/// the helper could not start and "Use plain SSH for this host" when that was a fallback.
 struct HostDetail<Spaces: View>: View {
     let hostID: UUID
     /// The rows of the Spaces section, for this session.
     let spaces: (HostSession) -> Spaces
+    /// How many rows `spaces` lists (Tabs' workspace: a plain host's Shell space has no topology); nil counts the
+    /// topology's workspaces (`HostSummary.spaces`).
+    let count: ((HostSession) -> Int)?
     @Environment(HostSessions.self) private var sessions
     @Environment(\.dismiss) private var dismiss
     /// The name in the host's tint on dark (M1f); on the light canvas the pale tints would not read, so the label.
@@ -16,8 +21,9 @@ struct HostDetail<Spaces: View>: View {
     /// Removal waits for the pop to finish, so the screen sliding away still shows the host.
     @State private var removing = false
 
-    init(hostID: UUID, @ViewBuilder spaces: @escaping (HostSession) -> Spaces) {
+    init(hostID: UUID, count: ((HostSession) -> Int)? = nil, @ViewBuilder spaces: @escaping (HostSession) -> Spaces) {
         self.hostID = hostID
+        self.count = count
         self.spaces = spaces
     }
 
@@ -45,18 +51,23 @@ struct HostDetail<Spaces: View>: View {
                 LabeledContent("Port") { Text(String(host.port)).monospaced() }
                 LabeledContent("User") { Text(host.user).monospaced() }
                 LabeledContent("Key") { Text(keyName(host)).monospaced() }
-                multiplexer(session)
+                if host.helper { multiplexer(session) }
+                HostHelperRows(session: session)
             } header: {
                 MobileSectionHeader("Connection")
             }
 
-            let count = summary.spaces.count
+            let count = count?(session) ?? summary.spaces.count
             if count > 0 {
                 Section { spaces(session) } header: {
                     // The multiplexer they come from, as Spaces' host header marks it.
                     HStack(spacing: 8) {
                         MobileSectionHeader("Spaces · \(count)")
-                        if let multiplexer = session.spacesMultiplexer { MultiplexerMark(name: multiplexer) }
+                        if session.isPlain {
+                            PlainSSHMark()
+                        } else if let multiplexer = session.spacesMultiplexer {
+                            MultiplexerMark(name: multiplexer)
+                        }
                     }
                 }
             }
@@ -157,6 +168,50 @@ struct HostDetail<Spaces: View>: View {
     }
 }
 
+/// Host detail's Helper switch, Chat with the helper, and the Plain SSH line (`HostSummary.plainLine`) with "Use plain
+/// SSH for this host" when the connection fell back (`HostSummary.offersPlainSSH`).
+struct HostHelperRows: View {
+    let session: HostSession
+    @Environment(HostSessions.self) private var sessions
+
+    static let usePlainSSH = "Use plain SSH for this host"
+
+    var body: some View {
+        let summary = HostSummary(session: session)
+        Toggle("Helper", isOn: Binding(get: { session.host.helper }, set: { sessions.setHelper($0, host: session.id) }))
+            .accessibilityHint(NewHostSheet.helperHint)
+        if session.host.helper {
+            Toggle("Chat", isOn: Binding(get: { session.host.chat }, set: { chat in
+                var host = session.host
+                host.chat = chat
+                sessions.update(host)
+            }))
+        }
+        if let line = summary.plainLine {
+            Text(line)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        if summary.offersPlainSSH {
+            Button(Self.usePlainSSH) { sessions.setHelper(false, host: session.id) }
+                .accessibilityHint("Turns the helper off: \(session.host.name) connects with plain SSH from now on")
+        }
+    }
+}
+
+extension HostSessions {
+    /// The Helper switch (host detail; "Use plain SSH for this host" turns it off), saved at once: the session reconnects
+    /// with the new choice (`update`). Off turns Chat off with it (`HostRecord.helper`); on turns Chat on again, as New
+    /// host does (`HostFeatureDraft`), and the Chat switch beside it turns it off.
+    func setHelper(_ helper: Bool, host id: UUID) {
+        guard var record = store.record(id), record.helper != helper else { return }
+        record.helper = helper
+        if helper { record.chat = true }
+        update(record)
+    }
+}
+
 /// The host's multiplexer choice (Automatic, herdr, tmux) with the one in use: host detail (M1f) and Settings. A new
 /// choice is saved at once and followed on the live connection (no reconnect).
 struct HostMultiplexerPicker: View {
@@ -188,7 +243,7 @@ struct HostMultiplexerPicker: View {
 extension HostDetail where Spaces == HostSpacesList {
     /// With the topology's workspaces as the Spaces rows (previews, and until Tabs injects its own).
     init(hostID: UUID) {
-        self.init(hostID: hostID) { HostSpacesList(session: $0) }
+        self.init(hostID: hostID, count: nil) { HostSpacesList(session: $0) }
     }
 }
 
