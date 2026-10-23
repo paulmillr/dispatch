@@ -6,7 +6,8 @@ import Foundation
 ///
 /// The blob is a binary property list (`PropertyListEncoder`), not JSON: the snapshot repeats the same strings in every
 /// row (host ids, keys, space names, folders, field names), which a binary plist stores once. Measured on the 5 hosts ×
-/// 6 conversations sample (`WatchFixtures.crowded`, every text at its longest): 15.0 KB as a binary plist, 28.5 KB as
+/// 6 conversations sample (`WatchFixtures.crowded`, every text at its longest, before the redesign's fields; 24.9 KB with
+/// them): 15.0 KB as a binary plist, 28.5 KB as
 /// JSON. Dates stay native. `plutil -p` reads a captured blob.
 enum WatchCodec {
     /// The one key of every WatchConnectivity dictionary (application context, message, reply).
@@ -33,22 +34,45 @@ enum WatchCodec {
 
     // MARK: Fitting under the limits
 
-    /// The snapshot as the phone sends it: texts clipped (`WatchLimits`), then, while the encoding exceeds `budget`, rows
-    /// left out a tenth at a time, least useful on a wrist first: terminal tabs, then idle conversations and their tabs,
+    /// The snapshot as the phone sends it: texts clipped (`WatchLimits`); over `budget`, the hosts' CPU lines go, then the
+    /// rows' steps and requests are cut to `WatchLimits.short`; then, while the encoding still exceeds it, rows left out a
+    /// tenth at a time, least useful on a wrist first: terminal tabs, then idle conversations and their tabs,
     /// then anything that does not need the user, oldest first in each; `truncated` set.
-    static func fit(_ snapshot: WatchSnapshot, budget: Int = WatchLimits.snapshotBytes) -> WatchSnapshot {
+    static func fit(_ snapshot: WatchSnapshot, budget: Int = WatchLimits.snapshotBytes - WatchLimits.envelope) -> WatchSnapshot {
         var fitted = snapshot
         for index in fitted.hosts.indices {
             fitted.hosts[index].problem = fitted.hosts[index].problem.map { WatchText.clip($0, to: WatchLimits.line) }
+            if let history = fitted.hosts[index].stats?.history, history.count > WatchHostStats.historyCount {
+                fitted.hosts[index].stats?.history = Array(history.suffix(WatchHostStats.historyCount))
+            }
         }
         for index in fitted.conversations.indices {
             fitted.conversations[index].preview = fitted.conversations[index].preview.map(WatchText.preview)
             fitted.conversations[index].attention = fitted.conversations[index].attention.map { WatchText.clip($0, to: WatchLimits.preview) }
             fitted.conversations[index].name = WatchText.clip(fitted.conversations[index].name, to: WatchLimits.line)
+            fitted.conversations[index].title = fitted.conversations[index].title.map { WatchText.clip($0, to: WatchLimits.line) }
+            fitted.conversations[index].step = fitted.conversations[index].step.map { WatchText.clip($0, to: WatchLimits.preview) }
+            fitted.conversations[index].waitingText = fitted.conversations[index].waitingText.map(WatchText.preview)
+        }
+        for index in fitted.reviews.indices {
+            fitted.reviews[index].title = WatchText.clip(fitted.reviews[index].title, to: WatchLimits.line)
         }
         for index in fitted.tabs.indices {
             fitted.tabs[index].status = fitted.tabs[index].status.map { WatchText.clip($0, to: WatchLimits.line) }
             fitted.tabs[index].name = WatchText.clip(fitted.tabs[index].name, to: WatchLimits.line)
+        }
+        // Over the budget, before any row goes: the hosts' CPU lines (their strip stays), then the rows' steps and what
+        // they ask, to one short line.
+        if size(fitted) > budget {
+            for index in fitted.hosts.indices where fitted.hosts[index].stats?.history.isEmpty == false {
+                fitted.hosts[index].stats?.history = []
+            }
+        }
+        if size(fitted) > budget {
+            for index in fitted.conversations.indices {
+                fitted.conversations[index].step = fitted.conversations[index].step.map { WatchText.clip($0, to: WatchLimits.short) }
+                fitted.conversations[index].waitingText = fitted.conversations[index].waitingText.map { WatchText.clip($0, to: WatchLimits.short) }
+            }
         }
         while size(fitted) > budget {
             let kept = Set(fitted.conversations.map(\.key))

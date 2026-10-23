@@ -22,6 +22,15 @@ enum System {
 
     static func date() -> Date { Date() }
 
+    /// iOS's Low Power Mode, which slows host stats sampling (`HostStatistics.cadence`). Debug's `-DispatchLowPower YES`
+    /// pins it on for screenshots.
+    static var lowPowerMode: Bool {
+        #if DEBUG
+        if UserDefaults.standard.bool(forKey: "DispatchLowPower") { return true }
+        #endif
+        return ProcessInfo.processInfo.isLowPowerModeEnabled
+    }
+
     /// The Mac's replay reads a test's polling checks differently; nothing polls a journal here.
     static var polling: Bool { false }
 }

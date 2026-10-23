@@ -40,6 +40,10 @@ final class WatchRequestServerTests: XCTestCase {
     private var app: MobileComposition!
     private var server: WatchRequestServer!
     private var holds: [UUID] = []
+    /// Conversations "Open on iPhone" showed.
+    private var shown: [ChatConversationKey] = []
+    private var now = Date(timeIntervalSince1970: 1_800_000_000)
+    private var reviews: WatchReviewEvents!
     private var blocked: WatchHostBlock?
     private var locked = false
     private let suite = "watch-server-\(UUID().uuidString)"
@@ -71,16 +75,21 @@ final class WatchRequestServerTests: XCTestCase {
                                 presences: TerminalPresences(), markers: ChatMarkers(store: ChatMarkerMemoryStore()),
                                 outbox: ChatOutbox(store: ChatOutboxMemoryStore()),
                                 drafts: ChatDraftRepository(store: ChatDraftMemoryStore()))
-        // The bridge's hold, as the test's: connect the host's own session and wait for it to settle.
-        server = WatchRequestServer(composition: app) { [unowned self] id in
+        reviews = WatchReviewEvents(clock: { [unowned self] in now })
+        // The bridge's hold, as the test's: connect the host's own session and wait for it to settle; a host the user
+        // disconnected is left alone (`HostSessions.hold`).
+        server = WatchRequestServer(composition: app, hold: { [unowned self] id in
             holds.append(id)
-            guard let session = app.hosts.session(id) else { return }
+            guard let session = app.hosts.session(id), !session.parked else { return }
             session.retryNow()
             let deadline = ContinuousClock.now.advanced(by: .seconds(2))
             while session.link.isPending || session.link == .disconnected, ContinuousClock.now < deadline {
                 try? await Task.sleep(for: .milliseconds(10))
             }
-        }
+        }, show: { [unowned self] in
+            shown.append($0)
+            return .shown
+        }, reviews: reviews)
         server.grace = .milliseconds(300)
         server.budget = .seconds(5)
     }
@@ -156,6 +165,82 @@ final class WatchRequestServerTests: XCTestCase {
         XCTAssertEqual(failure(unknownKind)?.code, .unsupported)
         let newer = await server.serve(WatchRequest(.hello, version: WatchProtocol.version + 1)) { self.snapshot() }
         XCTAssertEqual(failure(newer)?.code, .unsupported)
+    }
+
+    // MARK: Open on iPhone, reviews
+
+    /// `open` shows a conversation the phone lists (its own `show`: the thread, or a notification in the background),
+    /// answers what it did and needs no host; one it does not list is `noConversation`.
+    func testOpenShowsTheConversationOnThePhone() async throws {
+        start()
+        _ = try await openThread()
+        let reply = await serve(.openOnPhone(key))
+        XCTAssertEqual(reply.result, .opened(.shown))
+        XCTAssertEqual(shown, [chatKey])
+        let unknown = await serve(.openOnPhone(WatchConversationKey(host: record.id.uuidString, node: "tmux:fixture:99")))
+        XCTAssertEqual(failure(unknown)?.code, .noConversation)
+        XCTAssertEqual(shown, [chatKey])
+    }
+
+    /// The bridge's `show`: in the foreground the thread opens (`shown`); in the background a notification when they
+    /// are allowed and it was posted (`notified`), else nothing (`unavailable`), never asking for permission.
+    func testOpenShowsNotifiesOrSaysItCannot() async throws {
+        start()
+        _ = try await openThread()
+        var posted: [RefreshNotification] = [], asked = 0
+        func notifications(allowed: Bool, posts: Bool = true) -> WatchBridge.Notifications {
+            WatchBridge.Notifications(authorized: { asked += 1; return allowed }, post: { posted.append($0); return posts })
+        }
+        var opened: [ChatConversationKey] = []
+        NotificationRoute.shared.open = { opened.append($0) }
+        defer { NotificationRoute.shared.open = nil }
+
+        let shown = await WatchBridge.show(chatKey, in: app, notifications: notifications(allowed: true))
+        XCTAssertEqual(shown, .shown)
+        XCTAssertEqual(opened, [chatKey])
+        XCTAssertEqual(asked, 0, "the foreground needs no notification")
+
+        app.hosts.setActive(false)
+        let notified = await WatchBridge.show(chatKey, in: app, notifications: notifications(allowed: true))
+        XCTAssertEqual(notified, .notified)
+        XCTAssertEqual(posted.map(\.key), [chatKey])
+        XCTAssertEqual(posted.first?.id, "watch-open:\(record.id.uuidString):\(node)")
+        XCTAssertEqual(posted.first?.body, "Opened from your Apple Watch.")
+
+        let off = await WatchBridge.show(chatKey, in: app, notifications: notifications(allowed: false))
+        XCTAssertEqual(off, .unavailable)
+        XCTAssertEqual(posted.count, 1, "nothing posted without permission")
+        let failed = await WatchBridge.show(chatKey, in: app, notifications: notifications(allowed: true, posts: false))
+        XCTAssertEqual(failed, .unavailable)
+        XCTAssertEqual(opened, [chatKey], "the background opens nothing by itself")
+    }
+
+    /// `review.undo` takes a review back through the Review tab's undo while its window is open; after it, or for a
+    /// review the phone does not know, it is `requestEnded` and nothing is undone.
+    func testUndoTakesAReviewBackOnlyInItsWindow() async throws {
+        start()
+        var undone = 0
+        let id = reviews.post(key: chatKey, agent: "claude", title: "Docs", comments: 3, files: 2, window: 8) { undone += 1; return true }
+        XCTAssertEqual(reviews.open(at: now).map(\.id), [id])
+        let undo = await serve(.undoReview(id: id))
+        XCTAssertEqual(undo.result, .done)
+        XCTAssertEqual(undone, 1)
+        XCTAssertTrue(reviews.open(at: now).isEmpty)
+        let again = await serve(.undoReview(id: id))
+        XCTAssertEqual(failure(again)?.code, .requestEnded, "gone after its undo")
+
+        let late = reviews.post(key: chatKey, agent: "claude", title: "Docs", comments: 1, files: 1, window: 8) { undone += 1; return true }
+        now = now.addingTimeInterval(9)
+        XCTAssertTrue(reviews.open(at: now).isEmpty, "the snapshot leaves it out once its window closed")
+        let tooLate = await serve(.undoReview(id: late))
+        XCTAssertEqual(failure(tooLate), WatchRequestServer.reviewRead)
+        XCTAssertEqual(undone, 1)
+
+        let refused = reviews.post(key: chatKey, agent: "claude", title: "Docs", comments: 1, files: 1, window: 8) { false }
+        let refusal = await serve(.undoReview(id: refused))
+        XCTAssertEqual(failure(refusal)?.code, .requestEnded, "the agent had it already")
+        reviews.finished(refused)
+        XCTAssertFalse(reviews.events.contains { $0.id == refused })
     }
 
     // MARK: Answers
@@ -346,6 +431,46 @@ final class WatchRequestServerTests: XCTestCase {
 
         _ = await serve(.markSeen(key, through: Date(timeIntervalSince1970: Double(first) / 1000)))
         XCTAssertEqual(markers.seen(host: record.id, conversation: conversation), second, "never back")
+    }
+
+    // MARK: Connect
+
+    /// The host screen's Connect (`refresh` with the host) is the user's: it lifts the phone's Disconnect and connects.
+    /// Pull to refresh and a thread leave a disconnected host alone.
+    func testConnectLiftsADisconnectInTheForeground() async throws {
+        start()
+        let host = try XCTUnwrap(app.hosts.session(record.id))
+        try await TestSupport.eventually { host.link == .connected }
+        host.park()
+        XCTAssertEqual(host.link, .disconnected)
+
+        _ = await serve(.refresh(host: nil))
+        XCTAssertTrue(host.parked, "pull to refresh is not Connect")
+        XCTAssertEqual(host.link, .disconnected)
+
+        let reply = await serve(.refresh(host: record.id.uuidString))
+        guard case .snapshot = reply.result else { return XCTFail("Expected the lists, got \(reply.result)") }
+        XCTAssertFalse(host.parked)
+        try await TestSupport.eventually { host.link == .connected }
+        XCTAssertTrue(holds.isEmpty, "the foreground connects the live session")
+    }
+
+    /// In the background Connect lifts the Disconnect and holds the host (its quiet connection); other requests do not
+    /// connect a disconnected host.
+    func testConnectLiftsADisconnectInTheBackground() async throws {
+        start(active: false)
+        let host = try XCTUnwrap(app.hosts.session(record.id))
+        host.park()
+
+        _ = await serve(.refresh(host: nil))
+        XCTAssertEqual(holds, [record.id])
+        XCTAssertTrue(host.parked)
+        XCTAssertEqual(host.link, .disconnected, "the hold skips a disconnected host")
+
+        _ = await serve(.refresh(host: record.id.uuidString))
+        XCTAssertEqual(holds, [record.id, record.id])
+        XCTAssertFalse(host.parked)
+        try await TestSupport.eventually { host.link == .connected }
     }
 
     // MARK: Background

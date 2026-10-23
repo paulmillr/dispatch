@@ -12,7 +12,7 @@ import XCTest
 final class FidelityUITests: XCTestCase {
     typealias Screen = AppearanceUITests.Screen
 
-    /// The mockup's 22 screens in its order.
+    /// The first mockup's 22 screens in its order, then the host stats screens.
     static let screens: [Screen] = {
         let appearance = Dictionary(uniqueKeysWithValues: AppearanceUITests.screens.map { ($0.id, $0) })
         let sample = AppearanceUITests.sample
@@ -44,8 +44,44 @@ final class FidelityUITests: XCTestCase {
             appearance["M7a"]!,
             appearance["M8a"]!,
             demo("M9a"),
+        ] + hostStats
+    }()
+
+    /// The host stats screens (W1a–W7, I5) on the simulator demo's mba2 (`HostStatsDemo`'s launch arguments); their
+    /// renders are the mockup app's shots (`mockups/shots/<ID>-<name>-<scheme>.png`).
+    static let hostStats: [Screen] = {
+        func stats(_ id: String, _ arguments: [String]) -> Screen {
+            Screen(id: id, environment: ["DISPATCH_MOBILE_DEMO": "1"], arguments: arguments)
+        }
+        return [
+            stats("W1a", ["-DispatchHostStats", "mba2"]),
+            stats("W1b", ["-DispatchHostStats", "mba2:drag"]),
+            stats("W1c", ["-DispatchHostStats", "mba2", "-DispatchHostStatsState", "offline"]),
+            stats("W1", ["-DispatchHostStats", "mba2:large"]),
+            stats("W2", ["-DispatchHostStats", "mba2:large:memory"]),
+            stats("W3", ["-DispatchHostStats", "mba2:large:scrub"]),
+            stats("W4", ["-DispatchHostDetail", "mba2"]),
+            stats("W5", ["-DispatchHostStats", "mba2:large", "-DispatchHostStatsState", "offline"]),
+            stats("W6", ["-DispatchHostStats", "mba2:large", "-DispatchHostStatsState", "plain"]),
+            stats("W7", ["-DispatchHostStats", "mba2:large", "-DispatchLowPower", "YES"]),
+            stats("I5", ["-DispatchHostStatsPopover", "mba2"]),
         ]
     }()
+
+    /// The mockup app's shots (`python3 mockups/shoot.py`), git-ignored: `TEST_RUNNER_DISPATCH_MOCKUP_SHOTS` names the
+    /// folder, else the checkout's `mockups/shots`.
+    static var shots: URL {
+        if let folder = ProcessInfo.processInfo.environment["DISPATCH_MOCKUP_SHOTS"] { return URL(fileURLWithPath: folder) }
+        return URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("mockups/shots")
+    }
+
+    /// `<ID>-<name>-<scheme>.png` from `shots`.
+    static func shot(_ id: String, scheme: String) -> UIImage? {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: shots.path)) ?? []
+        return names.first { $0.hasPrefix("\(id)-") && $0.hasSuffix("-\(scheme).png") }
+            .flatMap { UIImage(contentsOfFile: shots.appendingPathComponent($0).path) }
+    }
 
     static var selected: [Screen] {
         let environment = ProcessInfo.processInfo.environment
@@ -68,7 +104,8 @@ final class FidelityUITests: XCTestCase {
     }
 
     func testScreensBesideTheMockup() throws {
-        guard FileManager.default.fileExists(atPath: Self.mockups.appendingPathComponent("ios-M2a.png").path) else {
+        guard FileManager.default.fileExists(atPath: Self.mockups.appendingPathComponent("ios-M2a.png").path)
+                || Self.shot("W1", scheme: "dark") != nil else {
             throw XCTSkip("No mockup renders in \(Self.mockups.path) (build/mockup-review, or TEST_RUNNER_DISPATCH_MOCKUP_DIR)")
         }
         for screen in Self.selected {
@@ -86,6 +123,8 @@ final class FidelityUITests: XCTestCase {
                 let id = Self.render(screen.id, scheme: scheme)
                 if let mockup = UIImage(contentsOfFile: Self.mockups.appendingPathComponent("ios-\(id).png").path) {
                     attach(Self.pair(mockup: mockup, app: shot).pngData(), "\(screen.id)-\(scheme)")
+                } else if let mockup = Self.shot(screen.id, scheme: scheme) {
+                    attach(Self.pair(mockup: mockup, app: shot, whole: true).pngData(), "\(screen.id)-\(scheme)")
                 } else {
                     XCTFail("No render for \(id)")
                 }
@@ -105,14 +144,17 @@ final class FidelityUITests: XCTestCase {
     /// The phone cut out of the render (868 px wide at 2x: the caption above, the 402 x 874 pt phone at the bottom with
     /// 32 px margins) and the app's screenshot, both at 2x, side by side, with a faint guide every 50 points
     /// (`scripts/fidelity-pairs.swift` does the same on the Mac).
-    static func pair(mockup: UIImage, app: UIImage) -> UIImage {
+    /// `whole`: the mockup is a shot of the whole device (the mockup app's), drawn as it is.
+    static func pair(mockup: UIImage, app: UIImage, whole: Bool = false) -> UIImage {
         let phone = CGSize(width: 804, height: 1748), gap: CGFloat = 24
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
         return UIGraphicsImageRenderer(size: CGSize(width: phone.width * 2 + gap, height: phone.height), format: format).image { context in
             UIColor.gray.setFill()
             context.fill(CGRect(x: 0, y: 0, width: phone.width * 2 + gap, height: phone.height))
-            if let image = mockup.cgImage {
+            if whole {
+                mockup.draw(in: CGRect(origin: .zero, size: phone))
+            } else if let image = mockup.cgImage {
                 let crop = CGRect(x: 32, y: CGFloat(image.height) - 32 - phone.height, width: phone.width, height: phone.height)
                 if let cut = image.cropping(to: crop) {
                     UIImage(cgImage: cut).draw(in: CGRect(origin: .zero, size: phone))

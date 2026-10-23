@@ -24,6 +24,7 @@ struct AgentsScreen: View {
                     NavigationLink(value: conversation.key) {
                         AgentsRow(conversation: conversation, host: model.host(conversation.host), now: context.date)
                     }
+                    .id(conversation.key)
                 }
                 if !blocked.isEmpty {
                     Section {
@@ -65,10 +66,10 @@ struct AgentsScreen: View {
     }
 }
 
-/// One Agents row, the phone's grammar (MobileRow, M3a) at watch size: the gutter dot, the name on up to two lines, then
-/// the agent's mark in the host's tint with "host · space" and the time, then the preview on up to two lines. The phone's
-/// 46 pt disc would take a quarter of a 42 mm screen; the mark carries its tint instead. Dimmed while its data is
-/// last-known (`stale`).
+/// One Agents row, the phone's new row grammar at watch size (mockups K1): the gutter dot, the agent's glyph in its own
+/// column, then the name (two lines), the state line (two lines: the current step and how long it has run while
+/// working, what it asks while it needs you, in primary, else its last message) and a caption with "host · space" in the
+/// host's tint and the time. Dimmed while its data is last-known (`stale`).
 struct AgentsRow: View {
     let conversation: WatchConversation
     let host: WatchHost?
@@ -79,42 +80,59 @@ struct AgentsRow: View {
     var body: some View {
         let tint = Color(watchHex: host?.tint)
         let dot = AgentsDot.of(conversation)
-        HStack(alignment: .firstTextBaseline, spacing: 5) {
+        HStack(alignment: .top, spacing: 5) {
             Circle()
                 .fill(dot?.color ?? .clear)
                 .frame(width: Self.dotSize, height: Self.dotSize)
+                .padding(.top, 5)
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(conversation.name)
-                    .font(.headline)
+            AgentGlyph(agent: conversation.agent, size: 13)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(conversation.displayTitle)
+                    .font(.subheadline.weight(.semibold))
                     .lineLimit(2)
+                stateLine
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    AgentsMark(agent: conversation.agent, tint: tint)
                     Text(Self.subtitle(conversation, host: host) ?? "")
                         .foregroundStyle(tint)
                         .lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     if let time = conversation.lastActivity.map({ WatchTime.relative($0, now: now) }) {
                         Text(time)
-                            .foregroundStyle(conversation.stale ? .tertiary : .secondary)
+                            .foregroundStyle(.tertiary)
                             .lineLimit(1)
                             .fixedSize()
                     }
                 }
                 .font(.caption2)
-                if let line = Self.line(conversation) {
-                    Text(line)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
             }
         }
-        .padding(.vertical, 3)
+        .padding(.vertical, 1)
         .opacity(conversation.stale ? 0.6 : 1)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Self.accessibilityLabel(conversation, host: host, now: now))
         .accessibilityValue(dot?.accessibilityLabel ?? "")
+    }
+
+    /// The state line; a working one ticks its seconds (only that line redraws).
+    @ViewBuilder private var stateLine: some View {
+        if conversation.busy, !conversation.needsYou, let since = conversation.workingSince {
+            TimelineView(.periodic(from: since, by: 1)) { context in
+                lineText(Self.line(conversation, now: context.date))
+            }
+        } else {
+            lineText(Self.line(conversation, now: now))
+        }
+    }
+
+    @ViewBuilder private func lineText(_ line: String?) -> some View {
+        if let line {
+            Text(line)
+                .font(.caption)
+                .foregroundStyle(conversation.needsYou ? Color.primary : Color.secondary)
+                .lineLimit(2)
+        }
     }
 
     /// "studio · dispatch": the host, then the space it runs in; " · muted" as the phone's detail adds it.
@@ -124,38 +142,28 @@ struct AgentsRow: View {
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
-    /// The preview, else the agent's attention line (the phone's subtitle). A needs-you row whose agent waits on the
-    /// terminal says what it waits for.
-    static func line(_ conversation: WatchConversation) -> String? {
-        let preview = conversation.preview?.isEmpty == false ? conversation.preview : nil
-        let attention = conversation.attention?.isEmpty == false ? conversation.attention : nil
-        if conversation.needsYou, let attention { return attention }
-        return preview ?? attention
+    /// The line under the name, by state: needs you, what it asks (the approval's command, the question; else the
+    /// agent's attention line); working, the current step and its elapsed time ("Editing Sidebar.tsx · 48s"); else the
+    /// last message.
+    static func line(_ conversation: WatchConversation, now: Date) -> String? {
+        func text(_ value: String?) -> String? { value?.isEmpty == false ? value : nil }
+        if conversation.needsYou {
+            return text(conversation.waitingText) ?? text(conversation.attention) ?? text(conversation.preview) ?? "Needs you"
+        }
+        if conversation.busy {
+            let step = text(conversation.step) ?? "Working"
+            guard let since = conversation.workingSince else { return step }
+            return step + " · " + WatchTime.elapsed(now.timeIntervalSince(since))
+        }
+        return text(conversation.preview) ?? text(conversation.attention)
     }
 
     /// VoiceOver: the name, the agent, the detail, the time, "Needs you" or "Working", then the line.
     static func accessibilityLabel(_ conversation: WatchConversation, host: WatchHost?, now: Date) -> String {
         let state = conversation.needsYou ? "Needs you" : conversation.busy ? "Working" : nil
-        return [conversation.name, conversation.agent, subtitle(conversation, host: host),
-                conversation.lastActivity.map { WatchTime.ago($0, now: now) }, state, line(conversation)]
+        return [conversation.displayTitle, conversation.agent, subtitle(conversation, host: host),
+                conversation.lastActivity.map { WatchTime.ago($0, now: now) }, state, line(conversation, now: now)]
             .compactMap { $0?.isEmpty == false ? $0 : nil }.joined(separator: ", ")
-    }
-}
-
-/// The agent's mark, in the host's tint, at the text's size.
-struct AgentsMark: View {
-    let agent: String?
-    let tint: Color
-
-    var body: some View {
-        Group {
-            switch AgentsGlyph.agent(agent) {
-            case .symbol(let name): Image(systemName: name).fontWeight(.bold)
-            case .letter(let letter): Text(letter).fontWeight(.bold).fontDesign(.serif)
-            }
-        }
-        .foregroundStyle(tint)
-        .accessibilityHidden(true)
     }
 }
 

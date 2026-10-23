@@ -35,14 +35,28 @@ struct WatchRoot: View {
             .navigationDestination(for: WatchConversationKey.self) { ThreadScreen(model: model, key: $0) }
             .navigationDestination(for: WatchSpaceRoute.self) { SpaceScreen(model: model, route: $0) }
             .navigationDestination(for: WatchTabRoute.self) { TabDetailScreen(model: model, route: $0) }
+            .navigationDestination(for: WatchHostRoute.self) { HostScreen(model: model, route: $0) }
         }
+        // A review the phone just sent (K8), over whatever shows, while its Undo is open; after a thread's own sheet closes.
+        .sheet(item: Binding(get: { router.childSheet ? nil : model.review },
+                             set: { if $0 == nil, !router.childSheet { model.dismissReview() } })) { review in
+            ReviewSentScreen(model: model, review: review)
+        }
+        // A complication's tap (`WatchComplicationEntry.url`).
+        .onOpenURL { router.open(url: $0) }
         .onAppear(perform: route)
         .onChange(of: router.pending) { route() }
         .onChange(of: router.show) { route() }
+        .onChange(of: router.showAgents) { route() }
     }
 
     /// A notification's thread: Agents comes forward with the thread pushed on it.
     private func route() {
+        if router.showAgents {
+            router.showAgents = false
+            page = .agents
+            path = NavigationPath()
+        }
         if let show = router.show {
             router.show = nil
             var next = NavigationPath()
@@ -55,6 +69,7 @@ struct WatchRoot: View {
                     next.append(WatchSpaceRoute(host: tab.host, space: tab.space))
                 }
                 next.append(route)
+            case .host(let route): next.append(route)
             }
             path = next
         }

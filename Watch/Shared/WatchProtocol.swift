@@ -12,7 +12,8 @@ import Foundation
 /// as `unknown`). `version` changes only for a change an older peer would misread, never for an added field or kind: a
 /// later `terminal.screen` request (a text snapshot of a tab's screen, answered by a `screen` reply) is such an addition.
 enum WatchProtocol {
-    /// The protocol both sides speak. 1: snapshot, thread, answer, send, queue, stop/resume, seen.
+    /// The protocol both sides speak. 1: snapshot, thread, answer, send, queue, stop/resume, seen; later additions
+    /// (no new version): `open`, `review.undo`, and the snapshot's rows, hosts' stats and review events.
     static let version = 1
 }
 
@@ -86,6 +87,12 @@ enum WatchAction: Equatable, Sendable {
     /// The watch showed the thread up to `through` (its newest item's time): the phone's seen marker moves there
     /// (`ChatMarkers.markSeen`), never past what the phone itself holds. Answered `done`.
     case markSeen(WatchConversationKey, through: Date)
+    /// "Open on iPhone": the phone shows the conversation (its thread) when it is in the foreground, else posts a
+    /// local notification that opens it. Answered `opened` with what it did.
+    case openOnPhone(WatchConversationKey)
+    /// Undo of a review the phone just sent (`WatchReviewSent.id`), before its deadline. Answered `done`, or
+    /// `requestEnded` once the agent has it.
+    case undoReview(id: String)
     /// A kind this build does not know (a newer peer's). The phone answers `unsupported`.
     case unknown(String)
 
@@ -101,6 +108,8 @@ enum WatchAction: Equatable, Sendable {
         case .removeQueued: "queue.remove"
         case .sendQueuedNow: "queue.sendNow"
         case .markSeen: "seen"
+        case .openOnPhone: "open"
+        case .undoReview: "review.undo"
         case .unknown(let kind): kind
         }
     }
@@ -109,15 +118,15 @@ enum WatchAction: Equatable, Sendable {
     var conversation: WatchConversationKey? {
         switch self {
         case .thread(let key, _), .answer(let key, _, _), .send(let key, _, _), .stop(let key), .resume(let key),
-             .removeQueued(let key, _), .sendQueuedNow(let key, _), .markSeen(let key, _): key
-        case .hello, .refresh, .unknown: nil
+             .removeQueued(let key, _), .sendQueuedNow(let key, _), .markSeen(let key, _), .openOnPhone(let key): key
+        case .hello, .refresh, .undoReview, .unknown: nil
         }
     }
 }
 
 extension WatchAction: Codable {
     /// Every action's fields in one flat object: no nesting to version, and unknown fields are ignored.
-    private enum CodingKeys: String, CodingKey { case kind, host, node, limit, request, answer, text, steer, item, through }
+    private enum CodingKeys: String, CodingKey { case kind, host, node, limit, request, answer, text, steer, item, through, review }
 
     init(from decoder: any Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -140,6 +149,8 @@ extension WatchAction: Codable {
         case "queue.remove": self = .removeQueued(try key(), item: try values.decode(String.self, forKey: .item))
         case "queue.sendNow": self = .sendQueuedNow(try key(), item: try values.decode(String.self, forKey: .item))
         case "seen": self = .markSeen(try key(), through: try values.decode(Date.self, forKey: .through))
+        case "open": self = .openOnPhone(try key())
+        case "review.undo": self = .undoReview(id: try values.decode(String.self, forKey: .review))
         default: self = .unknown(kind)
         }
     }
@@ -162,7 +173,8 @@ extension WatchAction: Codable {
             if steer { try values.encode(true, forKey: .steer) }
         case .removeQueued(_, let item), .sendQueuedNow(_, let item): try values.encode(item, forKey: .item)
         case .markSeen(_, let through): try values.encode(through, forKey: .through)
-        case .hello, .stop, .resume, .unknown: break
+        case .undoReview(let id): try values.encode(id, forKey: .review)
+        case .hello, .stop, .resume, .openOnPhone, .unknown: break
         }
     }
 }
@@ -203,8 +215,10 @@ enum WatchResult: Equatable, Sendable {
     case snapshot(WatchSnapshot)
     /// `thread` and every conversation action: the page after the phone applied the action.
     case thread(WatchThread)
-    /// Done, nothing to show (`markSeen`).
+    /// Done, nothing to show (`markSeen`, `review.undo`).
     case done
+    /// `open`: what the phone did.
+    case opened(WatchOpenOutcome)
     /// Refused or failed, with what to tell the user.
     case failure(WatchFailure)
     /// A reply kind this build does not know.
@@ -215,6 +229,7 @@ enum WatchResult: Equatable, Sendable {
         case .snapshot: "snapshot"
         case .thread: "thread"
         case .done: "done"
+        case .opened: "opened"
         case .failure: "failure"
         case .unknown(let kind): kind
         }
@@ -222,7 +237,7 @@ enum WatchResult: Equatable, Sendable {
 }
 
 extension WatchResult: Codable {
-    private enum CodingKeys: String, CodingKey { case kind, snapshot, thread, failure }
+    private enum CodingKeys: String, CodingKey { case kind, snapshot, thread, failure, opened }
 
     init(from decoder: any Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -231,6 +246,7 @@ extension WatchResult: Codable {
         case "snapshot": self = .snapshot(try values.decode(WatchSnapshot.self, forKey: .snapshot))
         case "thread": self = .thread(try values.decode(WatchThread.self, forKey: .thread))
         case "done": self = .done
+        case "opened": self = .opened((try? values.decode(WatchOpenOutcome.self, forKey: .opened)) ?? .unknown)
         case "failure": self = .failure(try values.decode(WatchFailure.self, forKey: .failure))
         default: self = .unknown(kind)
         }
@@ -243,9 +259,21 @@ extension WatchResult: Codable {
         case .snapshot(let snapshot): try values.encode(snapshot, forKey: .snapshot)
         case .thread(let thread): try values.encode(thread, forKey: .thread)
         case .failure(let failure): try values.encode(failure, forKey: .failure)
+        case .opened(let outcome): try values.encode(outcome, forKey: .opened)
         case .done, .unknown: break
         }
     }
+}
+
+/// What "Open on iPhone" did on the phone.
+enum WatchOpenOutcome: String, WatchTolerantValue {
+    /// The phone app was in the foreground: the thread is on its screen.
+    case shown
+    /// In the background: a local notification that opens the thread was posted.
+    case notified
+    /// In the background with notifications not allowed: nothing could bring it forward.
+    case unavailable
+    case unknown
 }
 
 /// Why a request did not do what it asked, in the words the watch shows. The phone fills `message` with its own text
@@ -329,6 +357,11 @@ enum WatchLimits {
     static let preview = 120
     /// A thread item's text; longer messages end with "…" (the whole message is on the phone).
     static let itemText = 1_000
+    /// What the WatchConnectivity dictionary adds around the encoded snapshot (its key, the plist's frame): the snapshot
+    /// is fitted to `snapshotBytes` less this, so the context itself stays under `snapshotBytes`.
+    static let envelope = 256
+    /// A row's step and what it asks when the snapshot is over its budget: one short line.
+    static let short = 40
     /// A tool one-liner, an approval's code block, a queued message.
     static let line = 200
     static let detail = 600

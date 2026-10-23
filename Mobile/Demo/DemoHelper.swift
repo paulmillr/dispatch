@@ -81,6 +81,11 @@ final class DemoHelper: @unchecked Sendable {
             respond(id, ["id": "demo-\(serial)", "mode": "prompt", "revision": 1,
                          "preview": [["kind": "text", "text": params["text"] as? String ?? ""]], "editable": true,
                          "editing": false, "paused": NSNull(), "error": NSNull()])
+        case "stats.sample", "stats.processes", "stats.disks":
+            guard let value = HostStatsDemo.answer(method, host: host.record.name, home: host.hello.account?.home ?? "/Users/alex") else {
+                return fail(id, "No such stats")
+            }
+            respond(id, value)
         case "interactions.answer": respond(id, ["written": true, "may_have_sent": true, "reason": NSNull()])
         case "launches.list":
             respond(id, [["launch": 0, "key": "claude", "label": "Claude Code", "program": "claude"],

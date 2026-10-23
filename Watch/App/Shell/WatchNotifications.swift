@@ -18,17 +18,20 @@ final class WatchRouter {
         return pending
     }
 
-    /// Debug only (`-DispatchWatchShow`): a screen of Spaces to open at launch, for screenshots without touches.
+    /// Debug only (`-DispatchWatchShow`): a screen to open at launch, for screenshots without touches.
     enum Show: Equatable {
         /// Spaces, scrolled to a host's section when one is named.
         case spaces(host: String?)
         case space(WatchSpaceRoute)
         case tab(WatchTabRoute)
+        /// A host's screen (K6), pushed over Spaces.
+        case host(WatchHostRoute)
 
-        /// "spaces", "spaces:<host>" (scrolled to that host), "space:<host>/<key>", "tab:<host>/<key>".
+        /// "spaces", "spaces:<host>" (scrolled to that host), "space:<host>/<key>", "tab:<host>/<key>", "host:<host>".
         init?(argument: String) {
             if argument == "spaces" { self = .spaces(host: nil); return }
             if argument.hasPrefix("spaces:") { self = .spaces(host: String(argument.dropFirst(7))); return }
+            if argument.hasPrefix("host:") { self = .host(WatchHostRoute(host: String(argument.dropFirst(5)))); return }
             let parts = argument.split(separator: ":", maxSplits: 1).map(String.init)
             guard parts.count == 2, let slash = parts[1].firstIndex(of: "/") else { return nil }
             let host = String(parts[1][..<slash]), key = String(parts[1][parts[1].index(after: slash)...])
@@ -43,6 +46,44 @@ final class WatchRouter {
     var show: Show?
     /// The host section Spaces scrolls to when it appears (`Show.spaces(host:)`).
     var scrollTarget: String?
+
+    /// Debug only (`-DispatchWatchSheet`): a thread's sheet to open once the thread shows, for screenshots: its first
+    /// question's form (K4), or the reply confirm screen with a text (K5).
+    enum Sheet: Equatable {
+        /// The first question's form, with its first part's option at this index chosen.
+        case question(choose: Int?)
+        case reply(String)
+
+        /// "question", "question:<option index>", "reply:<text>".
+        init?(argument: String) {
+            if argument == "question" { self = .question(choose: nil); return }
+            if argument.hasPrefix("question:") { self = .question(choose: Int(argument.dropFirst(9))); return }
+            guard argument.hasPrefix("reply:") else { return nil }
+            self = .reply(String(argument.dropFirst(6)))
+        }
+    }
+
+    var sheet: Sheet?
+
+    /// The pending debug sheet, once.
+    func takeSheet() -> Sheet? {
+        defer { sheet = nil }
+        return sheet
+    }
+
+    /// A complication's tap (`dispatch-watch://open?host=…&node=…`, `WatchComplicationEntry.url`): that thread, or
+    /// Agents when the URL names none.
+    func open(url: URL) {
+        guard url.scheme == WatchComplicationEntry.scheme else { return }
+        if let key = WatchComplicationEntry.key(url) { open(key) } else { showAgents = true }
+    }
+
+    /// Agents comes forward with nothing pushed (a complication with nothing waiting).
+    var showAgents = false
+
+    /// A thread's own sheet is up (its question form or the reply confirm screen): the review card waits until it closes,
+    /// as one sheet cannot present over another.
+    var childSheet = false
 }
 
 /// The phone's agent notifications on the watch (docs/watch.md, Behaviour, Notifications). iOS forwards them while the
@@ -97,6 +138,7 @@ enum WatchNotifications {
         }
         if let key = value("-DispatchWatchOpen").flatMap(key(argument:)) { WatchRouter.shared.open(key) }
         WatchRouter.shared.show = value("-DispatchWatchShow").flatMap(WatchRouter.Show.init(argument:))
+        WatchRouter.shared.sheet = value("-DispatchWatchSheet").flatMap(WatchRouter.Sheet.init(argument:))
         if let key = value("-DispatchWatchNotify").flatMap(key(argument:)) {
             Task { await post(key) }
         }

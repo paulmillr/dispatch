@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import UIKit
+import UserNotifications
 import WatchConnectivity
 import os
 
@@ -16,6 +17,12 @@ import os
     func updateApplicationContext(_ context: [String: Any]) throws
     /// A message that expects no reply.
     func sendMessage(_ message: [String: Any], failed: @escaping @Sendable (any Error) -> Void)
+    /// The watch shows one of the app's complications on its active face.
+    var isComplicationEnabled: Bool { get }
+    /// What is left of the day's complication budget (`remainingComplicationUserInfoTransfers`, 50 a day).
+    var remainingComplicationUserInfoTransfers: Int { get }
+    /// `transferCurrentComplicationUserInfo`: wakes the watch app in the background to update its complications.
+    func transferComplication(_ userInfo: [String: Any])
 }
 
 extension WCSession: WatchSessioning {
@@ -26,6 +33,10 @@ extension WCSession: WatchSessioning {
 
     func sendMessage(_ message: [String: Any], failed: @escaping @Sendable (any Error) -> Void) {
         sendMessage(message, replyHandler: nil, errorHandler: failed)
+    }
+
+    func transferComplication(_ userInfo: [String: Any]) {
+        _ = transferCurrentComplicationUserInfo(userInfo)
     }
 }
 
@@ -61,12 +72,20 @@ final class WatchBridge: NSObject {
     /// Protected data is available (the phone is unlocked); the notifications keep it. Only `WatchPhone.locked`
     /// reads it: a locked phone still serves requests (docs/watch.md, Background).
     private(set) var protectedDataAvailable: Bool
+    /// The hosts' statistics the snapshot carries (`WatchStatsSource`): `WatchHostStatsFeed` over the hosts' own stores
+    /// (`MobileComposition.app()`); nil, none.
+    var stats: (any WatchStatsSource)?
+    /// Reviews just sent with an open Undo (the Review tab posts them, docs/watch.md, Review sent).
+    let reviews: WatchReviewEvents
     /// The last snapshot handed to the session, `generated` cleared: an equal one is not sent again.
     private(set) var pushed: WatchSnapshot?
     /// The last snapshot built, before fitting (requests answer with a fresh one).
     private(set) var built: WatchSnapshot?
     /// Why the latest push sent nothing (logged when it changes).
     private(set) var skipped: String?
+    /// The complication entry last transferred: the next goes only when the count or the first line changes, which
+    /// keeps within the day's budget.
+    private(set) var complicationSent: WatchComplicationEntry?
 
     private weak var composition: MobileComposition?
     private let session: any WatchSessioning
@@ -99,13 +118,18 @@ final class WatchBridge: NSObject {
         self.backgroundTask = backgroundTask
         self.backgroundRemaining = backgroundRemaining
         let hosts = composition.hosts
+        let reviews = WatchReviewEvents(clock: clock)
+        self.reviews = reviews
         server = WatchRequestServer(composition: composition, hold: { [weak hosts] id in
             guard let hosts else { return }
             let before = hosts.session(id).map { "\($0.link)" } ?? "none", started = ContinuousClock.now
             await hosts.hold(id)
             let after = hosts.session(id).map { "\($0.link)" } ?? "none"
             Self.log.info("Hold \(Self.short(id), privacy: .public) (\(hosts.active ? "foreground" : "background", privacy: .public)): \(before, privacy: .public) → \(after, privacy: .public) in \(Self.milliseconds(since: started)) ms\(hosts.isHeld(id) ? ", held" : "", privacy: .public)")
-        })
+        }, show: { [weak composition] key in
+            guard let composition else { return .unavailable }
+            return await WatchBridge.show(key, in: composition)
+        }, reviews: reviews)
         super.init()
         // Synchronously, before anything else: a request that launched the app is delivered once this returns.
         session.activate(delegate: self)
@@ -133,7 +157,8 @@ final class WatchBridge: NSObject {
     /// The snapshot as the phone shows it now.
     func buildSnapshot() -> WatchSnapshot {
         guard let composition else { return WatchSnapshot(generated: clock(), phone: WatchPhone(), hosts: []) }
-        let snapshot = WatchSnapshotBuilder(composition: composition, protectedDataAvailable: protectedDataAvailable).build(at: clock())
+        let snapshot = WatchSnapshotBuilder(composition: composition, protectedDataAvailable: protectedDataAvailable, stats: stats,
+                                            reviews: reviews).build(at: clock())
         built = snapshot
         return snapshot
     }
@@ -205,6 +230,7 @@ final class WatchBridge: NSObject {
         }
         pushed = comparable
         skipped = nil
+        transferComplication(snapshot)
         let reachable = session.isReachable
         Self.log.info("Snapshot pushed (\(reason, privacy: .public)): \(snapshot.hosts.count) hosts, \(snapshot.conversations.count) conversations, \(WatchCodec.size(snapshot)) bytes\(reachable ? ", also as a message" : "", privacy: .public)")
         // The watch app is running: a message arrives sooner than the context.
@@ -213,6 +239,20 @@ final class WatchBridge: NSObject {
                 Self.log.error("Snapshot message failed: \(error.localizedDescription, privacy: .public)")
             }
         }
+    }
+
+    /// The complications' entry for `snapshot`, to the watch app in the background (`transferCurrentComplicationUserInfo`),
+    /// when it differs from the last one sent, a complication is on the watch's face and budget is left. Otherwise the
+    /// watch writes it the next time it takes a snapshot (docs/watch.md, Complications).
+    private func transferComplication(_ snapshot: WatchSnapshot) {
+        let entry = WatchComplicationEntry(snapshot)
+        guard !entry.shows(complicationSent), session.isComplicationEnabled else { return }
+        let left = session.remainingComplicationUserInfoTransfers
+        guard left > 0 else { return Self.log.notice("Complication not transferred: the day's budget is spent") }
+        guard let userInfo = try? entry.userInfo() else { return }
+        session.transferComplication(userInfo)
+        complicationSent = entry
+        Self.log.info("Complication transferred: \(entry.needsYou) need you, \(left - 1) transfers left today")
     }
 
     private func skip(_ why: String) {
@@ -247,6 +287,7 @@ final class WatchBridge: NSObject {
     func watchStateChanged() {
         updateStatus()
         pushed = nil
+        complicationSent = nil
         push(reason: "watch state")
     }
 
@@ -335,6 +376,46 @@ final class WatchBridge: NSObject {
     }
 
     private struct Envelope: Decodable { let id: String }
+
+    /// How "Open on iPhone" reaches the user in the background: whether notifications are allowed, and posting one
+    /// (true once added). `system` is `UNUserNotificationCenter`'s; tests pass their own.
+    struct Notifications {
+        var authorized: @MainActor () async -> Bool
+        var post: @MainActor (RefreshNotification) async -> Bool
+
+        static let system = Notifications(authorized: {
+            let status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+            return status == .authorized || status == .provisional || status == .ephemeral
+        }, post: { notification in
+            let request = UNNotificationRequest(identifier: notification.id, content: notification.content, trigger: nil)
+            return (try? await UNUserNotificationCenter.current().add(request)) != nil
+        })
+    }
+
+    /// "Open on iPhone": in the foreground the conversation's thread opens at once (as a notification's tap opens it,
+    /// `NotificationRoute`): `shown`. In the background a local notification opens it when tapped (iOS cannot bring an
+    /// app forward by itself): `notified`, or `unavailable` when notifications are not allowed (Background refresh
+    /// asks for them) or the post failed.
+    static func show(_ key: ChatConversationKey, in composition: MobileComposition,
+                     notifications: Notifications = .system) async -> WatchOpenOutcome {
+        let row = composition.conversations.conversations.first { $0.key == key }
+        let host = composition.hosts.session(key.host)?.host.name
+        let notification = RefreshNotification(
+            id: "watch-open:" + key.host.uuidString + ":" + key.node,
+            title: [row?.name, host].compactMap { $0 }.joined(separator: " · "),
+            body: "Opened from your Apple Watch.", key: key)
+        let outcome: WatchOpenOutcome
+        if composition.hosts.active {
+            NotificationRoute.shared.route(notification.userInfo)
+            outcome = .shown
+        } else if await notifications.authorized(), await notifications.post(notification) {
+            outcome = .notified
+        } else {
+            outcome = .unavailable
+        }
+        log.info("Open \(short(key.host), privacy: .public): \(outcome.rawValue, privacy: .public)")
+        return outcome
+    }
 
     /// `UIApplication.beginBackgroundTask`, ended by the returned closure or by the system's expiration, once.
     static func applicationBackgroundTask(_ name: String) -> @MainActor () -> Void {

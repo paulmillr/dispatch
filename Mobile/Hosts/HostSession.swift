@@ -37,7 +37,14 @@ final class HostSession: Identifiable {
     /// multiplexer preference, the last connection time).
     private(set) var host: HostRecord
     nonisolated var id: UUID { hostID }
-    private(set) var link: HostLink = .disconnected
+    private(set) var link: HostLink = .disconnected {
+        didSet {
+            if link == .connected { droppedAt = nil } else if oldValue == .connected { droppedAt = System.date() }
+        }
+    }
+    /// When the last connection ended (the link left `.connected`); nil while connected and before this run's first
+    /// connection. The watch's "Offline since" (docs/watch.md).
+    private(set) var droppedAt: Date?
     /// The current connection's mode; nil until connected and again once the connection ends (each connection decides
     /// anew).
     private(set) var mode: Mode?
@@ -45,6 +52,12 @@ final class HostSession: Identifiable {
     private(set) var shellOpener: (any ShellOpener)?
     /// The shell tabs the phone made on this host (plain SSH): live while their connection is, then ended cards.
     let shells: ShellSessions
+    /// The host's CPU, memory, disk and processes from its helper (docs/ios.md, Host stats): sampled while a helper
+    /// connection is up and the app is in the foreground, kept (stale) after.
+    let stats = HostStatistics()
+    /// The user disconnected this host (Disconnect in its stats): nothing connects it again (the foreground, a network
+    /// change, pull to refresh, an edit, a watch request) until `connectByUser()` or the next launch.
+    private(set) var parked = false
     /// Non-nil only while connected.
     private(set) var client: HelperClient?
     /// The last `hello` (identity, OS line, schema); kept while offline for the host's labels.
@@ -126,7 +139,7 @@ final class HostSession: Identifiable {
     }
 
     func connect() {
-        guard task == nil else { return }
+        guard task == nil, !parked else { return }
         if let reason = refusal?() {
             if link != .failed(reason) { link = .failed(reason) }
             changed?(self)
@@ -172,6 +185,7 @@ final class HostSession: Identifiable {
     /// a host key mismatch: that hard stop waits for the user (Remove and retry, an edit), never re-handshaking by
     /// itself.
     func retryNow() {
+        guard !parked else { return }
         if task != nil {
             switch link {
             case .reconnecting, .connected: retry?.yield()
@@ -181,6 +195,25 @@ final class HostSession: Identifiable {
         }
         guard hostKeyMismatch == nil else { return }
         connect()
+    }
+
+    /// Disconnect in the host's stats: the connection ends and stays down until `connectByUser()` (Connect) or the next
+    /// launch, whatever else would reconnect it.
+    func park() {
+        if !parked { parked = true }
+        disconnect()
+    }
+
+    /// Every user-initiated Connect or Reconnect (the stats, host detail, the multiplexer hint, a watch's Connect):
+    /// lifts `park()` and connects (or retries now), as `retryNow()` does.
+    func connectByUser() {
+        unpark()
+        retryNow()
+    }
+
+    /// Lifts `park()` without connecting (an action that starts its own run: Remove and retry).
+    func unpark() {
+        if parked { parked = false }
     }
 
     /// The last-known state from the device's cache (`HostCache`, at launch): the lists show it at once and the live
@@ -233,6 +266,7 @@ final class HostSession: Identifiable {
             self.client = client
             mode = .helper
             shellOpener = nil
+            stats.attach(client)
             updated = System.date()
             self.hello = hello
             self.multiplexers = multiplexers.filter { $0.name != "native" }
@@ -264,6 +298,7 @@ final class HostSession: Identifiable {
             if shellOpener != nil { self.shells.connectionEnded() }
             mode = .plain(reason: reason)
             shellOpener = shells
+            stats.attach(nil)
             // No helper on this connection: a kept snapshot (the cache's, an earlier helper's) is not the host's spaces.
             if topology != nil { topology = nil }
             if topologyIsLive { topologyIsLive = false }
@@ -325,6 +360,7 @@ final class HostSession: Identifiable {
         if switchingMultiplexer { switchingMultiplexer = false }
         if mode != nil { mode = nil }
         if shellOpener != nil { shellOpener = nil }
+        stats.attach(nil)
         // The shells were channels of this connection: they ended with it and stay as cards.
         shells.connectionEnded()
     }

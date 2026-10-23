@@ -170,9 +170,13 @@ struct WatchItem: Codable, Equatable, Sendable, Identifiable {
     var running: Bool
     /// Under the last agent message of an ended turn: "5 steps · 1m 26s" (`ChatTurnSummary.caption`).
     var caption: String?
+    /// The same turn's summary, structured, for "5 steps in 1m 26s · 4 files +61 −9" (a newer phone's; an older one sends
+    /// only `caption`).
+    var summary: WatchTurnSummary?
 
     init(id: String, kind: WatchItemKind, text: String, time: Date? = nil, turn: String? = nil, tool: String? = nil,
-         detail: String? = nil, failed: Bool = false, running: Bool = false, caption: String? = nil) {
+         detail: String? = nil, failed: Bool = false, running: Bool = false, caption: String? = nil,
+         summary: WatchTurnSummary? = nil) {
         self.id = id
         self.kind = kind
         self.text = text
@@ -183,6 +187,27 @@ struct WatchItem: Codable, Equatable, Sendable, Identifiable {
         self.failed = failed
         self.running = running
         self.caption = caption
+        self.summary = summary
+    }
+}
+
+/// What an ended turn did (`ChatTurnSummary` and its patch steps): its steps, how long it took, and the files it changed
+/// with the lines added and removed across them.
+struct WatchTurnSummary: Codable, Equatable, Sendable {
+    var steps: Int
+    /// Nil for a turn read without times.
+    var seconds: Double?
+    /// Distinct paths its patches changed.
+    var files: Int
+    var additions: Int
+    var deletions: Int
+
+    init(steps: Int, seconds: Double? = nil, files: Int = 0, additions: Int = 0, deletions: Int = 0) {
+        self.steps = steps
+        self.seconds = seconds
+        self.files = files
+        self.additions = additions
+        self.deletions = deletions
     }
 }
 
@@ -225,14 +250,23 @@ struct WatchApproval: Codable, Equatable, Sendable, Identifiable {
     var arrived: Date
     /// In the phone's order (`MobileChatSession.choices(for:)`): Deny, This session when offered, Allow.
     var choices: [WatchChoice]
+    /// What `detail` is, for "Codex wants to run": the tool's command, a file it edits, a URL it fetches, a pattern it
+    /// searches for (`HelperChat.Interaction.approvalPresentation`'s source). Nil: say `title`.
+    var verb: WatchApprovalVerb?
 
-    init(id: String, title: String, detail: String? = nil, arrived: Date, choices: [WatchChoice]) {
+    init(id: String, title: String, detail: String? = nil, arrived: Date, choices: [WatchChoice], verb: WatchApprovalVerb? = nil) {
         self.id = id
         self.title = title
         self.detail = detail
         self.arrived = arrived
         self.choices = choices
+        self.verb = verb
     }
+}
+
+/// What an approval's code block is, as the card's line says it ("wants to run").
+enum WatchApprovalVerb: String, WatchTolerantValue {
+    case run, edit, fetch, search, unknown
 }
 
 /// One option of a question (`HelperChat.Choice`, `ClaudeQuestions.Option`).

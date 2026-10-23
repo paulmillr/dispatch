@@ -30,6 +30,11 @@ struct DispatchWatchApp: App {
                     }
                 }
         }
+        // The phone's complication entry or a new context while the app is not running: the complications stay current
+        // (docs/watch.md, Complications).
+        .backgroundTask(.watchConnectivity) {
+            await model.receivePending()
+        }
         WKNotificationScene(controller: WatchNotificationController.self, category: WatchNotification.category)
     }
 }

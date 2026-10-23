@@ -140,8 +140,18 @@ final class HostSessions {
         holds = [:]
         if active, !quietRefusals.isEmpty { quietRefusals = [:] }
         for session in ordered {
+            session.stats.active = active
             if active { session.retryNow() } else { session.disconnect() }
         }
+    }
+
+    /// The user disconnected this host (`HostSession.park`): background refresh and watch requests leave it alone until
+    /// Connect or the next launch.
+    func isParked(_ id: UUID) -> Bool { sessions[id]?.parked ?? false }
+
+    /// Low Power Mode changed: each host's stats take its cadence (`HostStatistics.cadence`).
+    func powerStateChanged() {
+        for session in ordered { session.stats.powerStateChanged() }
     }
 
     /// A watch request needs this saved host (docs/watch.md, Background). In the background its own session connects
@@ -152,7 +162,8 @@ final class HostSessions {
     /// connected, failed or retrying, the attempt waits on the user (a host key or login sheet, in the foreground), after
     /// `holdBudget`, or when the caller is cancelled.
     func hold(_ id: UUID) async {
-        guard let session = sessions[id] else { return }
+        // A host the user disconnected is left alone (`HostSession.park`).
+        guard let session = sessions[id], !session.parked else { return }
         if !active { extendHold(id) }
         guard session.link != .connected else {
             // The app may have been suspended since the last request: a dead link is found by an `echo` probe within
@@ -299,6 +310,8 @@ final class HostSessions {
     /// to keep its connection.
     func probe(_ record: HostRecord) -> HostSession {
         let session = makeSession(record)
+        // Verifying a host samples no stats; `add` turns them on with the session it keeps.
+        session.stats.active = false
         probes.append(Weak(session: session))
         return session
     }
@@ -306,6 +319,7 @@ final class HostSessions {
     /// A session for background work (the app refresh task) that asks the user nothing: a host key that is not
     /// already trusted and a keyboard-interactive login fail it, as does a key behind Face ID (no prompt can show).
     /// It is not one of `sessions`: nothing it does reaches the lists.
+    /// A host the user disconnected (`HostSession.park`) is left alone: the caller skips it (`isParked`).
     func backgroundSession(_ record: HostRecord) -> HostSession {
         let session = HostSession(host: record, driver: driver) { [weak self] session in
             guard let self else {
@@ -349,6 +363,7 @@ final class HostSessions {
         store.add(record)
         guard let saved = store.record(record.id) else { return }
         if let probe, probe.id == record.id {
+            probe.stats.active = active
             probe.update(saved)
             sessions[record.id] = probe
         }
@@ -380,6 +395,8 @@ final class HostSessions {
             let replacement = makeSession(saved)
             // The shells ended with the old connection; their cards stay with the host.
             replacement.shells.adopt(session.shells)
+            replacement.stats.adopt(session.stats)
+            if session.parked { replacement.park() }
             sessions[record.id] = replacement
             if active { replacement.connect() }
         }
@@ -463,8 +480,9 @@ final class HostSessions {
         trustRequests.removeAll { $0.id == request.id }
         knownHosts.forget(host: request.offer.host, port: request.offer.port)
         guard let session = sessionOf[request.hostID]?.session ?? sessions[request.hostID] else { return }
-        // The refused run may still be ending: start a fresh one.
+        // The refused run may still be ending: start a fresh one (the user asked: a Disconnect is lifted).
         session.disconnect()
+        session.unpark()
         session.connect()
     }
 
@@ -568,6 +586,7 @@ final class HostSessions {
         session.clientEnded = clientEnded
         session.shells.presences = presences
         session.networkUnavailable = networkUnavailable
+        session.stats.active = active
         session.changed = { [weak self] session in
             guard let self, self.sessions[session.id] === session else { return }
             // Disconnected (backgrounded, or the user's own disconnect): no run is left to take an answer.

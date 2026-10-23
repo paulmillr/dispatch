@@ -46,7 +46,8 @@ booted iPhone Duo) is never paired. To undo: `xcrun simctl unpair <pair>`, `xcru
 
 | Target | What |
 | --- | --- |
-| `DispatchWatch` | The watch app: single-target SwiftUI (`WKApplication`), bundle id the phone's + `.watchkitapp`, watchOS 26.0. Sources `Watch/App` and `Watch/Shared`. |
+| `DispatchWatch` | The watch app: single-target SwiftUI (`WKApplication`), bundle id the phone's + `.watchkitapp`, watchOS 26.0. Sources `Watch/App`, `Watch/Shared` and `Watch/Complication`; embeds `DispatchWatchWidgets`. |
+| `DispatchWatchWidgets` | The complications (Complications, below): a WidgetKit extension (`app-extension`, `com.apple.widgetkit-extension`) in the watch app's `PlugIns`, bundle id the watch app's + `.widgets`. Sources `Watch/Widgets` (the `@main` bundle), `Watch/Complication`, `Watch/Shared`. |
 | `DispatchWatchTests` | Unit tests hosted by the watch app (`Watch/Tests`), bundle id `….watchkitapp.tests`. |
 | `DispatchWatchUITests` | UI tests that launch the watch app (`Watch/UITests`, bundle id `….watchkitapp.uitests`), own scheme (Testing). |
 | `DispatchMobile` | Embeds `DispatchWatch` ("Embed Watch Content", `$(CONTENTS_FOLDER_PATH)/Watch`) and compiles `Watch/Shared` (Foundation-only) and `Mobile/Watch` (its `Mobile` glob). |
@@ -57,7 +58,12 @@ the project's options. The `watchApp` setting group mirrors `mobileApp`: device 
 project's arm64e matches no watch), automatic signing from `Mobile/Config/Signing.xcconfig` (the same team and
 `DISPATCH_BUNDLE_ID_SUFFIX`), ad hoc in the simulator. `Watch/App/Info.plist` names the phone in
 `WKCompanionAppBundleIdentifier` (`yachts.dispatch.mobile$(DISPATCH_BUNDLE_ID_SUFFIX)`) and sets
-`WKRunsIndependentlyOfCompanionApp` false. The icon is the phone's 1024 px PNG as a single watchOS size; the accent
+`WKRunsIndependentlyOfCompanionApp` false. The watch app and its widget extension sign with one App Group,
+`group.yachts.dispatch.mobile$(DISPATCH_BUNDLE_ID_SUFFIX)` (`DISPATCH_APP_GROUP` in the `watchApp` group;
+`Watch/App/DispatchWatch.entitlements`, `Watch/Widgets/DispatchWatchWidgets.entitlements`, and `DispatchAppGroup` in each
+Info.plist, which the code reads): a device build needs the group on the team (automatic signing registers it with
+`-allowProvisioningUpdates`); the simulator signs ad hoc with it and needs nothing. Without the group's container the app
+writes nothing and the complications say "Nothing waiting". The icon is the phone's 1024 px PNG as a single watchOS size; the accent
 colour is the phone's. The watch app has no `PrivacyInfo.xcprivacy`: it needs one in `Watch/App` as soon as it uses a
 required-reason API (UserDefaults, file timestamps). `test/ios-release.py` checks the embedded app's executable
 (arm64 and arm64_32 in a device build) against it and fails on an undeclared use; it also lists the watch app's size.
@@ -75,13 +81,19 @@ WatchConnectivity. Nothing on the watch knows a host's address, a key, a node id
 
 **Wire.** Every WatchConnectivity dictionary has one key, `dispatch.watch`, holding a binary property list
 (`PropertyListEncoder`): the snapshot repeats host ids, keys and field names in every row, which a binary plist stores
-once (5 hosts × 6 conversations: 15.0 KB, JSON 28.5 KB). The phone pushes `WatchSnapshot` with
+once (5 hosts × 6 conversations: 15.0 KB, JSON 28.5 KB, measured before the redesign's fields; 24.9 KB with them). The phone pushes `WatchSnapshot` with
 `updateApplicationContext` (latest wins; the system keeps it for the watch app's next launch). The watch sends one
 `WatchRequest` per `sendMessage` with a reply handler; the phone answers one `WatchReply` with the request's `id`.
 Every message names its `kind`; every field added later is optional. An unknown request kind is answered
 `unsupported`, an unknown reply kind or enum value decodes as `unknown`, a row that does not decode drops only that
 row. `WatchProtocol.version` changes only for a change an older peer would misread: a `terminal.screen` request (a
-tab's screen as text) with a `screen` reply is an addition, not a version.
+tab's screen as text) with a `screen` reply is an addition, not a version. The redesign's additions are of that kind
+(still version 1): the `open` and `review.undo` requests, the rows' `title`, `step`, `workingSince` and `waitingText`,
+the hosts' `latency`, `offlineSince` and `stats`, the snapshot's `reviews`, a page's turn `summary` and approval `verb`.
+An older phone answers the new requests `unsupported` and sends none of the fields (the watch then falls back: the
+preview, "Working", the caption, the approval's own words, no statistics); an older watch ignores them. A statistics
+value that does not decode drops that value, not the host; a CPU series gap travels as -1 (a property list has no null);
+`stale` travels only when true (an older phone's numbers read as current).
 
 **Identity.** As the phone keys everything (docs/ios.md, Identity): a host is `HostRecord.id`, a conversation is host
 plus its terminal's topology `key` (`WatchConversationKey`, the phone's `ChatConversationKey`), a space or tab is
@@ -119,8 +131,9 @@ and `sessionReachabilityDidChange` to reachable pushes at once, even unchanged. 
 | Snapshot | From |
 | --- | --- |
 | `phone` | `foreground`: `HostSessions.active`; `locked`: the bridge's reading (`isProtectedDataAvailable` at launch, false from `protectedDataWillBecomeUnavailable`, while it is still true, to `DidBecomeAvailable`); `offline`: `HostSessions.networkUnavailable`; `knownHostsUnreadable`: `KnownHostStore.unreadable`; `needsYou`: `ChatConversations.needsYouCount` |
-| `hosts` | `HostSessions.ordered` less plain SSH hosts (`HostSession.plainSSH`: Helper off, or a connection without the helper; docs/ios.md): `SpacesHostState(link)`, `HostSummary.tint` in the dark appearance as `#RRGGBB` (`HostTint.oklch` with the dark tone and the host's colour, as `HostTint.color` draws it when `Chrome.palette` is dark: no trait resolves it; `WatchTint.hex`; nil offline), `HostSystem.os` ("Darwin" → `macos`, else `linux`), `HostSummary.osLabel`, `HostSession.problem` or the `.failed` reason (the address, port and user it may name replaced by the host's name: `WatchSnapshotBuilder.redact`, also applied to every reply's texts), `blocked` (below), `HostRecord.chat`, `topologyIsLive && !switchingMultiplexer`, `spacesMultiplexer`, `MobileComposition.sameMachine`, `lastConnected` |
-| `conversations` | `ChatConversations.conversations` in its order: key, `name`, `space`, `MobileComposition.tab(for:)`'s key, `MobileChatSession.agentKey` (else the binding executable's file name), `WatchText.preview(summary.preview)`, `attention`, `dot`, `summary.needsYou`, `busy`, `muted`, `lastActivity`, `stale` |
+| `hosts` | `HostSessions.ordered` less plain SSH hosts (`HostSession.plainSSH`: Helper off, or a connection without the helper; docs/ios.md): `SpacesHostState(link)`, `HostSummary.tint` in the dark appearance as `#RRGGBB` (`HostTint.oklch` with the dark tone and the host's colour, as `HostTint.color` draws it when `Chrome.palette` is dark: no trait resolves it; `WatchTint.hex`; nil offline), `HostSystem.os` ("Darwin" → `macos`, else `linux`), `HostSummary.osLabel`, `HostSession.problem` or the `.failed` reason (the address, port and user it may name replaced by the host's name: `WatchSnapshotBuilder.redact`, also applied to every reply's texts), `blocked` (below), `HostRecord.chat`, `topologyIsLive && !switchingMultiplexer`, `spacesMultiplexer`, `MobileComposition.sameMachine`, `lastConnected`; `latency` (connected only: `HostSession.latency`, the `echo` round trip, in ms); `offlineSince` (offline only: `HostSession.droppedAt`, when the link last left `.connected` in this run of the app; nil before, and the watch then leaves the line out); `stats` from the bridge's `WatchStatsSource` (below), kept while offline as last known |
+| `conversations` | `ChatConversations.conversations` in its order: key, `name`, `space`, `MobileComposition.tab(for:)`'s key, `MobileChatSession.agentKey` (else the binding executable's file name), `WatchText.preview(summary.preview)`, `attention`, `dot`, `summary.needsYou`, `busy`, `muted`, `lastActivity`, `stale`; `title` (`MobileChatSession.title`, else `summary.title`: the watch titles the row and its thread by it, else by `name`); from the conversation's open `MobileChatSession` only (none before the phone opened it): while verified and working, `step` (the open turn's running `ChatStep`, else its latest, as `WatchSnapshotBuilder.phrase` words it: "Editing Sidebar.tsx", "Reading README.md", "Running cargo test", "Searching fn drain", several files as "Sidebar.tsx +2"; else the agent's `activity`, capitalised) and `workingSince` (`ChatWorkingRow`'s clock: `submittedAt`, else the open turn's start, else `workingSince`); `waitingText`: its first pending approval as "Allow <subject>?" when its operation names a command, file, URL or pattern (the first line), else the approval's own words unless they are the operation itself (raw JSON, several lines), else "Allow a tool call?" (`WatchSnapshotBuilder.approvalLine`), a question form's or a blocking side question's first question, else `summary.attention` when it needs you |
+| `reviews` | `WatchReviewEvents.open(at:)`: reviews the phone sent whose Undo is still open (below) |
 | `spaces`, `tabs` | per `MobileTabs.workspaces` but a plain SSH host's and a `sameMachine` host's (its spaces show under the first host): `orderedSpaces` less any Shell space (`MobileSpace.Kind.plainShell`, also one left on a host with its helper), unfiltered (Spaces' filter is the phone's view), `unread` (tabs whose urgency is needs you or unseen) and `working` as `SpacesSpaceRow` counts them, `TabsHost.abbreviate(cwd)`, `activity(of:)`; each space's tabs in server order with `label(of:host:)`, `program`, `abbreviate(cwd)`, `isChat`, the agent pane's agent (as a conversation's) and key, `urgency(of:)`, line two (`TabsTabRow.line`), `activity(of:)` |
 
 `blocked`, only for a host that is not connected, the first that applies: `hostKeyChanged` for `hostKeyMismatch` (or a
@@ -160,6 +173,8 @@ changed nothing, a retry runs again).
 | `stop`, `resume` | `session.stop()`, `session.resumeQueue()` | `thread` |
 | `queue.remove`, `queue.sendNow` | the `QueueRow` with that `id` (waited for up to 2 s, and for a queue change in flight to end); `removeQueued(_:)` (a row already gone is done; a device row goes offline too); `canSendNow(_:)` then `sendQueuedNow(_:)`, else `notSent` with the row's status | `thread` |
 | `seen` | `ChatConversations.markSeen(_:through:)`: the conversation id (`session.conversation`, else the row's `binding.session`), `min(through, summary.lastActivity)`, `ChatMarkers.markSeen`, rebuild. No host needed | `done` |
+| `open` | "Open on iPhone": a conversation the phone lists (a row or a session) is shown by `WatchBridge.show`: in the foreground `NotificationRoute.shared.route` opens its thread at once, as a notification's tap does (`shown`); in the background, when `UNUserNotificationCenter` says notifications are allowed (authorized, provisional or ephemeral; it never asks), a local notification (`RefreshNotification` content, id `watch-open:<host>:<node>`, "Opened from your Apple Watch.") opens it when tapped, since iOS brings no app forward by itself (`notified`); otherwise, or when the post fails, nothing (`unavailable`). No host needed | `opened` with `shown`, `notified` or `unavailable` |
+| `review.undo` | `WatchReviewEvents.undo(id)`: while the review's window is open, the Review tab's undo closure takes it back and the event goes; after the window, or when the closure says the agent has it, `requestEnded` | `done` |
 
 Failures (`WatchFailure`): `noConversation` for a host or topology key the phone does not list (or a terminal that
 no longer runs an agent); `phoneLocked` is reserved and never sent (a locked phone connects password hosts; see
@@ -169,14 +184,43 @@ row only the host's queue holds) and does not have it: `openPhone` when the snap
 `HostSession.problem`, `timedOut` when the host is up but the conversation did not open in time, `failed` with the
 paused reason; `requestEnded` for an approval or question that is no longer pending; `invalid` for an answer that
 does not complete its parts or names no offered choice, or empty text; `notSent` when the outbox refuses a message or
-Send now is not allowed; `unsupported` for an unknown kind or a newer `version`.
+Send now is not allowed; `unsupported` for an unknown kind or a newer `version`. The host screen's Connect is `refresh`
+with that host, so it needs no request of its own. It is the user's Connect: it lifts the phone's Disconnect
+(`HostSession.park`, docs/ios.md) as the phone's Connect does, `HostSession.connectByUser()` in the foreground and in the
+background `unpark()` then the quiet hold (above), whose `retryNow` connects. Pull to refresh (`refresh` without a host),
+threads and actions leave a disconnected host alone (`HostSessions.hold` skips it).
+
+**Seams for other changes.** Two inputs are protocols or plain objects the phone's later features fill:
+
+- `WatchStatsSource` (`Mobile/Watch/WatchStatsSource.swift`): `stats(for: UUID) -> WatchHostStats?` (CPU %, load,
+  memory used and total, disk free and total, warning flags, 60 buckets of 15 s of CPU with nil gaps, when sampled,
+  `stale`). `MobileComposition.app()` sets the bridge's `stats` to `WatchHostStatsFeed`
+  (`Mobile/Watch/WatchHostStatsFeed.swift`), which reads each host's own store (`HostSession.stats`, `HostStatistics`,
+  docs/ios.md Host stats) through `summary(at:)`: its values, the strip's red flags as `warnings` (CPU from 90 %, memory
+  over 90 %, a disk over 80 % used), its 60 CPU bars as the history, the sample's time and `stale` (the link dropped,
+  the app in the background, a new connection's first sample not in yet). The stores sample every 5 s (2 s while a
+  stats sheet shows a host); the feed keeps the snapshot to one change of numbers per 15 s (`WatchHostStatsFeed.interval`,
+  one bar of the history): it observes the stores and publishes new numbers at once only when the last publish is 15 s
+  old, else once at its end, while a host's numbers appearing or going or turning stale or current go at once. The
+  builder reads the feed's `published` inside its observation tracking, so each publish is one push (after the
+  bridge's 1 s debounce, with whatever else changed). In the background nothing samples, so nothing more is pushed
+  for statistics. Where a host has no reading the feed answers nil (the strip's "—"), except in Debug's scripted modes
+  (`DISPATCH_MOBILE_SCRIPTED`, the demo), whose helpers send no statistics: there `WatchSampleStats` answers, numbers
+  derived from the host's id (the demo's hosts sample their own).
+- `WatchReviewEvents` (`Mobile/Watch/WatchReviewEvents.swift`, `WatchBridge.reviews`, observable): the Review tab calls
+  `post(key:agent:title:comments:files:window:undo:)` when Send goes out with an undo window (the closure takes it back,
+  false once the agent has it) and `finished(_:)` when the window closed or the phone's own Undo took it; the snapshot
+  carries the open ones, `review.undo` calls `undo(_:)`. At most eight are kept.
 
 The page (`WatchThreadBuilder`): per turn, `ChatPatch.displayedItems` in order (as `ChatTurnSummary.displayed`), each
 user, agent, notice and narration item as an item (`WatchText.plain`, row id as `ChatThreadRow.id` builds it), each
 tool as one line with the same id form (`ChatStep`: `kind.label`, `title`, `detail`, `failed`, `running`), other
-reasoning left out; `ChatTurnSummary.caption` on an ended turn's last agent item; `optimisticPrompt` last (its
+reasoning left out; `ChatTurnSummary.caption` on an ended turn's last agent item, with its `summary` (steps, the
+turn's seconds, and across its patches that applied the distinct paths of `ToolPresentation.documents` and the summed
+`ChatStep.additions`/`deletions`); `optimisticPrompt` last (its
 `pending-…` id); the newest `limit` items, at most 200 (`earlier` when more exist, here or on the host). Approvals:
-`approvalPresentation` (title, code), `choices(for:)` as `WatchChoice` (role from `ApprovalChoice.Role`). Questions:
+`approvalPresentation` (title, code), `choices(for:)` as `WatchChoice` (role from `ApprovalChoice.Role`). An approval's `verb` is `run` when its operation's JSON has a
+`command` (or `cmd`), `fetch` for a `url`, else none (a path may be read or written: the approval's own words). Questions:
 question forms (pending approvals with `pending.questions`) first, then unsubmitted side questions; parts from the
 interaction's questions (`HelperChat.Question`: id, header, text, options by index, `multiple`, `secret`). A form's
 parts have `custom` false (the phone's form offers only its options); a side question's parts take
@@ -245,10 +289,14 @@ What the model layer does (`WatchModel`); the screens follow it.
   state. Under "Unlock your iPhone" a host blocked only by the lock says nothing more. Times re-read every 30 s.
 - **Agents.** Sorted as the phone's (`ChatConversations.rebuild`: newest activity, then host name, then node key,
   descending). Dots as the phone's: blue for needs you or an unseen result, amber working, muted rows keep only needs
-  you. The badge is the phone's needs-you count. Previews are one flattened line of at most 120 characters. A row is
-  the dot, the name (two lines), the agent's mark in the host's tint with "host · space" and the time, then the
-  preview (two lines; the agent's attention line instead when it needs you). The phone's 46 pt host disc does not fit
-  a 42 mm row: the mark (Claude's asterisk, Codex's braces, Pi's π, else a terminal) carries the tint. A blocked host
+  you. The badge is the phone's needs-you count. Previews are one flattened line of at most 120 characters. A row
+  (mockups K1) is the dot, the agent's glyph in its own column (`AgentGlyph`: Claude's sparkle in orange, Codex's
+  angle brackets, Pi's π in the code purple, else a terminal), then the title (`title`, else `name`; two lines, semibold), the state line (two
+  lines) and a caption with "host · space" in the host's tint and the time. The state line follows the state: needs
+  you, what it asks in primary ("Allow cargo test --workspace?", `waitingText`, else the attention line, the preview,
+  "Needs you"); working, the step and the turn's time ticking each second ("Editing Sidebar.tsx · 48s", else
+  "Working"); else the last message. The phone's 46 pt host disc does not fit a 42 mm row: the host's tint goes to
+  the caption. A blocked host
   with rows says `blockedMessage` under the list; the toolbar's leading button is Refresh (watchOS lists have no pull to
   refresh). No rows: the phone's "No agents yet"; before the first snapshot "Waiting for your iPhone".
 - **Thread.** Opening fetches a page (40 items) and caches it; the cached page shows while a newer one loads, and a
@@ -258,20 +306,34 @@ What the model layer does (`WatchModel`); the screens follow it.
   before WatchConnectivity activated) loads once it is, without Try Again; launch greets the phone with one `hello`
   however many starts meet it. Items: user and agent messages (Markdown flattened by `WatchText.plain`), thinking muted,
   tools as one line each ("Run · cargo test · ok"), the turn caption ("5 steps · 1m 26s"), notices. Older history stays
-  on the phone ("Earlier messages are on your iPhone"). One list: a header (agent · model, then "Attaching…", the
-  paused or offline reason, and the phone's notes), the items, the working line ("editing files 4m 2s"), failure lines
-  (the watch's, then the phone's `failure`; a tap dismisses one), the requests, the queue, the composer. It opens at the
-  first request, else at the newest item.
-- **Approvals and questions.** Only pending ones, with the phone's chips in the phone's order (Deny, This session when
-  offered, Allow). Questions offer their options (several when `multiple`), dictation where a typed answer is allowed,
-  Skip; a secret question says "Answer on your iPhone". Nothing is sent until every part is answered. An approval is
-  the agent's bubble (title, the command in three lines, "Waiting · 2m") with each chip a full-width row: Deny red,
-  This session grey, Allow pink. A question is a bubble with Answer, which opens the form as a sheet (options with
-  checkmarks, "Dictate or type", Send, Skip); a typed answer replaces a part's chosen options and the other way round.
-- **Composer and queue.** Dictation or the system text input (`TextFieldLink`); the phone routes the text as its own
-  composer would (sent at once when idle, else queued; `route` gives the placeholder: "Message", "Queue a message…",
-  "Queued on your iPhone"; "Queue another…" with messages waiting, as the phone). Steer is the phone's long-press send:
-  watchOS has no context menu, so a live, working agent gets a second input, Steer. Queue rows ("Queued · 2") show
+  on the phone ("Earlier messages are on your iPhone"). One list (mockups K2): a header (the agent's glyph, agent ·
+  model, then "Attaching…", the paused or offline reason, and the phone's notes), the items, the working line
+  ("editing files 4m 2s"), failure lines (the watch's, then the phone's `failure`; a tap dismisses one), the requests,
+  the queue, then the capsules: Reply (pink), Steer, Stop, Open on iPhone. The newest agent message, unless the user
+  wrote after it, is the summary card: its bubble with the turn's footnote, "5 steps in 1m 26s · 4 files +61 −9" (the
+  counts green and red; an older phone's caption otherwise). It opens at the first request, else at the card's top (so
+  Reply shows under it), else at the newest item. Open on iPhone sends `open` and words the phone's answer under the
+  button: "Open on your iPhone" (`shown`), "Tap the notification on your iPhone" (`notified`), "Open Dispatch on your
+  iPhone: its notifications are off." (`unavailable`). The row and the thread are titled by the conversation's `title`,
+  else its `name`.
+- **Approvals and questions.** Only pending ones, with the phone's chips (the page lists them in the phone's order,
+  Deny, This session when offered, Allow; the watch shows the affirmative first, below). Questions offer their options (several when `multiple`), dictation where a typed answer is allowed,
+  Skip; a secret question says "Answer on your iPhone". Nothing is sent until every part is answered. An approval
+  (mockups K3) is the agent's bubble: its glyph and "Codex wants to run" (the page's `verb`; else the approval's own
+  words, one line, scaled down on a 42 mm screen), the command on one monospaced line scaled down rather than wrapped
+  (a longer one ends "…"), "Waiting · 2m" under it, then the chips as full-width glass capsules, affirmative first:
+  Allow pink, This session glass where offered, Deny glass with red words. A question is a bubble with Answer, which
+  opens the form as a sheet (mockups K4): one part at a time ("1 of 2"), its options as rows with checkmarks, "Dictate
+  or type" where a typed answer is allowed, Next once the part is answered, Send on the last, Back, Skip; a typed
+  answer replaces a part's chosen options and the other way round.
+- **Composer and queue.** Reply (mockups K5) opens the system's text input (`TextFieldLink`: dictation or the
+  keyboard; the mockup's waveform is that system screen), then a confirm screen with the words in the user's pink
+  bubble, where they go ("Queued until this turn ends", "Queued after 2 more", "Queued on your iPhone"; nothing when
+  sent at once), Send and Cancel: nothing leaves the watch before Send. The phone routes the text as its own composer
+  would (sent at once when idle, else queued; `route` gives the input's prompt: "Message", "Queue a message…", "Queued
+  on your iPhone"; "Queue another…" with messages waiting, as the phone). Steer is the phone's long-press send:
+  watchOS has no context menu, so a live, working agent gets a second input, Steer (the same confirm screen, titled
+  Steer). Queue rows ("Queued · 2") show
   their status and swipe for Remove and Send now where the phone allows it; Stop while working, Resume after Stop. No
   editing of queued text (remove and send again). The message on its way is a faded bubble with "Sending…".
 - **Optimistic, then the phone's page.** An answer removes its card, a message shows as "Sending…", a removed row
@@ -297,6 +359,54 @@ What the model layer does (`WatchModel`); the screens follow it.
   time. An agent's tab (`chat` with an agent pane) pushes its thread; any other a tab screen: name, host, system,
   space, folder, program, "40 min ago", status, and "Terminal on your iPhone". A truncated snapshot ends with "Some rows
   are on your iPhone". The leading toolbar button is Refresh, as in Agents.
+- **Host** (mockups K6). Each Spaces header (the host's mark, name, state dot, multiplexer chip, a chevron) pushes the
+  host's screen (`HostScreen`): the mark, the multiplexer chip, the state dot with the helper's latency ("18 ms";
+  "Connecting…", "Offline"), then a grouped card with the phone's strip (CPU %, Memory used, Disk free, each red when
+  the phone flags it; "—" without a reading; GB, MB under one, TB from a thousand) over the 15-minute CPU sparkline in
+  the host's tint (gaps skipped, the last sample marked) with "CPU · 15 min" and "peak 82%", then "2 spaces · 5 tabs"
+  with how many of its agents need you (blue) and an amber dot while one works. Connecting is not offline: the card as
+  it is, "Connecting…" with a spinner above the counts. Offline (K6b): the card as last known at half opacity without
+  the line, "Offline since 2:02 PM" (a weekday within the week, else the date; no line when the phone does not know
+  when the connection dropped, as after its own relaunch), then Connect (pink; `refresh` with the host, "Connecting…"
+  meanwhile), or for a blocked host what only the phone can do. Numbers the phone marks `stale` (a connected host while
+  the phone is in the background, or before a new connection's first sample) dim the card as offline does, the line
+  kept, and VoiceOver adds "not current". No statistics from the phone (an older one, or none read yet): the strip
+  says "—".
+- **Review sent** (mockups K8). When a snapshot brings a review the phone just sent whose Undo is still open
+  (`WatchSnapshot.reviews`, newest), the root presents it over whatever shows, once: "Review sent", the agent's glyph
+  and the conversation, "3 comments · 2 files", Undo (glass; `review.undo`), and "Sent from your iPhone. Undo for 8 s,
+  then claude reads it." (the window the phone gave). At the deadline Undo goes and the line says "claude has it."; an
+  Undo after it says "Too late to undo" without asking the phone. A review that arrives after its window never shows.
+  When a later snapshot no longer lists it before its deadline (the phone's own Undo took it), the card says "Taken back
+  on your iPhone." for two seconds and closes; after the deadline it just closes. While a thread's own sheet is up (its
+  question form or the reply confirm screen; `WatchRouter.childSheet`) the card waits and shows once that closes: one
+  sheet cannot present over another. The reviews already shown are remembered only while the phone lists them.
+- **Complications** (mockups K7). One widget, "Needs you" (`NeedsYouWidget`, `DispatchWatchWidgets`), in the
+  rectangular family (faces and the Smart Stack: the pink sparkle, "Needs you · 2" and "Allow cargo test? · mba2", the
+  first needs-you row's `waitingText` or attention line, else its title, and its host), the corner (the glyph, the count
+  along the bezel), circular (glyph over count) and inline; pink only while something needs you, grey "Nothing waiting"
+  otherwise. The entry (`WatchComplicationEntry`, `Watch/Shared`: the count, the newest needs-you row as Agents sorts,
+  the snapshot's time) is a JSON file in the App Group container (`WatchComplicationStore`, data protection class C),
+  written by `WatchComplicationWriter`, newest wins, from two sources:
+  - every snapshot the watch app takes (the model's `snapshotChanged`): the application context at activation and on
+    each change, a reply, a message;
+  - the phone's `transferCurrentComplicationUserInfo` (`WatchBridge`, after a push): only while a complication of the
+    app is on the watch's active face (`isComplicationEnabled`), only when the count or the first line changed
+    (`complicationSent`), and only while the day's budget lasts (`remainingComplicationUserInfoTransfers`, 50 a day;
+    "Complication not transferred: the day's budget is spent" in the phone's log). It wakes the watch app in the
+    background: `DispatchWatchApp`'s `.backgroundTask(.watchConnectivity)` activates the session, waits (up to 10 s)
+    until `hasContentPending` is false while the link hands the entry (`didReceiveUserInfo`) and any newer context to
+    the writer, then returns.
+  The writer reloads the widget's timelines when what the faces show changed, or when the last entry was old enough to
+  show its time. The timeline is the entry as written, then from five minutes past its time (`staleAfter`) the same
+  with "As of 2:02 PM" on the rectangular face; the system asks for a new timeline after half an hour. A tap opens
+  `dispatch-watch://open?host=…&node=…` (`WatchRouter.open(url:)`: Agents with that thread pushed) or
+  `dispatch-watch://agents` with nothing waiting. No `UserDefaults` (a required-reason API): a plain file. Limits: once
+  the budget is spent, or with the complication only in the Smart Stack (not on the face), the entry changes only when
+  the watch app runs or the system wakes it for a context, so a face can show an old count; its "As of" time says so.
+  Untested: a face carrying it and a real background wake (simctl can neither configure a face nor report the budget);
+  the views, the timeline, the writer and the phone's transfer rules are tested (`WatchComplicationTests`,
+  `WatchBridgeTests`).
 - **Notifications.** Background refresh's notifications reach the watch as iOS forwards any iPhone notification (the
   phone locked, the watch worn). Their `userInfo` is `host` and `node` (`RefreshNotification`). The app's
   `WKApplicationDelegate` (`WatchAppDelegate`) is the `UNUserNotificationCenter` delegate and registers category
@@ -311,26 +421,36 @@ What the model layer does (`WatchModel`); the screens follow it.
 - **Not on the watch.** Adding, editing or removing hosts, keys, trust and login sheets (secrets and trust decisions
   stay on the phone's screen), Settings, New chat, New space and New tab (multi-step forms), the terminal, the diff
   viewer, message details and step output, the model and effort picker, mute and close (cheap to add later), editing
-  queued messages, the phone's drafts (the watch's messages never touch them).
+  queued messages, the phone's drafts (the watch's messages never touch them), the review itself (the watch only
+  mirrors a sent review's Undo).
 - **Debug hooks** (compiled out of Release): `DISPATCH_WATCH_SCRIPTED=1|empty|unreachable|locked|waiting` (via
   `SIMCTL_CHILD_`), or the launch argument `-DispatchWatchScripted <value>` (read from the process arguments, so
   `xcrun simctl launch <udid> <bundle id> -DispatchWatchScripted locked` works without a paired phone):
   `ScriptedWatchLink`'s phone. `1` (or `demo`): hosts "studio" (macOS, tmux) and "lab" (Linux, herdr) connected, "pi"
   offline behind Face ID; an approval, a question, a working agent, an unseen result; five spaces, nine tabs.
+  The demo's hosts carry statistics and latency, its rows steps and questions. `mockup`: the redesign mockups' phone
+  (host mba2, macOS, herdr, 18 ms, the mockups' statistics and sparkline; "Sidebar theme toggle" working, "Rate limiter
+  for the API" waiting on `cargo test --workspace` with a two-part question behind it, "Docs site migration" done; their
+  pages). `mockup-offline`: the same with mba2 offline since 2:02 PM (Connect brings it back). `mockup-review`: the
+  same with a review just sent (its 8 s window held open a little ahead so a screenshot finds it).
   `empty`: reachable, no hosts. `unreachable`: the demo's snapshot from 25 min ago, the phone out of reach. `locked`:
   the demo with the phone locked and in the background: studio and lab (passwords) stay connected and take actions,
   pi (Face ID) answers `answer`, `stop`, `resume` and Send now with `openPhone`; no notice. `waiting`: no snapshot,
   unreachable.
-  Screens without touches: `-DispatchWatchShow spaces|spaces:<host>|space:<host>/<space key>|tab:<host>/<tab key>`
-  opens Spaces (scrolled to a host's section), a space or a tab screen; `-DispatchWatchOpen <host>/<node>` takes a
+  Screens without touches: `-DispatchWatchShow spaces|spaces:<host>|space:<host>/<space key>|tab:<host>/<tab key>|host:<host>`
+  opens Spaces (scrolled to a host's section), a space, a tab or a host screen; `-DispatchWatchSheet
+  question|question:<option>|reply:<text>` opens, once the thread shows, its first question's form (with that option
+  of the first part chosen) or the reply confirm screen with the text; `-DispatchWatchOpen <host>/<node>` takes a
   notification tap's route to a thread; `-DispatchWatchNotify <host>/<node>` posts a local `agent` notification with
   the phone's `userInfo` 3 s after launch (provisional authorization, so no prompt; simctl cannot grant notifications).
-  Hosts are `WatchFixtures`' UUIDs (`5E1D1A5C-57D1-4C0A-8000-00000000000{1,2,3}`).
+  Hosts are `WatchFixtures`' UUIDs (`5E1D1A5C-57D1-4C0A-8000-00000000000{1,2,3}`; mba2 `…000000000011`, its
+  conversations `term_1` to `term_3`).
 - **Screens** (Agents). `Watch/App/Agents`: `AgentsScreen.swift` (`AgentsScreen`, `AgentsRow`, the blocked note,
   the empty state), `ThreadScreen.swift` (`ThreadScreen`, `ThreadHeader`), `ThreadItems.swift` (items, bubbles, tool
   lines, the working line), `ThreadRequests.swift` (approval card and chips, question card, `QuestionSheet`,
-  `QuestionDraft`), `ThreadComposer.swift` (placeholders, queue rows), `AgentsStyle.swift` (the phone's chat colours
-  in their dark values, the agent marks). Tests: `Watch/Tests/WatchAgentsViewTests.swift`; with
+  `QuestionDraft`), `ThreadComposer.swift` (placeholders, route words, queue rows), `ReviewSentScreen.swift` (K8),
+  `AgentsStyle.swift` (the phone's chat colours in their dark values, the agent marks); `ThreadScreen.swift` also holds
+  `ThreadSummaryCard` (K2) and `ReplyConfirmScreen` (K5). Tests: `Watch/Tests/WatchAgentsViewTests.swift`; with
   `TEST_RUNNER_DISPATCH_WATCH_AGENTS_SHOTS=<dir>` its render test saves every scenario's rows and threads as PNGs.
 - **Screens** (app shell and Spaces). `Watch/App/DispatchWatchApp.swift` (`@main`: one `WatchModel.app()`, `start()` at
   launch and on every return to active, `refresh()` too after more than 30 s away; the notification scene).
@@ -339,17 +459,26 @@ What the model layer does (`WatchModel`); the screens follow it.
   bar; a stack per page crashed at launch on watchOS 26, "nest wrapped navigation controllers"), `WatchNoticeView.swift`
   (notice words and banners, the host problem line), `WatchNotifications.swift` (`WatchRouter`, `WatchAppDelegate`,
   the debug hooks, `WatchNotificationController`), `WatchStyle.swift` (`Color(watchHex:)`, `WatchDots`, `WatchTime`,
-  `WatchHostMark`, `WatchDotView`). `Watch/App/Spaces`: `SpacesScreen.swift`, `SpaceScreen.swift`,
-  `TabDetailScreen.swift`, `SpacesText.swift` (row words, routes `WatchSpaceRoute`/`WatchTabRoute`). Tests:
+  `WatchHostMark`, `WatchDotView`), `WatchChrome.swift` (the redesign's shared pieces: `AgentGlyph`, `CapsuleLabel` and
+  `CapsuleButton` over `CapsuleFill`, Liquid Glass capsules, the accent tinted, in place of platter buttons; `BareRow`;
+  `Sparkline`), `WatchComplicationWriter.swift`. `Watch/App/Spaces`: `SpacesScreen.swift`, `SpaceScreen.swift`,
+  `TabDetailScreen.swift`, `HostScreen.swift` (K6, `HostStatsCard`, `HostStatsText`), `SpacesText.swift` (row words,
+  routes `WatchSpaceRoute`/`WatchTabRoute`/`WatchHostRoute`). `Watch/Complication` (app and widget):
+  `WatchComplication.swift` (entry, URL, store), `NeedsYouWidget.swift` (widget, provider, faces). Tests:
   `Watch/Tests/WatchShellTests.swift`, `WatchSpacesViewTests.swift`.
 
 ### Limits
 
 - **Sizes** (`WatchLimits`). WatchConnectivity refuses a context or message over its payload limit (about 64 KiB,
-  `WCErrorCodePayloadTooLarge`). The snapshot is fitted to 32 KiB: texts clipped (previews 120, names and lines 200),
+  `WCErrorCodePayloadTooLarge`). The snapshot is fitted to 32 KiB: texts clipped (previews, steps and what a row asks
+  120, names, titles and lines 200; a host's statistics are about 0.7 KB, its CPU line cut to the newest 60 buckets),
   then rows left out a tenth at a time, least useful first: terminal tabs, idle conversations and their tabs, anything
-  that does not need the user; `truncated` says so. 5 hosts × 6 conversations at their longest: 15.0 KB, nothing left
-  out; 8 × 12: fitted, every needs-you row kept. Replies are fitted to 48 KiB (item text 1,000 characters, oldest items
+  that does not need the user; `truncated` says so. Before any row goes, the hosts' CPU lines go (their strips stay),
+  then the rows' steps and what they ask are cut to 40 characters (`WatchLimits.short`). The budget leaves 256 bytes
+  (`WatchLimits.envelope`) for the WatchConnectivity dictionary around the snapshot. 5 hosts × 6 conversations at their
+  longest (every host with statistics and a full CPU line, every row titled, a working row with its step, a waiting one
+  with what it asks; `WatchFixtures.crowded`): 24.9 KB (15.0 before those fields), nothing cut or left out; 8 × 12:
+  the CPU lines and the long steps go, then rows, every needs-you row kept. Replies are fitted to 48 KiB (item text 1,000 characters, oldest items
   first). A thread page is about 1 KB.
 - **Reachability.** The watch can ask only while `isReachable` (the phone in Bluetooth or Wi-Fi range); the phone app
   need not run: `sendMessage` wakes it in the background. A reply takes up to the phone's 15 s budget when a host must
@@ -369,6 +498,9 @@ What the model layer does (`WatchModel`); the screens follow it.
   scheme in `build/ios` (`--derived-data` for another). Cases are classified in `test/suites.json` as
   `DispatchWatchTests/<Class>/<test>`; a fast run fails on an unclassified case, as the iPhone's does. No Python cases
   and no SSH engine setup. The watch needs no paired phone; xcodebuild boots it.
+- The phone's side runs in the iPhone suite: `WatchSnapshotTests`, `WatchThreadBuilderTests`, `WatchRequestServerTests`
+  (every request, the Connect that lifts a Disconnect), `WatchBridgeTests` (pushes, complications, budgets) and
+  `WatchHostStatsFeedTests` (the stores' statistics, at most one change per 15 s).
 - The pair logic's tests (`test/ios-release.test.py`, `DispatchMobileScripts/DeviceDiscoveryTests`) run in the iPhone
   suite.
 - **UI tests** (`Watch/UITests`, target and scheme `DispatchWatchUITests`; not in `test/suites.json`, which holds unit
@@ -380,7 +512,11 @@ What the model layer does (`WatchModel`); the screens follow it.
   ```
 
   `testScriptedTapsThroughAgentsAndSpaces` (`-DispatchWatchScripted 1`, no phone): Agents → the approval's thread →
-  Allow, the question's Answer → Cosine → Send, then Spaces → dispatch → zsh ("Terminal on your iPhone").
+  Allow, the question's Answer → Cosine → Send, the release notes' thread → Reply → typed text → the confirm screen's
+  Send (the user's bubble shows) → Open on iPhone ("… on your iPhone"), then Spaces → the studio header → its host
+  screen ("CPU 34 percent"), back → dispatch → zsh ("Terminal on your iPhone"). `WatchFidelityTests` opens each
+  redesign screen on the mockup phone (`-DispatchWatchScripted mockup`, below) and checks what must show; K6b also
+  taps Connect and K8 Undo. With `TEST_RUNNER_DISPATCH_WATCH_FIDELITY=<dir>` each saves its screen as `<ID>.png`.
   `testLiveRoundTripWithThePairedPhone` runs against Dispatch on the paired phone (start it first, e.g. with the
   scripted hosts as in Building and running): waits up to 10 s for the phone's rows (else `XCTSkip`, so it is safe
   without a phone), taps Refresh, opens the first row, then taps Allow, a question's first option or Stop when the page
@@ -443,6 +579,12 @@ What the model layer does (`WatchModel`); the screens follow it.
   left), held the host ("Hold 24CF4CFD (background): disconnected → connected in 122 ms, held") and answered in
   13.0 s. The app was suspended again once the task ended, so the hold's 60 s timer did not fire on time; the next
   wake (a `hello` 2 min later) disconnected the host ("Host 24CF4CFD: connected → offline").
+- The redesign (2026-10-23, the same pair, the phone on its scripted hosts as above): the snapshot carried the new
+  fields over WatchConnectivity (studio's screen: "38 ms", the sample's strip and sparkline, "2 spaces · 3 tabs"), and
+  `testLiveRoundTripWithThePairedPhone` tapped Open on iPhone: "Request open B32A1BAB received (app active)", "Open
+  39FFE3A2: shown", "Answered open B32A1BAB with opened in 223 ms" on the phone, "Open on your iPhone" on the watch. Not
+  run: a review sent from the phone (the Review tab is another change; the scripted watch phone plays it) and a face
+  with the complication.
 - Not shown by the simulators: a locked phone (`simctl` cannot lock one, and a simulator without a passcode always has
   protected data), forwarded iPhone notifications and their tap, Face ID keys, real SSH hosts, a device. The watch
   cannot be tapped from `simctl`; the debug routes and the UI tests stand in.
@@ -457,6 +599,16 @@ What the model layer does (`WatchModel`); the screens follow it.
   it), and the next `chat.send` is refused as "not ready for input" until that input is cleared; a message sent from
   the watch then is lost (the phone keeps no draft for it, though the failure says "Your draft is preserved"), and the
   watch learns of the failure only from its next page.
+- **Fidelity** (the redesign, mockups/Watch, 2026-10-23). The pairs of `mockups/shots/K*.png` (46 mm, 416 × 496;
+  the watch is dark only) come from `WatchFidelityTests` as above into `build/mockup-review/` (K1, K1b scrolled with the
+  Digital Crown, K2, K3, K4, K5, K6, K6b, K8) and, for the complications, from `WatchComplicationTests` with
+  `TEST_RUNNER_DISPATCH_WATCH_AGENTS_SHOTS=<dir>` (`complication.png`: the rectangular and corner faces as the mockup's
+  note lays them out; a face cannot be configured from simctl). By hand: `xcrun simctl launch <watch>
+  yachts.dispatch.mobile.watchkitapp -DispatchWatchScripted mockup -DispatchWatchShow host:<mba2>` and `xcrun simctl io
+  <watch> screenshot`. What differs from the mockups is the system's: a pushed screen's Back button and its title in the
+  accent (the mockups are root screens with grey large titles), Agents' Refresh button and centred title (the vertical
+  pages' navigation bar), the system's focus glow on a question's chosen row; K5's waveform is the system's dictation
+  screen, which comes before the confirm screen.
 - New tests go in `Watch/Tests/<Area>Tests.swift`; after adding files, run `python3 scripts/generate-project.py` and
   commit `project.pbxproj` and `Dispatch.xcodeproj/xcshareddata/xcschemes/DispatchWatch.xcscheme` (and
   `DispatchWatchUITests.xcscheme`).

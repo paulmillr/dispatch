@@ -14,6 +14,11 @@ import UIKit
 final class WatchRequestServer {
     let composition: MobileComposition
     private let hold: @MainActor (UUID) async -> Void
+    /// "Open on iPhone": shows the conversation (the bridge's: its thread in the foreground, else a local notification
+    /// that opens it) and says what it did.
+    private let show: @MainActor (ChatConversationKey) async -> WatchOpenOutcome
+    /// Reviews the watch may undo.
+    var reviews: WatchReviewEvents?
 
     /// How long one request may wait for a host and its conversation: under the bridge's `WatchLimits.phoneBudget`, so
     /// the phone answers with what it has rather than the bridge timing out.
@@ -28,9 +33,13 @@ final class WatchRequestServer {
     /// Duplicates of a request still being served, waiting for its reply.
     private var waiting: [String: [CheckedContinuation<WatchReply, Never>]] = [:]
 
-    init(composition: MobileComposition, hold: @escaping @MainActor (UUID) async -> Void) {
+    init(composition: MobileComposition, hold: @escaping @MainActor (UUID) async -> Void,
+         show: @escaping @MainActor (ChatConversationKey) async -> WatchOpenOutcome = { _ in .unavailable },
+         reviews: WatchReviewEvents? = nil) {
         self.composition = composition
         self.hold = hold
+        self.show = show
+        self.reviews = reviews
     }
 
     /// Serves one request within `WatchLimits.phoneBudget` (the bridge races it with a timeout). `snapshot` builds the
@@ -125,6 +134,18 @@ final class WatchRequestServer {
             // A row with nothing written yet has nothing to mark: still done.
             composition.conversations.markSeen(chat, through: through)
             return .done
+        case .openOnPhone(let key):
+            guard let chat = chatKey(key), composition.conversations.sessions[chat] != nil
+                    || composition.conversations.conversations.contains(where: { $0.key == chat }) else {
+                return .failure(Self.noConversation)
+            }
+            return .opened(await show(chat))
+        case .undoReview(let id):
+            switch reviews?.undo(id) ?? .failure(.unknown) {
+            case .success: return .done
+            case .failure(.tooLate): return .failure(Self.reviewRead)
+            case .failure(.unknown): return .failure(Self.reviewGone)
+            }
         case .unknown:
             return .failure(.unsupported)
         }
@@ -144,7 +165,7 @@ final class WatchRequestServer {
             page.failure = page.failure.map(redact)
             page.notes = page.notes.map(redact)
             return .thread(page)
-        case .snapshot, .done, .unknown:
+        case .snapshot, .done, .opened, .unknown:
             return result
         }
     }
@@ -152,13 +173,19 @@ final class WatchRequestServer {
     // MARK: Hosts
 
     /// Pull to refresh: the hosts with Chat on (or `host`; never a plain SSH host) connect, held in the background or retried in the
-    /// foreground, and their rows are read again; returns once every link settled or at the deadline.
+    /// foreground, and their rows are read again; returns once every link settled or at the deadline. One `host` is the
+    /// host screen's Connect, the user's own: it lifts a Disconnect (`HostSession.park`) as the phone's Connect does,
+    /// `connectByUser()` in the foreground, `unpark()` and the hold's quiet connection in the background. Pull to refresh
+    /// and every other request leave a disconnected host alone.
     private func refresh(_ host: UUID?, all: Bool, deadline: ContinuousClock.Instant) async {
         let hosts = composition.hosts
         let sessions = hosts.ordered.filter { !$0.plainSSH && (all ? $0.host.chat : $0.id == host) }
         if hosts.active {
-            for session in sessions { session.retryNow() }
+            for session in sessions {
+                if all { session.retryNow() } else { session.connectByUser() }
+            }
         } else {
+            if !all { for session in sessions { session.unpark() } }
             let holds = sessions.map { session in Task { await self.hold(session.id, until: deadline) } }
             for hold in holds { await hold.value }
         }
@@ -369,6 +396,8 @@ final class WatchRequestServer {
     }
 
     static let noConversation = WatchFailure(.noConversation, "This conversation isn't on your iPhone any more.")
+    static let reviewRead = WatchFailure(.requestEnded, "Too late to undo: the agent has the review.")
+    static let reviewGone = WatchFailure(.requestEnded, "This review can't be undone from here any more.")
     static let requestEnded = WatchFailure(.requestEnded, "This was already answered or is no longer waiting.")
     static let unanswerable = WatchFailure(.invalid, "That answer doesn't fit the question. Answer it on your iPhone.")
     /// What a request that lost to the budget returns (the watch already has `timedOut`; never cached, so a retry runs).

@@ -22,6 +22,15 @@ final class ScriptedWatchSession: WatchSessioning {
     func sendMessage(_ message: [String: Any], failed: @escaping @Sendable (any Error) -> Void) {
         if let snapshot = try? WatchCodec.value(WatchSnapshot.self, in: message) { messages.append(snapshot) }
     }
+
+    var isComplicationEnabled = false
+    var remainingComplicationUserInfoTransfers = 50
+    private(set) var complications: [WatchComplicationEntry] = []
+
+    func transferComplication(_ userInfo: [String: Any]) {
+        if let entry = WatchComplicationEntry.value(in: userInfo) { complications.append(entry) }
+        remainingComplicationUserInfoTransfers -= 1
+    }
 }
 
 /// The phone's side of WatchConnectivity (docs/watch.md, The bridge): activation, when the snapshot is pushed, and how
@@ -81,6 +90,40 @@ final class WatchBridgeTests: XCTestCase {
 
         bridge.deactivated()
         XCTAssertEqual(session.activations, 2, "activated again for the next watch")
+    }
+
+    /// The complications' entry goes to the watch (`transferCurrentComplicationUserInfo`) only with a complication on its
+    /// face, only when the count or the first line changed, and only while the day's budget lasts.
+    func testTransfersTheComplicationOnlyWhenItChangesAndWithinBudget() async throws {
+        let (app, _, _) = try await WatchSnapshotTests.fixture(self)
+        let session = ScriptedWatchSession()
+        session.activationState = .activated
+        session.isPaired = true
+        session.isWatchAppInstalled = true
+        let bridge = bridge(app, session: session)
+        XCTAssertEqual(session.contexts.count, 1)
+        XCTAssertTrue(session.complications.isEmpty, "no complication on the face")
+
+        session.isComplicationEnabled = true
+        bridge.watchStateChanged()
+        XCTAssertEqual(session.complications.count, 1)
+        let entry = try XCTUnwrap(session.complications.first)
+        XCTAssertEqual(entry.needsYou, 1)
+        XCTAssertEqual(entry.text, "Billing migration")
+        XCTAssertEqual(entry.host, "studio")
+        XCTAssertEqual(entry, WatchComplicationEntry(try XCTUnwrap(session.contexts.last)))
+
+        bridge.push(reason: "test", force: true)
+        XCTAssertEqual(session.contexts.count, 3)
+        XCTAssertEqual(session.complications.count, 1, "the same faces: no transfer")
+
+        session.remainingComplicationUserInfoTransfers = 0
+        bridge.watchStateChanged()
+        XCTAssertEqual(session.complications.count, 1, "the day's budget is spent")
+        session.remainingComplicationUserInfoTransfers = 1
+        bridge.watchStateChanged()
+        XCTAssertEqual(session.complications.count, 2)
+        XCTAssertEqual(bridge.complicationSent, entry)
     }
 
     func testAnswersRequests() async throws {

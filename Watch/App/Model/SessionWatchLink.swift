@@ -20,6 +20,8 @@ final class SessionWatchLink: NSObject, WatchLink {
     private(set) var snapshot: WatchSnapshot?
     private(set) var reachable = false
     var changed: (@MainActor () -> Void)?
+    /// A complication entry the phone transferred (`transferCurrentComplicationUserInfo`).
+    var complication: (@MainActor (WatchComplicationEntry) -> Void)?
 
     /// Nil where WatchConnectivity is unsupported: nothing is ever reachable.
     private let session: WCSession?
@@ -38,6 +40,20 @@ final class SessionWatchLink: NSObject, WatchLink {
         Self.log.debug("Activating")
         session.delegate = self
         session.activate()
+    }
+
+    /// Activates and waits (up to `limit`) until the session has delivered what it holds for the app: the background
+    /// task's work.
+    func drain(limit: Duration = .seconds(10)) async {
+        activate()
+        guard let session else { return }
+        let deadline = ContinuousClock.now.advanced(by: limit)
+        while session.activationState != .activated || session.hasContentPending, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        // The delegate's callbacks hop to the main queue: let the last ones run.
+        try? await Task.sleep(for: .milliseconds(100))
+        Self.log.info("Background delivery done (content pending: \(session.hasContentPending))")
     }
 
     func request(_ request: WatchRequest) async throws -> WatchReply {
@@ -159,6 +175,12 @@ extension SessionWatchLink: WCSessionDelegate {
         let data = applicationContext[WatchCodec.key] as? Data
         Self.log.debug("Application context received (\(data?.count ?? 0) bytes)")
         onMain { $0.receive(data) }
+    }
+
+    nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
+        guard let entry = WatchComplicationEntry.value(in: userInfo) else { return }
+        Self.log.info("Complication entry received: \(entry.needsYou) need you")
+        onMain { $0.complication?(entry) }
     }
 
     nonisolated func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {

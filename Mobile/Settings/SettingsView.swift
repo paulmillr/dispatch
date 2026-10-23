@@ -144,10 +144,18 @@ extension SettingsView {
 struct HostSettingsView: View {
     let hostID: UUID
     @Environment(HostSessions.self) private var sessions
+    /// The host's stats sheet (W1).
+    @State private var statsHost: UUID?
 
     var body: some View {
         if let session = sessions.session(hostID) {
             Form {
+                Section {
+                    Button { statsHost = hostID } label: {
+                        Label("Stats", systemImage: "chart.xyaxis.line")
+                    }
+                    .accessibilityHint("Shows CPU, memory, disk and processes of \(session.host.name)")
+                }
                 Section {
                     Toggle("Chat", isOn: Binding(get: { session.host.chat }, set: { chat in
                         var host = session.host
@@ -178,6 +186,7 @@ struct HostSettingsView: View {
             }
             .navigationTitle(session.host.name)
             .navigationBarTitleDisplayMode(.inline)
+            .hostStatsSheet(host: $statsHost)
         } else {
             Color.clear
         }

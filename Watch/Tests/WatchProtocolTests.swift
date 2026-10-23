@@ -16,7 +16,7 @@ final class WatchProtocolTests: XCTestCase {
             .answer(key, request: "interaction-12", .skipped),
             .send(key, text: "Run it again", steer: false), .send(key, text: "Stop after this file", steer: true),
             .stop(key), .resume(key), .removeQueued(key, item: "helper:q-1"), .sendQueuedNow(key, item: "B2C1D7E0-0000-4000-8000-000000000001"),
-            .markSeen(key, through: now),
+            .markSeen(key, through: now), .openOnPhone(key), .undoReview(id: "review-1"),
         ]
         for action in actions {
             let request = WatchRequest(action, id: "r-1")
@@ -30,12 +30,88 @@ final class WatchProtocolTests: XCTestCase {
         let thread = try XCTUnwrap(WatchFixtures.threads(now: now)[WatchFixtures.question])
         let results: [WatchResult] = [
             .snapshot(WatchFixtures.demo(now: now)), .thread(thread), .done, .failure(.phoneLocked),
+            .snapshot(WatchFixtures.mockup(now: now, review: true)), .thread(WatchFixtures.mockupThreads(now: now)[WatchFixtures.limiter]!),
+            .opened(.shown), .opened(.notified), .opened(.unavailable),
             .failure(WatchFailure.openPhone(host: "pi")),
         ]
         for result in results {
             let reply = WatchReply(id: "r-2", result)
             XCTAssertEqual(try WatchCodec.decode(WatchReply.self, from: WatchCodec.encode(reply)), reply, result.kind)
         }
+    }
+
+    /// The redesign's fields (rows' step, time and question, hosts' latency and statistics with gaps in their CPU line,
+    /// review events, turn summaries, approval verbs) travel and come back as they were.
+    func testTheRedesignsFieldsRoundTrip() throws {
+        let snapshot = WatchFixtures.mockup(now: now, review: true)
+        let decoded = try WatchCodec.decode(WatchSnapshot.self, from: WatchCodec.encode(snapshot))
+        XCTAssertEqual(decoded, snapshot)
+        let host = try XCTUnwrap(decoded.hosts.first)
+        XCTAssertEqual(host.latency, 18)
+        XCTAssertEqual(host.stats?.history.count, WatchHostStats.historyCount)
+        XCTAssertEqual(host.stats?.history.filter { $0 == nil }.count, 4, "the gap stays a gap")
+        XCTAssertEqual(host.stats?.warnings, [.disk])
+        XCTAssertEqual(host.stats?.peak, 82)
+        XCTAssertEqual(decoded.conversations[0].step, "Editing Sidebar.tsx")
+        XCTAssertEqual(decoded.conversations[1].waitingText, "Allow cargo test --workspace?")
+        XCTAssertEqual(decoded.reviews.map(\.comments), [3])
+        let thread = try XCTUnwrap(WatchFixtures.mockupThreads(now: now)[WatchFixtures.sidebar])
+        let page = try WatchCodec.decode(WatchThread.self, from: WatchCodec.encode(thread))
+        XCTAssertEqual(page.items.last?.summary, WatchTurnSummary(steps: 5, seconds: 86, files: 4, additions: 61, deletions: 9))
+        let limiter = try XCTUnwrap(WatchFixtures.mockupThreads(now: now)[WatchFixtures.limiter])
+        XCTAssertEqual(try WatchCodec.decode(WatchThread.self, from: WatchCodec.encode(limiter)).approvals.first?.verb, .run)
+    }
+
+    /// An older phone's snapshot (none of the redesign's fields) reads with them empty; a newer one's unknown warning or
+    /// verb reads as unknown; statistics that do not decode leave the host without them, not the host out.
+    func testOlderAndNewerPeersReadTheRedesignsFields() throws {
+        let data = try WatchCodec.encode(WatchFixtures.mockup(now: now, review: true))
+        var object = try XCTUnwrap(PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
+        var hosts = try XCTUnwrap(object["hosts"] as? [[String: Any]])
+        var stats = try XCTUnwrap(hosts[0]["stats"] as? [String: Any])
+        stats["warnings"] = ["disk", "battery"]
+        stats["cpu"] = "high"
+        hosts[0]["stats"] = stats
+        object["hosts"] = hosts
+        var newer = try WatchCodec.decode(WatchSnapshot.self, from: PropertyListSerialization.data(fromPropertyList: object, format: .binary, options: 0))
+        XCTAssertEqual(newer.hosts.first?.stats?.warnings, [.disk, .unknown])
+        XCTAssertNil(newer.hosts.first?.stats?.cpu)
+        XCTAssertNotNil(newer.hosts.first?.stats?.memoryUsed)
+
+        for host in hosts.indices { hosts[host]["stats"] = nil; hosts[host]["latency"] = nil; hosts[host]["offlineSince"] = nil }
+        object["hosts"] = hosts
+        object["reviews"] = nil
+        var rows = try XCTUnwrap(object["conversations"] as? [[String: Any]])
+        for row in rows.indices { for field in ["title", "step", "workingSince", "waitingText"] { rows[row][field] = nil } }
+        object["conversations"] = rows
+        newer = try WatchCodec.decode(WatchSnapshot.self, from: PropertyListSerialization.data(fromPropertyList: object, format: .binary, options: 0))
+        XCTAssertEqual(newer.hosts.count, 1)
+        XCTAssertNil(newer.hosts[0].stats)
+        XCTAssertEqual(newer.reviews, [])
+        XCTAssertNil(newer.conversations[0].step)
+        XCTAssertEqual(newer.conversations.count, 3)
+
+        let opened = try plist(["id": "r", "version": 1, "kind": "opened", "opened": "teleported"])
+        XCTAssertEqual(try WatchCodec.decode(WatchReply.self, from: opened).result, .opened(.unknown))
+
+        let approval = try plist(["id": "i", "title": "Fetch it?", "arrived": now, "choices": [[String: Any]](), "verb": "teleport"])
+        XCTAssertEqual(try WatchCodec.decode(WatchApproval.self, from: approval).verb, .unknown)
+    }
+
+    /// The snapshot clips the rows' new texts as it clips their previews, and a host's CPU line to its 15 minutes.
+    func testFittingClipsTheRowsNewTexts() {
+        var snapshot = WatchFixtures.mockup(now: now)
+        let long = String(repeating: "cargo test --workspace --all-features ", count: 20)
+        snapshot.conversations[0].step = long
+        snapshot.conversations[1].waitingText = long
+        snapshot.conversations[2].title = long
+        snapshot.hosts[0].stats?.history = Array(repeating: 50, count: 240) + [12]
+        let fitted = WatchCodec.fit(snapshot)
+        XCTAssertEqual(fitted.hosts[0].stats?.history.count, WatchHostStats.historyCount, "the newest 15 minutes")
+        XCTAssertEqual(fitted.hosts[0].stats?.history.last, 12)
+        XCTAssertLessThanOrEqual(fitted.conversations[0].step?.count ?? 0, WatchLimits.preview)
+        XCTAssertLessThanOrEqual(fitted.conversations[1].waitingText?.count ?? 0, WatchLimits.preview)
+        XCTAssertLessThanOrEqual(fitted.conversations[2].title?.count ?? 0, WatchLimits.line)
     }
 
     /// A newer watch may ask for a terminal's screen; a newer phone may reply with kinds this build lacks. Both decode
@@ -91,7 +167,11 @@ final class WatchProtocolTests: XCTestCase {
         XCTAssertFalse(fitted.truncated)
         XCTAssertEqual(fitted.conversations.count, 30)
         XCTAssertEqual(fitted.tabs.count, sample.tabs.count)
-        XCTAssertLessThanOrEqual(bytes, 20 * 1024, "measured 15.0 KB when written")
+        XCTAssertEqual(fitted.hosts.map { $0.stats?.history.count }, Array(repeating: WatchHostStats.historyCount, count: 5),
+                       "every CPU line kept")
+        XCTAssertEqual(fitted.conversations.map(\.step), sample.conversations.map { $0.step.map { WatchText.clip($0, to: WatchLimits.preview) } })
+        XCTAssertEqual(fitted.conversations.compactMap(\.waitingText).count, 10)
+        XCTAssertLessThanOrEqual(bytes, 28 * 1024, "measured 24.9 KB when written (15.0 before the statistics and the rows' steps)")
         // The application context as WatchConnectivity serializes it.
         let context = try PropertyListSerialization.data(fromPropertyList: WatchCodec.message(fitted), format: .binary, options: 0)
         XCTAssertLessThanOrEqual(context.count, WatchLimits.snapshotBytes)
@@ -108,7 +188,24 @@ final class WatchProtocolTests: XCTestCase {
         XCTAssertTrue(fitted.truncated)
         XCTAssertLessThanOrEqual(WatchCodec.size(fitted), WatchLimits.snapshotBytes)
         XCTAssertEqual(Set(fitted.conversations.filter(\.needsYou).map(\.key)), Set(sample.conversations.filter(\.needsYou).map(\.key)))
-        XCTAssertEqual(fitted.hosts, sample.hosts)
+        // The hosts stay, their strips too; their CPU lines went first, then the rows' steps and requests were cut short.
+        XCTAssertEqual(fitted.hosts.map(\.id), sample.hosts.map(\.id))
+        XCTAssertTrue(fitted.hosts.allSatisfy { $0.stats?.history.isEmpty == true && $0.stats?.cpu != nil })
+        XCTAssertTrue(fitted.conversations.allSatisfy { ($0.step?.count ?? 0) <= WatchLimits.short && ($0.waitingText?.count ?? 0) <= WatchLimits.short })
+    }
+
+    /// Just over the budget: the CPU lines go and nothing else.
+    func testTheCPULinesGoBeforeAnyRow() throws {
+        let sample = WatchFixtures.crowded(hosts: 5, conversations: 6, now: now)
+        let lines = WatchCodec.size(sample)
+        var withoutLines = sample
+        for index in withoutLines.hosts.indices { withoutLines.hosts[index].stats?.history = [] }
+        let budget = WatchCodec.size(withoutLines) + 10
+        XCTAssertLessThan(budget, lines)
+        let fitted = WatchCodec.fit(sample, budget: budget)
+        XCTAssertFalse(fitted.truncated)
+        XCTAssertEqual(fitted.conversations, WatchCodec.fit(sample).conversations, "rows and their texts as they were")
+        XCTAssertTrue(fitted.hosts.allSatisfy { $0.stats?.history.isEmpty == true })
     }
 
     func testAThreadPageFitsByLeavingOutItsOldestItems() throws {

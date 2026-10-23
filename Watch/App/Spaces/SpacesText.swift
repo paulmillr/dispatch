@@ -6,6 +6,11 @@ struct WatchTabRoute: Hashable, Sendable {
     let tab: String
 }
 
+/// A host's screen (`HostScreen`, K6): its `WatchHost.id`.
+struct WatchHostRoute: Hashable, Sendable {
+    let host: String
+}
+
 /// A space's screen (`SpaceScreen`): host plus the space's key (`SpaceRef`).
 struct WatchSpaceRoute: Hashable, Sendable {
     let host: String

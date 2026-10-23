@@ -106,6 +106,51 @@ final class WatchSnapshotTests: XCTestCase {
         XCTAssertEqual(decoded, snapshot)
     }
 
+    /// The redesign's fields: a row's own title, the hosts' statistics from the stats source (the phone's store; here
+    /// the sample's), the latency of a connected host and since when one is offline, the reviews whose Undo is open.
+    func testRowsTitlesHostStatisticsAndReviews() async throws {
+        let (app, studio, lab) = try await Self.fixture(self)
+        let now = Date(timeIntervalSince1970: 1_800_001_000)
+        let stats = WatchSampleStats(now: { now })
+        let studioStats = WatchHostStats(cpu: 34, memoryUsed: 11 << 30, diskFree: 48 << 30, warnings: [.disk],
+                                         history: [20, nil, 34], sampled: now)
+        stats.overrides[studio.id] = studioStats
+        let reviews = WatchReviewEvents(clock: { now })
+        reviews.post(key: ChatConversationKey(host: studio.id, node: Self.billing), agent: "claude", title: "Billing migration",
+                     comments: 3, files: 2, window: 8) { true }
+        let snapshot = WatchSnapshotBuilder(composition: app, stats: stats, reviews: reviews).build(at: now)
+
+        XCTAssertEqual(snapshot.conversations[0].title, "Billing migration", "the conversation's own title")
+        XCTAssertNil(snapshot.conversations[1].title)
+        XCTAssertNil(snapshot.conversations[0].step, "not working")
+        XCTAssertNil(snapshot.conversations[0].waitingText, "no session open and no attention line: the watch says Needs you")
+
+        XCTAssertEqual(snapshot.hosts[0].stats, studioStats)
+        let sample = try XCTUnwrap(snapshot.hosts[1].stats, "the sample's derived numbers")
+        XCTAssertEqual(sample.history.count, WatchHostStats.historyCount)
+        XCTAssertEqual(sample, stats.stats(for: lab.id), "the same each time")
+        XCTAssertEqual(snapshot.hosts[0].latency, app.hosts.session(studio.id)?.latency.map(WatchSnapshotBuilder.milliseconds))
+        XCTAssertNil(snapshot.hosts[0].offlineSince)
+        XCTAssertNil(snapshot.hosts[1].latency, "offline")
+        XCTAssertNil(snapshot.hosts[1].offlineSince, "never connected in this run: not known")
+
+        // A connection that ends says when.
+        let session = try XCTUnwrap(app.hosts.session(studio.id))
+        XCTAssertNil(session.droppedAt)
+        let before = Date()
+        session.disconnect()
+        let dropped = try XCTUnwrap(session.droppedAt)
+        XCTAssertGreaterThanOrEqual(dropped, before.addingTimeInterval(-1))
+        XCTAssertEqual(WatchSnapshotBuilder(composition: app).build(at: now).hosts[0].offlineSince, dropped)
+        XCTAssertNil(WatchSnapshotBuilder(composition: app).build(at: now).hosts[0].stats, "no source: none sent")
+
+        XCTAssertEqual(snapshot.reviews.count, 1)
+        XCTAssertEqual(snapshot.reviews[0].node, Self.billing)
+        XCTAssertEqual(snapshot.reviews[0].undoUntil, now.addingTimeInterval(8))
+        XCTAssertTrue(WatchSnapshotBuilder(composition: app, reviews: reviews).build(at: now.addingTimeInterval(9)).reviews.isEmpty)
+        XCTAssertEqual(WatchSnapshotBuilder.milliseconds(.milliseconds(18)), 18, accuracy: 0.001)
+    }
+
     /// The agent's glyph: the thread's key once it named one, else the bound executable's name.
     func testTheAgentIsTheBindingsExecutable() async throws {
         let (app, studio, _) = try await Self.fixture(self)

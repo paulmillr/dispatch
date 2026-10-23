@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// Host detail (M1f), pushed from Spaces (Info in edit mode, or a host section's long-press menu): identity and live
-/// status, Connection (what the user entered, editable), the multiplexer, the host's spaces (their header marks the
-/// multiplexer they come from), and Remove host last, in red. The spaces rows come from Tabs (`spaces`); without them the topology's workspaces are listed.
+/// Host detail (M1f, W4), pushed from Spaces (Info in edit mode, or a host section's long-press menu): identity and live
+/// status (its disc opens the stats sheet), the stat strip and 15-minute sparkline (`HostStatistics`, not for a plain
+/// SSH host), Connection (what the user entered, as fact rows), the multiplexer, the host's spaces (their header marks
+/// the multiplexer they come from), and Remove host last, in red. The spaces rows come from Tabs (`spaces`); without them the topology's workspaces are listed.
 /// The Helper switch and Chat sit under the multiplexer; a plain SSH host (docs/ios.md) says so there, with the reason
 /// the helper could not start and "Use plain SSH for this host" when that was a fallback.
 struct HostDetail<Spaces: View>: View {
@@ -18,6 +19,10 @@ struct HostDetail<Spaces: View>: View {
     @Environment(\.colorScheme) private var scheme
     @State private var editing = false
     @State private var confirmingRemoval = false
+    /// The stats sheet (W1), from the disc.
+    @State private var statsHost: UUID?
+    @State private var metric = HostStatistics.Metric.cpu
+    @State private var scrub: Int?
     /// Removal waits for the pop to finish, so the screen sliding away still shows the host.
     @State private var removing = false
 
@@ -46,12 +51,26 @@ struct HostDetail<Spaces: View>: View {
             .listRowBackground(Color.clear)
             .listRowInsets(EdgeInsets())
 
+            // W4: the stats block between the header and Connection; a host without its helper has none.
+            if !session.plainSSH {
+                Section {
+                    StatStripCard(stats: session.stats, metric: $metric, tint: host.tint.color,
+                                  dimmed: !session.stats.live, scrub: $scrub)
+                }
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets())
+            }
+
             Section {
-                LabeledContent("Address") { Text(host.address).monospaced() }
-                LabeledContent("Port") { Text(String(host.port)).monospaced() }
-                LabeledContent("User") { Text(host.user).monospaced() }
-                LabeledContent("Key") { Text(keyName(host)).monospaced() }
-                if host.helper { multiplexer(session) }
+                Group {
+                    FactRow(label: "Address", value: host.address)
+                    FactRow(label: "Port", value: String(host.port))
+                    FactRow(label: "User", value: host.user)
+                    FactRow(label: "Key", value: sessions.keyName(host))
+                    if host.helper { multiplexer(session) }
+                }
+                // The fact rows carry their own 7 points above and below (W4).
+                .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
                 HostHelperRows(session: session)
             } header: {
                 MobileSectionHeader("Connection")
@@ -93,6 +112,10 @@ struct HostDetail<Spaces: View>: View {
             .listRowInsets(EdgeInsets())
         }
         .listStyle(.insetGrouped)
+        // W4's fact rows are tighter than a list's 44 points.
+        .environment(\.defaultMinListRowHeight, 36)
+        .listSectionSpacing(18)
+        .hostStatsSheet(host: $statsHost)
         // The identity sits right under the bar, as in M1f (the list's own top margin pushed it 36 points down).
         .contentMargins(.top, 0, for: .scrollContent)
         .navigationBarTitleDisplayMode(.inline)
@@ -109,11 +132,16 @@ struct HostDetail<Spaces: View>: View {
 
     private func header(_ session: HostSession, summary: HostSummary) -> some View {
         VStack(spacing: 10) {
-            HostGlyph(host: session.host, size: 44)
-                .foregroundStyle(summary.tint)
-                .frame(width: 84, height: 84)
-                .background(summary.tint.opacity(0.15), in: Circle())
-                .accessibilityHidden(true)
+            Button { statsHost = session.id } label: {
+                HostGlyph(host: session.host, size: 44)
+                    .foregroundStyle(summary.tint)
+                    .frame(width: 84, height: 84)
+                    .background(summary.tint.opacity(0.15), in: Circle())
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(session.host.name) stats")
+            .accessibilityHint("Shows CPU, memory, disk and processes")
             Text(session.host.name)
                 .font(.title2.bold())
                 .foregroundStyle(scheme == .dark ? summary.tint : Color.primary)
@@ -138,19 +166,12 @@ struct HostDetail<Spaces: View>: View {
                 Text(os).font(.footnote).foregroundStyle(.tertiary)
             }
             if !session.link.isConnected, !session.link.isPending, session.hostKeyMismatch == nil {
-                Button("Connect") { session.retryNow() }
+                Button("Connect") { session.connectByUser() }
                     .buttonStyle(.glass)
             }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 8)
-    }
-
-    private func keyName(_ host: HostRecord) -> String {
-        switch host.auth {
-        case .password: "Password"
-        case .key(let id): sessions.keys.key(id)?.label ?? "Missing key"
-        }
     }
 
     /// "herdr 0.9.3", "tmux 3.7" or "none", with the per-host choice. None leads to the install hint.
@@ -160,10 +181,17 @@ struct HostDetail<Spaces: View>: View {
             NavigationLink {
                 MultiplexerHint(hostID: session.id)
             } label: {
-                LabeledContent("Multiplexer") { Text("none").monospaced() }
+                FactRow(label: "Multiplexer", value: "none")
             }
         } else {
-            HostMultiplexerPicker(session: session)
+            Menu {
+                HostMultiplexerPicker.choices(session: session, sessions: sessions)
+            } label: {
+                FactRow(label: "Multiplexer", value: line ?? session.host.multiplexer.title, chevron: true)
+                    .foregroundStyle(Color(uiColor: .label))
+            }
+            .accessibilityLabel("Multiplexer")
+            .accessibilityValue(line ?? session.host.multiplexer.title)
         }
     }
 }
@@ -218,15 +246,20 @@ struct HostMultiplexerPicker: View {
     let session: HostSession
     @Environment(HostSessions.self) private var sessions
 
+    /// The choices: Automatic, herdr, tmux, saved at once.
+    static func choices(session: HostSession, sessions: HostSessions) -> some View {
+        Picker("Multiplexer", selection: Binding(get: { session.host.multiplexer }, set: { choice in
+            var host = session.host
+            host.multiplexer = choice
+            sessions.update(host)
+        })) {
+            ForEach(HostRecord.MultiplexerPreference.allCases, id: \.self) { Text($0.title).tag($0) }
+        }
+    }
+
     var body: some View {
         Menu {
-            Picker("Multiplexer", selection: Binding(get: { session.host.multiplexer }, set: { choice in
-                var host = session.host
-                host.multiplexer = choice
-                sessions.update(host)
-            })) {
-                ForEach(HostRecord.MultiplexerPreference.allCases, id: \.self) { Text($0.title).tag($0) }
-            }
+            Self.choices(session: session, sessions: sessions)
         } label: {
             HStack {
                 // Explicit colours: a menu label otherwise draws in the tint.

@@ -59,9 +59,20 @@ enum DemoScenario {
 
     /// The demo's sessions: in memory, nothing saved, every host connected through its `DemoHelper`.
     @MainActor static func sessions() -> HostSessions {
-        let hosts = Self.hosts()
+        // `-DispatchHostStatsState plain`: the stats screenshots' host without its helper (W6).
+        let hosts = Self.hosts().map { host in
+            guard host.record.name == HostStatsDemo.plainHost else { return host }
+            var record = host.record
+            record.helper = false
+            return Host(record: record, hello: host.hello, multiplexer: host.multiplexer, version: host.version,
+                        latency: host.latency, sketch: host.sketch, content: host.content)
+        }
         let driver = ScriptedHostSessionDriver { record in
             guard let host = hosts.first(where: { $0.record.id == record.id }) else { return [.event(.link(.failed("Not in the demo")))] }
+            if !record.helper {
+                return [.event(.link(.connecting)), .sleep(.milliseconds(60)), .event(.link(.authenticating)),
+                        .sleep(.milliseconds(40)), .plain(reason: nil), .hold]
+            }
             return [.event(.link(.connecting)), .sleep(.milliseconds(60)), .event(.link(.authenticating)), .sleep(.milliseconds(40)),
                     .event(.link(.bootstrapping)), .sleep(.milliseconds(50)), .event(.following(host.multiplexer)),
                     .readyWith(client: { DemoHelper.connect(host) }, hello: host.hello,
@@ -70,8 +81,14 @@ enum DemoScenario {
                     .event(.latency(host.latency)), .hold]
         }
         let keys = KeyStore(url: nil, vault: MemoryVault(), keyProtection: .none, secureEnclaveAvailable: false)
-        return HostSessions(store: HostStore(url: nil, hosts: hosts.map(\.record)), keys: keys, knownHosts: KnownHostStore(url: nil),
-                            driver: driver, active: true)
+        let sessions = HostSessions(store: HostStore(url: nil, hosts: hosts.map(\.record)), keys: keys,
+                                    knownHosts: KnownHostStore(url: nil), driver: driver, active: true)
+        // The 15 minutes before launch, so the stats' chart is full at once.
+        for session in sessions.ordered {
+            let home = hosts.first { $0.record.id == session.id }?.hello.account?.home ?? "/Users/alex"
+            HostStatsDemo.seed(session.stats, host: session.host.name, home: home)
+        }
+        return sessions
     }
 
     static func hosts(now: Date = Date()) -> [Host] {

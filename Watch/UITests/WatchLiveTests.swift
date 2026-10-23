@@ -63,7 +63,8 @@ final class WatchLiveTests: XCTestCase {
 
     // MARK: Scripted
 
-    /// Agents → the approval's thread → Allow; the question's sheet → an option → Send; Spaces → a space → a tab.
+    /// Agents → the approval's thread → Allow; the question's form → an option → Send; a finished thread → Reply → the
+    /// confirm screen → Send, then Open on iPhone; Spaces → a host's screen, a space → a tab.
     func testScriptedTapsThroughAgentsAndSpaces() throws {
         let app = launch(["-DispatchWatchScripted", "1"])
 
@@ -99,6 +100,20 @@ final class WatchLiveTests: XCTestCase {
         shot("answered")
         back(app)
 
+        // A finished thread (the release notes): the summary card, Reply through the system input to the confirm screen.
+        let notesRow = element(app, labelStarting: "Draft the release notes")
+        XCTAssertTrue(reveal(notesRow, in: app), app.debugDescription)
+        notesRow.tap()
+        XCTAssertTrue(element(app, labelContaining: "first draft grouped by area").waitForExistence(timeout: 10), app.debugDescription)
+        self.send("Add the Files changes too", in: app)
+        XCTAssertTrue(element(app, labelContaining: "Add the Files changes too").waitForExistence(timeout: 10), app.debugDescription)
+        shot("replied")
+        let open = app.buttons["Open on iPhone"]
+        XCTAssertTrue(reveal(open, in: app), app.debugDescription)
+        open.tap()
+        XCTAssertTrue(element(app, labelContaining: "on your iPhone").waitForExistence(timeout: 10), app.debugDescription)
+        back(app)
+
         // Spaces is the second vertical page: the Digital Crown scrolls Agents to its end, and a swipe there pages on
         // (the simulated crown stops at the list's end).
         let space = element(app, labelStarting: "dispatch")
@@ -110,6 +125,17 @@ final class WatchLiveTests: XCTestCase {
         }
         XCTAssertTrue(space.waitForExistence(timeout: 5), app.debugDescription)
         shot("spaces")
+        // The host's header opens its screen (K6): the statistics strip and its counts.
+        let header = app.buttons.matching(NSPredicate(format: "label == 'studio'")).firstMatch
+        if !header.isHittable { XCUIDevice.shared.rotateDigitalCrown(delta: -1) }
+        XCTAssertTrue(header.waitForExistence(timeout: 5), app.debugDescription)
+        header.tap()
+        XCTAssertTrue(element(app, labelContaining: "CPU 34 percent").waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertTrue(element(app, labelStarting: "2 spaces").waitForExistence(timeout: 5) || element(app, labelContaining: "spaces ·").exists,
+                      app.debugDescription)
+        shot("host")
+        back(app)
+        XCTAssertTrue(space.waitForExistence(timeout: 5), app.debugDescription)
         space.tap()
         let tab = element(app, labelStarting: "zsh")
         XCTAssertTrue(tab.waitForExistence(timeout: 10), app.debugDescription)
@@ -172,10 +198,10 @@ final class WatchLiveTests: XCTestCase {
         return target.exists
     }
 
-    /// Types `text` into the composer (`TextFieldLink`: the system's text input, typed into as a keyboard would) and
-    /// submits it. The composer's title is the route's ("Message", "Queue a message…", "Queue another…").
+    /// Types `text` into Reply (`TextFieldLink`: the system's text input, typed into as a keyboard would), submits it and
+    /// sends it from the confirm screen (K5).
     private func send(_ text: String, in app: XCUIApplication) {
-        let composer = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Message' OR label BEGINSWITH 'Queue'")).firstMatch
+        let composer = app.buttons["Reply"]
         XCTAssertTrue(reveal(composer, in: app, swipes: 10), app.debugDescription)
         composer.tap()
         // The system input opens on its keyboard (a 46 mm watch) with the text view focused; Done submits.
@@ -186,10 +212,16 @@ final class WatchLiveTests: XCTestCase {
         let done = app.navigationBars.buttons["Done"]
         XCTAssertTrue(done.waitForExistence(timeout: 3) && done.isEnabled, app.debugDescription)
         done.tap()
+        // The confirm screen: the words in the pink bubble, then Send.
+        XCTAssertTrue(element(app, labelStarting: "Your reply: " + text).waitForExistence(timeout: 10), app.debugDescription)
+        shot("confirm")
+        let confirm = app.buttons["Send"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), app.debugDescription)
+        confirm.tap()
     }
 
-    /// The phone app's own rows over WatchConnectivity: the first conversation opens with the phone's page, and an action
-    /// on it comes back without a failure line. Against the live fixture (the phone's conversation waiting on an
+    /// The phone app's own rows over WatchConnectivity: the first conversation opens with the phone's page, Open on
+    /// iPhone is answered, and an action on it comes back without a failure line. Against the live fixture (the phone's conversation waiting on an
     /// approval, docs/watch.md, Verified on simulators) it goes on: Allow runs the tool, a message from the composer
     /// reaches the agent and its reply shows, and Stop ends a held turn. The phone's side shows in its log
     /// (`yachts.dispatch.mobile`, category `Watch`: "Request answer … received", "Answered answer … with thread").
@@ -207,6 +239,13 @@ final class WatchLiveTests: XCTestCase {
         }
         openFirstThread(app, rows: rows)
         shot("thread")
+        // Open on iPhone: the phone shows the conversation (or posts a notification that opens it) and answers `done`.
+        let open = app.buttons["Open on iPhone"]
+        XCTAssertTrue(reveal(open, in: app, swipes: 10), app.debugDescription)
+        open.tap()
+        XCTAssertTrue(element(app, labelContaining: "on your iPhone").waitForExistence(timeout: 25), app.debugDescription)
+        XCTAssertFalse(failureLine(app).exists, app.debugDescription)
+        shot("opened")
         if fixture { return try fixtureActions(app) }
 
         // The first action the page offers, as a user would pick it: an approval, a question, Stop.

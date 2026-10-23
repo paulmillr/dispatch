@@ -163,6 +163,8 @@ struct MobileRoot: View {
         // The menu bar and ⌘ chords (MobileCommands).
         .mobileCommands(composition, section: $section, sheet: $sheet)
         #if DEBUG
+        // Host stats screenshots (`-DispatchHostStats`, `-DispatchHostDetail`, HostStatsDemo).
+        .modifier(HostStatsDebugLaunch(composition: composition))
         .onAppear {
             navigator.selectSection = { name in section = name == "agents" ? .agents : .spaces }
         }

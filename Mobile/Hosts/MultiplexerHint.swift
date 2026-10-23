@@ -60,7 +60,7 @@ struct MultiplexerHint: View {
                 Section {
                     Button("Reconnect") {
                         session.disconnect()
-                        session.connect()
+                        session.connectByUser()
                     }
                 }
             }

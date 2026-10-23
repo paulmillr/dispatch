@@ -18,6 +18,15 @@ enum ThreadComposer {
         route == .outbox ? "Message" : prompt(route: route, queued: queued)
     }
 
+    /// Where a reply goes, said on the confirm screen (K5): nothing when it is sent at once.
+    static func routeLine(_ state: (route: WatchRoute, queued: Int)?) -> String? {
+        switch state?.route {
+        case .queue?: state!.queued > 0 ? "Queued after \(state!.queued) more" : "Queued until this turn ends"
+        case .outbox?: "Queued on your iPhone"
+        case .send?, .unknown?, nil: nil
+        }
+    }
+
     /// Steer is the phone's long-press send: offered while a live agent works.
     static func canSteer(_ thread: WatchThread) -> Bool { thread.working && thread.phase == .live }
 

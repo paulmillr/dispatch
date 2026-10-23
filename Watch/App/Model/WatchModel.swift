@@ -66,13 +66,33 @@ final class WatchModel {
     @ObservationIgnored private var started = false
     /// A `hello` is on its way: launch both starts the app and finds the phone reachable, one greeting is enough.
     @ObservationIgnored private var greeting = false
+    /// Hosts with a Connect on its way (K6b's button shows progress).
+    private(set) var connecting: Set<String> = []
+    /// The review card on screen (K8): the newest review event that arrived while its Undo was open, until dismissed.
+    private(set) var review: WatchReviewSent?
+    /// The review on screen was taken back on the phone (its event left the snapshot before its deadline): the card
+    /// says so for `withdrawnFor`, then closes.
+    private(set) var reviewWithdrawn = false
+    @ObservationIgnored var withdrawnFor: Duration = .seconds(2)
+    /// Reviews already shown (or arrived too late), among those the snapshot still lists: a later snapshot repeating
+    /// one never shows it again, and the set never outgrows the phone's list.
+    @ObservationIgnored private(set) var seenReviews: Set<String> = []
+    /// Reviews this watch is undoing: their leaving the snapshot is this watch's doing, not the phone's.
+    @ObservationIgnored private var undoing: Set<String> = []
+    /// Called with every snapshot the model takes (the complications' writer, `WatchComplicationWriter`).
+    @ObservationIgnored let snapshotChanged: ((WatchSnapshot) -> Void)?
 
-    init(link: any WatchLink, now: @escaping () -> Date = Date.init) {
+    init(link: any WatchLink, now: @escaping () -> Date = Date.init, snapshotChanged: ((WatchSnapshot) -> Void)? = nil) {
         self.link = link
         self.now = now
+        self.snapshotChanged = snapshotChanged
         snapshot = link.snapshot
         reachable = link.reachable
         link.changed = { [weak self] in self?.linkChanged() }
+        if let snapshot {
+            snapshotChanged?(snapshot)
+            noteReviews(snapshot)
+        }
     }
 
     // MARK: Lists
@@ -134,6 +154,17 @@ final class WatchModel {
         }
     }
 
+    /// A host's spaces and tabs as Spaces lists them, for K6's "2 spaces · 5 tabs".
+    func counts(host: String) -> (spaces: Int, tabs: Int) {
+        ((snapshot?.spaces ?? []).filter { $0.host == host }.count, (snapshot?.tabs ?? []).filter { $0.host == host }.count)
+    }
+
+    /// A host's conversations that need you, and whether one works (K6's blue count and amber dot).
+    func activity(host: String) -> (needsYou: Int, working: Bool) {
+        let rows = (snapshot?.conversations ?? []).filter { $0.host == host }
+        return (rows.filter(\.needsYou).count, rows.contains { $0.busy && !$0.needsYou })
+    }
+
     /// The banner the lists show at `date`, if any.
     func notice(at date: Date) -> WatchNotice? {
         guard let snapshot else { return reachable ? nil : .waiting }
@@ -156,6 +187,16 @@ final class WatchModel {
     }
 
     // MARK: Lifecycle
+
+    /// The WatchConnectivity background task (the phone transferred a complication entry or a new context while the app
+    /// was not running): activate, take what is pending (the link hands it on: snapshots to the model and its writer,
+    /// complication entries to the writer), then return so the system can suspend the app.
+    func receivePending() async {
+        #if canImport(WatchConnectivity)
+        guard let session = link as? SessionWatchLink else { return }
+        await session.drain()
+        #endif
+    }
 
     /// The app launched or came forward: the link starts and the phone is asked for a fresh snapshot, now or as soon as
     /// it becomes reachable (WatchConnectivity's activation completes later).
@@ -211,6 +252,8 @@ final class WatchModel {
         let previous = snapshot
         guard next != previous else { return }
         snapshot = next
+        snapshotChanged?(next)
+        noteReviews(next)
         // Pages of conversations the phone no longer lists (as a row or a tab's agent) go, unless on screen.
         let listed = Set(next.conversations.map(\.key) + next.tabs.compactMap(\.conversationKey))
         for key in threads.keys where !listed.contains(key) && !visible.contains(key) && acting[key] == nil {
@@ -232,6 +275,80 @@ final class WatchModel {
     static func page(_ page: WatchThread, shows row: WatchConversation) -> Bool {
         page.needsYou == row.needsYou && page.working == row.busy && page.lastActivity == row.lastActivity
             && row.stale == (page.phase != .live)
+    }
+
+    /// A review the phone sent shows once, if it arrives while Undo still takes it back. One on screen that leaves the
+    /// snapshot was taken back on the phone (before its deadline: said briefly) or is read (after it: the card closes).
+    private func noteReviews(_ next: WatchSnapshot) {
+        let date = now()
+        let listed = Set(next.reviews.map(\.id))
+        if let current = review, !listed.contains(current.id), !undoing.contains(current.id) {
+            if current.undoable(at: date) { withdraw(current) } else { dismissReview() }
+        }
+        for event in next.reviews where seenReviews.insert(event.id).inserted && event.undoable(at: date) {
+            review = event
+            reviewWithdrawn = false
+        }
+        seenReviews.formIntersection(listed)
+    }
+
+    private func withdraw(_ event: WatchReviewSent) {
+        reviewWithdrawn = true
+        let delay = withdrawnFor
+        Task {
+            try? await Task.sleep(for: delay)
+            if review?.id == event.id, reviewWithdrawn { dismissReview() }
+        }
+    }
+
+    /// The review card was closed.
+    func dismissReview() {
+        review = nil
+        reviewWithdrawn = false
+    }
+
+    /// Undo of the review on screen: the phone takes it back before the agent reads it. Nil when it did, else why not.
+    func undoReview(_ event: WatchReviewSent) async -> WatchFailure? {
+        guard event.undoable(at: now()) else { return WatchFailure(.requestEnded, Self.tooLate(event)) }
+        undoing.insert(event.id)
+        defer { undoing.remove(event.id) }
+        switch await perform(.undoReview(id: event.id)) {
+        case .success:
+            if review?.id == event.id { dismissReview() }
+            return nil
+        case .failure(let failure):
+            return failure
+        }
+    }
+
+    static func tooLate(_ event: WatchReviewSent) -> String {
+        "Too late to undo: \(event.agent ?? "the agent") has it."
+    }
+
+    /// Connect (K6b): the phone connects the host now (`refresh` with the host: `HostSession.connectByUser`, which lifts
+    /// the phone's Disconnect; a quiet hold in the background) and answers with its lists.
+    func connect(host: String) async {
+        guard connecting.insert(host).inserted else { return }
+        defer { connecting.remove(host) }
+        await ask(.refresh(host: host))
+    }
+
+    /// "Open on iPhone": what to say under the button, from what the phone did.
+    func openOnPhone(_ key: WatchConversationKey) async -> String {
+        switch await perform(.openOnPhone(key)) {
+        case .success(.opened(let outcome)): return Self.openWords(outcome)
+        case .success: return Self.openWords(.unknown)
+        case .failure(let failure): return failure.message
+        }
+    }
+
+    static func openWords(_ outcome: WatchOpenOutcome) -> String {
+        switch outcome {
+        case .shown: "Open on your iPhone"
+        case .notified: "Tap the notification on your iPhone"
+        case .unavailable: "Open Dispatch on your iPhone: its notifications are off."
+        case .unknown: "Sent to your iPhone"
+        }
     }
 
     // MARK: Threads
@@ -397,15 +514,18 @@ final class WatchModel {
     /// (or `empty`, `unreachable`, `locked`, `waiting`; also the launch argument `-DispatchWatchScripted <value>`).
     static func app(environment: [String: String] = ProcessInfo.processInfo.environment,
                     arguments: [String] = ProcessInfo.processInfo.arguments) -> WatchModel {
+        let writer: (WatchSnapshot) -> Void = { snapshot in MainActor.assumeIsolated { WatchComplicationWriter.shared.write(snapshot) } }
         #if DEBUG
         if let scenario = scripted(environment: environment, arguments: arguments) {
-            return WatchModel(link: ScriptedWatchLink(scenario: scenario))
+            return WatchModel(link: ScriptedWatchLink(scenario: scenario), snapshotChanged: writer)
         }
         #endif
         #if canImport(WatchConnectivity)
-        return WatchModel(link: SessionWatchLink())
+        let link = SessionWatchLink()
+        link.complication = { WatchComplicationWriter.shared.write(entry: $0) }
+        return WatchModel(link: link, snapshotChanged: writer)
         #else
-        return WatchModel(link: ScriptedWatchLink(scenario: .waiting))
+        return WatchModel(link: ScriptedWatchLink(scenario: .waiting), snapshotChanged: writer)
         #endif
     }
 

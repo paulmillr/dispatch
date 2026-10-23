@@ -137,7 +137,104 @@ final class WatchSpacesViewTests: XCTestCase {
         ])
     }
 
+    // MARK: The host screen (K6)
+
+    /// The strip's numbers: CPU in percent, memory used and disk free in the phone's units; "—" without a reading.
+    func testTheHostsStripReadsAsThePhones() throws {
+        let gib: Int64 = 1_073_741_824
+        XCTAssertEqual(HostStatsText.cpu(WatchHostStats(cpu: 33.6)).value, "34")
+        XCTAssertEqual(HostStatsText.cpu(nil).value, "—")
+        XCTAssertEqual(HostStatsText.bytes(11 * gib).value, "11")
+        XCTAssertEqual(HostStatsText.bytes(11 * gib).unit, "GB")
+        XCTAssertEqual(HostStatsText.bytes(gib * 15 / 2).value, "7.5")
+        XCTAssertEqual(HostStatsText.bytes(gib / 2).value, "512")
+        XCTAssertEqual(HostStatsText.bytes(gib / 2).unit, "MB")
+        XCTAssertEqual(HostStatsText.bytes(1200 * gib).value, "1.2")
+        XCTAssertEqual(HostStatsText.bytes(1200 * gib).unit, "TB")
+        XCTAssertEqual(HostStatsText.bytes(nil).value, "—")
+        XCTAssertEqual(HostStatsText.counts(spaces: 2, tabs: 5), "2 spaces · 5 tabs")
+        XCTAssertEqual(HostStatsText.counts(spaces: 1, tabs: 1), "1 space · 1 tab")
+        let stats = WatchFixtures.mockup(now: now).hosts[0].stats
+        XCTAssertEqual(HostStatsText.accessibilityLabel(stats),
+                       "CPU 34 percent, Memory 11 GB used, Disk 48 GB free, peak 82 percent in 15 minutes")
+        XCTAssertEqual(HostStatsText.accessibilityLabel(nil), "No statistics")
+        var stale = try XCTUnwrap(stats)
+        stale.stale = true
+        XCTAssertEqual(HostStatsText.accessibilityLabel(stale),
+                       "CPU 34 percent, Memory 11 GB used, Disk 48 GB free, peak 82 percent in 15 minutes, not current")
+    }
+
+    /// The phone's stale flag travels only when set; an older phone's statistics (none) decode as current, and a gap
+    /// as nil.
+    func testTheStaleFlagCrossesTheWire() throws {
+        let host = WatchHost(id: "h", name: "studio", order: 0, state: .connected,
+                             stats: WatchHostStats(cpu: 12, history: [10, nil, 12], stale: true))
+        let snapshot = WatchSnapshot(generated: now, phone: WatchPhone(), hosts: [host])
+        let decoded = try XCTUnwrap(try WatchCodec.value(WatchSnapshot.self, in: try WatchCodec.message(snapshot)))
+        XCTAssertEqual(decoded.hosts.first?.stats, host.stats)
+        var current = host
+        current.stats?.stale = false
+        let older = WatchSnapshot(generated: now, phone: WatchPhone(), hosts: [current])
+        let plain = try XCTUnwrap(try WatchCodec.value(WatchSnapshot.self, in: try WatchCodec.message(older)))
+        XCTAssertEqual(plain.hosts.first?.stats?.stale, false)
+        XCTAssertEqual(plain.hosts.first?.stats?.history, [10, nil, 12])
+    }
+
+    /// The header's state: the latency while connected, else the state; offline since a time today, a weekday this
+    /// week, a date before.
+    func testTheHostSaysItsLatencyOrSinceWhenItIsOffline() throws {
+        var mba2 = WatchFixtures.mockup(now: now).hosts[0]
+        XCTAssertEqual(HostStatsText.state(mba2), "18 ms")
+        XCTAssertNil(HostStatsText.offlineSince(mba2, now: now))
+        mba2.latency = 0.4
+        XCTAssertEqual(HostStatsText.state(mba2), "1 ms")
+        mba2.latency = nil
+        XCTAssertEqual(HostStatsText.state(mba2), "Connected")
+        mba2.state = .connecting
+        XCTAssertEqual(HostStatsText.state(mba2), "Connecting…")
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "UTC"))
+        let offline = WatchFixtures.mockup(now: now, offline: true).hosts[0]
+        XCTAssertEqual(HostStatsText.state(offline), "Offline")
+        let since = try XCTUnwrap(offline.offlineSince)
+        XCTAssertEqual(HostStatsText.offlineSince(offline, now: since.addingTimeInterval(60), calendar: calendar),
+                       "Offline since " + since.formatted(date: .omitted, time: .shortened))
+        XCTAssertEqual(HostStatsText.offlineSince(offline, now: since.addingTimeInterval(2 * 86_400), calendar: calendar),
+                       "Offline since " + since.formatted(.dateTime.weekday(.wide)))
+        XCTAssertEqual(HostStatsText.offlineSince(offline, now: since.addingTimeInterval(30 * 86_400), calendar: calendar),
+                       "Offline since " + since.formatted(date: .abbreviated, time: .omitted))
+        // Not known (the phone has not seen it drop since its launch): no line, whatever the last connection.
+        var unknown = offline
+        unknown.offlineSince = nil
+        XCTAssertNotNil(unknown.lastConnected)
+        XCTAssertNil(HostStatsText.offlineSince(unknown, now: since))
+        var connecting = offline
+        connecting.state = .connecting
+        XCTAssertNil(HostStatsText.offlineSince(connecting, now: since), "connecting is not offline")
+    }
+
+    /// The sparkline skips gaps and keeps its points inside the frame.
+    func testTheSparklineSkipsGaps() throws {
+        let points = try XCTUnwrap(Sparkline.points([10, nil, 50, 100, 140], in: CGSize(width: 100, height: 40), ceiling: 100))
+        XCTAssertEqual(points.count, 4)
+        XCTAssertEqual(points.map(\.x), [0, 50, 75, 100])
+        XCTAssertTrue(points.allSatisfy { $0.y >= 3 && $0.y <= 37 })
+        XCTAssertNil(Sparkline.points([5], in: CGSize(width: 100, height: 40), ceiling: 100))
+    }
+
     // MARK: Rendering
+
+    /// Every host of the scripted phones draws its screen (connected, offline, blocked, without statistics), and a
+    /// route whose host has gone says so.
+    func testEveryHostRenders() {
+        for scenario in ScriptedWatchLink.Scenario.allCases {
+            let model = model(scenario)
+            for host in model.hosts {
+                XCTAssertNotNil(render(HostScreen(model: model, route: WatchHostRoute(host: host.id))), "\(scenario) \(host.name)")
+            }
+            XCTAssertNotNil(render(HostScreen(model: model, route: WatchHostRoute(host: "gone"))))
+        }
+    }
 
     private func render(_ view: some View) -> CGImage? {
         ImageRenderer(content: view.frame(width: 205, height: 251)).cgImage

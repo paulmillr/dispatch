@@ -422,6 +422,145 @@ final class WatchModelTests: XCTestCase {
         XCTAssertTrue(condition(), "timed out", file: file, line: line)
     }
 
+    // MARK: Hosts, Open on iPhone, reviews
+
+    /// K6's counts: a host's spaces and tabs, its agents that need you and whether one works.
+    func testAHostCountsItsSpacesTabsAndAgents() {
+        let (model, _) = makeModel(.mockup)
+        XCTAssertEqual(model.counts(host: WatchFixtures.mba2).spaces, 2)
+        XCTAssertEqual(model.counts(host: WatchFixtures.mba2).tabs, 5)
+        XCTAssertEqual(model.activity(host: WatchFixtures.mba2).needsYou, 1)
+        XCTAssertTrue(model.activity(host: WatchFixtures.mba2).working)
+        XCTAssertEqual(model.counts(host: "none").tabs, 0)
+    }
+
+    /// K6b's Connect asks the phone to retry that host (`refresh` with it) and shows the lists it answers.
+    func testConnectAsksThePhoneToRetryTheHost() async {
+        let (model, link) = makeModel(.mockupOffline)
+        XCTAssertEqual(model.host(WatchFixtures.mba2)?.state, .offline)
+        await model.connect(host: WatchFixtures.mba2)
+        XCTAssertEqual(link.requests.last?.action, .refresh(host: WatchFixtures.mba2))
+        XCTAssertEqual(model.host(WatchFixtures.mba2)?.state, .connected)
+        XCTAssertTrue(model.connecting.isEmpty)
+    }
+
+    /// A host only the phone's screen brings back stays as it is (pi, behind Face ID).
+    func testConnectLeavesABlockedHostAlone() async {
+        let (model, _) = makeModel()
+        await model.connect(host: WatchFixtures.pi)
+        XCTAssertEqual(model.host(WatchFixtures.pi)?.state, .offline)
+    }
+
+    /// "Open on iPhone" is one `open` request; the words follow what the phone answers it did.
+    func testOpenOnIPhoneSaysWhatThePhoneDid() async {
+        let (model, link) = makeModel(.mockup)
+        let shown = await model.openOnPhone(WatchFixtures.sidebar)
+        XCTAssertEqual(link.opened, [WatchFixtures.sidebar])
+        XCTAssertEqual(shown, "Open on your iPhone")
+        link.openOutcome = .notified
+        let notified = await model.openOnPhone(WatchFixtures.sidebar)
+        XCTAssertEqual(notified, "Tap the notification on your iPhone")
+        link.openOutcome = .unavailable
+        let unavailable = await model.openOnPhone(WatchFixtures.sidebar)
+        XCTAssertEqual(unavailable, "Open Dispatch on your iPhone: its notifications are off.")
+        XCTAssertEqual(WatchModel.openWords(.unknown), "Sent to your iPhone")
+        link.reachable = false
+        let away = await model.openOnPhone(WatchFixtures.sidebar)
+        XCTAssertEqual(away, WatchFailure.unreachable.message)
+    }
+
+    /// K8: a review arriving with its Undo open shows once; Undo takes it back and closes the card.
+    func testAReviewShowsOnceAndUndoTakesItBack() async throws {
+        let (model, link) = makeModel(.mockupReview)
+        let review = try XCTUnwrap(model.review)
+        XCTAssertEqual(review.title, "Sidebar theme toggle")
+        let failure = await model.undoReview(review)
+        XCTAssertNil(failure)
+        XCTAssertEqual(link.undone, ["review-1"])
+        XCTAssertNil(model.review)
+        XCTAssertEqual(model.snapshot?.reviews, [])
+    }
+
+    /// A review whose window closed is never shown, and Undo after it says the agent has it without asking the phone.
+    func testALateReviewIsNotShownAndCannotBeUndone() async throws {
+        let (model, link) = makeModel(.mockup)
+        var next = WatchFixtures.mockup(now: now)
+        let late = WatchReviewSent(id: "late", host: WatchFixtures.mba2, node: "term_1", agent: "claude", title: "t", comments: 1, files: 1,
+                                   sent: now.addingTimeInterval(-20), undoUntil: now.addingTimeInterval(-12))
+        next.reviews = [late]
+        next.generated = now.addingTimeInterval(1)
+        link.push(next)
+        XCTAssertNil(model.review)
+        let failure = await model.undoReview(late)
+        XCTAssertEqual(failure?.code, .requestEnded)
+        XCTAssertEqual(failure?.message, "Too late to undo: claude has it.")
+        XCTAssertFalse(link.requests.contains { $0.action == .undoReview(id: "late") })
+    }
+
+    /// Taken back on the phone before its deadline (the event leaves the snapshot): the card says so, then closes; one
+    /// the watch's own Undo took is not "taken back on your iPhone".
+    func testAReviewTakenBackOnThePhoneSaysSoThenCloses() async throws {
+        let (model, link) = makeModel(.mockupReview)
+        model.withdrawnFor = .milliseconds(50)
+        XCTAssertNotNil(model.review)
+        var next = try XCTUnwrap(link.snapshot)
+        next.reviews = []
+        next.generated = now.addingTimeInterval(1)
+        link.push(next)
+        XCTAssertTrue(model.reviewWithdrawn)
+        XCTAssertNotNil(model.review, "the card stays to say so")
+        try await eventually { model.review == nil }
+        XCTAssertFalse(model.reviewWithdrawn)
+        XCTAssertTrue(model.seenReviews.isEmpty, "only what the phone still lists is remembered")
+
+        let (own, _) = makeModel(.mockupReview)
+        let failure = await own.undoReview(try XCTUnwrap(own.review))
+        XCTAssertNil(failure)
+        XCTAssertFalse(own.reviewWithdrawn)
+        XCTAssertNil(own.review)
+    }
+
+    /// Read after its deadline (the event leaves the snapshot then): the card closes at once.
+    func testAReviewReadAfterItsDeadlineCloses() throws {
+        var later = now
+        let link = ScriptedWatchLink(scenario: .mockupReview, now: { [now] in now })
+        let model = WatchModel(link: link, now: { later })
+        XCTAssertNotNil(model.review)
+        later = now.addingTimeInterval(300)
+        var next = try XCTUnwrap(link.snapshot)
+        next.reviews = []
+        next.generated = now.addingTimeInterval(1)
+        link.push(next)
+        XCTAssertNil(model.review)
+        XCTAssertFalse(model.reviewWithdrawn)
+    }
+
+    /// A dismissed card does not come back with the next snapshot that still lists its review.
+    func testADismissedReviewStaysDismissed() throws {
+        let (model, link) = makeModel(.mockupReview)
+        XCTAssertNotNil(model.review)
+        model.dismissReview()
+        var next = try XCTUnwrap(link.snapshot)
+        next.generated = now.addingTimeInterval(1)
+        link.push(next)
+        XCTAssertNil(model.review)
+    }
+
+    /// Every snapshot the model takes reaches the complications' writer.
+    func testEverySnapshotReachesTheComplications() {
+        let now = now
+        var written: [Int] = []
+        let link = ScriptedWatchLink(scenario: .demo, now: { now })
+        let model = WatchModel(link: link, now: { now }, snapshotChanged: { written.append($0.phone.needsYou) })
+        XCTAssertEqual(written, [2])
+        var next = WatchFixtures.demo(now: now)
+        next.generated = now.addingTimeInterval(1)
+        next.phone.needsYou = 3
+        link.push(next)
+        XCTAssertEqual(written, [2, 3])
+        _ = model
+    }
+
     // MARK: The app's
 
     func testScriptedModeComesFromTheEnvironmentOrTheLaunchArguments() {

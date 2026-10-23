@@ -274,6 +274,8 @@ final class HostSessionsRefreshSource: RefreshSource {
     init(hosts: HostSessions) { self.hosts = hosts }
 
     func refresh(_ record: HostRecord, until deadline: ContinuousClock.Instant) async -> HostRefresh? {
+        // Disconnect means leave the host alone until the user connects it (docs/ios.md, Connection).
+        guard !hosts.isParked(record.id) else { return nil }
         let session = hosts.backgroundSession(record)
         let (links, continuation) = AsyncStream<HostLink>.makeStream(bufferingPolicy: .bufferingNewest(1))
         session.changed = { continuation.yield($0.link) }

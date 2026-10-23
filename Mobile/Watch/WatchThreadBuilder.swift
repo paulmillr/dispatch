@@ -56,8 +56,14 @@ enum WatchThreadBuilder {
                 case .user:
                     result.append(WatchItem(id: id, kind: .user, text: Self.userText(item), time: time, turn: turn.id))
                 case .assistant:
-                    let caption = index == lastAgent && turn.ended != nil ? ChatTurnSummary(turn).caption : nil
-                    result.append(text(.agent, caption: caption))
+                    if index == lastAgent, turn.ended != nil {
+                        let summary = ChatTurnSummary(turn)
+                        var row = text(.agent, caption: summary.caption)
+                        row.summary = Self.summary(summary, directory: directory)
+                        result.append(row)
+                    } else {
+                        result.append(text(.agent))
+                    }
                 case .notice: result.append(text(.notice))
                 case .reasoning where item.isNarration && !item.text.isEmpty: result.append(text(.thinking))
                 case .tool:
@@ -73,6 +79,21 @@ enum WatchThreadBuilder {
             result.append(WatchItem(id: prompt.id, kind: .user, text: Self.userText(prompt)))
         }
         return result
+    }
+
+    /// An ended turn's summary for the card's footnote: its steps and time, and across its patches that applied, the
+    /// distinct files and the lines added and removed.
+    static func summary(_ summary: ChatTurnSummary, directory: String?) -> WatchTurnSummary {
+        var files = Set<String>(), additions = 0, deletions = 0
+        for item in summary.steps {
+            let step = ChatStep(item, directory: directory)
+            guard step.kind == .patch, !step.failed else { continue }
+            additions += step.additions
+            deletions += step.deletions
+            files.formUnion(ToolPresentation(item).documents.map(\.path))
+        }
+        return WatchTurnSummary(steps: summary.steps.count, seconds: summary.duration, files: files.count, additions: additions,
+                                deletions: deletions)
     }
 
     /// A user message's text; one with attachments starts with a line that names them ("📎 2 images"): the watch shows
@@ -131,7 +152,18 @@ enum WatchThreadBuilder {
             return WatchChoice(index: choice.index, label: choice.label, role: role)
         }
         return WatchApproval(id: approval.interaction.id, title: presentation.text, detail: presentation.code,
-                             arrived: approval.arrived, choices: choices)
+                             arrived: approval.arrived, choices: choices, verb: verb(approval.interaction))
+    }
+
+    /// What the approval's code block is, as `approvalPresentation` picks it: a command runs, a URL is fetched; a file
+    /// or a pattern says the approval's own words (a path may be read or written).
+    static func verb(_ interaction: HelperChat.Interaction) -> WatchApprovalVerb? {
+        guard let question = interaction.questions.first else { return nil }
+        let operation = question.text.isEmpty ? question.header : interaction.operation ?? question.text
+        guard let object = ToolPresentation.json(operation) as? [String: Any] else { return nil }
+        if ToolPresentation.command(object["command"] ?? object["cmd"]) != nil { return .run }
+        if object["url"] is String { return .fetch }
+        return nil
     }
 
     /// A question form (an approval with `ClaudeQuestions`): the phone's form offers only its options.

@@ -113,6 +113,7 @@ controls (the Mac's `ChatDictationButton` and `WhisperModelRow`, the phone's com
 | Terminal | `Mobile/Terminal` | `TerminalHostView`, `TerminalFeed` (`PlainShellFeed` for plain SSH), `TerminalPresence`, key capsule |
 | Transport | `Mobile/Transport` | SSH, auth, host-key delegate, exec and shell (PTY) channels, bootstrap, plain SSH fallback, reconnect |
 | Code | `Mobile/Code` | Diff viewer, code composer |
+| Stats | `Mobile/Stats` | `HostStatistics` (per `HostSession`), the stats sheet, host detail's strip, the iPad popover's content |
 | Resilience, Settings | `Mobile/Resilience`, `Mobile/Settings` | Network watching, launch cache, background refresh, Settings |
 
 - `HostSession` is the one object the UI observes per host. Other areas get a `HelperClient` and `HelperTopology`
@@ -159,7 +160,11 @@ connection up without it: both are [plain SSH](#plain-ssh).
   (network change, foregrounding, pull to refresh; on a connected link it probes `echo` within 3 s, `:` on a plain
   one, and closes a dead one). Refusals (host key, login, missing key) are final; after a host-key mismatch nothing
   retries until the user acts. Each connection decides again between the helper and plain SSH.
-- Foreground connects every host, background disconnects.
+- Foreground connects every host, background disconnects. **Disconnect** in a host's stats (`HostSession.park`) ends its
+  connection and leaves the host alone: the foreground, network changes, pull to refresh, an edit that reconnects,
+  background refresh and watch requests all leave it down until a **Connect** or **Reconnect** the user asks for
+  (`connectByUser`: the stats sheet, host detail, the multiplexer hint, the watch's host screen; Remove and retry lifts
+  it too) or the next launch (nothing is saved).
 - **Which multiplexer.** Connecting never starts a server. herdr's `backends.open` starts one, so herdr is followed
   only while its server runs (`running`) or the host asks for it; otherwise tmux, retried every 2 s. A preference
   change switches live without reconnecting; until the new one answers (a snapshot or no server) the host's spaces
@@ -243,7 +248,11 @@ race (replay sees a second ownership ask).
   password while the phone is locked (older builds' items and files move at the first unlocked launch). A host's colour
   is `HostTint` of the machine identity at creation, so draws with the same hash. As the Mac's `HostRegistry` does, a
   new host takes the colour the fewest of the phone's hosts show (the hash breaking ties) and keeps it
-  (`HostRecord.color`); the two apps agree only where their host lists do, and the phone has no colour picker. Two hosts
+  (`HostRecord.color`); the two apps agree only where their host lists do. A host's stats (Color) pick another: Automatic is the colour it was
+  given (choosing it again gives the one the fewest other hosts show), a pick is saved in `HostRecord.color` with
+  `colorPicked`; its Automatic row shows the colour Automatic would give. Colours are drawn by machine (`HostColorStore`,
+  published from the saved list), so two hosts of one machine show the first's: the second's picker says so and is
+  disabled. Two hosts
   reaching one machine and account (a LAN and a Tailscale address) show its spaces and agents once, under the first in
   the list, as the Mac keys a host by machine and uid; the other says "Same machine as …", and background refresh
   notifies once. A failed save stays in memory flagged unsaved, with a Retry notice in Spaces.
@@ -360,6 +369,39 @@ race (replay sees a second ownership ask).
   push in the detail column's own stack. In the narrowest sidebar (under 300 points) an Agents row puts its host at
   the start of line two so the name stays whole. Chips, the steps disclosure and the composer's buttons light under
   a pointer.
+- **Host stats.** `HostStatistics` (Mobile/Stats), one per `HostSession`, which hands it each helper connection's client:
+  `stats.sample` and `stats.processes` every 5 s while the app is in the foreground and the host connected through its
+  helper, every 2 s while a stats sheet or popover shows the host (`beginViewing`), every 15 s under Low Power Mode
+  (`System.lowPowerMode`, followed through `NSProcessInfoPowerStateDidChange`), `stats.disks` every 15 s (the first
+  volume, the home folder's, is Disk). Nothing samples in the background, on a plain SSH connection or for New host's
+  verifying connection, and no sample is taken before something shows the stats (the first a cadence after the
+  connection); a viewer samples at once, and follows the host's session when an edit replaces it. Each request is
+  bounded (3 s, the disks 6 s) and a cancelled loop sends nothing more. The numbers are current (`live`) only once the
+  connection's own first sample is in; a first sample without CPU (no interval behind it) keeps the last one, stale,
+  until the next. The last sample and the history stay when the link drops (stale, with their time; an edit that
+  replaces the session keeps them); the history is 15 minutes of CPU and memory percent in memory, drawn as 60 bars of
+  15 s on a wall-clock grid (the Mac's `historyBars`: a bar is its samples' peak, a bar between samples at most 20 s
+  apart takes the later one, else it is a gap and the line breaks) at the later of the 15 s timeline and the newest
+  sample's time. Peak and average are over the window's samples. Latency is `HostSession`'s.
+  Other surfaces read `summary(at:)` (values, warning flags, the bars): the watch's snapshot through
+  `WatchHostStatsFeed`, at most one change of numbers per 15 s (docs/watch.md, Seams). Red: CPU from 90 %, memory over 90 %, a disk over
+  80 % used (the Mac's). **The sheet** (`hostStatsSheet(host:)`, which other areas call; here from host detail's disc
+  and Settings' host page): detents `[.height(372), .large]`, the screen behind usable at the small one; its title the
+  host's disc, name and "OS · latency" line, xmark to close. Small: the stat strip (CPU % with load, memory used of
+  total, disk free with % used; CPU and Memory choose the sparkline and the processes' order) and Disconnect; offline
+  the connection facts (Address, Port, User, Key, Multiplexer) and Connect. Large: the strip over the 15-minute
+  sparkline ("CPU · 15 min", "peak 82% · avg 31%"; a drag across it reads a bar's value and time in the caption), Top
+  processes (three, by CPU or memory, bars proportional to the first), Connection (Address `user@host`, Latency,
+  Multiplexer, Helper › the Helper and Chat switches and the multiplexer, Color ›), and Edit (New host's form) and
+  Disconnect; offline an "Offline · last sample 2:02 PM" line (or why the transport failed) over the dimmed strip, the
+  pencil in the bar, Forget host (asks, then removes as Remove host does) and Connect. Low Power Mode adds "Low Power
+  Mode · sampling every 15 s"; a host without its helper shows "Stats need the helper" with **Install helper…** (turns
+  the switch on, which reconnects) or after a fallback its reason and **Try again**. The small detent's action sits right under
+  the strip or the facts; the large one's in a bottom bar (`safeAreaBar`), the rest scrolling above it. **Host detail** shows the strip and sparkline between its
+  header and Connection (not for a plain SSH host), the Connection rows as fact rows with monospaced values; its disc
+  opens the sheet. **The iPad popover's content** (`HostStatsPopoverContent`, 360 points, for the iPad's host glyph):
+  the sheet's large content without its bar, a pencil in its header, Address, Multiplexer and Helper only, Edit and
+  Disconnect (Connect offline).
 - **Attachments.** Offered only while the conversation's helper accepted `chat.attachments` (hello `features`) and
   the conversation is verified, and not for a command draft. The composer's "+" picks photos and screenshots
   (`PhotosPicker`, several, no library permission) or files (`fileImporter`, read under their security scope); an
@@ -457,8 +499,8 @@ race (replay sees a second ownership ask).
   background refresh that reaches the host sets it.
 - **Background refresh.** A `BGAppRefreshTask` (`<bundle id>.refresh`), off by default. It connects hosts with Chat
   and the helper on (`BackgroundRefresh.refreshes`; a connection that falls back to plain SSH reads nothing) through a
-  session that asks nothing, so Face ID key hosts are skipped (`interactionNotAllowed`), reads
-  `chat.list`, notifies conversations that newly need the user, and ends within 25 s. It never touches seen markers.
+  session that asks nothing, so Face ID key hosts are skipped (`interactionNotAllowed`), and so is a host the user
+  disconnected (`HostSessions.isParked`, until Connect or the next launch); it reads `chat.list`, notifies conversations that newly need the user, and ends within 25 s. It never touches seen markers.
 - **Appearance.** Dark by default (`appearance` in UserDefaults), every colour with a light variant. Deliberate
   departures from the mockups: the light user bubble is `#BF3BBF` (the mockup's `#C94FC9` fails 4.5:1), and system
   menus and segmented controls replace custom ones.
@@ -468,7 +510,7 @@ race (replay sees a second ownership ask).
 **Simulator demo.** `./run.sh --ios --demo` (Debug; `-DispatchDemo YES` or `DISPATCH_MOBILE_DEMO=1`) replaces the
 saved hosts with three demo hosts (`Mobile/Demo`): mba2 and studio (macOS, herdr and tmux) and ai (Ubuntu), connected
 through the scripted driver to an in-process helper (`DemoHelper`) on the real wire codec, so Spaces, Agents, threads,
-approvals and terminals run the app's own code. Agents are in every state: working (web), waiting for approval (api,
+approvals and terminals run the app's own code. Their helpers answer `stats.*` with fictional numbers, over 15 minutes of seeded history (`HostStatsDemo`). Agents are in every state: working (web), waiting for approval (api,
 Codex), asking a question (docs), finished unseen (billing) and idle (train). The threads are the real helper's
 `chat.page` records of authored Claude and Codex transcripts; shells replay recorded screens, three tabs keep logging
 (`live/`), and typing echoes with a prompt on Return. `python3 test/mobile-demo-fixtures.py` regenerates
@@ -493,7 +535,12 @@ the switch under the header and the sidebar's large title.
 arguments `-DispatchTabsSample`, `-DispatchTabsShow`, `-DispatchTabsTree`, `-DispatchTabsFilter`,
 `-DispatchTabsCollapse`, `-DispatchTabsEmptyHost` (a fourth, connected host without spaces), `-DispatchTabsScript` (one
 step every 1.5 s, for recordings), `-DispatchTerminalEcho keys` (the sample's terminal echoes input in caret notation),
-`-DispatchHardwareKeyboard YES|NO` (pins `HardwareKeyboard`). To force a background refresh, pause in lldb and run:
+`-DispatchHardwareKeyboard YES|NO` (pins `HardwareKeyboard`), and with the demo `-DispatchHostStats
+<host>[:small|drag|large][:cpu|memory|scrub]` (that host's stats sheet), `-DispatchHostStatsState offline|plain`
+(disconnected first, or its Helper switch off), `-DispatchHostDetail <host>`, `-DispatchHostStatsPopover <host>` (the
+popover's content from the top right) and `-DispatchLowPower YES` (pins `System.lowPowerMode`). With
+`DISPATCH_MOBILE_SCRIPTED` or the demo, the watch's snapshot carries `WatchSampleStats`' numbers for every host
+without statistics of its own (the scripted helpers send none; the demo's hosts sample theirs; docs/watch.md, Seams). To force a background refresh, pause in lldb and run:
 
 ```
 e -l objc -- (void)[[BGTaskScheduler sharedScheduler] _simulateLaunchForTaskWithIdentifier:@"yachts.dispatch.mobile.refresh"]
@@ -717,6 +764,16 @@ sheet).
   widget, the iPad strip layout, the watch) are SwiftUI screens in `mockups/`, rendered by `mockups/shoot.py`.
   `AppearanceUITests` runs the accessibility audit in both schemes; accepted reports
   are listed in the test.
+- **Host stats.** `HostStatisticsTests` drive the store on a fixed clock and a sleep the test ends (`SteppedSleeper`):
+  the cadences, the disks' interval, nothing in the background or for a probe, a new connection stale until its first
+  sample, a stuck request, the bars and gaps, peak and average, Disconnect staying off and the colour choice;
+  `HostStatsSheetTests` read every sheet state, host detail's strip and the popover through VoiceOver's elements, live
+  numbers that differ from the seed, the chart following 2 s samples, the viewer following a replaced session and the
+  hint's Reconnect lifting Disconnect; `BackgroundRefreshTests` that background refresh and watch holds skip a
+  disconnected host; `WatchRequestServerTests` that the watch's Connect lifts it (foreground and background) and pull to
+  refresh does not; `WatchHostStatsFeedTests` that the store's numbers reach the watch's snapshot at most every 15 s,
+  staleness at once, and the scripted sample only where a host has none. The W and I5 screens come from the demo's hooks (Debug hooks, above),
+  `FidelityUITests` lists them.
 
 ## Device checklist
 

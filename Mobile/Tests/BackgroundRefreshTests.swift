@@ -202,6 +202,24 @@ final class BackgroundRefreshTests: XCTestCase {
         XCTAssertNil(result, "connected without a helper: nothing to read")
     }
 
+    /// A host the user disconnected (Disconnect in its stats) is left alone: background refresh and watch requests do not
+    /// connect it; Connect does.
+    func testADisconnectedHostIsLeftAlone() async throws {
+        let driver = ScriptedHostSessionDriver()
+        let hosts = ResilienceFixture.sessions([studio], driver: driver, active: false)
+        let session = try XCTUnwrap(hosts.session(studio.id))
+        session.park()
+        XCTAssertTrue(hosts.isParked(studio.id))
+        let result = await HostSessionsRefreshSource(hosts: hosts).refresh(studio, until: .now + .seconds(5))
+        XCTAssertNil(result)
+        await hosts.hold(studio.id)
+        XCTAssertFalse(hosts.isHeld(studio.id))
+        XCTAssertEqual(driver.runs(studio.id), 0, "nothing connected it")
+        session.connectByUser()
+        try await TestSupport.eventually { session.link == .connected }
+        XCTAssertFalse(hosts.isParked(studio.id))
+    }
+
     /// A background session never asks: a host key that is not trusted yet fails it, with no sheet queued.
     func testABackgroundSessionAsksNothing() async throws {
         let offer = HostKeyOffer(host: "studio.local", port: 22, algorithm: "ssh-ed25519", key: Data([1, 2, 3]))

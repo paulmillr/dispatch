@@ -52,6 +52,9 @@ settingGroups:
     CODE_SIGN_IDENTITY: Apple Development
     "CODE_SIGN_IDENTITY[sdk=watchsimulator*]": "-"
     CODE_SIGN_INJECT_BASE_ENTITLEMENTS: YES
+    # The watch app and its widget extension share the complications' entry (docs/watch.md, Complications). A device
+    # build needs this group on the team (automatic signing registers it); the simulator signs ad hoc with it.
+    DISPATCH_APP_GROUP: group.yachts.dispatch.mobile$(DISPATCH_BUNDLE_ID_SUFFIX)
   # The Swift terminal (Vendor/Term) is optimized with whole-module optimization in every
   # configuration: built like the app's Debug code (unoptimized, or file by file) it consumes
   # output 3-80x slower and blocks the programs writing to it.
@@ -423,9 +426,13 @@ targets:
       Release: Mobile/Config/Signing.xcconfig
     sources:
       - path: Watch/App
-        excludes: [Info.plist]
+        excludes: [Info.plist, "*.entitlements"]
       # Foundation-only, compiled into both apps.
       - path: Watch/Shared
+      # The complication's entry, store and views, shared with the widget extension.
+      - path: Watch/Complication
+    dependencies:
+      - target: DispatchWatchWidgets
     settings:
       groups: [watchApp]
       base:
@@ -435,11 +442,36 @@ targets:
         # Must extend the phone app's id, suffix included, as WKCompanionAppBundleIdentifier names it.
         PRODUCT_BUNDLE_IDENTIFIER: yachts.dispatch.mobile$(DISPATCH_BUNDLE_ID_SUFFIX).watchkitapp
         INFOPLIST_FILE: Watch/App/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Watch/App/DispatchWatch.entitlements
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         ENABLE_PREVIEWS: YES
+  # The watch's complications (docs/watch.md, Complications): a WidgetKit extension embedded in the watch app, signed as
+  # it is, reading the entry the app writes to their App Group.
+  DispatchWatchWidgets:
+    type: app-extension
+    platform: watchOS
+    configFiles:
+      Debug: Mobile/Config/Signing.xcconfig
+      Release: Mobile/Config/Signing.xcconfig
+    sources:
+      - path: Watch/Widgets
+        excludes: [Info.plist, "*.entitlements"]
+      - path: Watch/Complication
+      - path: Watch/Shared
+    settings:
+      groups: [watchApp]
+      base:
+        PRODUCT_NAME: DispatchWatchWidgets
+        PRODUCT_BUNDLE_IDENTIFIER: yachts.dispatch.mobile$(DISPATCH_BUNDLE_ID_SUFFIX).watchkitapp.widgets
+        INFOPLIST_FILE: Watch/Widgets/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Watch/Widgets/DispatchWatchWidgets.entitlements
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_INCLUDE_PATHS: ""
+        SKIP_INSTALL: YES
   DispatchWatchTests:
     type: bundle.unit-test
     platform: watchOS

@@ -150,8 +150,33 @@ final class WatchShellTests: XCTestCase {
                        .space(WatchSpaceRoute(host: WatchFixtures.studio, space: "tmux:s:$1")))
         XCTAssertEqual(WatchRouter.Show(argument: "tab:\(WatchFixtures.studio)/tmux:s:$1:@6"),
                        .tab(WatchTabRoute(host: WatchFixtures.studio, tab: "tmux:s:$1:@6")))
+        XCTAssertEqual(WatchRouter.Show(argument: "host:\(WatchFixtures.lab)"), .host(WatchHostRoute(host: WatchFixtures.lab)))
         XCTAssertNil(WatchRouter.Show(argument: "agents"))
         XCTAssertNil(WatchRouter.Show(argument: "tab:nothing"))
+    }
+
+    /// A review waits while a thread's own sheet is up (one sheet cannot present over another), then shows.
+    func testTheReviewWaitsForAThreadsSheet() {
+        let now = now
+        let model = WatchModel(link: ScriptedWatchLink(scenario: .mockupReview, now: { now }), now: { now })
+        let router = WatchRouter()
+        router.childSheet = true
+        XCTAssertNotNil(ImageRenderer(content: WatchRoot(model: model, router: router).frame(width: 205, height: 251)).cgImage)
+        XCTAssertNotNil(model.review, "kept for when the sheet closes")
+        router.childSheet = false
+        XCTAssertNotNil(model.review)
+    }
+
+    /// `-DispatchWatchSheet`: the question form (with an option chosen) or the reply confirm screen, taken once.
+    func testDebugSheetArgumentsOpenAThreadsSheet() {
+        XCTAssertEqual(WatchRouter.Sheet(argument: "question"), .question(choose: nil))
+        XCTAssertEqual(WatchRouter.Sheet(argument: "question:0"), .question(choose: 0))
+        XCTAssertEqual(WatchRouter.Sheet(argument: "reply:Use the sidebar header"), .reply("Use the sidebar header"))
+        XCTAssertNil(WatchRouter.Sheet(argument: "review"))
+        let router = WatchRouter()
+        router.sheet = .question(choose: 1)
+        XCTAssertEqual(router.takeSheet(), .question(choose: 1))
+        XCTAssertNil(router.takeSheet())
     }
 
     /// `simctl launch … -DispatchWatchScripted <value>` reaches the model through the process arguments.

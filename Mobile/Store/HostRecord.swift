@@ -47,6 +47,8 @@ struct HostRecord: Identifiable, Equatable, Codable, Sendable {
     /// The colour given when the host was added, as the Mac's HostRegistry gives one: the colour fewest other hosts
     /// show, `tintSeed`'s hash breaking ties. Nil for hosts saved before it: their hash's colour, as they always showed.
     var color: HostColor?
+    /// The user chose `color` (the stats sheet's Color picker); false: Automatic, the colour the host was given.
+    var colorPicked = false
     /// What the helper last reported about the operating system: the glyph and line three of an offline row.
     var system: HostSystem?
     /// "macOS 26.1", "Ubuntu 24.04".
@@ -109,5 +111,6 @@ extension HostRecord {
         system = try fields.decodeIfPresent(HostSystem.self, forKey: .system)
         osLabel = try fields.decodeIfPresent(String.self, forKey: .osLabel)
         color = try? fields.decodeIfPresent(HostColor.self, forKey: .color)
+        colorPicked = (try? fields.decodeIfPresent(Bool.self, forKey: .colorPicked)) ?? false
     }
 }

@@ -54,6 +54,64 @@ final class WatchThreadBuilderTests: XCTestCase {
         XCTAssertFalse(page.earlier)
         XCTAssertEqual(page.title, ChatFixture.node, "no row: the key")
         XCTAssertEqual(page.lastActivity, chat.transcript.lastActivity)
+
+        // The cards' summaries (K2): the caption's steps and time, and the files the turn's patches changed with their
+        // lines, as the Patch lines of the same turn add up.
+        let agents = page.items.filter { $0.kind == .agent }
+        XCTAssertEqual(agents.compactMap(\.summary).map(\.steps), [5, 4])
+        XCTAssertEqual(agents.compactMap(\.summary).map { $0.seconds.map { Int($0.rounded()) } }, [86, 52])
+        for agent in agents {
+            let summary = try XCTUnwrap(agent.summary)
+            let patches = page.items.filter { $0.turn == agent.turn && $0.tool == "Patch" && !$0.failed }
+            var additions = 0, deletions = 0
+            for detail in patches.compactMap(\.detail) {
+                let counts = detail.split(separator: " ").compactMap { Int($0.dropFirst()) }
+                if counts.count == 2 { additions += counts[0]; deletions += counts[1] }
+            }
+            XCTAssertEqual(summary.additions, additions)
+            XCTAssertEqual(summary.deletions, deletions)
+            XCTAssertEqual(summary.files > 0, !patches.isEmpty)
+            XCTAssertLessThanOrEqual(summary.files, patches.count * 4)
+        }
+    }
+
+    /// What a row says while the agent works (K1): the open turn's step as a verb and what it acts on; the agent's
+    /// activity word without one; while it waits, its approval's command.
+    func testTheRowsStepAndQuestionComeFromTheSession() async throws {
+        let helper = ScriptedHelper()
+        let chat = try await opened(helper, records: ChatFixture.records("claude-thread"))
+        let steps = chat.transcript.turns.flatMap { ChatStep.steps($0, directory: nil, reasoning: false) }
+        let patch = try XCTUnwrap(steps.first { $0.kind == .patch })
+        XCTAssertTrue(WatchSnapshotBuilder.phrase(patch).hasPrefix("Editing "))
+        XCTAssertFalse(WatchSnapshotBuilder.phrase(patch).contains("/"), "a file by its name")
+        let run = try XCTUnwrap(steps.first { $0.kind == .run })
+        XCTAssertEqual(WatchSnapshotBuilder.phrase(run), "Running pnpm test billing")
+        let read = try XCTUnwrap(steps.first { $0.kind == .read })
+        XCTAssertTrue(WatchSnapshotBuilder.phrase(read).hasPrefix("Reading "))
+        XCTAssertNil(WatchSnapshotBuilder.waiting(chat))
+
+        let busy = ScriptedHelper()
+        let working = try await opened(busy, records: [], state: ChatFixture.state(busy: true, activity: "reading files"))
+        XCTAssertEqual(WatchSnapshotBuilder.step(working, directory: nil), "Reading files")
+        XCTAssertNotNil(WatchSnapshotBuilder.started(working))
+        let id = try XCTUnwrap(busy.subscription("chat.open"))
+        busy.notify(id, "interaction.opened", ["terminal": 7, "session": conversation, "interaction": ChatFixture.approval(options: ["Allow", "Deny"])])
+        try await TestSupport.eventually { working.approvals.count == 1 }
+        XCTAssertEqual(WatchSnapshotBuilder.waiting(working), "Allow printf 'DISPATCH_LOCAL_TOOL_OK\\n'?")
+        XCTAssertEqual(WatchThreadBuilder.page(working, row: nil).approvals.first?.verb, .run, "a command: Claude wants to run")
+
+        // An operation the line cannot name (no command, file, URL or pattern): the approval's own words, never its JSON.
+        func line(_ operation: String, header: String = "WebSearch") throws -> String {
+            let interaction = try JSONDecoder().decode(HelperChat.Interaction.self, from: JSONSerialization.data(withJSONObject: [
+                "id": "a", "key": NSNull(), "approval": true, "blocking": true, "turn": NSNull(), "record": NSNull(),
+                "questions": [["id": "q", "header": header, "text": operation, "secret": false, "multiple": false, "custom": false,
+                               "blocks": NSNull(), "options": [["id": "allow", "label": "Allow", "detail": NSNull()]]]]]))
+            return WatchSnapshotBuilder.approvalLine(interaction)
+        }
+        XCTAssertEqual(try line(#"{"query":"swift actors","allowed_domains":["example.com"]}"#), "Allow WebSearch?")
+        XCTAssertEqual(try line(#"{"command":"cargo test --workspace\nmore"}"#, header: "Bash"), "Allow cargo test --workspace?")
+        XCTAssertEqual(try line(#"{"url":"https://example.com/docs"}"#, header: "WebFetch"), "Allow https://example.com/docs?")
+        XCTAssertEqual(try line(#"{"query":"x"}"#, header: ""), "Allow a tool call?")
     }
 
     /// The newest `limit` items; `earlier` when more exist, here or on the host. The page survives the wire and fits a

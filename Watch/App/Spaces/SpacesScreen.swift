@@ -81,7 +81,13 @@ struct SpacesHostSection: View {
                     .listRowBackground(Color.clear)
             }
         } header: {
-            SpacesHostHeader(host: section.host).id(section.host.id)
+            // The header opens the host's screen (K6: its statistics, Connect).
+            NavigationLink(value: WatchHostRoute(host: section.host.id)) {
+                SpacesHostHeader(host: section.host)
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Shows the host's load and connection")
+            .id(section.host.id)
         }
     }
 }
@@ -109,6 +115,9 @@ struct SpacesHostHeader: View {
                     .background(.quaternary, in: Capsule())
             }
             Spacer(minLength: 0)
+            Image(systemName: "chevron.right")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.tertiary)
         }
         .textCase(nil)
         .accessibilityElement(children: .ignore)

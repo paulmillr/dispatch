@@ -246,8 +246,26 @@ final class MobileComposition {
         network.observed = { [weak hosts] path in hosts?.networkPath(satisfied: path.satisfied) }
         network.start()
         composition.network = network
+        // Low Power Mode slows every host's stats sampling (HostStatistics.cadence).
+        Task { [weak hosts] in
+            for await _ in NotificationCenter.default.notifications(named: Notification.Name.NSProcessInfoPowerStateDidChange) {
+                hosts?.powerStateChanged()
+            }
+        }
         // Also in the in-memory and scripted modes, so simulator demos push snapshots.
         composition.watch = WatchBridge.app(composition)
+        if let watch = composition.watch {
+            #if DEBUG
+            // The scripted hosts' helpers send no statistics: where a host has none, the watch's host screens show the
+            // sample's (the demo's hosts sample their own).
+            let scripted = (environment["DISPATCH_MOBILE_SCRIPTED"] ?? "0") != "0" || DemoScenario.enabled
+            let fallback: (any WatchStatsSource)? = scripted ? WatchSampleStats() : nil
+            #else
+            let fallback: (any WatchStatsSource)? = nil
+            #endif
+            // Each host's own stats store, at most one change every 15 s (WatchHostStatsFeed).
+            watch.stats = WatchHostStatsFeed(hosts: hosts, fallback: fallback)
+        }
         return composition
     }
 

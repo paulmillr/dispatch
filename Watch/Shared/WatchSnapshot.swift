@@ -23,9 +23,12 @@ struct WatchSnapshot: Codable, Equatable, Sendable {
     var tabs: [WatchTab]
     /// The phone left rows out to fit `WatchLimits.snapshotBytes` (the oldest conversations and tabs go first).
     var truncated = false
+    /// Reviews the phone sent whose undo window is still open (`WatchReviewEvents`), newest last: the watch shows the
+    /// latest with Undo until its deadline.
+    var reviews: [WatchReviewSent] = []
 
     init(generated: Date, phone: WatchPhone, hosts: [WatchHost], conversations: [WatchConversation] = [],
-         spaces: [WatchSpace] = [], tabs: [WatchTab] = [], truncated: Bool = false) {
+         spaces: [WatchSpace] = [], tabs: [WatchTab] = [], truncated: Bool = false, reviews: [WatchReviewSent] = []) {
         self.generated = generated
         self.phone = phone
         self.hosts = hosts
@@ -33,9 +36,12 @@ struct WatchSnapshot: Codable, Equatable, Sendable {
         self.spaces = spaces
         self.tabs = tabs
         self.truncated = truncated
+        self.reviews = reviews
     }
 
-    private enum CodingKeys: String, CodingKey { case version, generated, phone, hosts, conversations, spaces, tabs, truncated }
+    private enum CodingKeys: String, CodingKey {
+        case version, generated, phone, hosts, conversations, spaces, tabs, truncated, reviews
+    }
 
     /// Lists decode per entry: one row a newer phone wrote differently drops that row, not the snapshot.
     init(from decoder: any Decoder) throws {
@@ -48,6 +54,7 @@ struct WatchSnapshot: Codable, Equatable, Sendable {
         spaces = values.watchList(WatchSpace.self, forKey: .spaces)
         tabs = values.watchList(WatchTab.self, forKey: .tabs)
         truncated = (try? values.decodeIfPresent(Bool.self, forKey: .truncated)) ?? false
+        reviews = values.watchList(WatchReviewSent.self, forKey: .reviews)
     }
 }
 
@@ -148,10 +155,18 @@ struct WatchHost: Codable, Equatable, Sendable, Identifiable {
     var sameMachine: String?
     /// When the phone last reached it (`HostRecord.lastConnected`), for "Last connected 2h ago" while offline.
     var lastConnected: Date?
+    /// The helper's round trip in milliseconds while connected (`HostSession.latency`, the `echo` probe): "18 ms".
+    var latency: Double?
+    /// Since when it is not connected, for "Offline since 2:02 PM" (the last connection's time); nil while connected.
+    var offlineSince: Date?
+    /// Its load, memory and disk with the last 15 minutes of CPU (`WatchStatsSource`); kept while offline (last-known,
+    /// drawn dimmed). Nil when the phone has none.
+    var stats: WatchHostStats?
 
     init(id: String, name: String, order: Int, state: WatchHostState, tint: String? = nil, system: String? = nil,
          osLabel: String? = nil, problem: String? = nil, blocked: WatchHostBlock? = nil, chat: Bool = true, live: Bool = true,
-         multiplexer: String? = nil, sameMachine: String? = nil, lastConnected: Date? = nil) {
+         multiplexer: String? = nil, sameMachine: String? = nil, lastConnected: Date? = nil, latency: Double? = nil,
+         offlineSince: Date? = nil, stats: WatchHostStats? = nil) {
         self.id = id
         self.name = name
         self.order = order
@@ -166,6 +181,9 @@ struct WatchHost: Codable, Equatable, Sendable, Identifiable {
         self.multiplexer = multiplexer
         self.sameMachine = sameMachine
         self.lastConnected = lastConnected
+        self.latency = latency
+        self.offlineSince = offlineSince
+        self.stats = stats
     }
 
     /// Shown dimmed: not connected, or its rows are not this connection's yet.
@@ -209,10 +227,21 @@ struct WatchConversation: Codable, Equatable, Sendable, Identifiable {
     var lastActivity: Date?
     /// Last-known data (`ChatConversation.stale`): the row dims its time.
     var stale: Bool
+    /// The conversation's own title (`MobileChatSession.title`, else `ChatConversationSummary.title`), when the agent
+    /// named it: the watch's row and thread title (`displayTitle`); `name`, the row's automatic name, otherwise.
+    var title: String?
+    /// While working: the current step as the phone's working row names it ("Editing Sidebar.tsx", "Running cargo
+    /// test"), else the agent's activity word; nil when the phone has not opened the conversation.
+    var step: String?
+    /// When the running turn started (the phone's working clock), for "· 48s".
+    var workingSince: Date?
+    /// While it needs you: what it asks ("Allow cargo test --workspace?", the question's text), else its attention line.
+    var waitingText: String?
 
     init(host: String, node: String, name: String, space: String? = nil, tab: String? = nil, agent: String? = nil,
          preview: String? = nil, attention: String? = nil, dot: WatchDot? = nil, needsYou: Bool = false, busy: Bool = false,
-         muted: Bool = false, lastActivity: Date? = nil, stale: Bool = false) {
+         muted: Bool = false, lastActivity: Date? = nil, stale: Bool = false, title: String? = nil, step: String? = nil,
+         workingSince: Date? = nil, waitingText: String? = nil) {
         self.host = host
         self.node = node
         self.name = name
@@ -227,10 +256,17 @@ struct WatchConversation: Codable, Equatable, Sendable, Identifiable {
         self.muted = muted
         self.lastActivity = lastActivity
         self.stale = stale
+        self.title = title
+        self.step = step
+        self.workingSince = workingSince
+        self.waitingText = waitingText
     }
 
     var key: WatchConversationKey { WatchConversationKey(host: host, node: node) }
     var id: WatchConversationKey { key }
+
+    /// What the watch titles it by: the conversation's own title, else the row's name (the tab's).
+    var displayTitle: String { title?.isEmpty == false ? title! : name }
 }
 
 /// One space (`MobileSpace`, `SpacesSpaceRow`): a tmux session or a herdr workspace.
@@ -316,6 +352,126 @@ struct WatchTab: Codable, Equatable, Sendable, Identifiable {
 
     /// The thread a tap opens, for a tab bound to an agent.
     var conversationKey: WatchConversationKey? { conversation.map { WatchConversationKey(host: host, node: $0) } }
+}
+
+/// A host's statistics as the phone's host strip shows them (CPU %, memory used, disk free, the 15-minute CPU line).
+/// Every field optional: a host or a phone build that reports less leaves it out.
+struct WatchHostStats: Codable, Equatable, Sendable {
+    /// What the phone flags as high (its strip draws the value red).
+    enum Warning: String, WatchTolerantValue {
+        case cpu, memory, disk, unknown
+    }
+
+    /// Buckets of `history`: 60 of 15 s, the last 15 minutes.
+    static let historyCount = 60
+    static let historyInterval: TimeInterval = 15
+
+    /// CPU use across all cores, 0 to 100.
+    var cpu: Double?
+    /// The one-minute load average.
+    var load: Double?
+    /// Bytes.
+    var memoryUsed: Int64?
+    var memoryTotal: Int64?
+    var diskFree: Int64?
+    var diskTotal: Int64?
+    var warnings: [Warning]
+    /// CPU % per 15 s bucket (its peak), oldest first, at most `historyCount`; nil where no sample came (a gap).
+    var history: [Double?]
+    /// When the newest sample was taken.
+    var sampled: Date?
+    /// The numbers are not current: the host's link dropped, the phone is in the background (it samples only in the
+    /// foreground) or a new connection's first sample is not in yet (`HostStatistics.stale`). Sent only when true.
+    var stale: Bool
+
+    init(cpu: Double? = nil, load: Double? = nil, memoryUsed: Int64? = nil, memoryTotal: Int64? = nil, diskFree: Int64? = nil,
+         diskTotal: Int64? = nil, warnings: [Warning] = [], history: [Double?] = [], sampled: Date? = nil, stale: Bool = false) {
+        self.cpu = cpu
+        self.load = load
+        self.memoryUsed = memoryUsed
+        self.memoryTotal = memoryTotal
+        self.diskFree = diskFree
+        self.diskTotal = diskTotal
+        self.warnings = warnings
+        self.history = history
+        self.sampled = sampled
+        self.stale = stale
+    }
+
+    /// The highest bucket of `history` ("peak 82%").
+    var peak: Double? { history.compactMap { $0 }.max() }
+
+    private enum CodingKeys: String, CodingKey {
+        case cpu, load, memoryUsed, memoryTotal, diskFree, diskTotal, warnings, history, sampled, stale
+    }
+
+    /// A gap travels as -1: a property list has no null.
+    private static let gap = -1.0
+
+    init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        cpu = try? values.decodeIfPresent(Double.self, forKey: .cpu)
+        load = try? values.decodeIfPresent(Double.self, forKey: .load)
+        memoryUsed = try? values.decodeIfPresent(Int64.self, forKey: .memoryUsed)
+        memoryTotal = try? values.decodeIfPresent(Int64.self, forKey: .memoryTotal)
+        diskFree = try? values.decodeIfPresent(Int64.self, forKey: .diskFree)
+        diskTotal = try? values.decodeIfPresent(Int64.self, forKey: .diskTotal)
+        warnings = values.watchList(Warning.self, forKey: .warnings)
+        history = ((try? values.decodeIfPresent([Double].self, forKey: .history)) ?? []).map { $0 < 0 ? nil : $0 }
+        sampled = try? values.decodeIfPresent(Date.self, forKey: .sampled)
+        stale = (try? values.decodeIfPresent(Bool.self, forKey: .stale)) ?? false
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encodeIfPresent(cpu, forKey: .cpu)
+        try values.encodeIfPresent(load, forKey: .load)
+        try values.encodeIfPresent(memoryUsed, forKey: .memoryUsed)
+        try values.encodeIfPresent(memoryTotal, forKey: .memoryTotal)
+        try values.encodeIfPresent(diskFree, forKey: .diskFree)
+        try values.encodeIfPresent(diskTotal, forKey: .diskTotal)
+        if !warnings.isEmpty { try values.encode(warnings, forKey: .warnings) }
+        if !history.isEmpty { try values.encode(history.map { $0 ?? Self.gap }, forKey: .history) }
+        try values.encodeIfPresent(sampled, forKey: .sampled)
+        if stale { try values.encode(true, forKey: .stale) }
+    }
+}
+
+/// A review the phone just sent to an agent (the Review tab's Send), mirrored on the wrist with Undo until `undoUntil`
+/// (`WatchReviewEvents` on the phone).
+struct WatchReviewSent: Codable, Equatable, Sendable, Identifiable {
+    /// The phone's event id: what `undoReview` names.
+    var id: String
+    var host: String
+    /// The conversation it went to (`WatchConversationKey.node`).
+    var node: String
+    /// "claude", "codex", "pi": the glyph and "then claude reads it".
+    var agent: String?
+    /// The conversation's name, as its Agents row says it.
+    var title: String
+    var comments: Int
+    var files: Int
+    var sent: Date
+    /// Until when Undo takes it back; after it the agent has it.
+    var undoUntil: Date
+
+    init(id: String, host: String, node: String, agent: String? = nil, title: String, comments: Int, files: Int, sent: Date,
+         undoUntil: Date) {
+        self.id = id
+        self.host = host
+        self.node = node
+        self.agent = agent
+        self.title = title
+        self.comments = comments
+        self.files = files
+        self.sent = sent
+        self.undoUntil = undoUntil
+    }
+
+    var key: WatchConversationKey { WatchConversationKey(host: host, node: node) }
+
+    /// Undo still takes it back at `date`.
+    func undoable(at date: Date) -> Bool { date < undoUntil }
 }
 
 extension KeyedDecodingContainer {
