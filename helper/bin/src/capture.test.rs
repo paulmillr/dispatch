@@ -197,6 +197,28 @@ fn replace_masks_process_names_before_the_needles() {
     assert_eq!(replaced, Ok(journal(&masked_rows(), &fakeco)));
 }
 
+#[test]
+fn replace_gives_a_json_escaped_path_the_replacement_of_the_path() {
+    // A launcher's JSON file names the app's executable with `\/` (JSONEncoder); the app reads the same path plainly
+    // and compares the two, so both must become the same text, not the path's whole mask and its components' masks.
+    let root = scratch("escaped");
+    let journal = |path: &str| {
+        vec![
+            record("in.file", &Data::Null, &Data::Bytes(format!(r#"{{"origin":{{"executable":"{}"}}}}"#, path.replace('/', "\\/")).as_bytes())),
+            record("in.result", &Data::Null, &Data::String(path)),
+        ]
+    };
+    write(&root.join("in/T/a/x.rpl.zst"), &journal("/home/someone/work-tree/app"));
+    std::fs::write(root.join("needles.txt"), "/home/someone/work-tree\nwork-tree\n").unwrap();
+    let path = |name: &str| root.join(name).to_str().unwrap().to_string();
+    let replaced = run(&["replace", &path("in"), &path("out"), "--needles", &path("needles.txt")].map(Into::into))
+        .map_err(|error| error.to_string()).and_then(|_| only(&root.join("out/T/a")));
+    std::fs::remove_dir_all(&root).unwrap();
+    let list = [(b"/home/someone/work-tree".to_vec(), None), (b"work-tree".to_vec(), None)];
+    let tree = String::from_utf8(replacements(&list).unwrap().0.remove(0)).unwrap();
+    assert_eq!(replaced, Ok(journal(&format!("{tree}/app"))));
+}
+
 /// `bytes` with every `from` replaced by `to` (of its length).
 fn bytes_replaced(bytes: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
     let mut out = bytes.to_vec();

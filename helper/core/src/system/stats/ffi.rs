@@ -82,10 +82,6 @@ unsafe extern "C" {
         length: usize,
         result: *mut *mut Passwd,
     ) -> i32;
-    #[cfg_attr(
-        all(target_os = "macos", target_arch = "x86_64"),
-        link_name = "statfs$INODE64"
-    )]
     fn statfs(path: *const c_char, value: *mut Statfs) -> i32;
 }
 

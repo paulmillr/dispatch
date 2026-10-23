@@ -12,13 +12,13 @@ final class SSHCoordinator {
     @ObservationIgnored var presentIntegrationConsent: @MainActor (SSHIntegrationScope, NSWindow?) async -> SSHIntegrationSelection? = {
         await SSHIntegrationConsent.present($0, window: $1)
     }
-    /// The "Full features" new-host policy answers the consent sheet with this.
+    /// Auto-confirm uploads (Settings › Features › Remote helper) answers the consent sheet with this.
     /// Pi stays opt-in because it installs an extension on the remote host.
     static let fullFeatures = SSHIntegrationSelection(
         grant: .init(helperEnabled: true, features: Set(SSHIntegrationFeature.allCases)),
         agents: [.codex: true, .claude: true, .pi: false])
 
-    /// First choice for a login: automatic under Full features, otherwise the sheet.
+    /// First choice for a login: automatic with Auto-confirm uploads, otherwise the sheet.
     private func newHostSelection(_ scope: SSHIntegrationScope, window: NSWindow?) async -> SSHIntegrationSelection? {
         if TerminalRuntime.shared.preferences.autoGrantNewHosts { return Self.fullFeatures }
         return await presentIntegrationConsent(scope, window)
@@ -237,6 +237,13 @@ final class SSHCoordinator {
         requests.values.first { $0.tabID == tab && connections[$0.connectionID]?.originClosed != true }?.connectionID
     }
 
+    /// Whether `id`'s helper runs from the runtime folder, as on a host whose home folder cannot run programs: agent
+    /// hooks there would run `~/.dispatch/bin/dispatch-helper`, which cannot run.
+    func helperOutsideHome(_ id: SSHConnectionID) -> Bool {
+        guard let path = connections[id]?.helperPath, let home = connections[id]?.greeting?.home else { return false }
+        return !path.hasPrefix(home + "/")
+    }
+
     /// Connections whose remote helper runs with this feature granted.
     func helperConnections(granting feature: SSHIntegrationFeature) -> [SSHConnectionID] {
         connections.values.filter { $0.helper != nil && $0.granted?.selectedFeatures.contains(feature) == true }.map(\.id)
@@ -413,8 +420,12 @@ final class SSHCoordinator {
     private func startHelper(_ request: SSHLaunchRequest, state: SSHConnectionState, grant: SSHIntegrationGrant,
                               resources: URL, recovering: Bool, startShell: Bool,
                               prepare: (@MainActor (String, HelperSession.Info) throws -> Void)?) async throws {
+        // A grant with agent hooks keeps the helper in ~/.dispatch: hooks and the login shell's typed launch functions
+        // run ~/.dispatch/bin/dispatch-helper, so a home folder that cannot run programs falls back to a plain shell.
         let started = try await SSHBootstrap.startHelper(master: request.master, resources: resources,
-                                                          sessionID: request.sessionID, publish: startShell, prepare: prepare)
+                                                          sessionID: request.sessionID, publish: startShell,
+                                                          runtimeAllowed: !grant.capabilities.contains("hooks.configure"),
+                                                          prepare: prepare)
         guard !Task.isCancelled, connections[request.connectionID] === state,
               request.integrationScope.flatMap(permissions.remembered).map({ grant.reduced(to: $0) == grant }) == true,
               let identity = started.session.info.identity, let account = started.session.info.account else {
@@ -457,7 +468,7 @@ final class SSHCoordinator {
         }
         // Publish the ready link together with its workspace and authenticated host.
         // An actor hop after publishing shellPID exposes a partially connected session.
-        await HelperApp.shared.borrow(started.session.connection, for: request.connectionID)
+        await HelperApp.shared.borrow(started.session.connection, for: request.connectionID, features: started.session.info.features)
         guard !Task.isCancelled, connections[request.connectionID] === state,
               request.integrationScope.flatMap(permissions.remembered).map({ grant.reduced(to: $0) == grant }) == true else {
             await HelperApp.shared.forget(request.connectionID)
@@ -471,7 +482,7 @@ final class SSHCoordinator {
             _ = SSHStatisticsStore.shared.register(HelperStatisticsProvider(id: request.connectionID, scope: scope, greeting: greeting),
                                                    grant: grant, hostID: .authenticated(greeting.host))
         }
-        state.helperPath = greeting.home + "/" + started.relativePath
+        state.helperPath = SSHBootstrap.hostPath(started.relativePath, home: greeting.home)
         if let terminal = started.session.info.terminal {
             TerminalRuntime.shared.connect(request.connectionID, terminal: terminal, tab: request.tabID,
                                            granted: Set(grant.selectedFeatures.map(\.rawValue)), host: .authenticated(greeting.host),
@@ -737,7 +748,7 @@ final class SSHCoordinator {
             }
             guard activeRequest(recipe.connection) != nil, permissions.remembered(scope) == grant else { throw CancellationError() }
             guard let old, HostProcessWatcher.alive(recipe.launcher) else { throw HerdrFailure("The original SSH launcher closed during authentication.") }
-            connections[id]?.helperPath = account.home + "/" + path
+            connections[id]?.helperPath = SSHBootstrap.hostPath(path, home: account.home)
             connections[id]?.workspace = connections[recipe.connection]?.workspace
             runtime.hosts.recovered(from: recipe.connection.rawValue, request: request)
             runtime.hosts.reconnect.retain(.init(connection: id, host: recipe.host, shell: recipe.shell, scope: scope,

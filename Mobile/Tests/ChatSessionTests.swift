@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import XCTest
 @testable import DispatchMobile
 
@@ -166,6 +167,95 @@ final class ChatSessionTests: XCTestCase {
         try await TestSupport.eventually { helper.requests("chat.send").count == 1 && !chat.sending }
         XCTAssertEqual(helper.requests("chat.send").first?.params["mode"] as? String, "steer")
         XCTAssertNil(chat.optimisticPrompt, "A steer joins the running turn; it opens no new bubble of its own")
+    }
+
+    /// A command goes at once whenever the agent can take input, even with messages queued (the Mac's
+    /// sendFromComposer); while it works it queues as a command, never as a fenced prompt.
+    func testCommandsGoAtOnceWhenIdleAndQueueAsCommandsWhileWorking() async throws {
+        let helper = ScriptedHelper()
+        script(helper) { request in
+            switch request.method {
+            case "queue.add": .result(ChatFixture.queued("held-\(request.id)", request.params["text"] as! String))
+            case "chat.command": .result(["kind": "sent", "sent": ChatFixture.sent()])
+            default: nil
+            }
+        }
+        let chat = try await opened(helper, records: [], state: ChatFixture.state(busy: true))
+        chat.drafts.edit(text: "/compact")
+        XCTAssertEqual(chat.route(steer: true, command: true), .queue, "A command never steers")
+        chat.send(steer: true)
+        try await TestSupport.eventually { helper.requests("queue.add").count == 1 && chat.queueItems.first?.helperID != nil }
+        XCTAssertEqual(helper.requests("queue.add").first?.params["command"] as? Bool, true)
+        XCTAssertTrue(helper.requests("chat.send").isEmpty)
+        // Idle with a message still queued: the next command goes now.
+        let id = try XCTUnwrap(helper.subscription("chat.open"))
+        helper.notify(id, "chat.state", ["terminal": 7, "session": conversation, "state": ChatFixture.state(busy: false)])
+        try await TestSupport.eventually { !chat.working }
+        XCTAssertFalse(chat.queueRows.isEmpty)
+        chat.drafts.edit(text: "/model")
+        XCTAssertEqual(chat.route(steer: false, command: true), .prompt)
+        chat.send()
+        try await TestSupport.eventually { helper.requests("chat.command").count == 1 && !chat.sending }
+        XCTAssertEqual(helper.requests("chat.command").first?.params["text"] as? String, "/model")
+    }
+
+    /// The helper's queue refuses shell commands: a `!` command typed while the agent works waits on the device and
+    /// runs by `chat.command` once the agent is idle and nothing is ahead of it.
+    func testAQueuedShellCommandRunsWhenTheAgentIsIdle() async throws {
+        let helper = ScriptedHelper()
+        script(helper) { request in
+            request.method == "chat.command" ? .result(["kind": "shell", "command": "ls", "output": "a\nb", "sent": ChatFixture.sent()]) : nil
+        }
+        let chat = try await opened(helper, records: [], state: ChatFixture.state(busy: true))
+        chat.drafts.edit(text: "!ls")
+        chat.send()
+        try await TestSupport.eventually { chat.queueItems.count == 1 }
+        XCTAssertTrue(helper.requests("queue.add").isEmpty, "Never put into the helper's queue")
+        XCTAssertTrue(helper.requests("chat.command").isEmpty, "Not while the agent works")
+        let id = try XCTUnwrap(helper.subscription("chat.open"))
+        helper.notify(id, "chat.state", ["terminal": 7, "session": conversation, "state": ChatFixture.state(busy: false)])
+        try await TestSupport.eventually { helper.requests("chat.command").count == 1 && chat.queueItems.isEmpty }
+        XCTAssertEqual(helper.requests("chat.command").first?.params["text"] as? String, "!ls")
+        XCTAssertEqual(chat.commandResult?.text, "a\nb")
+    }
+
+    /// Stop pauses what the device still holds until Resume, as the Mac's stopQueue; Send now refuses a paused row.
+    func testStopPausesTheDeviceQueueAndSendNowRefusesPausedRows() async throws {
+        let helper = ScriptedHelper()
+        script(helper) { request in request.method == "chat.stop" ? .result(ChatFixture.sent()) : nil }
+        let outbox = ChatOutbox(store: ChatOutboxMemoryStore())
+        let chat = try await opened(helper, records: [], state: ChatFixture.state(busy: true), outbox: outbox)
+        // Held on the device: its add is refused as not sent, so it waits.
+        _ = outbox.add(ChatOutboxItem(key: chat.key, conversation: conversation, text: "later"))
+        chat.stop()
+        try await TestSupport.eventually { helper.requests("chat.stop").count == 1 && !chat.stopping }
+        XCTAssertEqual(chat.queueItems.first?.state, .paused(MobileChatSession.stopped))
+        XCTAssertTrue(chat.queueStopped)
+        let row = try XCTUnwrap(chat.queueRows.first)
+        XCTAssertFalse(chat.canSendNow(row), "A paused row is not sent by Send now")
+        chat.sendQueuedNow(row)
+        XCTAssertTrue(helper.requests("chat.send").isEmpty)
+    }
+
+    /// A message queued for one agent process is never delivered to another in the same pane (the Mac's
+    /// ChatQueuedMessage.matches): it pauses for the user; one queued before any agent was bound adopts this one.
+    func testAMessageQueuedForAnotherProcessIsPaused() async throws {
+        let helper = ScriptedHelper()
+        script(helper) { request in
+            request.method == "queue.add" ? .result(ChatFixture.queued("held-\(request.id)", request.params["text"] as! String)) : nil
+        }
+        let outbox = ChatOutbox(store: ChatOutboxMemoryStore())
+        let chat = try await opened(helper, records: [], state: ChatFixture.state(busy: true), outbox: outbox)
+        let other = ChatOutboxItem.Process(HelperTopology.Binding(session: "", transcript: nil, pid: 1, start: [1, 0],
+                                                                  executable: "/usr/local/bin/claude"))
+        _ = outbox.add(ChatOutboxItem(key: chat.key, conversation: conversation, text: "for the old one", state: .paused("x"),
+                                      process: other))
+        _ = outbox.add(ChatOutboxItem(key: chat.key, conversation: conversation, text: "unbound", state: .paused("x")))
+        for row in chat.queueRows { chat.resendQueued(row) }
+        try await TestSupport.eventually { chat.queueItems.first?.state == .paused(MobileChatSession.otherProcess) }
+        try await TestSupport.eventually { chat.queueItems.last?.helperID != nil }
+        XCTAssertEqual(chat.queueItems.last?.process, ChatOutboxItem.Process(ChatFixture.topologyBinding))
+        XCTAssertEqual(helper.requests("queue.add").map { $0.params["text"] as? String }, ["unbound"])
     }
 
     func testStopSendsChatStop() async throws {
@@ -476,33 +566,40 @@ final class ChatSessionTests: XCTestCase {
          ChatFixture.record("user-p1", "user", turn: "p1", text: "Make billing webhook retries idempotent.", time: 946_719_000_000)]
     }
 
-    func testQueuedMessagesGoBackIntoANewHelperWhenTheTurnStillRuns() async throws {
+    /// The host's queue store outlives its helper: a new helper lists the same items under the same ids, and the
+    /// device adds nothing again.
+    func testANewHelperFindsTheStoredQueueByItsIDs() async throws {
         let first = ScriptedHelper()
         script(first) { request in
-            request.method == "queue.add" ? .result(ChatFixture.queued("held-\(request.id)", request.params["text"] as! String)) : nil
+            request.method == "queue.add" ? .result(ChatFixture.queued("q-\(request.id)", request.params["text"] as! String)) : nil
         }
         let chat = try await opened(first, records: runningTurn, state: ChatFixture.state(busy: true))
         try await queueTwo(first, chat)
+        let ids = chat.queueItems.compactMap(\.helperID)
         first.close()
         chat.update(link: .reconnecting(attempt: 1, since: Date()), client: nil)
         XCTAssertEqual(chat.queueRows.count, 2, "The queue stays visible while the link is down")
-        // The same turn still runs on the host: the old helper never started on its queue.
-        let second = try await reconnect(chat, records: runningTurn, busy: true)
-        try await TestSupport.eventually { second.requests("queue.add").count == 2 && chat.queueItems.allSatisfy { $0.helperID?.hasPrefix("new-") == true } }
-        XCTAssertEqual(second.requests("queue.add").map { $0.params["text"] as? String }, ["Also cover invoice.paid", "Add a unit test"])
-        XCTAssertEqual(second.requests("queue.hold").map { $0.params["held"] as? Bool }, [true, false])
+        let stored = zip(ids, ["Also cover invoice.paid", "Add a unit test"]).map { ChatFixture.queued($0, $1) }
+        let second = try await reconnect(chat, records: runningTurn, busy: true, queue: stored)
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertTrue(second.requests("queue.add").isEmpty && second.requests("queue.hold").isEmpty)
+        XCTAssertEqual(chat.queueItems.compactMap(\.helperID), ids)
+        XCTAssertEqual(chat.queueRows.map(\.text), ["Also cover invoice.paid", "Add a unit test"])
     }
 
     /// A held queue never starts the agent: a release the helper refuses is tried once more, then the queue says so.
+    /// (Messages typed while the link was down are the ones mirrored after a reconnect.)
     func testAFailedQueueReleaseIsRetriedAndThenShown() async throws {
         let first = ScriptedHelper()
-        script(first) { request in
-            request.method == "queue.add" ? .result(ChatFixture.queued("held-\(request.id)", request.params["text"] as! String)) : nil
-        }
+        script(first)
         let chat = try await opened(first, records: runningTurn, state: ChatFixture.state(busy: true))
-        try await queueTwo(first, chat)
         first.close()
         chat.update(link: .reconnecting(attempt: 1, since: Date()), client: nil)
+        for text in ["Also cover invoice.paid", "Add a unit test"] {
+            chat.drafts.edit(text: text)
+            chat.send()
+        }
+        XCTAssertEqual(chat.queueItems.count, 2)
         let second = try await reconnect(chat, records: runningTurn, busy: true) { request in
             request.method == "queue.hold" && request.params["held"] as? Bool == false ? .error(code: "busy", message: "Try again") : nil
         }
@@ -512,40 +609,31 @@ final class ChatSessionTests: XCTestCase {
         XCTAssertEqual(chat.failure, chat.queueError, "The thread shows it")
     }
 
-    func testTheHeadOfALostQueueWaitsForTheUserWhenTheHelperMayHaveSentIt() async throws {
+    /// What the host's queue store no longer holds was sent or removed there: the device lets it go and never adds it
+    /// again, whatever the transcript shows yet.
+    func testAStoredMessageTheHostNoLongerHoldsLeavesTheDevice() async throws {
         let first = ScriptedHelper()
         script(first) { request in
-            request.method == "queue.add" ? .result(ChatFixture.queued("held-\(request.id)", request.params["text"] as! String)) : nil
+            request.method == "queue.add" ? .result(ChatFixture.queued("q-\(request.id)", request.params["text"] as! String)) : nil
         }
         let chat = try await opened(first, records: runningTurn, state: ChatFixture.state(busy: true))
         try await queueTwo(first, chat)
-        // The turn ends; the old helper may start draining before the link drops.
-        let id = try XCTUnwrap(first.subscription("chat.open"))
-        first.notify(id, "chat.records", ["terminal": 7, "session": conversation, "records": [
-            ChatFixture.record("f1:ended", "turn_ended", turn: "p1", time: 946_719_030_000)]])
-        first.notify(id, "chat.state", ["terminal": 7, "session": conversation, "state": ChatFixture.state(busy: false)])
-        try await TestSupport.eventually { !chat.working }
         first.close()
         chat.update(link: .reconnecting(attempt: 1, since: Date()), client: nil)
-        let second = try await reconnect(chat, records: runningTurn + [ChatFixture.record("f1:ended", "turn_ended", turn: "p1", time: 946_719_030_000)], busy: false)
-        try await TestSupport.eventually { second.requests("queue.add").count == 1 }
+        let second = try await reconnect(chat, records: runningTurn, busy: false)
+        try await TestSupport.eventually { chat.queueItems.isEmpty }
         try await Task.sleep(for: .milliseconds(150))
-        XCTAssertEqual(second.requests("queue.add").map { $0.params["text"] as? String }, ["Add a unit test"],
-                       "Only the message behind the head is certainly unsent")
-        guard case .uncertain = chat.queueItems.first?.state else { return XCTFail("The head waits for the user") }
-        XCTAssertNotNil(chat.queueRows.first?.status)
-        // The user's own decision sends it.
-        chat.resendQueued(chat.queueRows[0])
-        try await TestSupport.eventually { second.requests("queue.add").count == 2 }
+        XCTAssertTrue(second.requests("queue.add").isEmpty, "Never added again: the host may have sent it")
     }
 
     func testAMessageTheTranscriptShowsAsSentIsNotQueuedAgain() async throws {
         let first = ScriptedHelper()
         script(first) { request in
-            request.method == "queue.add" ? .result(ChatFixture.queued("held-\(request.id)", request.params["text"] as! String)) : nil
+            request.method == "queue.add" ? .result(ChatFixture.queued("q-\(request.id)", request.params["text"] as! String)) : nil
         }
         let chat = try await opened(first, records: runningTurn, state: ChatFixture.state(busy: true))
         try await queueTwo(first, chat)
+        let ids = chat.queueItems.compactMap(\.helperID)
         first.close()
         chat.update(link: .reconnecting(attempt: 1, since: Date()), client: nil)
         let now = Int64(Date().timeIntervalSince1970 * 1000)
@@ -553,9 +641,38 @@ final class ChatSessionTests: XCTestCase {
             ChatFixture.record("f1:ended", "turn_ended", turn: "p1", time: now - 2000),
             ChatFixture.record("p2:started", "turn_started", turn: "p2", time: now - 1000),
             ChatFixture.record("user-p2", "user", turn: "p2", text: "Also cover invoice.paid", time: now - 1000)]
-        let second = try await reconnect(chat, records: delivered, busy: true)
-        try await TestSupport.eventually { chat.queueItems.count == 1 && second.requests("queue.add").count == 1 }
-        XCTAssertEqual(second.requests("queue.add").first?.params["text"] as? String, "Add a unit test")
+        // The host sent the first; the second is still in its store.
+        let second = try await reconnect(chat, records: delivered, busy: true, queue: [ChatFixture.queued(ids[1], "Add a unit test")])
+        try await TestSupport.eventually { chat.queueItems.count == 1 }
+        XCTAssertEqual(chat.queueItems.first?.helperID, ids[1])
+        XCTAssertTrue(second.requests("queue.add").isEmpty)
+    }
+
+    /// A conversation the agent had not named when the message was queued is held in its helper's memory only: after
+    /// a reconnect the head, which that helper may have been sending, waits for the user; what is behind it is added again.
+    func testAQueueOfAnUnnamedConversationIsAddedAgainBehindItsUncertainHead() async throws {
+        let key = ChatConversationKey(host: UUID(), node: ChatFixture.node)
+        let gone = UUID()
+        let outbox = ChatOutbox(store: ChatOutboxMemoryStore([
+            ChatOutboxItem(key: key, conversation: nil, text: "Also cover invoice.paid", state: .queued(id: "q-1", revision: 1, helper: gone)),
+            ChatOutboxItem(key: key, conversation: nil, text: "Add a unit test", state: .queued(id: "q-2", revision: 2, helper: gone))]))
+        let helper = ScriptedHelper()
+        script(helper) { request in
+            switch request.method {
+            case "queue.list": .result([[String: Any]]())
+            case "queue.add": .result(ChatFixture.queued("q-\(request.id)", request.params["text"] as! String))
+            default: nil
+            }
+        }
+        let chat = MobileChatSession.scripted(helper, host: key.host, outbox: outbox)
+        try await TestSupport.eventually { helper.subscription("chat.open") != nil }
+        helper.notify(helper.subscription("chat.open")!, "chat.history", ChatFixture.history(state: ChatFixture.state(busy: false), pending: true))
+        helper.notify(helper.subscription("chat.open")!, "chat.history", ChatFixture.history())
+        try await TestSupport.eventually { helper.requests("queue.add").count == 1 }
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(helper.requests("queue.add").map { $0.params["text"] as? String }, ["Add a unit test"],
+                       "Only the message behind the head is certainly unsent")
+        guard case .uncertain = chat.queueItems.first?.state else { return XCTFail("The head waits for the user") }
     }
 
     func testAMessageTheHelperConsumedLeavesTheDevice() async throws {
@@ -698,7 +815,12 @@ final class ChatSessionTests: XCTestCase {
         try await chat.select(model: "sonnet", effort: "low")
         XCTAssertEqual(helper.requests("chat.settings.set").first?.params["effort"] as? String, "low")
         XCTAssertEqual(chat.model, "sonnet")
-        XCTAssertEqual(chat.modelLabel, "Sonnet")
+        XCTAssertEqual(chat.modelLabel, "sonnet")
+        // Claude reports the model's ID (a /model in its terminal, a fresh session): the Mac's label, never the raw ID.
+        helper.notify(helper.subscription("chat.open")!, "chat.state",
+                      ["terminal": 7, "session": conversation, "state": ChatFixture.state(busy: false, model: "claude-opus-5-5")])
+        try await TestSupport.eventually { chat.model == "claude-opus-5-5" }
+        XCTAssertEqual(chat.modelLabel, "opus-5.5")
     }
 
     func testAStepsFullOutputComesFromChatTools() async throws {
@@ -714,11 +836,386 @@ final class ChatSessionTests: XCTestCase {
         XCTAssertTrue(record.output.hasSuffix("12 passed"))
         XCTAssertTrue(chat.transcript.turns[0].items.first { $0.id == "tool-c4" }?.output.hasSuffix("12 passed") == true)
     }
+
+    // MARK: Attachments (docs/ios.md, Attachments)
+
+    /// A small PNG, as a pasted screenshot carries.
+    private static let png = UIGraphicsImageRenderer(size: CGSize(width: 40, height: 30)).pngData { context in
+        UIColor.systemPink.setFill()
+        context.fill(CGRect(x: 0, y: 0, width: 40, height: 30))
+    }
+    private static let stored = "/Users/sam/.dispatch/attachments/0123456789abcdef0123456789abcdef/screenshot.png"
+
+    /// An open conversation whose helper accepted `chat.attachments`; `attachments.put` stores under the request's id.
+    private func attachable(_ helper: ScriptedHelper, state: [String: Any]? = nil, outbox: ChatOutbox = ChatOutbox(store: ChatOutboxMemoryStore()),
+                            _ extra: @escaping (ScriptedHelper.Request) -> ScriptedHelper.Reply? = { _ in nil }) async throws -> MobileChatSession {
+        script(helper) { request in
+            if let reply = extra(request) { return reply }
+            guard request.method == "attachments.put" else { return nil }
+            let name = request.params["name"] as? String ?? ""
+            let image = name.hasSuffix(".png") || name.hasSuffix(".jpg")
+            return .result(["path": "/Users/sam/.dispatch/attachments/\(String(format: "%032llx", request.id))/\(name)", "name": name,
+                            "kind": image ? "image" : "file", "size": (request.params["bytes"] as? Data)?.count ?? 0])
+        }
+        let chat = try await opened(helper, records: [], state: state, outbox: outbox)
+        XCTAssertFalse(chat.attachmentsAvailable, "Not without the hello feature")
+        chat.update(link: .connected, client: helper.client, features: [ChatAttachment.feature])
+        XCTAssertTrue(chat.attachmentsAvailable)
+        return chat
+    }
+
+    /// Picked bytes are prepared, stored on the host and kept in the draft with a thumbnail; the send names the copy.
+    func testAnAttachmentUploadsThenSendsByPath() async throws {
+        let helper = ScriptedHelper()
+        let chat = try await attachable(helper) { $0.method == "chat.send" ? .result(ChatFixture.sent()) : nil }
+        XCTAssertTrue(chat.canAttach)
+        chat.attach([.data(Self.png, name: "screenshot.png", kind: .image)])
+        XCTAssertEqual(chat.uploads.map(\.name), ["screenshot.png"], "The strip shows it at once")
+        try await TestSupport.eventually { chat.uploads.isEmpty && chat.drafts.current.attachments.count == 1 }
+        let put = try XCTUnwrap(helper.requests("attachments.put").first)
+        XCTAssertEqual(put.params["name"] as? String, "screenshot.png")
+        XCTAssertEqual(put.params["bytes"] as? Data, Self.png, "A PNG goes as it is")
+        let attachment = chat.drafts.current.attachments[0]
+        XCTAssertEqual(attachment.kind, .image)
+        XCTAssertNotNil(attachment.thumbnail)
+        XCTAssertTrue(attachment.path?.hasSuffix("/screenshot.png") == true)
+        XCTAssertTrue(chat.drafts.shape.hasAttachments)
+        chat.drafts.edit(text: "Why is this button grey?")
+        chat.send()
+        XCTAssertEqual(chat.optimisticPrompt?.attachments, [attachment], "The bubble shows the thumbnail at once")
+        try await TestSupport.eventually { helper.requests("chat.send").count == 1 && !chat.sending }
+        let send = try XCTUnwrap(helper.requests("chat.send").first)
+        XCTAssertEqual(send.params["text"] as? String, "Why is this button grey?")
+        XCTAssertEqual(send.params["attachments"] as? [String], [try XCTUnwrap(attachment.path)])
+        XCTAssertTrue(chat.drafts.current.attachments.isEmpty, "The draft leaves with its attachments")
+    }
+
+    /// Attachments without text send; the record (its text empty, an image block naming the copy) takes the bubble's
+    /// place and keeps the thumbnail.
+    func testAnAttachmentOnlyMessageBecomesItsTranscriptRowInPlace() async throws {
+        let helper = ScriptedHelper()
+        let chat = try await attachable(helper) { $0.method == "chat.send" ? .result(ChatFixture.sent()) : nil }
+        let image = ChatAttachment(id: "a1", name: "screenshot.png", kind: .image, size: 2048, path: Self.stored,
+                                   thumbnail: ChatAttachmentImage.thumbnail(Self.png))
+        chat.drafts.attach([image])
+        XCTAssertEqual(CodeComposer.slot(text: "", working: false, attached: true), .send)
+        chat.send()
+        let pendingID = try XCTUnwrap(chat.optimisticPrompt?.id)
+        try await TestSupport.eventually { helper.requests("chat.send").count == 1 && !chat.sending }
+        let send = try XCTUnwrap(helper.requests("chat.send").first)
+        XCTAssertEqual(send.params["text"] as? String, "")
+        XCTAssertEqual(send.params["attachments"] as? [String], [Self.stored])
+        var record = ChatFixture.record("user-p1", "user", turn: "p1", text: "", time: 946_719_200_000)
+        record["blocks"] = [["kind": "image", "language": NSNull(), "text": "screenshot.png", "path": Self.stored]]
+        let id = try XCTUnwrap(helper.subscription("chat.open"))
+        helper.notify(id, "chat.records", ["terminal": 7, "session": conversation, "records": [
+            ChatFixture.record("p1:started", "turn_started", turn: "p1", time: 946_719_200_000), record]])
+        try await TestSupport.eventually { chat.optimisticPrompt == nil }
+        let row = try XCTUnwrap(chat.transcript.rows.last)
+        XCTAssertEqual(row.id, pendingID, "The confirmed record keeps the bubble's identity")
+        XCTAssertEqual(row.item.attachments.map(\.path), [Self.stored])
+        XCTAssertEqual(row.item.attachments.first?.thumbnail, image.thumbnail, "and the composer's thumbnail")
+        XCTAssertEqual(row.item.attachments.first?.id, "a1")
+    }
+
+    /// A send that fails puts the draft back with its attachments (they are still on the host).
+    func testAFailedSendPutsTheAttachmentsBackInTheDraft() async throws {
+        let helper = ScriptedHelper()
+        let chat = try await attachable(helper) {
+            $0.method == "chat.send" ? .error(code: "terminal_unavailable", message: "Not attached.") : nil
+        }
+        let image = ChatAttachment(id: "a1", name: "screenshot.png", kind: .image, size: 2048, path: Self.stored)
+        chat.drafts.attach([image])
+        chat.drafts.edit(text: "Compare with this")
+        chat.send()
+        XCTAssertTrue(chat.drafts.current.attachments.isEmpty)
+        try await TestSupport.eventually { chat.failure != nil && !chat.sending }
+        XCTAssertNil(chat.optimisticPrompt)
+        XCTAssertEqual(chat.drafts.current.text, "Compare with this")
+        XCTAssertEqual(chat.drafts.current.attachments.map(\.path), [Self.stored])
+    }
+
+    /// Queued while the agent works: `queue.add` carries the paths, the row shows the attachments and is not edited in
+    /// place, and the helper's preview (which names attachments by type) does not replace what was typed.
+    func testAQueuedMessageCarriesItsAttachments() async throws {
+        let helper = ScriptedHelper()
+        let chat = try await attachable(helper, state: ChatFixture.state(busy: true)) { request in
+            guard request.method == "queue.add" else { return nil }
+            var queued = ChatFixture.queued("held-1", request.params["text"] as! String)
+            queued["preview"] = [["kind": "text", "text": request.params["text"] as! String], ["kind": "attachment", "type": "image"]]
+            queued["editable"] = false
+            return .result(queued)
+        }
+        chat.drafts.attach([ChatAttachment(id: "a1", name: "screenshot.png", kind: .image, size: 2048, path: Self.stored)])
+        chat.drafts.edit(text: "Then this one")
+        XCTAssertEqual(chat.route(steer: false), .queue)
+        chat.send()
+        try await TestSupport.eventually { chat.queueItems.first?.helperID != nil }
+        XCTAssertEqual(helper.requests("queue.add").first?.params["attachments"] as? [String], [Self.stored])
+        let row = try XCTUnwrap(chat.queueRows.first)
+        XCTAssertEqual(row.text, "Then this one")
+        XCTAssertEqual(row.attachments.map(\.path), [Self.stored])
+        XCTAssertFalse(row.editable, "Not edited in place")
+        XCTAssertEqual(ChatQueueCard.accessibilityLabel(row), "Then this one, Image")
+        helper.notify(try XCTUnwrap(helper.subscription("chat.open")), "chat.queue", ["terminal": 7, "session": conversation, "items": [
+            ["id": "held-1", "mode": "prompt", "revision": 2, "editable": false, "editing": false, "paused": NSNull(), "error": NSNull(),
+             "preview": [["kind": "text", "text": "Then this one"], ["kind": "attachment", "type": "image"]]]], "error": NSNull()])
+        try await TestSupport.eventually { chat.queue.first?.revision == 2 }
+        XCTAssertEqual(chat.queueItems.first?.text, "Then this one", "The preview's attachment line is not the text")
+        // A row only the helper holds (added on the Mac): its attachments by kind, the text without them.
+        let mac = try JSONDecoder().decode(HelperChat.Queued.self, from: JSONSerialization.data(withJSONObject: [
+            "id": "mac-1", "mode": "prompt", "revision": 1, "editable": false, "editing": false, "paused": NSNull(), "error": NSNull(),
+            "preview": [["kind": "text", "text": "From the Mac"], ["kind": "attachment", "type": "localImage"],
+                        ["kind": "attachment", "type": "file"]]]))
+        XCTAssertEqual(mac.typedText, "From the Mac")
+        XCTAssertEqual(mac.previewAttachments.map(\.kind), [.image, .file])
+    }
+
+    /// The queue file keeps attachments without their thumbnails; a file written before attachments reads as before.
+    func testTheQueueFileKeepsAttachmentsWithoutThumbnailsAndReadsOlderFiles() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("outbox-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let url = folder.appendingPathComponent("chat-queue.json")
+        let key = ChatConversationKey(host: UUID(), node: ChatFixture.node)
+        let image = ChatAttachment(id: "a1", name: "screenshot.png", kind: .image, size: 2048, path: Self.stored, thumbnail: Self.png)
+        let item = ChatOutboxItem(key: key, conversation: conversation, text: "", attachments: [image])
+        let outbox = ChatOutbox(store: ChatOutboxFileStore(url: url))
+        XCTAssertTrue(outbox.add(item))
+        XCTAssertEqual(outbox.items.first?.attachments.first?.thumbnail, Self.png, "In memory the thumbnail stays")
+        let loaded = try ChatOutboxFileStore(url: url).load()
+        var expected = image
+        expected.thumbnail = nil
+        XCTAssertEqual(loaded.first?.attachments, [expected])
+        XCTAssertEqual(loaded.first?.text, "")
+        // An older file: no `attachments` key.
+        var document = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        var items = try XCTUnwrap(document["items"] as? [[String: Any]])
+        items[0].removeValue(forKey: "attachments")
+        items[0]["text"] = "Older"
+        document["items"] = items
+        try JSONSerialization.data(withJSONObject: document).write(to: url)
+        let older = try ChatOutboxFileStore(url: url).load()
+        XCTAssertEqual(older.map(\.text), ["Older"])
+        XCTAssertEqual(older.first?.attachments, [])
+    }
+
+    /// More than a message carries, a file that cannot be read, a command draft and a helper without the feature
+    /// upload nothing; a failed upload stays in the strip until Retry stores it.
+    func testUploadsRefuseWhatCannotGoAndRetryAFailure() async throws {
+        let helper = ScriptedHelper()
+        // The first upload fails; the helper's script runs on its own thread.
+        final class Failures: @unchecked Sendable {
+            private let lock = NSLock()
+            private var left = 1
+            func next() -> Bool { lock.withLock { defer { left -= 1 }; return left > 0 } }
+        }
+        let failures = Failures()
+        let chat = try await attachable(helper) { request in
+            guard request.method == "attachments.put" else { return nil }
+            return failures.next() ? .error(code: "io", message: "The host's disk is full.") : nil
+        }
+        chat.attach((0...ChatAttachment.maximumCount).map { .data(Self.png, name: "shot \($0).png", kind: .image) })
+        XCTAssertEqual(chat.attachmentError, ChatAttachmentError.tooMany.localizedDescription)
+        XCTAssertTrue(chat.uploads.isEmpty)
+        chat.attach([MobileAttachmentSource(name: "notes.txt") { throw ChatAttachmentError.unreadable("notes.txt") }])
+        try await TestSupport.eventually { chat.uploads.isEmpty && chat.attachmentError != nil }
+        XCTAssertEqual(chat.attachmentError, ChatAttachmentError.unreadable("notes.txt").localizedDescription)
+        XCTAssertTrue(helper.requests("attachments.put").isEmpty, "Nothing was uploaded")
+
+        chat.attach([.data(Data("Sam Example's notes\n".utf8), name: "notes.txt", kind: .file)])
+        try await TestSupport.eventually { chat.uploads.first?.error != nil }
+        XCTAssertEqual(chat.uploads.first?.error, "The host's disk is full.")
+        chat.drafts.edit(text: "see the notes")
+        chat.send()
+        XCTAssertTrue(helper.requests("chat.send").isEmpty, "Not without the attachment that failed")
+        XCTAssertEqual(chat.drafts.current.text, "see the notes")
+        chat.retryUpload(try XCTUnwrap(chat.uploads.first?.id))
+        try await TestSupport.eventually { chat.uploads.isEmpty && chat.drafts.current.attachments.count == 1 }
+        XCTAssertEqual(chat.drafts.current.attachments.first?.kind, .file)
+        XCTAssertEqual(helper.requests("attachments.put").count, 2)
+        chat.removeAttachment(try XCTUnwrap(chat.drafts.current.attachments.first?.id))
+        XCTAssertTrue(chat.drafts.current.attachments.isEmpty)
+
+        chat.drafts.edit(text: "/compact")
+        XCTAssertFalse(chat.canAttach, "A command takes none")
+        chat.drafts.edit(text: "")
+        chat.update(link: .connected, client: helper.client, features: [])
+        XCTAssertFalse(chat.canAttach, "Nor a helper without the feature")
+    }
+
+    /// An image the device has no thumbnail for is read from the host (`attachments.read`), a few at a time, and kept
+    /// in memory by host and path.
+    func testThumbnailsAreReadFromTheHostTwoAtATime() async throws {
+        let helper = ScriptedHelper()
+        let chat = try await attachable(helper) { request in
+            request.method == "attachments.read" ? .result(["bytes": Self.png, "size": Self.png.count]) : nil
+        }
+        let bytes = try await chat.attachmentBytes(Self.stored)
+        XCTAssertEqual(bytes, Self.png)
+        XCTAssertEqual(helper.requests("attachments.read").first?.params["path"] as? String, Self.stored)
+
+        final class Reads { var paths: [String] = []; var active = 0; var peak = 0 }
+        let reads = Reads()
+        let read: @MainActor (String) async throws -> Data? = { path in
+            reads.paths.append(path); reads.active += 1; reads.peak = max(reads.peak, reads.active)
+            try await Task.sleep(for: .milliseconds(40))
+            reads.active -= 1
+            return Self.png
+        }
+        let cache = MobileAttachmentThumbnails()
+        let host = UUID()
+        let images = (0..<5).map { ChatAttachment(id: "r\($0)", name: "shot.png", kind: .image, size: 0, path: "/stored/\($0)/shot.png") }
+        for image in images { XCTAssertNil(cache.image(image, host: host, read: read)) }
+        for image in images { _ = cache.image(image, host: host, read: read) }
+        try await TestSupport.eventually { images.allSatisfy { cache.image($0, host: host, read: nil) != nil } }
+        XCTAssertEqual(reads.paths.count, 5, "Each read once")
+        XCTAssertLessThanOrEqual(reads.peak, MobileAttachmentThumbnails.concurrency)
+        XCTAssertNil(cache.image(images[0], host: UUID(), read: nil), "Keyed by host")
+        XCTAssertNil(cache.image(ChatAttachment(name: "notes.txt", kind: .file, size: 1, path: "/stored/n.txt"), host: host, read: read))
+    }
+
+    /// An upload lands in the draft it was started for, though the user switched drafts meanwhile; the strip shows
+    /// uploads of the draft on screen only.
+    func testAnUploadLandsInTheDraftItWasStartedFor() async throws {
+        let helper = ScriptedHelper()
+        let chat = try await attachable(helper)
+        chat.drafts.edit(text: "About the chart")
+        let first = chat.drafts.current.id
+        chat.attach([.data(Self.png, name: "screenshot.png", kind: .image)])
+        XCTAssertEqual(chat.draftUploads.count, 1)
+        // Switched before the host answers (the upload runs after this turn of the main actor).
+        chat.drafts.keep()
+        XCTAssertNotEqual(chat.drafts.current.id, first)
+        XCTAssertTrue(chat.draftUploads.isEmpty, "The new draft's strip is empty")
+        XCTAssertTrue(ComposerAttachments.chips(chat).isEmpty)
+        try await TestSupport.eventually { chat.uploads.isEmpty }
+        XCTAssertTrue(chat.drafts.current.attachments.isEmpty, "Not the draft on screen")
+        XCTAssertEqual(chat.drafts.saved.first { $0.id == first }?.attachments.map(\.name), ["screenshot.png"])
+        chat.drafts.select(first)
+        XCTAssertEqual(ComposerAttachments.chips(chat).map(\.name), ["screenshot.png"])
+
+        // That draft gone before the host answers: the chip comes to the current draft, failed, for Retry.
+        chat.attach([.data(Self.png, name: "second.png", kind: .image)])
+        chat.drafts.discard()
+        try await TestSupport.eventually { chat.uploads.first?.error != nil }
+        XCTAssertEqual(chat.draftUploads.map(\.name), ["second.png"])
+        XCTAssertTrue(chat.drafts.current.attachments.isEmpty)
+        chat.retryUpload(try XCTUnwrap(chat.uploads.first?.id))
+        try await TestSupport.eventually { chat.uploads.isEmpty }
+        XCTAssertEqual(chat.drafts.current.attachments.map(\.name), ["second.png"])
+    }
+
+    /// After a reconnect, a queued attachment message is not taken for an earlier attachment-only message of the
+    /// transcript, nor for a helper row with its text but without attachments; one the transcript shows is sent.
+    func testAQueuedAttachmentMessageIsNotTakenForAnother() async throws {
+        let key = ChatConversationKey(host: UUID(), node: ChatFixture.node)
+        let gone = UUID()
+        let chart = "/Users/sam/.dispatch/attachments/0123456789abcdef0123456789abcdef/chart.png"
+        let deck = "/Users/sam/.dispatch/attachments/fedcba9876543210fedcba9876543210/deck.png"
+        let outbox = ChatOutbox(store: ChatOutboxMemoryStore([
+            ChatOutboxItem(key: key, conversation: nil, text: "Look", state: .queued(id: "q-1", revision: 1, helper: gone),
+                           attachments: [ChatAttachment(id: "a1", name: "deck.png", kind: .image, size: 1, path: deck)]),
+            ChatOutboxItem(key: key, conversation: nil, text: "", state: .queued(id: "q-2", revision: 1, helper: gone),
+                           attachments: [ChatAttachment(id: "a2", name: "chart.png", kind: .image, size: 1, path: chart)])]))
+        let helper = ScriptedHelper()
+        script(helper) { request in
+            request.method == "queue.list" ? .result([ChatFixture.queued("h-1", "Look")]) : nil
+        }
+        let chat = MobileChatSession.scripted(helper, host: key.host, outbox: outbox)
+        try await TestSupport.eventually { helper.subscription("chat.open") != nil }
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        var sent = ChatFixture.record("user-e3b0", "user", turn: "p1", text: "", time: now - 1000)
+        sent["blocks"] = [["kind": "image", "language": NSNull(), "text": "chart.png", "path": chart]]
+        helper.notify(helper.subscription("chat.open")!, "chat.history", ChatFixture.history(state: ChatFixture.state(busy: false), pending: true))
+        helper.notify(helper.subscription("chat.open")!, "chat.history", ChatFixture.history(records: [
+            ChatFixture.record("p1:started", "turn_started", turn: "p1", time: now - 1000), sent]))
+        try await TestSupport.eventually { chat.queueItems.count == 1 }
+        let left = try XCTUnwrap(chat.queueItems.first)
+        XCTAssertEqual(left.text, "Look", "The image-only message the transcript shows was sent; the other was not")
+        XCTAssertNil(left.helperID, "A helper row without attachments is another message")
+        XCTAssertNotNil(left.pauseReason, "The head may have been sending: the user decides")
+        XCTAssertTrue(helper.requests("queue.add").isEmpty)
+    }
+
+    /// A message with attachments waiting on the device is not edited in place, but "send now" steers it like any other.
+    func testADeviceRowWithAttachmentsCanBeSentNow() async throws {
+        let key = ChatConversationKey(host: UUID(), node: ChatFixture.node)
+        let outbox = ChatOutbox(store: ChatOutboxMemoryStore([
+            ChatOutboxItem(key: key, conversation: conversation, text: "First"),
+            ChatOutboxItem(key: key, conversation: conversation, text: "",
+                           attachments: [ChatAttachment(id: "a1", name: "screenshot.png", kind: .image, size: 1, path: Self.stored)])]))
+        let helper = ScriptedHelper()
+        script(helper) { request in
+            switch request.method {
+            // The first is refused: the drain stops there, and the second waits on the device.
+            case "queue.add": .error(code: "invalid_input", message: "Refused.")
+            case "chat.send": .result(ChatFixture.sent())
+            default: nil
+            }
+        }
+        let chat = MobileChatSession.scripted(helper, host: key.host, outbox: outbox)
+        try await TestSupport.eventually { helper.subscription("chat.open") != nil }
+        let open = try XCTUnwrap(helper.subscription("chat.open"))
+        helper.notify(open, "chat.history", ChatFixture.history(state: ChatFixture.state(busy: true), pending: true))
+        helper.notify(open, "chat.history", ChatFixture.history(records: runningTurn))
+        try await TestSupport.eventually { chat.queueItems.first?.pauseReason != nil && chat.working }
+        let row = try XCTUnwrap(chat.queueRows.last)
+        XCTAssertNil(row.status)
+        XCTAssertFalse(row.editable, "Not edited in place")
+        XCTAssertTrue(row.steerable)
+        XCTAssertTrue(chat.canSendNow(row), "Send now steers it")
+        chat.sendQueuedNow(row)
+        try await TestSupport.eventually { helper.requests("chat.send").count == 1 && chat.queueItems.count == 1 }
+        let send = try XCTUnwrap(helper.requests("chat.send").first)
+        XCTAssertEqual(send.params["mode"] as? String, "steer")
+        XCTAssertEqual(send.params["attachments"] as? [String], [Self.stored])
+    }
+
+    /// Thumbnails read from the host: an answer that will not change (`not_found`, `invalid_request`) is not asked
+    /// again; a lost link is, after a wait that doubles; an image dropped from the cache is read again when shown.
+    func testThumbnailReadsRetryTransientFailuresAndAfterEviction() async throws {
+        let cache = MobileAttachmentThumbnails()
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        cache.finish("flaky", .failure(HelperFailure(code: "unavailable", message: "Not connected.")), now: now)
+        XCTAssertFalse(cache.asks("flaky", now: now.addingTimeInterval(4)))
+        XCTAssertTrue(cache.asks("flaky", now: now.addingTimeInterval(5)))
+        cache.finish("flaky", .failure(CancellationError()), now: now)
+        XCTAssertFalse(cache.asks("flaky", now: now.addingTimeInterval(9)), "The wait doubles")
+        XCTAssertTrue(cache.asks("flaky", now: now.addingTimeInterval(10)))
+        XCTAssertEqual(MobileAttachmentThumbnails.backoff(20), 300)
+
+        // Through image(): a not_found answer is final, a transient one is asked again later.
+        final class Reads { var count = 0 }
+        let reads = Reads()
+        let host = UUID()
+        let missing = ChatAttachment(id: "m", name: "gone.png", kind: .image, size: 0, path: "/stored/gone.png")
+        let notFound: @MainActor (String) async throws -> Data? = { _ in
+            reads.count += 1; throw HelperFailure(code: "not_found", message: "Gone.")
+        }
+        XCTAssertNil(cache.image(missing, host: host, read: notFound))
+        try await TestSupport.eventually { reads.count == 1 }
+        try await Task.sleep(for: .milliseconds(50))
+        _ = cache.image(missing, host: host, read: notFound)
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(reads.count, 1, "Gone for good")
+        XCTAssertFalse(cache.asks(MobileAttachmentThumbnails.key(host: host, path: "/stored/gone.png")))
+
+        let first = ChatAttachment(id: "f", name: "shot.png", kind: .image, size: 0, path: "/stored/0/shot.png")
+        let read: @MainActor (String) async throws -> Data? = { _ in reads.count += 1; return Self.png }
+        _ = cache.image(first, host: host, read: read)
+        try await TestSupport.eventually { cache.image(first, host: host, read: nil) != nil }
+        let firstKey = MobileAttachmentThumbnails.key(host: host, path: "/stored/0/shot.png")
+        XCTAssertFalse(cache.asks(firstKey))
+        for index in 0..<MobileAttachmentThumbnails.capacity { cache.store(UIImage(), for: "other-\(index)") }
+        XCTAssertNil(cache.image(first, host: host, read: nil), "Dropped from the cache")
+        XCTAssertTrue(cache.asks(firstKey), "and read again when shown")
+    }
 }
 
 extension ChatThreadRow.Kind {
     var label: String {
-        switch self { case .user: "user"; case .agent: "agent"; case .notice: "notice" }
+        switch self { case .user: "user"; case .agent: "agent"; case .thinking: "thinking"; case .notice: "notice" }
     }
     var summary: ChatTurnSummary? {
         if case .agent(let summary) = self { return summary }

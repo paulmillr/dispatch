@@ -1,0 +1,34 @@
+ POST /api/preferences [32m200[0m in 402ms
+ GET / [32m304[0m in 33ms
+ POST /api/preferences [32m200[0m in 138ms
+ GET /api/session [32m304[0m in 120ms
+ GET /dashboard [32m200[0m in 32ms
+ GET /api/projects?limit=20 [32m200[0m in 623ms
+ [38;5;244m○[0m Compiling /api/preferences ...
+ [32m✓[0m Compiled in 252ms
+ GET /settings [32m200[0m in 24ms
+ GET /api/projects?limit=20 [32m200[0m in 21ms
+ GET /api/session [32m304[0m in 43ms
+ POST /api/preferences [32m200[0m in 476ms
+ GET /settings [32m200[0m in 55ms
+ GET /settings [32m200[0m in 57ms
+ POST /api/preferences [32m200[0m in 25ms
+ GET /api/projects?limit=20 [32m304[0m in 61ms
+ GET /dashboard [32m200[0m in 418ms
+ GET /_next/image?w=64 [32m200[0m in 125ms
+ POST /api/preferences [32m200[0m in 55ms
+ GET / [32m200[0m in 29ms
+ [38;5;244m○[0m Compiling /api/preferences ...
+ [32m✓[0m Compiled in 253ms
+ POST /api/preferences [32m200[0m in 648ms
+ POST /api/preferences [32m200[0m in 82ms
+ GET /api/projects?limit=20 [32m200[0m in 39ms
+ GET /api/projects?limit=20 [32m200[0m in 96ms
+ GET /api/session [32m200[0m in 116ms
+ [33m⚠[0m Fast Refresh did a full reload
+ GET /settings [32m200[0m in 28ms
+ GET /_next/image?w=64 [32m200[0m in 89ms
+ POST /api/preferences [32m200[0m in 136ms
+ GET /api/projects?limit=20 [32m200[0m in 26ms
+ GET /_next/image?w=64 [32m200[0m in 338ms
+ GET /dashboard [32m200[0m in 25ms

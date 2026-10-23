@@ -176,6 +176,50 @@ final class BackgroundRefreshTests: XCTestCase {
         XCTAssertEqual(notifications.map(\.body), ["Run the migration?"])
     }
 
+    /// Plain SSH hosts are never refreshed (docs/ios.md): a host with its Helper switch off (its Chat is off with it) is
+    /// neither scheduled for nor connected, and a connection that fell back to plain SSH reads nothing.
+    func testPlainSSHHostsAreSkipped() async throws {
+        var pi = ResilienceFixture.host("pi", order: 1)
+        pi.helper = false
+        pi.chat = true
+        XCTAssertFalse(pi.chat, "the record keeps Chat off without the helper")
+        XCTAssertFalse(BackgroundRefresh.refreshes(pi))
+        XCTAssertTrue(BackgroundRefresh.refreshes(studio))
+
+        let scheduler = RecordingScheduler()
+        refresh(hosts: [pi], source: FakeRefreshSource(), scheduler: scheduler).schedule()
+        XCTAssertEqual(scheduler.cancelled, ["yachts.dispatch.mobile.refresh"], "only a plain host: nothing to refresh")
+        XCTAssertTrue(scheduler.submitted.isEmpty)
+
+        let source = FakeRefreshSource(results: [studio.id: found(), pi.id: found()])
+        let posted = await refresh(hosts: [studio, pi], source: source).run()
+        XCTAssertEqual(source.asked, [studio.id], "the plain host is not connected")
+        XCTAssertEqual(posted.map(\.key.host), [studio.id])
+
+        let fallback = ScriptedHostSessionDriver { _ in [.event(.link(.connecting)), .plain(reason: "unsupported system"), .hold] }
+        let hosts = ResilienceFixture.sessions([studio], driver: fallback, active: false)
+        let result = await HostSessionsRefreshSource(hosts: hosts).refresh(studio, until: .now + .seconds(5))
+        XCTAssertNil(result, "connected without a helper: nothing to read")
+    }
+
+    /// A host the user disconnected (Disconnect in its stats) is left alone: background refresh and watch requests do not
+    /// connect it; Connect does.
+    func testADisconnectedHostIsLeftAlone() async throws {
+        let driver = ScriptedHostSessionDriver()
+        let hosts = ResilienceFixture.sessions([studio], driver: driver, active: false)
+        let session = try XCTUnwrap(hosts.session(studio.id))
+        session.park()
+        XCTAssertTrue(hosts.isParked(studio.id))
+        let result = await HostSessionsRefreshSource(hosts: hosts).refresh(studio, until: .now + .seconds(5))
+        XCTAssertNil(result)
+        await hosts.hold(studio.id)
+        XCTAssertFalse(hosts.isHeld(studio.id))
+        XCTAssertEqual(driver.runs(studio.id), 0, "nothing connected it")
+        session.connectByUser()
+        try await TestSupport.eventually { session.link == .connected }
+        XCTAssertFalse(hosts.isParked(studio.id))
+    }
+
     /// A background session never asks: a host key that is not trusted yet fails it, with no sheet queued.
     func testABackgroundSessionAsksNothing() async throws {
         let offer = HostKeyOffer(host: "studio.local", port: 22, algorithm: "ssh-ed25519", key: Data([1, 2, 3]))
@@ -232,10 +276,13 @@ final class BackgroundRefreshTests: XCTestCase {
         let notification = RefreshNotification(id: "x", title: "claude · studio", body: "Run the migration?",
                                                key: ChatConversationKey(host: UUID(), node: "n"))
         let content = notification.content
-        XCTAssertEqual(content.categoryIdentifier, RefreshNotification.category.identifier)
-        XCTAssertEqual(RefreshNotification.category.hiddenPreviewsBodyPlaceholder, "An agent needs you")
-        XCTAssertFalse(RefreshNotification.category.options.contains(.hiddenPreviewsShowTitle))
-        XCTAssertFalse(RefreshNotification.category.options.contains(.hiddenPreviewsShowSubtitle))
+        let category = RefreshNotification.categories.first { $0.identifier == content.categoryIdentifier }
+        XCTAssertEqual(content.categoryIdentifier, RefreshNotification.categoryIdentifier)
+        XCTAssertEqual(category?.hiddenPreviewsBodyPlaceholder, "An agent needs you")
+        for category in RefreshNotification.categories {
+            XCTAssertFalse(category.options.contains(.hiddenPreviewsShowTitle))
+            XCTAssertFalse(category.options.contains(.hiddenPreviewsShowSubtitle))
+        }
         XCTAssertEqual(content.body, "Run the migration?")
         XCTAssertEqual(content.userInfo as? [String: String], notification.userInfo)
     }
@@ -291,7 +338,9 @@ final class RecordingScheduler: RefreshScheduling, @unchecked Sendable {
         isAuthorized = grants
         return grants
     }
+    private(set) var badges: [Int] = []
     func post(_ notification: RefreshNotification) { posted.append(notification) }
+    func setBadge(_ count: Int) { badges.append(count) }
     func removeAll() { cleared += 1 }
 }
 

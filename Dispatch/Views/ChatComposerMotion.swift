@@ -179,6 +179,7 @@ struct ChatComposerAnimatedBorder: NSViewRepresentable {
                 for name in [NSWindow.didChangeScreenNotification, NSWindow.didChangeOcclusionStateNotification] {
                     NotificationCenter.default.addObserver(self, selector: #selector(updateAnimations), name: name, object: window)
                 }
+                NotificationCenter.default.addObserver(self, selector: #selector(updateAnimations), name: MotionRate.changed, object: nil)
             }
             updateScale()
             updateAnimations()
@@ -197,7 +198,7 @@ struct ChatComposerAnimatedBorder: NSViewRepresentable {
         @objc private func updateAnimations() {
             stop()
             guard moving, let window, window.occlusionState.contains(.visible), perimeter > 0 else { return }
-            let fps = Float(max(1, window.screen?.maximumFramesPerSecond ?? 60))
+            let rate = MotionRate.range(for: window)
             let now = CACurrentMediaTime()
             let start = now - now.truncatingRemainder(dividingBy: 4)
             for band in bands {
@@ -207,7 +208,7 @@ struct ChatComposerAnimatedBorder: NSViewRepresentable {
                 animation.duration = 4; animation.repeatCount = .infinity
                 animation.timingFunction = CAMediaTimingFunction(name: .linear)
                 animation.beginTime = band.convertTime(start, from: nil)
-                animation.preferredFrameRateRange = CAFrameRateRange(minimum: fps, maximum: fps, preferred: fps)
+                animation.preferredFrameRateRange = rate
                 band.add(animation, forKey: Self.animationKey)
             }
         }
@@ -393,6 +394,7 @@ class CompositorView: NSView {
             for name in [NSWindow.didChangeScreenNotification, NSWindow.didChangeOcclusionStateNotification] {
                 NotificationCenter.default.addObserver(self, selector: #selector(updateAnimations), name: name, object: window)
             }
+            NotificationCenter.default.addObserver(self, selector: #selector(updateAnimations), name: MotionRate.changed, object: nil)
         }
         redraw()
         updateAnimations()
@@ -406,8 +408,7 @@ class CompositorView: NSView {
     @objc func updateAnimations() {
         stop()
         guard moving, let window, window.occlusionState.contains(.visible) else { return }
-        let fps = Float(max(1, window.screen?.maximumFramesPerSecond ?? 60))
-        start(CAFrameRateRange(minimum: fps, maximum: fps, preferred: fps))
+        start(MotionRate.range(for: window))
     }
 
     /// Adds the loops; called whenever motion (re)starts.
@@ -415,7 +416,7 @@ class CompositorView: NSView {
     /// Redraws still artwork for the current inputs and backing scale.
     func redraw() {}
 
-    /// Repeats `animation` at the screen's rate, phase-aligned to the media clock so
+    /// Repeats `animation` at `rate` (MotionRate), phase-aligned to the media clock so
     /// every indicator with the same period moves together.
     func loop(_ animation: CAAnimation, on layer: CALayer, rate: CAFrameRateRange) {
         let now = CACurrentMediaTime()

@@ -57,6 +57,32 @@ final class HostScreensTests: XCTestCase {
         XCTAssertTrue(HostSummary(session: failing).offline)
     }
 
+    /// On a bad network a retrying host says why (the transport's reason), and an offline iPhone says so first: the
+    /// host is not to blame. Connected, or refused (the status is the reason), there is nothing more to say.
+    func testRetryingHostsSayWhyAndAnOfflineIPhoneSaysSo() async throws {
+        let since = Date(), reason = "Can’t find studio.tail3f.ts.net. Check the name, and that Tailscale is on."
+        let (registry, session) = sessions([.event(.link(.reconnecting(attempt: 2, since: since, reason: reason))), .hold])
+        session.connect()
+        try await TestSupport.eventually { session.link == .reconnecting(attempt: 2, since: since, reason: reason) }
+        XCTAssertEqual(HostSummary(session: session).problem, reason)
+        XCTAssertEqual(HostSummary(session: session).status, "Reconnecting · attempt 2")
+
+        registry.networkPath(satisfied: false)
+        XCTAssertEqual(HostSummary(session: session).status, "Waiting for the network…")
+        XCTAssertEqual(HostSummary(session: session).problem, "This \(MobileDevice.name) is offline. Dispatch reconnects when the network is back.")
+        // A host verified in New host gets the reading too.
+        let probe = registry.probe(HostRecord(name: "new", address: "new.local", user: "alex", auth: .password))
+        XCTAssertTrue(probe.networkUnavailable)
+        registry.networkPath(satisfied: true)
+        XCTAssertFalse(probe.networkUnavailable)
+        XCTAssertEqual(HostSummary(session: session).problem, reason)
+
+        let (_, failing) = sessions([.event(.link(.failed("Connection refused")))])
+        failing.connect()
+        try await TestSupport.eventually { HostSummary(session: failing).status == "Connection refused" }
+        XCTAssertNil(HostSummary(session: failing).problem)
+    }
+
     /// What Spaces (Tabs) drives: the host list in order with its link, removal with its question, reordering,
     /// and the embedded screens.
     func testHostManagement() async throws {
@@ -145,6 +171,214 @@ final class HostScreensTests: XCTestCase {
             if let folder { try image.pngData()?.write(to: folder.appendingPathComponent(name + ".png")) }
             window.isHidden = true
         }
+    }
+
+    // MARK: Plain SSH (docs/ios.md)
+
+    /// Hosts `view` in a tall window with the accessibility runtime on and returns what VoiceOver reads of it (labels
+    /// and values), polled until `until` holds.
+    private func spoken(_ view: some View, sessions: HostSessions, until: @escaping ([NSObject]) -> Bool) async throws -> [NSObject] {
+        AccessibilityLabelTests.enableAccessibility()
+        let found = await TestSupport.windowScene()
+        let scene = try XCTUnwrap(found)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 402, height: 2000)
+        window.rootViewController = UIHostingController(rootView: view.environment(sessions).tint(.dispatchPink))
+        window.isHidden = false
+        windows.append(window)
+        var elements: [NSObject] = []
+        try await TestSupport.eventually(diagnostic: "Elements: \(elements.map { $0.accessibilityLabel ?? "?" })") {
+            // The walk meets an element once per path to it: each once.
+            var seen: Set<ObjectIdentifier> = []
+            elements = AccessibilityLabelTests.elements(in: window).filter { seen.insert(ObjectIdentifier($0)).inserted }
+            return until(elements)
+        }
+        return elements
+    }
+
+    private var windows: [UIWindow] = []
+
+    override func tearDown() async throws {
+        for window in windows { window.isHidden = true }
+        windows = []
+        try await super.tearDown()
+    }
+
+    private static func labels(_ elements: [NSObject]) -> [String] { elements.compactMap(\.accessibilityLabel) }
+
+    /// New host's Helper switch (default on) under the multiplexer: off hides the multiplexer and Chat and the helper's
+    /// words, and says what plain SSH does instead; on again gives Chat back as it was (the sheet's own draft).
+    func testNewHostHelperSwitchHidesChatAndTheMultiplexer() async throws {
+        var draft = HostFeatureDraft()
+        XCTAssertTrue(draft.helper, "the helper is on by default")
+        XCTAssertTrue(draft.chat)
+        XCTAssertTrue(draft.showsHelperRows)
+        draft.helper = false
+        XCTAssertFalse(draft.showsHelperRows, "no multiplexer or Chat without the helper")
+        var record = HostRecord(name: "studio", address: "studio.tail3f.ts.net", user: "alex", auth: .password)
+        draft.apply(to: &record)
+        XCTAssertFalse(record.helper)
+        XCTAssertFalse(record.chat, "the record keeps Chat off without the helper")
+        draft.helper = true
+        XCTAssertTrue(draft.chat, "on again: Chat as it was")
+        draft.apply(to: &record)
+        XCTAssertTrue(record.helper)
+        XCTAssertTrue(record.chat)
+        draft.chat = false
+        draft.multiplexer = .tmux
+        draft.apply(to: &record)
+        XCTAssertEqual(record.multiplexer, .tmux)
+        XCTAssertFalse(record.chat)
+        var plain = record
+        plain.helper = false
+        let reopened = HostFeatureDraft(plain)
+        XCTAssertFalse(reopened.helper)
+        XCTAssertEqual(reopened.multiplexer, .tmux)
+        XCTAssertTrue(reopened.chat, "a host saved without the helper gets Chat on with it")
+
+        XCTAssertTrue(String(NewHostSheet.statement(helper: true).characters).hasPrefix("Dispatch installs its helper"))
+        let plainWords = String(NewHostSheet.statement(helper: false).characters)
+        XCTAssertEqual(plainWords, NewHostSheet.plainStatement)
+        XCTAssertFalse(plainWords.contains("Dispatch installs its helper"))
+        XCTAssertTrue(plainWords.contains("installs nothing"))
+
+        let (sessions, _) = sessions([.hold])
+        let helperOn = Self.labels(try await spoken(NewHostSheet(), sessions: sessions) { elements in
+            Self.labels(elements).contains { $0.hasPrefix("Dispatch installs its helper") }
+        })
+        XCTAssertTrue(helperOn.contains("Helper"), "\(helperOn)")
+        XCTAssertTrue(helperOn.contains("Chat"), "\(helperOn)")
+        XCTAssertTrue(helperOn.contains("Multiplexer, Automatic"), "\(helperOn)")
+        XCTAssertFalse(helperOn.contains(NewHostSheet.plainStatement))
+
+        let off = Self.labels(try await spoken(NewHostSheet(editing: plain), sessions: sessions) { elements in
+            Self.labels(elements).contains(NewHostSheet.plainStatement)
+        })
+        XCTAssertTrue(off.contains("Helper"), "\(off)")
+        XCTAssertFalse(off.contains("Chat"), "\(off)")
+        XCTAssertFalse(off.contains { $0.hasPrefix("Multiplexer") }, "\(off)")
+        XCTAssertFalse(off.contains { $0.contains("Dispatch installs its helper") }, "\(off)")
+    }
+
+    /// A connection that fell back to plain SSH says why in host detail, with "Use plain SSH for this host": that turns
+    /// the Helper switch off (and Chat with it) and clears the notice, keeping the plain connection (and its shells).
+    func testHostDetailOffersPlainSSHAfterAFallback() async throws {
+        let reason = "the host’s system (Plan 9) is not supported"
+        let record = HostRecord(name: "studio", address: "studio.tail3f.ts.net", user: "alex", auth: .password)
+        let driver = ScriptedHostSessionDriver { host in [.plain(reason: host.helper ? reason : nil), .hold] }
+        let registry = HostSessions(store: HostStore(url: nil, hosts: [record]),
+                                    keys: KeyStore(url: nil, vault: MemoryVault(), keyProtection: .none, secureEnclaveAvailable: false),
+                                    knownHosts: KnownHostStore(url: nil), driver: driver, active: true)
+        let session = try XCTUnwrap(registry.session(record.id))
+        try await TestSupport.eventually { session.isPlain }
+        XCTAssertEqual(HostSummary(session: session).plainLine, "Plain SSH · helper could not be installed: \(reason)")
+        XCTAssertTrue(HostSummary(session: session).offersPlainSSH)
+        XCTAssertNil(session.multiplexerLine)
+
+        let elements = try await spoken(NavigationStack { HostDetail(hostID: record.id) }, sessions: registry) { elements in
+            Self.labels(elements).contains(HostHelperRows.usePlainSSH)
+        }
+        let labels = Self.labels(elements)
+        XCTAssertTrue(labels.contains("Plain SSH · helper could not be installed: \(reason)"), "\(labels)")
+        XCTAssertTrue(labels.contains("Helper"), "\(labels)")
+        XCTAssertTrue(labels.contains("Chat"), "\(labels)")
+        let action = try XCTUnwrap(elements.first { $0.accessibilityLabel == HostHelperRows.usePlainSSH })
+        XCTAssertTrue(action.accessibilityTraits.contains(.button))
+        XCTAssertEqual(action.accessibilityHint, "Turns the helper off: studio connects with plain SSH from now on")
+        let toggle = try XCTUnwrap(elements.first { $0.accessibilityLabel == "Helper" })
+        XCTAssertEqual(toggle.accessibilityHint, NewHostSheet.helperHint)
+
+        _ = action.accessibilityActivate()
+        try await TestSupport.eventually { registry.store.record(record.id)?.helper == false }
+        XCTAssertEqual(registry.store.record(record.id)?.chat, false, "Chat goes with the helper")
+        let opener = try XCTUnwrap(session.shellOpener as? ScriptedShellOpener)
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(session.mode, .plain(reason: reason), "the plain connection stays: no reconnect")
+        XCTAssertTrue(session.shellOpener as? ScriptedShellOpener === opener, "its shells with it")
+        XCTAssertEqual(driver.runs(record.id), 1)
+        XCTAssertEqual(HostSummary(session: session).plainLine, "Plain SSH", "plain by choice: no reason, no action")
+        XCTAssertFalse(HostSummary(session: session).offersPlainSSH)
+        let after = Self.labels(try await spoken(NavigationStack { HostDetail(hostID: record.id) }, sessions: registry) { elements in
+            Self.labels(elements).contains("Plain SSH")
+        })
+        XCTAssertFalse(after.contains(HostHelperRows.usePlainSSH), "\(after)")
+        XCTAssertFalse(after.contains("Chat"), "no Chat without the helper: \(after)")
+        XCTAssertFalse(after.contains { $0.hasPrefix("Multiplexer") }, "\(after)")
+
+        // On again: the helper with Chat (its default), on the next connection.
+        registry.setHelper(true, host: record.id)
+        XCTAssertEqual(registry.store.record(record.id)?.helper, true)
+        XCTAssertEqual(registry.store.record(record.id)?.chat, true)
+        try await TestSupport.eventually { driver.runs(record.id) == 2 && session.mode == .plain(reason: reason) }
+    }
+
+    /// A host whose Helper switch is off shows no spaces, mark or multiplexer from an earlier helper while it is not
+    /// connected: the cache's are ignored and a kept snapshot goes when the switch goes off; Spaces marks it Plain SSH.
+    func testAHostWithoutTheHelperShowsNoCachedSpacesOffline() async throws {
+        let record = HostRecord(name: "studio", address: "studio.tail3f.ts.net", user: "alex", auth: .password)
+        let (registry, session) = sessions([.hold], record: record)
+        session.restore(hello: HostFixture.hello(), multiplexers: HostFixture.multiplexers(["tmux"]), versions: ["tmux": "3.7"],
+                        following: "tmux", topology: HostFixture.topology())
+        XCTAssertFalse(HostSummary(session: session).spaces.isEmpty)
+        XCTAssertEqual(TabsHost(session).multiplexer, "tmux")
+        XCTAssertFalse(TabsHost(session).plain)
+
+        registry.setHelper(false, host: record.id)
+        XCTAssertEqual(session.link, .disconnected, "not connected by the edit")
+        XCTAssertNil(session.topology, "the kept spaces go with the switch")
+        XCTAssertTrue(HostSummary(session: session).spaces.isEmpty)
+        XCTAssertNil(session.spacesMultiplexer)
+        XCTAssertNil(session.multiplexerLine)
+        XCTAssertEqual(HostSummary(session: session).plainLine, HostSummary.plainSSH)
+        let host = TabsHost(session)
+        XCTAssertTrue(host.plain, "Spaces marks it Plain SSH while offline")
+        XCTAssertNil(host.multiplexer)
+
+        var plain = record
+        plain.helper = false
+        let (_, cached) = sessions([.hold], record: plain)
+        cached.restore(hello: HostFixture.hello(), multiplexers: HostFixture.multiplexers(["tmux"]), versions: [:],
+                       following: "tmux", topology: HostFixture.topology())
+        XCTAssertNil(cached.topology, "the cache's spaces are an earlier helper's")
+        XCTAssertNil(cached.following)
+        XCTAssertNotNil(cached.hello, "kept for the host's labels")
+        XCTAssertTrue(HostSummary(session: cached).spaces.isEmpty)
+        XCTAssertTrue(TabsHost(cached).plain)
+    }
+
+    /// Host detail lists the spaces Tabs gives it without assuming a topology (a plain host's Shell space has none), its
+    /// header marked Plain SSH; counted from the topology the section stays away.
+    func testHostDetailListsSpacesWithoutATopology() async throws {
+        var record = HostRecord(name: "studio", address: "studio.tail3f.ts.net", user: "alex", auth: .password)
+        record.helper = false
+        let (registry, session) = sessions([.plain(reason: nil), .hold], record: record)
+        session.connect()
+        try await TestSupport.eventually { session.isPlain }
+        XCTAssertNil(session.topology)
+        XCTAssertTrue(HostSummary(session: session).spaces.isEmpty)
+        let labels = Self.labels(try await spoken(NavigationStack {
+            HostDetail(hostID: record.id, count: { _ in 1 }) { _ in Text("Shell") }
+        }, sessions: registry) { Self.labels($0).contains("Shell") })
+        XCTAssertTrue(labels.contains { $0.lowercased() == "spaces · 1" }, "\(labels)")
+        XCTAssertEqual(labels.filter { $0 == HostSummary.plainSSH }.count, 2, "the Plain SSH line and the header's mark: \(labels)")
+        let topologyOnly = Self.labels(try await spoken(NavigationStack { HostDetail(hostID: record.id) }, sessions: registry) {
+            Self.labels($0).contains("Remove host")
+        })
+        XCTAssertFalse(topologyOnly.contains { $0.lowercased().hasPrefix("spaces") }, "\(topologyOnly)")
+    }
+
+    /// Spaces' host header marks a plain SSH host where the multiplexer goes, and says so to VoiceOver.
+    func testSpacesHeaderMarksAPlainHost() async throws {
+        let (registry, _) = sessions([.hold])
+        var host = TabsHost(id: UUID(), name: "studio", tint: .blue, multiplexer: "tmux")
+        host.plain = true
+        let section = SpacesSection(host: host, spaces: [], unread: 0, collapsed: false)
+        let elements = try await spoken(SpacesHostHeader(section: section, editing: false, toggle: {}, remove: {}), sessions: registry) {
+            $0.contains { $0.accessibilityLabel == "studio" }
+        }
+        let row = try XCTUnwrap(elements.first { $0.accessibilityLabel == "studio" })
+        XCTAssertEqual(row.accessibilityValue, "Plain SSH, Expanded", "the mark replaces the multiplexer's")
+        XCTAssertEqual(SpacesHostHeader.value(collapsed: false, unread: 0, multiplexer: HostSummary.plainSSH), "Plain SSH, Expanded")
     }
 
     func testHintNamesBothMultiplexers() {

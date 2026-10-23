@@ -30,6 +30,7 @@ impl Herdr {
                 for id in expired {
                     self.interrupt(io, id, error("Timed out waiting for the herdr controller."));
                 }
+                self.observe_timer(io, at);
                 self.ready(io, at, false);
                 if self.request.as_ref().is_some_and(|r| r.deadline <= at) {
                     self.fail(io, error("Herdr connection closed or timed out."));
@@ -89,7 +90,9 @@ impl Herdr {
                 }
             }
             Event::Ready { fd, read, write } if !self.relay_event(io, fd, read, write) => {
-                if let Some(id) = self
+                if let Some(id) = self.observer_of(fd) {
+                    self.observer_ready(io, id, fd, read);
+                } else if let Some(id) = self
                     .controllers
                     .iter()
                     .find(|(_, c)| c.stderr == Some(fd))
@@ -251,6 +254,7 @@ impl Herdr {
                 }
             }
             Event::Exit { pid, status } => {
+                self.observer_exit(io, pid);
                 self.agents
                     .retain(|_, (_, binding)| binding.process.pid != pid);
                 if self.boot.as_ref().is_some_and(|(p, _, _)| *p == pid) {

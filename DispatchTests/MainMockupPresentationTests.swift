@@ -118,6 +118,27 @@ final class MainMockupPresentationTests: XCTestCase {
         XCTAssertEqual(side.topRightPaneID, b)
     }
 
+    /// A split pane's strip narrower than 320 pt still offers the overflow menu once its tabs overflow: it is the
+    /// only way to the tabs scrolled out of so narrow a strip.
+    func testANarrowSplitPanesStripOffersTheOverflowMenu() async throws {
+        let app = try TmuxWalkthrough(server: false, liquidGlass: false)
+        defer { app.close() }
+        app.window.setContentSize(NSSize(width: 620, height: 500))
+        // A split moves a tab beside its pane: two tabs, then the split, then more tabs in the focused (narrow) pane.
+        app.workspace.newTab()
+        app.workspace.split(.columns)
+        try await TestSupport.eventually { app.workspace.current?.panes.count == 2 }
+        for _ in 0..<6 { app.workspace.newTab() }
+        try await TestSupport.eventually(diagnostic: "overflow \(PresentationTestSupport.accessibilityFrames("tab-overflow", in: app.window))") {
+            app.window.contentView?.layoutSubtreeIfNeeded()
+            return !PresentationTestSupport.accessibilityFrames("tab-overflow", in: app.window).isEmpty
+        }
+        // Two panes in a 620 pt window: each strip is under 320 pt, where the menu used to be left out.
+        XCTAssertEqual(app.workspace.current?.panes.count, 2)
+        XCTAssertLessThanOrEqual(try XCTUnwrap(app.window.contentView).bounds.width, 620)
+        _ = try await PresentationTestSupport.capture(app.window, named: "narrow-split-overflow", in: "ui-audit")
+    }
+
     func testOverflowAttentionJumpSwitcherAndLastSpaceShortcut() async throws {
         let restoreRuntime = TestSupport.preserveRuntime()
         defer { restoreRuntime() }

@@ -463,10 +463,16 @@
           let local = endpoint == .local
           // The tab as it is now: its command or directory can have changed since it was shown.
           let latest = owned.flatMap(\.tabs).first { $0.id == tab.id } ?? tab
+          // Settings › General › Shell: a plain local tab runs it instead of the login shell, integrated as the
+          // engine would integrate it.
+          let shell = local && latest.machine == .local && latest.launchCommand == nil ? TerminalRuntime.shared.shellCommand : nil
+          let prepared = local ? environment(surface, shell: shell) : (variables: [], integrated: false, command: nil)
           let terminal = try await client.create(
             .init(
               parent: parent, beside: nil, cwd: local ? (latest.machine == .local ? latest.directory : System.home.path) : nil, launch: nil,
-              command: latest.launchCommand ?? latest.machine.command(), environment: local ? environment(surface) : []))
+              command: latest.launchCommand ?? latest.machine.command() ?? prepared.command, environment: prepared.variables,
+              // Only a default shell has startup files to skip; a command keeps the recorded request.
+              integration: prepared.integrated && latest.launchCommand == nil && latest.machine.command() == nil && shell == nil ? false : nil))
           guard !stopped, owned.flatMap(\.tabs).contains(where: { $0.id == tab.id }) else {
             _ = try await client.close(.init(node: terminal, policy: .terminate))
             throw CancellationError()
@@ -883,6 +889,7 @@
                 if let topology = self.snapshots[window.route] {
                   self.imported(topology, route: window.route)
                 }
+                self.restoreViews()
               } else { self.imports.removeValue(forKey: window.route) }
             }
           }
@@ -912,6 +919,12 @@
           reopen(entry)
         }
       }
+    }
+
+    /// Restored tabs show what they showed when they were detached (Files on a commit, chat, the terminal).
+    private func restoreViews() {
+      guard let workspace else { return }
+      TerminalRuntime.shared.files.restoreViews(present: workspace.allTabIDs)
     }
 
     private func placeholder(_ route: HelperBackend.Route, name: String, host: HostID) {
@@ -993,7 +1006,10 @@
     /// What an app-spawned shell gets, for a helper shell: the app's integration (ssh/launch wrappers,
     /// launch mailbox) and Ghostty's shell integration (prompt marks, title, cursor) as the terminal
     /// engine would launch it (Term Launch). Only variables that differ from this process are sent.
-    func environment(_ identifier: UInt64?) -> [String] {
+    /// `integrated`: Ghostty's integration is in there (its ZDOTDIR or ENV), so the helper's own startup
+    /// files would go unread and it is told not to write them. `shell`: a command to run instead of the login
+    /// shell, returned as `command` with the flags its integration adds.
+    func environment(_ identifier: UInt64?, shell: String? = nil) -> (variables: [String], integrated: Bool, command: String?) {
       let process = System.inherited
       var environment = process.merging(TerminalRuntime.shared.herdrLaunch.nativeEnvironment(for: scope)) { _, new in new }
       // Tests isolate shells from the account's startup files like app-spawned ones (TerminalView);
@@ -1001,16 +1017,20 @@
       let testing: [(String, String)] =
         System.testing
         ? [("HOME", System.home.path), ("DISPATCH_NATIVE_ZDOTDIR", "/var/empty"), ("DISPATCH_TESTING", "1")] : []
+      var integrated = false, command = shell
       if let config = TerminalRuntime.shared.config, let identifier,
         let launch = try? Launch(
-          command: nil, directory: nil, overrides: testing, config: config, environment: environment,
+          command: shell, directory: nil, overrides: testing + (shell.map { [("SHELL", String($0.split(separator: " ", maxSplits: 1)[0]))] } ?? []),
+          config: config, environment: environment,
           machine: System.machine.launch, resources: process["GHOSTTY_RESOURCES_DIR"].flatMap { $0.isEmpty ? nil : $0 },
           id: identifier)
       {
         environment = launch.env
+        integrated = true
+        if shell != nil { command = launch.command }
       }
-      return environment.filter { process[$0.key] != $0.value }
-        .sorted { $0.key < $1.key }.map { $0.key + "=" + $0.value }
+      return (environment.filter { process[$0.key] != $0.value }
+        .sorted { $0.key < $1.key }.map { $0.key + "=" + $0.value }, integrated, command)
     }
 
     /// A local terminal's Ghostty surface id, made when its creation is asked for: concurrent creations
@@ -1065,11 +1085,12 @@
           if external(backend), newSpace == nil, let anchor = space.activeTab?.terminal {
             try await client.focus(.init(node: anchor))
           }
+          let prepared = endpoint == .local ? environment(surface) : (variables: [], integrated: false, command: nil)
           let terminal = try await client.create(
             .init(
               // A multiplexer server knows its focused pane's directory (old app: tmux -c #{pane_current_path}).
               parent: parent, beside: nil, cwd: external(backend) ? nil : space.activeTab?.directory,
-              launch: nil, environment: endpoint == .local ? environment(surface) : []))
+              launch: nil, environment: prepared.variables, integration: prepared.integrated ? false : nil))
           await published()
           print("Helper creation reply: terminal=\(terminal), placeholder=\(String(describing: placeholder)), selected=\(String(describing: workspace?.activeTab?.id)), server=\(String(describing: snapshots[route]?.focus))")
           // A window dismissed while pending: the server's window is detached (kept running, listed), never shown.
@@ -2280,9 +2301,8 @@
           open(HelperBackend(mux: mux, key: key, label: key, isDefault: nil))
         case .attached: break
         case .clipboard(let clipboard):
-          guard TerminalRuntime.shared.allowsClipboardWrite(over: endpoint.connection) else { return }
-          NSPasteboard.general.clearContents()
-          NSPasteboard.general.setString(String(decoding: clipboard.bytes, as: UTF8.self), forType: .string)
+          guard TerminalRuntime.shared.allowsClipboardWrites else { return }
+          TerminalClipboard.concealed(String(decoding: clipboard.bytes, as: UTF8.self))
         }
       } catch { fail(error) }
     }
@@ -2764,6 +2784,7 @@
         }
         inherit(topology.backend)
         for tab in spaces.flatMap(\.tabs) { _ = TerminalRuntime.shared.view(for: tab) }
+        restoreViews()
         restoring.removeValue(forKey: route)
         restored.presentation.forEach { forget($0.id) }
         for helper in detached { for id in requested { helper.forget(id) } }

@@ -52,6 +52,8 @@ struct SpaceSidebar: View {
     @State private var flatDetachedExpanded = true
     @State private var expandedDetached: Set<HostID> = []
     @State private var branches: [UUID: String] = [:]
+    /// Nautical: the host whose radar sector was clicked, narrowing the traffic list to its traffic.
+    @State private var harbourHost: HostID?
 
     private func setSearchQuery(_ value: String) {
         // Filtering can remove hundreds of rows at once. Keep typing immediate
@@ -99,21 +101,23 @@ struct SpaceSidebar: View {
     }
 
     /// Rows with an agent waiting for approval or a blocked program.
-    private var attentionIDs: Set<UUID> {
-        Set(rowSurfaces.filter { _, surfaces in
-            surfaces.contains { TerminalRuntime.shared.chat.sessions[$0]?.approvals.contains(where: \.pending) == true
-                || TerminalRuntime.shared.programs.visible($0).contains { $0.state == .blocked } }
-        }.keys)
-    }
+    private var attentionIDs: Set<UUID> { Set(rowSurfaces.filter { Self.needsAttention($1) }.keys) }
 
     /// Rows with a finished, unseen reply: the tile's green ●.
-    private var readyIDs: Set<UUID> {
-        Set(rowSurfaces.filter { _, surfaces in
-            surfaces.contains { id in
-                TerminalRuntime.shared.chat.sessions[id].map { $0.hasNewMessages && !($0.active && $0.busy) } == true
-                    || TerminalRuntime.shared.programs.visible(id).contains(where: \.finished)
-            }
-        }.keys)
+    private var readyIDs: Set<UUID> { Set(rowSurfaces.filter { Self.ready($1) }.keys) }
+
+    /// Whether any of these terminals has an agent waiting for approval or a blocked program.
+    private static func needsAttention(_ surfaces: [UUID]) -> Bool {
+        surfaces.contains { TerminalRuntime.shared.chat.sessions[$0]?.approvals.contains(where: \.pending) == true
+            || TerminalRuntime.shared.programs.visible($0).contains { $0.state == .blocked } }
+    }
+
+    /// Whether any of these terminals has a finished, unseen reply or a finished program.
+    private static func ready(_ surfaces: [UUID]) -> Bool {
+        surfaces.contains { id in
+            TerminalRuntime.shared.chat.sessions[id].map { $0.hasNewMessages && !($0.active && $0.busy) } == true
+                || TerminalRuntime.shared.programs.visible(id).contains(where: \.finished)
+        }
     }
 
     /// A listed tab's name: the window's, or the tab's live label (its agent's conversation, program or folder).
@@ -194,22 +198,21 @@ struct SpaceSidebar: View {
     private var overflowBar: Bool {
         if #available(macOS 26, *) { return glass } else { return false }
     }
-    /// The flat order's "+ local" and "+ space" (tabs only: "+ tab") on one row after the last row, on Liquid Glass two
+    /// The flat order's "+ space" (tabs only: "+ tab") and "+ local" on one row after the last row, on Liquid Glass two
     /// capsules close enough that their glass blends. With only the local host, "+ local" would repeat "+ space", so
     /// "+ space" stands alone in the left half rather than filling the row.
     private var newSpaceButtons: some View {
         let remote = workspace.liveHosts.contains(where: { $0.id != .local })
         return HStack(spacing: glass ? 4 : 6) {
+            NewSpaceButton(workspace: workspace, metrics: metrics, tabs: tabsOnly)
             if remote {
                 NewSpaceButton(workspace: workspace, host: workspace.hosts.record(.local), metrics: metrics, tabs: tabsOnly)
-            }
-            NewSpaceButton(workspace: workspace, metrics: metrics, tabs: tabsOnly)
-            if !remote {
+            } else {
                 Color.clear.frame(maxWidth: .infinity, maxHeight: 0).accessibilityHidden(true)
             }
         }
-        // A host arrives in its own update, before any space moves to it: "+ space" slides between the halves as
-        // "+ local" fades, the same both ways.
+        // A host arrives in its own update, before any space moves to it: "+ space" keeps the left half as "+ local"
+        // fades in or out of the right one, the same both ways.
         .animation(InterfaceMotion.animation(reduce: reduceMotion), value: remote)
         // Blends glass across twice the capsules' gap, so they join at rest rather than only while they move.
         .glassGroup(spacing: 8)
@@ -904,29 +907,55 @@ struct SpaceSidebar: View {
     }
 
     /// The radar plot over the traffic list. The plot takes the sidebar's width, up to about half its height, so the
-    /// list keeps room for its rows.
+    /// list keeps room for its rows. The list holds the rows (spaces, or tabs only's tabs); the radar plots every tab
+    /// of them, so the tab that needs you is the one nearest the harbour.
     private func harbourList(listed: [Space], tabs: [SidebarTab], attention: Set<UUID>) -> some View {
         // Each space's (tabs only: tab's) key is its number, the first digit of its tabs' channels.
         let order = tabsOnly ? workspace.sidebarTabs.map(\.id) : workspace.presentationSpaces.map(\.id)
         let numbers = Dictionary(order.enumerated().map { ($1, "\($0 + 1)") }, uniquingKeysWith: { first, _ in first })
         let heading = settings.values.showsGitBranches
+        let ready = readyIDs
         let vessels = tabsOnly ? tabs.map { tab in
-            HarbourVessel.make(id: tab.id, name: label(tab), host: workspace.hosts.record(tab.host), surfaceIDs: tab.surfaceIDs,
+            HarbourVessel.make(id: tab.id, name: label(tab), host: workspace.hosts.record(tab.host),
+                               state: workspace.hosts.state(tab.host), surfaceIDs: tab.surfaceIDs,
                                selected: workspace.selectedSidebarTab == tab.id, pending: attention.contains(tab.id),
-                               shortcut: numbers[tab.id] ?? "", heading: heading ? branches[tab.id] : nil)
+                               ready: ready.contains(tab.id), shortcut: numbers[tab.id] ?? "", heading: heading ? branches[tab.id] : nil)
         } : listed.map {
             HarbourVessel.make($0, workspace: workspace, selected: workspace.selectedSpace == $0.id,
-                               pending: attention.contains($0.id), shortcut: numbers[$0.id] ?? "",
+                               pending: attention.contains($0.id), ready: ready.contains($0.id), shortcut: numbers[$0.id] ?? "",
                                heading: heading ? branches[$0.id] : nil)
         }
+        let listedSpaces = Set(listed.map(\.id))
+        let plotted = tabsOnly ? tabs : workspace.sidebarTabs.filter { listedSpaces.contains($0.space) }
+        let channels = harbourChannels()
+        let contacts = plotted.map { tab in
+            var vessel = HarbourVessel.make(id: tab.id, name: label(tab), host: workspace.hosts.record(tab.host),
+                                            state: workspace.hosts.state(tab.host), surfaceIDs: tab.surfaceIDs,
+                                            selected: workspace.selectedSidebarTab == tab.id,
+                                            pending: Self.needsAttention(tab.surfaceIDs), ready: Self.ready(tab.surfaceIDs),
+                                            shortcut: numbers[tab.id] ?? "",
+                                            heading: heading ? tabsOnly ? branches[tab.id] : branches[tab.space] : nil)
+            // Tabs only shows no spaces, so its convoys go unnamed.
+            vessel.convoy = tab.space
+            vessel.convoyName = tabsOnly ? nil : workspace.spaces.first { $0.id == tab.space }.map { workspace.liveName($0) }
+            vessel.channel = channels[tab.id]
+            return vessel
+        }
+        // A clicked sector narrows the list to the rows with a tab on its host, while that host has any.
+        let sector = harbourHost.flatMap { host in contacts.first { $0.hostID == host } }
+        let rowHosts = Dictionary(grouping: plotted, by: { tabsOnly ? $0.id : $0.space }).mapValues { Set($0.map(\.host)) }
+        let shown = sector.map { sector in vessels.filter { rowHosts[$0.id]?.contains(sector.hostID) == true } } ?? vessels
         return GeometryReader { area in
             VStack(spacing: 0) {
-                HarbourRadar(vessels: vessels, reduceMotion: reduceMotion) { select($0) }
+                HarbourRadar(vessels: contacts, reduceMotion: reduceMotion, focus: sector?.hostID,
+                             select: { workspace.selectSidebarTab($0) },
+                             filter: { host in harbourHost = harbourHost == host ? nil : host })
                     .equatable()
                     .frame(width: max(0, min(area.size.width - 24, area.size.height * 0.55)),
                            height: max(0, min(area.size.width - 24, area.size.height * 0.55)))
                     .padding(.top, 4)
-                HarbourTrafficList(vessels: vessels, typography: typography,
+                HarbourTrafficList(vessels: shown, typography: typography, sector: sector?.host,
+                                   clearSector: { harbourHost = nil },
                                    select: { select($0) },
                                    menu: { id in AnyView(Group {
                                        if let space = listed.first(where: { $0.id == id }) { spaceMenu(space) }
@@ -946,6 +975,19 @@ struct SpaceSidebar: View {
                 }
             }
         }
+    }
+
+    /// Each tab's VHF channel, as its strip tab names it; a structured space's window by its space's number and its
+    /// own.
+    private func harbourChannels() -> [UUID: String] {
+        let spaceNumbers = Dictionary(workspace.presentationSpaces.enumerated().map { ($1.id, $0 + 1) },
+                                      uniquingKeysWith: { first, _ in first })
+        var windows: [UUID: Int] = [:]
+        return Dictionary(workspace.sidebarTabs.map { tab -> (UUID, String) in
+            guard tab.window else { return (tab.id, HarbourRadio.channel(for: tab.id)) }
+            windows[tab.space, default: 0] += 1
+            return (tab.id, "CH \(spaceNumbers[tab.space] ?? 0)\(windows[tab.space] ?? 1)")
+        }, uniquingKeysWith: { first, _ in first })
     }
 
     private func overflowButton(hidden: [UUID], below: [UUID], attention: Set<UUID>, scroll: ScrollViewProxy) -> some View {
@@ -1201,13 +1243,17 @@ enum HarbourType {
     static func heading(_ size: CGFloat) -> Font { .system(size: size, weight: .semibold).width(.condensed) }
 }
 
-/// A space as Nautical's sidebar shows it: a vessel at anchor, under way while its agent works, or calling while it
-/// waits for an answer.
+/// A tab (in the traffic list, a space) as Nautical's sidebar shows it: a vessel at anchor, under way while its agent
+/// works, inbound with a reply you have not read, or calling while it waits for an answer.
 struct HarbourVessel: Equatable, Identifiable {
-    enum Status: Equatable { case anchor, underWay, calling }
+    /// In the order of how much the vessel needs you: the radar's range bands, from the anchorage in to the harbour.
+    enum Status: Equatable, CaseIterable { case anchor, underWay, inbound, calling }
     let id: UUID
     let name: String
     let host: String
+    /// Its host, whose radar sector it sails in, and whether that host is reachable.
+    var hostID: HostID = .local
+    var inRange = true
     let status: Status
     /// When its agent started working; the heading vector grows with the passage.
     let since: Date?
@@ -1217,38 +1263,43 @@ struct HarbourVessel: Equatable, Identifiable {
     var heading: String? = nil
     /// Subagents its agents run: escorts trailing it.
     var escorts = 0
+    /// Whether an agent or a watched program is aboard; a plain shell plots as a bare contact.
+    var crewed = true
+    /// The space it sails with on the radar, and that convoy's name where the radar shows it.
+    var convoy: UUID? = nil
+    var convoyName: String? = nil
+    /// Its VHF channel, the radar's tag for a vessel it does not label.
+    var channel: String? = nil
 
     var statusLabel: String {
         switch status {
         case .anchor: "at anchor"
         case .underWay: "under way"
+        case .inbound: "inbound"
         case .calling: "calling"
         }
     }
 
-    /// A space's fixed place on the scope (bearing in degrees, distance as a fraction of the radius) and course, from
-    /// its id so it stays put across launches.
-    var position: (bearing: Double, distance: Double) {
-        let bytes = id.uuid
-        return (Double(UInt16(bytes.0) << 8 | UInt16(bytes.1)) / 65536 * 360, 0.3 + 0.55 * Double(bytes.2) / 255)
-    }
-    var course: Int { Int(Double(id.uuid.3) / 256 * 360) }
-
-    @MainActor static func make(_ space: Space, workspace: Workspace, selected: Bool, pending: Bool, shortcut: String,
-                                heading: String? = nil) -> HarbourVessel {
-        make(id: space.id, name: workspace.liveName(space), host: workspace.hosts.record(space.hostID),
-             surfaceIDs: space.tabs.flatMap(\.surfaceIDs), selected: selected, pending: pending, shortcut: shortcut, heading: heading)
-    }
-
-    /// A vessel for any row: a space, or tabs only's tab, by its terminals' agents.
-    @MainActor static func make(id: UUID, name: String, host: HostRecord, surfaceIDs: [UUID], selected: Bool, pending: Bool,
+    @MainActor static func make(_ space: Space, workspace: Workspace, selected: Bool, pending: Bool, ready: Bool,
                                 shortcut: String, heading: String? = nil) -> HarbourVessel {
-        let sessions = surfaceIDs.compactMap { TerminalRuntime.shared.chat.sessions[$0] }
+        make(id: space.id, name: workspace.liveName(space), host: workspace.hosts.record(space.hostID),
+             state: workspace.hosts.state(space.hostID), surfaceIDs: space.tabs.flatMap(\.surfaceIDs), selected: selected,
+             pending: pending, ready: ready, shortcut: shortcut, heading: heading)
+    }
+
+    /// A vessel for any row: a space, or a tab, by its terminals' agents and programs.
+    @MainActor static func make(id: UUID, name: String, host: HostRecord, state: HostConnectionState, surfaceIDs: [UUID],
+                                selected: Bool, pending: Bool, ready: Bool, shortcut: String,
+                                heading: String? = nil) -> HarbourVessel {
+        let runtime = TerminalRuntime.shared
+        let sessions = surfaceIDs.compactMap { runtime.chat.sessions[$0] }
         let working = sessions.filter { AgentWorkingState.isWorking($0) }
-        return HarbourVessel(id: id, name: name, host: host.id == .local ? "Local" : host.name,
-                             status: pending ? .calling : working.isEmpty ? .anchor : .underWay,
+        return HarbourVessel(id: id, name: name, host: host.id == .local ? "Local" : host.name, hostID: host.id,
+                             inRange: host.id == .local || state != .disconnected,
+                             status: pending ? .calling : ready ? .inbound : working.isEmpty ? .anchor : .underWay,
                              since: working.compactMap(\.workingSince).min(), selected: selected, shortcut: shortcut,
-                             heading: heading, escorts: sessions.reduce(0) { $0 + $1.subagents.count })
+                             heading: heading, escorts: sessions.reduce(0) { $0 + $1.subagents.count },
+                             crewed: !sessions.isEmpty || surfaceIDs.contains { !runtime.programs.visible($0).isEmpty })
     }
 
     static func elapsed(since date: Date?, now: Date) -> String {
@@ -1259,18 +1310,111 @@ struct HarbourVessel: Equatable, Identifiable {
     }
 }
 
-/// Nautical's radar scope: range rings, bearings and a sweep that turns every four seconds over the harbour, with each
-/// space plotted as a vessel. At anchor it rides on its anchor; under way it shows its course with a heading vector
-/// that lengthens over the passage and a wake behind; calling (waiting for an answer) it shows in the warning color.
-/// Clicking a vessel selects its space. Reduce Motion holds the sweep still.
+extension HarbourVessel.Status {
+    func tint(_ palette: SidebarPalette) -> Color {
+        switch self {
+        case .anchor: palette.secondary
+        case .underWay: palette.accent
+        case .inbound: palette.ink
+        case .calling: palette.warning
+        }
+    }
+}
+
+/// Where the radar plots its vessels. Each host takes a sector of bearings in proportion to its tabs, clockwise from
+/// north in the order the tabs are listed; inside it each space's tabs sail as a convoy on an arc of their own; and a
+/// vessel's range is its status's band. So a tab keeps its bearing while it closes on the harbour and moves off again.
+/// A convoy's tabs in one band spread across its arc, alternately in and out within the band.
+struct HarbourChart: Equatable {
+    struct Sector: Equatable { let host: HostID; let name: String; let inRange: Bool; let start: Double; let end: Double }
+    /// `leading`: the first convoy of its sector, which starts at the sector's boundary.
+    struct Convoy: Equatable { let name: String?; let start: Double; let end: Double; let leading: Bool }
+    struct Fix: Equatable { let bearing: Double; let distance: Double }
+    private(set) var sectors: [Sector] = []
+    private(set) var convoys: [Convoy] = []
+    private(set) var fixes: [UUID: Fix] = [:]
+
+    /// A status's range band, as fractions of the radius: the more the vessel needs you, the nearer the harbour. The
+    /// rim outside the anchorage keeps the sectors' and convoys' names.
+    static func band(_ status: HarbourVessel.Status) -> ClosedRange<Double> {
+        switch status {
+        case .calling: 0.14...0.32
+        case .inbound: 0.32...0.5
+        case .underWay: 0.5...0.68
+        case .anchor: 0.68...0.86
+        }
+    }
+
+    static func bandName(_ status: HarbourVessel.Status) -> String {
+        switch status {
+        case .calling: "CALLING"
+        case .inbound: "INBOUND"
+        case .underWay: "UNDER WAY"
+        case .anchor: "ANCHORAGE"
+        }
+    }
+
+    init(_ vessels: [HarbourVessel]) {
+        var hosts: [(first: HarbourVessel, convoys: [[HarbourVessel]])] = []
+        for vessel in vessels {
+            guard let h = hosts.firstIndex(where: { $0.first.hostID == vessel.hostID }) else {
+                hosts.append((vessel, [[vessel]])); continue
+            }
+            let key = vessel.convoy ?? vessel.id
+            if let c = hosts[h].convoys.firstIndex(where: { ($0[0].convoy ?? $0[0].id) == key }) { hosts[h].convoys[c].append(vessel) }
+            else { hosts[h].convoys.append([vessel]) }
+        }
+        // A sector's share is its tabs and one more, so a host with a single tab keeps room around it.
+        let total = Double(vessels.count + hosts.count)
+        var start = 0.0
+        for host in hosts {
+            let count = host.convoys.reduce(0) { $0 + $1.count }
+            let span = 360 * Double(count + 1) / total
+            sectors.append(Sector(host: host.first.hostID, name: host.first.host, inRange: host.first.inRange,
+                                  start: start, end: start + span))
+            // Padding keeps vessels off the boundaries, and north clear for the bands' names.
+            let padding = min(10, span * 0.15)
+            var bearing = start + padding
+            let arc = span - 2 * padding
+            for (index, convoy) in host.convoys.enumerated() {
+                let width = arc * Double(convoy.count) / Double(count)
+                convoys.append(Convoy(name: convoy[0].convoyName, start: bearing, end: bearing + width, leading: index == 0))
+                for status in HarbourVessel.Status.allCases {
+                    let group = convoy.filter { $0.status == status }
+                    let band = Self.band(status), depth = band.upperBound - band.lowerBound
+                    for (place, vessel) in group.enumerated() {
+                        let stagger = group.count == 1 ? 0 : place % 2 == 0 ? -0.22 : 0.22
+                        fixes[vessel.id] = Fix(bearing: bearing + width * (Double(place) + 0.5) / Double(group.count),
+                                               distance: (band.lowerBound + band.upperBound) / 2 + stagger * depth)
+                    }
+                }
+                bearing += width
+            }
+            start += span
+        }
+    }
+}
+
+/// Nautical's radar scope, with the harbour (you) at its center. Every tab is a vessel, plotted nearer the harbour the
+/// more it needs you: calling (waiting for an answer) on the inner ring, then inbound with an unread reply, under way
+/// while its agent works, and the anchorage outside. Each host sails in its own sector and each space's tabs in a
+/// convoy inside it (HarbourChart). The sweep turns every four seconds and each vessel glows as it passes. Clicking a
+/// vessel selects its tab, and clicking a sector's rim narrows the traffic list to that host. Labels go to the vessels
+/// that are selected, active or under the pointer; the rest carry their channel. Reduce Motion holds the sweep still
+/// and drops the glow.
 ///
-/// The sweep turns in the compositor (HarbourSweep), as the composer's motion does: a SwiftUI redraw per frame of a
-/// full-screen window throttles its presentation on an Adaptive-refresh display (docs/benchmarks.md, Chat rendering). The plot
-/// redraws only when a vessel changes, and once a second while one is under way, for its passage time.
+/// The sweep and its echoes turn in the compositor (HarbourSweep, HarbourEchoes), as the composer's motion does: a
+/// SwiftUI redraw per frame of a full-screen window throttles its presentation on an Adaptive-refresh display
+/// (docs/benchmarks.md, Chat rendering). The plot redraws only when a vessel or the pointer's vessel changes, and once a
+/// second while one is under way, for its passage time.
 struct HarbourRadar: View, Equatable {
     let vessels: [HarbourVessel]
     let reduceMotion: Bool
+    /// The host whose sector narrows the traffic list.
+    var focus: HostID? = nil
     var select: (UUID) -> Void = { _ in }
+    var filter: (HostID) -> Void = { _ in }
+    @State private var hovered: UUID?
     static let period: TimeInterval = 4
     /// The still sweep's bearing, the mockup's.
     static let restingBearing: Double = 32
@@ -1279,7 +1423,9 @@ struct HarbourRadar: View, Equatable {
     /// A passage this long draws the full heading vector.
     private static let fullPassage: TimeInterval = 600
 
-    nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.vessels == rhs.vessels && lhs.reduceMotion == rhs.reduceMotion }
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.vessels == rhs.vessels && lhs.reduceMotion == rhs.reduceMotion && lhs.focus == rhs.focus
+    }
 
     fileprivate static func point(_ bearing: Double, _ distance: CGFloat, from center: CGPoint) -> CGPoint {
         let angle = bearing * .pi / 180
@@ -1292,26 +1438,30 @@ struct HarbourRadar: View, Equatable {
 
     var body: some View {
         let palette = Chrome.palette
+        let chart = HarbourChart(vessels)
         let underWay = vessels.contains { $0.since != nil }
         GeometryReader { proxy in
             ZStack {
                 HarbourSweep(accent: palette.accent, moving: !reduceMotion)
                     .frame(width: proxy.size.width, height: proxy.size.height)
                 if !reduceMotion {
-                    HarbourPings(vessels: vessels, accent: palette.accent).frame(width: proxy.size.width, height: proxy.size.height)
+                    HarbourEchoes(echoes: echoes(chart, palette: palette)).frame(width: proxy.size.width, height: proxy.size.height)
+                    HarbourPings(vessels: vessels, palette: palette).frame(width: proxy.size.width, height: proxy.size.height)
                 }
                 TimelineView(.animation(minimumInterval: 1, paused: !underWay)) { timeline in
-                    Canvas { context, size in draw(in: &context, size: size, now: timeline.date, palette: palette) }
+                    Canvas { context, size in draw(in: &context, size: size, chart: chart, now: timeline.date, palette: palette) }
                 }
             }
             .contentShape(Rectangle())
             .onTapGesture(coordinateSpace: .local) { location in
-                let (center, radius) = Self.geometry(proxy.size)
-                let nearest = vessels.map { vessel -> (UUID, CGFloat) in
-                    let p = Self.point(vessel.position.bearing, radius * vessel.position.distance, from: center)
-                    return (vessel.id, hypot(p.x - location.x, p.y - location.y))
-                }.min { $0.1 < $1.1 }
-                if let nearest, nearest.1 < 18 { select(nearest.0) }
+                if let id = vessel(at: location, chart: chart, size: proxy.size) { select(id) }
+                else if let host = sector(at: location, chart: chart, size: proxy.size) { filter(host) }
+            }
+            .onContinuousHover(coordinateSpace: .local) { phase in
+                switch phase {
+                case .active(let location): hovered = vessel(at: location, chart: chart, size: proxy.size)
+                case .ended: hovered = nil
+                }
             }
         }
         .accessibilityElement(children: .ignore)
@@ -1320,7 +1470,42 @@ struct HarbourRadar: View, Equatable {
         .accessibilityIdentifier("harbour-radar")
     }
 
-    private func draw(in context: inout GraphicsContext, size: CGSize, now: Date, palette: SidebarPalette) {
+    /// The vessel nearest `location`, within reach of a click.
+    private func vessel(at location: CGPoint, chart: HarbourChart, size: CGSize) -> UUID? {
+        let (center, radius) = Self.geometry(size)
+        return chart.fixes.map { id, fix -> (UUID, CGFloat) in
+            let p = Self.point(fix.bearing, radius * fix.distance, from: center)
+            return (id, hypot(p.x - location.x, p.y - location.y))
+        }.filter { $0.1 < 16 }.min { $0.1 < $1.1 }?.0
+    }
+
+    /// The bearing of `p` from `origin`, clockwise from north.
+    fileprivate static func bearing(of p: CGPoint, from origin: CGPoint) -> Double {
+        let bearing = atan2(p.x - origin.x, origin.y - p.y) * 180 / .pi
+        return bearing < 0 ? bearing + 360 : bearing
+    }
+
+    /// The sector whose rim, outside the anchorage, holds `location`; none while one host has the whole scope.
+    private func sector(at location: CGPoint, chart: HarbourChart, size: CGSize) -> HostID? {
+        let (center, radius) = Self.geometry(size)
+        let distance = hypot(location.x - center.x, location.y - center.y)
+        guard chart.sectors.count > 1, distance > radius * HarbourChart.band(.anchor).upperBound, distance < radius + 4 else { return nil }
+        let bearing = Self.bearing(of: location, from: center)
+        return chart.sectors.first { $0.start <= bearing && bearing < $0.end }?.host
+    }
+
+    /// Each vessel's glow as the sweep passes: bright for those that need you, dim at anchor, faint for bare contacts.
+    private func echoes(_ chart: HarbourChart, palette: SidebarPalette) -> [HarbourEchoes.Echo] {
+        vessels.compactMap { vessel in
+            chart.fixes[vessel.id].map { fix in
+                HarbourEchoes.Echo(bearing: fix.bearing, distance: fix.distance,
+                                   color: vessel.status == .anchor ? palette.accent : vessel.status.tint(palette),
+                                   strength: !vessel.crewed ? 0.16 : vessel.status == .anchor ? 0.26 : 0.5)
+            }
+        }
+    }
+
+    private func draw(in context: inout GraphicsContext, size: CGSize, chart: HarbourChart, now: Date, palette: SidebarPalette) {
         let (center, radius) = Self.geometry(size)
         guard radius > 20 else { return }
         func point(_ bearing: Double, _ distance: CGFloat, from origin: CGPoint = center) -> CGPoint {
@@ -1329,46 +1514,125 @@ struct HarbourRadar: View, Equatable {
         func circle(_ r: CGFloat, at p: CGPoint = center) -> Path {
             Path(ellipseIn: CGRect(x: p.x - r, y: p.y - r, width: r * 2, height: r * 2))
         }
-
-        // Range rings, the cardinal cross and dashed diagonals.
-        context.stroke(circle(radius), with: .color(palette.faint), lineWidth: 1.5)
-        for fraction in [2.0 / 3, 1.0 / 3] {
-            context.stroke(circle(radius * fraction), with: .color(palette.control), lineWidth: 1)
+        func spoke(_ bearing: Double, from inner: Double, to outer: Double) -> Path {
+            var path = Path()
+            path.move(to: point(bearing, radius * inner)); path.addLine(to: point(bearing, radius * outer))
+            return path
         }
-        var cross = Path()
-        for bearing in [0.0, 90] { cross.move(to: point(bearing, radius)); cross.addLine(to: point(bearing + 180, radius)) }
-        context.stroke(cross, with: .color(palette.control), lineWidth: 1)
-        var diagonals = Path()
-        for bearing in [45.0, 135] { diagonals.move(to: point(bearing, radius)); diagonals.addLine(to: point(bearing + 180, radius)) }
-        context.stroke(diagonals, with: .color(palette.separator), style: StrokeStyle(lineWidth: 1, dash: [2, 6]))
+        /// An arc clockwise between two bearings. Path angles run from east, and SwiftUI's y axis points down.
+        func arc(_ r: CGFloat, from start: Double, to end: Double, at p: CGPoint = center) -> Path {
+            var path = Path()
+            path.addArc(center: p, radius: r, startAngle: .degrees(start - 90), endAngle: .degrees(end - 90), clockwise: false)
+            return path
+        }
+        func hull(_ course: Double, _ length: CGFloat, at p: CGPoint) -> Path {
+            var path = Path()
+            path.move(to: point(course, length, from: p))
+            path.addLine(to: point(course + 141, length * 1.14, from: p))
+            path.addLine(to: point(course - 141, length * 1.14, from: p))
+            path.closeSubpath()
+            return path
+        }
+        let inner = HarbourChart.band(.calling).lowerBound, anchorage = HarbourChart.band(.anchor).upperBound
         let small = HarbourType.mono(max(8, min(10, radius / 22)))
-        for bearing in [0, 90, 180, 270] {
-            context.draw(Text(String(format: "%03d", bearing)).font(HarbourType.heading(11)).foregroundColor(palette.detail),
-                         at: point(Double(bearing), radius - 10))
+        let font = HarbourType.mono(max(9, min(11, radius / 20)))
+
+        // An out-of-range host's sector is shaded.
+        for sector in chart.sectors where !sector.inRange {
+            var wedge = arc(radius, from: sector.start, to: sector.end)
+            wedge.addArc(center: center, radius: radius * inner, startAngle: .degrees(sector.end - 90),
+                         endAngle: .degrees(sector.start - 90), clockwise: true)
+            wedge.closeSubpath()
+            context.fill(wedge, with: .color(palette.faint.opacity(0.35)))
         }
-        for (fraction, label) in [(2.0 / 3, "1.0 nm"), (1.0 / 3, "0.5 nm")] {
-            context.draw(Text(label).font(small).foregroundColor(palette.detail),
-                         at: CGPoint(x: center.x + 5, y: center.y - radius * fraction + 9), anchor: .leading)
+
+        // The rim and the bands' rings, the sectors' boundaries, and dashed lines between a sector's convoys.
+        context.stroke(circle(radius), with: .color(palette.faint), lineWidth: 1.5)
+        for status in [HarbourVessel.Status.calling, .inbound, .underWay] {
+            context.stroke(circle(radius * HarbourChart.band(status).upperBound), with: .color(palette.control), lineWidth: 1)
+        }
+        context.stroke(circle(radius * anchorage), with: .color(palette.separator), style: StrokeStyle(lineWidth: 1, dash: [2, 6]))
+        var boundaries = spoke(0, from: inner, to: 1)
+        for sector in chart.sectors { boundaries.addPath(spoke(sector.start, from: inner, to: 1)) }
+        context.stroke(boundaries, with: .color(palette.control), lineWidth: 1)
+        var convoyLines = Path()
+        for convoy in chart.convoys where !convoy.leading { convoyLines.addPath(spoke(convoy.start, from: inner, to: anchorage)) }
+        context.stroke(convoyLines, with: .color(palette.separator), style: StrokeStyle(lineWidth: 1, dash: [2, 6]))
+        if let focus, let sector = chart.sectors.first(where: { $0.host == focus }) {
+            context.stroke(arc(radius, from: sector.start, to: sector.end), with: .color(palette.accent), lineWidth: 2.5)
+        }
+        // Text already placed, and the vessels, so later text moves clear of them or gives way.
+        var placed: [CGRect] = chart.fixes.values.map { fix in
+            let p = point(fix.bearing, radius * fix.distance)
+            return CGRect(x: p.x - 8, y: p.y - 8, width: 16, height: 16)
+        }
+        func clear(_ frame: CGRect) -> Bool {
+            frame.minX >= 1 && frame.maxX <= size.width - 1 && frame.minY >= 1 && frame.maxY <= size.height - 1
+                && !placed.contains { $0.insetBy(dx: -2, dy: -1).intersects(frame) }
+        }
+
+        // The bands' names, down the north line.
+        for status in HarbourVessel.Status.allCases {
+            let text = context.resolve(Text(HarbourChart.bandName(status)).font(small).foregroundColor(palette.detail))
+            let origin = CGPoint(x: center.x + 4, y: center.y - radius * HarbourChart.band(status).upperBound + 3)
+            placed.append(CGRect(origin: origin, size: text.measure(in: size)))
+            context.draw(text, at: origin, anchor: .topLeading)
         }
 
         // The harbour: you, at the center.
         context.fill(circle(4), with: .color(palette.ink))
         context.stroke(circle(9), with: .color(palette.ink.opacity(0.5)), lineWidth: 1)
-        context.draw(Text("harbour").font(small).foregroundColor(palette.muted),
-                     at: CGPoint(x: center.x + 10, y: center.y + 12), anchor: .leading)
         if vessels.isEmpty {
-            context.draw(Text("No traffic in range").font(HarbourType.mono(max(9, min(11, radius / 20)))).foregroundColor(palette.detail),
+            context.draw(Text("No traffic in range").font(font).foregroundColor(palette.detail),
                          at: CGPoint(x: center.x, y: center.y + radius * 0.45))
         }
 
-        // Labels already placed, so a later one moves clear of them.
-        var placed: [CGRect] = []
-        for vessel in vessels {
-            let position = vessel.position
-            let p = point(position.bearing, radius * position.distance)
+        // Sectors are named on the rim just past their boundary, once there is more than the local one.
+        let namesSectors = chart.sectors.count > 1 || chart.sectors.contains { $0.host != .local || !$0.inRange }
+        if namesSectors {
+            for sector in chart.sectors {
+                let text = context.resolve(Text(sector.name.uppercased())
+                    .font(HarbourType.heading(10)).tracking(1.2)
+                    .foregroundColor(sector.host == focus ? palette.accent : sector.inRange ? palette.muted : palette.detail))
+                let measured = text.measure(in: size), rim = radius - 9
+                let past = min(Double(measured.width / 2 + 6) / Double(rim) * 180 / .pi, (sector.end - sector.start) / 2)
+                let p = point(sector.start + past, rim)
+                var frame = CGRect(x: p.x - measured.width / 2, y: p.y - measured.height / 2, width: measured.width, height: measured.height)
+                frame.origin.x = min(max(1, frame.minX), size.width - 1 - frame.width)
+                placed.append(frame)
+                context.draw(text, at: CGPoint(x: frame.midX, y: frame.midY))
+            }
+        }
+        // An out-of-range sector says so across its shading, where that is clear.
+        for sector in chart.sectors where !sector.inRange {
+            let text = context.resolve(Text("out of range").font(small).foregroundColor(palette.muted))
+            let measured = text.measure(in: size)
+            for distance in [0.41, 0.59, 0.23] {
+                let p = point((sector.start + sector.end) / 2, radius * distance)
+                let frame = CGRect(x: p.x - measured.width / 2, y: p.y - measured.height / 2, width: measured.width, height: measured.height)
+                guard clear(frame) else { continue }
+                placed.append(frame)
+                context.draw(text, at: p)
+                break
+            }
+        }
+
+        // The vessels, the selected one and those that need you last so they draw on top.
+        func rank(_ vessel: HarbourVessel) -> Int {
+            vessel.selected ? 9 : HarbourVessel.Status.allCases.firstIndex(of: vessel.status) ?? 0
+        }
+        let ordered = vessels.sorted { rank($0) < rank($1) }
+        for vessel in ordered {
+            guard let fix = chart.fixes[vessel.id] else { continue }
+            let p = point(fix.bearing, radius * fix.distance)
+            let tint = vessel.status.tint(palette)
+            // Under way it heads out; inbound and calling, home.
+            let course = vessel.status == .underWay ? fix.bearing : fix.bearing + 180
+            let reach = radius * 0.13
             switch vessel.status {
+            case .anchor where !vessel.crewed:
+                context.fill(circle(2.5, at: p), with: .color(palette.muted))
             case .anchor:
-                let tint = palette.secondary
                 context.stroke(circle(7, at: p), with: .color(tint), lineWidth: 1.4)
                 var anchor = Path()
                 anchor.move(to: CGPoint(x: p.x, y: p.y - 4)); anchor.addLine(to: CGPoint(x: p.x, y: p.y + 4))
@@ -1376,12 +1640,9 @@ struct HarbourRadar: View, Equatable {
                 anchor.move(to: CGPoint(x: p.x - 3, y: p.y + 1.5))
                 anchor.addQuadCurve(to: CGPoint(x: p.x + 3, y: p.y + 1.5), control: CGPoint(x: p.x, y: p.y + 5.5))
                 context.stroke(anchor, with: .color(tint), style: StrokeStyle(lineWidth: 1.1, lineCap: .round))
-            case .underWay, .calling:
-                let tint = (vessel.status == .calling ? palette.warning : palette.accent)
-                let course = Double(vessel.course)
+            case .underWay:
+                // The wake astern, the heading vector ahead and its progress over the passage.
                 let passage = vessel.since.map { min(1, now.timeIntervalSince($0) / Self.fullPassage) } ?? 0
-                // The wake astern, the heading vector ahead and its progress, then the hull pointing along the course.
-                let reach = radius * 0.3
                 var wake = Path()
                 wake.move(to: p); wake.addLine(to: point(course + 180, reach * 0.85, from: p))
                 context.stroke(wake, with: .color(tint.opacity(0.7)), style: StrokeStyle(lineWidth: 1.2, dash: [1.5, 5]))
@@ -1393,75 +1654,121 @@ struct HarbourRadar: View, Equatable {
                     progress.move(to: p); progress.addLine(to: point(course, reach * passage, from: p))
                     context.stroke(progress, with: .color(tint.opacity(0.35)), lineWidth: 5)
                 }
-                var hull = Path()
-                hull.move(to: point(course, 10, from: p))
-                hull.addLine(to: point(course + 141, 11.4, from: p))
-                hull.addLine(to: point(course - 141, 11.4, from: p))
-                hull.closeSubpath()
-                context.fill(hull, with: .color(tint))
+                context.fill(hull(course, 10, at: p), with: .color(tint))
+            case .inbound:
+                // Its course home, ahead of it.
+                var line = Path()
+                line.move(to: point(course, 12, from: p)); line.addLine(to: point(course, 12 + reach * 0.6, from: p))
+                context.stroke(line, with: .color(tint.opacity(0.6)), style: StrokeStyle(lineWidth: 1.2, dash: [1.5, 4]))
+                context.fill(hull(course, 10, at: p), with: .color(tint))
+            case .calling:
+                // Hailing the harbour: two arcs ahead of its bow.
+                for (index, r) in [CGFloat(13), 17].enumerated() {
+                    context.stroke(arc(r, from: course - 32, to: course + 32, at: p),
+                                   with: .color(tint.opacity(index == 0 ? 0.8 : 0.45)), style: StrokeStyle(lineWidth: 1.2, lineCap: .round))
+                }
+                context.fill(hull(course, 10, at: p), with: .color(tint))
             }
             // Escorts: its subagents, small hulls in line astern, alternating either side of its wake.
-            if vessel.escorts > 0 {
-                let course = Double(vessel.course)
-                let tint = vessel.status == .calling ? palette.warning : vessel.status == .underWay ? palette.accent : palette.secondary
-                for index in 0..<min(vessel.escorts, 4) {
-                    let side: Double = index % 2 == 0 ? 1 : -1
-                    let e = point(course + 180 + side * 28, 16 + CGFloat(index / 2) * 10, from: p)
-                    var hull = Path()
-                    hull.move(to: point(course, 5, from: e))
-                    hull.addLine(to: point(course + 141, 5.7, from: e))
-                    hull.addLine(to: point(course - 141, 5.7, from: e))
-                    hull.closeSubpath()
-                    context.fill(hull, with: .color(tint.opacity(0.75)))
-                }
+            for index in 0..<min(vessel.escorts, 4) {
+                let side: Double = index % 2 == 0 ? 1 : -1
+                let e = point(course + 180 + side * 28, 16 + CGFloat(index / 2) * 10, from: p)
+                context.fill(hull(course, 5, at: e), with: .color((vessel.status == .anchor ? palette.secondary : tint).opacity(0.75)))
             }
-            if vessel.selected || vessel.status != .anchor {
-                let tint = vessel.status == .calling ? palette.warning : palette.accent
-                context.stroke(circle(16, at: p), with: .color(tint.opacity(vessel.selected ? 0.6 : 0.3)), lineWidth: 1)
+            if vessel.selected {
+                context.stroke(circle(16, at: p), with: .color(palette.accent.opacity(0.6)), lineWidth: 1)
             }
+        }
 
-            // Its label: name and host, then status, course and passage time or its key. It sits beside the vessel,
-            // on whichever side has room, and stays inside the plot.
-            let font = HarbourType.mono(max(9, min(11, radius / 20)))
-            let title = Text(vessel.name).foregroundColor(vessel.selected ? palette.ink : palette.secondary)
-                + Text(" · " + vessel.host).foregroundColor(palette.detail)
-            let detail: String
+        // Labels: the selected vessel, those that need you, those under way, then the one under the pointer. Each takes
+        // the first spot around its vessel that is clear and inside the plot; with none, it steps past what is in its
+        // way and a leader line ties it back.
+        let labelled = ordered.reversed().filter { $0.selected || $0.status != .anchor || $0.id == hovered }
+        let hoveredLast = labelled.filter { $0.id != hovered } + labelled.filter { $0.id == hovered }
+        for vessel in hoveredLast {
+            guard let fix = chart.fixes[vessel.id] else { continue }
+            let p = point(fix.bearing, radius * fix.distance)
+            let title = Text(vessel.name).foregroundColor(vessel.selected || vessel.id == hovered ? palette.ink : palette.secondary)
+            let detail: [String]
             switch vessel.status {
-            case .anchor: detail = [vessel.statusLabel, vessel.shortcut].filter { !$0.isEmpty }.joined(separator: " · ")
-            case .underWay, .calling:
-                detail = [vessel.statusLabel, String(format: "%03d°", vessel.course), HarbourVessel.elapsed(since: vessel.since, now: now)]
-                    .filter { !$0.isEmpty }.joined(separator: " · ")
+            case .underWay, .calling: detail = [vessel.statusLabel, HarbourVessel.elapsed(since: vessel.since, now: now)]
+            case .anchor, .inbound: detail = [vessel.statusLabel, vessel.channel ?? ""]
             }
-            let statusColor = vessel.status == .anchor ? palette.muted : vessel.status == .calling ? palette.warning : palette.accent
-            let first = context.resolve(title.font(font)), second = context.resolve(Text(detail).font(font).foregroundColor(statusColor))
+            let first = context.resolve(title.font(font))
+            let second = context.resolve(Text(detail.filter { !$0.isEmpty }.joined(separator: " · ")).font(font)
+                .foregroundColor(vessel.status == .anchor ? palette.muted : vessel.status.tint(palette)))
             let third = vessel.heading.map { context.resolve(Text("heading " + $0).font(font).foregroundColor(palette.detail)) }
             let firstSize = first.measure(in: size), secondSize = second.measure(in: size)
             let thirdSize = third?.measure(in: size) ?? .zero
             let width = max(firstSize.width, secondSize.width, thirdSize.width)
-            let x = p.x + 20 + width <= size.width - 2 ? p.x + 20
-                : p.x - 20 - width >= 2 ? p.x - 20 - width
-                : min(max(2, p.x - width / 2), size.width - 2 - width)
             let height = firstSize.height + secondSize.height + thirdSize.height
-            var frame = CGRect(x: x, y: min(p.y + 6, size.height - 2 - height), width: width, height: height)
-            // Step down past a label in the way, or up when the plot's bottom is reached.
-            for _ in 0..<8 {
-                guard let blocking = placed.first(where: { $0.insetBy(dx: 0, dy: -2).intersects(frame) }) else { break }
-                frame.origin.y = blocking.maxY + 3 + height <= size.height - 2 ? blocking.maxY + 3 : blocking.minY - 3 - height
+            let spots = [CGPoint(x: p.x + 18, y: p.y - 2), CGPoint(x: p.x - 18 - width, y: p.y - 2),
+                         CGPoint(x: p.x + 18, y: p.y + 2 - height), CGPoint(x: p.x - 18 - width, y: p.y + 2 - height),
+                         CGPoint(x: p.x - width / 2, y: p.y + 18), CGPoint(x: p.x - width / 2, y: p.y - 18 - height)]
+                .map { CGRect(origin: $0, size: CGSize(width: width, height: height)) }
+            var frame: CGRect
+            if let spot = spots.first(where: clear) { frame = spot } else {
+                frame = spots[0]
+                frame.origin.x = p.x + 18 + width <= size.width - 2 ? p.x + 18 : max(2, min(p.x - 18 - width, size.width - 2 - width))
+                frame.origin.y = min(max(2, frame.minY), size.height - 2 - height)
+                for _ in 0..<8 {
+                    guard let blocking = placed.first(where: { $0.insetBy(dx: 0, dy: -2).intersects(frame) }) else { break }
+                    frame.origin.y = blocking.maxY + 3 + height <= size.height - 2 ? blocking.maxY + 3 : blocking.minY - 3 - height
+                }
+                let near = CGPoint(x: min(max(p.x, frame.minX), frame.maxX), y: min(max(p.y, frame.minY), frame.maxY))
+                if hypot(near.x - p.x, near.y - p.y) > 24 {
+                    var leader = Path()
+                    leader.move(to: point(Self.bearing(of: near, from: p), 11, from: p)); leader.addLine(to: near)
+                    context.stroke(leader, with: .color(palette.detail.opacity(0.7)), lineWidth: 0.8)
+                }
+            }
+            // The pointer's label shows wherever it lands; it goes when the pointer does.
+            if vessel.id == hovered, !vessel.selected, vessel.status == .anchor {
+                context.fill(Path(roundedRect: frame.insetBy(dx: -3, dy: -2), cornerRadius: 3), with: .color(palette.window.opacity(0.85)))
             }
             placed.append(frame)
-            let y = frame.minY
-            context.draw(first, at: CGPoint(x: x, y: y), anchor: .topLeading)
-            context.draw(second, at: CGPoint(x: x, y: y + firstSize.height), anchor: .topLeading)
-            if let third { context.draw(third, at: CGPoint(x: x, y: y + firstSize.height + secondSize.height), anchor: .topLeading) }
+            context.draw(first, at: CGPoint(x: frame.minX, y: frame.minY), anchor: .topLeading)
+            context.draw(second, at: CGPoint(x: frame.minX, y: frame.minY + firstSize.height), anchor: .topLeading)
+            if let third { context.draw(third, at: CGPoint(x: frame.minX, y: frame.minY + firstSize.height + secondSize.height), anchor: .topLeading) }
+        }
+
+        // Convoys are named on the rim within their arc, where there is room.
+        for convoy in chart.convoys {
+            guard let name = convoy.name else { continue }
+            let text = context.resolve(Text(name.count > 18 ? String(name.prefix(17)) + "…" : name).font(small).foregroundColor(palette.muted))
+            let measured = text.measure(in: size)
+            for fraction in [0.5, 0.75, 0.25] {
+                let p = point(convoy.start + (convoy.end - convoy.start) * fraction, radius * (anchorage + 1) / 2)
+                let frame = CGRect(x: p.x - measured.width / 2, y: p.y - measured.height / 2, width: measured.width, height: measured.height)
+                guard clear(frame) else { continue }
+                placed.append(frame)
+                context.draw(text, at: p)
+                break
+            }
+        }
+
+        // The other crewed vessels carry their channel, where it fits.
+        for vessel in ordered where !labelled.contains(where: { $0.id == vessel.id }) && vessel.crewed {
+            guard let fix = chart.fixes[vessel.id], let channel = vessel.channel else { continue }
+            let p = point(fix.bearing, radius * fix.distance)
+            let text = context.resolve(Text(channel.replacingOccurrences(of: "CH ", with: "")).font(small).foregroundColor(palette.detail))
+            let measured = text.measure(in: size)
+            let frame = CGRect(x: p.x + 11, y: p.y - measured.height / 2, width: measured.width, height: measured.height)
+            guard clear(frame) else { continue }
+            placed.append(frame)
+            context.draw(text, at: frame.origin, anchor: .topLeading)
         }
     }
 }
 
 /// Nautical's traffic list: one row per space with its status, passage time and key. Clicking selects the space;
-/// the context menu is the space's own.
+/// the context menu is the space's own. A sector clicked on the radar narrows it to that host's traffic, named in its
+/// heading, which clears it.
 private struct HarbourTrafficList: View {
     let vessels: [HarbourVessel]
     let typography: AppTypography
+    var sector: String? = nil
+    var clearSector: () -> Void = {}
     let select: (UUID) -> Void
     let menu: (UUID) -> AnyView
 
@@ -1476,7 +1783,7 @@ private struct HarbourTrafficList: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            columns(Text("TRAFFIC · \(vessels.count)").fixedSize(), Text("STATUS"), Text("TIME"), Text("KEY").fixedSize())
+            columns(trafficHeading.fixedSize(), Text("STATUS"), Text("TIME"), Text("KEY").fixedSize())
                 .font(HarbourType.heading(typography.size(offset: -2))).tracking(1.8)
                 .foregroundStyle(Chrome.palette.detail)
                 .padding(.vertical, 4)
@@ -1496,6 +1803,15 @@ private struct HarbourTrafficList: View {
         .accessibilityIdentifier("harbour-traffic")
     }
 
+    @ViewBuilder private var trafficHeading: some View {
+        if let sector {
+            Button(action: clearSector) { Text("TRAFFIC · \(sector.uppercased()) · \(vessels.count)  ✕") }
+                .buttonStyle(.plain).help("Show all traffic").accessibilityIdentifier("harbour-sector")
+        } else {
+            Text("TRAFFIC · \(vessels.count)")
+        }
+    }
+
     private func columns(_ name: some View, _ status: some View, _ time: some View, _ key: some View) -> some View {
         HStack(spacing: 8) {
             name.frame(maxWidth: .infinity, alignment: .leading)
@@ -1508,7 +1824,7 @@ private struct HarbourTrafficList: View {
     }
 
     private func row(_ vessel: HarbourVessel) -> some View {
-        let tint = vessel.status == .calling ? Chrome.palette.warning : vessel.status == .underWay ? Chrome.accent : Chrome.palette.secondary
+        let tint = vessel.status.tint(Chrome.palette)
         return Button { select(vessel.id) } label: {
             columns(
                 HStack(spacing: 7) {
@@ -1543,7 +1859,9 @@ private struct HarbourTrafficList: View {
     @ViewBuilder private func glyph(_ status: HarbourVessel.Status, tint: Color) -> some View {
         switch status {
         case .anchor: Circle().strokeBorder(tint, lineWidth: 1.2).frame(width: 7, height: 7)
-        case .underWay, .calling: HarbourHull().fill(tint).frame(width: 8, height: 8)
+        case .underWay: HarbourHull().fill(tint).frame(width: 8, height: 8)
+        // Inbound and calling, it heads home, as on the radar.
+        case .inbound, .calling: HarbourHull().fill(tint).frame(width: 8, height: 8).rotationEffect(.degrees(180))
         }
     }
 }
@@ -1638,20 +1956,21 @@ private struct HarbourSweep: NSViewRepresentable {
     }
 }
 
-/// A radar ping where a vessel gets under way: a ring that opens and fades once, in the compositor like the sweep.
+/// A radar ping where a vessel changes course: getting under way, coming inbound or calling, a ring at its new range
+/// in its new color that opens and fades once, in the compositor like the sweep.
 private struct HarbourPings: NSViewRepresentable {
     let vessels: [HarbourVessel]
-    let accent: Color
+    let palette: SidebarPalette
 
     func makeNSView(context: Context) -> PingView { PingView() }
 
     func updateNSView(_ view: PingView, context: Context) {
-        view.accent = accent
+        view.palette = palette
         view.update(vessels)
     }
 
     final class PingView: NSView {
-        var accent = Color.green
+        var palette: SidebarPalette?
         private var statuses: [UUID: HarbourVessel.Status] = [:]
         private static let duration: CFTimeInterval = 1.4
 
@@ -1666,32 +1985,32 @@ private struct HarbourPings: NSViewRepresentable {
         override var isFlipped: Bool { true }
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
-        /// Pings each vessel that was plotted before and has just got under way.
+        /// Pings each vessel that was plotted before and has just changed to any status but at anchor.
         func update(_ vessels: [HarbourVessel]) {
-            let next = Dictionary(uniqueKeysWithValues: vessels.map { ($0.id, $0.status) })
+            let next = Dictionary(vessels.map { ($0.id, $0.status) }, uniquingKeysWith: { first, _ in first })
             defer { statuses = next }
-            guard let window, window.occlusionState.contains(.visible), bounds.width > 0 else { return }
+            guard let window, window.occlusionState.contains(.visible), bounds.width > 0, let palette else { return }
+            let chart = HarbourChart(vessels)
             let (center, radius) = HarbourRadar.geometry(bounds.size)
-            for vessel in vessels where vessel.status == .underWay {
-                guard let previous = statuses[vessel.id], previous != .underWay else { continue }
-                let position = vessel.position
-                ping(at: HarbourRadar.point(position.bearing, radius * position.distance, from: center), window: window)
+            for vessel in vessels where vessel.status != .anchor {
+                guard let previous = statuses[vessel.id], previous != vessel.status, let fix = chart.fixes[vessel.id] else { continue }
+                ping(at: HarbourRadar.point(fix.bearing, radius * fix.distance, from: center), color: vessel.status.tint(palette),
+                     window: window)
             }
         }
 
-        private func ping(at point: CGPoint, window: NSWindow) {
+        private func ping(at point: CGPoint, color: Color, window: NSWindow) {
             let ring = CAShapeLayer()
             let size: CGFloat = 52
             ring.bounds = CGRect(x: 0, y: 0, width: size, height: size)
             ring.position = point
             ring.path = CGPath(ellipseIn: ring.bounds.insetBy(dx: 1, dy: 1), transform: nil)
             ring.fillColor = nil
-            ring.strokeColor = NSColor(accent).cgColor
+            ring.strokeColor = NSColor(color).cgColor
             ring.lineWidth = 1.5
             ring.opacity = 0
             ring.contentsScale = window.backingScaleFactor
             layer?.addSublayer(ring)
-            let fps = Float(max(1, window.screen?.maximumFramesPerSecond ?? 60))
             let grow = CABasicAnimation(keyPath: "transform.scale")
             grow.fromValue = 0.15; grow.toValue = 1
             let fade = CABasicAnimation(keyPath: "opacity")
@@ -1700,11 +2019,90 @@ private struct HarbourPings: NSViewRepresentable {
             group.animations = [grow, fade]
             group.duration = Self.duration
             group.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            group.preferredFrameRateRange = CAFrameRateRange(minimum: fps, maximum: fps, preferred: fps)
+            group.preferredFrameRateRange = MotionRate.range(for: window)
             CATransaction.begin()
             CATransaction.setCompletionBlock { ring.removeFromSuperlayer() }
             ring.add(group, forKey: "ping")
             CATransaction.commit()
+        }
+    }
+}
+
+/// The sweep's echoes: each vessel glows as the beam crosses it and fades over the turn, as a radar's phosphor does.
+/// Each glow loops in the compositor on the sweep's period, phase-aligned to the same media clock (CompositorView.loop),
+/// so it lights exactly as the beam passes its bearing.
+private struct HarbourEchoes: NSViewRepresentable {
+    struct Echo: Equatable {
+        let bearing: Double
+        let distance: Double
+        let color: Color
+        /// The glow's peak opacity.
+        let strength: Double
+    }
+    let echoes: [Echo]
+
+    func makeNSView(context: Context) -> EchoView { EchoView() }
+
+    func updateNSView(_ view: EchoView, context: Context) {
+        view.echoes = echoes
+        view.moving = true
+    }
+
+    static func dismantleNSView(_ view: EchoView, coordinator: ()) { view.stop() }
+
+    final class EchoView: CompositorView {
+        var echoes: [Echo] = [] { didSet { if echoes != oldValue { redraw(); updateAnimations() } } }
+        private var blips: [CALayer] = []
+        private var drawnSize: CGSize = .zero
+        /// How much of the turn a glow takes to fade.
+        private static let fade = 0.6
+
+        override func layout() {
+            super.layout()
+            if drawnSize != bounds.size { redraw(); updateAnimations() }
+        }
+
+        override func redraw() {
+            drawnSize = bounds.size
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            defer { CATransaction.commit() }
+            blips.forEach { $0.removeFromSuperlayer() }
+            blips = []
+            guard bounds.width > 0 else { return }
+            let (center, radius) = HarbourRadar.geometry(bounds.size)
+            for echo in echoes {
+                let blip = CAGradientLayer()
+                let color = NSColor(echo.color)
+                blip.type = .radial
+                blip.colors = [color.withAlphaComponent(echo.strength).cgColor, color.withAlphaComponent(0).cgColor]
+                blip.startPoint = CGPoint(x: 0.5, y: 0.5)
+                blip.endPoint = CGPoint(x: 1, y: 1)
+                blip.bounds = CGRect(x: 0, y: 0, width: 28, height: 28)
+                blip.position = HarbourRadar.point(echo.bearing, radius * echo.distance, from: center)
+                blip.opacity = 0
+                blip.contentsScale = window?.backingScaleFactor ?? 2
+                layer?.addSublayer(blip)
+                blips.append(blip)
+            }
+        }
+
+        override func start(_ rate: CAFrameRateRange) {
+            for (blip, echo) in zip(blips, echoes) { loop(Self.afterglow(at: echo.bearing / 360), on: blip, rate: rate) }
+        }
+
+        /// One turn of a glow whose bearing the beam crosses at `phase` of the turn: off until then, full as it
+        /// passes, then fading.
+        static func afterglow(at phase: Double) -> CAKeyframeAnimation {
+            func level(_ time: Double) -> Double {
+                let since = (time - phase + 1).truncatingRemainder(dividingBy: 1)
+                return pow(max(0, 1 - since / fade), 2)
+            }
+            let times = Array(Set((0...48).map { Double($0) / 48 } + [phase, max(0, phase - 0.001)])).sorted()
+            let animation = CAKeyframeAnimation(keyPath: "opacity")
+            animation.keyTimes = times.map { NSNumber(value: $0) }
+            animation.values = times.map { level($0) }
+            animation.duration = HarbourRadar.period
+            return animation
         }
     }
 }

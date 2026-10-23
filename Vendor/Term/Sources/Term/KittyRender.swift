@@ -80,20 +80,20 @@ struct PlaceholderRun {
     /// Where this run's part of the image goes (Placement.renderPlacement); nil when nothing shows.
     func render(_ st: ImageStorage, _ img: KittyImage, _ cellW: UInt32, _ cellH: UInt32)
         -> (offsetX: UInt32, offsetY: UInt32, sourceX: UInt32, sourceY: UInt32, sourceWidth: UInt32, sourceHeight: UInt32, width: UInt32, height: UInt32)? {
-        guard let target = st.placeholderTarget(imageID, placementID) else { return nil }
+        guard cellW > 0, cellH > 0, let target = st.placeholderTarget(imageID, placementID) else { return nil }
         var rows = target.placement.rows, cols = target.placement.columns
-        if rows == 0 { rows = (img.height + cellH - 1) / cellH }
-        if cols == 0 { cols = (img.width + cellW - 1) / cellW }
+        if rows == 0 { rows = UInt32(clamping: (UInt64(img.height) + UInt64(cellH) - 1) / UInt64(cellH)) }
+        if cols == 0 { cols = UInt32(clamping: (UInt64(img.width) + UInt64(cellW) - 1) / UInt64(cellW)) }
         guard rows <= UInt32(UInt16.max), cols <= UInt32(UInt16.max) else { return nil }
         let (iw, ih) = (Double(img.width), Double(img.height))
-        let rowsPx = Double(rows * cellH), colsPx = Double(cols * cellW)
+        let rowsPx = Double(UInt64(rows) * UInt64(cellH)), colsPx = Double(UInt64(cols) * UInt64(cellW))
         var (xOff, yOff, xScale, yScale) = (0.0, 0.0, 0.0, 0.0)
         if iw * rowsPx > ih * colsPx { xScale = colsPx / max(iw, 1); yScale = xScale; yOff = (rowsPx - ih * yScale) / 2 } else {
             yScale = rowsPx / max(ih, 1); xScale = yScale; xOff = (colsPx - iw * xScale) / 2
         }
         let sx = xOff / xScale, sy = yOff / yScale, sw = iw + sx * 2, sh = ih + sy * 2
         var src = (x: sw * (Double(col) / Double(cols)), y: sh * (Double(row) / Double(rows)), w: sw * (Double(width) / Double(cols)), h: sh * (1 / Double(rows)))
-        var (dx, dy, dw, dh) = (0.0, 0.0, Double(width * cellW), Double(cellH))
+        var (dx, dy, dw, dh) = (0.0, 0.0, Double(width) * Double(cellW), Double(cellH))
         if src.y < sy {
             let o = sy - src.y
             (src.h, dy, dh, src.y) = (src.h - o, o, dh - o * yScale, 0)
@@ -113,7 +113,10 @@ struct PlaceholderRun {
             dw = src.w * xScale
         } else { src.x -= sx }
         guard src.w > 0, src.h > 0 else { return nil }
-        func u(_ v: Double) -> UInt32 { UInt32(max(0, v.rounded())) }
+        func u(_ v: Double) -> UInt32 {
+            guard v.isFinite, v > 0 else { return 0 }
+            return v >= Double(UInt32.max) ? .max : UInt32(v.rounded())
+        }
         return (u(dx * xScale), u(dy * yScale), u(src.x), u(src.y), u(src.w), u(src.h), u(dw), u(dh))
     }
 }

@@ -234,7 +234,7 @@ enum SSHHelperTestResources {
         try? FileManager.default.removeItem(at: resources)
         try FileManager.default.createDirectory(at: resources, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         try FileManager.default.copyItem(at: source, to: resources.appendingPathComponent("helper"))
-        // helper/darwin-universal links to ../dispatch-helper, the one bundled macOS helper.
+        // helper/darwin-arm64 links to ../dispatch-helper, the one bundled macOS helper.
         try FileManager.default.copyItem(at: System.resources.appendingPathComponent("dispatch-helper"),
                                          to: resources.appendingPathComponent("dispatch-helper"))
         return resources

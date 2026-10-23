@@ -7,6 +7,7 @@ use crate::keys::LoadedKey;
 use crate::reply::{Answer, Context, Reply};
 use crate::runtime;
 use crate::session::{AuthOutcome, BoxFuture, ConnectOptions, HostKey, Prompt, Session, SessionEvents};
+use crate::shell::{Resizer, shell};
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::ptr;
 use std::sync::Arc;
@@ -407,6 +408,59 @@ pub unsafe extern "C" fn dms_exec(
             }
         }
     });
+}
+
+/// A shell's handle: its window changes, sent in order once the shell started.
+pub struct DmsShell(Resizer);
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dms_shell_open(
+    handle: *mut DmsSession,
+    term: *const c_char,
+    cols: u32,
+    rows: u32,
+    context: *mut c_void,
+    started: Option<StartedFn>,
+    exited: Option<ExitedFn>,
+) -> *mut DmsShell {
+    let context = Context(context);
+    let Some(started) = started else { return ptr::null_mut() };
+    let resizer = Resizer::new(cols, rows);
+    let shell_handle = Box::into_raw(Box::new(DmsShell(resizer.clone())));
+    let (Some(session), Some(term)) = (unsafe { session(handle) }, unsafe { text(term) }) else {
+        let message = c_string("invalid arguments");
+        unsafe { started(context.get(), -1, Code::Protocol as i32, message.as_ptr()) };
+        return shell_handle;
+    };
+    let events = Arc::new(FfiExecEvents { context, stderr: None, exited });
+    runtime().spawn(async move {
+        let context = context;
+        match shell(&session, &term, cols, rows, events).await {
+            Ok((fd, shell)) => {
+                resizer.attach(shell);
+                unsafe { started(context.get(), fd, Code::Ok as i32, c"".as_ptr()) }
+            }
+            Err(failure) => {
+                let message = c_string(&failure.message);
+                unsafe { started(context.get(), -1, failure.code as i32, message.as_ptr()) };
+            }
+        }
+    });
+    shell_handle
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dms_shell_resize(handle: *mut DmsShell, cols: u32, rows: u32) {
+    if let Some(handle) = unsafe { handle.as_ref() } {
+        handle.0.resize(cols, rows);
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dms_shell_free(handle: *mut DmsShell) {
+    if !handle.is_null() {
+        drop(unsafe { Box::from_raw(handle) });
+    }
 }
 
 #[unsafe(no_mangle)]

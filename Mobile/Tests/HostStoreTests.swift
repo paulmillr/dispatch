@@ -65,8 +65,8 @@ final class HostStoreTests: XCTestCase {
         let key = try keys.generateED25519(label: "phone")
         XCTAssertEqual(keys.unsaved, [key.id])
         let notice = try XCTUnwrap(actions.saveFailure)
-        XCTAssertTrue(notice.hasPrefix("studio isn't saved on this iPhone: "), notice)
-        XCTAssertTrue(notice.contains("\nThe key “phone” isn't saved on this iPhone: "), notice)
+        XCTAssertTrue(notice.hasPrefix("studio isn't saved on this \(MobileDevice.name): "), notice)
+        XCTAssertTrue(notice.contains("\nThe key “phone” isn't saved on this \(MobileDevice.name): "), notice)
 
         actions.retrySave()
         XCTAssertNotNil(actions.saveFailure, "still blocked")
@@ -100,6 +100,42 @@ final class HostStoreTests: XCTestCase {
         let permissions = try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int
         XCTAssertEqual(permissions, 0o600)
         XCTAssertEqual(try url.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup, true)
+    }
+
+    /// A record saved before the Helper switch existed reads with the helper on and its Chat as saved; without the helper
+    /// Chat always reads off, from a file, the initializer or a later edit, and turning the helper off turns Chat off.
+    func testARecordSavedBeforeTheHelperSwitchKeepsTheHelper() throws {
+        let old = #"{"id":"6F1C0D7E-2B7A-4E1B-9C55-8A1D2E3F4A5B","name":"studio","address":"studio.local","port":22,"#
+            + #""user":"alex","auth":{"password":{}},"multiplexer":"tmux","chat":false,"order":0,"#
+            + #""tintSeed":"6F1C0D7E-2B7A-4E1B-9C55-8A1D2E3F4A5B"}"#
+        let decoded = try JSONDecoder().decode(HostRecord.self, from: Data(old.utf8))
+        XCTAssertTrue(decoded.helper)
+        XCTAssertFalse(decoded.chat, "kept as saved")
+        var chatOn = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(old.utf8)) as? [String: Any])
+        chatOn["chat"] = true
+        let on = try JSONDecoder().decode(HostRecord.self, from: JSONSerialization.data(withJSONObject: chatOn))
+        XCTAssertTrue(on.helper)
+        XCTAssertTrue(on.chat)
+
+        var plain = chatOn
+        plain["helper"] = false
+        let decodedPlain = try JSONDecoder().decode(HostRecord.self, from: JSONSerialization.data(withJSONObject: plain))
+        XCTAssertFalse(decodedPlain.helper)
+        XCTAssertFalse(decodedPlain.chat, "no Chat without the helper, whatever the file says")
+        let saved = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(decodedPlain)) as? [String: Any])
+        XCTAssertEqual(saved["helper"] as? Bool, false)
+        XCTAssertEqual(saved["chat"] as? Bool, false)
+
+        XCTAssertFalse(HostRecord(name: "ai", address: "ai.local", user: "alex", auth: .password, helper: false, chat: true).chat)
+        var edited = on
+        edited.helper = false
+        XCTAssertFalse(edited.chat, "turning the helper off turns Chat off")
+        edited.chat = true
+        XCTAssertFalse(edited.chat, "and keeps it off")
+        edited.helper = true
+        XCTAssertFalse(edited.chat, "turning the helper on leaves Chat to the user")
+        edited.chat = true
+        XCTAssertTrue(edited.chat)
     }
 
     func testUpdateRemoveAndReorder() {
@@ -198,5 +234,22 @@ final class HostStoreTests: XCTestCase {
         XCTAssertEqual(KnownHostStore.key(host: "Studio", port: 22), "studio")
         XCTAssertEqual(KnownHostStore.key(host: "studio", port: 2222), "[studio]:2222")
         XCTAssertEqual(KnownHostStore.key(host: "fd00::1", port: 22), "[fd00::1]:22")
+    }
+
+    /// A new host takes the colour the fewest hosts show (HostRegistry.assignColors), its hash breaking ties, and keeps
+    /// it; a host saved before colours were kept shows its hash's.
+    func testANewHostTakesTheLeastUsedColour() {
+        let store = HostStore(url: nil)
+        var colours: [HostColor] = []
+        for index in 0..<HostColor.allCases.count {
+            store.add(HostRecord(name: "h\(index)", address: "h\(index)", user: "sam", auth: .password, tintSeed: "machine-\(index % 2)"))
+            colours.append(store.hosts.last!.color!)
+        }
+        XCTAssertEqual(Set(colours).count, HostColor.allCases.count, "Eight hosts, eight colours, though two machines' hashes")
+        var edited = store.hosts[0]
+        edited.name = "renamed"
+        store.update(edited)
+        XCTAssertEqual(store.hosts[0].color, colours[0], "An edit keeps the colour")
+        XCTAssertEqual(HostStore.freeColor(seed: 3, among: []), HostColor.allCases[3])
     }
 }

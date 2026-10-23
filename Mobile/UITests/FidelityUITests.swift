@@ -12,15 +12,17 @@ import XCTest
 final class FidelityUITests: XCTestCase {
     typealias Screen = AppearanceUITests.Screen
 
-    /// The mockup's 22 screens in its order.
+    /// The first mockup's 22 screens in its order, then the host stats screens.
     static let screens: [Screen] = {
         let appearance = Dictionary(uniqueKeysWithValues: AppearanceUITests.screens.map { ($0.id, $0) })
         let sample = AppearanceUITests.sample
+        let reviewDiff = sample + ["-DispatchTabsShow", "tab:herdr:app:1", "-DispatchTabsSegment", "files",
+                               "-DispatchTabsFilesMode", "review"]
         func demo(_ id: String) -> Screen { appearance[id] ?? Screen(id: id, environment: ["DISPATCH_MOBILE_CHAT_DEMO": id]) }
         return [
             appearance["M1d"]!,
             // Edit mode over the tree with ai collapsed, as drawn.
-            Screen(id: "M1e", arguments: sample + ["-DispatchTabsTree", "YES", "-DispatchTabsCollapse", "ai", "-DispatchTabsShow", "edit"]),
+            Screen(id: "M1e", arguments: sample + ["-DispatchTabsCollapse", "ai", "-DispatchTabsShow", "edit"]),
             Screen(id: "M1f", environment: ["DISPATCH_MOBILE_SCRIPTED": "1"], then: { app in
                 let edit = app.buttons["Edit"]
                 if edit.waitForExistence(timeout: 5) { edit.tap() }
@@ -28,7 +30,7 @@ final class FidelityUITests: XCTestCase {
                 if info.waitForExistence(timeout: 5) { info.tap() }
             }),
             appearance["M2a"]!,
-            Screen(id: "M2b", arguments: sample + ["-DispatchTabsTree", "YES", "-DispatchTabsCollapse", "ai"]),
+            Screen(id: "M2b", arguments: sample + ["-DispatchTabsCollapse", "ai"]),
             appearance["M2c"]!,
             demo("M3a"), demo("M4a"), demo("M3b"), demo("M4b"), demo("M4c"),
             appearance["M4d"]!,
@@ -44,8 +46,83 @@ final class FidelityUITests: XCTestCase {
             appearance["M7a"]!,
             appearance["M8a"]!,
             demo("M9a"),
+            // The redesign (mockups/): the dev tab's capsule, and Files on mba2 as plain SSH and without the grant.
+            Screen(id: "H0", arguments: sample + ["-DispatchTabsShow", "tab:herdr:app:2"]),
+            Screen(id: "S1", arguments: sample + ["-DispatchTabsShow", "tab:herdr:app:1", "-DispatchTabsSegment", "files",
+                                                  "-DispatchTabsFiles", "plain"]),
+            Screen(id: "S2", arguments: sample + ["-DispatchTabsShow", "tab:herdr:app:1", "-DispatchTabsSegment", "files",
+                                                  "-DispatchTabsFiles", "denied"]),
+            // Files mode in the sample's web app: src's listing, and theme.ts pushed.
+            Screen(id: "H1", arguments: sample + ["-DispatchTabsShow", "tab:herdr:app:1", "-DispatchTabsSegment", "files",
+                                                  "-DispatchFilesFolder", "src"]),
+            Screen(id: "F2", arguments: sample + ["-DispatchTabsShow", "tab:herdr:app:1", "-DispatchTabsSegment", "files",
+                                                  "-DispatchFilesPreview", "src/theme.ts"]),
+            // Commits (the sample's repository, `CommitsFixture`): the log, and its newest commit pushed (C2-commit: the
+            // chat screens have a C2 of their own).
+            Screen(id: "H3", arguments: sample + ["-DispatchTabsShow", "tab:herdr:app:1", "-DispatchTabsSegment", "files",
+                                                  "-DispatchTabsFilesMode", "commits"]),
+            Screen(id: "C2-commit", arguments: sample + ["-DispatchTabsShow", "tab:herdr:app:1", "-DispatchTabsSegment", "files",
+                                                  "-DispatchTabsFilesMode", "commits", "-DispatchTabsFilesRoute",
+                                                  "commits:c81a2f49e0b3d5a7c1f2e4b6d8a0c3e5f7a9b1d2"]),
+            // Review on mba2's app repository (the sample's three comments): the list, offline, just sent.
+            Screen(id: "H2", arguments: sample + FidelityUITests.review),
+            Screen(id: "S3", arguments: sample + FidelityUITests.review + ["-DispatchTabsFiles", "offline"]),
+            Screen(id: "S4", arguments: sample + FidelityUITests.review + ["-DispatchReviewSent", "YES"]),
+            // Review's diff of Sidebar.tsx on mba2's app repository: the first comment open (R2), lines 45–48 selected
+            // (R3), the composer on them (R4), the outdated comment and the gap (S5).
+            Screen(id: "R2", arguments: reviewDiff + ["-DispatchReviewDiff", "Sidebar.tsx"]),
+            Screen(id: "R3", arguments: reviewDiff + ["-DispatchReviewDiff", "Sidebar.tsx:select"]),
+            Screen(id: "R4", arguments: reviewDiff + ["-DispatchReviewDiff", "Sidebar.tsx:compose"]),
+            Screen(id: "S5", arguments: reviewDiff + ["-DispatchReviewDiff", "Sidebar.tsx:outdated"]),
+            // Review's Create review sheet on mba2's app repository: to claude (R5), the second comment swiped open (R5b),
+            // and from the dev tab, which runs no agent (R5c).
+            Screen(id: "R5", arguments: sample + ["-DispatchTabsShow", "tab:herdr:app:1", "-DispatchTabsSegment", "files",
+                                                  "-DispatchTabsFilesMode", "review", "-DispatchReviewSheet", "agent"]),
+            Screen(id: "R5b", arguments: sample + ["-DispatchTabsShow", "tab:herdr:app:1", "-DispatchTabsSegment", "files",
+                                                   "-DispatchTabsFilesMode", "review", "-DispatchReviewSheet", "swipe"]),
+            Screen(id: "R5c", arguments: sample + ["-DispatchTabsShow", "tab:herdr:app:2", "-DispatchTabsSegment", "files",
+                                                   "-DispatchTabsFilesMode", "review", "-DispatchReviewSheet", "noagent"]),
+        ] + hostStats
+    }()
+
+    /// The claude tab's Files segment on Review.
+    static let review = ["-DispatchTabsShow", "tab:herdr:app:1", "-DispatchTabsSegment", "files", "-DispatchTabsFilesMode", "review"]
+
+    /// The host stats screens (W1a–W7, I5) on the simulator demo's mba2 (`HostStatsDemo`'s launch arguments); their
+    /// renders are the mockup app's shots (`mockups/shots/<ID>-<name>-<scheme>.png`).
+    static let hostStats: [Screen] = {
+        func stats(_ id: String, _ arguments: [String]) -> Screen {
+            Screen(id: id, environment: ["DISPATCH_MOBILE_DEMO": "1"], arguments: arguments)
+        }
+        return [
+            stats("W1a", ["-DispatchHostStats", "mba2"]),
+            stats("W1b", ["-DispatchHostStats", "mba2:drag"]),
+            stats("W1c", ["-DispatchHostStats", "mba2", "-DispatchHostStatsState", "offline"]),
+            stats("W1", ["-DispatchHostStats", "mba2:large"]),
+            stats("W2", ["-DispatchHostStats", "mba2:large:memory"]),
+            stats("W3", ["-DispatchHostStats", "mba2:large:scrub"]),
+            stats("W4", ["-DispatchHostDetail", "mba2"]),
+            stats("W5", ["-DispatchHostStats", "mba2:large", "-DispatchHostStatsState", "offline"]),
+            stats("W6", ["-DispatchHostStats", "mba2:large", "-DispatchHostStatsState", "plain"]),
+            stats("W7", ["-DispatchHostStats", "mba2:large", "-DispatchLowPower", "YES"]),
+            stats("I5", ["-DispatchHostStatsPopover", "mba2"]),
         ]
     }()
+
+    /// The mockup app's shots (`python3 mockups/shoot.py`), git-ignored: `TEST_RUNNER_DISPATCH_MOCKUP_SHOTS` names the
+    /// folder, else the checkout's `mockups/shots`.
+    static var shots: URL {
+        if let folder = ProcessInfo.processInfo.environment["DISPATCH_MOCKUP_SHOTS"] { return URL(fileURLWithPath: folder) }
+        return URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("mockups/shots")
+    }
+
+    /// `<ID>-<name>-<scheme>.png` from `shots`.
+    static func shot(_ id: String, scheme: String) -> UIImage? {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: shots.path)) ?? []
+        return names.first { $0.hasPrefix("\(id)-") && $0.hasSuffix("-\(scheme).png") }
+            .flatMap { UIImage(contentsOfFile: shots.appendingPathComponent($0).path) }
+    }
 
     static var selected: [Screen] {
         let environment = ProcessInfo.processInfo.environment
@@ -68,7 +145,8 @@ final class FidelityUITests: XCTestCase {
     }
 
     func testScreensBesideTheMockup() throws {
-        guard FileManager.default.fileExists(atPath: Self.mockups.appendingPathComponent("ios-M2a.png").path) else {
+        guard FileManager.default.fileExists(atPath: Self.mockups.appendingPathComponent("ios-M2a.png").path)
+                || Self.shot("W1", scheme: "dark") != nil else {
             throw XCTSkip("No mockup renders in \(Self.mockups.path) (build/mockup-review, or TEST_RUNNER_DISPATCH_MOCKUP_DIR)")
         }
         for screen in Self.selected {
@@ -86,6 +164,8 @@ final class FidelityUITests: XCTestCase {
                 let id = Self.render(screen.id, scheme: scheme)
                 if let mockup = UIImage(contentsOfFile: Self.mockups.appendingPathComponent("ios-\(id).png").path) {
                     attach(Self.pair(mockup: mockup, app: shot).pngData(), "\(screen.id)-\(scheme)")
+                } else if let mockup = Self.shot(screen.id, scheme: scheme) {
+                    attach(Self.pair(mockup: mockup, app: shot, whole: true).pngData(), "\(screen.id)-\(scheme)")
                 } else {
                     XCTFail("No render for \(id)")
                 }
@@ -105,14 +185,17 @@ final class FidelityUITests: XCTestCase {
     /// The phone cut out of the render (868 px wide at 2x: the caption above, the 402 x 874 pt phone at the bottom with
     /// 32 px margins) and the app's screenshot, both at 2x, side by side, with a faint guide every 50 points
     /// (`scripts/fidelity-pairs.swift` does the same on the Mac).
-    static func pair(mockup: UIImage, app: UIImage) -> UIImage {
+    /// `whole`: the mockup is a shot of the whole device (the mockup app's), drawn as it is.
+    static func pair(mockup: UIImage, app: UIImage, whole: Bool = false) -> UIImage {
         let phone = CGSize(width: 804, height: 1748), gap: CGFloat = 24
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
         return UIGraphicsImageRenderer(size: CGSize(width: phone.width * 2 + gap, height: phone.height), format: format).image { context in
             UIColor.gray.setFill()
             context.fill(CGRect(x: 0, y: 0, width: phone.width * 2 + gap, height: phone.height))
-            if let image = mockup.cgImage {
+            if whole {
+                mockup.draw(in: CGRect(origin: .zero, size: phone))
+            } else if let image = mockup.cgImage {
                 let crop = CGRect(x: 32, y: CGFloat(image.height) - 32 - phone.height, width: phone.width, height: phone.height)
                 if let cut = image.cropping(to: crop) {
                     UIImage(cgImage: cut).draw(in: CGRect(origin: .zero, size: phone))

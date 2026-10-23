@@ -18,7 +18,7 @@ struct SystemRefreshScheduler: RefreshScheduling {
     func cancel(_ identifier: String) { BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: identifier) }
 }
 
-/// A local notification for a conversation that started needing the user.
+/// A local notification for a conversation that started needing the user, finished or stopped (`AgentAlerts`).
 struct RefreshNotification: Equatable, Sendable {
     /// One per conversation: a later one replaces it.
     let id: String
@@ -27,6 +27,10 @@ struct RefreshNotification: Equatable, Sendable {
     /// The last line of what the agent said, else what it waits for.
     let body: String
     let key: ChatConversationKey
+    /// Settings' sound (G5).
+    var sound = NotificationSound.standard
+    /// What happened: the category, so a hidden preview says it in neutral words.
+    var event = AgentAlerts.Event.needsYou(question: false)
 
     /// `userInfo` keys: tapping opens the thread (`NotificationRoute`).
     static let hostKey = "host", nodeKey = "node"
@@ -46,27 +50,41 @@ struct RefreshNotification: Equatable, Sendable {
     /// Asks once; true when allowed.
     func requestAuthorization() async -> Bool
     func post(_ notification: RefreshNotification)
+    /// The app icon's badge (0 clears it).
+    func setBadge(_ count: Int)
     /// Remove all data: delivered and pending notifications go.
     func removeAll()
 }
 
 extension RefreshNotification {
-    /// The category every refresh notification has: with previews hidden (Settings, Notifications, Show Previews), the
-    /// lock screen shows only the placeholder, neither the agent's last line nor the tab and host.
-    static var category: UNNotificationCategory {
-        UNNotificationCategory(identifier: categoryIdentifier, actions: [], intentIdentifiers: [],
-                               hiddenPreviewsBodyPlaceholder: "An agent needs you", options: [])
+    /// The categories, one per event: with previews hidden (Settings, Notifications, Show Previews), the lock screen
+    /// shows only the placeholder, neither the agent's last line nor the tab and host. `agent` (needs you) is the
+    /// category the watch's long look registers.
+    static var categories: Set<UNNotificationCategory> {
+        Set([(categoryIdentifier, "An agent needs you"), (finishedCategory, "An agent finished"),
+             (stoppedCategory, "An agent stopped")].map { identifier, placeholder in
+            UNNotificationCategory(identifier: identifier, actions: [], intentIdentifiers: [],
+                                   hiddenPreviewsBodyPlaceholder: placeholder, options: [])
+        })
     }
-    static let categoryIdentifier = "agent"
+    static let categoryIdentifier = "agent", finishedCategory = "agent.finished", stoppedCategory = "agent.stopped"
+
+    var category: String {
+        switch event {
+        case .needsYou: Self.categoryIdentifier
+        case .finished: Self.finishedCategory
+        case .stopped: Self.stoppedCategory
+        }
+    }
 
     /// What `SystemNotifier` posts.
     var content: UNMutableNotificationContent {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
-        content.sound = .default
+        content.sound = sound.content
         content.threadIdentifier = key.host.uuidString
-        content.categoryIdentifier = Self.categoryIdentifier
+        content.categoryIdentifier = category
         content.userInfo = userInfo
         return content
     }
@@ -75,8 +93,13 @@ extension RefreshNotification {
 @MainActor final class SystemNotifier: RefreshNotifying {
     private var center: UNUserNotificationCenter { .current() }
 
+    /// The badge last set: a change only reaches the notification centre.
+    private var badge: Int?
+
     init() {
-        UNUserNotificationCenter.current().setNotificationCategories([RefreshNotification.category])
+        UNUserNotificationCenter.current().setNotificationCategories(RefreshNotification.categories)
+        // Synthesized off the main thread; a notification before it is written plays the default sound.
+        Task.detached(priority: .utility) { NotificationSound.installBell() }
     }
 
     func authorized() async -> Bool {
@@ -97,9 +120,17 @@ extension RefreshNotification {
         center.add(UNNotificationRequest(identifier: notification.id, content: notification.content, trigger: nil)) { _ in }
     }
 
+    func setBadge(_ count: Int) {
+        guard count != badge else { return }
+        badge = count
+        center.setBadgeCount(count) { _ in }
+    }
+
     func removeAll() {
         center.removeAllPendingNotificationRequests()
         center.removeAllDeliveredNotifications()
+        badge = nil
+        setBadge(0)
     }
 }
 
@@ -123,9 +154,10 @@ struct HostRefresh: Sendable {
 
 /// The background refresh (plan 3.8): a `BGAppRefreshTask` at most every 15 minutes, as the system allows. Each run
 /// connects to the hosts with Chat on, reads their conversations (`chat.list`, else `chat.state` per conversation),
-/// posts a local notification for each conversation that newly needs the user (title its tab and host, body the last
-/// line; tapping opens the thread), updates the launch cache and disconnects, all within `budget`. It never marks
-/// anything seen (only opening a thread does), skips muted conversations, and does nothing while the setting is off or
+/// posts a local notification for each conversation that newly needs the user, finished its turn or stopped while
+/// working, as Settings' Notifications allow (`AgentAlerts`: title its tab and host, body the last line; tapping opens
+/// the thread), sets the badge, updates the launch cache and disconnects, all within `budget`. It never marks anything
+/// seen (only opening a thread does), skips muted conversations, and does nothing while the setting is off or
 /// notifications are not allowed.
 @MainActor
 final class BackgroundRefresh {
@@ -160,10 +192,13 @@ final class BackgroundRefresh {
         self.source = source
     }
 
+    /// A host the run connects: Chat on, with its helper. A plain SSH host (Helper off, docs/ios.md) is never refreshed.
+    static func refreshes(_ record: HostRecord) -> Bool { record.helper && record.chat }
+
     /// Asks for the next run (the app went to the background, a run started, the setting or the hosts changed); with
     /// the setting off or no host with Chat on, cancels any pending one.
     func schedule() {
-        guard settings.backgroundRefresh, hosts().contains(where: \.chat) else {
+        guard settings.backgroundRefresh, hosts().contains(where: Self.refreshes) else {
             scheduler.cancel(identifier)
             return
         }
@@ -189,7 +224,7 @@ final class BackgroundRefresh {
         schedule()
         guard settings.backgroundRefresh, await notifier.authorized() else { return [] }
         let deadline = ContinuousClock.now + budget
-        let records = hosts().filter(\.chat)
+        let records = hosts().filter(Self.refreshes)
         guard !records.isEmpty else { return [] }
         let source = source
         // In parallel, each within the deadline; the system ending the task early cancels them all.
@@ -205,39 +240,65 @@ final class BackgroundRefresh {
         guard settings.backgroundRefresh else { return [] }
         let current = Dictionary(hosts().map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var posted: [RefreshNotification] = []
+        // Two hosts reaching one machine and account (a LAN and a Tailscale address) notify once, for the first in the
+        // list, as Spaces and Agents show that machine once (`MobileComposition.sameMachine`).
+        var machines: Set<String> = []
         for record in records {
-            guard let result = results[record.id], let record = current[record.id], record.chat else { continue }
-            for notification in apply(result, to: record) {
+            guard let result = results[record.id], let record = current[record.id], Self.refreshes(record) else { continue }
+            let machine = result.hello.flatMap { hello in
+                hello.identity.flatMap { identity in hello.account.map { identity.host + ":" + String($0.uid) } }
+            }
+            let duplicate = machine.map { !machines.insert($0).inserted } ?? false
+            for notification in apply(result, to: record) where !duplicate {
                 notifier.post(notification)
                 posted.append(notification)
             }
         }
+        // Conversations waiting for the user on the hosts the run reached (their cache entries, now current; rows whose
+        // agent left are gone from them): `AgentAlerts.waiting`, as the app counts its live rows.
+        let reached = records.filter { results[$0.id] != nil && current[$0.id].map(Self.refreshes) == true }
+        let waiting = AgentAlerts.waiting(reached.flatMap { cache.entry($0.id)?.conversations.values.map(\.summary) ?? [] })
+        notifier.setBadge(AgentAlerts.badge(waiting: waiting, policy: settings.alertPolicy))
         cache.flush()
         return posted
     }
 
-    /// The conversations of `result` that newly need the user (needs you now, not in the cache's last-known rows), and
-    /// the cache updated with what the run saw.
+    /// The notifications for `result` against the cache's last-known rows (`AgentAlerts.event`: newly needs you, a turn
+    /// that ended, an agent gone mid-turn from a live topology), as Settings allows, and the cache updated with what the
+    /// run saw.
     func apply(_ result: HostRefresh, to record: HostRecord) -> [RefreshNotification] {
         let previous = cache.entry(record.id)
         var notifications: [RefreshNotification] = []
+        let policy = settings.alertPolicy
         let nodes = Dictionary((result.topology?.nodes ?? []).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        for (key, summary) in result.conversations.sorted(by: { $0.key < $1.key }) where summary.attention != nil {
-            guard previous?.conversations[key]?.attention == nil, !markers.muted(host: record.id, node: key) else { continue }
+        // Without a live topology a missing row says nothing: only the rows read are compared.
+        let keys = Set(result.conversations.keys).union(result.topology == nil ? [] : previous?.conversations.keys.map { $0 } ?? [])
+        for key in keys.sorted() {
+            let before = previous?.conversations[key]?.summary, now = result.conversations[key]
+            // Gone means no agent on that terminal any more: not a row the helper left out, nor a detached tab's agent
+            // (the refresh reads no detached terminal), whose agent goes on working.
+            if now == nil, result.topology?.nodes.contains(where: { $0.key == key && $0.agent != nil }) != false { continue }
+            guard let event = AgentAlerts.event(previous: before, current: now), AgentAlerts.notifies(event, policy),
+                  !markers.muted(host: record.id, node: key) else { continue }
             let node = result.topology?.nodes.first { $0.key == key }
-            let tab = node.flatMap { $0.parent.flatMap { nodes[$0] }?.name ?? $0.name } ?? "Agent"
-            let body = Self.lastLine(result.texts[key]) ?? Self.lastLine(summary.preview) ?? summary.attention ?? "Needs you"
-            notifications.append(RefreshNotification(id: record.id.uuidString + ":" + key, title: tab + " · " + record.name,
-                                                     body: body, key: ChatConversationKey(host: record.id, node: key)))
+            let tab = node.flatMap { $0.parent.flatMap { nodes[$0] }?.name ?? $0.name } ?? before?.title ?? "Agent"
+            let text = Self.lastLine(result.texts[key]) ?? Self.lastLine(now?.preview) ?? now?.attention
+            notifications.append(AgentAlerts.notification(event, key: ChatConversationKey(host: record.id, node: key), tab: tab,
+                                                          host: record.name, text: text, policy: policy))
         }
         var entry = previous ?? HostCacheEntry(saved: clock())
-        if let hello = result.hello { entry.hello = hello }
+        if let hello = result.hello {
+            entry.hello = hello
+            entry.heard = clock()
+        }
         if !result.multiplexers.isEmpty { entry.multiplexers = result.multiplexers.map(HostCacheEntry.Multiplexer.init) }
         if !result.versions.isEmpty { entry.versions = result.versions }
         if let following = result.following { entry.following = following }
         if let topology = result.topology { entry.topology = topology }
-        let present = Set((result.topology?.nodes ?? []).map(\.key))
-        var conversations = entry.conversations.filter { result.topology == nil || present.contains($0.key) }
+        // A row stays while its terminal keeps an agent; one whose agent left goes, so its stop notifies once and a
+        // new agent there starts afresh.
+        let bound = Set((result.topology?.nodes ?? []).filter { $0.agent != nil }.map(\.key))
+        var conversations = entry.conversations.filter { result.topology == nil || bound.contains($0.key) }
         for (key, summary) in result.conversations { conversations[key] = HostCacheEntry.Conversation(summary) }
         entry.conversations = conversations
         cache.replace(entry, for: record.id)
@@ -261,6 +322,8 @@ final class HostSessionsRefreshSource: RefreshSource {
     init(hosts: HostSessions) { self.hosts = hosts }
 
     func refresh(_ record: HostRecord, until deadline: ContinuousClock.Instant) async -> HostRefresh? {
+        // Disconnect means leave the host alone until the user connects it (docs/ios.md, Connection).
+        guard !hosts.isParked(record.id) else { return nil }
         let session = hosts.backgroundSession(record)
         let (links, continuation) = AsyncStream<HostLink>.makeStream(bufferingPolicy: .bufferingNewest(1))
         session.changed = { continuation.yield($0.link) }
@@ -289,7 +352,8 @@ final class HostSessionsRefreshSource: RefreshSource {
             group.cancelAll()
             return first
         }
-        guard connected, let client = session.client, let hello = session.hello else { return nil }
+        // A connection that fell back to plain SSH has no helper to read: nothing to refresh.
+        guard connected, !session.isPlain, let client = session.client, let hello = session.hello else { return nil }
         // Node ids only from this connection's helper (a background session restores nothing, but never trust a kept one).
         let topology = session.topologyIsLive ? session.topology : nil
         var result = HostRefresh(hello: hello, multiplexers: session.multiplexers, versions: session.multiplexerVersions,

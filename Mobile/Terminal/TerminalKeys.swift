@@ -57,6 +57,13 @@ struct TerminalInputKey: Equatable, Sendable {
         return TerminalInputKey(keycode: unidentified, text: text, mods: mods)
     }
 
+    /// A US key with Shift held: its shifted character on the key's own keycode (UIKeyCommand names the unshifted one).
+    static func withShift(_ base: Character) -> TerminalInputKey {
+        guard let code = usLayout[base] else { return character(base) }
+        let shifted = Self.shifted.first { $0.value == base }?.key ?? Character(String(base).uppercased())
+        return TerminalInputKey(keycode: code, text: String(shifted))
+    }
+
     /// The Mac's ANSI keycodes for the unshifted characters.
     static let usLayout: [Character: UInt32] = [
         "a": 0x00, "s": 0x01, "d": 0x02, "f": 0x03, "h": 0x04, "g": 0x05, "z": 0x06, "x": 0x07, "c": 0x08, "v": 0x09,
@@ -173,6 +180,14 @@ struct KeyCapsuleModel: Equatable, Sendable {
     }
 
     mutating func keyUp() { release() }
+
+    /// Everything off: latches released, the cluster hidden (the capsule collapsed).
+    mutating func reset() {
+        ctrl = .off
+        alt = .off
+        lastTap = nil
+        hideCluster()
+    }
 
     /// Hides the cluster (the keyboard or the view went away).
     mutating func hideCluster() {

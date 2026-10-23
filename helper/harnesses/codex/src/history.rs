@@ -1,7 +1,7 @@
 //! File-backed common rollout records and exact native row identities.
 use crate::questions;
 use dispatch_helper_core::{
-    api::{Error, Page, Record, RecordKind, State},
+    api::{Error, Page, Record, RecordKind, State, attachment},
     hash::Sha256,
     json::{Json, Kind, Policy, Select, Value},
 };
@@ -51,6 +51,35 @@ pub fn content(value: Option<Value<'_>>) -> String {
         }
     }
     pieces.join("\n")
+}
+
+/// The images of a user message, in order: a local image's path, None for one sent as data or
+/// a URL. Rollouts write `local_image`, the app server `localImage`; `user_message` events list
+/// them in `local_images` and `images`.
+pub fn images(value: Value<'_>) -> Vec<Option<String>> {
+    if let Some(items) = value.get("content").and_then(Value::array) {
+        return items
+            .filter_map(|item| match item.get("type").and_then(Value::string)? {
+                "local_image" | "localImage" => Some(item.get("path").and_then(Value::string).map(str::to_owned)),
+                "image" | "input_image" => Some(None),
+                _ => None,
+            })
+            .collect();
+    }
+    let list = |key| value.get(key).and_then(Value::array).into_iter().flatten();
+    list("local_images")
+        .map(|path| path.string().map(str::to_owned))
+        .chain(list("images").map(|_| None))
+        .collect()
+}
+
+/// A user record of the recorded text, its id the text's, and its images for chat.attachments
+/// clients (api::attachment::Attached).
+pub fn typed(record: &mut Record, id: String, text: String, images: Vec<Option<String>>) {
+    record.kind = RecordKind::User;
+    record.id = id;
+    record.attached = attachment::attached(&text, None, images);
+    record.text = text;
 }
 
 /// Lowercase SHA-256 hex of a line or text; c1654cc ChatRecord.contentKey (TranscriptReader.swift:17-25).
@@ -314,8 +343,8 @@ pub fn page<'a>(
                     "user_message" | "agent_message" => {
                         record.text = string(payload, "message").unwrap_or("").into();
                         if tag == "user_message" {
-                            record.kind = RecordKind::User;
-                            record.id = user(&record.text);
+                            let text = std::mem::take(&mut record.text);
+                            typed(&mut record, user(&text), text, images(payload));
                         } else {
                             record.kind = RecordKind::Assistant;
                         }
@@ -347,8 +376,8 @@ pub fn page<'a>(
                             Some(kind @ ("UserMessage" | "AgentMessage")) => {
                                 record.text = content(item.get("content"));
                                 if kind == "UserMessage" {
-                                    record.kind = RecordKind::User;
-                                    record.id = user(&record.text);
+                                    let text = std::mem::take(&mut record.text);
+                                    typed(&mut record, user(&text), text, images(item));
                                 } else {
                                     record.kind = RecordKind::Assistant;
                                     if let Some(id) = item.get("id").and_then(Value::string) {

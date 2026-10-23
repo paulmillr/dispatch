@@ -388,7 +388,7 @@ enum StripSpaceMenu {
         shortcuts(order.map(\.id), keys: keys, group: \.spaces)
     }
 
-    /// The jump shortcuts of a list (spaces, or tabs only's tabs) by a Settings › Keys group: the first eight get
+    /// The jump shortcuts of a list (spaces, or tabs only's tabs) by a Settings › Keyboard group: the first eight get
     /// 1…8, the last 9; with the group unbound, none.
     static func shortcuts(_ order: [UUID], keys: KeyGroups, group: KeyPath<KeyGroups, NSEvent.ModifierFlags>) -> [UUID: String] {
         Dictionary(uniqueKeysWithValues: order.enumerated().map { index, id in

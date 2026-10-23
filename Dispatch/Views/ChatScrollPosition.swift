@@ -212,6 +212,8 @@ final class ChatScrollPosition {
             guard let self else { timer.invalidate(); return }
             MainActor.assumeIsolated { self.checkViewport() }
         }
+        // A watchdog, not a clock: let the system fire it with other timers.
+        viewportTimer?.tolerance = 1
         for name in [NSWindow.didChangeOcclusionStateNotification, NSWindow.didBecomeKeyNotification,
                      NSApplication.didBecomeActiveNotification] {
             visibilityObservations.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
@@ -273,8 +275,11 @@ final class ChatScrollPosition {
     /// First ask it to realize the saved row; rebuild only if that stays empty.
     func checkViewport(redraw: Bool = false, now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
         recordDiagnostic(.watchdog, force: true, now: now)
+        // A covered window (occluded, another space) gets no redraws: its layers refresh when it shows again
+        // (didChangeOcclusionStateNotification above calls this).
         guard let scroll, let document = scroll.documentView,
               scroll.window?.isVisible == true, scroll.window?.isMiniaturized == false,
+              scroll.window?.occlusionState.contains(.visible) == true,
               !scroll.isHiddenOrHasHiddenAncestor, scroll.contentView.bounds.width > 1,
               scroll.contentView.bounds.height > 1, hasContent?() == true,
               !isLiveScrolling, !isTrackingScroller, now - lastWheelTime > 0.3,

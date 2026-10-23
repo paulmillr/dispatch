@@ -220,7 +220,7 @@ fn structured(name: &str, input: Value<'_>, cwd: Option<&str>) -> Option<Tool> {
         "WebSearch" => {
             let query = text(input, "query")?;
             (
-                "Search web",
+                "Web",
                 "magnifyingglass",
                 query.into(),
                 query,
@@ -234,7 +234,7 @@ fn structured(name: &str, input: Value<'_>, cwd: Option<&str>) -> Option<Tool> {
                 if name == "Grep" {
                     "Search"
                 } else {
-                    "Find files"
+                    "Locate"
                 },
                 "magnifyingglass",
                 pattern.into(),

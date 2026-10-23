@@ -650,6 +650,12 @@ fragment float4 cell_bg_fragment(
   constant Uniforms& uniforms [[buffer(1)]],
   constant uchar4 *cells [[buffer(2)]]
 ) {
+  // The CPU validates this too. Keep the shader fail-closed if a future caller
+  // submits an empty grid or cell size: neither division nor cells[-1] is safe.
+  if (uniforms.grid_size.x == 0 || uniforms.grid_size.y == 0 ||
+      uniforms.cell_size.x <= 0.0f || uniforms.cell_size.y <= 0.0f) {
+    return float4(0.0f);
+  }
   int2 grid_pos = int2(floor((in.position.xy - uniforms.grid_padding.wx) / uniforms.cell_size));
 
   float4 bg = float4(0.0);
@@ -685,7 +691,7 @@ fragment float4 cell_bg_fragment(
   }
 
   // Load the color for the cell.
-  uchar4 cell_color = cells[grid_pos.y * uniforms.grid_size.x + grid_pos.x];
+  uchar4 cell_color = cells[uint(grid_pos.y) * uint(uniforms.grid_size.x) + uint(grid_pos.x)];
 
   // Convert the color and return it.
   //
@@ -758,6 +764,19 @@ vertex CellTextVertexOut cell_text_vertex(
   device DispatchContrastCache& contrast_cache [[buffer(3)]],
   constant uint& contrast_epoch [[buffer(4)]]
 ) {
+  CellTextVertexOut out;
+  // Do not derive a background-buffer address from an invalid instance even if
+  // a future CPU path bypasses frame validation. Collapse it outside the clip
+  // volume so no fragment texture access is generated either.
+  if (in.grid_pos.x >= uniforms.grid_size.x || in.grid_pos.y >= uniforms.grid_size.y) {
+    out.position = float4(-2.0f, -2.0f, 0.0f, 1.0f);
+    out.atlas = ATLAS_GRAYSCALE;
+    out.color = float4(0.0f);
+    out.bg_color = float4(0.0f);
+    out.tex_coord = float2(0.0f);
+    return out;
+  }
+
   // Convert the grid x, y into world space x, y by accounting for cell size
   float2 cell_pos = uniforms.cell_size * float2(in.grid_pos);
 
@@ -779,7 +798,6 @@ vertex CellTextVertexOut cell_text_vertex(
   corner.x = float(vid == 1 || vid == 3);
   corner.y = float(vid == 2 || vid == 3);
 
-  CellTextVertexOut out;
   out.atlas = in.atlas;
 
   //              === Grid Cell ===
@@ -834,7 +852,7 @@ vertex CellTextVertexOut cell_text_vertex(
 
   // Get the BG color
   out.bg_color = load_color(
-    bg_colors[in.grid_pos.y * uniforms.grid_size.x + in.grid_pos.x],
+    bg_colors[uint(in.grid_pos.y) * uint(uniforms.grid_size.x) + uint(in.grid_pos.x)],
     uniforms.use_display_p3,
     true
   );
@@ -892,6 +910,10 @@ fragment float4 cell_text_fragment(
       // Our input color is always linear.
       float4 color = in.color;
 
+      // Avoid 0/0 below. A zero-alpha source contributes nothing regardless
+      // of the glyph mask, and non-finite RGB can poison the blended target.
+      if (color.a <= 0.0f) return float4(0.0f);
+
       // If we're not doing linear blending, then we need to
       // re-apply the gamma encoding to our color manually.
       //
@@ -942,6 +964,10 @@ fragment float4 cell_text_fragment(
       // For now, we assume that color glyphs
       // are already premultiplied linear colors.
       float4 color = textureColor.sample(textureSampler, in.tex_coord);
+
+      // Color glyph atlases normally contain fully transparent edge pixels.
+      // Dividing those premultiplied pixels by alpha would produce NaNs.
+      if (color.a <= 0.0f) return float4(0.0f);
 
       // If we're doing linear blending, we can return this right away.
       if (uniforms.use_linear_blending) {

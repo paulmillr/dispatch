@@ -8,6 +8,8 @@ struct ChatHostSnapshot: Identifiable {
     let id: UUID
     var name: String
     var link: HostLink
+    /// Why the host is not connected yet (`HostSession.problem`).
+    var problem: String? = nil
     var client: HelperClient?
     var topology: HelperTopology?
     /// The helper features this connection's hello accepted (`HelperSession.Info.features`), e.g. "chat.list".
@@ -28,6 +30,14 @@ struct ChatConversationSummary: Equatable, Sendable {
     var finished = false
     /// When the newest record was written: what "seen" marks (ChatMarkers).
     var lastActivity: Date?
+    /// An approval or blocking question is open (`chat.list` `waiting`): the agent waits for the user, as a pending
+    /// approval card does on the Mac.
+    var waiting = false
+    /// The conversation's title (`State.title`), which names an unrenamed tab as on the Mac.
+    var title: String?
+
+    /// Needs the user: an open approval or question, or the agent's own attention (a prompt only Terminal can answer).
+    var needsYou: Bool { waiting || attention != nil }
 }
 
 /// Summaries for the agent-bound terminals of one host.
@@ -59,6 +69,7 @@ struct ChatStateProbe: ChatConversationSource {
         guard let observed: Observed = try? await client.connection.request("chat.state", params: input) else { return nil }
         var summary = ChatConversationSummary(busy: observed.state.busy, subagents: observed.state.agents?.count ?? 0,
                                               attention: observed.state.attention)
+        summary.title = observed.state.title
         if let page: HelperChat.Page = try? await client.connection.request("chat.page", params: input) {
             summary.apply(page.records)
         }
@@ -78,9 +89,9 @@ extension ChatConversationSummary {
     }
 
     /// Markdown-free enough for two lines: whitespace collapsed, code fences dropped.
+    /// One line of what the agent said: its Markdown read as text (`ChatMarkdownBlock.plainText`), whitespace collapsed.
     static func preview(_ text: String) -> String {
-        text.components(separatedBy: .newlines).filter { !$0.hasPrefix("```") }.joined(separator: " ")
-            .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        ChatMarkdownBlock.plainText(text).split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
 }
 
@@ -93,6 +104,9 @@ struct ChatListOperation: ChatConversationSource {
         /// The newest assistant text, lines kept (at most 280 characters).
         let preview: String?
         let time_ms: Int64?
+        /// Absent from helpers before it: nothing known to be open.
+        let waiting: Bool?
+        let title: String?
 
         var summary: ChatConversationSummary {
             let busy = busy ?? false
@@ -100,7 +114,8 @@ struct ChatListOperation: ChatConversationSource {
             return ChatConversationSummary(
                 busy: busy, attention: attention, preview: preview.map(ChatConversationSummary.preview),
                 finished: !busy && preview != nil,
-                lastActivity: time_ms.map { Date(timeIntervalSince1970: Double($0) / 1000) })
+                lastActivity: time_ms.map { Date(timeIntervalSince1970: Double($0) / 1000) }, waiting: waiting ?? false,
+                title: title)
         }
     }
 
@@ -236,8 +251,17 @@ struct ChatConversation: Identifiable, Equatable {
 /// `PaneUrgency` (Dispatch/Attention.swift) from the agent's state, open requests and the phone's seen markers. Owns
 /// the open `MobileChatSession`s so a thread keeps its state while the user moves between tabs.
 @MainActor @Observable final class ChatConversations {
-    private(set) var hosts: [UUID: ChatHostSnapshot] = [:]
-    private(set) var conversations: [ChatConversation] = []
+    private(set) var hosts: [UUID: ChatHostSnapshot] = [:] {
+        didSet { terminalKeys = hosts.mapValues { host in
+            Dictionary((host.topology?.nodes ?? []).map { ($0.id, $0.key) }, uniquingKeysWith: { first, _ in first })
+        } }
+    }
+    private(set) var conversations: [ChatConversation] = [] {
+        didSet { rowIndex = Dictionary(conversations.enumerated().map { ($1.key, $0) }, uniquingKeysWith: { first, _ in first }) }
+    }
+    /// The rows by key and each host's terminals' keys by node id: Spaces asks for them per row on every list update.
+    @ObservationIgnored private var rowIndex: [ChatConversationKey: Int] = [:]
+    @ObservationIgnored private var terminalKeys: [UUID: [UInt64: String]] = [:]
     @ObservationIgnored private var summaries: [ChatConversationKey: ChatConversationSummary] = [:]
     @ObservationIgnored private(set) var sessions: [ChatConversationKey: MobileChatSession] = [:]
     @ObservationIgnored private var probing: Set<UUID> = []
@@ -245,6 +269,10 @@ struct ChatConversation: Identifiable, Equatable {
     @ObservationIgnored private var cached: Set<ChatConversationKey> = []
     /// Called after the rows changed (the composition keeps the live ones in the cache).
     @ObservationIgnored var rowsChanged: (() -> Void)?
+    /// A live row's summary changed, or a live row went away while its host stayed connected (nil `current`): the
+    /// composition's notifications while the app is open (`AgentAlerts.arrived`). Rows restored from the cache or
+    /// coming back with a connection are not arrivals.
+    @ObservationIgnored var arrived: ((_ previous: ChatConversation, _ current: ChatConversation?) -> Void)?
     @ObservationIgnored let presence: (any ChatTerminalPresence)?
     let markers: ChatMarkers
     let outbox: ChatOutbox
@@ -268,8 +296,16 @@ struct ChatConversation: Identifiable, Equatable {
 
     var visible: [ChatConversation] { unreadOnly ? conversations.filter { $0.dot != nil } : conversations }
 
-    /// The back pill's count (M4a): conversations waiting for the user, across hosts, muted ones included.
-    var needsYouCount: Int { conversations.filter { $0.urgency == .waiting }.count }
+    /// Conversations waiting for the user, across hosts, muted ones included, on the hosts reached now (live rows): the
+    /// one count for the back pill (M4a), Spaces' Needs you chip and filter, the app's badge (`AgentAlerts.waiting` of the
+    /// live rows) and the watch's.
+    var needsYouCount: Int { conversations.filter { !$0.stale && $0.urgency == .waiting }.count }
+
+    /// A row by its key.
+    func conversation(_ key: ChatConversationKey) -> ChatConversation? {
+        guard let index = rowIndex[key], conversations.indices.contains(index) else { return nil }
+        return conversations[index]
+    }
 
     /// The dot for a tab's terminal (Tabs) and the most urgent dot on a host (Hosts).
     func dot(host: UUID, terminal: UInt64) -> MobileRowDot? {
@@ -280,7 +316,9 @@ struct ChatConversation: Identifiable, Equatable {
 
     /// The conversation key of a terminal in a host's current topology.
     func key(host: UUID, terminal: UInt64) -> ChatConversationKey? {
-        hosts[host]?.topology?.nodes.first { $0.id == terminal }.map { ChatConversationKey(host: host, node: $0.key) }
+        // Read `hosts` so a view asking follows the topology, then the index built from it.
+        guard hosts[host] != nil, let node = terminalKeys[host]?[terminal] else { return nil }
+        return ChatConversationKey(host: host, node: node)
     }
 
     func dot(host: UUID) -> MobileRowDot? {
@@ -303,7 +341,7 @@ struct ChatConversation: Identifiable, Equatable {
                 session.update(terminal: node?.id, binding: node?.agent)
             }
             // Without a topology (offline) the last binding stands: the thread stays readable.
-            session.update(link: host.link, client: host.client)
+            session.update(link: host.link, client: host.client, problem: host.problem, features: host.features)
         }
         rebuild()
         let bindings = { (topology: HelperTopology?) -> [String] in
@@ -365,7 +403,8 @@ struct ChatConversation: Identifiable, Equatable {
         session.update(terminal: node?.id, binding: node?.agent)
         session.changed = { [weak self] _ in self?.rebuild() }
         sessions[key] = session
-        session.update(link: host?.link ?? .disconnected, client: host?.client)
+        session.update(link: host?.link ?? .disconnected, client: host?.client, problem: host?.problem,
+                       features: host?.features ?? [])
         return session
     }
 
@@ -375,6 +414,17 @@ struct ChatConversation: Identifiable, Equatable {
               let time = session.transcript.lastActivity else { return }
         markers.markSeen(host: key.host, conversation: conversation, through: Self.milliseconds(time))
         rebuild()
+    }
+
+    /// The watch showed the thread through `through` (docs/watch.md, Seen): the marker moves there, never past the newest
+    /// record the phone knows of (the row's `lastActivity`) and never back. False: no such row, or nothing to mark.
+    @discardableResult
+    func markSeen(_ key: ChatConversationKey, through: Date) -> Bool {
+        guard let row = conversations.first(where: { $0.key == key }), let latest = row.summary.lastActivity,
+              let conversation = sessions[key]?.conversation ?? row.binding.session.nilIfEmpty else { return false }
+        markers.markSeen(host: key.host, conversation: conversation, through: Self.milliseconds(min(through, latest)))
+        rebuild()
+        return true
     }
 
     func setMuted(_ muted: Bool, _ conversation: ChatConversation) {
@@ -394,16 +444,17 @@ struct ChatConversation: Identifiable, Equatable {
                 let space = sequence(first: node, next: { $0.parent.flatMap { nodes[$0] } }).first { $0.kind == .workspace }
                 let session = sessions[key]
                 var summary = summaries[key] ?? ChatConversationSummary()
-                var waiting = summary.attention != nil
+                var waiting = summary.needsYou
                 var stale = host.link != .connected || !host.live || cached.contains(key)
                 if let session, session.phase == .verified || !session.transcript.isEmpty {
                     stale = host.link != .connected || !host.live || session.phase != .verified
                     summary = ChatConversationSummary(
-                        busy: session.working, subagents: session.subagents.count, attention: session.attention,
+                        busy: session.turnRunning, subagents: session.subagents.count, attention: session.attention,
                         preview: session.transcript.lastAgentItem.map { ChatConversationSummary.preview($0.text) } ?? summary.preview,
                         finished: session.transcript.turns.last?.ended != nil,
-                        lastActivity: session.transcript.lastActivity ?? summary.lastActivity)
-                    waiting = session.attention != nil || session.waitingForUser
+                        lastActivity: session.transcript.lastActivity ?? summary.lastActivity,
+                        waiting: session.waitingForUser, title: session.title ?? summary.title)
+                    waiting = summary.needsYou
                 }
                 let conversation = binding.session.isEmpty ? nil : binding.session
                 var unread = false
@@ -415,9 +466,11 @@ struct ChatConversation: Identifiable, Equatable {
                         markers.markSeen(host: host.id, conversation: conversation, through: latest)
                     }
                 }
-                let working = summary.busy || summary.subagents > 0
+                // As the Mac's PaneUrgency: the turn runs. Subagents left running after it ended do not hold back
+                // its unseen result.
+                let working = summary.busy
                 rows.append(ChatConversation(
-                    key: key, terminal: node.id, hostName: host.name, name: tab?.name ?? node.name, space: space?.name,
+                    key: key, terminal: node.id, hostName: host.name, name: Self.name(tab: tab ?? node, title: summary.title), space: space?.name,
                     spaceNode: space?.id, cwd: node.cwd, binding: binding, summary: summary,
                     urgency: PaneUrgency(waiting: waiting, working: working, unread: unread),
                     muted: markers.muted(host: host.id, node: node.key), unread: unread, stale: stale))
@@ -428,9 +481,34 @@ struct ChatConversation: Identifiable, Equatable {
                 > ($1.summary.lastActivity ?? .distantPast, $1.hostName, $1.key.node)
         }
         if rows != conversations {
+            let previous = conversations
             conversations = rows
+            if let arrived { Self.arrivals(from: previous, to: rows, hosts: hosts).forEach { arrived($0.0, $0.1) } }
             rowsChanged?()
         }
+    }
+
+    /// The live rows that changed between two builds: a summary that differs, or a row gone from a host that is still
+    /// connected and live. A stale row on either side is not compared.
+    static func arrivals(from previous: [ChatConversation], to rows: [ChatConversation],
+                         hosts: [UUID: ChatHostSnapshot]) -> [(ChatConversation, ChatConversation?)] {
+        let current = Dictionary(rows.map { ($0.key, $0) }, uniquingKeysWith: { first, _ in first })
+        return previous.filter { !$0.stale }.compactMap { before in
+            if let now = current[before.key] {
+                return !now.stale && now.summary != before.summary ? (before, now) : nil
+            }
+            // Gone means its agent left the terminal (or the terminal closed), not a detached tab.
+            guard let host = hosts[before.key.host], host.link == .connected, host.live,
+                  host.topology?.nodes.contains(where: { $0.key == before.key.node && $0.agent != nil }) == false else { return nil }
+            return (before, nil)
+        }
+    }
+
+    /// A row's name as the Mac's automatic tab names give it (ContainerTab.displayLabel): a renamed tab's own name, else
+    /// the conversation's title, else the tab's.
+    static func name(tab: HelperTopology.Node, title: String?) -> String {
+        guard tab.renamed != true else { return tab.name }
+        return TerminalTab.conversationLabel(title) ?? tab.name
     }
 
     static func milliseconds(_ date: Date) -> Int64 { Int64((date.timeIntervalSince1970 * 1000).rounded()) }

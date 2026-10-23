@@ -98,6 +98,5 @@ unsafe extern "C" {
     pub(super) fn getloadavg(load: *mut f64, count: i32) -> i32;
     pub(super) fn getifaddrs(value: *mut *mut Interfaces) -> i32;
     pub(super) fn freeifaddrs(value: *mut Interfaces);
-    #[cfg_attr(target_arch = "x86_64", link_name = "getfsstat$INODE64")]
     pub(super) fn getfsstat(value: *mut Statfs, size: i32, flags: i32) -> i32;
 }

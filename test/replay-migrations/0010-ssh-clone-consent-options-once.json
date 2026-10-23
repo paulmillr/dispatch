@@ -1,0 +1,7 @@
+{
+  "kind": "rerecord",
+  "why": "With 0009's fix a clone of a clone keeps one `-o RemoteCommand=none -o ClearAllForwardings=yes` pair: this test clones three times and recorded the `ssh -G` configuration reads with the pair repeated each generation (`open.ssh.configuration` inputs), which the app no longer asks.",
+  "tests": [
+    "SSHIntegrationPolicyTests/testNativeSSHClonesReusePersistedConsentWithoutDuplicatingForwarding"
+  ]
+}

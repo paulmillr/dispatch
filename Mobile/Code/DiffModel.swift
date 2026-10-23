@@ -76,7 +76,7 @@ struct DiffFile: Identifiable, Equatable, Sendable {
     /// additions) are coloured as code of their own, so a removed comment or string cannot change how added lines or
     /// the next hunk read (the Mac's `SyntaxHighlight.diffLines`). Hunk headers and notes stay plain.
     func highlighted() -> [AttributedString] {
-        var result = lines.map { AttributedString($0.text) }
+        var result = lines.map { AttributedString(TextRendering.visible($0.text)) }
         let language = CodeSyntax.language(path)
         guard language != "text", diff.utf16.count <= CodeSyntax.limit else { return result }
         for hunk in hunks {
@@ -165,7 +165,7 @@ struct WholeFile: Equatable, Sendable {
         let language = CodeSyntax.language(file.path)
         let coloured = language != "text" && text.utf16.count <= CodeSyntax.limit
             ? CodeSyntax.lines(fileLines.joined(separator: "\n"), language: language)
-            : fileLines.map { AttributedString($0) }
+            : fileLines.map { AttributedString(TextRendering.visible($0)) }
         let diffText = file.highlighted()
         var placed: [(start: Int, hunk: Range<Int>, length: Int)] = []
         var cursor = 0

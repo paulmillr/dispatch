@@ -3,7 +3,7 @@ import SwiftUI
 import XCTest
 @testable import DispatchMobile
 
-/// M2a's menu: sorting, filters, the needs-you count and the row times.
+/// P1's filter, the needs-you count, a tab's line and the row times.
 @MainActor
 final class TabsQueryTests: XCTestCase {
     private func model(_ urgency: [String: TabUrgency] = [:]) -> (MobileTabs, [UInt64: String]) {
@@ -37,45 +37,35 @@ final class TabsQueryTests: XCTestCase {
         return (model, keys)
     }
 
-    func testActivitySortPutsUnseenTabsLast() {
-        let (model, _) = model()
-        XCTAssertEqual(model.rows.map(\.tab.ref.key),
-                       ["herdr:app:1", "herdr:curves:1", "herdr:app:2", "herdr:app:3", "herdr:docs:1", "herdr:curves:2"])
-    }
-
-    func testNameAndHostSorts() {
-        let (model, _) = model()
-        model.query.sort = .name
-        XCTAssertEqual(model.rows.map(\.tab.name), ["btop", "claude", "codex", "dev", "zsh", "zsh"])
-        XCTAssertEqual(model.rows.suffix(2).map { $0.space?.name }, ["app", "docs"], "same names by space")
-        model.query.sort = .host
-        XCTAssertEqual(model.rows.map(\.host.name), ["ai", "ai", "mba2", "mba2", "mba2", "mba2"])
-        XCTAssertEqual(model.rows.prefix(2).map(\.tab.name), ["codex", "btop"], "by activity within a host")
-    }
-
+    /// The filters: Agents keeps the tabs running one, Needs you the ones waiting for the user.
     func testFilters() {
         let (model, _) = model(["p:dev": .needsYou, "p:codex": .working])
-        model.query.filter = .chats
-        XCTAssertEqual(Set(model.rows.map(\.tab.name)), ["claude", "codex"])
-        model.query.filter = .terminals
-        XCTAssertEqual(Set(model.rows.map(\.tab.name)), ["dev", "zsh", "btop"])
+        let entries = model.workspaces.flatMap { workspace in workspace.spaces.flatMap { model.rows(in: $0) } }
+        XCTAssertEqual(Set(entries.filter { $0.matches(.agents) }.map(\.tab.name)), ["claude", "codex"])
+        XCTAssertEqual(entries.filter { $0.matches(.needsYou) }.map(\.tab.name), ["dev"])
+        XCTAssertEqual(entries.filter { $0.matches(.all) }.count, 6)
         model.query.filter = .needsYou
-        XCTAssertEqual(model.rows.map(\.tab.name), ["dev"])
         XCTAssertTrue(model.query.filtering)
         model.query.filter = .all
         XCTAssertFalse(model.query.filtering)
     }
 
+    /// A space's tabs come in server order (the Mac strip's), whatever their times.
+    func testASpacesRowsAreInServerOrder() throws {
+        let (model, _) = model()
+        let app = try XCTUnwrap(model.space(SpaceRef(host: TabsFixtures.host.id, key: "herdr:app")))
+        XCTAssertEqual(model.rows(in: app).map(\.tab.ref.key), ["herdr:app:1", "herdr:app:2", "herdr:app:3"])
+    }
+
     /// A chat tab's time is its agent's newest record (what Agents shows) when that is later than the last change the
-    /// phone saw in the tab; a terminal tab's is only what the phone saw. The rows and the Activity sort use it.
+    /// phone saw in the tab; a terminal tab's is only what the phone saw. The rows use it.
     func testChatTabsTakeTheirAgentsTime() throws {
         let (model, keys) = model()
         let base = Date(timeIntervalSince1970: 1_800_000_000)
         let agents = ["p:codex": base, "p:claude": base.addingTimeInterval(-600), "p:dev": base]
         model.agentActivity = { _, terminal in keys[terminal].flatMap { agents[$0] } }
-        XCTAssertEqual(model.rows.map(\.tab.ref.key),
-                       ["herdr:curves:1", "herdr:app:1", "herdr:app:2", "herdr:app:3", "herdr:docs:1", "herdr:curves:2"])
-        XCTAssertEqual(model.rows.first?.activity, base, "codex's newest record")
+        let curves = try XCTUnwrap(model.workspaces.first { $0.id != TabsFixtures.host.id }?.spaces.first)
+        XCTAssertEqual(model.rows(in: curves).first?.activity, base, "codex's newest record")
         let claude = try XCTUnwrap(model.tab(TabRef(host: TabsFixtures.host.id, key: "herdr:app:1")))
         XCTAssertEqual(model.activity(of: claude), base.addingTimeInterval(-60), "the later of the two")
         let dev = try XCTUnwrap(model.tab(TabRef(host: TabsFixtures.host.id, key: "herdr:app:2")))
@@ -84,7 +74,7 @@ final class TabsQueryTests: XCTestCase {
     }
 
     /// With `terminals.activity` a terminal tab's time is the server's (a tmux window's activity) when that is later than
-    /// what the phone saw; a chat tab takes the later of that and its agent's newest record. The Activity sort follows.
+    /// what the phone saw; a chat tab takes the later of that and its agent's newest record.
     func testServerTimesDateTerminalTabsAndAgentsTakeTheLater() throws {
         let (model, keys) = model()
         let base = Date(timeIntervalSince1970: 1_800_000_000)
@@ -104,21 +94,51 @@ final class TabsQueryTests: XCTestCase {
         XCTAssertEqual(model.activity(of: try XCTUnwrap(tab("herdr:app:2"))), base.addingTimeInterval(-300),
                        "an older server time leaves what the phone saw")
         XCTAssertEqual(model.activity(of: try XCTUnwrap(tab("herdr:app:1"))), base.addingTimeInterval(-10), "the agent's, later")
-        XCTAssertEqual(model.rows.map(\.tab.ref.key),
-                       ["herdr:app:3", "herdr:app:1", "herdr:curves:2", "herdr:curves:1", "herdr:app:2", "herdr:docs:1"])
+        XCTAssertEqual(model.activity(of: try XCTUnwrap(model.workspace(theirs.id)?.tab("herdr:curves:2"))), base.addingTimeInterval(-30))
         // A later snapshot keeps the server's time (it is kept by key, not on the row).
         mine.apply(TabsFixtures.app(first: 40).topology)
         XCTAssertEqual(model.activity(of: try XCTUnwrap(tab("herdr:app:3"))), base)
     }
 
-    /// The tree's spaces follow the same menu: a filter keeps the spaces with a matching tab.
-    func testSpaceRowsFollowTheMenu() {
-        let (model, _) = model(["p:codex": .needsYou])
-        XCTAssertEqual(model.spaceRows.map(\.space.name), ["app", "curves", "docs"])
-        model.query.filter = .needsYou
-        XCTAssertEqual(model.spaceRows.map(\.space.name), ["curves"])
-        model.query.filter = .terminals
-        XCTAssertEqual(model.rows(in: model.space(SpaceRef(host: TabsFixtures.host.id, key: "herdr:app"))!).map(\.tab.name), ["dev", "zsh"])
+    /// A tab's line on the watch (`TabsTabLine`): the agent's status, else the program unless the tab is already named
+    /// after it; never the host or the folder.
+    func testATabsLineIsItsAgentOrProgramNeverWhereItRuns() throws {
+        let (model, _) = model()
+        let tab = { (key: String) in try XCTUnwrap(model.tab(TabRef(host: TabsFixtures.host.id, key: key))) }
+        let claude = try tab("herdr:app:1"), dev = try tab("herdr:app:2"), zsh = try tab("herdr:app:3")
+        let quiet: @MainActor (UUID, UInt64) -> TabsStatus? = { _, _ in nil }
+        let working = TabsStatus(text: "Editing Sidebar.tsx", since: Date(timeIntervalSince1970: 0))
+        XCTAssertEqual(TabsTabLine.line(claude, label: "claude", status: { _, _ in working }), "Editing Sidebar.tsx",
+                       "the watch gets the words, never a time that changes every second")
+        XCTAssertEqual(TabsTabLine.line(claude, label: "Make billing webhook retries idempotent", status: quiet), "claude")
+        XCTAssertNil(TabsTabLine.line(claude, label: "claude", status: quiet), "Named after its program already")
+        XCTAssertNil(TabsTabLine.line(zsh, label: "zsh", status: quiet), "A bare shell: one line, no folder")
+        XCTAssertNil(TabsTabLine.line(dev, label: "dev", status: quiet), "A renamed tab names no program")
+    }
+
+    /// P2's line: the agent's state from Chat; a terminal's own title; else the program; else the folder.
+    func testASpaceScreensLineSaysWhatTheTabIsDoing() throws {
+        let (model, keys) = model()
+        model.status = { _, terminal in keys[terminal] == "p:claude" ? TabsStatus(text: "Allow cargo test --workspace?") : nil }
+        model.paneTitle = { _, key in key == "p:zsh2" ? "vite ready · localhost:5173" : nil }
+        let app = try XCTUnwrap(model.space(SpaceRef(host: TabsFixtures.host.id, key: "herdr:app")))
+        XCTAssertEqual(model.rows(in: app).map { SpaceTabRow.line($0, model: model)?.text },
+                       ["Allow cargo test --workspace?", "~/src/app", "vite ready · localhost:5173"])
+        let docs = try XCTUnwrap(model.space(SpaceRef(host: TabsFixtures.host.id, key: "herdr:docs")))
+        XCTAssertEqual(model.rows(in: docs).map { SpaceTabRow.line($0, model: model)?.text }, ["~/src/docs"], "a shell: its folder")
+    }
+
+    /// The agent's mark: Chat's key when it knows, else the bound process's or the topology's names.
+    func testTheAgentMarkComesFromChatOrTheNames() throws {
+        let (model, keys) = model()
+        let claude = try XCTUnwrap(model.tab(TabRef(host: TabsFixtures.host.id, key: "herdr:app:1")))
+        let dev = try XCTUnwrap(model.tab(TabRef(host: TabsFixtures.host.id, key: "herdr:app:2")))
+        let codex = try XCTUnwrap(model.workspaces.first { $0.id != TabsFixtures.host.id }?.tab("herdr:curves:1"))
+        XCTAssertEqual(model.agent(of: claude), "claude", "the tab's name")
+        XCTAssertEqual(model.agent(of: codex), "codex")
+        XCTAssertNil(model.agent(of: dev), "no agent")
+        model.agentKey = { _, terminal in keys[terminal] == "p:claude" ? "pi" : nil }
+        XCTAssertEqual(model.agent(of: claude), "pi", "Chat's key first")
     }
 
     /// Dots: a tab shows its most urgent pane, a space its most urgent tab; the back pill counts waiting tabs elsewhere.
@@ -133,24 +153,43 @@ final class TabsQueryTests: XCTestCase {
         XCTAssertGreaterThan(TabUrgency.working, .unseen)
     }
 
-    /// The menu and the tree toggle are kept on the device.
-    func testMenuIsRemembered() {
+    /// The filter and the OFFLINE group's state are kept on the device; "Show offline hosts" is on by default.
+    func testFilterAndOfflineGroupAreRemembered() {
         let defaults = UserDefaults(suiteName: "tabs-menu-tests")!
         defaults.removePersistentDomain(forName: "tabs-menu-tests")
         let first = MobileTabs(activity: TabActivityStore(url: nil), defaults: defaults)
-        first.query = TabsQuery(sort: .host, filter: .chats)
-        first.tree = true
+        XCTAssertTrue(first.showOffline)
+        XCTAssertFalse(first.offlineFolded)
+        first.query = TabsQuery(filter: .agents)
+        first.showOffline = false
+        first.offlineFolded = true
         let second = MobileTabs(activity: TabActivityStore(url: nil), defaults: defaults)
-        XCTAssertEqual(second.query, TabsQuery(sort: .host, filter: .chats))
-        XCTAssertTrue(second.tree)
+        XCTAssertEqual(second.query, TabsQuery(filter: .agents))
+        XCTAssertFalse(second.showOffline)
+        XCTAssertTrue(second.offlineFolded)
     }
 
-    /// The remembered menu of an older or newer build: a missing or unknown value takes its default, the other stays.
+    /// The remembered filter of an older build ("chats" is Agents now) or one this build does not know (All); a
+    /// missing one is All, other keys are left.
     func testAMenuOfAnotherShapeKeepsWhatItCanRead() throws {
-        XCTAssertEqual(try JSONDecoder().decode(TabsQuery.self, from: Data(#"{"sort":"name"}"#.utf8)),
-                       TabsQuery(sort: .name, filter: .all))
-        XCTAssertEqual(try JSONDecoder().decode(TabsQuery.self, from: Data(#"{"sort":"recent","filter":"chats"}"#.utf8)),
-                       TabsQuery(sort: .activity, filter: .chats))
+        XCTAssertEqual(try JSONDecoder().decode(TabsQuery.self, from: Data(#"{"other":1}"#.utf8)), TabsQuery())
+        XCTAssertEqual(try JSONDecoder().decode(TabsQuery.self, from: Data(#"{"filter":"chats"}"#.utf8)), TabsQuery(filter: .agents))
+        XCTAssertEqual(try JSONDecoder().decode(TabsQuery.self, from: Data(#"{"filter":"later"}"#.utf8)), TabsQuery())
+        XCTAssertEqual(try JSONDecoder().decode(TabsQuery.self, from: Data(#"{"filter":"needsYou"}"#.utf8)),
+                       TabsQuery(filter: .needsYou))
+    }
+
+    /// Needs you counts and filters live rows only, as the app's badge does: a host not reached now says nothing.
+    func testNeedsYouIsTheLiveRows() throws {
+        let (model, _) = model(["p:dev": .needsYou, "p:codex": .needsYou])
+        XCTAssertEqual(model.needsYou(), 2)
+        let ai = try XCTUnwrap(model.workspaces.first { $0.id != TabsFixtures.host.id })
+        var offline = ai.host
+        offline.state = .offline
+        ai.update(host: offline)
+        XCTAssertEqual(model.needsYou(), 1, "the offline host's waiting agent is not counted")
+        let rows = model.workspaces.flatMap { workspace in workspace.spaces.flatMap { model.rows(in: $0) } }
+        XCTAssertEqual(rows.filter { $0.matches(.needsYou) }.map(\.tab.name), ["dev"], "nor listed under Needs you")
     }
 
     /// New space (M7a) chooses its host before the first frame: the one asked for while it is listed, else the first

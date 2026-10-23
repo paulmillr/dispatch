@@ -13,6 +13,13 @@ import Foundation
     func release(_ key: ChatConversationKey)
     /// The terminal is attached and its screen is being published.
     func attached(_ key: ChatConversationKey) -> Bool
+    /// The conversation is sending (a send, a queue start or an answer the helper verifies against the published
+    /// screen) or has finished: the terminal holds off what would drop the publication meanwhile (Reset terminal).
+    func sending(_ key: ChatConversationKey, _ busy: Bool)
+}
+
+extension ChatTerminalPresence {
+    func sending(_ key: ChatConversationKey, _ busy: Bool) {}
 }
 
 /// For previews, the demo and tests: a terminal counts as attached once retained (unless `publishes` is off).

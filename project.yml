@@ -3,6 +3,7 @@ options:
   deploymentTarget:
     macOS: "14.0"
     iOS: "26.0"
+    watchOS: "26.0"
 settings:
   base:
     SWIFT_VERSION: "6.0"
@@ -29,13 +30,31 @@ settingGroups:
   ios:
     ARCHS: "$(ARCHS_STANDARD)"
     ENABLE_HARDENED_RUNTIME: NO
-  # The iPhone app and its test bundles: iPhone only, signed automatically for a device (the team comes from
+  # The iPhone and iPad app and its test bundles, signed automatically for a device (the team comes from
   # build/signing.xcconfig through Mobile/Config/Signing.xcconfig), ad hoc in the simulator.
   mobileApp:
-    TARGETED_DEVICE_FAMILY: "1"
+    TARGETED_DEVICE_FAMILY: "1,2"
     CODE_SIGN_STYLE: Automatic
     CODE_SIGN_IDENTITY: Apple Development
     "CODE_SIGN_IDENTITY[sdk=iphonesimulator*]": "-"
+    # The project's Release turns this off for the notarized Mac app; without it an iPhone Release build (--prod)
+    # has no application-identifier, and every Keychain write (a new key, a saved password) fails with "A required
+    # entitlement is not present" (errSecMissingEntitlement).
+    CODE_SIGN_INJECT_BASE_ENTITLEMENTS: YES
+  # Dispatch for Apple Watch and its tests (docs/watch.md): Apple Watch only, signed as mobileApp signs the phone's
+  # (the same team and suffix, so the watch app's id stays under the phone app's).
+  watchApp:
+    TARGETED_DEVICE_FAMILY: "4"
+    # The project's ARCHS (the Mac's arm64e) matches no watch simulator or device (arm64_32 and arm64).
+    ARCHS: "$(ARCHS_STANDARD)"
+    ENABLE_HARDENED_RUNTIME: NO
+    CODE_SIGN_STYLE: Automatic
+    CODE_SIGN_IDENTITY: Apple Development
+    "CODE_SIGN_IDENTITY[sdk=watchsimulator*]": "-"
+    CODE_SIGN_INJECT_BASE_ENTITLEMENTS: YES
+    # The watch app and its widget extension share the complications' entry (docs/watch.md, Complications). A device
+    # build needs this group on the team (automatic signing registers it); the simulator signs ad hoc with it.
+    DISPATCH_APP_GROUP: group.yachts.dispatch.mobile$(DISPATCH_BUNDLE_ID_SUFFIX)
   # The Swift terminal (Vendor/Term) is optimized with whole-module optimization in every
   # configuration: built like the app's Debug code (unoptimized, or file by file) it consumes
   # output 3-80x slower and blocks the programs writing to it.
@@ -49,6 +68,11 @@ settingGroups:
 packages:
   MobileTransport:
     path: Mobile/Transport
+  # Chat dictation (Packages/Dictation): the engine (Apple's recognizer and Whisper through Packages/WhisperEngine,
+  # whisper.cpp in Swift with the ggml Metal kernels, which Dictation depends on by path), shared by the Mac and the
+  # iPhone apps. The settings and buttons stay in the apps.
+  Dictation:
+    path: Packages/Dictation
 targets:
   # Static: the hardened runtime's library validation refuses ad-hoc signed
   # frameworks embedded in an ad-hoc signed app (local Release builds would not launch).
@@ -124,7 +148,7 @@ targets:
       - name: Install SSH helpers
         # Built by the SSHHelpers target, in parallel with the terminal frameworks.
         script: python3 "$SRCROOT/scripts/build-ssh-helper.py" --install-only
-        inputFiles: ["$(SRCROOT)/build/helper-rust/bin/darwin-universal", "$(SRCROOT)/build/helper-rust/bin/linux-aarch64", "$(SRCROOT)/build/helper-rust/bin/linux-x86_64", "$(SRCROOT)/build/helper-rust/bin/version", "$(SRCROOT)/build/helper-rust/bin/protocol-version"]
+        inputFiles: ["$(SRCROOT)/build/helper-rust/bin/darwin-arm64", "$(SRCROOT)/build/helper-rust/bin/linux-aarch64", "$(SRCROOT)/build/helper-rust/bin/linux-x86_64", "$(SRCROOT)/build/helper-rust/bin/version", "$(SRCROOT)/build/helper-rust/bin/protocol-version"]
         outputFiles: ["$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/linux-aarch64", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/linux-x86_64", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/version", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/protocol-version"]
     postBuildScripts:
       - name: Bundle unified helper
@@ -158,15 +182,17 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: yachts.dispatch.app
+        CODE_SIGN_ENTITLEMENTS: Dispatch/Dispatch.entitlements
         PRODUCT_MODULE_NAME: DispatchApp
         INFOPLIST_FILE: Dispatch/Info.plist
-        MARKETING_VERSION: "0.1.1"
+        MARKETING_VERSION: "0.1.2"
         CURRENT_PROJECT_VERSION: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         # Only this target: the static terminal frameworks keep the debug info the dSYM is made from.
         DEPLOYMENT_POSTPROCESSING: "$(DISPATCH_STRIP_APP)"
         STRIP_INSTALLED_PRODUCT: "$(DISPATCH_STRIP_APP)"
     dependencies:
+      - package: Dictation
       - target: SSHHelpers
       # Linked into the app (static), nothing to embed.
       - target: Term
@@ -175,6 +201,7 @@ targets:
         embed: false
       - target: Zstd
         embed: false
+      - sdk: Accelerate.framework
       - sdk: AppKit.framework
       - sdk: Carbon.framework
       - sdk: CoreText.framework
@@ -231,8 +258,10 @@ targets:
           destination="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/TermFonts"
           mkdir -p "$destination"
           cp "$SRCROOT"/Vendor/Term/Sources/TermApple/Resources/*.ttf "$SRCROOT"/Vendor/Term/Sources/TermApple/Resources/*.txt "$destination/"
-        inputFiles: ["$(SRCROOT)/Vendor/Term/Sources/TermApple/Resources/JetBrainsMono-Variable.ttf", "$(SRCROOT)/Vendor/Term/Sources/TermApple/Resources/JetBrainsMono-Italic-Variable.ttf", "$(SRCROOT)/Vendor/Term/Sources/TermApple/Resources/SymbolsNerdFont-Regular.ttf"]
-        outputFiles: ["$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/JetBrainsMono-Variable.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/JetBrainsMono-Italic-Variable.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/SymbolsNerdFont-Regular.ttf"]
+          # The Mac's terminal fonts Settings offers (TerminalFont.all; not Ioskeley Mono, 6 MB).
+          for font in SourceCodePro-Regular.ttf SourceCodePro-Bold.ttf SourceCodePro-Italic.ttf SourceCodePro-BoldItalic.ttf FiraCode-Regular.ttf FiraCode-Bold.ttf 0xProto-Regular.otf 0xProto-Bold.otf 0xProto-Italic.otf DepartureMono-Regular.otf; do cp "$SRCROOT/Dispatch/Resources/Fonts/$font" "$destination/"; done
+        inputFiles: ["$(SRCROOT)/Vendor/Term/Sources/TermApple/Resources/JetBrainsMono-Variable.ttf", "$(SRCROOT)/Vendor/Term/Sources/TermApple/Resources/JetBrainsMono-Italic-Variable.ttf", "$(SRCROOT)/Vendor/Term/Sources/TermApple/Resources/SymbolsNerdFont-Regular.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/SourceCodePro-Regular.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/SourceCodePro-Bold.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/SourceCodePro-Italic.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/SourceCodePro-BoldItalic.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/FiraCode-Regular.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/FiraCode-Bold.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/0xProto-Regular.otf", "$(SRCROOT)/Dispatch/Resources/Fonts/0xProto-Bold.otf", "$(SRCROOT)/Dispatch/Resources/Fonts/0xProto-Italic.otf", "$(SRCROOT)/Dispatch/Resources/Fonts/DepartureMono-Regular.otf"]
+        outputFiles: ["$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/JetBrainsMono-Variable.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/JetBrainsMono-Italic-Variable.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/SymbolsNerdFont-Regular.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/SourceCodePro-Regular.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/SourceCodePro-Bold.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/SourceCodePro-Italic.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/SourceCodePro-BoldItalic.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/FiraCode-Regular.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/FiraCode-Bold.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/0xProto-Regular.otf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/0xProto-Bold.otf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/0xProto-Italic.otf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/DepartureMono-Regular.otf"]
     preBuildScripts:
       - name: Build SSH engine
         script: python3 "$SRCROOT/scripts/build-mobile-ssh.py" --platform "$PLATFORM_NAME"
@@ -240,14 +269,19 @@ targets:
       - name: Install SSH helpers
         # The phone uploads every helper (the Mac one too) to hosts: all three are plain resources in helper/.
         script: python3 "$SRCROOT/scripts/build-ssh-helper.py" --install-only
-        inputFiles: ["$(SRCROOT)/build/helper-rust/bin/darwin-universal", "$(SRCROOT)/build/helper-rust/bin/linux-aarch64", "$(SRCROOT)/build/helper-rust/bin/linux-x86_64", "$(SRCROOT)/build/helper-rust/bin/version", "$(SRCROOT)/build/helper-rust/bin/protocol-version"]
-        outputFiles: ["$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/darwin-universal", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/linux-aarch64", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/linux-x86_64", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/version", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/protocol-version"]
+        inputFiles: ["$(SRCROOT)/build/helper-rust/bin/darwin-arm64", "$(SRCROOT)/build/helper-rust/bin/linux-aarch64", "$(SRCROOT)/build/helper-rust/bin/linux-x86_64", "$(SRCROOT)/build/helper-rust/bin/version", "$(SRCROOT)/build/helper-rust/bin/protocol-version"]
+        outputFiles: ["$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/darwin-arm64", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/linux-aarch64", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/linux-x86_64", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/version", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/protocol-version"]
     sources:
       - path: Mobile
         # Tests: DispatchMobileTests. Transport: its own Swift package; its Integration folder (the app's SSH driver)
         # is app code.
-        excludes: [App/Info.plist, Config, Tests, UITests, Transport, ThirdPartyLicenses]
+        # Demo/Fixtures: the simulator demo reads them from the source tree (Debug only, never bundled).
+        excludes: [App/Info.plist, Config, Tests, UITests, Transport, ThirdPartyLicenses, Demo/Fixtures]
       - path: Mobile/Transport/Integration
+      # Ghostty's bundled themes, Settings' terminal colour schemes (TerminalSchemes reads the app's themes folder).
+      - path: Vendor/Term/Resources/ghostty/themes
+        type: folder
+        buildPhase: resources
       # The Dispatch themes (TerminalConfiguration reads them from the app's ghostty folder).
       - path: extras/ghostty
         type: folder
@@ -255,14 +289,17 @@ targets:
       # Shared with the Mac app (docs/ios.md, Shared sources).
       - Dispatch/Attention.swift
       - Dispatch/Chat/AgentModelMenu.swift
+      - Dispatch/Chat/ChatAttachments.swift
       - Dispatch/Chat/ChatCommands.swift
       - Dispatch/Chat/ChatDrafts.swift
+      - Dispatch/Chat/ChatMarkdownBlock.swift
       - Dispatch/Chat/ChatModelChoicesCache.swift
       - Dispatch/Chat/ChatModels.swift
       - Dispatch/Chat/ChatOperations.swift
       - Dispatch/Chat/ChatPatch.swift
       - Dispatch/Chat/ChatSideConversation.swift
       - Dispatch/Chat/ChatSideQuestion.swift
+      - Dispatch/Chat/ChatTranscript.swift
       - Dispatch/Chat/ClaudeQuestions.swift
       - Dispatch/Chat/HelperChat.swift
       - Dispatch/Chat/ToolCommandPresentation.swift
@@ -273,6 +310,16 @@ targets:
       - Dispatch/Chat/ToolPresentation.swift
       - Dispatch/Chat/ToolPresentationCache.swift
       - Dispatch/Chat/ToolReadCommand.swift
+      - Dispatch/Files/FilesFormatting.swift
+      - Dispatch/Files/FilesModels.swift
+      - Dispatch/Files/GitDiffPresentation.swift
+      - Dispatch/Files/GitGraph.swift
+      - Dispatch/Files/GitLog.swift
+      - Dispatch/Files/GitModels.swift
+      - Dispatch/Files/GitParsers.swift
+      - Dispatch/Files/Review.swift
+      - Dispatch/Files/ReviewRefresh.swift
+      - Dispatch/Files/ReviewRepository.swift
       - Dispatch/Helper/AppReplay.swift
       - Dispatch/Helper/HelperBackend.swift
       - Dispatch/Helper/HelperBinary.swift
@@ -294,7 +341,10 @@ targets:
       - Dispatch/Views/ComposerFences.swift
       - Dispatch/Views/HostGlyph.swift
       - Dispatch/Views/HostTint.swift
+      - Dispatch/Themes/ColorVision.swift
       - Dispatch/WorkspaceModels.swift
+      # The watch protocol (docs/watch.md): the phone's side of WatchConnectivity is in Mobile/Watch.
+      - path: Watch/Shared
     settings:
       groups: [ios, mobileApp]
       base:
@@ -306,7 +356,7 @@ targets:
         INFOPLIST_FILE: Mobile/App/Info.plist
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
-        # iPhone only (iPad later): TARGETED_DEVICE_FAMILY in mobileApp.
+        # iPhone and iPad (TARGETED_DEVICE_FAMILY in mobileApp); never Catalyst or a Mac running the iPad build.
         SUPPORTS_MACCATALYST: NO
         SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
         SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD: NO
@@ -322,11 +372,15 @@ targets:
           STRIP_INSTALLED_PRODUCT: YES
     dependencies:
       - package: MobileTransport
+      - package: Dictation
       - target: SSHHelpers
+      # Embedded in Watch/ ("Embed Watch Content"): installing the phone app offers it on a paired watch.
+      - target: DispatchWatch
       - target: TermMobile
         embed: false
       - target: TermAppleMobile
         embed: false
+      - sdk: Accelerate.framework
       - sdk: CoreText.framework
       - sdk: Metal.framework
       - sdk: QuartzCore.framework
@@ -344,6 +398,8 @@ targets:
       - DispatchTests/ChatDraftTests.swift
       - DispatchTests/ChatSideQuestionTests.swift
       - DispatchTests/ChatOperationsTests.swift
+      - DispatchTests/GitGraphTests.swift
+      - DispatchTests/GitParsersTests.swift
       - DispatchTests/PortableTestSupport.swift
     dependencies:
       - target: DispatchMobile
@@ -357,7 +413,6 @@ targets:
       groups: [ios, mobileApp]
       base:
         PRODUCT_BUNDLE_IDENTIFIER: yachts.dispatch.mobile.tests$(DISPATCH_BUNDLE_ID_SUFFIX)
-        SWIFT_INCLUDE_PATHS: ""
         GENERATE_INFOPLIST_FILE: YES
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/DispatchMobile.app/DispatchMobile"
         BUNDLE_LOADER: "$(TEST_HOST)"
@@ -378,6 +433,97 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: yachts.dispatch.mobile.uitests$(DISPATCH_BUNDLE_ID_SUFFIX)
         GENERATE_INFOPLIST_FILE: YES
         TEST_TARGET_NAME: DispatchMobile
+  # Dispatch for Apple Watch (docs/watch.md): a single-target SwiftUI app, a WatchConnectivity companion of the
+  # phone app, which embeds it. Its version follows the phone's: Apple requires a watch app and its companion to match
+  # (the simulator build's embedded-binary validation does not check it).
+  DispatchWatch:
+    type: application
+    platform: watchOS
+    configFiles:
+      Debug: Mobile/Config/Signing.xcconfig
+      Release: Mobile/Config/Signing.xcconfig
+    sources:
+      - path: Watch/App
+        excludes: [Info.plist, "*.entitlements"]
+      # Foundation-only, compiled into both apps.
+      - path: Watch/Shared
+      # The complication's entry, store and views, shared with the widget extension.
+      - path: Watch/Complication
+    dependencies:
+      - target: DispatchWatchWidgets
+    settings:
+      groups: [watchApp]
+      base:
+        PRODUCT_NAME: DispatchWatch
+        PRODUCT_MODULE_NAME: DispatchWatch
+        SWIFT_INCLUDE_PATHS: ""
+        # Must extend the phone app's id, suffix included, as WKCompanionAppBundleIdentifier names it.
+        PRODUCT_BUNDLE_IDENTIFIER: yachts.dispatch.mobile$(DISPATCH_BUNDLE_ID_SUFFIX).watchkitapp
+        INFOPLIST_FILE: Watch/App/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Watch/App/DispatchWatch.entitlements
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        ENABLE_PREVIEWS: YES
+  # The watch's complications (docs/watch.md, Complications): a WidgetKit extension embedded in the watch app, signed as
+  # it is, reading the entry the app writes to their App Group.
+  DispatchWatchWidgets:
+    type: app-extension
+    platform: watchOS
+    configFiles:
+      Debug: Mobile/Config/Signing.xcconfig
+      Release: Mobile/Config/Signing.xcconfig
+    sources:
+      - path: Watch/Widgets
+        excludes: [Info.plist, "*.entitlements"]
+      - path: Watch/Complication
+      - path: Watch/Shared
+    settings:
+      groups: [watchApp]
+      base:
+        PRODUCT_NAME: DispatchWatchWidgets
+        PRODUCT_BUNDLE_IDENTIFIER: yachts.dispatch.mobile$(DISPATCH_BUNDLE_ID_SUFFIX).watchkitapp.widgets
+        INFOPLIST_FILE: Watch/Widgets/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Watch/Widgets/DispatchWatchWidgets.entitlements
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_INCLUDE_PATHS: ""
+        SKIP_INSTALL: YES
+  DispatchWatchTests:
+    type: bundle.unit-test
+    platform: watchOS
+    configFiles:
+      Debug: Mobile/Config/Signing.xcconfig
+      Release: Mobile/Config/Signing.xcconfig
+    sources:
+      - path: Watch/Tests
+    dependencies:
+      - target: DispatchWatch
+    settings:
+      groups: [watchApp]
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: yachts.dispatch.mobile$(DISPATCH_BUNDLE_ID_SUFFIX).watchkitapp.tests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/DispatchWatch.app/DispatchWatch"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+  # Taps the watch app (docs/watch.md, Testing): its own scheme, so the unit test runs never start it.
+  DispatchWatchUITests:
+    type: bundle.ui-testing
+    platform: watchOS
+    configFiles:
+      Debug: Mobile/Config/Signing.xcconfig
+      Release: Mobile/Config/Signing.xcconfig
+    sources:
+      - path: Watch/UITests
+    dependencies:
+      - target: DispatchWatch
+    settings:
+      groups: [watchApp]
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: yachts.dispatch.mobile$(DISPATCH_BUNDLE_ID_SUFFIX).watchkitapp.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: DispatchWatch
 aggregateTargets:
   # The Rust helper depends on nothing in Xcode, so this target builds alongside Term/TermApple
   # instead of serially inside the app target.
@@ -391,7 +537,7 @@ aggregateTargets:
         script: bash "$SRCROOT/scripts/build-ssh-helper.sh" --build-only
         basedOnDependencyAnalysis: false
         inputFiles: ["$(SRCROOT)/helper", "$(SRCROOT)/Vendor/Zstd", "$(SRCROOT)/scripts/build-ssh-helper.sh", "$(SRCROOT)/scripts/build-ssh-helper.py", "$(SRCROOT)/scripts/setup-ssh-rust.py"]
-        outputFiles: ["$(SRCROOT)/build/helper-rust/bin/darwin-universal", "$(SRCROOT)/build/helper-rust/bin/linux-aarch64", "$(SRCROOT)/build/helper-rust/bin/linux-x86_64", "$(SRCROOT)/build/helper-rust/bin/version", "$(SRCROOT)/build/helper-rust/bin/protocol-version"]
+        outputFiles: ["$(SRCROOT)/build/helper-rust/bin/darwin-arm64", "$(SRCROOT)/build/helper-rust/bin/linux-aarch64", "$(SRCROOT)/build/helper-rust/bin/linux-x86_64", "$(SRCROOT)/build/helper-rust/bin/version", "$(SRCROOT)/build/helper-rust/bin/protocol-version"]
 schemes:
   Dispatch:
     build:
@@ -407,6 +553,12 @@ schemes:
         DispatchMobile: all
     test:
       targets: [DispatchMobileTests]
+  DispatchWatch:
+    build:
+      targets:
+        DispatchWatch: all
+    test:
+      targets: [DispatchWatchTests]
   DispatchMobileUITests:
     build:
       targets:
@@ -414,3 +566,10 @@ schemes:
         DispatchMobileUITests: [test]
     test:
       targets: [DispatchMobileUITests]
+  DispatchWatchUITests:
+    build:
+      targets:
+        DispatchWatch: all
+        DispatchWatchUITests: [test]
+    test:
+      targets: [DispatchWatchUITests]

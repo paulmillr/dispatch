@@ -108,6 +108,12 @@ enum Chrome {
     static func sidebarSlotWidth(_ typography: AppTypography) -> CGFloat {
         LiquidGlassStore.shared.active ? 52 : sidebarButtonInset + StripHostMark.size(typography).width + 12
     }
+
+    /// The row leading a full-screen window that has no tab strip (one tab): the edge reveal's host mark and the
+    /// floating mode switch center on it, where a strip's would sit.
+    static func bareLeadingRowHeight(_ typography: AppTypography) -> CGFloat {
+        typography.expanded(LiquidGlassStore.shared.active ? 38 : 30)
+    }
     #endif
     static var palette: SidebarPalette { SidebarThemeStore.shared.current.palette }
     static var window: Color { palette.window }

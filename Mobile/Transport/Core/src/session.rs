@@ -200,10 +200,22 @@ impl Session {
         });
         let client = Client { link: link.clone(), gate: gate.clone(), reason: None };
         let address = (options.host.clone(), options.port);
+        // How far the connect got, for what a deadline reports: 0 looking up, 1 connecting, 2 the SSH handshake.
+        let stage = Arc::new(std::sync::atomic::AtomicU8::new(0));
+        let reached = stage.clone();
         let handshake = async move {
-            let stream = tokio::net::TcpStream::connect(address)
+            use std::sync::atomic::Ordering::Relaxed;
+            // Resolved apart from the connect, so a name that does not resolve is told from a host that does not answer.
+            let addresses: Vec<_> = tokio::net::lookup_host(address)
                 .await
-                .map_err(|e| Failure::new(Code::Network, e.to_string()))?;
+                .map_err(|e| Failure::new(Code::HostNotFound, e.to_string()))?
+                .collect();
+            if addresses.is_empty() {
+                return Err(Failure::new(Code::HostNotFound, "no address"));
+            }
+            reached.store(1, Relaxed);
+            let stream = tokio::net::TcpStream::connect(&addresses[..]).await.map_err(|e| Failure::io(&e))?;
+            reached.store(2, Relaxed);
             let _ = stream.set_nodelay(true);
             client::connect_stream(config, stream, client).await.map_err(Failure::from)
         };
@@ -236,7 +248,13 @@ impl Session {
                     return Err(failure);
                 }
             },
-            () = deadline => return Err(Failure::new(Code::Timeout, "SSH handshake timed out")),
+            () = deadline => {
+                return Err(match stage.load(std::sync::atomic::Ordering::Relaxed) {
+                    0 => Failure::new(Code::Timeout, "looking up the host's address"),
+                    1 => Failure::new(Code::NoAnswer, "no answer"),
+                    _ => Failure::new(Code::Timeout, "the SSH handshake"),
+                });
+            }
         };
         let session = Arc::new(Session { handle: tokio::sync::Mutex::new(handle), link });
         session.link.arm();

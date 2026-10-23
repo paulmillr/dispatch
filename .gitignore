@@ -11,6 +11,8 @@ DispatchTests/LocalToolAudit/
 /Mobile/Transport/Core/target/
 /Mobile/Transport/.build/
 /Mobile/Transport/.swiftpm/
+/Packages/Dictation/.build/
+/Packages/Dictation/.swiftpm/
 
 # Private prompt history and raw conversation captures stay local.
 /docs/STEPS.md

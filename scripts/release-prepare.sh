@@ -97,7 +97,7 @@ verify() {
         path="${line#Files "$reference"/}"; path="${path%% and *}"
         [[ "$path" == Contents/_CodeSignature/CodeResources ]] && continue
         grep -qxF "$path" <<< "$executables" && continue
-        # A link to an executable (helper/darwin-universal) differs with its target; links are checked below.
+        # A link to an executable (helper/darwin-arm64) differs with its target; links are checked below.
         [[ -L "$reference/$path" ]] && is_macho "$reference/$path" && continue ;;
       "Only in $signed/Contents: CodeResources") continue ;;
     esac

@@ -2,8 +2,9 @@ import Foundation
 
 /// The last-known state of one host, as the lists need it at launch before any host answers (plan 3.8, "instant
 /// launch from cache"): the helper's hello (identity, OS line, homes), the multiplexers and the one followed, the
-/// latest topology, and Agents' rows (state, a preview no longer than the list shows, time). Nothing else of a
-/// transcript is kept, and no secret: what the lists already show.
+/// latest topology, Agents' rows (state, a preview no longer than the list shows, time), and a plain SSH host's shell
+/// tabs (number, title, creation; never a screen). Nothing else of a transcript is kept, and no secret: what the lists
+/// already show.
 struct HostCacheEntry: Codable, Equatable, Sendable {
     struct Multiplexer: Codable, Equatable, Sendable {
         let mux: UInt64
@@ -37,6 +38,8 @@ struct HostCacheEntry: Codable, Equatable, Sendable {
         var preview: String?
         var finished: Bool
         var lastActivity: Date?
+        var waiting: Bool
+        var title: String?
 
         /// Longest preview kept: two lines of the list, with room to spare.
         static let previewLimit = 280
@@ -49,6 +52,8 @@ struct HostCacheEntry: Codable, Equatable, Sendable {
             preview = values.lenient(String.self, forKey: .preview)
             finished = values.lenient(Bool.self, forKey: .finished, default: false)
             lastActivity = values.lenient(Date.self, forKey: .lastActivity)
+            waiting = values.lenient(Bool.self, forKey: .waiting, default: false)
+            title = values.lenient(String.self, forKey: .title)
         }
 
         init(_ summary: ChatConversationSummary) {
@@ -58,11 +63,14 @@ struct HostCacheEntry: Codable, Equatable, Sendable {
             preview = summary.preview.map { $0.count > Self.previewLimit ? String($0.prefix(Self.previewLimit)) : $0 }
             finished = summary.finished
             lastActivity = summary.lastActivity
+            waiting = summary.waiting
+            title = summary.title
         }
 
         var summary: ChatConversationSummary {
             ChatConversationSummary(busy: busy, subagents: subagents, attention: attention, preview: preview,
-                                    finished: finished, lastActivity: lastActivity)
+                                    finished: finished, lastActivity: lastActivity, waiting: waiting,
+                                    title: title)
         }
     }
 
@@ -75,6 +83,12 @@ struct HostCacheEntry: Codable, Equatable, Sendable {
     var conversations: [String: Conversation] = [:]
     /// When the live data was last written here.
     var saved: Date
+    /// When the host's helper last answered (`HostSession.updated`, or a background refresh that reached it): the
+    /// host's last update after a relaunch. Nil in older caches, whose `saved` stands in.
+    var heard: Date?
+    /// The plain SSH shell tabs the phone made on the host (`ShellSessions`), in order: listed after a relaunch as ended
+    /// cards without a screen.
+    var shells: [ShellTabEntry] = []
 
     init(saved: Date) { self.saved = saved }
 
@@ -89,6 +103,8 @@ struct HostCacheEntry: Codable, Equatable, Sendable {
         topology = values.lenient(HelperTopology.self, forKey: .topology)
         conversations = values.lenientDictionary(Conversation.self, forKey: .conversations)
         saved = values.lenient(Date.self, forKey: .saved, default: .distantPast)
+        heard = values.lenient(Date.self, forKey: .heard)
+        shells = values.lenientArray(ShellTabEntry.self, forKey: .shells)
     }
 }
 
@@ -134,7 +150,15 @@ final class HostCache {
 
     /// A connected session's live state (its hello, multiplexers and topology).
     func record(_ session: HostSession) {
-        guard session.link.isConnected, let hello = session.hello else { return }
+        guard session.link.isConnected else { return }
+        if session.isPlain {
+            // No helper on this connection: the kept spaces are not the host's any more; the rest stays for its labels.
+            guard var entry = entries[session.id], entry.topology != nil else { return }
+            entry.topology = nil
+            write(entry, for: session.id)
+            return
+        }
+        guard let hello = session.hello else { return }
         var entry = entries[session.id] ?? HostCacheEntry(saved: now())
         entry.hello = hello
         entry.multiplexers = session.multiplexers.map(HostCacheEntry.Multiplexer.init)
@@ -142,7 +166,31 @@ final class HostCache {
         entry.following = session.following
         // Only this connection's snapshot replaces the kept one; a live "no spaces" (no server) clears it.
         if session.topologyIsLive { entry.topology = session.topology }
+        if let updated = session.updated { entry.heard = updated }
         write(entry, for: session.id)
+    }
+
+    /// When the host's helper last answered (`HostSession.updated`), kept for its label after a relaunch: written as
+    /// the link changes (a drop, going to the background), not on every ping.
+    func record(heard: Date?, host: UUID) {
+        guard let heard, var entry = entries[host], entry.heard.map({ $0 < heard }) ?? true else { return }
+        entry.heard = heard
+        write(entry, for: host)
+    }
+
+    /// The last update a relaunch shows for `host`: when it last answered, else when its live data was last saved.
+    func updated(_ host: UUID) -> Date? {
+        guard let entry = entries[host] else { return nil }
+        // An entry without a hello (a plain host's shell tabs alone) was never a helper's answer.
+        return entry.heard ?? (entry.saved == .distantPast || entry.hello == nil ? nil : entry.saved)
+    }
+
+    /// A host's shell tabs (`ShellSessions.entries`), connected or not: a tab made or closed, a program's new title.
+    /// A host without an entry gets one only for tabs.
+    func record(shells: [ShellTabEntry], host: UUID) {
+        guard var entry = entries[host] ?? (shells.isEmpty ? nil : HostCacheEntry(saved: now())), entry.shells != shells else { return }
+        entry.shells = shells
+        write(entry, for: host)
     }
 
     /// Agents' live rows for a connected host: `rows` by topology key; rows of nodes no longer in `present` go.

@@ -84,6 +84,29 @@ struct HostStatisticsSnapshot: Codable, Sendable {
         return result
     }
 
+    /// The chart's bars, oldest first: one per 15 s on a fixed wall-clock grid, so only the newest bar changes as
+    /// samples land and the chart steps one bar left every 15 s (bars measured back from `now` slid under their
+    /// samples, each changing at its own moment). A bar is the peak of its own samples. One with none, between two
+    /// samples at most `hold` apart, takes the later one, as its CPU is that interval's average: Low Power Mode's
+    /// 15 s cadence drifts past a bar now and then.
+    func historyBars(memory: Bool, at now: Date, count: Int = 60, hold: TimeInterval = 20) -> [Double?] {
+        let span = Self.historyWindow / Double(count)
+        func slot(_ date: Date) -> Int { Int((date.timeIntervalSinceReferenceDate / span).rounded(.down)) }
+        let first = slot(now) - (count - 1)
+        var bars = [Double?](repeating: nil, count: count), held = bars
+        var previous: Date?
+        for point in history where point.date <= now {
+            defer { previous = point.date }
+            guard let raw = memory ? point.memoryPercent : point.cpu, raw.isFinite else { continue }
+            let value = min(100, max(0, raw)), own = slot(point.date) - first
+            if bars.indices.contains(own) { bars[own] = max(bars[own] ?? 0, value) }
+            guard let previous, point.date > previous, point.date.timeIntervalSince(previous) <= hold else { continue }
+            let gap = max(0, slot(previous) + 1 - first), end = min(count, own)
+            if gap < end { for index in gap..<end { held[index] = max(held[index] ?? 0, value) } }
+        }
+        return zip(bars, held).map { $0 ?? $1 }
+    }
+
     static func gib(_ bytes: UInt64?) -> String {
         guard let bytes else { return "—" }
         return (Double(bytes) / 1_073_741_824).formatted(.number.precision(.fractionLength(0...1)))

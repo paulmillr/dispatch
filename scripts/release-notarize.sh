@@ -8,8 +8,8 @@
 # First it shows the zip's SHA-256: continue only if it matches the hash the maintainer sent over a
 # separate channel. Everything it makes goes to Dispatch-signed/, next to the zip.
 # Re-signs the maintainer's build (never rebuilds it): every Mach-O, deepest first, then the app,
-# with the hardened runtime, a secure timestamp, no entitlements and each binary's own identifier
-# (yachts.dispatch.app, yachts.dispatch.helper). Notarizes and staples the app,
+# with the hardened runtime, a secure timestamp and each binary's own identifier (yachts.dispatch.app,
+# yachts.dispatch.helper); the app alone gets one entitlement, written below (the microphone, for dictation). Notarizes and staples the app,
 # so it launches offline once copied out, then packs it into an LZMA DMG with an Applications link,
 # signs, notarizes and staples that. Send back Dispatch-signed/Dispatch-<version>.dmg exactly as it is: it is
 # the release download, and repacking it (a Finder zip, say) adds junk and discards nothing useful.
@@ -40,6 +40,12 @@ identity_hash() {
   echo "$matches"
 }
 
+# The app's only entitlement: the hardened runtime blocks the microphone (chat dictation) without it. Written here,
+# not taken from the maintainer's signature, so the signer's identity vouches for exactly this.
+ENTITLEMENTS='<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>com.apple.security.device.audio-input</key><true/></dict></plist>'
+
 # Nested code before what encloses it: Mach-O files and bundles, deepest first, then the app.
 sign_app() {
   local app="$1" identity="$2" target
@@ -51,7 +57,10 @@ sign_app() {
         depth="${path//[^\/]/}"; printf '%d\t%s\n' "${#depth}" "$path"
       fi
     done | sort -t$'\t' -k1,1nr -k2,2)
-  codesign --force --sign "$identity" --options runtime --timestamp "$app"
+  # A file: codesign cannot read entitlements from a pipe.
+  printf '%s\n' "$ENTITLEMENTS" > "$app.entitlements"
+  codesign --force --sign "$identity" --options runtime --timestamp --entitlements "$app.entitlements" "$app"
+  rm "$app.entitlements"
   codesign --verify --deep --strict --verbose=2 "$app"
 }
 

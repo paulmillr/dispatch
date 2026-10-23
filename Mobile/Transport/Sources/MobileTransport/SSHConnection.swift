@@ -285,6 +285,9 @@ final class SessionLink: @unchecked Sendable {
 
   /// A refused host key explains a failed connect better than the engine's error does.
   func explain(_ error: any Error) -> any Error {
+    if case SSHTransportError.connectFailed(let failure, _, _) = error {
+      return SSHTransportError.connectFailed(failure, host: host, port: port)
+    }
     guard let (info, decision) = decision else { return error }
     switch decision {
     case .trust: return error

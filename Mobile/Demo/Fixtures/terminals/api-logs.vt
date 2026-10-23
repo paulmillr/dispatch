@@ -1,0 +1,10 @@
+[38;5;114malex@studio[0m [38;5;75m~/src/api[0m [2m%[0m cargo run
+    [1m[32mFinished[0m `dev` profile in 0.31s
+     [1m[32mRunning[0m `target/debug/api`
+[2m10:02:11[0m [32mINFO[0m postgres pool ready (8)
+[2m10:02:11[0m [32mINFO[0m rate limit 100/min, burst 20
+[2m10:02:11[0m [32mINFO[0m listening on 0.0.0.0:8080
+[2m10:02:12[0m [32mINFO[0m GET /v1/projects [32m200[0m 12ms [2mk_31[0m
+[2m10:02:13[0m [32mINFO[0m GET /v1/projects/prj_8f2 [32m200[0m 7ms [2mk_31[0m
+[2m10:02:14[0m [32mINFO[0m POST /v1/deployments [32m201[0m 48ms [2mk_31[0m
+[2m10:02:15[0m [32mINFO[0m GET /v1/usage [32m200[0m 19ms [2mk_07[0m

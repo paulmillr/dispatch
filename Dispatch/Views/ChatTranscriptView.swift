@@ -430,7 +430,7 @@ private struct ChatTranscriptRowView: View {
                 .padding(.vertical, 8)
         } else if row.item?.kind == .user, let item = row.item {
             ChatRadioLog.line(time: row.time, station: HarbourRadio.ownStation, own: true, theme: theme) {
-                ChatMarkdown(text: item.text).foregroundStyle(theme.ink)
+                radioUserMessage(item)
             }
             .padding(.vertical, 9)
             .background(LinearGradient(colors: [.clear, theme.ink.opacity(0.04)], startPoint: .leading, endPoint: .trailing))
@@ -452,12 +452,7 @@ private struct ChatTranscriptRowView: View {
                         itemView(item).padding(.leading, 8)
                             .overlay(alignment: .leading) { Rectangle().fill(theme.border).frame(width: 2) }
                     } else if let item = row.item { itemView(item) }
-                    if let group = row.group {
-                        ChatToolGroupHeader(group: group, expanded: Binding(
-                            get: { session.groupIsExpanded(group, turnID: row.turnID) },
-                            set: { session.setGroupExpanded(group, $0) }
-                        ))
-                    }
+                    if let group = row.group { groupHeader(group) }
                     // Procedure words: a finished turn's last message ends its transmission.
                     if row.signsOff {
                         Text("out").font(theme.typography.detail).foregroundStyle(theme.muted)
@@ -482,13 +477,13 @@ private struct ChatTranscriptRowView: View {
                 }.font(theme.typography.detail).foregroundStyle(theme.muted).padding(.vertical, 4)
             } else if isBubble {
                 VStack(alignment: .leading, spacing: 6) {
-                    if let item = row.item { itemView(item) }
+                    if let item = row.item, let timeline = row.timeline {
+                        itemView(item).padding(.leading, ChatStepRail.width + Self.railSpacing)
+                            .overlay(alignment: .leading) { ChatStepRail(timeline: timeline) }
+                    } else if let item = row.item { itemView(item) }
                     if let group = row.group {
-                        ChatToolGroupHeader(group: group, replyTime: row.replyTime, expanded: Binding(
-                            get: { session.groupIsExpanded(group, turnID: row.turnID) },
-                            set: { session.setGroupExpanded(group, $0) }
-                        ))
-                        .padding(.top, row.item == nil ? 0 : 4)
+                        groupHeader(group, replyTime: row.replyTime)
+                            .padding(.top, row.item == nil ? 0 : 4)
                     } else if let replyTime = row.replyTime {
                         ChatReplyTime(date: replyTime)
                             .frame(maxWidth: .infinity, alignment: .trailing)
@@ -514,12 +509,25 @@ private struct ChatTranscriptRowView: View {
                                bottomTrailingRadius: row.bubbleEnd ? 10 : 0,
                                topTrailingRadius: row.bubbleStart ? 10 : 0)
     }
+    private static let railSpacing: CGFloat = 8
+    /// The width a standard bubble's timeline rail takes beside its step (the radio log keeps its own rule).
+    private var railWidth: CGFloat { row.timeline != nil && !theme.radioLog ? ChatStepRail.width + Self.railSpacing : 0 }
+
+    /// Clicking a closed group, or a live one showing just its current step, shows every step; clicking again closes it.
+    private func groupHeader(_ group: ChatToolGroup, replyTime: Date? = nil) -> some View {
+        let disclosure = session.groupDisclosure(group, turnID: row.turnID)
+        let live = disclosure == .current || (disclosure == .all && session.groupIsLive(group, turnID: row.turnID))
+        return ChatToolGroupHeader(group: group, replyTime: replyTime, disclosure: disclosure, live: live) {
+            session.setGroupExpanded(group, disclosure != .all)
+        }
+    }
+
     @ViewBuilder private func itemView(_ item: ChatItem) -> some View {
         switch item.kind {
         case .user where theme.radioLog:
-            ChatMarkdown(text: item.text).foregroundStyle(theme.ink)
+            radioUserMessage(item)
         case .user:
-            ChatUserMessage(text: item.text, contentWidth: contentWidth)
+            ChatUserMessage(text: item.text, contentWidth: contentWidth, attachments: item.attachments, endpoint: session.helper?.endpoint)
         case .assistant:
             ChatMarkdown(text: item.text).foregroundStyle(theme.ink)
         case .notice:
@@ -542,8 +550,22 @@ private struct ChatTranscriptRowView: View {
             }
         case .tool:
             ChatToolCard(item: item, expanded: toolExpansion(item), directory: directory, embedded: true,
-                         layouts: session.toolLayouts, layoutWidth: max(0, bubbleWidth - 32),
-                         live: session.busy && row.turnID == session.activeTurnID)
+                         layouts: session.toolLayouts, layoutWidth: max(0, bubbleWidth - 32 - railWidth),
+                         live: session.busy && row.turnID == session.activeTurnID,
+                         elapsed: theme.radioLog || row.timeline?.running == true ? nil : row.timeline?.step.seconds,
+                         titleColumn: row.timeline == nil || theme.radioLog ? nil : theme.typography.stepTitleWidth)
+        }
+    }
+    /// The log's own transmission: its attachments, then what was typed.
+    @ViewBuilder private func radioUserMessage(_ item: ChatItem) -> some View {
+        if item.attachments.isEmpty {
+            ChatMarkdown(text: item.text).foregroundStyle(theme.ink)
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                ChatMessageAttachments(attachments: item.attachments, endpoint: session.helper?.endpoint,
+                                       maxWidth: ChatRadioLog.messageWidth(contentWidth, theme: theme), alignment: .leading)
+                if !item.text.isEmpty { ChatMarkdown(text: item.text).foregroundStyle(theme.ink) }
+            }
         }
     }
     private func toolExpansion(_ item: ChatItem) -> Binding<Bool> {
@@ -566,17 +588,38 @@ struct ChatUserMessage: View {
     @Environment(\.chatTheme) private var theme
     let text: String
     let contentWidth: CGFloat
+    /// Shown above the text, on the bubble's side; a message of attachments alone has no text bubble.
+    var attachments: [ChatAttachment] = []
+    var endpoint: HelperWorkspace.Endpoint?
+
+    /// A user bubble keeps to 60 percent of a wide pane and 80 characters, but a narrow pane's gives it room for 40
+    /// characters (up to 85 percent) rather than stacking a short message word by word.
+    static func maxWidth(_ contentWidth: CGFloat, characterWidth: CGFloat) -> CGFloat {
+        min(max(contentWidth * 0.6, min(contentWidth * 0.85, characterWidth * 40)), characterWidth * 80)
+    }
 
     var body: some View {
+        let width = Self.maxWidth(contentWidth, characterWidth: theme.typography.characterWidth)
         HStack(spacing: 0) {
             Spacer(minLength: 0)
-            ChatMarkdown(text: text, fillWidth: false)
-                .font(theme.typography.body)
-                .padding(.horizontal, 12).padding(.vertical, 8)
-                .background(theme.ink.opacity(0.08), in: UnevenRoundedRectangle(
-                    topLeadingRadius: 10, bottomLeadingRadius: 10, bottomTrailingRadius: 3, topTrailingRadius: 10))
-                .frame(maxWidth: min(contentWidth * 0.6, theme.typography.characterWidth * 80), alignment: .trailing)
+            if attachments.isEmpty {
+                bubble.frame(maxWidth: width, alignment: .trailing)
+            } else {
+                VStack(alignment: .trailing, spacing: 6) {
+                    ChatMessageAttachments(attachments: attachments, endpoint: endpoint, maxWidth: width)
+                    if !text.isEmpty { bubble }
+                }
+                .frame(maxWidth: width, alignment: .trailing)
+            }
         }
+    }
+
+    private var bubble: some View {
+        ChatMarkdown(text: text, fillWidth: false)
+            .font(theme.typography.body)
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .background(theme.ink.opacity(0.08), in: UnevenRoundedRectangle(
+                topLeadingRadius: 10, bottomLeadingRadius: 10, bottomTrailingRadius: 3, topTrailingRadius: 10))
     }
 }
 

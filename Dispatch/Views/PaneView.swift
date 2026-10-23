@@ -227,7 +227,8 @@ struct PaneView: View {
 
     private func tabContent(_ tab: TerminalTab) -> some View {
         TerminalContentView(tab: tab, workspace: workspace, spaceID: space.id, windowTabID: window?.id, paneID: pane.id, focused: isPresented && space.focusedPane == pane.id,
-                            isPresented: isPresented, floatingSwitch: floatingChatSwitch)
+                            isPresented: isPresented, floatingSwitch: floatingChatSwitch,
+                            switchRow: floatingChatSwitch && placement.sidebarSlot ? Chrome.bareLeadingRowHeight(typography) : nil)
             .overlay { SplitDropZones(pane: pane, workspace: workspace) }
     }
 

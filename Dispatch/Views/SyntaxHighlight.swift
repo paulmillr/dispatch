@@ -32,6 +32,7 @@ enum SyntaxHighlight {
 
     struct Token { let range: NSRange; let color: Color }
     static func text(_ code: String, language hint: String, theme: ChatTheme = .standard) -> AttributedString {
+        let code = TextRendering.visible(code)
         var result = AttributedString(code)
         result.foregroundColor = theme.ink
         for token in tokens(code, language: hint, theme: theme) {
@@ -83,7 +84,9 @@ enum SyntaxHighlight {
         if lang == "markdown" { return markdownPattern }
         let hashComments = ["shell", "python", "yaml"].contains(lang)
         let comments = lang == "json" ? #"(?!)"# : (hashComments ? #"(?m)(?<!\S)#[^\n]*"# : (lang == "sql" ? #"--[^\n]*|/\*[\s\S]*?(?:\*/|$)"# : #"//[^\n]*|/\*[\s\S]*?(?:\*/|$)|<!--[\s\S]*?(?:-->|$)"#))
-        let strings = #""""[\s\S]*?(?:"""|$)|'''[\s\S]*?(?:'''|$)|"(?:\\[\s\S]|[^"\\])*(?:"|$)|'(?:\\[\s\S]|[^'\\])*(?:'|$)|`(?:\\[\s\S]|[^`\\])*(?:`|$)"#
+        // A quote's string ends with its line (as the iPhone's CodeSyntax): one apostrophe ("it's", Rust's 'static)
+        // never colours the rest of the file.
+        let strings = #""""[\s\S]*?(?:"""|$)|'''[\s\S]*?(?:'''|$)|"(?:\\[\s\S]|[^"\\\n])*(?:"|$)|'(?:\\[\s\S]|[^'\\\n])*(?:'|$)|`(?:\\[\s\S]|[^`\\])*(?:`|$)"#
         let words = lang == "json" ? "true false null" : "let var const func function return if else guard for while in of do switch case break continue default import from export class struct enum protocol extension public private internal static final override async await throws throw try catch defer self super new nil null true false None True False def with as lambda pass yield raise except finally and or not is select SELECT FROM WHERE JOIN INSERT INTO VALUES UPDATE SET CREATE TABLE LIMIT ORDER BY fn mut impl use pub package interface type void int string bool this"
         let keywords = #"\b(?:"# + words.split(separator: " ").joined(separator: "|") + #")\b"#
         let variables = lang == "shell" ? #"\$\{[^}\n]*\}|\$[a-zA-Z_][a-zA-Z_0-9]*|(?<!\S)--?[a-zA-Z][a-zA-Z0-9-]*"# : #"\b[A-Z][a-zA-Z0-9_]*\b"#
@@ -160,23 +163,30 @@ struct ChatCodeBlock: View {
     var title: String?
     var firstLine: Int?
     var body: some View {
-        let preview = String(code.prefix(32_768))
-        let shown = firstLine != nil && preview.hasSuffix("\n") ? String(preview.dropLast()) : preview
+        let preview = TextRendering.prefix(code, scalars: 32_768)
+        let shown = firstLine != nil && preview.text.hasSuffix("\n") ? String(preview.text.dropLast()) : preview.text
+        let rawLabel = title ?? (language == "text" ? "Text" : language)
+        let label = TextRendering.visible(TextRendering.prefix(rawLabel, scalars: 128).text)
         // Formatting depends on the content, not the viewport. Capture it outside
         // GeometryReader so resizing only lays out the existing attributed text.
         let highlighted = SyntaxHighlight.text(shown.isEmpty ? " " : shown, language: language, theme: theme)
+        let natural = CGFloat(shown.components(separatedBy: "\n").count) * theme.typography.codeDetailLineHeight + 24
+        // A block that fits its 320 pt scrolls sideways only: with both axes, a horizontal scroller shown always
+        // (no trackpad) takes its one line's height and a vertical scroller appears for it.
+        let tall = natural > 320
+        let scroller = NSScroller.preferredScrollerStyle == .legacy ? NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy) : 0
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text(title ?? (language == "text" ? "Text" : language)).foregroundStyle(theme.muted)
+                Text(label).foregroundStyle(theme.muted)
                 Spacer()
                 Button {
                     NSPasteboard.general.clearContents(); NSPasteboard.general.setString(code, forType: .string)
                 } label: { Image(systemName: "doc.on.doc") }
-                    .buttonStyle(.plain).help("Copy \(title ?? "code")").accessibilityLabel("Copy \(title ?? "code")")
+                    .buttonStyle(.plain).help("Copy \(label)").accessibilityLabel("Copy \(label)")
             }.font(theme.typography.detail).padding(.horizontal, 12).padding(.vertical, 8)
                 .background(theme.window)
             GeometryReader { geometry in
-            ScrollView([.horizontal, .vertical]) {
+            ScrollView(tall ? [.horizontal, .vertical] : .horizontal) {
                 HStack(alignment: .top, spacing: 12) {
                     if let firstLine {
                         Text((0..<shown.components(separatedBy: "\n").count).map { String(firstLine + $0) }.joined(separator: "\n"))
@@ -189,8 +199,8 @@ struct ChatCodeBlock: View {
                 }.font(theme.typography.codeDetail)
                     .frame(minWidth: max(0, geometry.size.width - 24), alignment: .leading).padding(12)
             }
-            }.frame(height: min(320, max(44, CGFloat(shown.components(separatedBy: "\n").count) * theme.typography.codeDetailLineHeight + 24)))
-            if preview.count < code.count {
+            }.frame(height: tall ? 320 : max(44, natural) + scroller)
+            if preview.truncated {
                 Text("Preview truncated · Copy includes the full text")
                     .font(theme.typography.detail).foregroundStyle(theme.muted).padding(8)
             }

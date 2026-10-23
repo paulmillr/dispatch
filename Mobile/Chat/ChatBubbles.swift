@@ -8,12 +8,15 @@ struct ChatBubble<Content: View>: View {
     var faded = false
     @ViewBuilder var content: Content
     @Environment(\.chatColumnWidth) private var column
+    @Environment(\.chatMeasure) private var measure
+    /// Settings' chat font and size (G3).
+    @Environment(\.chatTypography) private var typography
 
     var body: some View {
         HStack(spacing: 0) {
             if side == .user { Spacer(minLength: 0) }
             content
-                .font(.callout)
+                .font(typography.body)
                 .lineSpacing(2)
                 .foregroundStyle(side == .user ? Color.bubbleUserText : Color.primary)
                 .padding(.horizontal, 14)
@@ -23,8 +26,10 @@ struct ChatBubble<Content: View>: View {
                                 ? .init(topLeading: 20, bottomLeading: 20, bottomTrailing: 6, topTrailing: 20)
                                 : .init(topLeading: 20, bottomLeading: 6, bottomTrailing: 20, topTrailing: 20),
                                 style: .continuous))
-                // 78% of the column for the user, 86% for the agent (M4a); the bubble hugs shorter text.
-                .frame(maxWidth: column * (side == .user ? 0.78 : 0.86), alignment: side == .user ? .trailing : .leading)
+                // 78% of the column for the user, 86% for the agent (M4a), never past the readable measure (an iPad's
+                // wide column); the bubble hugs shorter text.
+                .frame(maxWidth: ChatMeasure.bubble(user: side == .user, column: column, measure: measure),
+                       alignment: side == .user ? .trailing : .leading)
                 .fixedSize(horizontal: false, vertical: true)
             if side == .agent { Spacer(minLength: 0) }
         }
@@ -34,6 +39,34 @@ struct ChatBubble<Content: View>: View {
 extension EnvironmentValues {
     /// The thread's text column (the screen less 16 pt each side), which bubble widths are a share of.
     @Entry var chatColumnWidth: CGFloat = 370
+    /// The widest a bubble, a thinking block, a note or the queue card gets (`ChatMeasure`), at the text size.
+    @Entry var chatMeasure: CGFloat = ChatMeasure.standard
+}
+
+/// The thread's readable measure, the Mac's: a bubble keeps to 80 characters of its text (`ChatTranscriptRow`'s
+/// `bubbleWidth`, `ChatUserMessage.maxWidth`) plus its padding, on the speaker's side, and the thread is not centred.
+/// A phone's column never reaches it (80 characters of callout is about 790 points), so there the phone's shares
+/// decide; in an iPad's detail column it keeps lines readable where 86 % would run to a thousand points.
+enum ChatMeasure {
+    static let characters: CGFloat = 80
+    /// The bubble's horizontal padding, both sides.
+    static let padding: CGFloat = 28
+
+    /// The measure at the default text size: 80 of the callout font's "0" (the Mac measures the same glyph), plus
+    /// the padding. The thread scales it with Dynamic Type (`@ScaledMetric` relative to callout).
+    static let standard: CGFloat = {
+        let font = UIFont.preferredFont(forTextStyle: .callout,
+                                        compatibleWith: UITraitCollection(preferredContentSizeCategory: .large))
+        return (characters * ("0" as NSString).size(withAttributes: [.font: font]).width + padding).rounded()
+    }()
+
+    /// A bubble's widest: the phone's share of the column (78 % for the user, 86 % for the agent, M4a), capped.
+    static func bubble(user: Bool, column: CGFloat, measure: CGFloat) -> CGFloat {
+        min(column * (user ? 0.78 : 0.86), measure)
+    }
+
+    /// The queue card's width: 92 % of the column on a phone (M5c), the user's bubble's measure at most.
+    static func queueCard(column: CGFloat, measure: CGFloat) -> CGFloat { min(column * 0.92, measure) }
 }
 
 /// The line under a bubble where iMessage puts "Delivered" (12 pt, the tertiary label: 30 % in both schemes, L2a).
@@ -131,6 +164,8 @@ struct ChatChip: View {
                             .overlay(Capsule().strokeBorder(Color.chipBorder, lineWidth: 0.5))
                     }
                 }
+                .contentShape(.hoverEffect, Capsule())
+                .hoverEffect(.highlight)
         }
         .buttonStyle(.plain)
         .accessibilityHint(hint ?? "")
@@ -156,6 +191,18 @@ struct ChatQuestionFormView: View {
                             Text(question.header).font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
                         }
                         Text(question.text)
+                        if approval.pending.pending {
+                            ChatQuestionOptionDetails(options: question.options)
+                            let chosen = draft.usingCustom.contains(question.id) ? [] : draft.selected[question.id, default: []]
+                            if let preview = question.options.first(where: { chosen.contains($0.label) && $0.preview?.isEmpty == false })?.preview {
+                                ChatQuestionDetail(text: preview)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 8)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(Color.approvalCode, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                    .padding(.top, 4)
+                            }
+                        }
                     }
                 }
                 if approval.pending.pending {
@@ -198,6 +245,9 @@ struct ChatSideQuestionView: View {
                         Text(question.question.header).font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
                     }
                     Text(question.question.question)
+                    if !question.submitted, let options = question.question.options {
+                        ChatQuestionOptionDetails(options: options.map { .init(label: $0.label, description: $0.description, preview: nil) })
+                    }
                 }
             }
             if let options = question.question.options, !options.isEmpty {
@@ -232,6 +282,47 @@ struct ChatSideQuestionView: View {
                 }
             }
             .disabled(question.submitted)
+        }
+    }
+}
+
+/// The options' descriptions under the question, label over description, for the options that have one; the chips
+/// below only carry the labels.
+struct ChatQuestionOptionDetails: View {
+    let options: [ClaudeQuestions.Option]
+    var body: some View {
+        let described = options.filter { !$0.description.isEmpty }
+        if !described.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(described) { option in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(option.label).font(.footnote.weight(.semibold))
+                        ChatQuestionDetail(text: option.description).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .padding(.top, 4)
+        }
+    }
+}
+
+/// An option's description or preview in mono, since agents draw layouts in them. Large ones (several lines, or longer
+/// than a couple of lines of footnote) drop to 8 pt, scaled with Dynamic Type, so a layout's lines fit the bubble; a
+/// multi-line one scrolls sideways rather than wrapping its columns.
+struct ChatQuestionDetail: View {
+    let text: String
+    @ScaledMetric(relativeTo: .caption2) private var largeSize: CGFloat = 8
+
+    static func isLarge(_ text: String) -> Bool { text.contains("\n") || text.count > 120 }
+
+    var body: some View {
+        let font = Self.isLarge(text) ? Font.system(size: largeSize, design: .monospaced) : .footnote.monospaced()
+        if text.contains("\n") {
+            ScrollView(.horizontal, showsIndicators: false) {
+                Text(text).font(font).lineSpacing(1).fixedSize().textSelection(.enabled)
+            }
+        } else {
+            Text(text).font(font).lineSpacing(1).textSelection(.enabled)
         }
     }
 }

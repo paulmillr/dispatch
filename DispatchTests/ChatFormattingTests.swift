@@ -21,6 +21,16 @@ final class ChatFormattingTests: XCTestCase {
         opened.append((chat, root))
         return try await chat.archived(lines, agent: "codex", session: try XCTUnwrap(meta?["id"] as? String), in: root)
     }
+    /// A user bubble keeps to 60 percent of a wide pane and 80 characters; a narrow pane leaves it 40 characters, up to
+    /// 85 percent.
+    func testUserBubblesWidenInNarrowPanes() {
+        let character: CGFloat = 7.5
+        XCTAssertEqual(ChatUserMessage.maxWidth(1_100, characterWidth: character), 600, "80 characters on a wide pane")
+        XCTAssertEqual(ChatUserMessage.maxWidth(800, characterWidth: character), 480, "60 percent")
+        XCTAssertEqual(ChatUserMessage.maxWidth(400, characterWidth: character), 300, "40 characters")
+        XCTAssertEqual(ChatUserMessage.maxWidth(280, characterWidth: character), 238, "85 percent of a very narrow pane")
+    }
+
     func testSearchHighlightsRenderedTextWithoutLosingFormatting() throws {
         let original = ChatMarkdown.safeInlineMarkdown("🙂 [Alpha](https://example.com) **alpha**\n`ALPHA`")
         let theme = ChatTheme.standard
@@ -73,9 +83,9 @@ final class ChatFormattingTests: XCTestCase {
             ("Grep", #"{"pattern":"needle","path":"/work/src","glob":"*.swift","output_mode":"content"}"#,
              ["Search", "magnifyingglass", "needle · in src · *.swift", "needle", "text"]),
             ("Glob", #"{"pattern":"**/*.swift","path":"/work"}"#,
-             ["Find files", "magnifyingglass", "**/*.swift · in .", "**/*.swift", "text"]),
+             ["Locate", "magnifyingglass", "**/*.swift · in .", "**/*.swift", "text"]),
             ("WebSearch", #"{"query":"Swift actors","allowed_domains":["swift.org"]}"#,
-             ["Search web", "magnifyingglass", "Swift actors", "Swift actors", "text"]),
+             ["Web", "magnifyingglass", "Swift actors", "Swift actors", "text"]),
             ("WebFetch", #"{"url":"https://example.com","prompt":"Summarize the page"}"#,
              ["Open page", "globe", "https://example.com", "Summarize the page", "text"]),
             ("Agent", #"{"description":"Review sources","prompt":"Find correctness issues","subagent_type":"Explore"}"#,
@@ -150,7 +160,7 @@ final class ChatFormattingTests: XCTestCase {
 
     func testWebStepsHaveActionLabelsAndReadableTargets() {
         let cases: [(String, String, String)] = [
-            (#"{"search_query":[{"q":"Swift actor isolation"}]}"#, "Search web", "Swift actor isolation"),
+            (#"{"search_query":[{"q":"Swift actor isolation"}]}"#, "Web", "Swift actor isolation"),
             (#"{"image_query":[{"q":"waterfalls"}]}"#, "Search images", "waterfalls"),
             (#"{"open":[{"ref_id":"https://example.com/docs","lineno":40}]}"#, "Open page", "https://example.com/docs · line 40"),
             (#"{"find":[{"ref_id":"turn0search0","pattern":"Installation"}]}"#, "Find on page", "“Installation” · Search result"),
@@ -167,7 +177,7 @@ final class ChatFormattingTests: XCTestCase {
                 let tool = ToolPresentation(item)
                 XCTAssertEqual(tool.title, title)
                 XCTAssertEqual(tool.summary, summary)
-                XCTAssertEqual(tool.symbol, title.hasPrefix("Search") ? "magnifyingglass" : "globe")
+                XCTAssertEqual(tool.symbol, input.contains("_query\"") ? "magnifyingglass" : "globe")
                 XCTAssertEqual(tool.language, "json")
                 XCTAssertNotNil(ToolPresentation.json(tool.input))
                 XCTAssertEqual(tool.output, "Result")
@@ -208,10 +218,10 @@ final class ChatFormattingTests: XCTestCase {
         let group = try XCTUnwrap(session.transcriptRows.first?.group)
         let items = group.children.compactMap(\.item)
         XCTAssertEqual(items.count, 2)
-        XCTAssertEqual(items.map { ToolPresentation($0).title }, ["Open page", "Search web"])
+        XCTAssertEqual(items.map { ToolPresentation($0).title }, ["Open page", "Web"])
         XCTAssertEqual(items.map { ToolPresentation($0).summary }, ["https://example.com/docs", "Swift concurrency"])
         XCTAssertEqual(items.map { ToolPresentation($0).output }, ["Page content", "Search results"])
-        XCTAssertEqual(ChatToolGroupHeader.summarize(items), "Browse web ×2")
+        XCTAssertEqual(group.steps.map(\.kind), [.web, .web])
     }
 
     func testDiffRetainsSyntaxColorsAndSeparatesOldAndNewLexicalState() throws {
@@ -359,7 +369,7 @@ final class ChatFormattingTests: XCTestCase {
         XCTAssertEqual(ToolPresentation.command(["printf", "%s", "", "a b", "it's", "$(touch x)"]), "printf %s '' 'a b' 'it'\\''s' '$(touch x)'")
         XCTAssertEqual(ToolPresentation.command(["bash", "-c", "echo $0", "name"]), "bash -c 'echo $0' name")
         let search = ToolPresentation(ChatItem(id: "search", kind: .tool, text: #"{"cmd":"rg --files src","workdir":"/tmp/project"}"#, title: "functions.exec_command"))
-        XCTAssertEqual(search.title, "Find files")
+        XCTAssertEqual(search.title, "Locate")
         XCTAssertEqual(search.summary, "in src")
         XCTAssertEqual(search.directory, "/tmp/project")
         let exec = ToolPresentation(ChatItem(id: "exec", kind: .tool, text: "const results = await Promise.allSettled([]);", title: "functions.exec"))
@@ -458,6 +468,8 @@ final class ChatFormattingTests: XCTestCase {
         XCTAssertEqual(SyntaxHighlight.text("42", language: "json").foregroundColor, SyntaxHighlight.number)
         XCTAssertEqual(SyntaxHighlight.text("let 42", language: "unknown").foregroundColor, Chrome.ink)
         XCTAssertEqual(SyntaxHighlight.lines("/* hello\nworld */", language: "swift")[1].foregroundColor, SyntaxHighlight.comment)
+        XCTAssertEqual(String(SyntaxHighlight.text("let safe = 1 // \u{202E} hidden", language: "swift").characters),
+                       "let safe = 1 // ⟦RLO⟧ hidden")
         let large = String(repeating: "a", count: 70_000)
         XCTAssertEqual(String(SyntaxHighlight.text(large, language: "swift").characters), large)
     }
@@ -470,6 +482,21 @@ final class ChatFormattingTests: XCTestCase {
         XCTAssertTrue(blocks.contains(.init(kind: .table([["Name", "Value"], ["`a|b`", "x\\|y"]]), text: "")))
         XCTAssertTrue(blocks.contains(.init(kind: .code("swift"), text: "let fence = \"```\"")))
         XCTAssertEqual(blocks.last, .init(kind: .code("python"), text: "print('unfinished')"))
+        let wide = "| " + String(repeating: "cell | ", count: ChatMarkdownBlock.tableColumnsLimit + 20)
+        let divider = "| " + String(repeating: "--- | ", count: ChatMarkdownBlock.tableColumnsLimit + 20)
+        guard case .table(let bounded)? = ChatMarkdownBlock.parse(wide + "\n" + divider).first?.kind else {
+            return XCTFail("Wide table was not parsed")
+        }
+        XCTAssertEqual(bounded.first?.count, ChatMarkdownBlock.tableColumnsLimit)
+        let rich = TextRendering.rich(String(repeating: "line\n", count: TextRendering.richLineLimit + 20))
+        XCTAssertTrue(rich.truncated)
+        XCTAssertEqual(rich.text.filter { $0 == "\n" }.count, TextRendering.richLineLimit - 1)
+        let pathological = "a" + String(repeating: "\u{0301}", count: 20_000)
+        let scalarBounded = TextRendering.prefix(pathological, scalars: 64)
+        XCTAssertTrue(scalarBounded.truncated)
+        XCTAssertEqual(scalarBounded.text.unicodeScalars.count, 64)
+        XCTAssertEqual(FileTextLines.cut([pathological])[0]?.unicodeScalars.count, FileTextLines.lineLimit + 2,
+                       "The visible ellipsis adds a space and one scalar")
     }
     /// A streamed fence keeps its lines while its closing fence arrives a backtick at a time: an unfinished last line
     /// that could still close it adds no line the next delta would take away.
@@ -625,7 +652,7 @@ final class ChatFormattingTests: XCTestCase {
             let rows = try snapshot.recognizedText()
             let text = try snapshot.text()
             XCTAssertTrue(text.contains("Shell"), text)
-            XCTAssertTrue(text.contains("Find files"), text)
+            XCTAssertTrue(text.contains("Locate"), text)
             XCTAssertTrue(text.contains("Patch"), text)
             XCTAssertTrue(text.contains("exit 7"), text)
             XCTAssertTrue(text.contains("Idempotent retries"), text)

@@ -35,6 +35,10 @@ extern "C" {
 #define DMS_UNSUPPORTED (-8)
 #define DMS_CLOSED (-9)             /* the connection is closed */
 #define DMS_REFUSED (-10)           /* the server refused the channel request */
+#define DMS_HOST_NOT_FOUND (-11)    /* name resolution found no address */
+#define DMS_CONNECTION_REFUSED (-12) /* nothing accepted the TCP connection on the port */
+#define DMS_UNREACHABLE (-13)       /* no route to the host (or Local Network access denied) */
+#define DMS_NO_ANSWER (-14)         /* the host did not answer the TCP connection in time */
 
 /* Authentication methods (remaining_methods bits). */
 #define DMS_METHOD_PASSWORD 1u
@@ -49,6 +53,7 @@ extern "C" {
 
 typedef struct dms_session dms_session;
 typedef struct dms_key dms_key;
+typedef struct dms_shell dms_shell;
 /* A one-shot answer slot. Answer each exactly once with one dms_reply_* call (any thread, any time). */
 typedef struct dms_reply dms_reply;
 
@@ -140,6 +145,25 @@ void dms_key_free(dms_key *key);
  */
 void dms_exec(dms_session *session, const char *command, void *context, dms_exec_started_fn started,
               dms_stderr_fn stderr_chunk, dms_exited_fn exited);
+
+/*
+ * Opens a session channel with a PTY (`term`, cols x rows, no pixel size, no terminal modes, no env requests) and
+ * starts the login shell on it. Callbacks as dms_exec without stderr (the PTY merges it into the output): `started`
+ * runs once (a refused pty-req or shell request is DMS_REFUSED, and the last call), then `exited` exactly once.
+ * The fd carries the terminal both ways; unlike exec, shutdown(SHUT_WR) or close() closes the channel (a PTY has
+ * no end of file), and the shell ends as the server decides (sshd hangs it up). Returns the shell's handle (NULL
+ * only when `started` is NULL), valid whatever happens until dms_shell_free.
+ */
+dms_shell *dms_shell_open(dms_session *session, const char *term, uint32_t cols, uint32_t rows, void *context,
+                          dms_exec_started_fn started, dms_exited_fn exited);
+/*
+ * Asks for a window change (no pixel size). Changes reach the server in call order from one engine task; a size
+ * superseded before it was sent is skipped (the latest wins), one asked before the shell started is sent once it
+ * has, and changes after the channel closed are dropped.
+ */
+void dms_shell_resize(dms_shell *shell, uint32_t cols, uint32_t rows);
+/* Releases the handle only: the fd decides the channel's lifetime. */
+void dms_shell_free(dms_shell *shell);
 
 void dms_reply_bool(dms_reply *reply, bool value);
 void dms_reply_strings(dms_reply *reply, const char *const *strings, size_t count);

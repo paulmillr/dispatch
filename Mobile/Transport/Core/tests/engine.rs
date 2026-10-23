@@ -1,8 +1,9 @@
 //! Engine tests against an in-process russh server: keyboard-interactive and password (a user-owned
 //! OpenSSH sshd cannot do PAM, and cannot check passwords), the external signer, key files of every type
-//! (made with ssh-keygen), and an exec channel through the socketpair. The Swift tests cover OpenSSH 10.3.
+//! (made with ssh-keygen), and exec and shell (PTY) channels through the socketpair. The Swift tests cover
+//! OpenSSH 10.3.
 
-use dispatch_mobile_ssh::{AuthOutcome, Code, ConnectOptions, ExecEvents, Exit, HostKey, LoadedKey, Prompt, Session, SessionEvents, exec, runtime};
+use dispatch_mobile_ssh::{AuthOutcome, Code, ConnectOptions, ExecEvents, Exit, HostKey, LoadedKey, Prompt, Session, SessionEvents, Resizer, exec, runtime, shell};
 use russh::keys::{PrivateKey, PublicKey};
 use russh::server::{self, Auth, Msg, Response};
 use russh::{Channel, ChannelId, MethodKind, MethodSet};
@@ -11,6 +12,7 @@ use std::io::{Read, Write};
 use std::os::fd::FromRawFd;
 use std::path::PathBuf;
 use std::process::Command;
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -64,6 +66,10 @@ fn keygen_fingerprint(name: &str) -> String {
 struct Server {
     authorized: Arc<Mutex<Vec<PublicKey>>>,
     rounds: Arc<Mutex<Vec<String>>>,
+    /// What shell channels asked for, in order: "pty <term> <cols>x<rows> <pixels> modes=<n>", "shell",
+    /// "resize <cols>x<rows> <pixels>", "close".
+    terminal: Arc<Mutex<Vec<String>>>,
+    shells: Arc<Mutex<HashSet<ChannelId>>>,
 }
 
 impl server::Handler for Server {
@@ -114,8 +120,59 @@ impl server::Handler for Server {
         Ok(())
     }
 
+    /// A terminal named "refused" is refused, as a server without PTYs (or `no-pty` in authorized_keys) does.
+    async fn pty_request(
+        &mut self,
+        channel: ChannelId,
+        term: &str,
+        col_width: u32,
+        row_height: u32,
+        pix_width: u32,
+        pix_height: u32,
+        modes: &[(russh::Pty, u32)],
+        session: &mut server::Session,
+    ) -> Result<(), Self::Error> {
+        self.terminal.lock().unwrap().push(format!("pty {term} {col_width}x{row_height} {pix_width}x{pix_height} modes={}", modes.len()));
+        if term == "refused" { session.channel_failure(channel) } else { session.channel_success(channel) }
+    }
+
+    /// The shell writes a prompt; its input echoes back, and a line "exit <n>" ends it with status n.
+    async fn shell_request(&mut self, channel: ChannelId, session: &mut server::Session) -> Result<(), Self::Error> {
+        self.terminal.lock().unwrap().push("shell".into());
+        self.shells.lock().unwrap().insert(channel);
+        session.channel_success(channel)?;
+        session.data(channel, &b"$ "[..])?;
+        Ok(())
+    }
+
+    async fn window_change_request(
+        &mut self,
+        _channel: ChannelId,
+        col_width: u32,
+        row_height: u32,
+        pix_width: u32,
+        pix_height: u32,
+        _session: &mut server::Session,
+    ) -> Result<(), Self::Error> {
+        self.terminal.lock().unwrap().push(format!("resize {col_width}x{row_height} {pix_width}x{pix_height}"));
+        Ok(())
+    }
+
     async fn data(&mut self, channel: ChannelId, data: &[u8], session: &mut server::Session) -> Result<(), Self::Error> {
+        let status = self.shells.lock().unwrap().contains(&channel).then(|| std::str::from_utf8(data).ok()?.trim().strip_prefix("exit ")?.parse().ok()).flatten();
         session.data(channel, data.to_vec())?;
+        if let Some(status) = status {
+            session.exit_status_request(channel, status)?;
+            session.eof(channel)?;
+            session.close(channel)?;
+        }
+        Ok(())
+    }
+
+    async fn channel_close(&mut self, channel: ChannelId, _session: &mut server::Session) -> Result<(), Self::Error> {
+        if self.shells.lock().unwrap().contains(&channel) {
+            self.terminal.lock().unwrap().push("close".into());
+        }
         Ok(())
     }
 
@@ -150,7 +207,7 @@ fn start_server() -> Running {
         methods: MethodSet::from(&[MethodKind::Password, MethodKind::PublicKey, MethodKind::KeyboardInteractive][..]),
         ..Default::default()
     });
-    let handler = Server { authorized: Arc::default(), rounds: Arc::default() };
+    let handler = Server { authorized: Arc::default(), rounds: Arc::default(), terminal: Arc::default(), shells: Arc::default() };
     let listener = runtime().block_on(tokio::net::TcpListener::bind("127.0.0.1:0")).unwrap();
     let port = listener.local_addr().unwrap().port();
     let accept = handler.clone();
@@ -227,6 +284,26 @@ fn rejected_host_key_fails_connect_without_disconnect() {
     assert!(events.disconnects.lock().unwrap().is_empty());
 }
 
+fn connect_failure(host: &str, port: u16) -> dispatch_mobile_ssh::Failure {
+    let events = Arc::new(Events { expected: start_server().host_key.clone(), seen: Mutex::default(), disconnects: Mutex::default() });
+    let options = ConnectOptions { host: host.into(), port, timeout: Duration::from_secs(10), keepalive_interval: Duration::from_secs(15), keepalive_max: 3 };
+    let failure = runtime().block_on(Session::connect(options, events.clone())).err().expect("connect fails");
+    assert!(events.disconnects.lock().unwrap().is_empty());
+    failure
+}
+
+#[test]
+fn a_closed_port_is_refused() {
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    assert_eq!(connect_failure("127.0.0.1", port).code, Code::ConnectionRefused);
+}
+
+#[test]
+fn a_name_that_does_not_resolve_is_not_found() {
+    // RFC 6761: .invalid never resolves.
+    assert_eq!(connect_failure("dispatch-test.invalid", 22).code, Code::HostNotFound);
+}
+
 /// A proxy to `port` that passes the server's version line at once and holds the rest of what the
 /// server sends (its key exchange) back for `delay`.
 fn slow_proxy(port: u16, delay: Duration) -> u16 {
@@ -272,7 +349,8 @@ fn a_key_exchange_finishing_after_the_deadline_never_asks() {
         keepalive_max: 3,
     };
     let result = runtime().block_on(Session::connect(options, events.clone()));
-    assert_eq!(result.err().map(|f| f.code), Some(Code::Timeout));
+    let failure = result.err().unwrap();
+    assert_eq!((failure.code, failure.message.as_str()), (Code::Timeout, "the SSH handshake"), "past TCP: the handshake timed out");
     std::thread::sleep(Duration::from_millis(2500));
     assert!(events.seen.lock().unwrap().is_empty(), "host_key was asked after connect had failed");
     assert!(events.disconnects.lock().unwrap().is_empty());
@@ -439,6 +517,168 @@ fn exec_over_socketpair() {
     assert_eq!(*log.exit.lock().unwrap(), Some(Exit::Status(0)));
 }
 
+// MARK: - Shell (PTY) channels
+
+fn logged_in(server: &Running) -> Arc<Session> {
+    let (session, _) = connect(server);
+    assert!(matches!(runtime().block_on(session.auth_password("phone", "s3cret")), AuthOutcome::Success));
+    session
+}
+
+fn exec_log() -> Arc<ExecLog> {
+    Arc::new(ExecLog { stderr: Mutex::default(), exit: Mutex::default() })
+}
+
+/// Reads until `expected` has arrived (or the socket ends), with a deadline.
+fn read_until(socket: &mut std::os::unix::net::UnixStream, expected: &[u8]) -> Vec<u8> {
+    socket.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    let mut seen = Vec::new();
+    let mut buffer = [0u8; 4096];
+    while !seen.windows(expected.len()).any(|w| w == expected) {
+        match socket.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(count) => seen.extend_from_slice(&buffer[..count]),
+            Err(error) => panic!("reading {:?}: {error}; seen {:?}", String::from_utf8_lossy(expected), String::from_utf8_lossy(&seen)),
+        }
+    }
+    seen
+}
+
+fn eventually(what: &str, mut check: impl FnMut() -> bool) {
+    for _ in 0..200 {
+        if check() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    panic!("timed out waiting for {what}");
+}
+
+#[test]
+fn shell_starts_and_echoes() {
+    let server = start_server();
+    let session = logged_in(&server);
+    let log = exec_log();
+    let (fd, _shell) = runtime().block_on(shell(&session, "xterm-256color", 80, 24, log.clone())).unwrap();
+    let mut socket = unsafe { std::os::unix::net::UnixStream::from_raw_fd(fd) };
+    assert_eq!(read_until(&mut socket, b"$ "), b"$ ");
+    socket.write_all(b"echo hi\r").unwrap();
+    assert_eq!(read_until(&mut socket, b"echo hi\r"), b"echo hi\r");
+    assert_eq!(*server.handler.terminal.lock().unwrap(), ["pty xterm-256color 80x24 0x0 modes=0", "shell"], "no pixels, no modes, no env");
+    assert!(log.exit.lock().unwrap().is_none());
+}
+
+#[test]
+fn shell_resize_reaches_the_server() {
+    let server = start_server();
+    let session = logged_in(&server);
+    let (fd, shell) = runtime().block_on(shell(&session, "xterm-256color", 80, 24, exec_log())).unwrap();
+    let mut socket = unsafe { std::os::unix::net::UnixStream::from_raw_fd(fd) };
+    read_until(&mut socket, b"$ ");
+    runtime().block_on(shell.resize(120, 40)).unwrap();
+    runtime().block_on(shell.resize(100, 30)).unwrap();
+    let terminal = server.handler.terminal.clone();
+    eventually("both window changes", || terminal.lock().unwrap().len() == 4);
+    assert_eq!(terminal.lock().unwrap()[2..], ["resize 120x40 0x0", "resize 100x30 0x0"]);
+}
+
+/// The window changes the server saw, as (cols, rows).
+fn resizes(terminal: &Mutex<Vec<String>>) -> Vec<(u32, u32)> {
+    terminal
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|line| {
+            let (cols, rows) = line.strip_prefix("resize ")?.split(' ').next()?.split_once('x')?;
+            Some((cols.parse().ok()?, rows.parse().ok()?))
+        })
+        .collect()
+}
+
+/// Back-to-back changes (a layout pass, then the keyboard) reach the server in order, and the last one wins.
+#[test]
+fn rapid_resizes_arrive_in_order_and_the_last_wins() {
+    let server = start_server();
+    let session = logged_in(&server);
+    let resizer = Resizer::new(80, 24);
+    // Asked before the shell started: sent once it has.
+    resizer.resize(81, 25);
+    let (fd, shell) = runtime().block_on(shell(&session, "xterm-256color", 80, 24, exec_log())).unwrap();
+    let mut socket = unsafe { std::os::unix::net::UnixStream::from_raw_fd(fd) };
+    read_until(&mut socket, b"$ ");
+    resizer.attach(shell);
+    let terminal = server.handler.terminal.clone();
+    eventually("the change asked before the start", || resizes(&terminal) == [(81, 25)]);
+    for step in 2..=300 {
+        resizer.resize(80 + step, 24 + step);
+    }
+    eventually("the last window change", || resizes(&terminal).last() == Some(&(380, 324)));
+    std::thread::sleep(Duration::from_millis(100));
+    let seen = resizes(&terminal);
+    assert!(seen.windows(2).all(|pair| pair[0].0 < pair[1].0), "out of order: {seen:?}");
+    assert_eq!(seen.last(), Some(&(380, 324)), "nothing after the last: {seen:?}");
+    resizer.resize(380, 324);
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(resizes(&terminal).len(), seen.len(), "an unchanged size is not sent again");
+}
+
+#[test]
+fn shell_exit_status_propagates() {
+    let server = start_server();
+    let session = logged_in(&server);
+    let log = exec_log();
+    let (fd, _shell) = runtime().block_on(shell(&session, "xterm-256color", 80, 24, log.clone())).unwrap();
+    let mut socket = unsafe { std::os::unix::net::UnixStream::from_raw_fd(fd) };
+    read_until(&mut socket, b"$ ");
+    socket.write_all(b"exit 3\r").unwrap();
+    let mut rest = Vec::new();
+    socket.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    socket.read_to_end(&mut rest).unwrap();
+    assert_eq!(rest, b"exit 3\r", "the output ends with the channel");
+    eventually("the exit", || log.exit.lock().unwrap().is_some());
+    assert_eq!(*log.exit.lock().unwrap(), Some(Exit::Status(3)));
+}
+
+#[test]
+fn closing_the_socket_closes_the_shell_channel() {
+    let server = start_server();
+    let session = logged_in(&server);
+    let log = exec_log();
+    let (fd, _shell) = runtime().block_on(shell(&session, "xterm-256color", 80, 24, log.clone())).unwrap();
+    let mut socket = unsafe { std::os::unix::net::UnixStream::from_raw_fd(fd) };
+    read_until(&mut socket, b"$ ");
+    drop(socket);
+    let terminal = server.handler.terminal.clone();
+    eventually("the server seeing the close", || terminal.lock().unwrap().last().map(String::as_str) == Some("close"));
+    eventually("the exit", || log.exit.lock().unwrap().is_some());
+    assert_eq!(*log.exit.lock().unwrap(), Some(Exit::Lost), "closed by the caller before any status");
+}
+
+#[test]
+fn a_refused_pty_request_is_refused() {
+    let server = start_server();
+    let session = logged_in(&server);
+    let log = exec_log();
+    let failure = runtime().block_on(shell(&session, "refused", 80, 24, log.clone())).err().expect("refused");
+    assert_eq!(failure.code, Code::Refused);
+    assert_eq!(*server.handler.terminal.lock().unwrap(), ["pty refused 80x24 0x0 modes=0"], "no shell request after a refused pty-req");
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(log.exit.lock().unwrap().is_none(), "no exit after a failed start");
+}
+
+#[test]
+fn a_lost_connection_ends_the_shell_as_lost() {
+    let server = start_server();
+    let session = logged_in(&server);
+    let log = exec_log();
+    let (fd, _shell) = runtime().block_on(shell(&session, "xterm-256color", 80, 24, log.clone())).unwrap();
+    let mut socket = unsafe { std::os::unix::net::UnixStream::from_raw_fd(fd) };
+    read_until(&mut socket, b"$ ");
+    runtime().block_on(session.close());
+    eventually("the exit", || log.exit.lock().unwrap().is_some());
+    assert_eq!(*log.exit.lock().unwrap(), Some(Exit::Lost));
+}
+
 // MARK: - The C ABI itself (what Swift calls), for the paths the OpenSSH fixture cannot reach.
 
 mod abi {
@@ -523,6 +763,72 @@ mod abi {
         let password = CString::new("s3cret").unwrap();
         unsafe { dms_auth_password(session, user.as_ptr(), password.as_ptr(), context, Some(done)) };
         assert_eq!(receiver.recv_timeout(Duration::from_secs(10)).unwrap().0, 0);
+        unsafe { dms_session_free(session) };
+    }
+
+    struct ShellRun {
+        started: mpsc::Sender<(i32, i32)>,
+        exited: mpsc::Sender<(i32, u32)>,
+    }
+
+    unsafe extern "C" fn shell_started(context: *mut c_void, fd: i32, code: i32, _: *const c_char) {
+        let run = unsafe { &*context.cast::<ShellRun>() };
+        run.started.send((fd, code)).unwrap();
+    }
+
+    unsafe extern "C" fn shell_exited(context: *mut c_void, kind: i32, status: u32, _: *const c_char) {
+        let run = unsafe { &*context.cast::<ShellRun>() };
+        run.exited.send((kind, status)).unwrap();
+    }
+
+    fn logged_in(port: u16) -> *mut DmsSession {
+        let session = connect(port);
+        let user = CString::new("phone").unwrap();
+        let password = CString::new("s3cret").unwrap();
+        let (sender, receiver) = mpsc::channel();
+        let auth = Box::new(Auth { done: sender, prompts: Mutex::default() });
+        unsafe { dms_auth_password(session, user.as_ptr(), password.as_ptr(), (&*auth as *const Auth).cast_mut().cast(), Some(done)) };
+        assert_eq!(receiver.recv_timeout(Duration::from_secs(10)).unwrap().0, 0);
+        session
+    }
+
+    /// DMS_REFUSED (-10) for a refused pty-req, DMS_EXIT_STATUS (0) with the status, window changes through the handle.
+    #[test]
+    fn shell_through_the_c_abi() {
+        let server = start_server();
+        let session = logged_in(server.port);
+        let (started, started_rx) = mpsc::channel();
+        let (exited, exited_rx) = mpsc::channel();
+        let run = Box::new(ShellRun { started, exited });
+        let context = (&*run as *const ShellRun).cast_mut().cast();
+
+        let refused = CString::new("refused").unwrap();
+        let handle = unsafe { dms_shell_open(session, refused.as_ptr(), 80, 24, context, Some(shell_started), Some(shell_exited)) };
+        assert!(!handle.is_null());
+        assert_eq!(started_rx.recv_timeout(Duration::from_secs(10)).unwrap(), (-1, -10));
+        unsafe { dms_shell_resize(handle, 1, 1) }; // ignored: never started
+        unsafe { dms_shell_free(handle) };
+
+        let term = CString::new("xterm-256color").unwrap();
+        let handle = unsafe { dms_shell_open(session, term.as_ptr(), 80, 24, context, Some(shell_started), Some(shell_exited)) };
+        // Most likely before the shell started: sent once it has.
+        unsafe { dms_shell_resize(handle, 100, 30) };
+        let (fd, code) = started_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert_eq!(code, 0);
+        let mut socket = unsafe { std::os::unix::net::UnixStream::from_raw_fd(fd) };
+        read_until(&mut socket, b"$ ");
+        let terminal = server.handler.terminal.clone();
+        eventually("the early window change", || resizes(&terminal) == [(100, 30)]);
+        for cols in 101..=132 {
+            unsafe { dms_shell_resize(handle, cols, 50) };
+        }
+        eventually("the last window change", || resizes(&terminal).last() == Some(&(132, 50)));
+        let seen = resizes(&terminal);
+        assert!(seen.windows(2).all(|pair| pair[0].0 < pair[1].0), "out of order: {seen:?}");
+        socket.write_all(b"exit 3\r").unwrap();
+        assert_eq!(exited_rx.recv_timeout(Duration::from_secs(10)).unwrap(), (0, 3));
+        unsafe { dms_shell_free(handle) };
+        assert!(exited_rx.recv_timeout(Duration::from_millis(100)).is_err(), "exited runs once");
         unsafe { dms_session_free(session) };
     }
 }

@@ -3,7 +3,9 @@ import SwiftUI
 /// New host (M8a, from Add host in Spaces), and Edit from host detail. Name, host and port, username, and Password or
 /// Key file: the key list shows each key's type and SHA256 fingerprint to match against `authorized_keys`, the
 /// checked one is used. Create connects once to verify, asking about the host key on first use inside the sheet,
-/// and saves only when that connection succeeds; the verified connection becomes the host's session.
+/// and saves only when that connection succeeds; the verified connection becomes the host's session. Below them the
+/// multiplexer, the Helper switch and Chat (`HostFeatureDraft`): with Helper off the host is plain SSH (docs/ios.md),
+/// the multiplexer and Chat rows go and the words say that nothing is installed.
 struct NewHostSheet: View {
     enum Method: Hashable { case password, key }
 
@@ -23,6 +25,7 @@ struct NewHostSheet: View {
     @State private var keyID: UUID?
     @State private var importingKey = false
     @State private var creatingKey = false
+    @State private var features: HostFeatureDraft
     /// The connection Create makes to verify the host; it becomes the host's session when it connects.
     @State private var probe: HostSession?
     @State private var failure: String?
@@ -40,6 +43,7 @@ struct NewHostSheet: View {
         _address = State(initialValue: editing?.address ?? "")
         _port = State(initialValue: String(editing?.port ?? 22))
         _user = State(initialValue: editing?.user ?? "")
+        _features = State(initialValue: HostFeatureDraft(editing))
         switch editing?.auth {
         case .key(let key)?:
             _method = State(initialValue: .key)
@@ -76,127 +80,169 @@ struct NewHostSheet: View {
         record.port = port
         record.user = trimmedUser
         record.auth = auth
+        features.apply(to: &record)
         return record
     }
 
+    private static let failureRow = "failure"
+
     var body: some View {
         NavigationStack {
-            Form {
-                Section {
-                    TextField("studio", text: $name)
-                        .focused($focused, equals: .name)
-                        .textInputAutocapitalization(.never)
-                        .submitLabel(.next)
-                        .onSubmit { focused = .address }
-                } header: {
-                    MobileSectionHeader("Name")
-                }
-                Section {
-                    HStack(spacing: 12) {
-                        TextField("studio.tail3f.ts.net", text: $address)
-                            .focused($focused, equals: .address)
-                            .monospaced()
-                            .keyboardType(.URL)
-                            .textContentType(.URL)
-                        Divider()
-                        TextField("22", text: $port)
-                            .focused($focused, equals: .port)
-                            .monospaced()
-                            .keyboardType(.numberPad)
-                            .frame(width: 64)
-                    }
-                } header: {
-                    MobileSectionHeader("Host")
-                } footer: {
-                    Text("Hostname or Tailscale name · port")
-                }
-                Section {
-                    TextField("alex", text: $user)
-                        .focused($focused, equals: .user)
-                        .monospaced()
-                        .textContentType(.username)
-                } header: {
-                    MobileSectionHeader("Username")
-                }
-                Section {
-                    Picker("Authentication", selection: $method) {
-                        Text("Password").tag(Method.password)
-                        Text("Key file").tag(Method.key)
-                    }
-                    .pickerStyle(.segmented)
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets())
-                    if method == .password {
-                        SecureField(editing?.auth == .password ? "Unchanged" : "Password", text: $password)
-                            .focused($focused, equals: .password)
-                            .textContentType(.password)
-                    } else {
-                        KeyList(selection: $keyID)
-                        Button("Import key…") { importingKey = true }
-                        Button("Create key…") { creatingKey = true }
-                    }
-                } header: {
-                    MobileSectionHeader("Authentication")
-                } footer: {
-                    if method == .key {
-                        Text("Private keys stay in the Keychain and unlock with Face ID; Secure Enclave keys are available for P-256.")
-                    }
-                }
-                if method == .key, let keyID, let key = sessions.keys.key(keyID) {
-                    PublicKeyActions(key: key)
-                }
-                Section {
-                } footer: {
-                    Text(Self.helperStatement)
-                }
-                if let failure {
+            ScrollViewReader { reader in
+                Form {
                     Section {
-                        Text(failure).foregroundStyle(.red)
+                        TextField("studio", text: $name)
+                            .focused($focused, equals: .name)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .submitLabel(.next)
+                            .onSubmit { focused = .address }
+                    } header: {
+                        MobileSectionHeader("Name")
+                    }
+                    Section {
+                        HStack(spacing: 12) {
+                            TextField("studio.tail3f.ts.net", text: $address)
+                                .focused($focused, equals: .address)
+                                .monospaced()
+                                .keyboardType(.URL)
+                                .textContentType(.URL)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                            Divider()
+                            TextField("22", text: $port)
+                                .focused($focused, equals: .port)
+                                .monospaced()
+                                .keyboardType(.numberPad)
+                                .frame(width: 64)
+                        }
+                    } header: {
+                        MobileSectionHeader("Host")
                     } footer: {
-                        Text("Nothing was saved. Check the address and login, then Create again.")
+                        Text("Hostname or Tailscale name · port")
+                    }
+                    Section {
+                        TextField("alex", text: $user)
+                            .focused($focused, equals: .user)
+                            .monospaced()
+                            .textContentType(.username)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                    } header: {
+                        MobileSectionHeader("Username")
+                    }
+                    Section {
+                        Picker("Authentication", selection: $method) {
+                            Text("Password").tag(Method.password)
+                            Text("Key file").tag(Method.key)
+                        }
+                        .pickerStyle(.segmented)
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets())
+                        if method == .password {
+                            SecureField(editing?.auth == .password ? "Unchanged" : "Password", text: $password)
+                                .focused($focused, equals: .password)
+                                .textContentType(.password)
+                        } else {
+                            KeyList(selection: $keyID)
+                            Button("Import key…") { importingKey = true }
+                            Button("Create key…") { creatingKey = true }
+                        }
+                    } header: {
+                        MobileSectionHeader("Authentication")
+                    } footer: {
+                        if method == .key {
+                            Text("Private keys stay in the Keychain and unlock with Face ID; Secure Enclave keys are available for P-256.")
+                        }
+                    }
+                    if method == .key, let keyID, let key = sessions.keys.key(keyID) {
+                        PublicKeyActions(key: key)
+                    }
+                    Section {
+                        if features.showsHelperRows {
+                            Picker("Multiplexer", selection: $features.multiplexer) {
+                                ForEach(HostRecord.MultiplexerPreference.allCases, id: \.self) { Text($0.title).tag($0) }
+                            }
+                        }
+                        Toggle("Helper", isOn: $features.helper)
+                            .accessibilityHint(Self.helperHint)
+                        if features.showsHelperRows {
+                            Toggle("Chat", isOn: $features.chat)
+                            Toggle(HostFilesSwitch.title, isOn: $features.files)
+                        }
+                    } header: {
+                        MobileSectionHeader("On the host")
+                    } footer: {
+                        Text(Self.statement(helper: features.helper))
+                    }
+                    if let failure {
+                        Section {
+                            Text(failure).foregroundStyle(.red)
+                        } footer: {
+                            Text("Nothing was saved. Check the address and login, then Create again.")
+                        }
+                        .id(Self.failureRow)
                     }
                 }
-            }
-            .scrollDismissesKeyboard(.interactively)
-            .navigationTitle(editing == nil ? "New host" : "Edit host")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(role: .cancel) { cancel() } label: { Image(systemName: "xmark") }
-                        .tint(.primary)
-                        .accessibilityLabel("Cancel")
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    if verifying {
-                        ProgressView().accessibilityLabel("Connecting")
-                    } else {
-                        Button(editing == nil ? "Create" : "Save") { submit() }
-                            .buttonStyle(.glassProminent)
-                            .disabled(record == nil)
+                .scrollDismissesKeyboard(.interactively)
+                .navigationTitle(editing == nil ? "New host" : "Edit host")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button(role: .cancel) { cancel() } label: { Image(systemName: "xmark") }
+                            .tint(.primary)
+                            .accessibilityLabel("Cancel")
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        if verifying {
+                            ProgressView().accessibilityLabel("Connecting")
+                        } else {
+                            Button(editing == nil ? "Create" : "Save") { submit() }
+                                .buttonStyle(.glassProminent)
+                                .disabled(record == nil)
+                        }
                     }
                 }
-            }
-            .disabled(verifying)
-            .sheet(isPresented: $importingKey) {
-                ImportKeySheet { keyID = $0.id }.tint(.dispatchPink)
-            }
-            .sheet(isPresented: $creatingKey) {
-                CreateKeySheet { keyID = $0.id }.tint(.dispatchPink)
-            }
-            .onChange(of: probe?.link) { _, link in probeChanged(link) }
-            .onAppear {
-                if editing == nil, keyID == nil { keyID = sessions.keys.keys.first?.id }
+                .disabled(verifying)
+                .sheet(isPresented: $importingKey) {
+                    ImportKeySheet { keyID = $0.id }.tint(.dispatchPink)
+                }
+                .sheet(isPresented: $creatingKey) {
+                    CreateKeySheet { keyID = $0.id }.tint(.dispatchPink)
+                }
+                .onChange(of: probe?.link) { _, link in probeChanged(link) }
+                .onAppear {
+                    if editing == nil, keyID == nil { keyID = sessions.keys.keys.first?.id }
+                }
+                // The failure is the form's last section, below the helper's text: brought into view, or a small screen
+                // would show only the Create button coming back.
+                .onChange(of: failure) { _, failure in
+                    if failure != nil { withAnimation { reader.scrollTo(Self.failureRow, anchor: .bottom) } }
+                }
             }
         }
         .hostTrustPrompt()
         // M8a draws the sheet's grabber, as New space's and New chat's do.
-        .presentationDragIndicator(.visible)
+        .mobileSheetGrabber()
         .interactiveDismissDisabled(verifying)
         // Swiped away after a failed attempt: nothing of the unsaved host stays behind.
         .onDisappear { if !saved, editing == nil { discardProbe() } }
     }
 
-    /// What the helper does on the host (plan 3.1: on the phone the helper is not optional), linking the details.
+    /// The words under the Helper switch: what the helper does on the host, or with the switch off what plain SSH does.
+    static func statement(helper: Bool) -> AttributedString {
+        helper ? helperStatement : AttributedString(plainStatement)
+    }
+
+    /// With Helper off (docs/ios.md, Plain SSH): a shell over SSH, nothing installed.
+    static var plainStatement: String {
+        "Without the helper, this \(MobileDevice.name) only opens shells on the host over SSH and installs nothing there. Chat, agents and tmux or herdr spaces need the helper."
+    }
+
+    /// VoiceOver's hint on the Helper switch (New host, host detail).
+    static let helperHint = "Off: plain SSH, nothing is installed on the host"
+
+    /// What the helper does on the host, linking the details.
     static let helperStatement: AttributedString = {
         var text = AttributedString(HelperGrant.statement)
         var link = AttributedString("What the helper can do")
@@ -242,6 +288,11 @@ struct NewHostSheet: View {
             save(record, probe: probe)
         case .failed(let reason):
             failure = probe.hostKeyMismatch != nil ? "The host key changed since you trusted it." : reason
+        case .reconnecting(_, _, let reason?):
+            // A saved host keeps retrying a network failure; verifying a new one stops at the first and says why
+            // (a mistyped name, Tailscale off, no signal), instead of spinning.
+            failure = probe.problem ?? reason
+            discardProbe()
         default:
             break
         }
@@ -264,6 +315,36 @@ struct NewHostSheet: View {
         probe?.disconnect()
         probe = nil
         sessions.keys.removePassword(for: id)
+    }
+}
+
+/// New host's multiplexer, Helper, Chat and Files & git rows (M8a): the sheet's own copy of them. Chat and Files are
+/// kept apart from the record, which forces them off without the helper (`HostRecord.helper`): turning Helper off only
+/// hides them, and turning it on again shows them as they were (on, for a host saved without the helper: their default).
+struct HostFeatureDraft: Equatable {
+    var multiplexer: HostRecord.MultiplexerPreference = .automatic
+    var helper = true
+    /// What Chat is with the helper; kept while Helper is off.
+    var chat = true
+    /// What Files & git is with the helper; kept while Helper is off.
+    var files = true
+
+    init(_ record: HostRecord? = nil) {
+        guard let record else { return }
+        multiplexer = record.multiplexer
+        helper = record.helper
+        chat = record.helper ? record.chat : true
+        files = record.helper ? record.files : true
+    }
+
+    /// The multiplexer, Chat and Files & git rows show with the helper only.
+    var showsHelperRows: Bool { helper }
+
+    func apply(to record: inout HostRecord) {
+        record.multiplexer = multiplexer
+        record.helper = helper
+        record.chat = helper && chat
+        record.files = helper && files
     }
 }
 
@@ -293,7 +374,7 @@ struct KeyList: View {
         } message: { key in
             Text(sessions.store.hosts.contains { $0.auth == .key(key.id) }
                  ? "Hosts that use this key can't connect until you choose another."
-                 : "The private key is removed from this iPhone.")
+                 : "The private key is removed from this \(MobileDevice.name).")
         }
     }
 }

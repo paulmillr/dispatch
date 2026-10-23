@@ -891,7 +891,12 @@ fn web(title: &str, root: Option<Value<'_>>) -> Option<Tool> {
     };
     Some(Tool {
         kind: "tool".into(),
-        title: if same { actions[0].0 } else { "Web" }.into(),
+        title: if same && actions[0].0 != "Search web" {
+            actions[0].0
+        } else {
+            "Web"
+        }
+        .into(),
         symbol: if search { "magnifyingglass" } else { "globe" }.into(),
         summary: if actions.is_empty() {
             "Web request".into()
@@ -985,6 +990,7 @@ fn questions(root: Option<Value<'_>>, output: &mut Output) -> Option<Tool> {
 fn text(block: &Block) -> &str {
     match block {
         Block::Code { text, .. } | Block::Markdown(text) | Block::Attachment(text) => text,
+        Block::File(shown) => shown.name.as_deref().unwrap_or_default(),
     }
 }
 

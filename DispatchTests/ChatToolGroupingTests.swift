@@ -60,36 +60,114 @@ final class ChatToolGroupingTests: XCTestCase {
         XCTAssertEqual(session.transcriptRows.compactMap(\.replyTime), [date.addingTimeInterval(60), date.addingTimeInterval(120)])
     }
 
-    func testMockupGroupSummaryCountsOperationsWithoutDecodingOutput() {
+    func testStepKindsReadOperationsWithoutDecodingOutput() {
+        func kinds(_ items: [ChatItem]) -> [ChatToolStep.Kind] { items.map { ChatToolStep($0, seconds: nil).kind } }
         let items = [
             ChatItem(id: "read1", kind: .tool, text: #"{"cmd":"cat billing.swift"}"#, title: "exec_command"),
             ChatItem(id: "read2", kind: .tool, text: #"{"command":["zsh","-lc","head helpers.swift"]}"#, title: "shell"),
             ChatItem(id: "patch", kind: .tool, text: "*** Begin Patch", title: "functions.apply_patch"),
             ChatItem(id: "shell", kind: .tool, text: #"{"cmd":"swift test"}"#, title: "exec_command", output: String(repeating: "large output\n", count: 100_000))
         ]
-        XCTAssertEqual(ChatToolGroupHeader.summarize(items), "Patch")
+        XCTAssertEqual(kinds(items), [.other, .other, .edit, .other])
         let webItems = [
             ChatItem(id: "web-search", kind: .tool, text: #"{"search_query":[{"q":"Swift"}]}"#, title: "web.run"),
             ChatItem(id: "web-open", kind: .tool, text: #"{"open":[{"ref_id":"https://example.com"}]}"#, title: "web__run"),
             ChatItem(id: "web-click", kind: .tool, text: #"{"click":[{"ref_id":"turn0view0","id":7}]}"#, title: "functions.web__run")
         ]
-        for item in webItems {
-            XCTAssertEqual(ChatToolGroupHeader.summarize([item]), "Browse web")
-        }
-        XCTAssertEqual(ChatToolGroupHeader.summarize(items + webItems), "Patch · Browse web ×3")
-        XCTAssertEqual(ChatToolGroupHeader.summarize([
+        XCTAssertEqual(kinds(webItems), [.web, .web, .web])
+        XCTAssertEqual(kinds([
             ChatItem(id: "large", kind: .tool, text: String(repeating: "command", count: 10_000), title: "exec_command"),
             ChatItem(id: "tools", kind: .tool, text: "", title: "functions.exec"),
-            ChatItem(id: "read", kind: .tool, text: "", title: "read_file")
-        ]), "")
-        XCTAssertEqual(ChatToolGroupHeader.summarize([
+            ChatItem(id: "read", kind: .tool, text: "", title: "read_file"),
             ChatItem(id: "search", kind: .tool, text: #"{"cmd":"rg pattern ."}"#, title: "exec_command"),
-            ChatItem(id: "search-again", kind: .tool, text: "", title: "search"),
-            ChatItem(id: "patch", kind: .tool, text: "", title: "apply_patch"),
             ChatItem(id: "input", kind: .tool, text: "", title: "write_stdin"),
-            ChatItem(id: "custom", kind: .tool, text: "", title: "Browser"),
-            ChatItem(id: "custom-again", kind: .tool, text: "", title: "Browser")
-        ]), "Patch")
+            ChatItem(id: "custom", kind: .tool, text: "", title: "Browser")
+        ]), Array(repeating: .other, count: 6))
+        XCTAssertEqual(kinds([ChatItem(id: "patch", kind: .tool, text: "", title: "apply_patch"),
+                              ChatItem(id: "write", kind: .tool, text: "", title: "write_file")]), [.edit, .edit])
+        var failed = tool("failed"); failed.exitCode = 1
+        XCTAssertEqual([tool("ok"), failed].map { ChatToolStep($0, seconds: nil).failed }, [false, true])
+    }
+
+    func testStepTimesAreTheGapsBetweenRecordedSteps() throws {
+        let session = ChatSession(id: System.uuid())
+        let date = Date(timeIntervalSince1970: 1_750_000_000)
+        session.insert(ChatItem(id: "reply", kind: .assistant, text: "Checking"), turnID: "turn", at: date)
+        for (id, seconds) in [("one", 1.0), ("two", 3.4), ("three", 44.6)] {
+            session.insert(tool(id), turnID: "turn", at: date.addingTimeInterval(seconds))
+        }
+        let group = try XCTUnwrap(session.transcriptRows.first?.group)
+        for (step, seconds) in zip(group.steps, [1, 2.4, 41.2]) { XCTAssertEqual(try XCTUnwrap(step.seconds), seconds, accuracy: 0.001) }
+        XCTAssertEqual(group.steps.count, 3)
+        XCTAssertEqual(try XCTUnwrap(group.elapsed), 44.6, accuracy: 0.001)
+        XCTAssertEqual(ChatToolGroupHeader.caption(count: group.children.count, elapsed: group.elapsed, radio: false), "3 steps · 45s",
+                       "Whole seconds")
+        XCTAssertEqual(ChatToolGroupHeader.caption(count: 1, elapsed: nil, radio: true), "1 manoeuvre", "No time when one is unknown")
+        // Without the message's time the first step is instant; without a step's own time the group's is unknown.
+        XCTAssertEqual(ChatToolStep.steps([tool("a"), tool("b")], times: [date, date.addingTimeInterval(5)], start: nil).map(\.seconds), [0, 5])
+        let untimed = ChatToolGroup(id: "g", children: [], steps: ChatToolStep.steps([tool("a"), tool("b")], times: [date, nil], start: date))
+        XCTAssertNil(untimed.elapsed)
+    }
+
+    /// The live turn's newest group and its running step show no time; finished steps and finished groups keep theirs.
+    func testLiveGroupShowsNoTimeForItsRunningStep() throws {
+        let session = ChatSession(id: System.uuid())
+        let date = Date(timeIntervalSince1970: 1_750_000_000)
+        session.activeTurnID = "turn"; session.busy = true
+        session.insert(ChatItem(id: "reply", kind: .assistant, text: "Checking"), turnID: "turn", at: date)
+        for (id, seconds) in [("one", 1.0), ("two", 3.0), ("three", 10.0)] {
+            session.insert(tool(id), turnID: "turn", at: date.addingTimeInterval(seconds))
+        }
+        let group = try XCTUnwrap(session.transcriptRows.last?.group)
+        XCTAssertTrue(session.groupIsLive(group, turnID: "turn"))
+        XCTAssertEqual(session.groupDisclosure(group, turnID: "turn"), .current)
+        let current = session.visibleTranscriptRows.compactMap(\.timeline)
+        XCTAssertEqual(current.map(\.running), [true], "The live group shows its running step alone, without a time")
+
+        session.setGroupExpanded(group, true)
+        let opened = session.visibleTranscriptRows.compactMap(\.timeline)
+        XCTAssertEqual(opened.map(\.running), [false, false, true], "Opened, only its last step is still running")
+        XCTAssertEqual(opened.map(\.step.seconds), [1, 2, 7], "Finished steps keep their times")
+        XCTAssertEqual(session.groupDisclosure(group, turnID: "turn"), .all)
+        XCTAssertTrue(session.groupIsLive(group, turnID: "turn"))
+
+        session.busy = false
+        XCTAssertFalse(session.groupIsLive(group, turnID: "turn"))
+        XCTAssertEqual(session.visibleTranscriptRows.compactMap(\.timeline).map(\.running), [false, false, false],
+                       "A finished turn's steps all show their times")
+        XCTAssertEqual(try XCTUnwrap(group.elapsed), 10, accuracy: 0.001)
+    }
+
+    /// An opened group's step names share one column, wide enough for the common names in the chat's font.
+    func testStepTitleColumnFitsTheCommonNames() {
+        AppFont.register()
+        let typography = ChatTypography(preferences: Preferences())
+        let font = NSFont(name: typography.fontName, size: typography.detailSize) ?? .systemFont(ofSize: typography.detailSize)
+        for name in ChatTypography.stepNames {
+            XCTAssertGreaterThanOrEqual(typography.stepTitleWidth, (name as NSString).size(withAttributes: [.font: font]).width, name)
+        }
+        XCTAssertLessThan(typography.stepTitleWidth, typography.characterWidth * 14, "The column stays narrow")
+    }
+
+    func testStepChartBarsShareWidthByTimeAndMergeWhenCrowded() {
+        func step(_ seconds: TimeInterval?, _ kind: ChatToolStep.Kind = .other, failed: Bool = false) -> ChatToolStep {
+            ChatToolStep(kind: kind, failed: failed, seconds: seconds)
+        }
+        // 100 points: 3 bars of 3 plus 2 gaps of 2 leave 87 to share by time.
+        let timed = ChatStepChart.bars([step(1), step(2), step(7)], width: 100)
+        for (bar, (x, width)) in zip(timed, [(0, 11.7), (13.7, 20.4), (36.1, 63.9)] as [(CGFloat, CGFloat)]) {
+            XCTAssertEqual(bar.x, x, accuracy: 0.001); XCTAssertEqual(bar.width, width, accuracy: 0.001)
+        }
+        XCTAssertEqual(ChatStepChart.bars([step(1), step(nil), step(7)], width: 100).map(\.width), [32, 32, 32], "Equal without every time")
+        // 10 000 steps fill 20 bars of 500, each marked by an edit or failure inside it.
+        var many = (0..<10_000).map { _ in step(1) }
+        many[1_234] = step(1, .edit); many[9_999] = step(1, failed: true)
+        let crowded = ChatStepChart.bars(many, width: 100)
+        XCTAssertEqual(crowded.count, 20)
+        XCTAssertEqual(crowded.filter { $0.step.kind == .edit }.count, 1)
+        XCTAssertTrue(crowded.last?.step.failed == true)
+        XCTAssertEqual(crowded.last.map { $0.x + $0.width } ?? 0, 100, accuracy: 0.001)
+        XCTAssertEqual(ChatStepChart.bars([], width: 100), [])
     }
 
     func testConsecutiveToolsGroupWithinTurnsAndKeepApprovalsVisible() {
@@ -347,10 +425,21 @@ final class ChatToolGroupingTests: XCTestCase {
         let row = try XCTUnwrap(session.transcriptRows.first)
         let group = try XCTUnwrap(row.group)
         XCTAssertEqual(row.item?.id, "message")
-        XCTAssertEqual(session.visibleTranscriptRows.count, 3)
+        // Live, the group shows only the step the agent is on; the next one replaces it.
+        XCTAssertEqual(session.groupDisclosure(group, turnID: "turn"), .current)
+        XCTAssertEqual(session.visibleTranscriptRows.map { $0.item?.id }, ["message", "two"])
         XCTAssertFalse(session.visibleTranscriptRows[0].bubbleEnd)
         XCTAssertFalse(session.visibleTranscriptRows[1].bubbleStart)
-        XCTAssertTrue(session.visibleTranscriptRows[2].bubbleEnd)
+        XCTAssertTrue(session.visibleTranscriptRows[1].bubbleEnd)
+        let current = try XCTUnwrap(session.visibleTranscriptRows[1].timeline)
+        XCTAssertTrue(current.current && current.first && current.last)
+        session.turns[0].items.append(tool("three"))
+        XCTAssertEqual(session.visibleTranscriptRows.map { $0.item?.id }, ["message", "three"])
+        session.setGroupExpanded(group, true)
+        XCTAssertEqual(session.groupDisclosure(group, turnID: "turn"), .all, "Opening a live group shows every step")
+        XCTAssertEqual(session.visibleTranscriptRows.compactMap { $0.timeline.map { [$0.first, $0.last, $0.current] } },
+                       [[true, false, false], [false, false, false], [false, true, false]])
+        session.turns[0].items.removeLast()
         session.setGroupExpanded(group, false)
         XCTAssertEqual(session.visibleTranscriptRows.count, 1)
         session.turns[0].items.append(tool("three"))
@@ -363,7 +452,7 @@ final class ChatToolGroupingTests: XCTestCase {
         XCTAssertEqual(restored.expandedToolGroups, session.expandedToolGroups)
         session.expandedToolGroups = []
         session.busy = true
-        XCTAssertEqual(session.visibleTranscriptRows.count, 4)
+        XCTAssertEqual(session.visibleTranscriptRows.count, 2)
         session.busy = false
         XCTAssertEqual(session.visibleTranscriptRows.count, 1, "Automatic expansion ends with the turn")
     }

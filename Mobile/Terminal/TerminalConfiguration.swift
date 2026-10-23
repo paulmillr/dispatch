@@ -5,29 +5,53 @@ import Foundation
 /// The terminal's config as the Mac writes it (`TerminalRuntime.makeConfig`, Ghostty's config syntax read by
 /// `Vendor/Term`): the same theme names, contrast shader setting and keybinds, with the phone's font size and the
 /// mockup's padding (M6a: 14 points beside the text, 10 above and below). Dark by default: `dispatch-black`, the
-/// Mac's Default dark theme. Themes come from the app's `ghostty` folder (`extras/ghostty`), fonts from TermApple's
-/// bundled JetBrains Mono and Symbols Nerd Font.
+/// Mac's Default dark theme; Settings picks another (`TerminalSchemes`), and the font, cursor and bold colours
+/// (`TerminalStyle`). Fonts come from TermApple's bundled JetBrains Mono and Symbols Nerd Font, else the family
+/// Settings named (registered by `MobileFonts`).
 struct TerminalConfiguration: Equatable, Sendable {
     static let defaultFontSize = 12.0
     /// Pinch zoom stays within these sizes (points).
     static let fontSizes = 7.0...28.0
 
+    static let defaultScheme = "dispatch-black"
+
     var fontSize = defaultFontSize
-    var theme = "dispatch-black"
+    /// `font-family`: nil leaves JetBrains Mono, which every terminal falls back to.
+    var fontFamily: String?
+    /// The scheme's file name (`TerminalSchemes`).
+    var theme = defaultScheme
     /// The Mac's "Improve text contrast": the contrast shader raises text to 4.5:1 against its background.
     var improveTextContrast = false
+    /// Bold text in the first eight colours draws bright (`DrawConfig.bold`; Term's config has no `bold-color`).
+    var boldIsBright = false
+    var cursor = TerminalCursorStyle.block
+    /// Off writes `cursor-style-blink = false`; on leaves the program's choice, as the Mac does.
+    var cursorBlink = true
     var paddingX = 14
     var paddingY = 10
     /// Kept small on a phone: the multiplexer keeps the long history (herdr), or tmux's own history is replayed.
     var scrollbackBytes = 10_000_000
+    /// Programs may write the phone's pasteboard (OSC 52, kitty clipboard): set by the presence from its feed
+    /// (`TerminalFeed.clipboardWrite`), true only for plain SSH shells. Never a user setting.
+    var clipboardWrite = false
 
-    /// Where the bundled themes are (`DispatchMobile.app/ghostty`).
-    static var themes: URL { Bundle.main.bundleURL.appendingPathComponent("ghostty") }
+    /// Where Dispatch's themes are (`DispatchMobile.app/ghostty`).
+    static var themes: URL { TerminalSchemes.dispatchFolder }
 
+    /// `clipboard-write = deny` by default: the phone has no trusted consent surface for a remote program's write, so it
+    /// fails closed instead of turning an `ask` request into an unconditional write in the SurfaceHost. Behind a helper
+    /// the writer is whatever runs in a server-owned multiplexer session, shared with other clients and agents, so its
+    /// writes stay denied. A plain SSH shell (`clipboardWrite`) is a PTY the user opened from the phone with nothing
+    /// between, as in any SSH client: `allow` sends its OSC 52 writes to `UIPasteboard.general` (docs/security.md).
+    /// `clipboard-read` is answered by the host, which denies every read (an empty reply) for every feed: a remote
+    /// program never reads the phone's pasteboard.
     var text: String {
-        let themePath = Self.themes.appendingPathComponent(theme).path
-        return """
-        term = xterm-256color
+        let themePath = (TerminalSchemes.url(theme) ?? Self.themes.appendingPathComponent(Self.defaultScheme)).path
+        var lines = ["term = xterm-256color"]
+        if let fontFamily { lines.append("font-family = \(fontFamily)") }
+        lines.append("cursor-style = \(cursor.rawValue)")
+        if !cursorBlink { lines.append("cursor-style-blink = false") }
+        return lines.joined(separator: "\n") + "\n" + """
         font-size = \(fontSize)
         theme = \(themePath)
         minimum-contrast = \(improveTextContrast ? 4.5 : 1)
@@ -37,10 +61,10 @@ struct TerminalConfiguration: Equatable, Sendable {
         scrollback-limit-bytes = \(scrollbackBytes)
         image-storage-limit = 0
         clipboard-read = ask
-        // The phone has no trusted consent surface for a remote program's write. Fail closed instead of turning an
-        // `ask` request into an unconditional write in the SurfaceHost.
-        clipboard-write = deny
+        clipboard-write = \(clipboardWrite ? "allow" : "deny")
         keybind = clear
+        keybind = shift+page_up=scroll_page_up
+        keybind = shift+page_down=scroll_page_down
         """
     }
 

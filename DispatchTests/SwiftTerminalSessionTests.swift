@@ -15,6 +15,88 @@ final class SwiftTerminalSessionTests: XCTestCase {
         XCTAssertEqual(TerminalLinkPolicy.confirmationScheme(for: "ssh://host"), "ssh")
     }
 
+    /// The CPU/GPU boundary rejects inconsistent lengths, formats and uniforms before a shader can
+    /// turn them into unchecked buffer or texture addresses. Extreme public initializer values stay
+    /// finite instead of trapping while they are narrowed to the Metal ABI.
+    func testMetalRendererRejectsUnsafeFrameMetadata() throws {
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let renderer = try MetalRenderer(device: device)
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: renderer.pixelFormat, width: 1, height: 1, mipmapped: false)
+        (descriptor.usage, descriptor.storageMode) = (.renderTarget, .shared)
+        let target = try XCTUnwrap(device.makeTexture(descriptor: descriptor))
+        let gray = Atlas(size: 2, format: .grayscale), color = Atlas(size: 2, format: .bgra)
+        let background = RGB(r: 0, g: 0, b: 0)
+        let valid = Contents(cols: 1, rows: 1, background: background, bg: [0, 0, 0, 0], lists: [[], [], []])
+        let uniforms = FrameUniforms(size: RenderSize(screen: (1, 1), cell: (1, 1)), cell: (1, 1), cols: 1, rows: 1, background: background)
+
+        let commands = try XCTUnwrap(renderer.draw(valid, uniforms, gray: gray, color: color, into: target))
+        commands.waitUntilCompleted()
+        XCTAssertEqual(commands.status, .completed)
+
+        let short = Contents(cols: 1, rows: 1, background: background, bg: [0, 0, 0], lists: [[], [], []])
+        XCTAssertNil(renderer.draw(short, uniforms, gray: gray, color: color, into: target))
+        XCTAssertNil(renderer.draw(valid, uniforms, gray: gray, color: Atlas(size: 2, format: .bgr), into: target))
+        var mismatched = uniforms
+        mismatched.grid = SIMD2(2, 1)
+        XCTAssertNil(renderer.draw(valid, mismatched, gray: gray, color: color, into: target))
+        mismatched = uniforms
+        mismatched.padding.x = .infinity
+        XCTAssertNil(renderer.draw(valid, mismatched, gray: gray, color: color, into: target))
+        let readOnlyDescriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: renderer.pixelFormat, width: 1, height: 1, mipmapped: false)
+        (readOnlyDescriptor.usage, readOnlyDescriptor.storageMode) = (.shaderRead, .shared)
+        let readOnlyTarget = try XCTUnwrap(device.makeTexture(descriptor: readOnlyDescriptor))
+        XCTAssertNil(renderer.draw(valid, uniforms, gray: gray, color: color, into: readOnlyTarget))
+
+        let extreme = FrameUniforms(size: RenderSize(screen: (0, 0), cell: (0, 0)), cell: (0, 0), cols: .max, rows: -1,
+                                    background: background, opacity: .nan, block: (-1, -1, true, background))
+        XCTAssertEqual(extreme.grid, SIMD2(UInt16.max, 0))
+        XCTAssertEqual(extreme.bgColor.w, 255)
+        XCTAssertTrue((0..<16).allSatisfy { extreme.projection[$0].isFinite })
+        XCTAssertEqual(extreme.cursorPos, SIMD2(repeating: UInt16.max))
+
+        var atlas = Atlas(size: 8, format: .grayscale)
+        let original = atlas.data
+        XCTAssertNil(atlas.reserve(-1, 4))
+        XCTAssertNil(atlas.reserve(4, .max))
+        atlas.set(x: 7, y: 7, width: 2, height: 2, [1])
+        XCTAssertEqual(atlas.data, original)
+
+        let huge = RenderSize(screen: (.max, .max), cell: (0, 0), padding: (.max, .max, .max, .max))
+        XCTAssertEqual(huge.grid.cols, 1)
+        XCTAssertEqual(huge.grid.rows, 1)
+        XCTAssertEqual(RenderSize.contentScale(.infinity), 1)
+        XCTAssertEqual(RenderSize.contentScale(100), 16)
+        XCTAssertEqual(RenderSize.pixels(points: .max, dpi: .infinity), 0)
+    }
+
+    /// Darwin's POSIX shared-memory descriptors cannot be read with read/pread. Exercise the
+    /// page-aligned bounded mmap path with a deliberately unaligned requested range.
+    func testKittySharedMemoryReadsOnlyTheRequestedRange() throws {
+        typealias ShmOpen = @convention(c) (UnsafePointer<CChar>, Int32, mode_t) -> Int32
+        let symbol = try XCTUnwrap(dlsym(UnsafeMutableRawPointer(bitPattern: -2), "shm_open"))
+        let open = unsafeBitCast(symbol, to: ShmOpen.self)
+        let name = "/dsp-\(getpid())-\(arc4random())"
+        let fd = name.withCString { open($0, O_CREAT | O_EXCL | O_RDWR, 0o600) }
+        XCTAssertGreaterThanOrEqual(fd, 0)
+        guard fd >= 0 else { return }
+        defer { close(fd); shm_unlink(name) }
+        let bytes = Int(sysconf(_SC_PAGESIZE)) * 2
+        XCTAssertEqual(ftruncate(fd, off_t(bytes)), 0)
+        let map = try XCTUnwrap(mmap(nil, bytes, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0))
+        XCTAssertNotEqual(map, MAP_FAILED)
+        guard map != MAP_FAILED else { return }
+        defer { munmap(map, bytes) }
+        let expected: [UInt8] = [0xDE, 0xAD, 0xBE, 0xEF]
+        expected.withUnsafeBytes { memcpy(map + Int(sysconf(_SC_PAGESIZE)) + 1, $0.baseAddress!, $0.count) }
+
+        let actual = try KittyFiles(environment: ["TMPDIR": "/tmp"]).sharedMemory(Array(name.utf8)) { size in
+            XCTAssertEqual(size, bytes)
+            let start = Int(sysconf(_SC_PAGESIZE)) + 1
+            return start..<(start + expected.count)
+        }
+        XCTAssertEqual(actual, expected)
+    }
+
     /// New fonts (size, family, padding, scale) replace the glyph atlases while earlier frames keep
     /// their textures: a reconfigured session must draw exactly like a fresh one, in every in-flight frame.
     func testReconfiguredSessionDrawsLikeAFreshOne() throws {
@@ -199,6 +281,49 @@ final class SwiftTerminalSessionTests: XCTestCase {
         XCTAssertLessThan(small, output.count / 10)
         XCTAssertEqual(unlimited, 200_000 * 71 - 1, "Every line, joined by newlines")
         XCTAssertEqual(SwiftEngine.parse("scrollback-limit-bytes = lots", dark: true).diagnostics.map(\.key), ["scrollback-limit-bytes"])
+    }
+
+    /// cursor-style and cursor-style-blink as Ghostty reads them set the cursor a program has not chosen, in a new
+    /// terminal and in an open one reconfigured.
+    /// background-opacity: the frame's background (not text or cells with their own background) carries it as alpha,
+    /// and the layer stops claiming to cover what is behind it; reconfiguring back to opaque restores both.
+    func testBackgroundOpacityTranslucesTheBackgroundOnly() throws {
+        let config = SwiftEngine.parse("background = #204060\nbackground-opacity = 0.8", dark: true)
+        XCTAssertEqual(config.backgroundOpacity, 0.8)
+        XCTAssertTrue(config.diagnostics.isEmpty)
+        XCTAssertEqual(SwiftEngine.parse("background-opacity = 3", dark: true).backgroundOpacity, 1, "clamped like Ghostty")
+        XCTAssertEqual(SwiftEngine.parse("background-opacity = clear", dark: true).diagnostics.map(\.key), ["background-opacity"])
+        let session = try Session(config: config, scale: 1, machine: System.machine.launch)
+        session.setSize(width: 200, height: 100)
+        func corner() -> [UInt8] {
+            let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: 200, height: 100, mipmapped: false)
+            (descriptor.usage, descriptor.storageMode) = ([.renderTarget, .shaderRead], .shared)
+            let target = session.device.makeTexture(descriptor: descriptor)!
+            guard let commands = session.render(into: target) else { XCTFail("Metal frame was not submitted"); return [] }
+            commands.waitUntilCompleted()
+            var bytes = [UInt8](repeating: 0, count: 4)
+            target.getBytes(&bytes, bytesPerRow: 200 * 4, from: MTLRegionMake2D(190, 90, 1, 1), mipmapLevel: 0)
+            return bytes
+        }
+        XCTAssertEqual(Int(corner()[3]), 204, accuracy: 1, "80% of 255")
+        XCTAssertFalse(session.layerIsOpaque)
+        session.configure(SwiftEngine.parse("background = #204060", dark: true))
+        XCTAssertEqual(corner()[3], 255)
+        XCTAssertTrue(session.layerIsOpaque)
+    }
+
+    func testCursorConfigSetsTheDefaultCursorAndFollowsReconfiguring() throws {
+        let session = try Session(config: SwiftEngine.parse("cursor-style = bar\ncursor-style-blink = false", dark: true),
+                                  scale: 1, machine: System.machine.launch)
+        func defaults() -> CursorDefaults { session.locked { session.surface.terminal.view.cursorDefaults } }
+        XCTAssertEqual(defaults().defaultStyle, .bar)
+        XCTAssertEqual(defaults().defaultBlink, false)
+        session.configure(SwiftEngine.parse("cursor-style = underline", dark: true))
+        XCTAssertEqual(defaults().defaultStyle, .underline)
+        XCTAssertNil(defaults().defaultBlink, "no cursor-style-blink: the program's blinking mode decides")
+        XCTAssertTrue(defaults().isDefault)
+        XCTAssertEqual(SwiftEngine.parse("cursor-style = beam\ncursor-style-blink = sometimes", dark: true).diagnostics.map(\.key),
+                       ["cursor-style", "cursor-style-blink"])
     }
 
     /// Once the child is reaped its PID can belong to another process: the pty must forget it, so

@@ -46,6 +46,7 @@ operations! {
         ("cell_width", Unsigned),
         ("cell_height", Unsigned),
         ("environment", Array(&Text)),
+        ("integration", Boolean),
     ]),
         core create() id;
     "backends.prefix" => Object(&[
@@ -76,10 +77,11 @@ operations! {
         ("parent", Unsigned),
         ("before", Unsigned),
     ]),
-        mux r#move(
+        mux move_member(
         local(number(p, "node")?),
         local(number(p, "parent")?),
-        optional(p, "before").map(local)
+        optional(p, "before").map(local),
+        features::enabled(&self.helper.features, self.fd, features::MEMBERSHIPS_APPEND)
     ) value;
     "memberships.reorder" => Object(&[
         ("mux", Unsigned),
@@ -243,6 +245,7 @@ operations! {
         ("text", Text),
         ("mode", Text),
         ("command", Boolean),
+        ("attachments", Array(&Text)),
     ]),
         harness send(text(p, "text")?, mode(p)?, flag(p, "command")) send;
     "chat.command" => Object(&[
@@ -304,6 +307,7 @@ operations! {
         ("text", Text),
         ("mode", Text),
         ("command", Boolean),
+        ("attachments", Array(&Text)),
     ]),
         core queue("add") value;
     "queue.update" => Object(&[

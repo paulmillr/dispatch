@@ -119,7 +119,7 @@ struct SidebarSpaceTile: View {
 
     private var activity: some View {
         AgentActivityGlyph(tabIDs: entry.surfaceIDs,
-                           connecting: connecting, size: metrics.activitySize)
+                           connecting: connecting, size: metrics.activitySize, showsQuiet: false)
             .fixedSize()
     }
 
@@ -169,7 +169,7 @@ struct SidebarSpaceTile: View {
                 label.branchLine
             }.frame(maxWidth: .infinity, alignment: .leading)
             if let mixedHost { mixedGlyph(mixedHost) }
-            AgentActivityGlyph(tabIDs: entry.surfaceIDs, connecting: connecting, size: metrics.activitySize)
+            AgentActivityGlyph(tabIDs: entry.surfaceIDs, connecting: connecting, size: metrics.activitySize, showsQuiet: false)
                 .fixedSize()
             shortcutLabel.fixedSize()
         }

@@ -114,6 +114,32 @@ final class SplitSizingTests: XCTestCase {
         XCTAssertEqual(sidebar.arrangedSubviews[0].frame.width, 340, accuracy: 0.01, "Clamped as a divider drag is")
     }
 
+    /// A narrow window narrows the sidebar first, down to its 200 pt, so the content keeps 420; widened again, the
+    /// sidebar returns to the width chosen for it.
+    func testANarrowWindowNarrowsTheSidebarBeforeTheContent() {
+        let sidebar = TerminalSplitView()
+        sidebar.sidebar = true
+        sidebar.isVertical = true
+        sidebar.dividerStyle = .thin
+        sidebar.delegate = sidebar
+        sidebar.addArrangedSubview(NSView())
+        sidebar.addArrangedSubview(NSView())
+        sidebar.frame.size = CGSize(width: 1200, height: 400)
+        resize(sidebar)
+        sidebar.applySidebarWidth(300)
+        XCTAssertEqual(sidebar.arrangedSubviews[0].frame.width, 300, accuracy: 0.01)
+        sidebar.frame.size.width = 620
+        resize(sidebar)
+        XCTAssertEqual(sidebar.arrangedSubviews[0].frame.width, 200, accuracy: 0.01)
+        XCTAssertGreaterThanOrEqual(sidebar.arrangedSubviews[1].frame.width, 419)
+        sidebar.frame.size.width = 700
+        resize(sidebar)
+        XCTAssertEqual(sidebar.arrangedSubviews[0].frame.width, 700 - sidebar.dividerThickness - 420, accuracy: 0.01)
+        sidebar.frame.size.width = 1200
+        resize(sidebar)
+        XCTAssertEqual(sidebar.arrangedSubviews[0].frame.width, 300, accuracy: 0.01, "the chosen width comes back")
+    }
+
     private func nested(_ axis: SplitAxis, count: Int) -> PaneLayout {
         guard count > 1 else { return .pane(System.uuid()) }
         return .split(System.uuid(), axis, nested(axis, count: count - 1), .pane(System.uuid()))

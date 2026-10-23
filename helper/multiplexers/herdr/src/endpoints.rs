@@ -186,6 +186,7 @@ impl Herdr {
         endpoint.backend = self.graph.issue();
         endpoint.graph.next = self.graph.next.clone();
         endpoint.harnesses = self.harnesses.clone();
+        endpoint.host_screens = self.host_screens;
         self.endpoints.insert(key.clone(), Box::new(endpoint));
         Ok(key)
     }
@@ -244,6 +245,13 @@ impl Herdr {
                             || controller.stderr == Some(*fd)
                             || controller.stream.as_ref().is_some_and(stream)
                     })
+                    || self.observers.values().any(|observer| {
+                        observer
+                            .relay
+                            .as_ref()
+                            .is_some_and(|relay| relay.owns(*fd))
+                    })
+                    || self.observer_of(*fd).is_some()
             }
             _ => false,
         }

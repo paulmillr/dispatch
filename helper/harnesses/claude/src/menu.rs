@@ -409,7 +409,24 @@ pub fn ready(screen: &Screen, working: bool, name: Option<&str>) -> bool {
     if !label.is_empty() && name != Some(label) {
         return false;
     }
-    let below = &all[prompt + 2..];
+    footer(&all[prompt + 2..], working)
+}
+/// What the composer holds, its rows joined and whitespace collapsed, when the screen shows the
+/// composer as `ready` checks it (the frame, the session name, the footer) and nothing else.
+pub fn drafted(screen: &Screen, working: bool, name: Option<&str>) -> Option<String> {
+    let all: Vec<&str> = lines(&screen.text)?.collect();
+    let prompt = all.iter().rposition(|s| s.starts_with('❯'))?;
+    let end = prompt + all[prompt..].iter().position(|s| rule(s))?;
+    let label = border(all[prompt.checked_sub(1)?])?;
+    if (!label.is_empty() && name != Some(label)) || !footer(&all[end + 1..], working) {
+        return None;
+    }
+    let content = all[prompt..end].join(" ");
+    let content = content.strip_prefix('❯').unwrap_or(&content);
+    Some(content.split_whitespace().collect::<Vec<_>>().join(" "))
+}
+/// The rows under the composer: no other rule, and Claude's footer.
+fn footer(below: &[&str], working: bool) -> bool {
     !below.iter().any(|s| rule(s))
         && below.iter().any(|s| {
             if s.contains("esc to interrupt") {
@@ -491,6 +508,38 @@ enum Stage {
     Enter,
     Verify,
     Exit,
+    /// Pasting a send's images one at a time, each until its placeholder shows.
+    Attach,
+}
+/// Settled screens (about a second each) a pasted image may show nothing before it counts as
+/// missed: Claude Code reads (and may scale) the file before the placeholder shows.
+const PATIENCE: u8 = 5;
+/// A text without white space (a composer row wraps anywhere).
+fn compact(text: &str) -> String {
+    text.split_whitespace().collect()
+}
+/// Claude Code's placeholder for a pasted image path: `[Image #n]`, n counting per session.
+fn placeholder(s: &str) -> bool {
+    s.strip_prefix("[Image #")
+        .and_then(|rest| rest.strip_suffix(']'))
+        .is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
+}
+/// A text that starts like a command, fenced so Claude takes it as a message.
+fn fence(text: &str) -> String {
+    if !text.trim_start().starts_with(['/', '!']) {
+        return text.to_owned();
+    }
+    let mut counts = [0usize; 2];
+    let mut longest = [0usize; 2];
+    for character in text.chars() {
+        for (index, marker) in ['`', '~'].iter().enumerate() {
+            counts[index] = if character == *marker { counts[index] + 1 } else { 0 };
+            longest[index] = longest[index].max(counts[index]);
+        }
+    }
+    let index = usize::from(longest[0] > longest[1]);
+    let fence = ['`', '~'][index].to_string().repeat(3.max(longest[index] + 1));
+    format!("{fence}\n{text}{}{fence}", if text.ends_with('\n') { "" } else { "\n" })
 }
 #[derive(Default)]
 pub struct Walk {
@@ -518,6 +567,13 @@ pub struct Walk {
     raw: Option<String>,
     /// A read catalog or effort list, returned once Escape has closed the menu (Stage::Exit).
     result: Option<Menu>,
+    /// Stage::Attach: images pasted so far, the composer they made (their placeholders, and the
+    /// paths Claude kept as text), the paths of those that showed nothing in time (sent as path
+    /// lines with the text instead), and the settled screens the last paste has waited.
+    pasted: usize,
+    draft: String,
+    missed: Vec<String>,
+    waited: u8,
 }
 impl Walk {
     /// codex's choose (c1654cc ChatCommands.chooseCommandOption :578-628): Up/Down toward the
@@ -591,6 +647,74 @@ impl Walk {
         self.inputs = vec![Input::Text("/model".into()), Input::Key(Key::Enter)];
         Step::Keys(self.inputs.clone())
     }
+    /// Stage::Attach: paste each image path alone (Claude Code reads the file and shows
+    /// `[Image #n]`), wait for its placeholder, then paste the text with the path lines of files
+    /// and of images that showed nothing in time; Enter follows. A path Claude does not take as
+    /// an image stays in the composer as text: it is that image's path, kept where it is (never
+    /// pasted again). Anything else in the composer, once the screen settled, fails the walk
+    /// before Enter: nothing is sent twice or with input that is not this send's.
+    fn attach(&mut self, goal: &Goal, name: Option<&str>, screen: &Screen, settled: bool) -> Step {
+        let Goal::Send { text, mode, attachments, .. } = goal else {
+            return Step::Fail(error("input", "Not a send"));
+        };
+        let images: Vec<&Attachment> = attachments.iter().filter(|attachment| attachment.image).collect();
+        if self.pasted > 0 {
+            let path = images[self.pasted - 1].path.as_str();
+            let now = drafted(screen, *mode == Mode::Steer, name);
+            // What the composer gained since the last paste (rows wrap anywhere: no white space).
+            let added = now.as_deref().and_then(|now| compact(now).strip_prefix(&compact(&self.draft)).map(str::to_owned));
+            match (now, added.as_deref()) {
+                // Its placeholder showed.
+                (Some(now), Some(added)) if added.strip_prefix("[Image#").is_some_and(|rest| placeholder(&format!("[Image #{rest}"))) => {
+                    self.draft = now;
+                }
+                // Claude kept the path as text: it read no image there. The path stays.
+                (Some(now), Some(added)) if added == compact(path) => {
+                    self.draft = now;
+                }
+                // Nothing yet: Claude may still be reading the file.
+                (Some(_), Some("")) => {
+                    if !settled {
+                        return Step::Wait;
+                    }
+                    self.waited += 1;
+                    if self.waited < PATIENCE {
+                        return Step::Wait;
+                    }
+                    // Nothing showed in time: its path goes as a line with the text.
+                    self.missed.push(path.to_owned());
+                }
+                // A frame between two states (a partial redraw, a menu): only a settled screen counts.
+                _ if !settled => return Step::Wait,
+                _ => return Step::Fail(error("input", "Claude's prompt changed while attaching. Check it in Terminal.")),
+            }
+        }
+        if let Some(next) = images.get(self.pasted) {
+            self.pasted += 1;
+            self.waited = 0;
+            self.inputs = vec![Input::Paste(next.path.clone())];
+            return Step::Keys(self.inputs.clone());
+        }
+        let paths: Vec<&str> = attachments
+            .iter()
+            .filter(|attachment| !attachment.image || self.missed.contains(&attachment.path))
+            .map(|attachment| attachment.path.as_str())
+            .collect();
+        // After a placeholder or a path the text is no command; Claude adds no space before a paste.
+        let literal = if self.draft.is_empty() {
+            attachment::fallback(&fence(text), &paths)
+        } else {
+            let literal = attachment::fallback(text, &paths);
+            if literal.trim().is_empty() { literal } else { format!(" {literal}") }
+        };
+        if literal.trim().is_empty() {
+            self.stage = Stage::Exit;
+            return Step::Submit(self.keys(4));
+        }
+        self.stage = Stage::Enter;
+        self.inputs = vec![Input::Paste(literal)];
+        Step::Keys(self.inputs.clone())
+    }
     pub fn answer(&mut self, answers: Vec<(String, Answer)>) -> Result<Sent, Error> {
         self.inputs.clear();
         let scope = self
@@ -639,6 +763,10 @@ impl Walk {
             self.previous = None;
             self.before = None;
             self.result = None;
+            self.pasted = 0;
+            self.draft.clear();
+            self.missed.clear();
+            self.waited = 0;
         }
         let repeated = self
             .settled
@@ -656,6 +784,9 @@ impl Walk {
             if self.stage == Stage::Enter {
                 self.stage = Stage::Exit;
                 return Step::Submit(self.keys(4));
+            }
+            if self.stage == Stage::Attach {
+                return self.attach(goal, name, screen, repeated);
             }
             let valid = !matches!(goal, Goal::Send { text, .. }
                 if text.bytes().any(|b| b < 32 && b != b'\n' && b != b'\t'));
@@ -676,31 +807,17 @@ impl Walk {
                     text,
                     mode,
                     command,
+                    attachments,
                 } if valid && input(status, name, screen, *mode) =>
                 {
-                    let mut literal = text.clone();
-                    if !command && text.trim_start().starts_with(['/', '!']) {
-                        let mut counts = [0usize; 2];
-                        let mut longest = [0usize; 2];
-                        for character in text.chars() {
-                            for (index, marker) in ['`', '~'].iter().enumerate() {
-                                counts[index] = if character == *marker {
-                                    counts[index] + 1
-                                } else {
-                                    0
-                                };
-                                longest[index] = longest[index].max(counts[index]);
-                            }
-                        }
-                        let index = usize::from(longest[0] > longest[1]);
-                        let fence = ['`', '~'][index]
-                            .to_string()
-                            .repeat(3.max(longest[index] + 1));
-                        literal = format!(
-                            "{fence}\n{text}{}{fence}",
-                            if text.ends_with('\n') { "" } else { "\n" }
-                        );
+                    if attachments.iter().any(|attachment| attachment.image) {
+                        self.stage = Stage::Attach;
+                        return self.attach(goal, name, screen, false);
                     }
+                    // Only the typed text is fenced (a command takes no attachments); the path
+                    // lines follow the fence, and an empty text is never fenced.
+                    let paths: Vec<&str> = attachments.iter().map(|attachment| attachment.path.as_str()).collect();
+                    let literal = if *command { text.clone() } else { attachment::fallback(&fence(text), &paths) };
                     self.inputs = vec![Input::Paste(literal)];
                     self.stage = Stage::Enter;
                     Step::Keys(self.inputs.clone())
@@ -1015,7 +1132,8 @@ impl Walk {
                     .choices
                     .iter()
                     .find(|r| r.current)
-                    .map(|r| crate::menu::model(&r.detail).unwrap_or_else(|| r.name.clone()));
+                    // 2.1.302 rows name the model ("Opus 5.5") and describe it; older ones put it in the detail.
+                    .map(|r| crate::menu::model(&r.detail).or_else(|| crate::menu::model(&r.name)).unwrap_or_else(|| r.name.clone()));
                 self.stage = Stage::Exit;
                 self.key(5)
             }
@@ -1072,5 +1190,170 @@ mod tests {
         assert!(!ready(&screen, false, None));
         assert!(ready(&screen, true, None));
         assert!(interrupt("busy", None, &screen));
+    }
+
+    fn composer(content: &str) -> Screen {
+        let rule = "─".repeat(60);
+        let footer = "⏵⏵ auto mode on (shift+tab to cycle) · gh auth login for";
+        Screen {
+            text: format!("Claude Code\n{rule}\n❯ {content}\n{rule}\n  {footer}\n"),
+            cursor: (2 + content.chars().count() as u32, 2),
+            faint_tail: false,
+        }
+    }
+
+    const FOLDER: &str = "/home/sam/.dispatch/attachments/0123456789abcdef0123456789abcdef";
+
+    fn send(text: &str, names: &[&str]) -> Goal {
+        let attachments = names
+            .iter()
+            .map(|name| Attachment { path: format!("{FOLDER}/{name}"), image: name.ends_with(".png") })
+            .collect();
+        Goal::Send { text: text.into(), mode: Mode::Prompt, command: false, attachments }
+    }
+
+    fn step(walk: &mut Walk, goal: &Goal, screen: &Screen, settled: bool) -> Step {
+        walk.settled = Some(settled);
+        walk.next("s-1", "idle", None, goal, screen)
+    }
+
+    fn paste(text: impl Into<String>) -> Step {
+        Step::Keys(vec![Input::Paste(text.into())])
+    }
+
+    #[test]
+    fn images_are_pasted_alone_until_their_placeholders_show_then_the_text() {
+        let goal = send("Describe these", &["a.png", "notes.txt", "b.png"]);
+        let mut walk = Walk::default();
+        assert_eq!(step(&mut walk, &goal, &composer(""), false), paste(format!("{FOLDER}/a.png")));
+        // Not shown yet: wait (a sample before the settle mark).
+        assert_eq!(step(&mut walk, &goal, &composer(""), false), Step::Wait);
+        assert_eq!(step(&mut walk, &goal, &composer("[Image #7]"), false), paste(format!("{FOLDER}/b.png")));
+        assert_eq!(
+            step(&mut walk, &goal, &composer("[Image #7] [Image #8]"), false),
+            paste(format!(" Describe these\n\n{FOLDER}/notes.txt"))
+        );
+        assert_eq!(
+            step(&mut walk, &goal, &composer("[Image #7] [Image #8] Describe these"), false),
+            Step::Submit(vec![Input::Key(Key::Enter)])
+        );
+        assert!(matches!(step(&mut walk, &goal, &composer(""), false), Step::Done(_)));
+    }
+
+    #[test]
+    fn only_images_submit_once_their_placeholders_show() {
+        let goal = send("", &["a.png"]);
+        let mut walk = Walk::default();
+        assert_eq!(step(&mut walk, &goal, &composer(""), false), paste(format!("{FOLDER}/a.png")));
+        assert_eq!(step(&mut walk, &goal, &composer("[Image #1]"), false), Step::Submit(vec![Input::Key(Key::Enter)]));
+    }
+
+    #[test]
+    fn an_image_that_shows_nothing_in_time_goes_as_a_path_line() {
+        let goal = send("Look", &["a.png", "b.png"]);
+        let mut walk = Walk::default();
+        step(&mut walk, &goal, &composer(""), false);
+        // Claude may still be reading it: several settled screens before it counts as missed.
+        for _ in 1..PATIENCE {
+            assert_eq!(step(&mut walk, &goal, &composer(""), true), Step::Wait);
+        }
+        assert_eq!(step(&mut walk, &goal, &composer(""), true), paste(format!("{FOLDER}/b.png")));
+        assert_eq!(
+            step(&mut walk, &goal, &composer("[Image #2]"), false),
+            paste(format!(" Look\n\n{FOLDER}/a.png"))
+        );
+    }
+
+    #[test]
+    fn a_slow_placeholder_is_still_its_images() {
+        let goal = send("Look", &["a.png", "b.png"]);
+        let mut walk = Walk::default();
+        step(&mut walk, &goal, &composer(""), false);
+        for _ in 1..PATIENCE {
+            assert_eq!(step(&mut walk, &goal, &composer(""), true), Step::Wait);
+        }
+        // Shown just before the deadline: credited, and b.png only pasted now.
+        assert_eq!(step(&mut walk, &goal, &composer("[Image #1]"), true), paste(format!("{FOLDER}/b.png")));
+        assert_eq!(step(&mut walk, &goal, &composer("[Image #1] [Image #2]"), false), paste(" Look"));
+    }
+
+    #[test]
+    fn a_path_claude_keeps_as_text_stays_and_is_never_pasted_again() {
+        let goal = send("Look", &["a.png", "b.png", "notes.txt"]);
+        let mut walk = Walk::default();
+        step(&mut walk, &goal, &composer(""), false);
+        // Claude read no image there: the path is in the composer as text. On to the next image.
+        let kept = format!("{FOLDER}/a.png");
+        assert_eq!(step(&mut walk, &goal, &composer(&kept), false), paste(format!("{FOLDER}/b.png")));
+        assert_eq!(
+            step(&mut walk, &goal, &composer(&format!("{kept} [Image #3]")), false),
+            paste(format!(" Look\n\n{FOLDER}/notes.txt"))
+        );
+        // Wrapped over two rows it is the same path.
+        let goal = send("", &["a.png"]);
+        let mut walk = Walk::default();
+        step(&mut walk, &goal, &composer(""), false);
+        let rule = "─".repeat(60);
+        let footer = "⏵⏵ auto mode on (shift+tab to cycle) · gh auth login for";
+        let (head, tail) = kept.split_at(40);
+        let wrapped = Screen { text: format!("{rule}\n❯ {head}\n  {tail}\n{rule}\n  {footer}\n"), cursor: (4, 3), faint_tail: false };
+        // Nothing else to paste: the path in the composer is the message.
+        assert_eq!(step(&mut walk, &goal, &wrapped, false), Step::Submit(vec![Input::Key(Key::Enter)]));
+    }
+
+    #[test]
+    fn anything_else_in_the_composer_fails_before_enter_once_settled() {
+        let goal = send("Look", &["a.png"]);
+        let mut walk = Walk::default();
+        step(&mut walk, &goal, &composer(""), false);
+        // Someone's typing, or half a redraw: a frame that has not settled waits.
+        assert_eq!(step(&mut walk, &goal, &composer("draft"), false), Step::Wait);
+        let menu = Screen { text: "Claude Code\n  1. Yes\n  2. No\n".into(), cursor: (0, 0), faint_tail: false };
+        assert_eq!(step(&mut walk, &goal, &menu, false), Step::Wait);
+        let failed = step(&mut walk, &goal, &composer("draft"), true);
+        assert!(matches!(failed, Step::Fail(Error { code: "input", .. })), "{failed:?}");
+        // A placeholder and more: not this paste's alone.
+        let mut walk = Walk::default();
+        step(&mut walk, &goal, &composer(""), false);
+        assert!(matches!(step(&mut walk, &goal, &composer("[Image #1] [Image #2]"), true), Step::Fail(_)));
+        // A draft that was already there refuses the send before anything is pasted.
+        let mut walk = Walk::default();
+        assert!(matches!(step(&mut walk, &goal, &composer("draft"), false), Step::Fail(_)));
+    }
+
+    #[test]
+    fn files_alone_go_as_path_lines_after_the_fenced_text() {
+        let goal = send("/compact these", &["notes.txt"]);
+        let mut walk = Walk::default();
+        // Only the typed text is fenced: the path lines follow the fence.
+        assert_eq!(
+            step(&mut walk, &goal, &composer(""), false),
+            paste(format!("```\n/compact these\n```\n\n{FOLDER}/notes.txt"))
+        );
+        // A file alone is its path, never fenced (Claude takes `/a/b` as a message, not a command).
+        let goal = send("", &["notes.pdf"]);
+        let mut walk = Walk::default();
+        assert_eq!(step(&mut walk, &goal, &composer(""), false), paste(format!("{FOLDER}/notes.pdf")));
+        // Every image missed and no text: the path lines alone, unfenced.
+        let goal = send("", &["a.png"]);
+        let mut walk = Walk::default();
+        step(&mut walk, &goal, &composer(""), false);
+        for _ in 1..PATIENCE {
+            step(&mut walk, &goal, &composer(""), true);
+        }
+        assert_eq!(step(&mut walk, &goal, &composer(""), true), paste(format!("{FOLDER}/a.png")));
+    }
+
+    #[test]
+    fn a_wrapped_composer_is_read_whole() {
+        let rule = "─".repeat(40);
+        let footer = "⏵⏵ auto mode on (shift+tab to cycle) · gh auth login for";
+        let screen = Screen {
+            text: format!("{rule}\n❯ [Image #1] [Image #2] [Image #3]\n  [Image #4]\n{rule}\n  {footer}\n"),
+            cursor: (12, 2),
+            faint_tail: false,
+        };
+        assert_eq!(drafted(&screen, false, None).as_deref(), Some("[Image #1] [Image #2] [Image #3] [Image #4]"));
+        assert_eq!(drafted(&composer(""), false, None).as_deref(), Some(""));
     }
 }

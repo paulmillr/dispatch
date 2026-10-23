@@ -283,6 +283,8 @@ pub enum Job {
     /// - "stats.processes": {local:bool} -> {boot,monotonic,truncated,processes:[{pid,start?,
     ///   name,cpu?,cpuNanos?,rss}]}, local or not. macOS rows carry cpu (/bin/ps's percentage),
     ///   Linux rows start and cpuNanos (CPU time so far).
+    /// - "attachment.put", "attachment.read": chat attachments' private copies; "attachment.clock"
+    ///   -> {ms}, the wall clock for the delivery index (system/attachment.rs).
     /// - "stats.disks": {local:bool} -> {disks:[{identity:string,paths:[string],total,free}]};
     ///   identity is the native signed fsid pair, "word:word". No fabricated identity.
     Native {
@@ -777,6 +779,9 @@ pub enum Block {
     Code { language: String, text: String },
     Markdown(String),
     Attachment(String),
+    /// A message's attachment (feature chat.attachments), in order; encoded
+    /// `{kind: "image"|"file", path, text: name}`. A tuple variant: its fields are not wire names.
+    File(attachment::Shown),
 }
 
 /// Existing normalized row fields; c1654cc Dispatch/Chat/ChatModels.swift:23-37, Dispatch/Chat/PiTranscript.swift:163-188.
@@ -799,6 +804,9 @@ pub struct Record {
     pub time_ms: Option<i64>,
     /// Transcript source position; prompt acknowledgement compares this independently of clocks.
     pub position: Option<FilePosition>,
+    /// A user record's attachments for clients of chat.attachments (dispatch/attachments.rs
+    /// `view`); not encoded, so every other client gets the record as before.
+    pub attached: Option<Box<attachment::Attached>>,
 }
 
 mod tool;
@@ -1009,6 +1017,8 @@ impl Input {
 
 mod queue;
 pub use queue::{Pause, Preview, Queued};
+pub mod attachment;
+pub use attachment::Attachment;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Edit {
@@ -1039,6 +1049,8 @@ pub enum Goal {
         text: String,
         mode: Mode,
         command: bool,
+        /// Stored attachments (chat.attachments), never with `command`.
+        attachments: Vec<Attachment>,
     },
     Stop,
     Models,
@@ -1171,6 +1183,20 @@ pub trait Harness {
         command: bool,
         done: Done<Sent>,
     );
+    /// Send input with stored attachments (chat.attachments; never a command or a side
+    /// conversation). The default is the text fallback: the paths after the text.
+    fn send_attached(
+        &mut self,
+        io: &mut dyn Io,
+        binding: &Binding,
+        text: &str,
+        mode: Mode,
+        attachments: &[Attachment],
+        done: Done<Sent>,
+    ) {
+        let paths: Vec<&str> = attachments.iter().map(|attachment| attachment.path.as_str()).collect();
+        self.send(io, binding, &attachment::fallback(text, &paths), mode, false, done);
+    }
     /// Interrupt the current turn; c1654cc Dispatch/Chat/ChatCoordinator.swift:2205.
     fn stop(&mut self, io: &mut dyn Io, binding: &Binding, done: Done<Sent>);
     /// Models through a native API; a terminal-menu harness fails with code "menu" and the core runs `drive(Goal::Models)`; c1654cc Dispatch/Chat/ChatModelPicker.swift:72.
@@ -1231,6 +1257,19 @@ pub trait Harness {
         mode: Mode,
         done: Done<Queued>,
     );
+    /// Add with stored attachments to the native queue; the default queues the text fallback.
+    fn queue_add_attached(
+        &mut self,
+        io: &mut dyn Io,
+        binding: &Binding,
+        text: &str,
+        mode: Mode,
+        attachments: &[Attachment],
+        done: Done<Queued>,
+    ) {
+        let paths: Vec<&str> = attachments.iter().map(|attachment| attachment.path.as_str()).collect();
+        self.queue_add(io, binding, &attachment::fallback(text, &paths), mode, done);
+    }
     /// Change one native queue item at its revision (None text = remove); c1654cc Dispatch/Chat/CodexPatchConnection.swift:632.
     fn queue_edit(
         &mut self,
@@ -1268,6 +1307,8 @@ pub trait Harness {
     /// With `agent`, the target is that running agent's own config root (its environment,
     /// e.g. CODEX_HOME) instead of the helper's account default; c51466a
     /// hook_transport.rs:1055-1077.
+    /// Error code `changed` means no edit committed and the whole operation may be retried
+    /// against fresh snapshots. Partial/uncertain writes must use a different error code.
     fn install(
         &mut self,
         io: &mut dyn Io,
@@ -1465,6 +1506,20 @@ pub trait Multiplexer {
     fn focus(&mut self, io: &mut dyn Io, node: Id, done: Done<()>);
     /// Move a node under another parent; c1654cc Dispatch/Hosts/HerdrHostMoves.swift:186.
     fn r#move(&mut self, io: &mut dyn Io, node: Id, parent: Id, before: Option<Id>, done: Done<()>);
+    /// `memberships.move`: `r#move`, where `append` (the client named the `memberships.append` feature) asks that a
+    /// node moved without `before` go after `parent`'s last member. Producers whose `r#move` already does that keep
+    /// this default; herdr's old index for that case (before the last tab) stays for every other client.
+    fn move_member(
+        &mut self,
+        io: &mut dyn Io,
+        node: Id,
+        parent: Id,
+        before: Option<Id>,
+        _append: bool,
+        done: Done<()>,
+    ) {
+        self.r#move(io, node, parent, before, done);
+    }
     /// Resize a split; c1654cc Dispatch/Herdr/HerdrLayouts.swift:24, Dispatch/Tmux/TmuxCoordinator.swift:1409.
     fn split(&mut self, io: &mut dyn Io, node: Id, ratio: f64, done: Done<()>);
     /// Zoom one terminal; c1654cc Dispatch/Tmux/TmuxSession.swift:195.
@@ -1595,6 +1650,11 @@ pub trait Multiplexer {
     fn screen(&mut self, io: &mut dyn Io, terminal: Id, changed: bool, done: Done<Screen>);
     /// Screen text the app publishes for a terminal it renders itself; c1654cc Dispatch/Chat/ChatCoordinator.swift:2098-2100.
     fn publish(&mut self, io: &mut dyn Io, terminal: Id, screen: Screen);
+    /// Let `screen` read terminals no client renders from the multiplexer itself (tmux `capture-pane`, herdr's
+    /// terminal observer), as the screen a client would publish (crate::cells). For a helper without clients (the
+    /// queue drainer); off by default, so a client helper reads only published screens and records nothing new. A
+    /// terminal a client attached or published for keeps reading the client's screens.
+    fn host_screens(&mut self, _enabled: bool) {}
     /// Completion of IO this multiplexer submitted; also reports `Update::Clipboard`, c1654cc Dispatch/Tmux/TmuxSession.swift:178-191.
     fn event(&mut self, io: &mut dyn Io, ui: &mut dyn Ui, event: Event);
 }

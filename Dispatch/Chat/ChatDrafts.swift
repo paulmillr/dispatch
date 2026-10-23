@@ -10,10 +10,43 @@ struct ChatDraft: Codable, Identifiable, Equatable {
     var modified = Date()
     // A restored copy may need a new UI identity, but retains this version ID.
     var revision = System.uuid()
+    /// Files already stored on the conversation's host (`attachments.put`); uploads still running are the composer's.
+    var attachments: [ChatAttachment] = []
     var label: String {
-        title ?? String(text.components(separatedBy: .newlines).first { !$0.trimmingCharacters(in: .whitespaces).isEmpty }?.prefix(36) ?? "Draft")
+        title ?? String(text.components(separatedBy: .newlines).first { !$0.trimmingCharacters(in: .whitespaces).isEmpty }?.prefix(36)
+            ?? attachments.first?.name.prefix(36) ?? "Draft")
     }
-    var isEmpty: Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    var isEmpty: Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && attachments.isEmpty }
+}
+
+extension ChatDraft {
+    private enum CodingKeys: String, CodingKey { case id, title, text, multiline, selection, modified, revision, attachments }
+
+    // Drafts saved before attachments existed have no `attachments`.
+    init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.init()
+        id = try values.decode(UUID.self, forKey: .id)
+        title = try values.decodeIfPresent(String.self, forKey: .title)
+        text = try values.decode(String.self, forKey: .text)
+        multiline = try values.decode(Bool.self, forKey: .multiline)
+        selection = try values.decode(NSRange.self, forKey: .selection)
+        modified = try values.decode(Date.self, forKey: .modified)
+        revision = try values.decode(UUID.self, forKey: .revision)
+        attachments = try values.decodeIfPresent([ChatAttachment].self, forKey: .attachments) ?? []
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(id, forKey: .id)
+        try values.encodeIfPresent(title, forKey: .title)
+        try values.encode(text, forKey: .text)
+        try values.encode(multiline, forKey: .multiline)
+        try values.encode(selection, forKey: .selection)
+        try values.encode(modified, forKey: .modified)
+        try values.encode(revision, forKey: .revision)
+        if !attachments.isEmpty { try values.encode(attachments, forKey: .attachments) }
+    }
 }
 
 struct ChatDraftBucket: Codable {
@@ -60,6 +93,8 @@ struct ChatDraftBucket: Codable {
     @ObservationIgnored private var maximumWait: Task<Void, Never>?
     @ObservationIgnored private var loaded = false
     @ObservationIgnored private var migratedScopes: [String: String] = [:]
+    /// How long a draft nobody edits is kept on disk.
+    static let expiry: TimeInterval = 30 * 24 * 3600
     func migrate(_ source: String, to destination: String) { migratedScopes[source] = destination }
     func resolvedScope(_ key: String) -> String {
         var key = key
@@ -80,7 +115,13 @@ struct ChatDraftBucket: Codable {
                     if bucket.saved.contains(where: { $0.id == draft.id }) || bucket.working.id == draft.id { draft.id = System.uuid() }
                     bucket.saved.append(draft)
                 }
-                bucket.recovery = [:]; restored[key] = bucket
+                bucket.recovery = [:]
+                // Drafts nobody touched for `expiry` go; a bucket left with nothing goes too.
+                let cutoff = Date().addingTimeInterval(-Self.expiry)
+                bucket.saved.removeAll { $0.modified < cutoff }
+                if bucket.working.modified < cutoff, !bucket.working.isEmpty { bucket.working = ChatDraft() }
+                if !bucket.saved.contains(where: { $0.id == bucket.selected }) { bucket.selected = nil }
+                restored[key] = bucket.saved.isEmpty && bucket.working.isEmpty ? nil : bucket
             }
             inactiveRevision &+= 1
             for (key, bucket) in restored {
@@ -248,6 +289,53 @@ struct ChatDraftDelivery {
         else { bucket.working = record }
         persist()
     }
+    /// Adds stored attachments to the current draft, up to `ChatAttachment.maximumCount`; false when some did not fit.
+    @discardableResult func attach(_ attachments: [ChatAttachment]) -> Bool {
+        attach(attachments, toDraft: current.id, scope: scope) ?? false
+    }
+    /// Adds stored attachments to the draft an upload started for, wherever it is now: the current one, another of
+    /// this conversation's (the user switched drafts meanwhile), or one of the conversation the collection showed then.
+    /// False when some did not fit; nil when that draft is gone (sent, discarded, or replaced by a restored one).
+    func attach(_ attachments: [ChatAttachment], toDraft id: UUID, scope: String) -> Bool? {
+        func add(_ record: inout ChatDraft) -> Bool {
+            let room = max(0, ChatAttachment.maximumCount - record.attachments.count)
+            let added = attachments.filter { item in !record.attachments.contains { $0.id == item.id } }
+            guard !added.isEmpty else { return true }
+            record.attachments += added.prefix(room)
+            record.modified = Date(); record.revision = System.uuid()
+            return added.count <= room
+        }
+        let key = repository.resolvedScope(scope)
+        if key == self.scope {
+            if bucket.working.id == id {
+                let fitted = add(&bucket.working); persist(flush: true); return fitted
+            }
+            guard let index = bucket.saved.firstIndex(where: { $0.id == id }) else { return nil }
+            let fitted = add(&bucket.saved[index]); persist(flush: true); return fitted
+        }
+        guard var other = repository.buckets[key] else { return nil }
+        let fitted: Bool
+        if other.working.id == id { fitted = add(&other.working) }
+        else if let index = other.saved.firstIndex(where: { $0.id == id }) { fitted = add(&other.saved[index]) }
+        else { return nil }
+        repository.put(other, at: key, flush: true)
+        return fitted
+    }
+    /// Whether this conversation still has the draft `id` (working or saved).
+    func contains(_ id: UUID) -> Bool { bucket.working.id == id || bucket.saved.contains { $0.id == id } }
+    func detach(_ id: String) {
+        var record = current
+        guard let index = record.attachments.firstIndex(where: { $0.id == id }) else { return }
+        record.attachments.remove(at: index)
+        replaceCurrent(record)
+    }
+    private func replaceCurrent(_ draft: ChatDraft) {
+        var record = draft
+        record.modified = Date(); record.revision = System.uuid()
+        if let index = bucket.saved.firstIndex(where: { $0.id == bucket.selected }) { bucket.saved[index] = record }
+        else { bucket.working = record }
+        persist(flush: true)
+    }
     func keep() {
         guard !current.isEmpty else { return }
         if bucket.selected == nil { bucket.saved.append(bucket.working); bucket.working = ChatDraft() }
@@ -384,11 +472,17 @@ struct ChatDraftShape: Equatable {
     /// A single word after "/", which `ChatSession.matchingCommands` completes.
     var commandPrefix: String?
     var hasSaved = false
+    /// `ChatDraft.attachments` is not empty: the draft can be sent without text.
+    var hasAttachments = false
+    /// The draft's identity: uploads show on the draft they were started for.
+    var id: UUID?
 
     init() {}
     init(_ draft: ChatDraft, hasSaved: Bool) {
         let text = draft.text
-        isEmpty = text.isEmpty
+        hasAttachments = !draft.attachments.isEmpty
+        id = draft.id
+        isEmpty = text.isEmpty && !hasAttachments
         hasText = text.contains { !$0.isWhitespace }
         multiline = draft.multiline
         command = AgentInput.isCommand(text, multiline: multiline)

@@ -42,38 +42,7 @@ impl Codex {
         }
         let main = self.main.channels.borrow().contains_key(&binding.session);
         if self.channel(binding).is_ok() && !command && (answer || !main) {
-            let mut params = vec![
-                ("threadId", Data::String(&binding.session)),
-                ("input", super::input(text)),
-            ];
-            if self
-                .channel(binding)
-                .is_ok_and(|channel| channel.borrow().read_only)
-            {
-                params.extend(crate::side::permissions());
-            }
-            let turn = self
-                .states
-                .borrow()
-                .get(&binding.session)
-                .and_then(|state| state.activity.clone());
-            let method = if mode == Mode::Steer {
-                let Some(turn) = turn.as_deref() else {
-                    deferred(done)(io, Err(failure("turn", "No active Codex turn.")));
-                    return;
-                };
-                params.push(("expectedTurnId", Data::String(turn)));
-                "turn/steer"
-            } else {
-                "turn/start"
-            };
-            self.request(
-                io,
-                binding,
-                method,
-                Data::Object(params),
-                Box::new(move |io, result| deferred(done)(io, super::sent(result))),
-            );
+            self.turn(io, binding, super::input(text), mode, done);
         } else {
             if command && let Some(reading) = super::command::Reading::new(text) {
                 self.reading
@@ -84,23 +53,7 @@ impl Codex {
                 );
                 return;
             }
-            let mut value = text.to_owned();
-            if !command && matches!(text.trim_start().chars().next(), Some('/' | '!')) {
-                let longest = ['`', '~'].map(|character| {
-                    text.split(|value| value != character)
-                        .map(str::len)
-                        .max()
-                        .unwrap_or(0)
-                });
-                let index = usize::from(longest[0] > longest[1]);
-                let fence = ['`', '~'][index]
-                    .to_string()
-                    .repeat(3.max(longest[index] + 1));
-                value = format!(
-                    "{fence}\n{text}{}{fence}",
-                    if text.ends_with('\n') { "" } else { "\n" }
-                );
-            }
+            let value = if command { text.to_owned() } else { fence(text) };
             deferred(done)(
                 io,
                 Ok(Sent::Keys(vec![
@@ -109,6 +62,81 @@ impl Codex {
                 ])),
             );
         }
+    }
+
+    /// `submit` with stored attachments: owned sides get native input items (the text, then a
+    /// `localImage` per image); the main TUI gets each image path pasted alone (Codex 0.163
+    /// attaches a pasted image path as `[Image #n]`), then the text, then Enter. Other files go
+    /// as path lines after the text.
+    pub(super) fn submit_attached(
+        &mut self,
+        io: &mut dyn Io,
+        binding: &Binding,
+        text: &str,
+        mode: Mode,
+        attachments: &[Attachment],
+        done: Done<Sent>,
+    ) {
+        if text.chars().any(|value| value < ' ' && value != '\n' && value != '\t') {
+            deferred(done)(io, Err(failure("input", "The agent input contains control characters.")));
+            return;
+        }
+        let files: Vec<&str> = attachments.iter().filter(|a| !a.image).map(|a| a.path.as_str()).collect();
+        let main = self.main.channels.borrow().contains_key(&binding.session);
+        if self.channel(binding).is_ok() && !main {
+            let text = attachment::fallback(text, &files);
+            self.turn(io, binding, super::attached(&text, attachments), mode, done);
+            return;
+        }
+        let mut keys: Vec<Input> = attachments
+            .iter()
+            .filter(|attachment| attachment.image)
+            .map(|attachment| Input::Paste(quoted(&attachment.path)))
+            .collect();
+        // After a placeholder the text is no command; without one only the typed text is fenced
+        // (never an empty one), the path lines after the fence.
+        let text = attachment::fallback(&if keys.is_empty() { fence(text) } else { text.to_owned() }, &files);
+        if !text.trim().is_empty() {
+            keys.push(Input::Paste(text));
+        }
+        keys.push(Input::Key(Key::Enter));
+        deferred(done)(io, Ok(Sent::Keys(keys)));
+    }
+
+    /// Start a turn, or steer the active one, on an owned channel.
+    fn turn(&mut self, io: &mut dyn Io, binding: &Binding, input: Data<'_>, mode: Mode, done: Done<Sent>) {
+        let mut params = vec![
+            ("threadId", Data::String(&binding.session)),
+            ("input", input),
+        ];
+        if self
+            .channel(binding)
+            .is_ok_and(|channel| channel.borrow().read_only)
+        {
+            params.extend(crate::side::permissions());
+        }
+        let turn = self
+            .states
+            .borrow()
+            .get(&binding.session)
+            .and_then(|state| state.activity.clone());
+        let method = if mode == Mode::Steer {
+            let Some(turn) = turn.as_deref() else {
+                deferred(done)(io, Err(failure("turn", "No active Codex turn.")));
+                return;
+            };
+            params.push(("expectedTurnId", Data::String(turn)));
+            "turn/steer"
+        } else {
+            "turn/start"
+        };
+        self.request(
+            io,
+            binding,
+            method,
+            Data::Object(params),
+            Box::new(move |io, result| deferred(done)(io, super::sent(result))),
+        );
     }
 
     pub fn new() -> Self {
@@ -583,4 +611,44 @@ impl Codex {
         }
         Ok(())
     }
+}
+
+/// A text that starts like a command or shell escape, fenced so the TUI sends it as a message.
+fn fence(text: &str) -> String {
+    if !matches!(text.trim_start().chars().next(), Some('/' | '!')) {
+        return text.to_owned();
+    }
+    let longest = ['`', '~'].map(|character| {
+        text.split(|value| value != character)
+            .map(str::len)
+            .max()
+            .unwrap_or(0)
+    });
+    let index = usize::from(longest[0] > longest[1]);
+    let fence = ['`', '~'][index]
+        .to_string()
+        .repeat(3.max(longest[index] + 1));
+    format!(
+        "{fence}\n{text}{}{fence}",
+        if text.ends_with('\n') { "" } else { "\n" }
+    )
+}
+
+/// A path as Codex's composer takes a pasted image path: as it is, or single-quoted when it has
+/// other characters (a raw path with spaces stays text), else each such character escaped.
+pub(crate) fn quoted(path: &str) -> String {
+    let plain = |c: char| c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '_' | '-' | '+' | ',' | '@' | '%' | ':');
+    if path.chars().all(plain) {
+        return path.to_owned();
+    }
+    if !path.contains('\'') {
+        return format!("'{path}'");
+    }
+    path.chars().fold(String::new(), |mut out, c| {
+        if !plain(c) {
+            out.push('\\');
+        }
+        out.push(c);
+        out
+    })
 }

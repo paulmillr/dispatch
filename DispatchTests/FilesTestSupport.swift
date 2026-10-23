@@ -191,7 +191,7 @@ final class FakeFilesSource: FilesSource, @unchecked Sendable {
             let entries = names.map { name -> FileEntry in
                 let child = node.children[name]!
                 return FileEntry(name: name, kind: child.kind, size: child.kind == .directory ? 0 : UInt64(child.data.count),
-                                 modified: child.modified, targetKind: targetKind(of: child, in: path), mark: nil,
+                                 modified: child.modified, targetKind: targetKind(of: child, in: path),
                                  identity: FileIdentity(device: 1, inode: child.inode))
             }
             return FileListing(path: normalize(path), entries: entries, truncated: truncated,

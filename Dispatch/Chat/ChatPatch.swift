@@ -93,3 +93,37 @@ extension ChatPatch {
         }
     }
 }
+
+extension ChatPatch {
+    /// What a wrapper call and the patch after it share: the wrapper only repeats the patch (`collapse`), or some of its
+    /// requests (`hidden`).
+    typealias Pairing = (collapse: Bool, hidden: Set<String>)
+
+    static func pairing(wrapper: ChatItem, patch: ChatItem) -> Pairing {
+        (duplicates(wrapper: wrapper, patch: patch), duplicatedRequests(wrapper: wrapper, patch: patch))
+    }
+
+    /// A turn's items as the transcript shows them (the Mac's tool cards and the iPhone's steps): orchestration
+    /// coalesced (`ToolOrchestration.coalesced`), a wrapper that only repeats its patch folded into the patch (which
+    /// keeps the wrapper's row), and the requests a wrapper repeats hidden. `pairing` may be cached by the caller.
+    static func displayedItems(_ items: [ChatItem], turnID: String,
+                               pairing: (_ wrapper: ChatItem, _ patch: ChatItem) -> Pairing = pairing) -> [ChatItem] {
+        var result: [ChatItem] = []
+        for item in ToolOrchestration.coalesced(items, turnID: turnID) {
+            if let previous = result.last, !isPatchOperation(previous), isPatchOperation(item) {
+                let match = pairing(previous, item)
+                if match.collapse {
+                    var merged = item
+                    merged.rowID = previous.rowID ?? "\(turnID.utf8.count):\(turnID):\(previous.id)"
+                    result[result.count - 1] = merged
+                    continue
+                }
+                if !match.hidden.isEmpty {
+                    result[result.count - 1].hiddenPatchRequests.formUnion(match.hidden)
+                }
+            }
+            result.append(item)
+        }
+        return result
+    }
+}

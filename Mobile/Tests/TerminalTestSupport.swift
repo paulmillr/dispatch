@@ -64,9 +64,13 @@ extension TerminalSession {
 
 extension ScriptedHelper {
     /// A helper for terminal feeds: answers every request at once except the methods in `open`, which the test answers
-    /// later (`reply`).
-    static func terminal(open: Set<String> = ["terminals.attach"]) -> ScriptedHelper {
-        ScriptedHelper { open.contains($0.method) ? .open : .empty }
+    /// later (`reply`). `attached`: an open attach confirms itself at once (`terminal.attached`), as the helper does, so
+    /// the input, sizes and screens the feed holds until then go out.
+    static func terminal(open: Set<String> = ["terminals.attach"], attached: Bool = true) -> ScriptedHelper {
+        ScriptedHelper { request in
+            if request.method == "terminals.attach", attached, open.contains(request.method) { return .attachedNow }
+            return open.contains(request.method) ? .open : .empty
+        }
     }
 
     /// A terminal update on the attach subscription `id`.
@@ -102,4 +106,9 @@ enum TerminalTestWindow {
         window.layoutIfNeeded()
         return window
     }
+}
+
+extension ScriptedHelper.Reply {
+    /// An attach the helper confirms at once: `terminal.attached` on the open subscription.
+    static var attachedNow: Self { .notify([("terminal.attached", try! HelperClient.Update.attached.encode())]) }
 }

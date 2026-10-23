@@ -35,6 +35,8 @@ struct ChatItem: Identifiable, Equatable, Sendable {
     /// The directory the agent recorded for this tool call, when its input omits one.
     var directory: String? { didSet { presentationID = System.uuid() } }
     var hiddenPatchRequests: Set<String> = [] { didSet { presentationID = System.uuid() } }
+    /// Files a user message carries (`ChatAttachment`): the composer's while it is optimistic, the record's afterwards.
+    var attachments: [ChatAttachment] = [] { didSet { presentationID = System.uuid() } }
     private(set) var presentationID = System.uuid()
     /// Claude's summarized thinking reads as short progress notes, so it is
     /// shown inline like a message instead of behind a disclosure.
@@ -43,18 +45,30 @@ struct ChatItem: Identifiable, Equatable, Sendable {
     static func == (lhs: ChatItem, rhs: ChatItem) -> Bool {
         lhs.id == rhs.id && lhs.kind == rhs.kind && lhs.text == rhs.text && lhs.title == rhs.title &&
         lhs.output == rhs.output && lhs.completed == rhs.completed && lhs.exitCode == rhs.exitCode && lhs.patch == rhs.patch && lhs.processID == rhs.processID &&
-        lhs.shellCommand == rhs.shellCommand && lhs.commandSource == rhs.commandSource && lhs.directory == rhs.directory && lhs.hiddenPatchRequests == rhs.hiddenPatchRequests && lhs.source == rhs.source
+        lhs.shellCommand == rhs.shellCommand && lhs.commandSource == rhs.commandSource && lhs.directory == rhs.directory && lhs.hiddenPatchRequests == rhs.hiddenPatchRequests && lhs.source == rhs.source &&
+        lhs.attachments == rhs.attachments
     }
     static func contentID(_ text: String) -> String {
         ChatRecord.contentKey(Data(text.utf8))
     }
 
     fileprivate func matches(_ previous: Self) -> Bool {
+        // Attachment-only prompts all have the same empty text, and Codex keys a prompt's id by its text: two that
+        // carry other files are two messages.
+        if carriesOtherAttachments(than: previous) { return false }
         if id == previous.id { return true }
         // Pi's native message/block identities already match live and saved
         // records. Repeated text in another message is a distinct item.
         if id.hasPrefix("pi-") || previous.id.hasPrefix("pi-") { return false }
         return [.user, .assistant, .reasoning].contains(kind) && kind == previous.kind && text == previous.text
+            && (kind != .user || ChatAttachment.same(attachments, previous.attachments))
+    }
+
+    /// Both are user messages that name attachments, and not the same ones (`ChatAttachment.same`). A copy without
+    /// any may still be the same message by id (a record read before its attachments were known).
+    func carriesOtherAttachments(than previous: Self) -> Bool {
+        kind == .user && previous.kind == .user && !attachments.isEmpty && !previous.attachments.isEmpty
+            && !ChatAttachment.same(attachments, previous.attachments)
     }
 
     fileprivate func merging(_ previous: Self, historical: Bool = false) -> Self {
@@ -82,6 +96,8 @@ struct ChatItem: Identifiable, Equatable, Sendable {
            kind == .assistant || kind == .reasoning { updated.text = previous.text }
         if updated.title.isEmpty { updated.title = previous.title }
         if updated.output.isEmpty { updated.output = previous.output }
+        // A transcript names images without the thumbnails the composer made: keep those (and the row's chip ids).
+        updated.attachments = ChatAttachment.merge(updated.attachments, keeping: previous.attachments)
         updated.completed = updated.completed || previous.completed
         updated.exitCode = updated.exitCode ?? previous.exitCode
         updated.processID = updated.processID ?? previous.processID
@@ -133,19 +149,23 @@ final class PendingApproval: Identifiable {
     let turnID: String?
     /// The transcript item of the tool call this request is about, when the hook named one.
     let toolItemID: String?
+    /// The turn that was last when the request arrived: where its receipt goes once decided when no
+    /// tool call claims it (a native panel names none), not after every later turn.
+    let anchorTurnID: String?
     let questions: ClaudeQuestions?
     let questionDraft: ClaudeQuestionDraft?
     private(set) var answers: [String: String]?
     private(set) var decision: Decision?
     @ObservationIgnored private let complete: (PendingApproval) -> Void
-    init(key: String, interaction: String? = nil, operation: String, item: ChatItem? = nil, turnID: String? = nil, toolItemID: String? = nil, questions: ClaudeQuestions? = nil,
-         complete: @escaping (PendingApproval) -> Void) {
+    init(key: String, interaction: String? = nil, operation: String, item: ChatItem? = nil, turnID: String? = nil, toolItemID: String? = nil,
+         anchorTurnID: String? = nil, questions: ClaudeQuestions? = nil, complete: @escaping (PendingApproval) -> Void) {
         self.key = key
         self.interaction = interaction
         self.operation = operation
         self.item = item
         self.turnID = turnID
         self.toolItemID = toolItemID
+        self.anchorTurnID = anchorTurnID
         self.complete = complete
         self.questions = questions
         questionDraft = questions.map(ClaudeQuestionDraft.init)
@@ -166,13 +186,120 @@ final class PendingApproval: Identifiable {
     }
 }
 
+/// One step of a tool group as its run chart draws it: cheap facts read from the item, never its formatted payload,
+/// so a collapsed group of thousands of tools parses nothing.
+struct ChatToolStep: Equatable, Sendable {
+    enum Kind: Sendable { case edit, web, other }
+    let kind: Kind
+    let failed: Bool
+    /// Seconds since the step before it (the group's message for the first). A step keeps one recorded time (its
+    /// result's for Claude, its call's for Codex), so this is the gap between steps; nil when a time is unknown.
+    let seconds: TimeInterval?
+
+    init(kind: Kind, failed: Bool = false, seconds: TimeInterval? = nil) {
+        self.kind = kind; self.failed = failed; self.seconds = seconds
+    }
+
+    init(_ item: ChatItem, seconds: TimeInterval?) {
+        kind = Self.kind(of: item)
+        failed = (item.exitCode.map { $0 != 0 } ?? false) || Self.refused(item.patch?.state)
+        self.seconds = seconds
+    }
+
+    /// The step `item` recorded at `time`, after a step (or the group's message) at `previous`. Without the message's
+    /// time the first step counts as instant, so the group still spans its first to its last step.
+    init(_ item: ChatItem, time: Date?, after previous: Date?, first: Bool) {
+        let seconds: TimeInterval? = if let time {
+            previous.map { max(0, time.timeIntervalSince($0)) } ?? (first ? 0 : nil)
+        } else { nil }
+        self.init(item, seconds: seconds)
+    }
+
+    private static func refused(_ state: ChatPatch.State?) -> Bool {
+        switch state {
+        case .failed, .declined: true
+        default: false
+        }
+    }
+
+    /// The operations a step chart tells apart: edits and web browsing. Rows of every group are built from this, so
+    /// it reads the title without allocating (`WebToolPresentation.matches`, `ChatPatch.isPatchOperation` and a
+    /// last-component `write_file`, in one pass).
+    nonisolated static func kind(of item: ChatItem) -> Kind {
+        let title = item.title
+        switch title {
+        case "WebSearch", "WebFetch": return .web
+        case "Edit", "MultiEdit", "Write": return .edit
+        default: break
+        }
+        // The names below are short: a longer last component is another tool, and a short one lowercases inline.
+        let name = title.lastIndex(of: ".").map { title[title.index(after: $0)...] } ?? title[...]
+        let lowered = name.utf8.count <= 11 ? name.lowercased() : ""
+        if lowered == "web__run" || (lowered == "run" && title.utf8.count == 7 && title.lowercased() == "web.run") { return .web }
+        if item.patch != nil { return .edit }
+        switch lowered {
+        case "apply_patch", "patch", "write_file": return .edit
+        default: return .other
+        }
+    }
+
+    /// The steps of `items` recorded at `times`, the first timed from `start`.
+    static func steps(_ items: [ChatItem], times: [Date?], start: Date?) -> [ChatToolStep] {
+        var previous = start, steps: [ChatToolStep] = []
+        steps.reserveCapacity(items.count)
+        for (item, time) in zip(items, times) {
+            steps.append(ChatToolStep(item, time: time, after: previous, first: steps.isEmpty))
+            previous = time
+        }
+        return steps
+    }
+}
+
+/// A group's steps, worked out the first time its header or timeline reads them: building a long history's rows times
+/// no step of a group that never shows.
+final class ChatToolSteps {
+    private var source: (() -> [ChatToolStep])?
+    private var computed: (steps: [ChatToolStep], elapsed: TimeInterval?)?
+
+    init(_ steps: [ChatToolStep]) { computed = (steps, Self.elapsed(steps)) }
+    init(_ source: @escaping () -> [ChatToolStep]) { self.source = source }
+
+    var value: (steps: [ChatToolStep], elapsed: TimeInterval?) {
+        if let computed { return computed }
+        let steps = source?() ?? []
+        let value = (steps, Self.elapsed(steps))
+        computed = value; source = nil
+        return value
+    }
+
+    private static func elapsed(_ steps: [ChatToolStep]) -> TimeInterval? {
+        steps.isEmpty || steps.contains { $0.seconds == nil } ? nil : steps.reduce(0) { $0 + ($1.seconds ?? 0) }
+    }
+}
+
 struct ChatToolGroup: Identifiable {
     let id: String
     let children: [ChatTranscriptRow]
+    private let timing: ChatToolSteps
+    /// One per child, for the header's run chart and the expanded timeline.
+    var steps: [ChatToolStep] { timing.value.steps }
+    /// The group's run time when every step's time is known.
+    var elapsed: TimeInterval? { timing.value.elapsed }
     // Separate from the stable disclosure identity. A rebuilt cached group
     // refreshes its summary without hashing every child's revision during draw.
     let presentationID = System.uuid()
+
+    init(id: String, children: [ChatTranscriptRow], steps: [ChatToolStep] = []) {
+        self.id = id; self.children = children; timing = ChatToolSteps(steps)
+    }
+
+    init(id: String, children: [ChatTranscriptRow], steps: @escaping () -> [ChatToolStep]) {
+        self.id = id; self.children = children; timing = ChatToolSteps(steps)
+    }
 }
+
+/// How much of a tool group the transcript shows: nothing but its header, the step the live turn is on, or all of it.
+enum ChatToolGroupDisclosure { case collapsed, current, all }
 
 struct ChatTranscriptRow: Identifiable {
     let id: String
@@ -189,6 +316,18 @@ struct ChatTranscriptRow: Identifiable {
     var time: Date? = nil
     /// The agent's last message in a finished turn: the radio log signs it off with "out".
     var signsOff = false
+    /// A shown step of a tool group: its place on the expanded group's timeline.
+    var timeline: Timeline? = nil
+
+    struct Timeline {
+        let step: ChatToolStep
+        let first: Bool
+        let last: Bool
+        /// The live turn's current step, shown alone under its group's header.
+        let current: Bool
+        /// The live group's last step, still running: it shows no time yet.
+        var running = false
+    }
 }
 
 struct ChatQueuedMessage: Identifiable {
@@ -207,6 +346,11 @@ struct ChatQueuedMessage: Identifiable {
     var native: HelperChat.Queued? = nil
     /// Being added to the native queue.
     var pending = false
+    /// The host's queue store refused it: this Mac delivers it itself, as before the store.
+    var local = false
+    /// Files it carries (`ChatDraft.attachments`); a native row's attachment previews as placeholders. Such a
+    /// message is not edited here: the helper keeps attachment rows read-only, and an edit would drop them.
+    var attachments: [ChatAttachment] = []
     /// Not yet accepted by a native queue; the app delivers or uploads it.
     var held: Bool { native == nil }
     var editable: Bool { native?.editable ?? true }
@@ -392,12 +536,14 @@ final class ChatSession: Identifiable {
     var binding: HelperTopology.Binding?
     @ObservationIgnored var helper: HelperChat?
     @ObservationIgnored var helperTask: Task<Void, Never>?
+    /// The upload of a held row to the host's queue, while it runs: Stop waits for it, so the
+    /// helper stops what it was just given instead of receiving it after the stop.
+    @ObservationIgnored var upload: Task<Void, Never>?
     var helperTitle: String?
     var helperEarlier: String?
     /// The SSH host a remote agent runs on (its helper's link); nil on this Mac.
     var host: String?
     /// Positions given to helper records so far (they arrive in transcript order); see receiveHelper.
-    @ObservationIgnored var helperPositions: ClosedRange<UInt64>?
     var helperCommands: [String] = []
     var agentTitle: String { helperTitle ?? "Agent" }
     var supportsQueue: Bool { helper != nil }
@@ -489,36 +635,16 @@ final class ChatSession: Identifiable {
         }
     }
     @ObservationIgnored private var displayedTurns: TurnRowsCache = [:]
+    /// The shared shaping (`ChatPatch.displayedItems`), its pairings cached by presentation.
     private func displayedItems(_ items: [ChatItem], turnID: String) -> [ChatItem] {
-        patchDisplayedItems(ToolOrchestration.coalesced(items, turnID: turnID), turnID: turnID)
-    }
-    private func patchDisplayedItems(_ items: [ChatItem], turnID: String) -> [ChatItem] {
-        var result: [ChatItem] = []
-        for item in items {
-            if let previous = result.last, !ChatPatch.isPatchOperation(previous), ChatPatch.isPatchOperation(item) {
-                let patch = item
-                let wrapper = previous
-                let key = PatchPair(wrapper: wrapper.presentationID, patch: patch.presentationID)
-                let match: (collapse: Bool, hidden: Set<String>)
-                if let cached = patchPairs[key] { match = cached }
-                else {
-                    match = (ChatPatch.duplicates(wrapper: wrapper, patch: patch), ChatPatch.duplicatedRequests(wrapper: wrapper, patch: patch))
-                    if patchPairs.count >= 4096 { patchPairs.removeAll(keepingCapacity: true) }
-                    patchPairs[key] = match
-                }
-                if match.collapse {
-                    var merged = patch
-                    merged.rowID = previous.rowID ?? "\(turnID.utf8.count):\(turnID):\(previous.id)"
-                    result[result.count - 1] = merged
-                    continue
-                }
-                if !match.hidden.isEmpty {
-                    result[result.count - 1].hiddenPatchRequests.formUnion(match.hidden)
-                }
-            }
-            result.append(item)
+        ChatPatch.displayedItems(items, turnID: turnID) { wrapper, patch in
+            let key = PatchPair(wrapper: wrapper.presentationID, patch: patch.presentationID)
+            if let cached = patchPairs[key] { return cached }
+            let match = ChatPatch.pairing(wrapper: wrapper, patch: patch)
+            if patchPairs.count >= 4096 { patchPairs.removeAll(keepingCapacity: true) }
+            patchPairs[key] = match
+            return match
         }
-        return result
     }
     @ObservationIgnored private var cachedRows: [ChatTranscriptRow]?
     @ObservationIgnored private var cachedVisibleRows: [ChatTranscriptRow]?
@@ -537,8 +663,21 @@ final class ChatSession: Identifiable {
         return expanded.contains(row.id) || (newestPatch && !collapsedLiveTools.contains(row.id))
     }
 
+    /// A group the user opened shows all its steps. The live turn's newest group, unless the user closed it, shows
+    /// just the step the agent is on: the next step replaces it.
+    func groupDisclosure(_ group: ChatToolGroup, turnID: String?) -> ChatToolGroupDisclosure {
+        if expandedToolGroups.contains(group.id) { return .all }
+        return !collapsedToolGroups.contains(group.id) && groupIsLive(group, turnID: turnID) ? .current : .collapsed
+    }
+
+    /// The live turn's newest group: the agent is on its last step, so neither shows a time yet.
+    func groupIsLive(_ group: ChatToolGroup, turnID: String?) -> Bool {
+        busy && turnID == activeTurnID
+            && transcriptRows.last(where: { $0.group != nil && $0.turnID == activeTurnID })?.group?.id == group.id
+    }
+
     func groupIsExpanded(_ group: ChatToolGroup, turnID: String?) -> Bool {
-        expandedToolGroups.contains(group.id) || (busy && turnID == activeTurnID && transcriptRows.last(where: { $0.group != nil && $0.turnID == activeTurnID })?.group?.id == group.id && !collapsedToolGroups.contains(group.id))
+        groupDisclosure(group, turnID: turnID) != .collapsed
     }
     func setGroupExpanded(_ group: ChatToolGroup, _ value: Bool) {
         atBottom = false; followRevision = nil
@@ -554,13 +693,19 @@ final class ChatSession: Identifiable {
         if let cachedVisibleRows { return cachedVisibleRows }
         var visible: [ChatTranscriptRow] = []
         for row in rows {
-            if let group = row.group, groupIsExpanded(group, turnID: row.turnID) {
+            if let group = row.group, case let disclosure = groupDisclosure(group, turnID: row.turnID), disclosure != .collapsed {
                 var head = row; head.bubbleEnd = false
                 visible.append(head)
-                for (index, child) in group.children.enumerated() {
-                    var child = child
+                let shown = disclosure == .all ? group.children.indices : group.children.indices.suffix(1)
+                let live = disclosure == .current || groupIsLive(group, turnID: row.turnID)
+                for index in shown {
+                    var child = group.children[index]
                     child.bubbleStart = false
-                    child.bubbleEnd = index == group.children.count - 1
+                    child.bubbleEnd = index == shown.last
+                    if group.steps.indices.contains(index) {
+                        child.timeline = .init(step: group.steps[index], first: index == shown.first, last: index == shown.last,
+                                               current: disclosure == .current, running: live && index == group.children.count - 1)
+                    }
                     visible.append(child)
                 }
             } else { visible.append(row) }
@@ -577,7 +722,10 @@ final class ChatSession: Identifiable {
         // call is in a turn, show the card there instead of after every later turn, where its receipt would sit
         // above the composer for good. Without a call ID (Claude's PermissionRequest hook may omit it), a resolved
         // request's call is the latest tool item with its tool and arguments; a pending one stays last, since an
-        // earlier identical call is not the one it is asking about.
+        // earlier identical call is not the one it is asking about. A resolved one no call claims follows the turn
+        // that was last when it arrived (the iPhone's ChatThreadView placement). A decided one whose turn is not loaded
+        // (a replacement reloads only the latest page) belongs to earlier history: it shows once that page is read,
+        // never above the composer meanwhile.
         if let unplaced = grouped[nil], !unplaced.isEmpty {
             let ids = Set(unplaced.compactMap(\.toolItemID))
             let matched = unplaced.filter { !$0.pending }.compactMap(\.item)
@@ -589,13 +737,14 @@ final class ChatSession: Identifiable {
                     if tools.contains(item.title) { calls[item.title + "\n" + item.text] = turn.id }
                 }
             }
-            if !owners.isEmpty || !calls.isEmpty {
-                grouped[nil] = nil
-                for approval in unplaced {
-                    let owner = approval.toolItemID.flatMap { owners[$0] }
-                        ?? (approval.pending ? nil : approval.item.flatMap { calls[$0.title + "\n" + $0.text] })
-                    grouped[owner, default: []].append(approval)
-                }
+            let anchors = Set(unplaced.filter { !$0.pending }.compactMap(\.anchorTurnID)).intersection(turns.map(\.id))
+            grouped[nil] = nil
+            for approval in unplaced {
+                let owner = approval.toolItemID.flatMap { owners[$0] }
+                    ?? (approval.pending ? nil : approval.item.flatMap { calls[$0.title + "\n" + $0.text] })
+                    ?? (approval.pending ? nil : approval.anchorTurnID.flatMap { anchors.contains($0) ? $0 : nil })
+                if owner == nil, !approval.pending, approval.anchorTurnID != nil { continue }
+                grouped[owner, default: []].append(approval)
             }
         }
         var rows: [ChatTranscriptRow] = []
@@ -629,9 +778,11 @@ final class ChatSession: Identifiable {
 
     /// A native record orders by its transcript position (its item date is the epoch),
     /// so it shows its own time; a reply without a known time shows none.
-    private func replyTime(_ item: ChatItem, turnID: String) -> Date? {
+    private func replyTime(_ item: ChatItem, turnID: String) -> Date? { Self.replyTime(item, turnID: turnID, dates: itemDates) }
+
+    nonisolated private static func replyTime(_ item: ChatItem, turnID: String, dates: [ItemIdentity: Date]) -> Date? {
         let date = item.source.map { $0.time_ms.map { Date(timeIntervalSince1970: Double($0) / 1000) } }
-            ?? itemDates[ItemIdentity(turn: turnID, item: item.id)]
+            ?? dates[ItemIdentity(turn: turnID, item: item.id)]
         return date.flatMap { $0.timeIntervalSince1970 > 0 ? $0 : nil }
     }
 
@@ -668,7 +819,20 @@ final class ChatSession: Identifiable {
             if first == nil, !hasMessage { transcriptArrivals.recordGroup(id, forming: tools.map(\.id)) }
             for tool in tools { toolGroupIdentities[tool.id] = id }
             let children = tools.map { row in var row = row; row.toolGroupID = id; return row }
-            let group = ChatToolGroup(id: id, children: children)
+            // Timed from the message the steps follow (or the turn's start), so the first step's bar has a width.
+            let start = rows.last?.time ?? (turn.started.timeIntervalSince1970 > 0 ? turn.started : nil)
+            let turnID = turn.id, dates = itemDates
+            let group = ChatToolGroup(id: id, children: children) {
+                var steps: [ChatToolStep] = [], previous = start
+                steps.reserveCapacity(children.count)
+                for child in children {
+                    guard let item = child.item else { continue }
+                    let time = Self.replyTime(item, turnID: turnID, dates: dates)
+                    steps.append(ChatToolStep(item, time: time, after: previous, first: steps.isEmpty))
+                    previous = time
+                }
+                return steps
+            }
             if hasMessage { rows[rows.count - 1].group = group }
             else { rows.append(ChatTranscriptRow(id: id, item: nil, approval: nil, group: group, turnID: turn.id)) }
             tools.removeAll(keepingCapacity: true)
@@ -721,6 +885,9 @@ final class ChatSession: Identifiable {
         showChat = chat
     }
     var terminalAttention: String?
+    /// The harness's own attention (`State.attention`: a prompt only Terminal can answer) while it lasts: the agent
+    /// needs the user, as on the iPhone.
+    var agentAttention: String?
     var inputBlocked: Bool { discoveryBlocked || terminalAttention != nil }
     var manualViewChoice = false
     /// The user sent /exit or /quit to the current agent: Terminal is shown whichever of the
@@ -787,6 +954,8 @@ final class ChatSession: Identifiable {
     var helperQueueSnapshot: [HelperChat.Queued]?
     /// The producer's own queue (chat.open native_queue); otherwise core holds and drains it.
     var helperNativeQueue = false
+    /// Send now was asked for a row while the host was still taking it: sent once it holds it.
+    var sendAfterUpload: UUID?
     var queueGeneration = System.uuid()
     var queueWaiting: String?
     var queueRetryAfter: Date?
@@ -810,6 +979,23 @@ final class ChatSession: Identifiable {
         }
     }
     var queuedSubmissionID: UUID?
+    /// The helper accepted `chat.attachments` (hello features): the composer may offer attachments.
+    var acceptsAttachments = false
+    /// Files being read and uploaded for drafts (`ChatCoordinator.attach`); never persisted, a quit drops them.
+    var attachmentUploads: [ChatAttachmentUpload] = []
+    /// The uploads of the draft the composer shows (each belongs to the draft it was started for).
+    var draftUploads: [ChatAttachmentUpload] {
+        let draft = drafts.shape.id
+        return attachmentUploads.filter { $0.draft == draft }
+    }
+    /// An upload whose draft is gone shows on the current one instead.
+    func retarget(_ upload: String) {
+        guard let index = attachmentUploads.firstIndex(where: { $0.id == upload }) else { return }
+        attachmentUploads[index].draft = drafts.current.id
+        attachmentUploads[index].scope = drafts.scope
+    }
+    /// Why the last attach was refused (too many, too large); shown beside the attachment chips.
+    var attachmentError: String?
     var editingQueuedID: UUID?
     var editingQueuedDraftID: UUID?
     var selectedQueuedID: UUID?
@@ -841,6 +1027,7 @@ final class ChatSession: Identifiable {
         set { reportedModel = newValue }
     }
     private var reportedModel: String?
+    var reportsModel: Bool { reportedModel != nil }
     var title: String?
     var transcriptTitle: String?
     var conversationTitle: String? { title ?? transcriptTitle }
@@ -888,13 +1075,13 @@ final class ChatSession: Identifiable {
     var transcriptAvailable = false
     var stoppedTurnID: String?
     var transcriptPath: String?
-    struct ItemIdentity: Hashable {
-        let turn: String
-        let item: String
-    }
-    @ObservationIgnored var itemDates: [ItemIdentity: Date] = [:]
-    @ObservationIgnored var itemOffsets: [ItemIdentity: UInt64] = [:]
-    @ObservationIgnored var seen: Set<String> = []
+    typealias ItemIdentity = ChatTranscript.ItemIdentity
+    /// The transcript's ordering keys, seen records and record positions (ChatTranscript, shared with the iPhone);
+    /// `turns` stays this session's own observed property and goes to the shared merge by reference.
+    @ObservationIgnored var transcriptIndex = ChatTranscript.Index()
+    var itemDates: [ItemIdentity: Date] { transcriptIndex.itemDates }
+    var itemOffsets: [ItemIdentity: UInt64] { transcriptIndex.itemOffsets }
+    var seen: Set<String> { transcriptIndex.seen }
     init(id: UUID, draftRepository: ChatDraftRepository = .shared) {
         self.id = id; draftCollection = ChatDraftCollection(repository: draftRepository)
     }
@@ -967,7 +1154,7 @@ final class ChatSession: Identifiable {
         relinquish()
         retiredInteraction = false
         optimisticPrompt = nil
-        approvals = []; turns = []; seen = []; itemDates = [:]; itemOffsets = [:]; toolLayouts.removeAll(); helperPositions = nil
+        approvals = []; turns = []; transcriptIndex = ChatTranscript.Index(); toolLayouts.removeAll()
         transcriptPath = nil; transcriptAvailable = false; version = nil
         loadingHistory = false; promptBoundary = nil
         hasEarlier = false; loadingEarlier = false; earlierError = nil; historyGeneration = nil
@@ -977,7 +1164,7 @@ final class ChatSession: Identifiable {
         submissionFailure = nil; status = nil; title = nil; transcriptTitle = nil; configurationRequest = nil
         if !keepingConfiguration { reportedModel = nil; effort = nil }
         configurationRevision = System.uuid()
-        terminalAttention = nil
+        terminalAttention = nil; agentAttention = nil
         expanded = []; expandedToolGroups = []; collapsedToolGroups = []; collapsedLiveTools = []; scrollAnchor = nil; atBottom = true
         followRevision = nil
         revision += 1
@@ -1005,7 +1192,7 @@ final class ChatSession: Identifiable {
             print("Chat transcript replacement preserves pending approvals: session=\(sessionID ?? "nil"), pending=\(approvals.filter(\.pending).count)")
         }
         if optimisticPrompt == nil || optimisticPromptRetained { optimisticPrompt = nil; submittedThinkingAt = nil }
-        turns = []; seen = []; itemDates = [:]; itemOffsets = [:]; toolLayouts.removeAll(); helperPositions = nil
+        turns = []; transcriptIndex = ChatTranscript.Index(); toolLayouts.removeAll()
         toolGroupIdentities = [:]; patchPairs = [:]; displayedTurns = [:]
         activeTurnID = nil; hasEarlier = false; loadingEarlier = false; earlierError = nil
         scrollPosition.clear(); scrollAnchor = nil; atBottom = true
@@ -1014,268 +1201,59 @@ final class ChatSession: Identifiable {
     }
 
     func turn(_ id: String, at date: Date = Date(), fileOffset: UInt64? = nil) -> Int {
-        func precedes(_ a: ChatTurn, _ b: ChatTurn) -> Bool {
-            a.started == b.started ? (a.fileOffset ?? .max) < (b.fileOffset ?? .max) : a.started < b.started
-        }
-        if let index = turns.firstIndex(where: { $0.id == id }) {
-            let started = date.timeIntervalSince1970 > 0 ? min(turns[index].started, date) : turns[index].started
-            let offset = fileOffset.map { min(turns[index].fileOffset ?? $0, $0) } ?? turns[index].fileOffset
-            // Almost every tool/reply updates an existing turn without changing
-            // its ordering. Avoid sorting the entire conversation per record.
-            guard started != turns[index].started || offset != turns[index].fileOffset else { return index }
-            turns[index].started = started; turns[index].fileOffset = offset
-            turns.sort(by: precedes)
-            return turns.firstIndex(where: { $0.id == id })!
-        }
-        let value = ChatTurn(id: id, started: date, fileOffset: fileOffset)
-        var low = 0, high = turns.count
-        while low < high {
-            let middle = (low + high) / 2
-            if precedes(value, turns[middle]) { high = middle } else { low = middle + 1 }
-        }
-        turns.insert(value, at: low)
-        return low
+        ChatTranscript.turn(id, at: date, fileOffset: fileOffset, in: &turns)
     }
+
+    /// The shared merge (`ChatTranscript.insert`), then this view's part of a live arrival: its entrance, unread and
+    /// the follow revision.
     func insert(_ item: ChatItem, turnID: String, at date: Date = Date(), historical: Bool = false, fileOffset: UInt64? = nil) {
-        let index = turn(turnID, at: date, fileOffset: fileOffset)
-        let date = item.source == nil ? date : Date(timeIntervalSince1970: 0)
-        var turn = turns[index]
-        var identity = item.id
-        let changed: Bool
-        let existing = turn.items.firstIndex(where: item.matches)
-        if let existing {
-            let updated = item.merging(turn.items[existing], historical: historical)
-            changed = updated != turn.items[existing]
-            identity = updated.id
-            if changed { turn.items[existing] = updated }
-        } else {
-            turn.items.append(item); changed = true
-            // An acknowledged optimistic prompt already animated under its rowID.
-            if !historical, showChat, atBottom, !loadingHistory, item.rowID == nil {
-                if transcriptArrivals.admitsMotion() {
-                    transcriptArrivals.record("\(turnID.utf8.count):\(turnID):\(item.id)")
-                    scrollPosition.expectArrival()
-                } else {
-                    scrollPosition.expectRow()
-                }
+        let result = ChatTranscript.insert(item, turnID: turnID, at: date, historical: historical, fileOffset: fileOffset,
+                                           turns: &turns, index: &transcriptIndex)
+        // An acknowledged optimistic prompt already animated under its rowID.
+        if result.added, !historical, showChat, atBottom, !loadingHistory, item.rowID == nil {
+            if transcriptArrivals.admitsMotion() {
+                transcriptArrivals.record("\(turnID.utf8.count):\(turnID):\(item.id)")
+                scrollPosition.expectArrival()
+            } else {
+                scrollPosition.expectRow()
             }
         }
-        let key = ItemIdentity(turn: turnID, item: identity)
-        let previousDate = itemDates[key], previousOffset = itemOffsets[key]
-        itemDates[key] = min(itemDates[key] ?? date, date)
-        if let fileOffset { itemOffsets[key] = min(itemOffsets[key] ?? fileOffset, fileOffset) }
-        func precedes(_ lhs: ChatItem, _ rhs: ChatItem) -> Bool {
-            let a = ItemIdentity(turn: turnID, item: lhs.id), b = ItemIdentity(turn: turnID, item: rhs.id)
-            let ad = itemDates[a] ?? date, bd = itemDates[b] ?? date
-            return ad == bd ? (itemOffsets[a] ?? .max) < (itemOffsets[b] ?? .max) : ad < bd
-        }
-        if existing == nil {
-            let added = turn.items.removeLast()
-            var low = 0, high = turn.items.count
-            while low < high {
-                let middle = (low + high) / 2
-                if precedes(added, turn.items[middle]) { high = middle } else { low = middle + 1 }
-            }
-            turn.items.insert(added, at: low)
-        } else if previousDate != itemDates[key] || previousOffset != itemOffsets[key] {
-            // Earlier history can supply an older timestamp/offset for an
-            // existing live item. Preserve the stable tie order in that case.
-            turn.items.sort(by: precedes)
-        }
-        if previousDate != itemDates[key] { turn.invalidatePresentation() }
-        turns[index] = turn
-        if !historical {
-            if changed && !latestOutputIsVisible { hasNewMessages = true }
+        // A record published again unchanged (the helper repeats a turn's records with its state) moves nothing:
+        // no revision, so no transcript pass and no follow scroll for it.
+        if !historical, result.added || result.changed {
+            if result.changed && !latestOutputIsVisible { hasNewMessages = true }
             followRevision = atBottom ? revision + 1 : nil
             revision += 1
         }
     }
 
-    /// Historical publication shares the live merge rules, but copies each
-    /// affected item array once and publishes the conversation once per batch.
-    /// Activity, configuration and prompt acknowledgement stay in the
-    /// coordinator's ordered event loop.
+    /// Historical publication (`ChatTranscript.mergeHistorical`): one merge and one publication per batch.
     func mergeHistorical(_ records: [ChatRecord]) {
-        guard !records.isEmpty else { return }
-        var updatedTurns = turns
-        var turnIndices: [String: Int] = [:]
-        var requiresIncrementalMerge = false
-        let affectedTurns = Set(records.map(\.turnID))
-        for (index, turn) in updatedTurns.enumerated() {
-            if turnIndices[turn.id] != nil { requiresIncrementalMerge = true }
-            else { turnIndices[turn.id] = index }
-            if affectedTurns.contains(turn.id) {
-                var identities: Set<String> = []
-                for item in turn.items {
-                    if !identities.insert(item.id).inserted || itemDates[ItemIdentity(turn: turn.id, item: item.id)] == nil {
-                        requiresIncrementalMerge = true
-                        break
-                    }
-                }
-            }
-        }
-        // Directly restored snapshots may not have item ordering metadata, or
-        // may contain repeated native IDs. Preserve the original first-match
-        // and per-record fallback-date behavior for these exceptional inputs.
-        if requiresIncrementalMerge {
-            for record in records {
-                switch record.action {
-                case .item(let item):
-                    insert(item, turnID: record.turnID, at: record.date, historical: true, fileOffset: record.fileOffset)
-                case .started:
-                    _ = turn(record.turnID, at: record.date, fileOffset: record.fileOffset)
-                case .ended:
-                    let index = turn(record.turnID, at: record.date, fileOffset: record.fileOffset)
-                    turns[index].ended = record.date
-                default: break
-                }
-            }
-            return
-        }
-        var turnRanks = Array(updatedTurns.indices)
-        var itemsByTurn: [Int: [ChatRecord]] = [:]
-        func turnPrecedes(_ a: Int, _ b: Int) -> Bool {
-            let lhs = updatedTurns[a], rhs = updatedTurns[b]
-            if lhs.started != rhs.started { return lhs.started < rhs.started }
-            let leftOffset = lhs.fileOffset ?? .max, rightOffset = rhs.fileOffset ?? .max
-            if leftOffset != rightOffset { return leftOffset < rightOffset }
-            return turnRanks[a] < turnRanks[b]
-        }
-        for record in records {
-            let index: Int
-            if let existing = turnIndices[record.turnID] {
-                index = existing
-                let previous = updatedTurns[index]
-                let started = record.date.timeIntervalSince1970 > 0 ? min(previous.started, record.date) : previous.started
-                let offset = record.fileOffset.map { min(previous.fileOffset ?? $0, $0) } ?? previous.fileOffset
-                if started != previous.started || offset != previous.fileOffset {
-                    // A stable sort after a timestamp correction retains the
-                    // order immediately before that correction, including prior
-                    // corrections in this batch. Remember it before changing keys.
-                    for (rank, position) in updatedTurns.indices.sorted(by: turnPrecedes).enumerated() {
-                        turnRanks[position] = rank
-                    }
-                    updatedTurns[index].started = started
-                    updatedTurns[index].fileOffset = offset
-                }
-            } else {
-                index = updatedTurns.count
-                turnIndices[record.turnID] = index
-                updatedTurns.append(ChatTurn(id: record.turnID, started: record.date, fileOffset: record.fileOffset))
-                turnRanks.append(index)
-            }
-            switch record.action {
-            case .item: itemsByTurn[index, default: []].append(record)
-            case .ended: updatedTurns[index].ended = record.date
-            default: break
-            }
-        }
-        for (index, items) in itemsByTurn {
-            mergeHistoricalItems(items, into: &updatedTurns[index])
-        }
-        let order = updatedTurns.indices.sorted(by: turnPrecedes)
-        turns = order.map { updatedTurns[$0] }
+        ChatTranscript.mergeHistorical(records, turns: &turns, index: &transcriptIndex)
     }
 
-    private struct HistoricalTextIdentity: Hashable {
-        let kind: ChatItem.Kind
-        let text: String
-        init?(_ item: ChatItem) {
-            guard !item.id.hasPrefix("pi-"), [.user, .assistant, .reasoning].contains(item.kind) else { return nil }
-            kind = item.kind; text = item.text
-        }
-    }
-
-    private func mergeHistoricalItems(_ records: [ChatRecord], into turn: inout ChatTurn) {
-        var items = turn.items
-        var identities = Dictionary(uniqueKeysWithValues: items.enumerated().map { ($0.element.id, $0.offset) })
-        var textIdentities: [HistoricalTextIdentity: Set<Int>] = [:]
-        var dates = items.map { itemDates[ItemIdentity(turn: turn.id, item: $0.id)] }
-        var offsets = items.map { itemOffsets[ItemIdentity(turn: turn.id, item: $0.id)] }
-        var ranks = Array(items.indices)
-        for (index, item) in items.enumerated() {
-            if let source = item.source { identities[source.id] = index }
-            if let key = HistoricalTextIdentity(item) { textIdentities[key, default: []].insert(index) }
-        }
-        func precedes(_ a: Int, _ b: Int, fallback: Date) -> Bool {
-            let leftDate = dates[a] ?? fallback, rightDate = dates[b] ?? fallback
-            if leftDate != rightDate { return leftDate < rightDate }
-            let leftOffset = offsets[a] ?? .max, rightOffset = offsets[b] ?? .max
-            if leftOffset != rightOffset { return leftOffset < rightOffset }
-            return ranks[a] < ranks[b]
-        }
-        for record in records {
-            guard case .item(let item) = record.action else { continue }
-            let date = item.source == nil ? record.date : Date(timeIntervalSince1970: 0)
-            var existing = identities[item.source?.id ?? item.id]
-            if let key = HistoricalTextIdentity(item), let candidates = textIdentities[key] {
-                // The live path takes the first displayed match, which can be
-                // an equal-text item before the item with the exact native ID.
-                for candidate in candidates where item.matches(items[candidate]) {
-                    if existing == nil || precedes(candidate, existing!, fallback: record.date) { existing = candidate }
-                }
-            }
-            let index: Int
-            if let existing {
-                index = existing
-                let previous = items[index], updated = item.merging(previous, historical: true)
-                if updated != previous {
-                    if let key = HistoricalTextIdentity(previous) { textIdentities[key]?.remove(index) }
-                    items[index] = updated
-                    if let key = HistoricalTextIdentity(updated) { textIdentities[key, default: []].insert(index) }
-                }
-                let date = min(dates[index] ?? date, date)
-                let offset = record.fileOffset.map { min(offsets[index] ?? $0, $0) } ?? offsets[index]
-                if date != dates[index] || offset != offsets[index] {
-                    // Most pages add records without correcting existing keys.
-                    // Only corrections need the current stable order captured;
-                    // the item array itself is reordered once after the batch.
-                    for (rank, position) in items.indices.sorted(by: { precedes($0, $1, fallback: record.date) }).enumerated() {
-                        ranks[position] = rank
-                    }
-                    dates[index] = date; offsets[index] = offset
-                }
-            } else {
-                index = items.count
-                items.append(item); identities[item.id] = index
-                if let key = HistoricalTextIdentity(item) { textIdentities[key, default: []].insert(index) }
-                let key = ItemIdentity(turn: turn.id, item: item.id)
-                ranks.append(index)
-                dates.append(min(itemDates[key] ?? date, date))
-                offsets.append(record.fileOffset.map { min(itemOffsets[key] ?? $0, $0) } ?? itemOffsets[key])
-            }
-            if let source = items[index].source { identities[source.id] = index }
-            let key = ItemIdentity(turn: turn.id, item: items[index].id)
-            itemDates[key] = dates[index]
-            itemOffsets[key] = offsets[index]
-        }
-        let fallback = records.last?.date ?? turn.started
-        let order = items.indices.sorted { precedes($0, $1, fallback: fallback) }
-        turn.items = order.map { items[$0] }
-    }
-
-    func showOptimisticPrompt(_ text: String, at date: Date = .now) {
+    func showOptimisticPrompt(_ text: String, attachments: [ChatAttachment] = [], at date: Date = .now) {
         optimisticPromptDelivered = false
         optimisticPromptRetained = false
         submittedThinkingAt = date
-        optimisticPrompt = ChatItem(id: "pending-" + System.uuid().uuidString, kind: .user, text: text)
+        var prompt = ChatItem(id: "pending-" + System.uuid().uuidString, kind: .user, text: text)
+        prompt.attachments = attachments
+        optimisticPrompt = prompt
         optimisticPromptBoundary = .local(date)
         followRevision = atBottom ? revision + 1 : nil
         revision += 1
     }
 
     func matchesPrompt(_ item: ChatItem) -> Bool {
-        guard item.kind == .user, let pending = optimisticPrompt else { return false }
-        let text = item.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return [pending.text, AgentInput.fenced(pending.text)].contains {
-            $0.trimmingCharacters(in: .whitespacesAndNewlines) == text
-        }
+        guard let pending = optimisticPrompt else { return false }
+        return AgentInput.records(item, prompt: pending.text, attachments: pending.attachments)
     }
 
     func reconcilePrompt(_ item: ChatItem) -> ChatItem {
         guard matchesPrompt(item), let pending = optimisticPrompt else { return item }
         var confirmed = item
         confirmed.rowID = pending.id
+        confirmed.attachments = ChatAttachment.merge(item.attachments, keeping: pending.attachments)
         optimisticPrompt = nil
         return confirmed
     }
@@ -1289,7 +1267,7 @@ final class ChatSession: Identifiable {
         if optimisticPromptDelivered { optimisticPromptRetained = true; return }
         if restoreDraft {
             if directDraftDelivery != nil { finishDirectDraft(success: false) }
-            else { drafts.restore(ChatDraft(text: pending.text, multiline: pending.text.contains("\n"))) }
+            else { drafts.restore(ChatDraft(text: pending.text, multiline: pending.text.contains("\n"), attachments: pending.attachments)) }
         }
         optimisticPrompt = nil
         followRevision = atBottom ? revision + 1 : nil
@@ -1385,6 +1363,23 @@ enum AgentInput {
         let useBackticks = longestBackticks <= longestTildes
         let fence = String(repeating: useBackticks ? "`" : "~", count: max(3, (useBackticks ? longestBackticks : longestTildes) + 1))
         return fence + "\n" + text + (text.hasSuffix("\n") ? "" : "\n") + fence
+    }
+
+    /// A user record the agent wrote for `prompt`: its text as sent, or fenced as the harness types a command-like
+    /// prompt (the optimistic bubble it confirms, on both apps).
+    static func records(_ item: ChatItem, prompt: String, attachments: [ChatAttachment]) -> Bool {
+        // Paths tell two attachment-only prompts apart; a record that names none (an agent that kept only text) has none.
+        guard item.attachments.isEmpty || ChatAttachment.same(item.attachments, attachments) else { return false }
+        return records(item, prompt: prompt, attachments: attachments.count)
+    }
+
+    static func records(_ item: ChatItem, prompt: String, attachments: Int = 0) -> Bool {
+        guard item.kind == .user else { return false }
+        // The helper takes attachment references out of a user record's text (helper/PROTOCOL.md, Attachments); a
+        // record that names some must name as many as were sent. One that names none is an agent that kept only text.
+        guard item.attachments.isEmpty ? attachments == 0 || !prompt.isEmpty : item.attachments.count == attachments else { return false }
+        let text = item.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return [prompt, fenced(prompt)].contains { $0.trimmingCharacters(in: .whitespacesAndNewlines) == text }
     }
 
     /// Native editor commands need delivery confirmation, not a model-turn ack.

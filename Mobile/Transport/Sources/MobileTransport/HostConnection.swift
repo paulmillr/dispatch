@@ -9,9 +9,10 @@ public enum HostConnectionState: Sendable, Equatable {
   /// Installing or checking the helper and greeting it.
   case bootstrapping
   case connected
-  /// The connection was lost at `since`; `attempt` counts tries since then. Stays put through each
-  /// attempt's phases, so the banner and its elapsed counter never flicker.
-  case reconnecting(attempt: Int, since: Date)
+  /// The connection was lost at `since` (or the first connection failed then); `attempt` counts tries since then.
+  /// Stays put through each attempt's phases, so the banner and its elapsed counter never flicker. `reason` is why
+  /// the link is down: the latest attempt's failure, else why the connection was lost.
+  case reconnecting(attempt: Int, since: Date, reason: String? = nil)
   /// Refused (host key, credentials, incompatible helper): no automatic retry until `start` again.
   case failed(reason: String)
 }
@@ -32,6 +33,12 @@ public struct SystemReconnectClock: ReconnectClock {
 public protocol HostSession: Sendable {
   func closed() async
   func close() async
+  /// Why the connection ended, once `closed()` returned; nil when not known.
+  var lossReason: String? { get }
+}
+
+extension HostSession {
+  public var lossReason: String? { nil }
 }
 
 public enum HostConnectionPhase: Sendable {
@@ -122,10 +129,11 @@ public actor HostConnection<Session: HostSession> {
   private func run(_ generation: UUID) async {
     var attempt = 0
     var since: Date?
+    var reason: String?
     while self.generation == generation, !Task.isCancelled {
       if let since {
         attempt += 1
-        state = .reconnecting(attempt: attempt, since: since)
+        state = .reconnecting(attempt: attempt, since: since, reason: reason)
       } else {
         state = .connecting
       }
@@ -151,7 +159,8 @@ public actor HostConnection<Session: HostSession> {
         lastDrop = now
         since = now
         attempt = 0
-        state = .reconnecting(attempt: 0, since: now)
+        reason = session.lossReason ?? "The connection was lost."
+        state = .reconnecting(attempt: 0, since: now, reason: reason)
         if recent { await pause(backoff()) } else { failures = 0; await pause(.seconds(1)) }
       } catch {
         guard self.generation == generation, !Task.isCancelled else { return }
@@ -162,7 +171,8 @@ public actor HostConnection<Session: HostSession> {
         }
         // Waiting for the next try shows as reconnecting, never as the failed attempt's last phase.
         if since == nil { since = clock.now }
-        state = .reconnecting(attempt: attempt, since: since!)
+        reason = HostConnectionPolicy.describe(error)
+        state = .reconnecting(attempt: attempt, since: since!, reason: reason)
         await pause(backoff())
       }
     }
@@ -213,12 +223,12 @@ public enum HostConnectionPolicy: Sendable {
     case .hostKeyRejected, .hostKeyMismatch, .authenticationFailed, .unsupportedAuthentication, .invalidKey,
       .wrongPassphrase, .bootstrap, .cancelled:
       return true
-    case .timedOut, .channelClosed, .commandFailed, .outputLimit, .network, .protocolError:
+    case .timedOut, .channelClosed, .commandFailed, .outputLimit, .network, .connectFailed, .protocolError:
       return false
     }
   }
 
-  static func describe(_ error: any Error) -> String {
-    (error as? any LocalizedError)?.errorDescription ?? String(describing: error)
+  public static func describe(_ error: any Error) -> String {
+    (error as? any LocalizedError)?.errorDescription ?? (error as NSError).localizedDescription
   }
 }

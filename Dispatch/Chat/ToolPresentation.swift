@@ -263,12 +263,12 @@ private struct NativeToolPresentation: Sendable {
             if !text("pages").isEmpty { suffix = "pages " + text("pages") }
         case "Grep", "Glob":
             guard let pattern = object["pattern"] as? String else { return nil }
-            title = item.title == "Grep" ? "Search" : "Find files"; symbol = "magnifyingglass"
+            title = item.title == "Grep" ? "Search" : "Locate"; symbol = "magnifyingglass"
             detail = pattern; input = pattern; path = object["path"] as? String; scope = true
             suffix = [text("glob"), text("type")].filter { !$0.isEmpty }.joined(separator: " · ")
         case "WebSearch":
             guard let query = object["query"] as? String else { return nil }
-            title = "Search web"; symbol = "magnifyingglass"; detail = query; input = query
+            title = "Web"; symbol = "magnifyingglass"; detail = query; input = query
         case "WebFetch":
             guard let url = object["url"] as? String else { return nil }
             title = "Open page"; symbol = "globe"; detail = url; input = text("prompt")
@@ -378,7 +378,7 @@ struct WebToolPresentation {
         }
         isSearchOnly = !actions.isEmpty && actions.allSatisfy(\.search)
         let sameKind = Set(actions.map(\.title)).count == 1
-        title = sameKind ? actions[0].title : "Web"
+        title = sameKind && actions[0].title != "Search web" ? actions[0].title : "Web"
         symbol = isSearchOnly ? "magnifyingglass" : "globe"
         let descriptions = actions.prefix(3).map { action in
             let detail = action.detail.split(whereSeparator: \.isWhitespace).joined(separator: " ")

@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// The Tabs screens' shared actions and their dialogs: rename, Close, Detach, Terminate (with the Mac's confirmation),
-/// and the alert for a failed request. Attached once to the Tabs navigation stack.
+/// and the alert for a failed request. Attached once to the Tabs navigation stack. A plain host's shells close on the
+/// phone (`MobileTabs.closeShell`): Close tab at once, Close space after asking while a shell is live.
 @MainActor @Observable
 final class TabsActions {
     enum Target: Hashable {
@@ -12,8 +13,8 @@ final class TabsActions {
     var renaming: Target?
     var name = ""
     var terminating: Target?
-    /// M4d's Close space: the dialog with Close Space, Detach and Terminate….
-    var closingSpace: SpaceRef?
+    /// Close space of a Shell space with live shells: the dialog that ends them.
+    var closingShells: SpaceRef?
     var failure: String?
 
     @ObservationIgnored let model: MobileTabs
@@ -48,12 +49,35 @@ final class TabsActions {
     }
 
     /// Terminate asks first, with the Mac's words; Close and Detach act at once (the work of a busy tab keeps running).
+    /// A shell tab closes at once whichever way (nothing keeps a plain shell); a Shell space asks first while one of
+    /// its shells is live.
     func close(_ target: Target, _ how: TabsClose) {
+        switch target {
+        case .tab(let ref) where model.tab(ref)?.isShell == true:
+            closed(target)
+            model.closeShell(ref)
+            return
+        case .space(let ref) where model.space(ref)?.kind == .plainShell:
+            if model.space(ref)?.tabs.contains(where: { $0.shell == .live }) == true {
+                closingShells = ref
+            } else {
+                closeShells(ref)
+            }
+            return
+        default: break
+        }
         if how == .terminate {
             terminating = target
             return
         }
         run(target, how)
+    }
+
+    /// The confirmed Close space of a Shell space: every shell of the host ends.
+    func closeShells(_ ref: SpaceRef) {
+        closingShells = nil
+        closed(.space(ref))
+        model.closeShells(host: ref.host)
     }
 
     /// The confirmed Terminate.
@@ -63,6 +87,7 @@ final class TabsActions {
     }
 
     private func run(_ target: Target, _ how: TabsClose) {
+        model.noteUserClose(target)
         closed(target)
         perform(target) { workspace in
             switch target {
@@ -115,6 +140,12 @@ private struct TabsDialogs: ViewModifier {
                 Button("Cancel", role: .cancel) {}
                 Button("Rename") { actions.commitRename() }
             }
+            .alert(TabsShellCopy.closeTitle, isPresented: binding(\.closingShells), presenting: actions.closingShells) { ref in
+                Button("Cancel", role: .cancel) {}
+                Button(TabsShellCopy.closeConfirm, role: .destructive) { actions.closeShells(ref) }
+            } message: { _ in
+                Text(TabsShellCopy.closeMessage)
+            }
             .alert(terminateTitle, isPresented: binding(\.terminating), presenting: actions.terminating) { target in
                 Button("Cancel", role: .cancel) {}
                 Button(TabsTerminateCopy.confirm, role: .destructive) { actions.terminate(target) }
@@ -129,12 +160,29 @@ private struct TabsDialogs: ViewModifier {
     }
 }
 
-/// A tab's menu (long press on a row): the Mac's tab menu, with Rename.
+/// What closing a Shell space says (plain SSH: the shells are the phone's, nothing on the host keeps them).
+enum TabsShellCopy {
+    static let closeTitle = "Close all shells?"
+    static let closeMessage = "Each shell and the programs running in it end. Nothing on the host keeps them."
+    static let closeConfirm = "Close Shells"
+}
+
+/// A tab's menu (long press on a row): the Mac's tab menu, with Rename; a shell tab's is Close Tab alone.
 struct TabsTabMenu: View {
     let actions: TabsActions
     let tab: TabRef
 
     var body: some View {
+        if TabsTabMenu.isShell(tab) {
+            Button("Close Tab", systemImage: "xmark") { actions.close(.tab(tab), .close) }
+        } else {
+            multiplexerItems
+        }
+    }
+
+    static func isShell(_ tab: TabRef) -> Bool { ShellSessions.isKey(tab.key) }
+
+    @ViewBuilder private var multiplexerItems: some View {
         Button("Rename…", systemImage: "pencil") { actions.rename(.tab(tab)) }
         Divider()
         Button("Close Tab", systemImage: "xmark") { actions.close(.tab(tab), .close) }

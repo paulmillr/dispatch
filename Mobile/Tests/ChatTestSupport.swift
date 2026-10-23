@@ -23,6 +23,9 @@ final class ScriptedHelper: @unchecked Sendable {
         case open
         /// Notifications on the request's id; the subscription stays open.
         case notify([(method: String, params: HelperBinary.Value)])
+        /// A result with raw bytes (`files.read`): the bytes in chunk frames, then the result with the stream's totals.
+        /// The client must have configured chunks (`configureChunks`).
+        case bytes(HelperBinary.Value, Data)
 
         static func value<T: Encodable>(_ value: T) -> Reply { .binary(try! HelperBinary.value(encoding: value)) }
         static var empty: Reply { .binary(.null) }
@@ -97,7 +100,30 @@ final class ScriptedHelper: @unchecked Sendable {
         case .open: break
         case .notify(let notes):
             for note in notes { notify(id, note.method, value: note.params) }
+        case .bytes(let result, let data):
+            var sequence: UInt64 = 0, offset = 0
+            while offset < data.count {
+                let piece = data[data.startIndex + offset..<data.startIndex + min(offset + Self.chunkLimit, data.count)]
+                var body = Data()
+                withUnsafeBytes(of: sequence.littleEndian) { body.append(contentsOf: $0) }
+                body.append(piece)
+                transport.send(try! HelperWire.encode(.init(kind: .chunk, id: id, body: body)))
+                sequence += 1
+                offset += piece.count
+            }
+            let stream: HelperBinary.Value = .object(["chunks": .unsigned(sequence), "bytes": .unsigned(UInt64(data.count)),
+                                                      "encoding": .string("binary")])
+            respond(id, value: .object(["result": result, "stream": stream]))
         }
+    }
+
+    /// The chunk size of `.bytes` replies.
+    static let chunkLimit = 64 << 10
+
+    /// Lets the client take chunked replies (`.bytes`), as a helper's hello does.
+    func configureChunks() async throws {
+        try await client.connection.configure(limit: UInt32(HelperWire.limit), chunkKind: HelperWire.Kind.chunk.rawValue,
+                                              chunkLimit: UInt32(Self.chunkLimit))
     }
 
     /// The link drops: the client's pending requests and subscriptions fail.
@@ -191,7 +217,8 @@ enum ChatFixture {
     /// The approval Claude Code's PermissionRequest hook becomes (helper/harnesses/claude/src/hooks.rs), for the real
     /// hook input of DispatchTests/Fixtures/hooks-observed-0.153.2.json; `options` adds a session-scoped choice.
     static func approval(id: String = "approval-1", options: [String] = ["Allow", "Deny", "Terminal"]) -> [String: Any] {
-        let operation = #"{"command":"printf 'DISPATCH_LOCAL_TOOL_OK\\n'","description":"Allow the local fixture to print its test marker?"}"#
+        // The hook's text is "<tool>\n<input>" (hooks.rs `operation`).
+        let operation = "Bash\n" + #"{"command":"printf 'DISPATCH_LOCAL_TOOL_OK\\n'","description":"Allow the local fixture to print its test marker?"}"#
         return ["id": id, "key": NSNull(), "approval": true, "blocking": true, "turn": NSNull(), "record": NSNull(),
                 "questions": [["id": "approval", "header": "Bash", "text": operation, "secret": false, "multiple": false,
                                "custom": false, "options": options.map { ["id": $0, "label": $0, "detail": NSNull()] },

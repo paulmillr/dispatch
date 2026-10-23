@@ -2625,6 +2625,18 @@ fn replacements(list: &[(Vec<u8>, Option<Vec<u8>>)]) -> io::Result<(Vec<Vec<u8>>
     Ok((replacements, taken))
 }
 
+/// Each needle holding a `/` as JSON writes it escaped (`\\/`: Foundation's JSONEncoder, in the files the app's launchers
+/// write and the app reads back), with its replacement escaped the same way: a path in such a file gets the replacement
+/// it gets everywhere else, never one made of its components' (the app compares the two in replay). A needle whose value
+/// has its `/` elsewhere gets none: the plain check (test/scrub.py) finds that escaped form if a capture holds it.
+fn escaped(needles: &[Vec<u8>], replacements: &[Vec<u8>]) -> Vec<(Vec<u8>, Vec<u8>)> {
+    let escape = |bytes: &[u8]| bytes.iter().flat_map(|&byte| if byte == b'/' { vec![b'\\', b'/'] } else { vec![byte] }).collect::<Vec<u8>>();
+    needles.iter().zip(replacements).filter(|(needle, _)| needle.contains(&b'/')).filter_map(|(needle, replacement)| {
+        let (needle, replacement) = (escape(needle), escape(replacement));
+        (needle.len() == replacement.len() && !needles.contains(&needle)).then_some((needle, replacement))
+    }).collect()
+}
+
 /// Scrub (docs/replay.md, Scrub captures): every needle, and with `patterns` every UUID or IPv4 address, becomes a replacement
 /// of the same byte length in every text/bytes value of every capture under DIR, literally (text another program
 /// encoded stays as it is: `grep` lists it), written under OUT with the same layout. Equal length keeps every length prefix and wire frame intact. One run
@@ -2635,8 +2647,14 @@ fn replace(directory: &str, out: &str, list: Vec<(Vec<u8>, Option<Vec<u8>>)>, pa
     if target.exists() {
         return Err(io::Error::other("OUT must be a new directory"));
     }
-    let (replacements, mut taken) = replacements(&list)?;
-    let matcher = Matcher::new(list.iter().map(|(needle, _)| needle.clone()).collect());
+    let (mut replacements, mut taken) = replacements(&list)?;
+    let mut needles: Vec<Vec<u8>> = list.iter().map(|(needle, _)| needle.clone()).collect();
+    for (needle, replacement) in escaped(&needles, &replacements) {
+        taken.insert(replacement.clone());
+        needles.push(needle);
+        replacements.push(replacement);
+    }
+    let matcher = Matcher::new(needles);
     let original = replays(directory, &format!("{out}.replay-original"))?;
     // First the process lists: everything after reads the captures with only their allowed names.
     let root = &PathBuf::from(format!("{out}.rows"));
@@ -2693,9 +2711,10 @@ fn replace(directory: &str, out: &str, list: Vec<(Vec<u8>, Option<Vec<u8>>)>, pa
         std::fs::rename(&partial, file)?;
     }
     println!("hashes followed: {} changed values' SHA-256, {occurrences} occurrences", followed.needles.len());
-    for (index, (needle, replacement)) in list.iter().map(|(needle, _)| needle).zip(&replacements).enumerate() {
+    for (index, (needle, replacement)) in matcher.needles.iter().zip(&replacements).enumerate() {
         let count = counts.get(&Hit::Needle(index)).unwrap_or(&0);
-        println!("needle {} ({} bytes) -> {}: {count} occurrences", index + 1, needle.len(), String::from_utf8_lossy(replacement));
+        let escaped = if index < list.len() { "" } else { " (JSON-escaped)" };
+        println!("needle {}{escaped} ({} bytes) -> {}: {count} occurrences", index + 1, needle.len(), String::from_utf8_lossy(replacement));
     }
     // The values patterns found, to review (a version can look like an address: keep it with a needle `value<TAB>value`).
     for (hit, value) in &order {
@@ -3285,7 +3304,16 @@ pub fn run(arguments: &[std::ffi::OsString]) -> io::Result<()> {
                         println!("no replacements, tokens hold needles only: {error}");
                         Vec::new()
                     }, |(replaced, _)| replaced);
-                    (list.into_iter().map(|(needle, _)| needle).collect(), replaced)
+                    let mut needles: Vec<Vec<u8>> = list.into_iter().map(|(needle, _)| needle).collect();
+                    let mut replaced = replaced;
+                    let pairs = escaped(&needles, if replaced.is_empty() { &needles } else { &replaced });
+                    for (needle, replacement) in pairs {
+                        needles.push(needle);
+                        if !replaced.is_empty() {
+                            replaced.push(replacement);
+                        }
+                    }
+                    (needles, replaced)
                 }
                 None if shapes.is_empty() && args.len() >= 2 && !args[0].is_empty() => (vec![args.remove(0).into_bytes()], Vec::new()),
                 None if !shapes.is_empty() => (Vec::new(), Vec::new()),

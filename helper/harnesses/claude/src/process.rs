@@ -13,6 +13,15 @@ pub fn matches(p: &Process) -> bool {
                 .and_then(Path::file_name)
                 .is_some_and(|n| n == "claude")
     });
+    (name || version)
+        && p.arguments
+            .first()
+            .is_some_and(|s| !s.is_empty() && !Path::new(s).file_name().is_some_and(|n| n == "rg"))
+        && interactive(&p.arguments[1..])
+}
+
+/// The typed launcher configures interactive sessions, never service/print invocations.
+pub(crate) fn interactive(arguments: &[String]) -> bool {
     let flags = [
         "-p",
         "--print",
@@ -45,16 +54,39 @@ pub fn matches(p: &Process) -> bool {
         "update",
         "upgrade",
     ];
-    (name || version)
-        && p.arguments
+    !arguments
+        .iter()
+        .any(|s| flags.contains(&s.as_str()) || s.starts_with("--print="))
+        && arguments
             .first()
-            .is_some_and(|s| !s.is_empty() && !Path::new(s).file_name().is_some_and(|n| n == "rg"))
-        && !p
-            .arguments
-            .iter()
-            .skip(1)
-            .any(|s| flags.contains(&s.as_str()) || s.starts_with("--print="))
-        && p.arguments
-            .get(1)
             .is_none_or(|s| !services.contains(&s.as_str()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn only_interactive_invocations_configure_hooks() {
+        for args in [
+            vec![],
+            vec!["resume", "session"],
+            vec!["--model", "opus", "hello"],
+        ] {
+            assert!(interactive(
+                &args.into_iter().map(String::from).collect::<Vec<_>>()
+            ));
+        }
+        for args in [
+            vec!["--help"],
+            vec!["--version"],
+            vec!["-p", "hello"],
+            vec!["--print=hello"],
+            vec!["mcp", "list"],
+            vec!["auth", "login"],
+        ] {
+            assert!(!interactive(
+                &args.into_iter().map(String::from).collect::<Vec<_>>()
+            ));
+        }
+    }
 }

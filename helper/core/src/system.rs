@@ -1,6 +1,8 @@
 //! Native effects and completion routing. Reactor and workers are ported from helper2.
 pub mod capture;
+mod attachment;
 mod effects;
+mod executable;
 mod file;
 pub(crate) use file::{copy, errno};
 
@@ -16,6 +18,12 @@ pub mod search;
 pub mod queue;
 pub mod reactor;
 pub mod renderer;
+
+/// The account's persistent state directory (`Io::storage` without creating it or recording):
+/// for programs that run beside a helper, not inside one.
+pub fn storage_root() -> io::Result<PathBuf> {
+    hooks::base().map(|base| base.join("state"))
+}
 pub mod replay;
 pub mod sender;
 mod socket;
@@ -23,6 +31,12 @@ pub mod startup;
 mod stats;
 mod watch;
 mod work;
+#[cfg(test)]
+#[path = "system/write.test.rs"]
+mod write_tests;
+#[cfg(test)]
+#[path = "system/retire.test.rs"]
+mod retire_tests;
 pub(crate) mod zstd;
 // The files plugin's transfer jobs and their archive layout.
 mod archive;
@@ -142,6 +156,35 @@ impl Drop for System {
             }
         }
         self.descriptors.clear();
+        // A hung-up shell saves its history before it exits (zsh under HISTFILE.LOCK, which a
+        // shell killed mid-save leaves behind: the next one then waits until it is 10 s old).
+        // Give the hangups a bounded moment; the app ends a helper still running one second
+        // after closing its stdin (HelperSession.close), so the whole grace stays under that.
+        let deadline = Instant::now() + RETIREMENT_GRACE;
+        loop {
+            let mut pending = false;
+            for child in self
+                .children
+                .values_mut()
+                .filter(|child| child.pty && child.status.is_none())
+            {
+                match child.process.try_wait() {
+                    Ok(Some(status)) => {
+                        let status = status.code().unwrap_or(128 + status.signal().unwrap_or(0));
+                        child.exit.take();
+                        #[cfg(target_os = "macos")]
+                        child.slave.take();
+                        child.status = Some((status, Instant::now()));
+                    }
+                    Ok(None) => pending = true,
+                    Err(_) => {}
+                }
+            }
+            if !pending || Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
         for mut child in std::mem::take(&mut self.children)
             .into_values()
             .filter(|child| (child.owned || child.pty) && child.status.is_none())
@@ -155,6 +198,9 @@ impl Drop for System {
         }
     }
 }
+
+/// How long retirement waits for hung-up terminal shells to exit on their own.
+const RETIREMENT_GRACE: Duration = Duration::from_millis(700);
 
 impl System {
     /// The helper's working directory, distinct from replay control-file locations.
@@ -1208,6 +1254,8 @@ pub fn isolated() -> Option<i32> {
 pub fn native(name: &str, input: &[u8]) -> io::Result<Vec<u8>> {
     if name == "hook.endpoint" {
         hooks::endpoint(input)
+    } else if name.starts_with("attachment.") {
+        attachment::native(name, input)
     } else {
         inspect::native(name, input)
     }
@@ -1276,10 +1324,17 @@ fn execute(job: Job) -> io::Result<Output> {
                 file.sync_all()?;
                 match expected {
                     Expected::Same(_) => {
+                        // Recheck the full revision after preparing the replacement. Renaming can change
+                        // ctime (Linux RENAME_EXCHANGE does), so it is checked only before our own swap.
+                        // Pin every other field, including identity, even if the caller's guard is partial.
+                        let mut guard =
+                            crate::api::Guard::from(metadata(original.as_ref().unwrap().clone()));
+                        checked(&parent, name, Expected::Same(guard))?;
+                        guard.changed_ns = None;
                         // The swap is the check-and-publish transaction: `temporary` now names the exact object
                         // displaced from the target. If it is not the authorized one, put both names back.
                         native::exchange(&parent, &temporary, name)?;
-                        if let Err(error) = checked(&parent, &temporary, expected) {
+                        if let Err(error) = checked(&parent, &temporary, Expected::Same(guard)) {
                             if let Err(restore) = native::exchange(&parent, &temporary, name) {
                                 stranded = true;
                                 return Err(io::Error::other(format!(

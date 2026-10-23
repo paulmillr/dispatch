@@ -1,0 +1,9 @@
+{
+  "kind": "rerecord",
+  "why": "Under test a terminal no longer forwards the physical pointer's motion and entry (TerminalView.followsPointer): resting or moving over the test window it typed mouse reports into programs that track every motion (Pi's TUI), so these recordings held the capture machine's pointer (`ESC[<35;137;36M` …) and stalled at the first one on every replay, host and VM alike. Recorded again without them.",
+  "tests": [
+    "SSHClaudeIntegrationTests/testRemoteTmuxClaudeReattachmentRejectsOldApprovalAndRecoversQuestions",
+    "SSHLinuxPiIntegrationTests/testLinuxPlainTransportAndSessionLifecycle",
+    "SSHPiIntegrationTests/testRemotePlainTransportAndSessionLifecycle"
+  ]
+}

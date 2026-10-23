@@ -23,8 +23,6 @@ struct FilesRow: Hashable, Identifiable, Sendable {
 
     var isEntry: Bool { kind == .entry }
     var isDirectory: Bool { entry?.isDirectory == true }
-    /// Ignored entries dim (the git tabs' "!" mark; nothing sets it in step one).
-    var dimmed: Bool { entry?.mark == "!" }
 
     static func placeholderID(_ kind: Kind, in folder: String) -> String { "\(folder)\u{0}\(kind)" }
 }
@@ -249,14 +247,23 @@ extension FilesSession {
         case .pin(let path): pin(path)
         case .preview(let path):
             showPreview(path, entry: row.entry)
-            // Asking for a file's preview is asking to see it: a hidden pane comes back.
+            // Asking for a file's preview is asking to see it: a hidden pane comes back, on one column in the list's
+            // place.
             setPreviewHidden(false)
+            if splitNarrow { narrowDetail = true }
         case nil: break
         }
     }
 
-    /// ⌥⌘P and the header's button.
-    func togglePreview() { setPreviewHidden(!previewOff) }
+    /// ⌥⌘P and the header's button: on one column, the detail in the list's place instead.
+    func togglePreview() {
+        if splitNarrow {
+            narrowDetail.toggle()
+            if narrowDetail { setPreviewHidden(false) }
+        } else {
+            setPreviewHidden(!previewOff)
+        }
+    }
 
     /// Hiding keeps `previewWidth` for when the pane returns. A preview that had the keyboard is unmounted with it, so
     /// the list takes the keyboard rather than leaving the window with no responder. Showing it counts as asking for it.

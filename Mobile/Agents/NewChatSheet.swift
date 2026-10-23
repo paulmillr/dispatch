@@ -27,16 +27,18 @@ extension ChatConversations {
     }
 
     /// Starts `launch` in a new tab of `space` (`terminals.create` with `launch`) and returns the conversation once the
-    /// topology shows its terminal. Optional integrations (Pi's extension) are enabled on this connection first: the
-    /// helper keeps that choice in memory per connection (docs/ios.md, Helper contract).
+    /// topology shows its terminal. An optional integration (Pi's extension) is opt-in, as on the Mac: one not yet on the
+    /// host throws `ChatIntegrationConsent` until the user agrees (`install`); once installed it is enabled on this
+    /// connection first (the helper keeps that choice in memory per connection, docs/ios.md, Helper contract).
     func start(_ launch: HelperClient.Launch, in space: ChatSpaceChoice,
-               settings: (model: String, effort: String?)?) async throws -> ChatConversationKey {
+               settings: (model: String, effort: String?)?, install: Bool = false) async throws -> ChatConversationKey {
         guard let client = hosts[space.host]?.client else {
             throw HelperFailure(code: "connection_closed", message: "\(space.hostName) is not connected.")
         }
         if let audit: HelperChat.Installation = try? await client.connection.request(
             "installation.audit", params: HelperChat.Setup(launch: launch.launch, enabled: nil, terminal: nil)),
-           audit.optional == true, audit.installed != true {
+           audit.optional == true, audit.installed != true || audit.status == "off" {
+            guard install || audit.installed == true else { throw ChatIntegrationConsent(agent: launch.label, host: space.hostName) }
             let _: HelperChat.Installation = try await client.connection.request(
                 "installation.install", params: HelperChat.Setup(launch: launch.launch, enabled: true, terminal: nil))
         }
@@ -54,6 +56,16 @@ extension ChatConversations {
             try await Task.sleep(for: .milliseconds(100))
         }
         throw HelperFailure(code: "timeout", message: "The chat started, but its tab has not appeared on \(space.hostName) yet.")
+    }
+}
+
+/// An optional integration (Pi's extension) is not on the host yet: New chat asks before installing it.
+struct ChatIntegrationConsent: LocalizedError {
+    let agent: String
+    let host: String
+    var errorDescription: String? { "\(agent)’s Dispatch extension is not installed on \(host)." }
+    var message: String {
+        "Dispatch adds an extension to \(agent) on \(host) so Chat can read its conversation and send it messages."
     }
 }
 
@@ -104,6 +116,8 @@ struct NewChatSheet: View {
     @State private var effort: String?
     @State private var starting = false
     @State private var error: String?
+    /// Starting needs an optional integration installed first: the user's answer.
+    @State private var consent: ChatIntegrationConsent?
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -239,7 +253,7 @@ struct NewChatSheet: View {
         }
         .tint(Color.dispatchPink)
         // M9a draws the sheet's grabber, as New space's (M7a) does.
-        .presentationDragIndicator(.visible)
+        .mobileSheetGrabber()
         .onChange(of: spaces) { _, spaces in
             if let made = making?.made { adopt(made) } else if space == nil { space = spaces.first }
         }
@@ -252,6 +266,13 @@ struct NewChatSheet: View {
             }
         }
         .task(id: space?.host) { await loadLaunches() }
+        .alert("Install the \(consent?.agent ?? "") extension?", isPresented: Binding(get: { consent != nil }, set: { if !$0 { consent = nil } }),
+               presenting: consent) { _ in
+            Button("Install") { start(install: true) }
+            Button("Cancel", role: .cancel) {}
+        } message: { consent in
+            Text(consent.message)
+        }
     }
 
     private var selectedLaunch: HelperClient.Launch? { launches.first { $0.key == agent } }
@@ -343,16 +364,20 @@ struct NewChatSheet: View {
         if !efforts.contains(where: { $0.id == effort }) { effort = efforts.last?.id }
     }
 
-    private func start() {
+    private func start() { start(install: false) }
+
+    private func start(install: Bool) {
         guard let space, let launch = selectedLaunch else { return }
         starting = true; error = nil
         Task {
             defer { starting = false }
             do {
-                let key = try await conversations.start(launch, in: space, settings: model.map { ($0, effort) })
+                let key = try await conversations.start(launch, in: space, settings: model.map { ($0, effort) }, install: install)
                 memory.remember(agent: launch.key, model: model, effort: effort)
                 dismiss()
                 started(key)
+            } catch let needed as ChatIntegrationConsent {
+                consent = needed
             } catch { self.error = error.localizedDescription }
         }
     }

@@ -90,6 +90,8 @@ final class ChatPatchTests: XCTestCase {
 
     func testLineNumbersAndEndpointResolution() {
         XCTAssertEqual(ToolDocument.lineNumbers(["@@ -41,2 +41,3 @@", " same", "-old", "+new", "+extra"]), [nil, 41, 42, 42, 43])
+        // A blank context line without its leading space still counts in both files.
+        XCTAssertEqual(ToolDocument.lineNumbers(["@@ -1,3 +1,3 @@", " a", "", "-b", "+c"]), [nil, 1, 2, 3, 3])
         // Native socket/home resolution is the helper's contract, not an app parser.
     }
 

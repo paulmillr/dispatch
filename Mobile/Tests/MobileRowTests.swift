@@ -25,13 +25,14 @@ final class MobileRowTests: XCTestCase {
         XCTAssertLessThan(height, 78)
     }
 
-    /// M3a: a two-line preview adds one line; a row without a subtitle still fits the disc.
+    /// M3a: a two-line preview adds one line; a row without a subtitle keeps a lined row's height beside the disc, so
+    /// its separator runs under the disc.
     func testPreviewRowsGrowAndShortRowsFitTheDisc() {
         let preview = size(row(dot: .unread, subtitle: "Run the migration on staging, then confirm the webhook replays cleanly before Monday.", lines: 2)).height
         XCTAssertGreaterThan(preview, size(row(dot: .unread)).height + 12)
         let short = size(row(dot: nil, subtitle: nil)).height
         XCTAssertGreaterThanOrEqual(short, MobileRow<Image>.disc + 10)
-        XCTAssertLessThan(short, size(row(dot: nil)).height)
+        XCTAssertEqual(short, size(row(dot: nil)).height, accuracy: 0.5)
     }
 
     /// The separator starts at the text column: list inset, gutter, disc and both gaps.

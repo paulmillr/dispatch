@@ -1,0 +1,24 @@
+{
+  "kind": "rewrite",
+  "why": "The SSH login hand-off also accepts a helper in the runtime folder: when the home folder cannot run programs (mounted noexec), the Mac installs the helper in $XDG_RUNTIME_DIR/dispatch/bin/versions/<sha256>/ (grants without agent hooks only) and publishes dispatch/bin/versions/<sha256>/dispatch-helper, which the login checks as it checks the home cache (absolute $XDG_RUNTIME_DIR, private folders, the file's SHA-256) before it execs that file by its physical path. For a home path the login does exactly what it did: it execs \"$HOME/$helper\" with the same arguments, now through a variable. Text only, so the recorded login commands are rewritten; every recorded answer still holds. Recorded observations of a running ssh's arguments (results) keep the old text, and the app only reads them.",
+  "ops": [
+    "open.command"
+  ],
+  "replace": [
+    {
+      "old": "printf '%s\\n' \"$helper\";;\n    \"unavailable: \"*)",
+      "new": "printf '%s\\n' \"$helper\";;\n    dispatch/bin/versions/*/dispatch-helper)\n      digest=${helper#dispatch/bin/versions/}\n      digest=${digest%/dispatch-helper}\n      test \"${#digest}\" = 64 || fail \"malformed helper path\"\n      case \"$digest\" in *[!0-9a-f]*) fail \"malformed helper path\";; esac\n      case \"$XDG_RUNTIME_DIR\" in /*) ;; *) fail \"no runtime folder (XDG_RUNTIME_DIR)\";; esac\n      cd -P \"$XDG_RUNTIME_DIR\" || fail \"cannot enter the runtime folder\"\n      private_directory . || fail \"runtime folder not private\"\n      enter_private dispatch && enter_private bin && enter_private versions && enter_private \"$digest\"\n      safe_file dispatch-helper && test -x dispatch-helper || fail \"cached helper missing or unsafe\"\n      if command -v sha256sum >/dev/null 2>&1; then hash=$(sha256sum dispatch-helper | cut -d ' ' -f 1)\n      elif command -v shasum >/dev/null 2>&1; then hash=$(shasum -a 256 dispatch-helper | cut -d ' ' -f 1)\n      else fail \"no sha256sum or shasum\"; fi\n      test \"$hash\" = \"$digest\" || fail \"cached helper checksum mismatch\"\n      printf '%s/dispatch-helper\\n' \"$(pwd -P)\";;\n    \"unavailable: \"*)"
+    },
+    {
+      "old": "  cd \"$HOME\" || exit 1\n",
+      "new": "  cd \"$HOME\" || exit 1\n  case \"$helper\" in /*) ;; *) helper=\"$HOME/$helper\";; esac\n"
+    },
+    {
+      "old": "exec \"$HOME/$helper\" login",
+      "new": "exec \"$helper\" login"
+    }
+  ],
+  "fingerprints": {
+    "ssh-setup": "a31a087691145f87342e47acad9bffdfd403dcfe6a5e36d118b2253a3dd93a71"
+  }
+}

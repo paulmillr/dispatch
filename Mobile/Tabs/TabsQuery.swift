@@ -1,42 +1,49 @@
 import Foundation
 import SwiftUI
 
-/// M2a's sort/filter menu: Sort by (Activity, Name, Host) and Show (All, Chats, Terminals, Needs you). The same menu
-/// applies to the spaces level of the tree (M2b) and to a space's tabs (M2c).
+/// The Spaces tree's filter row (P1): All, Needs you (the hosts and spaces with an agent waiting for the user) and
+/// Agents (the spaces running one). The Agents section of the tab bar is the same set by conversation; the chip is the
+/// tree's view of it. No sort: hosts keep their order and spaces the phone's (`MobileTabs.orderedSpaces`).
 struct TabsQuery: Equatable, Codable {
-    enum Sort: String, CaseIterable, Codable, Identifiable {
-        case activity, name, host
-        var id: Self { self }
-        var title: String {
-            switch self { case .activity: "Activity"; case .name: "Name"; case .host: "Host" }
-        }
-    }
-
     enum Filter: String, CaseIterable, Codable, Identifiable {
-        case all, chats, terminals, needsYou
+        case all, needsYou, agents
         var id: Self { self }
         var title: String {
-            switch self { case .all: "All"; case .chats: "Chats"; case .terminals: "Terminals"; case .needsYou: "Needs you" }
+            switch self { case .all: "All"; case .needsYou: "Needs you"; case .agents: "Agents" }
+        }
+        /// The chip's glyph (P1).
+        var symbol: String {
+            switch self { case .all: "square.on.square"; case .needsYou: "exclamationmark.bubble"; case .agents: "text.bubble" }
         }
     }
 
-    var sort = Sort.activity
     var filter = Filter.all
 
-    init(sort: Sort = .activity, filter: Filter = .all) {
-        self.sort = sort
+    init(filter: Filter = .all) {
         self.filter = filter
     }
 
-    /// A missing or unknown value (an older or newer build's) takes its default; the other stays.
+    /// An older build's menu ("chats" is Agents now; its Terminals and sort are gone) or a newer build's unknown value
+    /// takes the nearest filter, else All.
     init(from decoder: any Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        sort = values.lenient(Sort.self, forKey: .sort, default: .activity)
-        filter = values.lenient(Filter.self, forKey: .filter, default: .all)
+        let raw = values.lenient(String.self, forKey: .filter, default: "")
+        filter = raw == "chats" ? .agents : Filter(rawValue: raw) ?? .all
     }
 
-    /// The pill tints when a filter is active (M2a); a sort alone does not count.
+    private enum CodingKeys: String, CodingKey { case filter }
+
+    /// A filter other than All is on: the chip is tinted, hosts without a match leave the tree.
     var filtering: Bool { filter != .all }
+}
+
+/// What a chat tab's agent is doing, for line two of its row (P2, P3) and the watch's tab rows: its words (the current
+/// step, the approval or question it waits on, its last message) and, while it works, when its turn started, which the
+/// rows count from ("Editing Sidebar.tsx · 48s", ticking) and the words never carry, so they change only with the step.
+struct TabsStatus: Equatable, Sendable {
+    var text: String
+    /// The running turn's start, while the agent works; nil otherwise.
+    var since: Date? = nil
 }
 
 /// How much a tab wants attention, from Chat's per-conversation state (`PaneUrgency`'s precedence: waiting, then
@@ -58,10 +65,14 @@ struct TabsEntry: Identifiable {
     let urgency: TabUrgency?
     /// Its time (`MobileTabs.activity(of:)`); nil: the tab's own.
     let activity: Date?
+    /// The name it shows (`MobileTabs.label(of:)`).
+    let label: String
     let id: TabRef
 
-    @MainActor init(tab: MobileTab, space: MobileSpace?, host: TabsHost, urgency: TabUrgency?, activity: Date? = nil) {
+    @MainActor init(tab: MobileTab, space: MobileSpace?, host: TabsHost, urgency: TabUrgency?, activity: Date? = nil,
+                    label: String? = nil) {
         self.tab = tab
+        self.label = label ?? tab.name
         self.space = space
         self.host = host
         self.urgency = urgency
@@ -72,77 +83,9 @@ struct TabsEntry: Identifiable {
     @MainActor func matches(_ filter: TabsQuery.Filter) -> Bool {
         switch filter {
         case .all: true
-        case .chats: tab.isChat
-        case .terminals: !tab.isChat
-        case .needsYou: urgency == .needsYou
-        }
-    }
-}
-
-@MainActor
-enum TabsOrdering {
-    /// Most recent first; tabs with no change seen yet go last, by name. Name and Host sort with Finder's comparison;
-    /// ties fall back to activity, then the tab key, so the order never flickers between snapshots.
-    static func sorted(_ entries: [TabsEntry], by sort: TabsQuery.Sort) -> [TabsEntry] {
-        entries.sorted { a, b in
-            switch sort {
-            case .activity:
-                if let order = activity(a.activity, b.activity) { return order }
-                if let order = text(a.tab.name, b.tab.name) { return order }
-            case .name:
-                if let order = text(a.tab.name, b.tab.name) { return order }
-                if let order = text(a.space?.name ?? "", b.space?.name ?? "") { return order }
-                if let order = activity(a.activity, b.activity) { return order }
-            case .host:
-                if let order = text(a.host.name, b.host.name) { return order }
-                if a.host.id != b.host.id { return a.host.id.uuidString < b.host.id.uuidString }
-                if let order = activity(a.activity, b.activity) { return order }
-                if let order = text(a.tab.name, b.tab.name) { return order }
-            }
-            if a.host.id != b.host.id { return a.host.id.uuidString < b.host.id.uuidString }
-            return a.tab.ref.key < b.tab.ref.key
-        }
-    }
-
-    static func query(_ entries: [TabsEntry], _ query: TabsQuery) -> [TabsEntry] {
-        sorted(entries.filter { $0.matches(query.filter) }, by: query.sort)
-    }
-
-    /// Spaces (M2b) by the same sort: a space's activity is its latest tab's.
-    static func sorted(spaces: [(space: MobileSpace, host: TabsHost)], by sort: TabsQuery.Sort,
-                       activity time: (MobileSpace) -> Date? = { $0.activity }) -> [(space: MobileSpace, host: TabsHost)] {
-        spaces.sorted { a, b in
-            switch sort {
-            case .activity:
-                if let order = activity(time(a.space), time(b.space)) { return order }
-                if let order = text(a.space.name, b.space.name) { return order }
-            case .name:
-                if let order = text(a.space.name, b.space.name) { return order }
-                if let order = text(a.host.name, b.host.name) { return order }
-            case .host:
-                if let order = text(a.host.name, b.host.name) { return order }
-                if a.host.id != b.host.id { return a.host.id.uuidString < b.host.id.uuidString }
-                if let order = activity(time(a.space), time(b.space)) { return order }
-            }
-            if a.host.id != b.host.id { return a.host.id.uuidString < b.host.id.uuidString }
-            return a.space.ref.key < b.space.ref.key
-        }
-    }
-
-    private static func activity(_ a: Date?, _ b: Date?) -> Bool? {
-        switch (a, b) {
-        case let (a?, b?): a == b ? nil : a > b
-        case (.some, nil): true
-        case (nil, .some): false
-        case (nil, nil): nil
-        }
-    }
-
-    private static func text(_ a: String, _ b: String) -> Bool? {
-        switch a.localizedStandardCompare(b) {
-        case .orderedAscending: true
-        case .orderedDescending: false
-        case .orderedSame: nil
+        case .agents: tab.isChat
+        // Live rows only, as the Needs you count and the app's badge count them: a host not reached now says nothing.
+        case .needsYou: urgency == .needsYou && !host.stale
         }
     }
 }
@@ -156,6 +99,16 @@ extension TabsTime {
         if seconds < 3600 { return "\(Int(seconds / 60))m ago" }
         if calendar.isDate(date, inSameDayAs: now) { return "\(Int(seconds / 3600))h ago" }
         return label(date, now: now, calendar: calendar, locale: locale)
+    }
+}
+
+extension TabsTime {
+    /// "48s", "3m", "1h 5m": how long a turn has run.
+    static func elapsed(_ seconds: TimeInterval) -> String {
+        let total = max(0, Int(seconds))
+        if total < 60 { return "\(total)s" }
+        if total < 3600 { return "\(total / 60)m" }
+        return "\(total / 3600)h \(total % 3600 / 60)m"
     }
 }
 

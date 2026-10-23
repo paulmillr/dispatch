@@ -319,7 +319,7 @@ final class SSHTransportTests: XCTestCase {
         let fixture = try BootstrapFixture(paused: "unsupported")
         defer { fixture.remove() }
         let unsupported = await fixture.bootstrap()
-        XCTAssertTrue(unsupported?.localizedDescription.contains("requires Linux or macOS") == true, "Unsupported platforms must fail enhancement")
+        XCTAssertTrue(unsupported?.localizedDescription.contains("requires Linux on ARM64 or x86-64, or macOS on Apple silicon") == true, "Unsupported platforms must fail enhancement")
         XCTAssertEqual(try fixture.uploadCount(), 0)
     }
 
@@ -566,7 +566,7 @@ private struct BootstrapFixture: Sendable {
     /// The bundle's binary for this Mac, its digest and size as the bootstrap observes them (replay answers the
     /// recorded ones: a rebuilt helper changes no path or byte count the test asks about), and where the bootstrap
     /// caches it in the fixture HOME.
-    var binary: URL { resources.appendingPathComponent("helper/darwin-universal") }
+    var binary: URL { resources.appendingPathComponent("helper/darwin-arm64") }
     var payload: (digest: String, size: Int) {
         struct Payload: Codable { let digest: String, size: Int }
         let live = { () -> Payload in

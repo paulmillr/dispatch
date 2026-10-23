@@ -15,7 +15,7 @@ public final class SSHExec: AsyncSequence, Sendable {
   public typealias Element = Output
 
   let state: ExecState
-  private let descriptor: Descriptor
+  let descriptor: Descriptor
 
   static func start(_ command: String, on session: SessionHandle) async throws -> SSHExec {
     let state = ExecState()
@@ -46,25 +46,12 @@ public final class SSHExec: AsyncSequence, Sendable {
 
   /// Writes stdin; suspends while the socket (and so the SSH window) is full.
   public func write(_ data: Data) async throws {
-    guard let fd = descriptor.fd else { throw SSHTransportError.channelClosed }
-    try await Blocking.run {
-      try data.withUnsafeBytes { bytes in
-        var offset = 0
-        while offset < bytes.count {
-          let written = Darwin.write(fd, bytes.baseAddress! + offset, bytes.count - offset)
-          if written < 0 {
-            if errno == EINTR { continue }
-            throw SSHTransportError.channelClosed
-          }
-          offset += written
-        }
-      }
-    }
+    try await descriptor.write(data)
   }
 
   /// Sends EOF on stdin.
   public func finishInput() async throws {
-    if let fd = descriptor.fd { _ = shutdown(fd, SHUT_WR) }
+    descriptor.finishWriting()
   }
 
   /// The exit status once the command ended (a signal reports 128).
@@ -85,7 +72,8 @@ public final class SSHExec: AsyncSequence, Sendable {
   }
 
   /// Hands the socket over (for `HelperConnection(read:write:)`): this exec no longer reads or closes it. Nothing
-  /// iterates it any more, so stderr is no longer queued for iteration; `stderr` keeps its first 64 KiB.
+  /// iterates it any more, so stderr is no longer queued for iteration; `stderr` keeps its first 64 KiB. nil once
+  /// closed, and while a read or write is in flight (take it before using the exec).
   public func takeFileDescriptor() -> Int32? {
     let fd = descriptor.take()
     if fd != nil { state.stopQueueing() }
@@ -96,16 +84,7 @@ public final class SSHExec: AsyncSequence, Sendable {
     let exec: SSHExec
     public mutating func next() async throws -> Output? {
       if let chunk = exec.state.nextStderr() { return .stderr(chunk) }
-      if let fd = exec.descriptor.fd, !exec.state.stdoutEnded {
-        let data = try await Blocking.run { () -> Data in
-          var buffer = Data(count: 256 * 1024)
-          let count = buffer.withUnsafeMutableBytes { bytes in
-            var count: Int
-            repeat { count = read(fd, bytes.baseAddress, bytes.count) } while count < 0 && errno == EINTR
-            return count
-          }
-          return count > 0 ? buffer.prefix(count) : Data()
-        }
+      if !exec.state.stdoutEnded, let data = try await exec.descriptor.read() {
         if !data.isEmpty { return .stdout(data) }
         exec.state.stdoutEnded = true
       }
@@ -169,6 +148,9 @@ final class ExecState: @unchecked Sendable {
     waiters.forEach { $0.resume(returning: exit) }
   }
 
+  /// How the channel ended, if it has.
+  var finished: Exit? { lock.withLock { ending } }
+
   var exit: Exit {
     get async {
       await withCheckedContinuation { continuation in
@@ -182,28 +164,108 @@ final class ExecState: @unchecked Sendable {
   }
 }
 
-/// The socket end Swift owns until it is closed or handed over.
+/// The socket end Swift owns until it is closed or handed over. Every operation holds the number open while it runs:
+/// `close()` shuts the socket down at once (a blocked read or write returns) but frees the number only when the last
+/// operation in flight finished. Otherwise a read or write queued on `Blocking` could run after the close, on a
+/// number the system has given to the next socket opened (a new shell, another host's channel), and steal its bytes
+/// or write keystrokes into it.
 final class Descriptor: @unchecked Sendable {
   private let lock = NSLock()
+  /// nil once closed or handed over: no operation starts after that.
   private var value: Int32?
+  private var users = 0
+  /// Closed, but still in use: the last operation closes it.
+  private var closing: Int32?
 
   init(_ fd: Int32) { value = fd }
-  deinit { if let value { Darwin.close(value) } }
+  /// No operation is in flight here: each one retains the descriptor until it finished.
+  deinit { if let fd = value ?? closing { Darwin.close(fd) } }
 
   var fd: Int32? { lock.withLock { value } }
 
+  /// Hands the number over; nil (and nothing changes) when it is closed or an operation is in flight.
   func take() -> Int32? {
     lock.withLock {
+      guard users == 0 else { return nil }
       defer { value = nil }
       return value
     }
   }
 
-  /// Shut down first: a read blocked on another thread returns instead of waiting on a closed number.
+  /// Shuts the socket down (a read or write blocked on another thread returns) and closes the number once no
+  /// operation uses it. Both happen under the lock, so neither can touch a number that was already reused.
   func close() {
-    if let fd = take() {
+    lock.withLock {
+      guard let fd = value else { return }
+      value = nil
       _ = shutdown(fd, SHUT_RDWR)
-      Darwin.close(fd)
+      if users == 0 { Darwin.close(fd) } else { closing = fd }
+    }
+  }
+
+  /// Runs `body` with the number, which stays open until `body` returns; nil when closed or handed over.
+  @discardableResult
+  func using<T>(_ body: (Int32) throws -> T) rethrows -> T? {
+    guard let fd = acquire() else { return nil }
+    defer { release() }
+    return try body(fd)
+  }
+
+  private func acquire() -> Int32? {
+    lock.withLock {
+      guard let value else { return nil }
+      users += 1
+      return value
+    }
+  }
+
+  private func release() {
+    lock.withLock {
+      users -= 1
+      if users == 0, let fd = closing {
+        closing = nil
+        Darwin.close(fd)
+      }
+    }
+  }
+
+  /// Sends EOF (`shutdown(SHUT_WR)`).
+  func finishWriting() {
+    using { _ = shutdown($0, SHUT_WR) }
+  }
+
+  /// Writes all of `data`; suspends while the socket (and so the SSH window) is full. Throws `channelClosed` once the
+  /// descriptor is closed or handed over, or when the socket is shut down.
+  func write(_ data: Data) async throws {
+    guard let fd = acquire() else { throw SSHTransportError.channelClosed }
+    try await Blocking.run { [self] in
+      defer { release() }
+      try data.withUnsafeBytes { bytes in
+        var offset = 0
+        while offset < bytes.count {
+          let written = Darwin.write(fd, bytes.baseAddress! + offset, bytes.count - offset)
+          if written < 0 {
+            if errno == EINTR { continue }
+            throw SSHTransportError.channelClosed
+          }
+          offset += written
+        }
+      }
+    }
+  }
+
+  /// One read of up to 256 KiB: empty at end of file (or on an error), nil once the descriptor is closed or handed over.
+  func read() async throws -> Data? {
+    guard let fd = acquire() else { return nil }
+    return try await Blocking.run { [self] () -> Data in
+      defer { release() }
+      var buffer = Data(count: 256 * 1024)
+      let count = buffer.withUnsafeMutableBytes { bytes in
+        var count: Int
+        repeat { count = Darwin.read(fd, bytes.baseAddress, bytes.count) } while count < 0 && errno == EINTR
+        return count
+      }
+      return count > 0 ? buffer.prefix(count) : Data()
     }
   }
 }

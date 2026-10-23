@@ -28,9 +28,15 @@ public struct Config {
     public var fontSize: Float = 12
     #endif
     public var minimumContrast = 1.0
+    /// background-opacity: how much of the window behind shows through the background (0 clear … 1 opaque); cells
+    /// with their own background stay opaque, as Ghostty's background-opacity-cells defaults.
+    public var backgroundOpacity = 1.0
     /// window-padding-x/-y: (top or left, bottom or right).
     public var paddingX = (2, 2), paddingY = (2, 2)
     public var optionAsAlt: OptionAsAlt?
+    /// cursor-style and cursor-style-blink: the cursor a program has not chosen (nil blink: the program's
+    /// DEC mode 12 decides, blinking at first).
+    public var cursorStyle = CursorShape.block, cursorBlink: Bool?
     public var clipboardRead = Clipboard.ask, clipboardWrite = Clipboard.allow
     public var term = "xterm-ghostty"
     /// Each new terminal's scrollback, in bytes of pages; nil: `unlimited`.
@@ -100,9 +106,12 @@ public struct Config {
             case "font-family": fontFamily = []
             case "font-size": fontSize = d.fontSize
             case "minimum-contrast": minimumContrast = d.minimumContrast
+            case "background-opacity": backgroundOpacity = d.backgroundOpacity
             case "window-padding-x": paddingX = d.paddingX
             case "window-padding-y": paddingY = d.paddingY
             case "macos-option-as-alt": optionAsAlt = nil
+            case "cursor-style": cursorStyle = d.cursorStyle
+            case "cursor-style-blink": cursorBlink = nil
             case "clipboard-read": clipboardRead = d.clipboardRead
             case "clipboard-write": clipboardWrite = d.clipboardWrite
             case "term": term = d.term
@@ -117,8 +126,8 @@ public struct Config {
         }
         guard ghosttyConfigKeys.contains(key) else { diagnostics.append((key, "unknown field")); return }
         let modeled = ["background", "foreground", "cursor-color", "cursor-text", "selection-background", "selection-foreground", "palette",
-                       "font-family", "font-size", "minimum-contrast", "window-padding-x", "window-padding-y", "macos-option-as-alt",
-                       "clipboard-read", "clipboard-write", "term", "scrollback-limit-bytes", "image-storage-limit", "shell-integration-features", "keybind", "theme"]
+                       "font-family", "font-size", "minimum-contrast", "background-opacity", "window-padding-x", "window-padding-y", "macos-option-as-alt",
+                       "cursor-style", "cursor-style-blink", "clipboard-read", "clipboard-write", "term", "scrollback-limit-bytes", "image-storage-limit", "shell-integration-features", "keybind", "theme"]
         guard modeled.contains(key) else { return }
         guard let v = value else { return required(&self) }
         let bytes = Array(v.utf8)
@@ -146,6 +155,8 @@ public struct Config {
         case "font-family": fontFamily.append(v)
         case "font-size": if let f = Self.float(bytes).map(Float.init) { fontSize = f } else { bad(&self) }
         case "minimum-contrast": if let f = Self.float(bytes) { minimumContrast = f } else { bad(&self) }
+        // Ghostty clamps it to 0...1.
+        case "background-opacity": if let f = Self.float(bytes) { backgroundOpacity = min(max(f, 0), 1) } else { bad(&self) }
         case "window-padding-x", "window-padding-y":
             // WindowPadding.parseCLI: `n` or `a,b`, decimal u32s.
             let parts = bytes.split(separator: 0x2C, maxSplits: 1, omittingEmptySubsequences: false).map { trim($0, " \t") }
@@ -154,6 +165,17 @@ public struct Config {
             let p = (Int(n[0]!), Int(n[parts.count - 1]!))
             if key == "window-padding-x" { paddingX = p } else { paddingY = p }
         case "macos-option-as-alt": if let o = OptionAsAlt(rawValue: v) { optionAsAlt = o } else { bad(&self) }
+        case "cursor-style":
+            // config.zig's CursorStyle: bar, block, underline, block_hollow.
+            switch v {
+            case "block": cursorStyle = .block
+            case "bar": cursorStyle = .bar
+            case "underline": cursorStyle = .underline
+            case "block_hollow": cursorStyle = .blockHollow
+            default: bad(&self)
+            }
+        case "cursor-style-blink":
+            switch v { case "true": cursorBlink = true; case "false": cursorBlink = false; default: bad(&self) }
         case "clipboard-read", "clipboard-write":
             guard let c = Clipboard(rawValue: v) else {
                 return diagnostics.append((key, "invalid value \"\(v)\", valid values are: allow, deny, ask"))

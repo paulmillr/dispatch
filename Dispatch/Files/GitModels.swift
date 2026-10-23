@@ -134,9 +134,35 @@ struct GitCommit: Hashable, Sendable, Identifiable {
     var refs: [GitRef]
     /// How the commit is signed, as its headers say (nothing checked); nil unsigned or not read yet.
     var signature: GitSignatureKind? = nil
+    /// The author date's own UTC offset, "+0200", as its `author` header says; nil until read.
+    var zone: String? = nil
+    /// Who committed it and when, from its `committer` header; nil until read.
+    var committer: GitPerson? = nil
 
     var id: String { hash }
     var short: String { String(hash.prefix(7)) }
+
+    /// The committer when they or their time differ from the author's.
+    var distinctCommitter: GitPerson? {
+        guard let committer, committer.name != author || committer.email != email || committer.date != date else { return nil }
+        return committer
+    }
+}
+
+/// A raw commit header's person and time: `author Sam Example <sam@example.com> 1792363575 +0200`.
+struct GitPerson: Hashable, Sendable {
+    var name: String
+    var email: String
+    var date: Date
+    /// The UTC offset as git wrote it, "+0200".
+    var zone: String
+}
+
+/// What a commit's raw headers say beyond the log record: its signature's kind, the author date's offset, the committer.
+struct GitRawHeaders: Hashable, Sendable {
+    var signature: GitSignatureKind?
+    var author: GitPerson?
+    var committer: GitPerson?
 }
 
 /// The kind of signature a commit carries (its `gpgsig` header's armor).
@@ -171,7 +197,7 @@ struct GitSignatureCheck: Hashable, Sendable {
 
     var verdict: Verdict
     var kind: GitSignatureKind?
-    /// "Paul Miller <paul@example.com>", or an SSH principal.
+    /// "Sam Example <sam@example.com>", or an SSH principal.
     var signer: String?
     /// gpg's fingerprint (else its key id), or an SSH key's SHA256 fingerprint.
     var key: String?

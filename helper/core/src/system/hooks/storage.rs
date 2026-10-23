@@ -57,6 +57,9 @@ pub(super) fn remove(anchor: &File, name: &str) -> io::Result<()> {
 /// A day: sessions and builds used more recently than this are kept even when unlocked, so a
 /// login waiting for its hand-off, an unread exit status, or a build about to be reused stays.
 const RECENT: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+/// A day: chat attachments stay this long after their folder last changed, so an agent may read
+/// one again later in its turn (dispatch/attachments.rs); a queued message's stay until it goes.
+const ATTACHMENTS: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 
 /// Up to 1024 entries of `directory` whose names are `length` lowercase hex digits.
 fn entries(directory: &Path, length: usize) -> Vec<std::path::PathBuf> {
@@ -75,21 +78,69 @@ fn entries(directory: &Path, length: usize) -> Vec<std::path::PathBuf> {
 }
 
 /// Hold `parent/lock` through new-run creation and remove what no running helper holds: run
-/// directories, SSH session directories, and uploaded builds. Active, recent, unknown or unsafe
-/// storage is retained.
+/// directories, SSH session directories, uploaded builds, and chat attachments older than a day
+/// that no queued message names. Active, recent, unknown or unsafe storage is retained.
 pub(super) fn collect(parent: &Path, uid: u32) -> io::Result<File> {
     let guard = lock(&parent.join("lock"), true, true, uid)?;
     for path in entries(&parent.join("run"), 32) {
         let _ = run(&path, uid);
     }
+    // The stable hook command must work even if no helper used it during the last day.
+    // Publishers hold this same storage lock until their new symlink is in place.
+    let published = parent.join("bin/dispatch-helper").canonicalize().ok()
+        .and_then(|path| path.parent().map(Path::to_path_buf));
     for path in entries(&parent.join("sessions"), 24)
         .into_iter()
         .chain(entries(&parent.join("bin").join("versions"), 64))
+        .chain(entries(&parent.join("bin").join("launchers"), 64))
     {
-        let _ = unused(&path, uid);
+        if published.as_ref().is_some_and(|target| path.canonicalize().ok().as_ref() == Some(target)) {
+            continue;
+        }
+        let _ = unused(&path, uid, RECENT);
+    }
+    let queued = queued(parent);
+    for path in entries(&parent.join(crate::api::attachment::DIRECTORY), 32) {
+        if path.file_name().and_then(|name| name.to_str()).is_some_and(|name| queued.contains(name)) {
+            continue;
+        }
+        let _ = unused(&path, uid, ATTACHMENTS);
     }
     Ok(guard)
 }
+
+/// The attachment folders queued messages name (`state/queue/*.q`, dispatch/store.rs): a message
+/// may wait longer than `ATTACHMENTS` for its agent. Read as bytes, `attachments/` or JSON's
+/// `attachments\/` then the folder, so a file this helper can't parse still keeps what it names.
+fn queued(parent: &Path) -> std::collections::HashSet<String> {
+    let marker = crate::api::attachment::DIRECTORY.as_bytes();
+    let mut names = std::collections::HashSet::new();
+    let directory = parent.join("state").join(crate::dispatch::store::DIRECTORY);
+    for entry in fs::read_dir(directory).into_iter().flatten().take(1024).flatten() {
+        let path = entry.path();
+        if path.extension().is_none_or(|extension| extension != "q")
+            || entry.metadata().map_or(true, |m| !m.is_file() || m.len() > crate::dispatch::store::LIMIT)
+        {
+            continue;
+        }
+        let Ok(bytes) = fs::read(&path) else { continue };
+        let mut rest = &bytes[..];
+        while let Some(at) = rest.windows(marker.len()).position(|window| window == marker) {
+            rest = &rest[at + marker.len()..];
+            let after = rest.strip_prefix(b"\\").unwrap_or(rest);
+            let Some(after) = after.strip_prefix(b"/") else { continue };
+            let name = &after[..after.len().min(32)];
+            if name.len() == 32 && name.iter().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f')) {
+                names.insert(String::from_utf8_lossy(name).into_owned());
+            }
+        }
+    }
+    names
+}
+
+#[cfg(test)]
+#[path = "storage.test.rs"]
+mod tests;
 
 /// A run directory whose helper is gone: its sockets, shell startup folders, and lock.
 fn run(path: &Path, uid: u32) -> io::Result<()> {
@@ -154,8 +205,9 @@ fn run(path: &Path, uid: u32) -> io::Result<()> {
     Ok(())
 }
 
-/// A session or build directory that nothing changed for RECENT and no running helper locks.
-fn unused(path: &Path, uid: u32) -> io::Result<()> {
+/// A session, build or attachment directory that nothing changed for `recent` and no running
+/// helper locks.
+fn unused(path: &Path, uid: u32, recent: std::time::Duration) -> io::Result<()> {
     let anchor = File::options()
         .read(true)
         .custom_flags(FLAGS | DIRECTORY)
@@ -168,7 +220,7 @@ fn unused(path: &Path, uid: u32) -> io::Result<()> {
     for entry in fs::read_dir(path)? {
         newest = newest.max(entry?.path().symlink_metadata()?.modified()?);
     }
-    if newest.elapsed().map_or(true, |age| age < RECENT) {
+    if newest.elapsed().map_or(true, |age| age < recent) {
         return Ok(());
     }
     let owner = match lock(&path.join("lock"), false, false, uid) {
@@ -185,15 +237,17 @@ fn unused(path: &Path, uid: u32) -> io::Result<()> {
     Ok(())
 }
 
-/// When this executable is an uploaded build (`bin/versions/<sha256>/dispatch-helper`), hold a
+/// When this executable is an uploaded or published build, hold a
 /// shared lock on its `lock` for the helper's lifetime and date it, so `collect` keeps it.
 pub(super) fn version(parent: &Path, uid: u32) -> Option<File> {
     let executable = std::env::current_exe().ok()?.canonicalize().ok()?;
     let directory = executable.parent()?;
-    let versions = parent.join("bin").join("versions").canonicalize().ok()?;
+    let stored = ["versions", "launchers"].iter().any(|name| {
+        parent.join("bin").join(name).canonicalize().ok().as_deref() == directory.parent()
+    });
     let digest = directory.file_name()?.to_str()?;
     if executable.file_name()? != "dispatch-helper"
-        || directory.parent()? != versions
+        || !stored
         || digest.len() != 64
         || !digest.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f'))
     {

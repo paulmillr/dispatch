@@ -15,8 +15,10 @@ mod hello;
 mod launch;
 pub(crate) use launch::write;
 mod params;
+pub(crate) mod attachments;
 pub(crate) mod queue;
 mod read;
+pub(crate) mod store;
 
 fn checked<T: 'static>(
     done: Done<T>,
@@ -96,8 +98,10 @@ pub(crate) fn window(
     })
 }
 pub(crate) type Nodes = Rc<RefCell<BTreeMap<Id, (usize, Node)>>>;
-/// Question ids of native interactions published to the UI, for dismissal.
-pub(crate) type Interactions = Rc<RefCell<BTreeMap<(Id, String, String), Vec<String>>>>;
+/// Question ids of interactions published to the UI, for dismissal, and whether each one holds
+/// the agent (an approval or a blocking question: chat.list `waiting`). A closed interaction
+/// keeps an entry without questions.
+pub(crate) type Interactions = Rc<RefCell<BTreeMap<(Id, String, String), (Vec<String>, bool)>>>;
 /// Per-harness state that installation.install sets (decisions-1002).
 pub(crate) enum Installed {
     /// Explicitly enabled, including optional integrations before their first launch.
@@ -121,6 +125,8 @@ pub(crate) struct Followed {
     pub again: bool,
     /// The State of the last sent read; a read that changes it is sent without new records.
     pub state: Option<State>,
+    /// A client of chat.attachments: its reads show attachments (attachments::shown).
+    pub attachments: Option<Held>,
 }
 pub(crate) type Archives = Rc<RefCell<BTreeMap<(i32, u64), Followed>>>;
 /// (client, create request, created terminal or None on failure) awaiting observer adoption.
@@ -282,6 +288,8 @@ pub(crate) fn walk<T: 'static>(
         result => done(io, result),
     })
 }
+/// A send whose goal is given later, with what wraps its reply (`Request::sending`).
+type Sending = Box<dyn FnOnce(Option<Goal>, Option<Box<dyn FnOnce(Done<Sent>) -> Done<Sent>>>) -> Done<Sent>>;
 pub(crate) fn reference(mux: usize, id: Id) -> Id {
     (mux as u64) << 48 | id
 }
@@ -665,9 +673,7 @@ impl Request<'_> {
             .filter(|(id, _)| removed.contains("hooks.configure") || terminals.contains(id))
             .filter_map(|(id, (_, node))| node.agent.clone().map(|(harness, binding)| (harness, binding, terminals.contains(id))))
             .filter(|(harness, binding, _)| seen.insert((*harness, binding.process.pid, binding.process.start))).collect();
-        for ((terminal, _), line) in self.helper.held.borrow_mut().iter_mut() {
-            if terminals.contains(terminal) { line.revoke(); }
-        }
+        queue::revoke(self.io, &self.helper.held, &terminals);
         self.helper.prompts.borrow_mut().retain(|terminal, _| !terminals.contains(terminal));
         self.helper.interactions.borrow_mut().retain(|(terminal, _, _), _| !terminals.contains(terminal));
         self.helper.questions.borrow_mut().retain(|(_, terminal, _, _), _| !terminals.contains(terminal));
@@ -741,42 +747,52 @@ impl Request<'_> {
         ))
     }
     fn sent(&self, p: &Data<'_>, goal: Option<Goal>) -> Result<Done<Sent>, Error> {
+        let send = matches!(&goal, Some(Goal::Send { .. }));
+        Ok(self.sending(p, goal.is_some(), send)?(goal, None))
+    }
+    /// `sent` with its goal given later (a send whose attachments are checked first): the busy
+    /// check and the held line's mark happen now. `walked`: a goal will be given; `send`: it
+    /// is a Goal::Send. The goal comes with what sees the final result before the client
+    /// (attachments::remembering).
+    fn sending(&self, p: &Data<'_>, walked: bool, send: bool) -> Result<Sending, Error> {
         let (_, mux, harness, binding) = self.agent(p)?;
         let terminal = number(p, "terminal")?;
         let mut reply = self.done(None);
-        if goal.is_some() && !harness.borrow().native_queue() {
+        if walked && !harness.borrow().native_queue() {
             let key = (terminal, binding.session.clone());
-            if self.helper.held.borrow().get(&key).is_some_and(|line| line.sending) {
+            // Another helper of this host typing a queued message into the same terminal counts too.
+            let typing = send && queue::claimed_elsewhere(&self.helper.held, &key);
+            if typing || self.helper.held.borrow().get(&key).is_some_and(|line| line.sending) {
                 return Err(Error { code: "busy", message: "Input is already being sent".into() });
             }
-            reply = queue::sending(self.helper.held.clone(), key, matches!(&goal, Some(Goal::Send { .. })), reply);
+            reply = queue::sending(self.helper.held.clone(), key, send, reply);
         }
-        let done = typed(
-            self.active(),
-            mux.clone(),
-            harness.clone(),
-            local(terminal),
-            binding.clone(),
-            reply,
-        );
-        Ok(match goal {
-            Some(goal) => walk(
-                self.active(),
-                mux,
-                harness,
-                local(terminal),
-                binding.clone(),
-                goal,
-                self.ask(terminal, binding),
-                done,
-                |_| Sent::Native {
-                    written: true,
-                    may_have_sent: true,
-                    reason: None,
-                },
-            ),
-            None => done,
-        })
+        let (active, ask) = (self.active(), self.ask(terminal, binding.clone()));
+        Ok(Box::new(move |goal, then| {
+            let reply = match then {
+                Some(then) => then(reply),
+                None => reply,
+            };
+            let done = typed(active.clone(), mux.clone(), harness.clone(), local(terminal), binding.clone(), reply);
+            match goal {
+                Some(goal) => walk(
+                    active,
+                    mux,
+                    harness,
+                    local(terminal),
+                    binding,
+                    goal,
+                    ask,
+                    done,
+                    |_| Sent::Native {
+                        written: true,
+                        may_have_sent: true,
+                        reason: None,
+                    },
+                ),
+                None => done,
+            }
+        }))
     }
     /// One composer command per conversation (c1654cc ChatCommands.swift:302); a harness
     /// without a native result for it gets the same checked send as chat.send.
@@ -816,6 +832,7 @@ impl Request<'_> {
             text: text.clone(),
             mode: Mode::Prompt,
             command: true,
+            attachments: Vec::new(),
         };
         // A walk may end with the command's result read from the screen.
         let walked = walk(
@@ -1015,7 +1032,7 @@ impl Request<'_> {
                 .borrow()
                 .get(&key)
                 .map(|q| q.interaction.questions.iter().map(|q| q.id.clone()).collect())
-                .or_else(|| interactions.borrow().get(&native).cloned())
+                .or_else(|| interactions.borrow().get(&native).map(|(ids, _)| ids.clone()))
                 .ok_or_else(|| Error {
                     code: "expired",
                     message: "The confirmation has ended".into(),
@@ -1267,6 +1284,7 @@ macro_rules! reply {
                 text: text($p, "text")?.into(),
                 mode: mode($p)?,
                 command: flag($p, "command"),
+                attachments: Vec::new(),
             }),
         )?
     };

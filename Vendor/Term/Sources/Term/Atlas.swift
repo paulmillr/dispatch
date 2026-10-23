@@ -32,6 +32,7 @@ public struct Atlas {
     /// A place for a width x height region (nil: full). An empty region is (0, 0) and takes no space.
     public mutating func reserve(_ width: Int, _ height: Int) -> (x: Int, y: Int)? {
         if width == 0 && height == 0 { return (0, 0) }
+        guard width > 0, height > 0, width <= size - 2, height <= size - 2 else { return nil }
         var (chosen, bestHeight, bestWidth, region): (Int?, Int, Int, (x: Int, y: Int)) = (nil, Int(UInt32.max), Int(UInt32.max), (0, 0))
         for i in nodes.indices {
             guard let y = fit(i, width, height) else { continue }
@@ -76,7 +77,15 @@ public struct Atlas {
 
     /// Copies `pixels` (rows of width x depth bytes, starting at row `from`) into a region.
     public mutating func set(x: Int, y: Int, width: Int, height: Int, _ pixels: [UInt8], from: Int = 0) {
-        let d = format.depth, row = width * d
+        guard x >= 0, y >= 0, width >= 0, height >= 0, from >= 0,
+              x <= size, y <= size, width <= size - x, height <= size - y else { return }
+        let d = format.depth
+        let rowResult = width.multipliedReportingOverflow(by: d)
+        let sourceRows = from.addingReportingOverflow(height)
+        guard !rowResult.overflow, !sourceRows.overflow else { return }
+        let needed = sourceRows.partialValue.multipliedReportingOverflow(by: rowResult.partialValue)
+        guard !needed.overflow, needed.partialValue <= pixels.count else { return }
+        let row = rowResult.partialValue
         for r in 0..<height {
             let at = ((y + r) * size + x) * d, src = (from + r) * row
             data.replaceSubrange(at..<at + row, with: pixels[src..<src + row])

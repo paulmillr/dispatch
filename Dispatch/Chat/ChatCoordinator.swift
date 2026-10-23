@@ -20,6 +20,8 @@ final class ChatCoordinator {
     var helperLaunches: [HelperClient.Launch]?
     /// Latest helper installation facts by opaque launch key.
     var helperInstalls: [String: HelperChat.Installation] = [:]
+    /// Model and effort choices by agent, host and agent version (`modelChoices(for:)`).
+    @ObservationIgnored private var sharedModelChoices: [String: ChatModelChoicesCache] = [:]
     @ObservationIgnored private let defaults: UserDefaults?
     /// Integrations the user turned off. The helper keeps that choice only while it runs, so every
     /// connection is told again (installation.install enabled:false).
@@ -307,7 +309,7 @@ final class ChatCoordinator {
                 session.insert(item, turnID: record.turnID, at: record.date, fileOffset: record.fileOffset)
             }
         }
-        for record in records where session.seen.insert(record.key).inserted {
+        for record in records where session.transcriptIndex.seen.insert(record.key).inserted {
             if !earlier, let reviewing = record.reviewing { session.reviewing = reviewing }
             switch record.action {
             case .title(let title):
@@ -457,11 +459,18 @@ final class ChatCoordinator {
 
     func queue(_ session: ChatSession, drain: Bool = true) {
         let text = session.draft
+        let attachments = session.drafts.current.attachments
         guard sessions[session.id] === session, session.supportsQueue, enabled,
               session.active, !session.inputBlocked,
               session.helper != nil,
-              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty else { return }
         session.submissionFailure = nil
+        if session.draftIsCommand, !attachments.isEmpty {
+            session.submissionFailure = "Commands cannot carry attachments. Remove them to queue this command; your draft is preserved."; return
+        }
+        if session.draftUploads.contains(where: \.uploading) {
+            session.submissionFailure = "Attachments are still uploading. Send again when they are ready."; return
+        }
         if session.editingQueuedID != nil, session.editingQueuedDraftID != session.drafts.current.id {
             session.submissionFailure = "Return to the queued message's draft or cancel its edit before sending."; return
         }
@@ -482,6 +491,7 @@ final class ChatCoordinator {
         if let id = session.editingQueuedID, let index = session.queuedMessages.firstIndex(where: { $0.id == id }) {
             if let previous = session.queuedMessages[index].delivery { session.drafts.forgetDelivery(previous) }
             session.queuedMessages[index].text = text
+            session.queuedMessages[index].attachments = attachments
             session.queuedMessages[index].delivery = delivery
             session.queuedMessages[index].isCommand = isCommand
             session.queuedMessages[index].process = session.process
@@ -492,7 +502,7 @@ final class ChatCoordinator {
             session.queuedMessages[index].pause = nil
             session.editingQueuedID = nil; session.editingQueuedDraftID = nil
         } else {
-            session.queuedMessages.append(ChatQueuedMessage(text: text, process: session.process, binding: session.binding, host: session.host, delivery: delivery, isCommand: isCommand, conversation: session.sessionID, generation: session.queueGeneration))
+            session.queuedMessages.append(ChatQueuedMessage(text: text, process: session.process, binding: session.binding, host: session.host, delivery: delivery, isCommand: isCommand, conversation: session.sessionID, generation: session.queueGeneration, attachments: attachments))
         }
         session.selectedQueuedID = nil
         if drain { drainQueue(session) }
@@ -515,9 +525,11 @@ final class ChatCoordinator {
     }
 
     func editQueued(_ id: UUID, in session: ChatSession) {
-        guard session.draft.isEmpty, session.editingQueuedID == nil, session.queuedSubmissionID != id,
+        guard session.drafts.current.isEmpty, session.editingQueuedID == nil, session.queuedSubmissionID != id,
               let message = session.queuedMessages.first(where: { $0.id == id }),
-              !session.queueBusy, !message.pending, message.editable else { return }
+              !session.queueBusy, !message.pending, message.editable,
+              // An edit would send the text without its attachments, and an upload must not land in the edit's draft.
+              message.attachments.isEmpty, session.draftUploads.isEmpty else { return }
         session.drafts.restore(message.delivery?.draft ?? ChatDraft(text: message.text, multiline: message.text.contains("\n")))
         session.editingQueuedID = id; session.selectedQueuedID = nil
         session.editingQueuedDraftID = session.drafts.current.id
@@ -554,6 +566,12 @@ final class ChatCoordinator {
             guard session.editingQueuedID == nil, let id else { return }
             sendNow(session, queuedID: id)
         } else if let queuedID {
+            // The host is taking this row: send it from there once it holds it.
+            if let message = session.queuedMessages.first(where: { $0.id == queuedID }), message.held, message.pending,
+               message.pause == nil, session.editingQueuedID != queuedID {
+                session.sendAfterUpload = queuedID
+                return
+            }
             guard let message = session.queuedMessages.first(where: { $0.id == queuedID }),
                   message.matches(session), message.pause == nil, !message.pending,
                   session.editingQueuedID != queuedID else { return }
@@ -578,7 +596,9 @@ final class ChatCoordinator {
         // Until the helper has bound the agent, held rows stay here and wait for it.
         session.queueWaiting = session.binding == nil && session.queuedMessages.contains(where: \.held)
             ? "Waiting for the terminal to be ready…" : nil
-        if let row = session.queuedMessages.first, row.held, row.pause == nil, !row.pending, row.matches(session),
+        // The host keeps what it accepted and sends it even after this Mac disconnects.
+        if uploadHeldQueue(session) { return }
+        if let row = session.queuedMessages.first, row.held, row.local || !storesQueue(session), row.pause == nil, !row.pending, row.matches(session),
            session.showChat, session.editingQueuedID == nil, !session.queueBusy,
            session.binding != nil, inputReady(session) {
             submit(session, queued: row)
@@ -590,7 +610,7 @@ final class ChatCoordinator {
     private func submit(_ session: ChatSession, queued: ChatQueuedMessage?, immediately: Bool = false) {
         guard session.helper != nil else {
             // No helper chat verified this terminal's agent: nothing is sent, and the user is told so.
-            if queued == nil, !session.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if queued == nil, !session.drafts.current.isEmpty {
                 session.submissionFailure = "Cannot safely send to \(session.agentTitle). Open the terminal to continue; your draft is preserved."
             }
             return
@@ -651,4 +671,21 @@ final class ChatCoordinator {
     }
 
     func closeModelPicker(_ session: ChatSession) { session.modelPicker?.close() }
+
+    /// An agent's menu belongs to its version on its host, not to one chat: a new chat, or one after /clear, reuses
+    /// the list instead of walking the agent's whole menu again (Claude 2.1.302 lists 13 models, one row per key).
+    /// Applying a choice still goes through the verified live menu, and any failure drops the list
+    /// (ChatModelPicker.run). Before the agent reports its version and model the chat keeps its own list: a picker
+    /// opened on the title stand-in ("Claude Code") would teach a shared list that it names the current row.
+    func modelChoices(for session: ChatSession) -> ChatModelChoicesCache {
+        guard let version = session.version, session.reportsModel else {
+            session.modelChoices.prepare(for: session)
+            return session.modelChoices
+        }
+        let key = [session.agentID, session.host ?? "", version].joined(separator: "\u{1F}")
+        if let cache = sharedModelChoices[key] { return cache }
+        let cache = ChatModelChoicesCache()
+        sharedModelChoices[key] = cache
+        return cache
+    }
 }

@@ -23,8 +23,6 @@ struct FileEntry: Hashable, Sendable, Identifiable {
     var size: UInt64
     var modified: Date?
     var targetKind: FileEntryKind?
-    /// Reserved for the git tabs: "M", "A", "U", "D", "R" or "!" (ignored). Nil until they exist.
-    var mark: String?
     var identity: FileIdentity? = nil
 
     var id: String { name }
@@ -178,6 +176,7 @@ extension FilesSource {
     var readOnly: Bool { false }
 }
 
+#if canImport(AppKit)
 /// Whether a tab can show files, and through what.
 enum FilesAvailability {
     case loading
@@ -197,8 +196,10 @@ enum FilesAvailability {
 
     var isAvailable: Bool { source != nil }
 }
+#endif
 
-/// The three tabs of files mode. Step one shows `.files` only; the others are remembered but not shown.
+/// The three tabs of files mode: Files, Review (`changes`: the uncommitted changes, which take comments for an agent)
+/// and Commits.
 enum FilesTab: String, Hashable, Sendable, CaseIterable {
     case files, changes, commits
 }

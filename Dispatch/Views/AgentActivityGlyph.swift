@@ -65,6 +65,8 @@ struct AgentActivityGlyph: View {
     var connecting = false
     var size: CGFloat = 10
     var tile = false
+    /// Draw the "·" when nothing is reported; without it the slot stays, empty, so rows keep their alignment.
+    var showsQuiet = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         let activity = AgentActivity(tabIDs: tabIDs, connecting: connecting)
@@ -77,7 +79,7 @@ struct AgentActivityGlyph: View {
             if reconnecting {
                 // Match a monospace status glyph's visible width, not its font point size.
                 SSHConnectingIndicator(reduceMotion: reduceMotion, size: tile ? size * 0.75 : size == 10 ? 9 : size)
-            } else { Text(tile && blocked && !offline ? "◌" : state) }
+            } else { Text(tile && blocked && !offline ? "◌" : state).opacity(state == "·" && !showsQuiet ? 0 : 1) }
         }
             .transformEnvironment(\.font) { if tile { $0 = AppFont.ui(size: 14) } }
             .contentTransition(.opacity)

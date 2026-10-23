@@ -29,6 +29,8 @@ final class TerminalHostViewTests: XCTestCase {
     private func makeController(_ feed: ScriptedTerminalFeed, size: CGSize = CGSize(width: 402, height: 600),
                             scrollback: TerminalScrollback = .unknown) async throws -> TerminalController {
         let controller = TerminalController(feed: feed, scrollback: scrollback, configuration: TerminalConfiguration())
+        // The full capsule on any simulator (an iPad's forwards the Mac's keyboard, which would collapse it).
+        controller.hardwareKeyboard = HardwareKeyboard(attached: false)
         controllers.append(controller)
         windows.append(TerminalTestWindow.show(controller.hostView, size: size))
         controller.appear()

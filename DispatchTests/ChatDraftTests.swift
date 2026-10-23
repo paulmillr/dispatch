@@ -9,6 +9,24 @@ import XCTest
     private func collection(_ store: ChatDraftMemoryStore = ChatDraftMemoryStore()) -> ChatDraftCollection {
         ChatDraftCollection(repository: ChatDraftRepository(store: store))
     }
+    /// Drafts nobody edited for 30 days are gone at the next read; newer ones, and a conversation's newer drafts, stay.
+    func testUntouchedDraftsExpire() throws {
+        let store = ChatDraftMemoryStore(), old = Date().addingTimeInterval(-31 * 24 * 3600)
+        var stale = ChatDraft(text: "old working"); stale.modified = old
+        var kept = ChatDraft(text: "old saved"); kept.modified = old
+        let recent = ChatDraft(text: "recent saved")
+        store.buckets = [
+            "gone": ChatDraftBucket(working: stale, saved: [kept], selected: kept.id),
+            "mixed": ChatDraftBucket(working: stale, saved: [kept, recent], selected: kept.id),
+        ]
+        let repository = ChatDraftRepository(store: store)
+        XCTAssertEqual(Set(repository.buckets.keys), ["mixed"])
+        let mixed = try XCTUnwrap(repository.buckets["mixed"])
+        XCTAssertEqual(mixed.saved.map(\.text), ["recent saved"])
+        XCTAssertTrue(mixed.working.isEmpty)
+        XCTAssertNil(mixed.selected, "The selected draft expired")
+    }
+
     func testKeepSwitchEditRenameDeleteAndStickyMultiline() throws {
         let drafts = collection()
         drafts.edit(text: "\nFirst 🧑🏽‍💻\nsecond", selection: NSRange(location: 2, length: 2))
@@ -453,5 +471,111 @@ extension ChatDraftTests {
         current.edit(text: "still editable"); current.keep()
         XCTAssertNotNil(repository.error); XCTAssertEqual(current.saved.first?.text, "still editable")
         XCTAssertEqual(try Data(contentsOf: url), malformed)
+    }
+}
+
+/// Attachments ride the draft (ChatDraft.attachments): stored with it, counted as content, restored with a failed send.
+extension ChatDraftTests {
+    private func attachment(_ name: String, kind: ChatAttachment.Kind = .image) -> ChatAttachment {
+        ChatAttachment(name: name, kind: kind, size: 1_024,
+                       path: "/home/example/.dispatch/attachments/0123456789abcdef0123456789abcdef/" + name,
+                       thumbnail: kind == .image ? Data([0xFF, 0xD8, 0xFF]) : nil)
+    }
+
+    func testAttachmentsRoundTripAndDraftsWithoutThemStillDecode() throws {
+        var draft = ChatDraft(text: "see the chart")
+        draft.attachments = [attachment("chart.png"), attachment("notes.txt", kind: .file)]
+        let decoded = try JSONDecoder().decode(ChatDraft.self, from: JSONEncoder().encode(draft))
+        XCTAssertEqual(decoded, draft)
+        XCTAssertEqual(decoded.attachments.first?.thumbnail, Data([0xFF, 0xD8, 0xFF]))
+
+        // A draft saved before attachments existed has no key; one without attachments writes none either.
+        let plain = ChatDraft(text: "older draft")
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(plain)) as? [String: Any])
+        XCTAssertNil(object["attachments"])
+        let old = try JSONDecoder().decode(ChatDraft.self, from: JSONSerialization.data(withJSONObject: object))
+        XCTAssertEqual(old, plain)
+        XCTAssertTrue(old.attachments.isEmpty)
+    }
+
+    func testAttachmentsAloneAreADraftWithinTheLimitAndDetach() {
+        let drafts = collection()
+        XCTAssertTrue(drafts.current.isEmpty)
+        XCTAssertTrue(drafts.attach([attachment("deck.jpg")]))
+        XCTAssertFalse(drafts.current.isEmpty, "Attachments alone can be sent")
+        XCTAssertTrue(drafts.shape.hasAttachments)
+        XCTAssertFalse(drafts.shape.isEmpty)
+        XCTAssertFalse(drafts.shape.hasText)
+        XCTAssertEqual(drafts.current.label, "deck.jpg")
+        let first = drafts.current.attachments[0]
+        XCTAssertTrue(drafts.attach([first]), "The same attachment is added once")
+        XCTAssertEqual(drafts.current.attachments.count, 1)
+
+        let more = (1...12).map { attachment("photo \($0).jpg") }
+        XCTAssertFalse(drafts.attach(more), "Past the limit some did not fit")
+        XCTAssertEqual(drafts.current.attachments.count, ChatAttachment.maximumCount)
+        XCTAssertEqual(drafts.current.attachments.map(\.name), ["deck.jpg"] + more.prefix(9).map(\.name))
+
+        drafts.detach(first.id)
+        XCTAssertEqual(drafts.current.attachments.count, ChatAttachment.maximumCount - 1)
+        XCTAssertFalse(drafts.current.attachments.contains { $0.id == first.id })
+        drafts.edit(text: "typed later")
+        XCTAssertEqual(drafts.current.attachments.count, ChatAttachment.maximumCount - 1, "Typing keeps them")
+        drafts.discard()
+        XCTAssertTrue(drafts.current.attachments.isEmpty)
+        XCTAssertFalse(drafts.shape.hasAttachments)
+    }
+
+    /// An upload names the draft it was started for: it lands there whether that draft is the working one, a saved
+    /// one the user switched away from, or one of the conversation the collection showed before; a gone draft is nil.
+    func testAttachToADraftByIdentity() throws {
+        let store = ChatDraftMemoryStore()
+        let drafts = collection(store)
+        drafts.bind(host: "local", agent: "claude", conversation: "first")
+        let scope = drafts.scope
+        drafts.edit(text: "kept")
+        let kept = drafts.current.id
+        drafts.keep()
+        let working = drafts.current.id
+        XCTAssertEqual(drafts.attach([attachment("chart.png")], toDraft: kept, scope: scope), true)
+        XCTAssertTrue(drafts.current.attachments.isEmpty, "Not the draft shown now")
+        XCTAssertEqual(drafts.saved.first { $0.id == kept }?.attachments.map(\.name), ["chart.png"])
+        XCTAssertFalse(drafts.shape.hasAttachments)
+        XCTAssertEqual(drafts.shape.id, working)
+        XCTAssertEqual(drafts.attach([attachment("deck.png")], toDraft: working, scope: scope), true)
+        XCTAssertEqual(drafts.current.attachments.map(\.name), ["deck.png"])
+        XCTAssertTrue(drafts.shape.hasAttachments)
+
+        // The chat moved to another conversation: the draft is in the first one's bucket, saved there.
+        drafts.bind(host: "local", agent: "claude", conversation: "second")
+        XCTAssertEqual(drafts.attach([attachment("notes.png")], toDraft: kept, scope: scope), true)
+        XCTAssertTrue(drafts.current.attachments.isEmpty)
+        XCTAssertEqual(drafts.repository.buckets[scope]?.saved.first { $0.id == kept }?.attachments.map(\.name),
+                       ["chart.png", "notes.png"])
+        XCTAssertEqual(try store.load()[scope]?.saved.first { $0.id == kept }?.attachments.count, 2, "Saved at once")
+
+        XCTAssertNil(drafts.attach([attachment("gone.png")], toDraft: System.uuid(), scope: drafts.scope), "Gone")
+        XCTAssertNil(drafts.attach([attachment("gone.png")], toDraft: kept, scope: "unknown"))
+        XCTAssertTrue(drafts.contains(drafts.current.id))
+        XCTAssertFalse(drafts.contains(kept))
+    }
+
+    func testFailedDeliveryRestoresTheAttachments() throws {
+        let drafts = collection()
+        drafts.bind(host: "local", agent: "claude", conversation: "with-attachments")
+        drafts.edit(text: "compare these")
+        drafts.attach([attachment("before.png"), attachment("after.png")])
+        let sent = drafts.current.attachments
+        let delivery = try XCTUnwrap(drafts.prepareDelivery(consume: true))
+        XCTAssertEqual(delivery.draft.attachments, sent)
+        XCTAssertTrue(drafts.current.isEmpty, "Sending clears the composer, attachments too")
+        drafts.finish(delivery, success: false)
+        XCTAssertEqual(drafts.current.text, "compare these")
+        XCTAssertEqual(drafts.current.attachments, sent)
+
+        let again = try XCTUnwrap(drafts.prepareDelivery(consume: true))
+        drafts.finish(again, success: true)
+        XCTAssertTrue(drafts.current.isEmpty)
+        XCTAssertTrue(drafts.saved.isEmpty)
     }
 }

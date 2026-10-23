@@ -78,10 +78,10 @@ extension FilesCoordinator {
             now: { System.date() })
     }
 
-    /// Settings › Files › Follow the shell’s directory and Show hidden files.
+    /// Settings › Features › Files › Show hidden files, and Git. Files always follows the shell’s directory.
     static func preferences() -> Preferences {
         let values = TerminalRuntime.shared.preferences
-        return Preferences(followShell: values.filesFollowShell, showHidden: values.filesShowHidden, git: values.gitEnabled)
+        return Preferences(showHidden: values.filesShowHidden, git: values.gitEnabled)
     }
 
     // MARK: Entry points
@@ -309,10 +309,8 @@ extension FilesCoordinator {
         for (path, result) in results where Self.path(path, isInside: plan.root) {
             let previous = listings[path]
             switch result {
-            case .success(let fresh):
+            case .success(let listing):
                 listed = true
-                // Marked before comparing, so a listing whose entries and marks are unchanged is not rewritten.
-                let listing = git.marked(fresh, in: session)
                 // An unchanged folder keeps its state value, so the outline does not redraw every 2 s.
                 if previous?.listing != listing || previous?.error != nil || previous?.loading == true {
                     listings[path] = FileListingState(listing: listing, loadedAt: now, error: nil, loading: false)

@@ -40,7 +40,7 @@ CAPABILITIES = ','.join(FULL)
 # The opt-in features the phone names in hello (helper/core/src/dispatch/features.rs). A client that
 # names none (the Mac app) gets exactly the replies its replay corpus recorded.
 FEATURES = ['interaction.options', 'chat.list', 'projects.recent', 'multiplexers.versions', 'terminals.coalesce',
-            'launch.names', 'stdio.liveness', 'terminals.activity']
+            'launch.names', 'stdio.liveness', 'terminals.activity', 'memberships.append']
 # With stdio.liveness the helper ends after 45 s without traffic; the phone pings this often.
 PING = 15
 # sshd's PATH for a non-login exec channel (macOS; Linux adds /usr/local/bin and /usr/games).
@@ -1422,6 +1422,7 @@ print(json.dumps(claude_fixture.environment(state, {port}, config)))
                     self.assertIs(row['busy'], False)
                     self.assertTrue(row['preview'].startswith('Local Claude fixture reply'), row['preview'])
                     self.assertIsInstance(row['time_ms'], int)
+                    self.assertIs(row['waiting'], False, 'no approval or question is open')
                 print('chat.list row:', json.dumps({k: v for k, v in rows[0].items() if k != 'binding'})[:300], flush=True)
                 metric(f'survival.{mode}.reconnect_to_both_chats_paged', elapsed * 1000, 'ms')
                 for name, (agent, backend, node, chat, opened) in chats.items():
@@ -1456,6 +1457,9 @@ print(json.dumps(claude_fixture.environment(state, {port}, config)))
                         timeout=40)
                     if method == 'interaction.opened':
                         interaction = params['interaction']
+                        # An open approval is a list row's "needs you" (chat.list `waiting`).
+                        listed = {row['terminal']: row for row in await session.request('chat.list', {})}
+                        self.assertIs(listed[node['id']]['waiting'], True, 'the open approval makes the row wait')
                         await session.request('interactions.answer', dict(route, interaction=interaction['id'],
                                                                           answers={interaction['questions'][0]['id']: [0]}))
                         continue
@@ -1471,6 +1475,82 @@ print(json.dumps(claude_fixture.environment(state, {port}, config)))
         run(self.closing(case()))
 
     # -- 8. Codex and Pi through the same launch path ---------------------------------------------
+    def test_typed_agents_install_hooks_across_updates_and_config_homes(self):
+        """Legacy migration and immutable updates, custom homes, concurrent launches, repeat installs."""
+        async def case():
+            import hashlib
+            fixture, host = self.fixture, self.fixture.host
+            session = await fixture.connect('ssh', 'typed-agent-updates')
+            await self.hello(session)
+            backend, _ = await self.opened(session, TMUX, 'tmux', create=True)
+            stable = fixture.home / '.dispatch/bin/dispatch-helper'
+            builds = stable.parent / 'launchers'
+            for scenario, (agent, variable, filename, custom_home) in enumerate([
+                ('codex', 'CODEX_HOME', 'hooks.json', False),
+                ('codex', 'CODEX_HOME', 'hooks.json', True),
+                ('claude', 'CLAUDE_CONFIG_DIR', 'settings.json', False),
+                ('claude', 'CLAUDE_CONFIG_DIR', 'settings.json', True),
+            ]):
+                with self.subTest(agent=agent, custom_home=custom_home):
+                    home = fixture.root / f'typed-home-{scenario}'
+                    config = home / ('.' + agent) if custom_home else fixture.root / f'typed-config-{scenario}'
+                    binary = fixture.root / f'typed-bin-{scenario}'
+                    host.mkdir(config)
+                    host.mkdir(binary)
+                    before = {'fixture_setting': 'keep', 'hooks': {'SessionStart': [{'hooks': [{'type': 'command', 'command': 'printf existing-hook'}]}]}}
+                    host.write(config / filename, json.dumps(before), 0o640)
+                    host.write(binary / agent, f'''#!/bin/sh
+if [ "$1" = --help ]; then printf '%s\\n' --no-daemon; exit; fi
+cat "${{{variable}:-$HOME/.{agent}}}/{filename}" > "$DISPATCH_FIXTURE_MARKER.tmp" && mv "$DISPATCH_FIXTURE_MARKER.tmp" "$DISPATCH_FIXTURE_MARKER"
+''', 0o700)
+                    terminals = [(await self.window(session, TMUX, backend, fixture.root))[0] for _ in range(2)]
+                    # A byte-distinct runnable build represents an older connected helper.
+                    older = fixture.helper.read_bytes() + f'\nprevious-helper-build-{scenario}\n'.encode()
+                    staged = fixture.root / 'previous-helper'
+                    if scenario == 0:
+                        host.write(staged, older, 0o700)  # migrate the old regular-file layout
+                    else:
+                        digest = hashlib.sha256(older).hexdigest()
+                        version = builds / digest
+                        host.mkdir(version)
+                        host.write(version / 'dispatch-helper', older, 0o700)
+                        result = host.sh('ln -s "$1" "$2"', f'launchers/{digest}/dispatch-helper', staged)
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                    result = host.sh('mv -f "$1" "$2"', staged, stable)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    previous = None
+                    for repeat in range(2):
+                        markers = [fixture.root / f'typed-started-{scenario}-{repeat}-{i}' for i in range(2)]
+                        for terminal, marker in zip(terminals, markers):
+                            environment = f'{variable}= HOME={shlex.quote(str(home))}' if custom_home else f'{variable}={shlex.quote(str(config))}'
+                            await self.typed(session, TMUX, terminal,
+                                f'{environment} DISPATCH_FIXTURE_MARKER={shlex.quote(str(marker))} PATH={shlex.quote(str(binary))}:$PATH {agent}\r')
+                        deadline = time.monotonic() + 20
+                        while not all(host.exists(marker) for marker in markers):
+                            for terminal in terminals:
+                                pane = self.node(session, backend, terminal)['key'].rsplit(':', 1)[1]
+                                screen = fixture.tmux('capture-pane', '-p', '-t', pane).stdout
+                                self.assertNotIn('The agent exited.', screen, screen)
+                                self.assertNotIn('Agent settings changed', screen, screen)
+                                self.assertLess(time.monotonic(), deadline, screen)
+                            await asyncio.sleep(0.1)
+                        raw = host.read(config / filename)
+                        settings = json.loads(raw)
+                        self.assertEqual(settings['fixture_setting'], 'keep')
+                        self.assertIn('PermissionRequest', settings['hooks'])
+                        self.assertEqual(settings['hooks']['SessionStart'][0], before['hooks']['SessionStart'][0])
+                        for marker in markers:
+                            self.assertEqual(json.loads(host.read(marker)), settings, 'hooks must be installed before the agent starts')
+                        if previous is not None:
+                            self.assertEqual(raw, previous, 'repeat setup must preserve hook indices and avoid duplicate hooks')
+                        previous = raw
+                    info = host.python(f'import os, stat; print(json.dumps([stat.S_IMODE(os.stat({str(config / filename)!r}).st_mode), os.path.islink({str(stable)!r})]))')
+                    self.assertEqual(info, [0o640, True])
+            digest = host.python(f'import hashlib; print(json.dumps(hashlib.sha256(open({str(stable)!r}, "rb").read()).hexdigest()))')
+            self.assertEqual(digest, hashlib.sha256(fixture.helper.read_bytes()).hexdigest())
+            await session.close()
+        run(self.closing(case()))
+
     async def agent(self, name, launch, environment, cwd, mux=TMUX, key='tmux', enable=False):
         """Launch `launch` in a new window with the fixture's environment; bound, chat open, screen published.
         `enable`: turn the optional integration on first (per helper process, so per connection)."""
@@ -1800,7 +1880,7 @@ def main():
         else:
             candidates = [args.helper] if args.helper else [
                 ROOT / 'build/hs-target/aarch64-apple-darwin/local/dispatch-helper',
-                ROOT / 'build/helper-rust/bin/darwin-universal']
+                ROOT / 'build/helper-rust/bin/darwin-arm64']
         helper = next((path for path in candidates if path and path.is_file()), None)
         if not helper:
             parser.error('build the helper first or pass --helper')

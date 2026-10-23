@@ -66,21 +66,31 @@ struct HostTint: Hashable, Sendable {
         static let lightTabControl = Tone(lightness: 0.52, chroma: 0.07)
     }
     @MainActor private var dark: Bool { Chrome.palette.isDark }
-    @MainActor private func draw(_ dark: Tone, _ light: Tone) -> Color {
+    /// How far a role follows a colorblind look's lightness (`HostColor.look`): washes and borders all the way, edges
+    /// squeezed into the range that keeps them 3:1 on the window, text not at all so it keeps 4.5:1.
+    private enum Lift { case full, edge, none }
+    @MainActor private func draw(_ dark: Tone, _ light: Tone, lift: Lift = .none) -> Color {
         let tone = self.dark ? dark : light
-        return Self.oklch(tone.lightness, HostColorStore.shared.enabled ? tone.chroma : 0, preset.hue)
+        let vision = HostColorStore.shared.vision, look = preset.look(for: vision)
+        let shift = switch vision == .typical ? .none : lift {
+        case .full: look.lift
+        // Squeezed (in order) into what keeps 3:1 on the window: on light windows only darker.
+        case .edge: self.dark ? HostColor.maxLift - (HostColor.maxLift - look.lift) * 0.75 : (look.lift - HostColor.maxLift) * 0.6
+        case .none: 0.0
+        }
+        return Self.oklch(tone.lightness + shift, HostColorStore.shared.enabled ? tone.chroma : 0, look.hue)
     }
     @MainActor var color: Color {
         if offline { return dark ? Color(red: 90/255, green: 90/255, blue: 100/255) : Chrome.muted }
-        return draw(.darkColor, .lightColor)
+        return draw(.darkColor, .lightColor, lift: .full)
     }
     @MainActor var edge: Color {
         if offline { return dark ? Color(red: 69/255, green: 69/255, blue: 77/255) : Chrome.palette.faint }
-        return draw(.darkColor, .lightEdge)
+        return draw(.darkColor, .lightEdge, lift: .edge)
     }
     @MainActor var border: Color {
         if offline { return dark ? Color.white.opacity(0.08) : Chrome.border }
-        return draw(.darkBorder, .lightBorder).opacity(dark ? 0.35 : 0.6)
+        return draw(.darkBorder, .lightBorder, lift: .full).opacity(dark ? 0.35 : 0.6)
     }
     /// The tab strip's wash and the top of the fade below it: barely there, so the edge carries the host color.
     @MainActor var stripWash: Color { color.opacity(dark ? (offline ? 0.04 : 0.06) : (offline ? 0.03 : 0.04)) }
@@ -144,6 +154,25 @@ enum HostColor: String, CaseIterable, Codable, Sendable {
         }
         return degrees / 360
     }
+
+    /// This color for `vision`: its hue (0..<1 of a turn) and a lightness shift. Typical vision keeps one lightness for
+    /// every host; colorblind sets trade that for lightness steps, because eight hues at one lightness collapse for
+    /// those viewers. Each stays within 15° of its name; the steps come from searching for the largest smallest Oklab
+    /// distance between the eight as protanopes and deuteranopes (red-green: 0.007 → 0.099) or tritanopes (blue-yellow:
+    /// 0.024 → 0.129) see them (Machado 2009), at the wash tones.
+    func look(for vision: ColorVision) -> (hue: Double, lift: Double) {
+        guard let set = Self.colorblind[vision], let index = Self.allCases.firstIndex(of: self) else { return (hue, 0) }
+        return (set.hues[index] / 360, set.lifts[index])
+    }
+
+    /// The largest lightness step in the colorblind sets.
+    static let maxLift = 0.14
+
+    /// By case order: red, orange, yellow, green, cyan, blue, purple, pink.
+    private static let colorblind: [ColorVision: (hues: [Double], lifts: [Double])] = [
+        .redGreen: ([24, 70, 90, 142, 202, 254, 298, 345], [0.14, -0.18, 0.06, -0.08, 0.14, -0.08, 0.05, -0.18]),
+        .blueYellow: ([31, 58, 110, 160, 203, 246, 294, 343], [-0.03, 0.11, -0.08, 0.02, 0.14, -0.18, 0.12, -0.18]),
+    ]
 }
 
 /// Saved host color choices (Preferences.hostColors), applied with the other settings.
@@ -153,8 +182,10 @@ final class HostColorStore {
     var choices: [String: HostColor] = [:]
     /// Automatic colors HostRegistry assigned to remembered hosts, by HostTint.machine.
     var automatic: [String: HostColor] = [:]
-    /// Settings' Host colors; off draws every host in neutral gray (Preferences.showHostColors).
+    /// Settings' Color-code remote hosts; off draws every host in neutral gray (Preferences.showHostColors).
     var enabled = true
+    /// Settings' colorblind mode: hosts take that vision's colors (`HostColor.look`).
+    var vision = ColorVision.typical
     /// Saves the choices; the application sets it.
     @ObservationIgnored var persist: ([String: HostColor]) -> Void = { _ in }
 

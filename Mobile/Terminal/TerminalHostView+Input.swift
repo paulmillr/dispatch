@@ -9,6 +9,14 @@ extension TerminalHostView {
     override var canBecomeFirstResponder: Bool { true }
 
     override func becomeFirstResponder() -> Bool {
+        // The iPad keyboard's shortcut bar would offer Undo, Redo and Paste, which a terminal has no use for or has in
+        // its edit menu and ⌘V; the capsule carries the keys the keyboard lacks. Empty, the bar goes and gives the rows
+        // back (with a hardware keyboard, only the system's minimal bar remains). No effect on an iPhone. Set here, as
+        // the keys come, outside SwiftUI's layout (`init`'s note).
+        if !inputAssistantItem.leadingBarButtonGroups.isEmpty || !inputAssistantItem.trailingBarButtonGroups.isEmpty {
+            inputAssistantItem.leadingBarButtonGroups = []
+            inputAssistantItem.trailingBarButtonGroups = []
+        }
         let became = super.becomeFirstResponder()
         if became { session.setFocus(true) }
         return became
@@ -64,12 +72,56 @@ extension TerminalHostView {
         }
     }
 
+    /// The Mac's Edit menu for a terminal (`TerminalView.validateMenuItem`): Copy with a selection, Paste with text,
+    /// Select All; plus Clear Screen and the font size, which a menu (⌘K, ⌘+, ⌘-, ⌘0) sends down the responder chain.
     override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
         switch action {
+        // UIKit asks before it fires a key command: every hardware key's command goes through here.
+        case #selector(keyCommand(_:)): true
         case #selector(copy(_:)): session.locked { session.surface.hasSelection }
         case #selector(paste(_:)): UIPasteboard.general.hasStrings
+        case #selector(selectAll(_:)), #selector(clearScreen(_:)), #selector(resetFontSize(_:)): true
+        // The menu bar's Find…, Find Next and Find Previous (⌘F, ⌘G, ⇧⌘G): the segment's search capsule.
+        case #selector(find(_:)), #selector(findNext(_:)), #selector(findPrevious(_:)): onFind != nil
+        case #selector(increaseSize(_:)): configuration.fontSize < TerminalConfiguration.fontSizes.upperBound
+        case #selector(decreaseSize(_:)): configuration.fontSize > TerminalConfiguration.fontSizes.lowerBound
         default: false
         }
+    }
+
+    override func selectAll(_ sender: Any?) {
+        session.locked { _ = session.surface.bindingAction(Array("select_all".utf8)) }
+        session.pump()
+    }
+
+    /// The Mac's Clear Screen (⌘K, `clear_screen`): the screen and scrollback cleared, the prompt redrawn.
+    @objc func clearScreen(_ sender: Any?) {
+        session.locked { _ = session.surface.bindingAction(Array("clear_screen".utf8)) }
+        session.pump()
+    }
+
+    /// Find… (⌘F) opens the search capsule over this terminal; Find Next and Find Previous (⌘G, ⇧⌘G) step it,
+    /// opening it first when it is closed.
+    override func find(_ sender: Any?) { onFind?(.open) }
+    override func findNext(_ sender: Any?) { onFind?(.next) }
+    override func findPrevious(_ sender: Any?) { onFind?(.previous) }
+
+    /// ⌘+ and ⌘- (the system's Bigger and Smaller): a point at a time, as the Mac's, kept as a pinch's size is.
+    override func increaseSize(_ sender: Any?) { adjustFontSize(by: 1) }
+    override func decreaseSize(_ sender: Any?) { adjustFontSize(by: -1) }
+
+    /// ⌘0: the device class's default size.
+    @objc func resetFontSize(_ sender: Any?) { setFontSize(TerminalController.defaultFontSize) }
+
+    func adjustFontSize(by points: Double) { setFontSize(configuration.fontSize + points) }
+
+    func setFontSize(_ size: Double) {
+        let size = min(max(size, TerminalConfiguration.fontSizes.lowerBound), TerminalConfiguration.fontSizes.upperBound)
+        guard size != configuration.fontSize else { return }
+        var next = configuration
+        next.fontSize = size
+        configure(next)
+        onFontSize?(size)
     }
 
     override func copy(_ sender: Any?) {
@@ -85,6 +137,41 @@ extension TerminalHostView {
 
     override var keyCommands: [UIKeyCommand]? { Self.commands }
 
+    /// Chords iPadOS keeps from key commands: Ctrl-Space (and with Shift or Alt) switches input sources, so no command
+    /// for it ever fires, but the press still comes here. The terminal takes it (tmux and Emacs read Ctrl-Space as
+    /// NUL), as the Mac's does; every other press goes on to key commands and the text system.
+    static func reservedChord(_ keyCode: UIKeyboardHIDUsage, _ flags: UIKeyModifierFlags) -> TerminalInputKey? {
+        guard keyCode == .keyboardSpacebar, flags.contains(.control), !flags.contains(.command) else { return nil }
+        var mods: Mods = .ctrl
+        if flags.contains(.shift) { mods.insert(.shift) }
+        if flags.contains(.alternate) { mods.insert(.alt) }
+        return TerminalInputKey.character(" ").with(mods)
+    }
+
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        var rest = presses
+        for press in presses {
+            guard let key = press.key, let chord = Self.reservedChord(key.keyCode, key.modifierFlags) else { continue }
+            rest.remove(press)
+            reservedPresses.insert(press)
+            send(chord)
+            afterKey()
+        }
+        if !rest.isEmpty { super.pressesBegan(rest, with: event) }
+    }
+
+    override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        let rest = presses.subtracting(reservedPresses)
+        reservedPresses.subtract(presses)
+        if !rest.isEmpty { super.pressesEnded(rest, with: event) }
+    }
+
+    override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        let rest = presses.subtracting(reservedPresses)
+        reservedPresses.subtract(presses)
+        if !rest.isEmpty { super.pressesCancelled(rest, with: event) }
+    }
+
     @MainActor private static let commands = makeCommands()
 
     private static func makeCommands() -> [UIKeyCommand] {
@@ -97,7 +184,8 @@ extension TerminalHostView {
         var list: [UIKeyCommand] = []
         let special = [UIKeyCommand.inputUpArrow, UIKeyCommand.inputDownArrow, UIKeyCommand.inputLeftArrow, UIKeyCommand.inputRightArrow,
                        UIKeyCommand.inputHome, UIKeyCommand.inputEnd, UIKeyCommand.inputPageUp, UIKeyCommand.inputPageDown, UIKeyCommand.inputDelete]
-        let combos: [UIKeyModifierFlags] = [[], .shift, .control, .alternate, [.shift, .control], [.shift, .alternate], [.control, .alternate]]
+        let combos: [UIKeyModifierFlags] = [[], .shift, .control, .alternate, [.shift, .control], [.shift, .alternate], [.control, .alternate],
+                                            [.shift, .control, .alternate]]
         for input in special { for flags in combos { list.append(command(input, flags)) } }
         for input in [UIKeyCommand.inputEscape, "\t"] { for flags in combos { list.append(command(input, flags)) } }
         let functions = [UIKeyCommand.f1, UIKeyCommand.f2, UIKeyCommand.f3, UIKeyCommand.f4, UIKeyCommand.f5, UIKeyCommand.f6,
@@ -110,6 +198,9 @@ extension TerminalHostView {
                 list.append(command(input, flags))
             }
         }
+        // Shift-Return and Shift-Backspace keep their Shift (the text path drops it): an agent's TUI reads
+        // Shift-Return as a newline under the kitty keyboard protocol, as the Mac's does.
+        for input in ["\u{8}", "\r"] { list.append(command(input, .shift)) }
         return list
     }
 
@@ -123,6 +214,21 @@ extension TerminalHostView {
         if flags.contains(.command) { mods.insert(.super) }
         let functions = [UIKeyCommand.f1, UIKeyCommand.f2, UIKeyCommand.f3, UIKeyCommand.f4, UIKeyCommand.f5, UIKeyCommand.f6,
                          UIKeyCommand.f7, UIKeyCommand.f8, UIKeyCommand.f9, UIKeyCommand.f10, UIKeyCommand.f11, UIKeyCommand.f12]
+        // PageUp and PageDown (alone or with Shift) page a multiplexer's own history, as on the Mac; the program gets the
+        // key when the server leaves the scrollback to the app. Shift pages the emulator's history (its keybinds).
+        if input == UIKeyCommand.inputPageUp || input == UIKeyCommand.inputPageDown, mods.isEmpty || mods == .shift,
+           presence.scrollback == .server, let feed {
+            let rows = max(1, session.currentSize.rows)
+            let request = TerminalScrollRequest(lines: (input == UIKeyCommand.inputPageUp ? 1 : -1) * rows, page: true,
+                                                modifiers: mods == .shift ? 1 : 0)
+            let key = (input == UIKeyCommand.inputPageUp ? TerminalInputKey.pageUp : TerminalInputKey.pageDown).with(mods)
+            Task { [weak self] in
+                let result = await feed.scroll(request)
+                if result != .server { self?.send(key) }
+            }
+            afterKey()
+            return
+        }
         let key: TerminalInputKey
         switch input {
         case UIKeyCommand.inputUpArrow: key = .up
@@ -142,7 +248,8 @@ extension TerminalHostView {
             if let index = functions.firstIndex(of: input) {
                 key = TerminalInputKey(keycode: TerminalInputKey.functionKeycodes[index])
             } else if let character = input.first {
-                key = .character(character)
+                // A shifted chord carries the shifted character, as the Mac's do (Option+Shift+A is ESC A, not ESC a).
+                key = mods.contains(.shift) ? TerminalInputKey.withShift(character) : .character(character)
             } else { return }
         }
         send(key.with(mods))

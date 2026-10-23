@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Records a key group's modifiers in Settings › Keys: click (or Space), hold any of ⌃ ⌥ ⇧ ⌘ and
+/// Records a key group's modifiers in Settings › Keyboard: click (or Space), hold any of ⌃ ⌥ ⇧ ⌘ and
 /// release them, or press a key while holding them. ⌫ unbinds the group; Esc or clicking elsewhere cancels.
 struct KeyGroupRecorder: NSViewRepresentable {
     @Environment(\.isEnabled) private var isEnabled

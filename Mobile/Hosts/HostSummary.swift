@@ -36,11 +36,31 @@ struct HostSummary {
         case .connecting: return "Connecting…"
         case .authenticating: return "Logging in…"
         case .bootstrapping: return "Starting the helper…"
-        case .reconnecting(let attempt, _): return attempt > 1 ? "Reconnecting · attempt \(attempt)" : "Reconnecting…"
+        case .reconnecting where session.networkUnavailable: return "Waiting for the network…"
+        case .reconnecting(let attempt, _, _): return attempt > 1 ? "Reconnecting · attempt \(attempt)" : "Reconnecting…"
         case .failed(let reason): return session.hostKeyMismatch != nil ? "Host key changed" : reason
         case .disconnected: return "Offline"
         }
     }
+
+    /// Why it is not connected yet, under the status (`HostSession.problem`).
+    var problem: String? { session.problem }
+
+    static let plainSSH = "Plain SSH"
+
+    /// Host detail's Plain SSH line (docs/ios.md, Plain SSH): with the reason the helper could not start when the
+    /// Helper switch is on and this connection fell back, else just "Plain SSH" for a host without its helper (by
+    /// choice, or a fallback without a reason); nil for a host on its helper.
+    var plainLine: String? {
+        if host.helper, case .plain(let reason?) = session.mode {
+            return "\(Self.plainSSH) · helper could not be installed: \(reason)"
+        }
+        return session.plainSSH ? Self.plainSSH : nil
+    }
+
+    /// The fallback can be made permanent ("Use plain SSH for this host", which turns the Helper switch off): the
+    /// switch is on and this connection is plain.
+    var offersPlainSSH: Bool { host.helper && session.isPlain }
 
     var statusColor: Color {
         switch session.link {
@@ -66,7 +86,8 @@ struct HostSummary {
     }
 
     var spaces: [Space] {
-        guard let topology = session.topology else { return [] }
+        // A plain SSH host has no spaces from a server, whatever was kept from an earlier helper.
+        guard !session.plainSSH, let topology = session.topology else { return [] }
         let nodes = topology.nodes.filter { !$0.detached }
         let homes = HomePath(session.hello)
         func folder(under id: UInt64) -> String? {
@@ -81,6 +102,12 @@ struct HostSummary {
         }
     }
 
+}
+
+extension HostSession {
+    /// Plain SSH (docs/ios.md): by choice (the host's Helper switch is off) or on this connection (the helper could
+    /// not start). Agents, background refresh and the watch leave such a host out; Spaces marks it.
+    var plainSSH: Bool { !host.helper || isPlain }
 }
 
 /// Opens one of a host's spaces from Host detail (Tabs owns the space screens). Rows show no chevron without it.

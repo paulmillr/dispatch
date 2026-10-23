@@ -472,6 +472,10 @@ impl Encode for Block {
             ),
             Self::Markdown(text) => object(out, &[("kind", &"markdown"), ("text", text)]),
             Self::Attachment(path) => object(out, &[("kind", &"attachment"), ("path", path)]),
+            Self::File(shown) => object(
+                out,
+                &[("kind", &if shown.image { "image" } else { "file" }), ("path", &shown.path), ("text", &shown.name)],
+            ),
         }
     }
 }

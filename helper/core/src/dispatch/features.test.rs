@@ -177,3 +177,15 @@ fn login_home_is_reported_only_when_it_differs_from_the_passwd_home() {
     assert_eq!(login_home("/home/u", Some(Path::new("/"))), None);
     assert_eq!(login_home("/home/u", None), None);
 }
+
+#[test]
+fn attachment_operations_belong_to_chat_attachments() {
+    assert!(KNOWN.contains(&ATTACHMENTS));
+    assert_eq!(operation(ATTACHMENTS_PUT), Some(ATTACHMENTS));
+    assert_eq!(operation(ATTACHMENTS_READ), Some(ATTACHMENTS));
+    assert_eq!(operation(CHAT_LIST), Some(CHAT_LIST));
+    assert_eq!(operation("chat.send"), None, "an ordinary operation");
+    // Uploading needs the right to send; reading back the right to look.
+    assert_eq!(crate::helper::login::required(ATTACHMENTS_PUT), "agent.submit");
+    assert_eq!(crate::helper::login::required(ATTACHMENTS_READ), "agent.inspect");
+}

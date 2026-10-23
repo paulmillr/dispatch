@@ -231,6 +231,11 @@ extension ChatCoordinator {
               session.nativePrompt == nil, session.commandEditor == nil, !session.nativeInputInFlight,
               !session.loadingHistory, !session.approvals.contains(where: \.pending),
               let parent = session.sessionID, let helper = session.helper else { return false }
+        // A side conversation takes text only: the draft (and its files) stay for the main conversation.
+        if consumeDraft, session.drafts.shape.hasAttachments || !session.draftUploads.isEmpty {
+            session.submissionFailure = "Side conversations cannot carry attachments. Remove them to ask on the side; your draft is preserved."
+            return false
+        }
         let side = ChatSideConversation(mode: mode, parentID: parent, agentID: session.agentID, model: session.model)
         side.title = session.agentTitle
         session.sideConversation = side

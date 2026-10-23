@@ -62,4 +62,16 @@ final class TerminalMachineTests: XCTestCase {
         changed.autoReconnectSSH = true
         XCTAssertEqual(try JSONDecoder().decode(Preferences.self, from: JSONEncoder().encode(changed)), changed)
     }
+
+    /// A connection the app launched carries the options `arguments` puts first; a clone of it parses back to the same
+    /// shell, so cloning a clone never repeats them (its command was different with whichever connection it cloned).
+    func testCloningALaunchedConnectionKeepsItsArguments() throws {
+        let original = try XCTUnwrap(SSHShell.parse(executable: "/usr/bin/ssh", arguments: ["ssh", "-p", "2222", "user@host"]))
+        let clone = try XCTUnwrap(SSHShell.parse(executable: "/usr/bin/ssh", arguments: ["ssh"] + original.arguments))
+        XCTAssertEqual(clone.arguments, original.arguments)
+        XCTAssertEqual(original.arguments.filter { $0 == "RemoteCommand=none" }.count, 1)
+        // As the launcher builds it, from its own invocation's options.
+        let launched = SSHShell(destination: "user@host", options: Array(original.arguments.dropLast(3)))
+        XCTAssertEqual(launched.arguments, original.arguments)
+    }
 }

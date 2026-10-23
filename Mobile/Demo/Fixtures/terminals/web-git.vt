@@ -1,0 +1,20 @@
+[38;5;114malex@mba2[0m [38;5;75m~/src/web[0m [2m%[0m git status -sb
+## [32mdark-mode[0m...[31morigin/dark-mode[0m [ahead 1]
+ [31mM[0m prisma/schema.prisma
+ [31mM[0m src/app/settings/page.tsx
+[31m??[0m src/app/settings/ThemeToggle.tsx
+[31m??[0m src/hooks/useThemePreference.ts
+[38;5;114malex@mba2[0m [38;5;75m~/src/web[0m [2m%[0m git log --oneline -8
+[33m9c1e4d2[0m Add theme column to User
+[33m5b07aa1[0m ThemeProvider: initial theme from session
+[33me3f9c60[0m Merge #212: settings layout
+[33m2a6b8f3[0m Settings: two columns on wide screens
+[33mc48d1e9[0m ProfileForm: optimistic save
+[33m7f3e2b0[0m Upgrade to Next.js 15.2
+[33m41d9a7c[0m Header: avatar menu keyboard nav
+[33m0b8e3f4[0m Fix hydration warning in Footer
+[38;5;114malex@mba2[0m [38;5;75m~/src/web[0m [2m%[0m git diff --stat
+ prisma/schema.prisma      | 1 [32m+[0m
+ src/app/settings/page.tsx | 5 [32m+++++[0m
+ 2 files changed, 6 insertions(+)
+[38;5;114malex@mba2[0m [38;5;75m~/src/web[0m [2m%[0m 

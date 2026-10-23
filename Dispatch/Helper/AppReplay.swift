@@ -112,7 +112,11 @@ final class AppReplay: @unchecked Sendable {
         /// `caller`: only its caller can have cancelled it (a sleep ends by elapsing or by its caller): a recorded
         /// cancellation then never ends the wait by itself, only the caller's does; it holds nothing either (identical
         /// concurrent sleeps, two timeouts' timers, may pair with each other's records).
-        nonisolated(nonsending) func outcome(caller: Bool = false) async throws -> HelperBinary.Value {
+        /// `woken`: something besides its caller may cut it short (a nap a window notification ends). Replay cannot count
+        /// on that cut coming at the recorded point (the notification follows wall time and window state), so a live
+        /// cancellation ends the wait only when the recording never saw it end; one the recording ended (cut or elapsed)
+        /// ends where the recording did, never earlier (a poll run early would read what capture's had not seen yet).
+        nonisolated(nonsending) func outcome(caller: Bool = false, woken: Bool = false) async throws -> HelperBinary.Value {
             final class Reply: @unchecked Sendable {
                 let lock = NSLock(); var sent = false, continuation: CheckedContinuation<HelperBinary.Value, any Error>?
                 func complete(_ result: Result<HelperBinary.Value, any Error>) {
@@ -124,7 +128,7 @@ final class AppReplay: @unchecked Sendable {
                     continuation?.resume(with: result)
                 }
             }
-            let reply = Reply(), cancellable = journal.cancelled(id)
+            let reply = Reply(), cancellable = journal.cancelled(id) && !(woken && journal.ended(id))
             if caller && cancellable { journal.release(id) }
             return try await withTaskCancellationHandler {
                 try await withCheckedThrowingContinuation { continuation in
@@ -547,11 +551,11 @@ final class AppReplay: @unchecked Sendable {
         return try await $suppressed.withValue(true) { try await read() }
     }
 
-    /// `caller`: see Ticket.outcome.
-    nonisolated(nonsending) static func run(kind: String, input: HelperBinary.Value, caller: Bool = false,
+    /// `caller`, `woken`: see Ticket.outcome.
+    nonisolated(nonsending) static func run(kind: String, input: HelperBinary.Value, caller: Bool = false, woken: Bool = false,
                                             read: () async throws -> HelperBinary.Value) async throws -> HelperBinary.Value {
         guard let ticket = try open(kind: kind, input: input) else { return try await read() }
-        if ticket.replaying { return try await ticket.outcome(caller: caller) }
+        if ticket.replaying { return try await ticket.outcome(caller: caller, woken: woken) }
         do {
             let result = try await unrecorded { try await read() }
             try ticket.emit(kind: "result", value: result)
@@ -616,6 +620,11 @@ final class AppReplay: @unchecked Sendable {
             inert.insert(end)
         }
         try? pump()
+    }
+
+    /// Replay: the recording saw this lifetime end (a result or an error).
+    fileprivate func ended(_ id: Int) -> Bool {
+        lock.withLock { streams[id]?.contains { ["in.result", "in.error"].contains(rows[$0].kind) } ?? false }
     }
 
     fileprivate func cancelled(_ id: Int) -> Bool {
@@ -1355,9 +1364,12 @@ final class AppReplay: @unchecked Sendable {
     }
 
     /// A request without the terminal grid it was sized for: geometry follows the app's layout (drawing), not I/O.
+    /// A hello without its features: they only tune how the helper batches what it sends (`terminals.coalesce`), and a
+    /// recording holds the helper's frames as they were, so one made before the Mac named any replays unchanged.
     private static func drawn(_ value: HelperBinary.Value) -> HelperBinary.Value {
         guard case .object(var request) = value, case .object(var params)? = request["params"] else { return value }
         params["size"] = nil
+        if request["method"] == .string("hello") { params["features"] = nil }
         request["params"] = .object(params)
         return .object(request)
     }

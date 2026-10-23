@@ -47,6 +47,17 @@ final class ChatRenderingTests: XCTestCase {
         XCTAssertGreaterThan(agent.height, 60, "Long text wraps onto more lines")
     }
 
+    func testLargeQuestionDetailsDropTo8pt() {
+        let short = "Keeps the current layout"
+        let long = String(repeating: "Moves the sidebar below the editor. ", count: 6)
+        XCTAssertFalse(ChatQuestionDetail.isLarge(short))
+        XCTAssertTrue(ChatQuestionDetail.isLarge(long))
+        XCTAssertTrue(ChatQuestionDetail.isLarge("+------+\n| tabs |\n+------+"), "A layout is large however short")
+        let line = size(ChatQuestionDetail(text: short), width: 300).height
+        // 216 characters: four lines of 8 pt mono in 300 pt, six of footnote mono.
+        XCTAssertLessThan(size(ChatQuestionDetail(text: long), width: 300).height, line * 3)
+    }
+
     func testTheBannerSaysWhereTheLinkIs() {
         XCTAssertNil(ChatLinkBanner.title(.connected, host: "mba2"))
         XCTAssertEqual(ChatLinkBanner.title(.reconnecting(attempt: 2, since: Date()), host: "mba2"), "Reconnecting to mba2")
@@ -54,6 +65,9 @@ final class ChatRenderingTests: XCTestCase {
         XCTAssertEqual(ChatLinkBanner.title(.failed("refused"), host: "mba2"), "Can’t reach mba2")
         XCTAssertEqual(size(ChatLinkBanner(link: .connected, host: "mba2")).height, 0, "No banner while connected")
         XCTAssertEqual(size(ChatLinkBanner(link: .reconnecting(attempt: 1, since: Date()), host: "mba2")).height, 38, "32 pt and 6 below (M4c)")
+        // Why it is down, on a second line: the banner grows to hold it.
+        let problem = "mba2.tail3f.ts.net didn’t answer on port 22. Check that Tailscale is on and the host is awake."
+        XCTAssertGreaterThan(size(ChatLinkBanner(link: .reconnecting(attempt: 1, since: Date()), host: "mba2", problem: problem)).height, 50)
     }
 
     func testAgentMarkdownKeepsOnlyCredentialFreeWebLinks() {
@@ -94,6 +108,15 @@ final class ChatRenderingTests: XCTestCase {
         // Another directory: paths fall back to the one the agent recorded.
         XCTAssertEqual(ChatStep.steps(transcript.turns[1], directory: "/Users/me/elsewhere", reasoning: false).first?.title,
                        "src/routes/invoices.ts")
+        // A patch that did not apply shows its state, not its counts (the Mac's tool card).
+        var declined = try XCTUnwrap(transcript.turns[0].items.first { ChatStep($0, directory: nil).kind == .patch })
+        declined.patch = ChatPatch(documents: declined.patch?.documents ?? [], state: .declined)
+        let step = ChatStep(declined, directory: "/work/app")
+        XCTAssertEqual([step.additions, step.deletions], [0, 0])
+        XCTAssertEqual(step.detail, "Patch declined")
+        // A shell search reads as Search, as the Mac titles it.
+        let rg = ChatItem(id: "rg", kind: .tool, text: #"{"command":"rg -n retry src"}"#, title: "Bash", completed: true)
+        XCTAssertEqual(ChatStep(rg, directory: nil).kind.label, "Search")
     }
 
     func testTheWorkingRowFoldsToOneLine() async throws {
@@ -107,5 +130,36 @@ final class ChatRenderingTests: XCTestCase {
         XCTAssertEqual(size(row).height, 45 + 6 + 22, accuracy: 8, "The 44 pt row, its hairline and the hint")
         let folded = ChatWorkingRow(session: session, directory: nil, expanded: .constant(false), openStep: { _ in })
         XCTAssertEqual(size(folded).height, 45, accuracy: 1, "Folded, the row is its hairline and 44 pt")
+    }
+
+    /// A user message's images sit above its bubble on the user's side, within the bubble's share: one large, else up
+    /// to four a row; the composer's strip is one row of chips.
+    func testAttachmentsSitAboveTheBubbleWithinItsShare() {
+        let png = UIGraphicsImageRenderer(size: CGSize(width: 60, height: 40)).pngData { context in
+            UIColor.systemPink.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 60, height: 40))
+        }
+        func image(_ index: Int) -> ChatAttachment {
+            ChatAttachment(id: "i\(index)", name: "shot.png", kind: .image, size: 1, path: nil, thumbnail: png)
+        }
+        func message(_ attachments: [ChatAttachment], text: String = "Like this") -> some View {
+            ChatUserMessage(text: text, attachments: attachments).environment(\.chatColumnWidth, 370)
+        }
+        let share = 370 * 0.78
+        XCTAssertEqual(ChatMessageAttachments.tile(count: 1, width: share), 220)
+        XCTAssertEqual(ChatMessageAttachments.tile(count: 4, width: share), 69)
+        let one = extent(message([image(0)]), width: 370)
+        XCTAssertEqual(one.maxX, 370, accuracy: 1, "On the user's side")
+        XCTAssertGreaterThan(one.height, 220 + 30, "The image, then the bubble")
+        let four = extent(message((0..<4).map(image)), width: 370)
+        XCTAssertLessThanOrEqual(four.width, share + 1)
+        let five = extent(message((0..<5).map(image), text: ""), width: 370)
+        XCTAssertEqual(five.height, 69 * 2 + 4, accuracy: 2, "Two rows, no bubble without text")
+        let file = ChatAttachment(name: "notes.txt", kind: .file, size: 2048, path: "/stored/n.txt")
+        XCTAssertLessThanOrEqual(extent(message([file]), width: 370).width, share + 1)
+        let strip = ComposerAttachmentStrip(attachments: ComposerAttachments(chips: [
+            .init(id: "a", name: "shot.png", kind: .image, thumbnail: png),
+            .init(id: "b", name: "notes.txt", kind: .file, detail: "2 KB", uploading: true)]))
+        XCTAssertEqual(size(strip).height, ComposerAttachmentStrip.height, accuracy: 1)
     }
 }

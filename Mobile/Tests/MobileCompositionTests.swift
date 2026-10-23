@@ -22,6 +22,20 @@ final class MobileCompositionTests: XCTestCase {
         HostRecord(name: name, address: name + ".local", user: "alex", auth: .password, order: order, tintSeed: name)
     }
 
+    /// Two hosts reaching one machine and account (a LAN and a Tailscale address) show its spaces and agents once, under
+    /// the first in the list, as the Mac keys a host by machine and uid; the other names it.
+    func testTheSameMachineShowsItsSpacesOnce() async throws {
+        let lan = HostRecord(name: "studio", address: "studio.local", user: "alex", auth: .password, order: 0, tintSeed: "machine")
+        let tailnet = HostRecord(name: "studio-ts", address: "studio.ts.net", user: "alex", auth: .password, order: 1, tintSeed: "machine")
+        let app = composition(hosts: [lan, tailnet])
+        try await TestSupport.eventually { app.hosts.ordered.allSatisfy { $0.link == .connected } }
+        try await TestSupport.eventually { app.tabs.workspace(lan.id)?.spaces.isEmpty == false }
+        XCTAssertEqual(app.tabs.workspace(tailnet.id)?.spaces.count, 0)
+        XCTAssertEqual(app.tabs.workspace(tailnet.id)?.host.sameMachine, "studio")
+        XCTAssertNil(app.tabs.workspace(lan.id)?.host.sameMachine)
+        XCTAssertEqual(Set(app.conversations.conversations.map(\.key.host)), [lan.id], "Its agents once")
+    }
+
     func testAConnectingHostFeedsSpacesAndAgents() async throws {
         let studio = host("studio")
         let app = composition(hosts: [studio])
@@ -269,28 +283,31 @@ final class MobileCompositionTests: XCTestCase {
         XCTAssertEqual(app.tabs.needsYou(excluding: ref), app.conversations.needsYouCount)
     }
 
-    /// Pi's extension is per helper connection: re-enabled after each connect when Pi and its integration are there,
-    /// never installed by connecting.
-    func testPiIsReenabledOnEachConnectionWhenInstalled() async throws {
-        for installed in [true, false] {
+    /// Every connection with Chat on installs Claude Code's and Codex's hooks, as the Mac does for a newly connected host;
+    /// Pi's extension is opt-in and only enabled again where it is installed. Chat off changes nothing.
+    func testIntegrationsAreEnabledOnEachConnection() async throws {
+        for (installed, chat) in [(true, true), (false, true), (false, false)] {
             let helper = ScriptedHelper.scripted { request in
                 switch request.method {
-                case "launches.list": .result([["launch": 4, "key": "pi", "label": "Pi", "program": "pi"]])
-                case "installation.audit": .result(["edits": [], "restart": false, "installed": installed, "optional": true])
-                case "installation.install": .result(["edits": [], "restart": false, "installed": true, "optional": true])
+                case "launches.list": .result([["launch": 4, "key": "pi", "label": "Pi", "program": "pi"],
+                                               ["launch": 5, "key": "claude", "label": "Claude Code", "program": "claude"]])
+                case "installation.audit":
+                    request.params["launch"] as? UInt64 == 4
+                        ? .result(["edits": [], "restart": false, "installed": installed, "optional": true])
+                        : .result(["edits": [], "restart": false, "installed": false, "optional": false])
+                case "installation.install": .result(["edits": [], "restart": false, "installed": true])
                 default: nil
                 }
             }
-            let session = HostSession(host: host("pi"), driver: ScriptedHostSessionDriver()) { _ in
+            var record = host("pi")
+            record.chat = chat
+            let session = HostSession(host: record, driver: ScriptedHostSessionDriver()) { _ in
                 HostSessionContext(verifyHostKey: { _ in true }, key: { nil }, password: { nil }, retries: AsyncStream { $0.finish() })
             }
-            await MobileComposition.enablePi(session, helper.client)
-            XCTAssertEqual(helper.methods, installed ? ["launches.list", "installation.audit", "installation.install"]
-                                                     : ["launches.list", "installation.audit"])
-            if installed {
-                XCTAssertEqual(helper.requests("installation.install").first?.params as NSDictionary?,
-                               ["launch": 4, "enabled": true] as NSDictionary)
-            }
+            await MobileComposition.enableIntegrations(session, helper.client)
+            let installs = helper.requests("installation.install").compactMap { $0.params["launch"] as? UInt64 }
+            XCTAssertEqual(installs, !chat ? [] : installed ? [4, 5] : [5], "installed \(installed), chat \(chat)")
+            XCTAssertTrue(helper.requests("installation.install").allSatisfy { $0.params["enabled"] as? Bool == true })
         }
     }
 }

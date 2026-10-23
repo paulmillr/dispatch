@@ -825,7 +825,7 @@ impl Io for System {
         if let Some(result) = self.replay("executable", Data::Null, |v: &Data<'_>| v.path().map(PathBuf::from)) {
             return result;
         }
-        let result = file::stable();
+        let result = executable::stable();
         let output = result.as_ref().map_or(Data::Null, |p| Data::from(p.as_path()));
         self.record("executable", Data::Null, &result, output)?;
         result

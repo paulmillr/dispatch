@@ -19,6 +19,13 @@ final class TerminalHostView: UIView {
     /// The latched capsule modifiers for the next key (the key capsule's model), and the notice that a key used them.
     var pendingMods: () -> Mods = { [] }
     var onKeySent: (() -> Void)?
+    /// The keyboard's frame in the window changed (nil: no window).
+    var onKeyboardFrame: ((CGRect?) -> Void)?
+    /// Pinned to `keyboardLayoutGuide`, which follows a floating or split keyboard too: the keyboard's real frame.
+    /// The keyboard's notifications cannot say it: a keyboard that comes up floating posts none, and floating a
+    /// docked one posts a hide while it stays on screen.
+    let keyboardTracker = UIView()
+    private var reportedKeyboard: CGRect??
     /// Whether the software keyboard shows while this view is first responder; false keeps hardware keys and the
     /// capsule working with no keyboard on screen.
     var softwareKeyboard = true {
@@ -61,11 +68,21 @@ final class TerminalHostView: UIView {
     var momentumTime: CFTimeInterval = 0
     var momentumPoint = CGPoint.zero
     var draggedHandle: Surface.TouchHandle?
+    /// Presses `pressesBegan` took for the terminal (a chord iPadOS reserves): their ends stay here too.
+    var reservedPresses: Set<UIPress> = []
+    /// The selection came from a pointer (no handles); a long press makes a touch one.
+    var pointerSelection = false
+    /// The scroll, wheel and pointer recognizers (tests check how they are set up).
+    var pointerRecognizers: (pan: UIPanGestureRecognizer, wheel: UIPanGestureRecognizer, click: UILongPressGestureRecognizer,
+                             secondary: UITapGestureRecognizer)?
     /// Runs once, after the first layout with a size (the attachment waits for the view's grid).
     var onSized: (() -> Void)?
     var hasSize: Bool { bounds.width > 0 && bounds.height > 0 && window != nil }
     /// A pinch changed the font size (to remember it).
     var onFontSize: ((Double) -> Void)?
+    /// The search's answers (`TerminalSearch.apply`) and the Find commands (⌘F, ⌘G, ⇧⌘G) sent to this terminal.
+    var onSearchEvent: ((TerminalSession.Event) -> Void)?
+    var onFind: ((TerminalFindCommand) -> Void)?
     var pinchBase: Double?
     private var blinkTimer: Timer?
 
@@ -77,7 +94,29 @@ final class TerminalHostView: UIView {
         layer.addSublayer(session.layer)
         updateBackground()
         presence.onViewEvent = { [weak self] event in self?.handle(event) }
+        presence.relayout = { [weak self] in self?.setNeedsLayout() }
+        // A colour scheme from Settings: the background around the grid and the handles follow at once.
+        presence.restyled = { [weak self] in
+            self?.updateBackground()
+            self?.updateSelectionHandles()
+        }
         installGestures()
+        installKeyboardTracker()
+        #if DEBUG
+        // `-DispatchHardwareKeyboard YES` stands in for an attached keyboard: no software keyboard either, as with a
+        // real one (and as Chat's composer does), so screenshots show the terminal as a keyboard user sees it. The
+        // capsule's keyboard key still brings it.
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: "DispatchHardwareKeyboard") != nil, defaults.bool(forKey: "DispatchHardwareKeyboard") {
+            // In the initializer its observer does not run: the input view too.
+            softwareKeyboard = false
+            inputView = UIView(frame: .zero)
+        }
+        #endif
+        // The keyboard's shortcut bar is emptied when the terminal first takes the keys (`becomeFirstResponder`), not
+        // here: the first `inputAssistantItem` of a scene makes UIKit's text effects window, which asks the hosting
+        // controller for its status bar, re-entering SwiftUI's graph in the middle of the layout pass that builds this
+        // view (an attribute cycle at full CPU, when a terminal was the window's first text input on an iPad).
         accessibilityLabel = "Terminal"
         accessibilityTraits = .allowsDirectInteraction
     }
@@ -94,14 +133,55 @@ final class TerminalHostView: UIView {
         }
     }
 
+    private func installKeyboardTracker() {
+        keyboardTracker.isHidden = true
+        keyboardTracker.isUserInteractionEnabled = false
+        keyboardTracker.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(keyboardTracker)
+        let guide = keyboardLayoutGuide
+        guide.followsUndockedKeyboard = true
+        NSLayoutConstraint.activate([
+            keyboardTracker.topAnchor.constraint(equalTo: guide.topAnchor),
+            keyboardTracker.bottomAnchor.constraint(equalTo: guide.bottomAnchor),
+            keyboardTracker.leadingAnchor.constraint(equalTo: guide.leadingAnchor),
+            keyboardTracker.trailingAnchor.constraint(equalTo: guide.trailingAnchor),
+        ])
+    }
+
+    /// The tracker's frame in the window, when it changed.
+    private func reportKeyboard() {
+        let frame = window.map { convert(keyboardTracker.frame, to: $0) }
+        guard reportedKeyboard != .some(frame) else { return }
+        reportedKeyboard = .some(frame)
+        onKeyboardFrame?(frame)
+    }
+
     override func layoutSubviews() {
         super.layoutSubviews()
+        reportKeyboard()
+        guard bounds.width > 0, bounds.height > 0 else {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            session.layer.frame = bounds
+            CATransaction.commit()
+            return
+        }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        session.layer.frame = bounds
-        CATransaction.commit()
-        guard bounds.width > 0, bounds.height > 0 else { return }
-        session.setSize(width: bounds.width, height: bounds.height)
+        if let grid = presence.shownGrid {
+            // The server's grid (another client holds the tmux window at its size): drawn at the same font size from
+            // the top left, clipped or with room to spare, while the view's own grid is still asked for.
+            let pixels = session.pixels(columns: grid.columns, rows: grid.rows)
+            session.layer.frame = CGRect(x: 0, y: 0, width: Double(pixels.width) / session.scale,
+                                         height: Double(pixels.height) / session.scale)
+            CATransaction.commit()
+            session.setGrid(columns: grid.columns, rows: grid.rows, drawn: true)
+            presence.offer(session.fitting(width: bounds.width, height: bounds.height))
+        } else {
+            session.layer.frame = bounds
+            CATransaction.commit()
+            session.setSize(width: bounds.width, height: bounds.height)
+        }
         updateSelectionHandles()
         if let sized = onSized {
             onSized = nil
@@ -168,8 +248,17 @@ final class TerminalHostView: UIView {
         case .background(let r, let g, let b):
             backgroundColor = UIColor(red: CGFloat(r) / 255, green: CGFloat(g) / 255, blue: CGFloat(b) / 255, alpha: 1)
         case .bell: UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        case .searchTotal, .searchSelected, .endSearch: onSearchEvent?(event)
         default: break
         }
+    }
+
+    /// A Ghostty binding action on the surface (`search:theme.ts`, `navigate_search:next`, `end_search`), its
+    /// messages taken at once: what the surface tells the host (the search's total) arrives before this returns.
+    @discardableResult func bindingAction(_ action: String) -> Bool {
+        let performed = session.locked { session.surface.bindingAction(Array(action.utf8)) }
+        session.pump()
+        return performed
     }
 
     /// The viewport's text (tests, accessibility).
@@ -180,4 +269,9 @@ final class TerminalHostView: UIView {
         get { visibleText() }
         set {}
     }
+}
+
+/// What a Find command asks of a terminal's search (the menu bar's Find…, Find Next, Find Previous).
+enum TerminalFindCommand: Equatable {
+    case open, next, previous
 }

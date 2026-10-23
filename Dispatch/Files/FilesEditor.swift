@@ -8,9 +8,6 @@ enum FilesEditor {
     enum Action: Equatable, Sendable {
         case edit
         case changeDirectory
-        /// A whole command line the caller built (and quoted with `quote`): the git tabs' "git add -p ›" and
-        /// "git show ›" (`git(_:repository:shellDirectory:)`). The path is not used.
-        case line(String)
     }
 
     /// Why nothing was typed.
@@ -40,28 +37,20 @@ enum FilesEditor {
     /// The line typed for `action`, or nil when the path cannot be typed safely. `$EDITOR` is expanded by the
     /// shell, with vi when it is unset, as most tools do.
     static func command(for path: String, action: Action) -> String? {
-        if case .line(let line) = action {
-            return line.isEmpty || hasControlCharacters(line) ? nil : line
-        }
         guard !path.isEmpty, !hasControlCharacters(path) else { return nil }
         switch action {
         case .edit: return "${EDITOR:-vi} " + quote(path)
         case .changeDirectory: return "cd " + quote(path)
-        case .line: return nil
         }
-    }
-
-    /// A git command line for the tab's shell: "git <arguments>" when the shell already sits in the repository (git
-    /// finds it from any folder inside), else "git -C '<repository>' <arguments>", so the line works wherever the shell
-    /// is. `arguments` are typed as given: the callers pass fixed words and hex hashes ("add -p", "show 3f2c1a0…").
-    static func git(_ arguments: String, repository: String, shellDirectory: String?) -> String {
-        if let shellDirectory, FilesPath.isWithin(shellDirectory, repository) { return "git " + arguments }
-        return "git -C " + quote(repository) + " " + arguments
     }
 
     /// Whether to type now. `busy`: the terminal is not at a shell prompt (`needsConfirmQuit`) or its input is parked.
     static func refusal(path: String, action: Action, hasTerminal: Bool, busy: Bool) -> Refusal? {
         if command(for: path, action: action) == nil { return .unsafePath }
+        return terminalRefusal(hasTerminal: hasTerminal, busy: busy)
+    }
+
+    private static func terminalRefusal(hasTerminal: Bool, busy: Bool) -> Refusal? {
         if !hasTerminal { return .noTerminal }
         if busy { return .busy }
         return nil
@@ -81,23 +70,13 @@ enum FilesEditor {
         return type(command, tab: tab, files: files)
     }
 
-    /// The git tabs' "git add -p ›" and "git show ›": `git(_:repository:shellDirectory:)` for where the tab's shell is
-    /// now, typed under `run`'s rule.
-    @MainActor @discardableResult
-    static func runGit(_ arguments: String, repository: String, tab: UUID, files: FilesCoordinator) -> Refusal? {
-        let directory = TerminalRuntime.shared.workspace?.liveTab(tab)?.directory
-        return run(.line(git(arguments, repository: repository, shellDirectory: directory)), path: repository, tab: tab,
-                   files: files)
-    }
-
-    /// Types `line`, quoted by the caller, and a Return into the tab's terminal and shows the terminal, under the
-    /// same rule as `run` (a line with control characters is refused like such a path).
-    @MainActor @discardableResult
-    static func type(_ line: String, tab: UUID, files: FilesCoordinator) -> Refusal? {
+    /// Types `line`, built by `command`, and a Return into the tab's terminal and shows the terminal, under `run`'s rule.
+    @MainActor
+    private static func type(_ line: String, tab: UUID, files: FilesCoordinator) -> Refusal? {
         let view = TerminalRuntime.shared.views[tab]
         let surface = view?.surface
         let busy = (view?.inputParked ?? true) || (surface?.needsConfirmQuit ?? true)
-        if let refusal = refusal(path: "", action: .line(line), hasTerminal: surface != nil, busy: busy) {
+        if let refusal = terminalRefusal(hasTerminal: surface != nil, busy: busy) {
             FilesEditorNotices.shared.post(refusal.message, tab: tab)
             return refusal
         }

@@ -12,6 +12,9 @@ struct SSHSetupFailure: LocalizedError, Sendable {
     let given: String?
     /// Fails the same way again whatever is retried.
     var permanent = false
+    /// The helper's exit status when it ended before it greeted (126: its folder cannot run programs, also when the
+    /// install found that out first); nil for every other failure.
+    var exitStatus: Int32?
 
     init(_ message: String, reason: String, given: String?) {
         self.message = message
@@ -26,6 +29,45 @@ struct SSHSetupFailure: LocalizedError, Sendable {
     }
 
     var errorDescription: String? { message + " (" + reason + ")" }
+
+    /// `root`'s folder cannot run programs (mounted noexec or blocked by policy): the helper is there and verifies,
+    /// but nothing may start it there.
+    static func cannotRun(_ root: SSHBootstrapScript.Root, runtimeDirectory: String?) -> Self {
+        exited(status: 126, stderr: "", root: root, runtimeDirectory: runtimeDirectory)
+    }
+
+    /// A helper that ended before it answered `hello`: the text the iPhone gives too (`SSHBootstrapScript.launchFailure`).
+    /// Permanent for 126 (the folder cannot run programs), 127 (it could not be started) and a setup step's own
+    /// `dispatch-setup:` reason; any other status (`connect` gave up waiting for the login's bus on a slow host) may pass
+    /// on another attempt, and keeps its text for when that fails too.
+    static func exited(status: Int32, stderr: String, root: SSHBootstrapScript.Root, runtimeDirectory: String?) -> Self {
+        var text = SSHBootstrapScript.launchFailure(status: status, stderr: stderr, root: root, runtimeDirectory: runtimeDirectory)
+        // The login prints the reason inside "(…);": no sentence's full stop there.
+        if text.hasSuffix("."), !text.hasSuffix("...") { text.removeLast() }
+        var failure: Self
+        if status == 126 || status == 127 || SSHBootstrapScript.reason(stderr) != nil {
+            failure = permanent("The SSH helper could not start.", reason: text)
+        } else {
+            failure = Self("The SSH helper could not start.", reason: text, given: nil)
+        }
+        failure.exitStatus = status
+        return failure
+    }
+
+    /// A home folder that cannot run programs, with a usable runtime folder the grant may not use: agent hooks and the
+    /// typed launch functions of the login's shell run `~/.dispatch/bin/dispatch-helper`, which cannot run there.
+    static var hooksNeedHome: Self {
+        var failure = permanent("The SSH helper could not start.", reason: hooksNeedHomeReason)
+        failure.exitStatus = 126
+        return failure
+    }
+
+    /// Why agent hooks are not installed on a host whose helper runs from the runtime folder.
+    static let hooksUnavailable =
+        "Agent hooks are unavailable on this host: they run ~/.dispatch/bin/dispatch-helper, and its home folder cannot run programs."
+
+    static let hooksNeedHomeReason =
+        "The home folder cannot run programs (noexec mount or policy), and agent hooks need it: turn hooks off for this host to use the helper"
 
     /// The reason any error gives the login: a setup step's own, else the error's words.
     static func reason(_ error: Error) -> String {
@@ -44,23 +86,66 @@ struct SSHSetupFailure: LocalizedError, Sendable {
 }
 
 enum SSHBootstrap {
-    /// Identifies the host platform, then places `resource/<platform>` in the digest-addressed private
-    /// cache (`~/.dispatch/bin/versions/<sha256>/`) unless an identical copy is already there.
-    /// Returns the cache path and its shell checks.
-    private static func install(resource: String, resources: URL,
-                                run: (String, Data) async throws -> SSHCommand.Result) async throws
-        -> (relativePath: String, preamble: String, verify: String) {
-        let probe = try await run(SSHBootstrapScript.probe, Data())
+    /// Where an install put the helper. `published` is what the login's ready file names (`.dispatch/bin/versions/…`
+    /// under `$HOME`, `dispatch/bin/versions/…` under `$XDG_RUNTIME_DIR`); `path` is the host path the app keeps
+    /// (home-relative, or absolute in the runtime folder: `hostPath`).
+    struct Installed {
+        let root: SSHBootstrapScript.Root
+        let published: String
+        let path: String
+        let runtimeDirectory: String?
+        let preamble: String
+        let verify: String
+
+        /// The helper's command over the master. The home root's text is what every recording holds. The runtime
+        /// root's keeps stdout (the helper protocol's stream) for the helper alone: a failed check says why on stderr.
+        /// `export`: `captureExport`, observed (`ReplayMigrationTests` fingerprints the text without it).
+        func command(_ arguments: String, export: String = captureExport) -> String {
+            switch root {
+            case .home:
+                preamble + "\n" + verify + " || exit 1\n" + export + "exec ./dispatch-helper " + arguments
+            case .runtimeDirectory:
+                "exec 3>&1 1>&2\n" + preamble + "\n" + verify + " || fail \"installed helper does not verify\"\n" + export
+                    + "exec ./dispatch-helper " + arguments + " 1>&3 3>&-"
+            }
+        }
+    }
+
+    /// The host path the app keeps for a helper path `startHelper` returned: absolute as it is, else under `home`.
+    static func hostPath(_ path: String, home: String) -> String {
+        path.hasPrefix("/") ? path : home + "/" + path
+    }
+
+    /// Identifies the host platform, then places `resource/<platform>` in the digest-addressed private cache under `root`
+    /// (`~/.dispatch/bin/versions/<sha256>/`, or `$XDG_RUNTIME_DIR/dispatch/bin/versions/<sha256>/`) unless an identical
+    /// copy is already there.
+    ///
+    /// A cached file that verifies but that `test -x` refuses (`SSHBootstrapScript.cacheCheck` prints `DISPATCH_NOEXEC`
+    /// and dates the file, so the helpers' cleanup keeps it) is a folder that cannot run programs: a permanent failure
+    /// with status 126 (`SSHSetupFailure.cannotRun`), nothing uploaded. A first upload there learns it the same way: it
+    /// ends "installed helper does not verify", one more check tells that from a bad upload, and the upload is not tried
+    /// again. The runtime root asks `runtimeProbe` first (only then: every connection's first command is `probe`); with no
+    /// usable runtime folder, or one `runtimeAllowed` forbids (a grant with agent hooks), it fails before writing anything.
+    private static func install(resource: String, resources: URL, root: SSHBootstrapScript.Root, runtimeAllowed: Bool,
+                                run: (String, Data) async throws -> SSHCommand.Result) async throws -> Installed {
+        let probe = try await run(root == .home ? SSHBootstrapScript.probe : SSHBootstrapScript.runtimeProbe, Data())
         guard probe.status == 0 else {
             throw SSHSetupFailure("Could not use the authenticated SSH connection.", reason: "the host refused commands (\(probe.status))",
                                   given: nil)
         }
+        let said = String(decoding: probe.output, as: UTF8.self)
         let name: String
-        switch SSHBootstrapScript.platform(String(decoding: probe.output, as: UTF8.self)) {
+        switch SSHBootstrapScript.platform(said) {
         case .helper(let helper): name = helper
         case .unidentified: throw SSHSetupFailure.permanent("Could not identify the SSH host platform.", reason: "unknown host platform")
         case .unsupported:
-            throw SSHSetupFailure.permanent("SSH integration requires Linux or macOS on ARM64 or x86-64.", reason: "unsupported host platform")
+            throw SSHSetupFailure.permanent("SSH integration requires Linux on ARM64 or x86-64, or macOS on Apple silicon.", reason: "unsupported host platform")
+        }
+        var runtimeDirectory: String?
+        if root == .runtimeDirectory {
+            runtimeDirectory = SSHBootstrapScript.runtimeDirectory(said)
+            guard runtimeDirectory != nil else { throw SSHSetupFailure.cannotRun(.home, runtimeDirectory: nil) }
+            guard runtimeAllowed else { throw SSHSetupFailure.hooksNeedHome }
         }
         // The bundled file is read like any other: its identity is observed (a replay answers the recorded one, whatever
         // the build bundles now), its bytes are read only to upload them.
@@ -74,31 +159,46 @@ enum SSHBootstrap {
             throw SSHSetupFailure.permanent("SSH helper is missing or invalid.", reason: "the bundled helper is missing")
         }
         let digest = payload.digest
-        let relativePath = SSHBootstrapScript.relativePath(digest: digest)
-        let preamble = cachePreamble(digest: digest)
+        let published = SSHBootstrapScript.relativePath(digest: digest, root: root)
+        let preamble = SSHBootstrapScript.cachePreamble(digest: digest, root: root)
         let verify = SSHBootstrapScript.verify(size: payload.size, digest: digest)
-        let existing = try await run(preamble + "\n" + verify, Data())
+        let check = SSHBootstrapScript.cacheCheck(size: payload.size, digest: digest, root: root)
+        let existing = try await run(check, Data())
         if existing.status != 0 {
             // A cache that is unsafe or cannot be made says why; a helper that is only missing (or another version) does
             // not, and is uploaded.
             if let reason = SSHBootstrapScript.reason(String(decoding: existing.output, as: UTF8.self)) {
                 throw SSHSetupFailure("Could not use the SSH helper cache.", reason: reason, given: reason)
             }
-            let staging = "upload-" + System.uuid().uuidString.lowercased()
-            let upload = SSHBootstrapScript.upload(digest: digest, size: payload.size, staging: staging)
+            if SSHBootstrapScript.blocked(String(decoding: existing.output, as: UTF8.self)) { throw SSHSetupFailure.cannotRun(root, runtimeDirectory: runtimeDirectory) }
+            // The id site keeps this function's former name: recordings know their staging folders by it.
+            let staging = "upload-" + System.uuid(#fileID, "install(resource:resources:run:)").uuidString.lowercased()
+            let upload = SSHBootstrapScript.upload(digest: digest, size: payload.size, staging: staging, root: root)
             let installed = try await run(upload, try System.read(url))
             guard installed.status == 0 else {
                 let given = SSHBootstrapScript.reason(String(decoding: installed.output, as: UTF8.self))
+                // How a folder that cannot run programs answers once the file is in place (`test -x` asks the kernel).
+                if given == "installed helper does not verify",
+                   SSHBootstrapScript.blocked(String(decoding: try await run(check, Data()).output, as: UTF8.self)) {
+                    throw SSHSetupFailure.cannotRun(root, runtimeDirectory: runtimeDirectory)
+                }
                 throw SSHSetupFailure("Could not install the SSH helper in the remote cache.",
                                       reason: given ?? "the upload failed (\(installed.status))", given: given)
             }
         }
-        return (relativePath, preamble, verify)
+        let path = runtimeDirectory.map { $0 + "/" + published } ?? published
+        return Installed(root: root, published: published, path: path, runtimeDirectory: runtimeDirectory,
+                         preamble: preamble, verify: verify)
     }
 
     /// The helper runs over SSH: upload it, release the waiting login (which execs `<helper> login …`),
     /// then reach that login's bus with `connect`; the bus exists only once the login runs.
-    static func startHelper(master: SSHMaster, resources: URL, sessionID: String, publish: Bool,
+    ///
+    /// A home folder that cannot run programs (the install's check, or a helper that exits with 126 before it greets)
+    /// moves the helper once to `$XDG_RUNTIME_DIR/dispatch/bin/versions/<sha256>/` when `runtimeAllowed` (a grant without
+    /// agent hooks: those, and the login shell's typed launch functions, run `~/.dispatch/bin/dispatch-helper`) and the
+    /// runtime folder is usable; the login then runs it from there. Returns the helper's host path (`hostPath`).
+    static func startHelper(master: SSHMaster, resources: URL, sessionID: String, publish: Bool, runtimeAllowed: Bool = false,
                             prepare: (@MainActor (String, HelperSession.Info) throws -> Void)? = nil) async throws
         -> (relativePath: String, session: HelperSession) {
         guard validSessionID(sessionID),
@@ -124,29 +224,59 @@ enum SSHBootstrap {
             let seconds = Double(remaining.components.seconds) + Double(remaining.components.attoseconds) / 1e18
             return try await SSHCommand.run(executable: master.executable, arguments: master.arguments(command: command), input: input, timeout: seconds)
         }
-        let (relativePath, preamble, verify) = try await attempt("install") {
-            try await install(resource: "helper", resources: resources, run: run)
+        func install(_ root: SSHBootstrapScript.Root) async throws -> Installed {
+            try await Self.install(resource: "helper", resources: resources, root: root, runtimeAllowed: runtimeAllowed, run: run)
         }
-        /// A helper process over the master, started afresh for each attempt.
+        // Once the home folder proved unable to run programs, another attempt goes to the runtime folder directly.
+        var homeBlocked = false
+        var installed = try await attempt("install") {
+            if !homeBlocked {
+                do { return try await install(.home) }
+                catch let failure as SSHSetupFailure where failure.exitStatus == 126 { homeBlocked = true }
+            }
+            return try await install(.runtimeDirectory)
+        }
+        /// A helper process over the master, started afresh for each attempt. One that ends before it greets says why
+        /// (`exited`): its status and stderr, read only then.
         func helper(_ name: String, _ arguments: String) async throws -> HelperSession {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: master.executable)
-            process.arguments = master.arguments(command: preamble + "\n" + verify + " || exit 1\n" + captureExport + "exec ./dispatch-helper " + arguments)
             let remaining = ContinuousClock.now.duration(to: deadline)
             guard remaining > .zero else { throw SSHSetupFailure.permanent("SSH integration setup timed out.", reason: "setup timed out") }
-            return try await SSHTimeout.run(remaining, name) { try await HelperSession(process: process) }
+            let process = Process(), errors = Pipe()
+            process.executableURL = URL(fileURLWithPath: master.executable)
+            process.arguments = master.arguments(command: installed.command(arguments))
+            process.standardError = errors
+            let collected = SSHHelperErrors(errors.fileHandleForReading)
+            do {
+                let session = try await SSHTimeout.run(remaining, name) { try await HelperSession(process: process) }
+                try? errors.fileHandleForWriting.close()
+                return session
+            } catch {
+                try? errors.fileHandleForWriting.close()
+                guard let end = await exited(error, process: process, errors: collected, name: name) else { throw error }
+                // At home the runtime folder is not known yet (`launch` asks next): no word about it here.
+                throw SSHSetupFailure.exited(status: end.status, stderr: end.stderr, root: installed.root,
+                                             runtimeDirectory: installed.runtimeDirectory ?? "")
+            }
+        }
+        /// `helper`, once more from the runtime folder after a 126 at home.
+        func launch(_ name: String, _ arguments: String) async throws -> HelperSession {
+            do { return try await helper(name, arguments) }
+            catch let failure as SSHSetupFailure where failure.exitStatus == 126 && installed.root == .home {
+                installed = try await install(.runtimeDirectory)
+                return try await helper(name, arguments)
+            }
         }
         // Verify the greeting before releasing the login: after its user command starts, a bad
         // helper channel cannot safely fall back by starting that command again.
         if publish || prepare != nil {
-            let probe = try await attempt("probe") { try await helper("probe", "--remote --capabilities '' --stdio") }
+            let probe = try await attempt("probe") { try await launch("probe", "--remote --capabilities '' --stdio") }
             defer { probe.close() }
             try Task.checkCancellation()
-            try await prepare?(relativePath, probe.info)
+            try await prepare?(installed.path, probe.info)
         }
         if publish {
             try await attempt("publish") {
-                let result = try await run(self.publish(sessionID: sessionID, relativePath: relativePath))
+                let result = try await run(self.publish(sessionID: sessionID, relativePath: installed.published))
                 guard result.status == 0 else {
                     let given = SSHBootstrapScript.reason(String(decoding: result.output, as: UTF8.self))
                     throw SSHSetupFailure("Could not finish setting up the remote shell.",
@@ -154,8 +284,30 @@ enum SSHBootstrap {
                 }
             }
         }
-        let session = try await attempt("connect") { try await helper("session", "connect --session '" + sessionID + "'") }
-        return (relativePath, session)
+        let session = try await attempt("connect") { try await launch("session", "connect --session '" + sessionID + "'") }
+        return (installed.path, session)
+    }
+
+    /// The end of a helper whose `hello` failed because it closed its stdout (`connection_closed`): its exit status and
+    /// the first 64 KiB of its stderr, observed (only on this path: a greeting that succeeded reads neither). Nil (the
+    /// failure stays what it was, retried as before) when it gave no status, when ssh itself failed (255), or in the
+    /// replay of a recording made before this was observed.
+    private static func exited(_ error: Error, process: Process, errors: SSHHelperErrors, name: String) async
+        -> (status: Int32, stderr: String)? {
+        guard (error as? HelperFailure)?.code == "connection_closed" else { return nil }
+        struct End: Codable { let status: Int32?; let stderr: String }
+        // Its stdout closed: it is ending (HelperSession closed its stdin and terminates it a second later). Waited for
+        // on a thread of its own, never the concurrency pool's; a process replay never started has nothing to wait for.
+        let live: End = process.processIdentifier == 0 ? End(status: nil, stderr: "") : await withCheckedContinuation { done in
+            DispatchQueue.global(qos: .utility).async {
+                let deadline = Date().addingTimeInterval(3)
+                while process.isRunning, Date() < deadline { usleep(10_000) }
+                let status: Int32? = process.isRunning || process.terminationReason != .exit ? nil : process.terminationStatus
+                done.resume(returning: End(status: status, stderr: errors.text(waiting: 1)))
+            }
+        }
+        guard let end = try? System.observe("helper.end", name, { live }), let status = end.status, status != 255 else { return nil }
+        return (status, end.stderr)
     }
 
     /// Test runs (DISPATCH_CAPTURE set for this app) trace remote helpers too: the remote login and
@@ -367,3 +519,46 @@ enum SSHTimeout {
     }
 }
 
+
+/// A remote helper's stderr (its ssh's): passed on to the app's own stderr as before, its first 64 KiB kept for the
+/// reason a helper that ended before it greeted gives. Read on a thread of its own for the helper's whole life (a helper
+/// blocked on a full stderr pipe would stall). The app's stderr may be a pipe nobody reads any more (a launch from a
+/// script that ended): writes to it never raise SIGPIPE, and one that fails ends the pass-through.
+final class SSHHelperErrors: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+    private let finished = DispatchSemaphore(value: 0)
+    private static let quiet: Void = { _ = fcntl(STDERR_FILENO, F_SETNOSIGPIPE, 1) }()
+
+    init(_ handle: FileHandle) {
+        let thread = Thread { [self] in
+            _ = Self.quiet
+            var passing = true
+            while let chunk = try? handle.read(upToCount: 65_536), !chunk.isEmpty {
+                if passing {
+                    passing = chunk.withUnsafeBytes { bytes in
+                        var offset = 0
+                        while offset < bytes.count {
+                            let written = Darwin.write(STDERR_FILENO, bytes.baseAddress! + offset, bytes.count - offset)
+                            if written < 0, errno == EINTR { continue }
+                            guard written > 0 else { return false }
+                            offset += written
+                        }
+                        return true
+                    }
+                }
+                lock.withLock { if data.count < 65_536 { data.append(chunk.prefix(65_536 - data.count)) } }
+            }
+            try? handle.close()
+            finished.signal()
+        }
+        thread.name = "SSH helper stderr"
+        thread.start()
+    }
+
+    /// What it kept, once its stream ended (or `seconds` passed).
+    func text(waiting seconds: Double) -> String {
+        _ = finished.wait(timeout: .now() + seconds)
+        return lock.withLock { String(decoding: data, as: UTF8.self) }
+    }
+}

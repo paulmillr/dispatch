@@ -132,5 +132,7 @@ final class CodeSyntaxTests: XCTestCase {
         XCTAssertEqual(lines.count, 4)
         XCTAssertEqual(lines[1].runs.first?.foregroundColor, CodeSyntax.Role.string.color, "Inside the string, `let` is not a keyword")
         XCTAssertEqual(lines[3].runs.first?.foregroundColor, CodeSyntax.Role.keyword.color)
+        XCTAssertEqual(String(CodeSyntax.lines("let safe = 1 // \u{202E} hidden", language: "swift")[0].characters),
+                       "let safe = 1 // ⟦RLO⟧ hidden")
     }
 }

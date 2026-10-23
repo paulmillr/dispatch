@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Hosts: how SSH connections behave, then this Mac's agent hooks and each known
-/// remote machine with one line per login showing what its helper may do. A login
+/// Hosts: this Mac's agent hooks and each known remote machine, with one line per
+/// login showing what its helper may do. A login
 /// is keyed by account and SSH configuration, so one machine can have several;
 /// logins not yet matched to a machine this launch are listed at the end. Clicking
 /// a row edits its choices in place.
@@ -11,9 +11,6 @@ struct SSHHostsSettings: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let workspace: Workspace
     let permissions: SSHIntegrationPermissions
-    var policy: Binding<NewHostPolicy> = .constant(.ask)
-    var clipboard: Binding<Bool> = .constant(false)
-    var reconnect: Binding<Bool> = .constant(false)
     var resetting = false
     var forgetAll: () -> Void = {}
     var logins: (HostID) -> [String] = { host in TerminalRuntime.shared.ssh.integrationEntries(for: host).map(\.id) }
@@ -47,26 +44,7 @@ struct SSHHostsSettings: View {
         let grouped = hosts.map { host in (host, logins(host.id).compactMap { permissions.entries[$0] }) }
         let matched = Set(grouped.flatMap { $0.1.map(\.id) })
         let other = entries.filter { !matched.contains($0.id) }
-        VStack(spacing: 8) {
-            connections
-            hostList(grouped: grouped, other: other)
-        }
-    }
-
-    /// Defaults for every SSH connection, new hosts included.
-    private var connections: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text("Connections").fontWeight(.semibold).foregroundStyle(SettingsControlStyle.selectedText)
-                .padding(.horizontal, 14).padding(.vertical, 11)
-            separator
-            policyRow
-            separator.padding(.horizontal, 14)
-            reconnectRow
-            separator.padding(.horizontal, 14)
-            clipboardRow
-        }.background(Chrome.sidebar, in: RoundedRectangle(cornerRadius: 8))
-            .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(Chrome.border) }
-            .accessibilityIdentifier("settings-connections")
+        hostList(grouped: grouped, other: other)
     }
 
     private func hostList(grouped: [(HostRecord, [Entry])], other: [Entry]) -> some View {
@@ -104,75 +82,6 @@ struct SSHHostsSettings: View {
     }
 
     private var separator: some View { Rectangle().fill(Chrome.border).frame(height: 1) }
-
-    private var policyRow: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 12) {
-                Text("On new hosts")
-                Spacer(minLength: 0)
-                Picker("On new hosts", selection: policy) {
-                    ForEach(NewHostPolicy.allCases, id: \.self) { Text($0.label).tag($0) }
-                }.labelsHidden().fixedSize()
-                    .accessibilityIdentifier("settings-new-host-policy")
-            }
-            Text(policyDetail(policy.wrappedValue))
-                .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
-                .fixedSize(horizontal: false, vertical: true)
-                .help(policyHelp(policy.wrappedValue))
-        }.padding(.horizontal, 14).padding(.vertical, 10)
-    }
-
-    private var clipboardRow: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 12) {
-                Text("Remote programs can copy")
-                Spacer(minLength: 0)
-                Toggle("Remote programs can copy", isOn: clipboard).labelsHidden()
-                    .toggleStyle(SettingsSwitchStyle(title: "Remote programs can copy", compact: true))
-                    .accessibilityIdentifier("settings-remote-clipboard")
-            }
-            Text("To your clipboard, via OSC 52 · helper hosts only")
-                .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
-                .fixedSize(horizontal: false, vertical: true)
-        }.padding(.horizontal, 14).padding(.vertical, 10)
-            .help("Controls OSC 52 and other remote clipboard writes on helper hosts. Local and plain SSH always allow them.")
-    }
-
-    private var reconnectRow: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 12) {
-                Text("Reconnect automatically")
-                Spacer(minLength: 0)
-                Toggle("Reconnect automatically", isOn: reconnect).labelsHidden()
-                    .toggleStyle(SettingsSwitchStyle(title: "Reconnect automatically", compact: true))
-                    .accessibilityIdentifier("settings-ssh-auto-reconnect")
-            }
-            Text("After a drop, with your keys or SSH agent")
-                .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
-                .fixedSize(horizontal: false, vertical: true)
-        }.padding(.horizontal, 14).padding(.vertical, 10)
-            .help("For connections with the helper, retrying after sleep or a network change. Hosts that ask for a password, connections you disconnect, and hosts reopened at launch wait for Reconnect.")
-    }
-
-    /// One line per policy; only the policies that upload a helper name where it goes.
-    private func policyDetail(_ policy: NewHostPolicy) -> String {
-        switch policy {
-        case .ask: "Ask which helper features to allow · helper in ~/.dispatch"
-        case .full: "Install the helper in ~/.dispatch without asking"
-        case .plain: "No helper: no stats, files or remote chat"
-        }
-    }
-
-    /// The rest: what Full features lets the helper see, and the uploaded helper's exact place (SSHBootstrap,
-    /// docs/security.md).
-    private func policyHelp(_ policy: NewHostPolicy) -> String {
-        let location = "The helper is kept at ~/.dispatch/bin/versions/<hash>/dispatch-helper."
-        switch policy {
-        case .ask: return location
-        case .full: return "The helper can see processes, files you can read, agent transcripts and Git. " + location
-        case .plain: return "Hosts connect over plain SSH."
-        }
-    }
 
     private func address(_ entry: SSHIntegrationPermissions.Entry) -> String {
         let destination = entry.scope.destination.replacingOccurrences(of: "ssh://", with: "")
@@ -299,11 +208,11 @@ struct SSHHostsSettings: View {
                 let draft = currentDraft(for: entry)
                 options(entry, draft)
                 reconnectNotice(entry, draft)
-                Text("Removals apply now; additions on the next connection.")
+                Text("removals apply now; additions on the next connection.")
                     .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
-                Text("Follows “On new hosts” on the next connection.")
+                Text("follows “On new hosts” on the next connection.")
                     .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -510,6 +419,7 @@ struct SSHHostsSettings: View {
                     Text("No way to reach \(name) is known. Run \(DispatchRemoval.command) there yourself.")
                 } else if let preview = removal?.preview {
                     if preview.absent { Text("Nothing: Dispatch isn’t installed there.") }
+                    else if preview.cannotRun { Text(DispatchRemoval.cannotRunAdvice) }
                     else if preview.removed { Text(preview.output.isEmpty ? "Nothing to remove." : preview.output) }
                     else {
                         Text("Couldn’t check (\(preview.output.isEmpty ? "status \(preview.status)" : preview.output)). "
@@ -582,27 +492,13 @@ struct SSHHostsSettings: View {
         let chat = TerminalRuntime.shared.chat
         return VStack(alignment: .leading, spacing: 10) {
             VStack(spacing: 0) {
-                option("Agent hooks", detail: "chat hooks · attention") {
-                    HStack(spacing: 4) {
-                        ForEach(launches, id: \.key) { launch in
-                            toggleChip(launch.key, on: chat.localHooksAllowed(launch.key), identifier: "settings-local-hooks-\(launch.key)") {
-                                chat.setLocalHooks(launch.key, allowed: !chat.localHooksAllowed(launch.key))
-                            }
-                        }
-                    }
-                }
-                ForEach(launches.filter { chat.localHooksAllowed($0.key) }, id: \.key) { launch in
-                    separator
-                    option(launch.label, detail: localStatus(launch), indented: true) {
-                        if needsInstall(launch.key) {
-                            Button("Install") { chat.setHelperIntegration(launch.key, enabled: true) }
-                                .accessibilityIdentifier("settings-install-\(launch.key)")
-                        }
-                    }.accessibilityIdentifier("settings-local-agent-\(launch.key)")
+                ForEach(launches, id: \.key) { launch in
+                    if launch.key != launches.first?.key { separator }
+                    localAgentRow(launch)
                 }
             }.background(Chrome.window, in: RoundedRectangle(cornerRadius: 7))
                 .overlay { RoundedRectangle(cornerRadius: 7).strokeBorder(SettingsControlStyle.border) }
-            Text("Off, Dispatch ignores the agent’s hooks here and leaves its settings as they are. Agents turned off in Chat mode stay off on every machine.")
+            Text("A switched-off agent’s hooks are ignored here; its settings are left alone.")
                 .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
                 .fixedSize(horizontal: false, vertical: true)
             if removal?.id == Self.localID {
@@ -624,19 +520,43 @@ struct SSHHostsSettings: View {
             .accessibilityIdentifier("settings-host-editor-\(Self.localID)")
     }
 
-    /// One line for every agent: an agent whose hooks this Mac uses with how they stand, the rest struck through.
+    /// One agent on one line: its name, how its hooks stand here, Install when they need it, and whether this Mac
+    /// uses them. An agent off in Chat mode is off everywhere, so its switch rests.
+    private func localAgentRow(_ launch: HelperClient.Launch) -> some View {
+        let chat = TerminalRuntime.shared.chat
+        let inChat = chat.enabled && !chat.disabledIntegrations.contains(launch.key)
+        return HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(launch.label).fixedSize()
+            Text(localStatus(launch)).font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if needsInstall(launch.key) {
+                Button("Install") { chat.setHelperIntegration(launch.key, enabled: true) }
+                    .accessibilityIdentifier("settings-install-\(launch.key)")
+            }
+            switchControl(launch.label, isOn: chat.localHooksAllowed(launch.key), identifier: "settings-local-hooks-\(launch.key)") {
+                chat.setLocalHooks(launch.key, allowed: !chat.localHooksAllowed(launch.key))
+            }.disabled(!inChat)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 7)
+        .opacity(inChat ? 1 : 0.5)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("settings-local-agent-\(launch.key)")
+    }
+
+    /// The closed row's line: how many agents are ready, which need a step, and which are off here.
     private func localSummary(_ launches: [HelperClient.Launch]) -> Text {
-        guard TerminalRuntime.shared.chat.enabled else {
-            return Text("Chat mode is off").foregroundColor(SettingsControlStyle.detail)
-        }
-        return launches.enumerated().reduce(Text("")) { line, item in
-            let (index, launch) = item
-            let separator = Text(index == 0 ? "" : " · ").foregroundColor(SettingsControlStyle.detail)
-            let entry = localOn(launch.key)
-                ? Text(launch.label).foregroundColor(Chrome.ink) + Text(" " + localStatus(launch)).foregroundColor(SettingsControlStyle.detail)
-                : Text(launch.label).strikethrough(color: SettingsControlStyle.detail.opacity(0.6)).foregroundColor(SettingsControlStyle.detail)
-            return line + separator + entry
-        }
+        let chat = TerminalRuntime.shared.chat
+        guard chat.enabled else { return Text("Chat mode is off").foregroundColor(SettingsControlStyle.detail) }
+        let on = launches.filter { localOn($0.key) }
+        let ready = on.filter { chat.hookStatus($0.key) == .ready }
+        let pending = on.filter { chat.hookStatus($0.key) != .ready }.map(\.label)
+        let off = launches.filter { !localOn($0.key) }.map(\.label)
+        var parts: [String] = []
+        if !ready.isEmpty { parts.append("\(ready.count) ready") }
+        if !pending.isEmpty { parts.append(pending.joined(separator: ", ") + (pending.count == 1 ? " needs setup" : " need setup")) }
+        if !off.isEmpty { parts.append(off.joined(separator: ", ") + " off") }
+        return Text(parts.joined(separator: " · ")).foregroundColor(SettingsControlStyle.detail)
     }
 
     private static let localID = "local"

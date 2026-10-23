@@ -15,7 +15,7 @@ extension TerminalView {
         // AppKit can interpret Control shortcuts as text commands before
         // keyDown. The focused terminal must send them to the terminal directly.
         // Command/Option shortcuts and active IME composition keep their
-        // normal responder-chain handling, as do the app's Settings › Keys digit chords and ⌃⇥.
+        // normal responder-chain handling, as do the app's Settings › Keyboard digit chords and ⌃⇥.
         let flags = event.modifierFlags
         // Prefix keys complete in keyDown; a chord the app takes here instead cancels a waiting prefix.
         if event.type == .keyDown, window?.firstResponder === self,
@@ -180,12 +180,21 @@ extension TerminalView {
         _ = surface.mouseButton(.release, .middle, mods: mouseModifiers(event))
     }
 
-    override func mouseMoved(with event: NSEvent) { reportMousePosition(event) }
+    /// Under test the physical pointer is not the test's: resting or moving over a terminal it would type mouse
+    /// reports into programs that track every motion (Pi's TUI), different on every run and machine, so a recording
+    /// could never replay. Tests drive terminals with keys, clicks and drags; motion and entry come only from the user.
+    private var followsPointer: Bool { !System.testing }
+
+    override func mouseMoved(with event: NSEvent) {
+        guard followsPointer else { return }
+        reportMousePosition(event)
+    }
     override func mouseDragged(with event: NSEvent) { reportMousePosition(event) }
     override func rightMouseDragged(with event: NSEvent) { reportMousePosition(event) }
     override func otherMouseDragged(with event: NSEvent) { reportMousePosition(event) }
 
     override func mouseEntered(with event: NSEvent) {
+        guard followsPointer else { return }
         reportMousePosition(event)
     }
 

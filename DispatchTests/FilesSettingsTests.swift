@@ -4,40 +4,31 @@ import XCTest
 final class FilesSettingsTests: XCTestCase {
     func testSettingsWithoutFilesFieldsTakeTheDefaults() throws {
         let decoded = try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8))
+        XCTAssertTrue(decoded.filesEnabled, "Files is on by default")
         XCTAssertTrue(decoded.filesDragAndDrop, "Drag and drop is on by default")
-        XCTAssertTrue(decoded.filesFollowShell)
         XCTAssertTrue(decoded.filesShowHidden, "Hidden files show until hidden")
-        XCTAssertEqual(decoded.filesOpenWith, .editorInTab)
-        XCTAssertTrue(decoded.filesAskBeforeReplacing)
         XCTAssertEqual(decoded, Preferences())
     }
 
     func testChangedFilesSettingsRoundTrip() throws {
         var changed = Preferences()
+        changed.filesEnabled = false
         changed.filesDragAndDrop = false
-        changed.filesFollowShell = false
         changed.filesShowHidden = false
-        changed.filesAskBeforeReplacing = false
         let decoded = try JSONDecoder().decode(Preferences.self, from: JSONEncoder().encode(changed))
         XCTAssertEqual(decoded, changed)
+        XCTAssertFalse(decoded.filesEnabled)
         XCTAssertFalse(decoded.filesDragAndDrop)
-        XCTAssertFalse(decoded.filesFollowShell)
         XCTAssertFalse(decoded.filesShowHidden)
-        XCTAssertFalse(decoded.filesAskBeforeReplacing)
-        for choice in FilesOpenWith.allCases {
-            var preferences = changed
-            preferences.filesOpenWith = choice
-            XCTAssertEqual(try JSONDecoder().decode(Preferences.self, from: JSONEncoder().encode(preferences)), preferences)
-        }
-        XCTAssertEqual(FilesOpenWith.editorInTab.title, "$EDITOR in this tab")
     }
 
-    func testUnknownOpenWithChoiceKeepsTheOtherSettings() throws {
-        let json = #"{"filesOpenWith":"unknownEditor","filesShowHiddenFiles":false,"filesDragAndDrop":false,"fontFamily":"0xProto"}"#
-        let decoded = try JSONDecoder().decode(Preferences.self, from: Data(json.utf8))
-        XCTAssertEqual(decoded.filesOpenWith, .editorInTab)
-        XCTAssertFalse(decoded.filesShowHidden)
-        XCTAssertFalse(decoded.filesDragAndDrop)
-        XCTAssertEqual(decoded.fontFamily, "0xProto")
+    @MainActor func testDragAndDropIsOffWithFiles() {
+        let runtime = TerminalRuntime.shared, preferences = runtime.preferences
+        defer { runtime.preferences = preferences }
+        runtime.preferences.filesEnabled = true
+        runtime.preferences.filesDragAndDrop = true
+        XCTAssertTrue(FilesTransferSettings.enabled())
+        runtime.preferences.filesEnabled = false
+        XCTAssertFalse(FilesTransferSettings.enabled(), "the card's options are off with the card")
     }
 }

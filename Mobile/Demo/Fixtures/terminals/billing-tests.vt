@@ -1,0 +1,40 @@
+[38;5;114malex@mba2[0m [38;5;75m~/src/billing[0m [2m%[0m pnpm vitest run
+
+ [46;30m RUN [0m [36mv2.1.4[0m [38;5;244m~/src/billing[0m
+
+ [32m✓[0m billing/invoices.test.ts [38;5;244m(5)[0m [33m233ms[0m
+ [32m✓[0m billing/subscriptions.test.ts [38;5;244m(9)[0m [33m301ms[0m
+ [31m❯[0m billing/webhooks.test.ts [38;5;244m(6 | [31m1 failed[38;5;244m)[0m
+   [31m×[0m handles a retried event once
+     [31m→ expected 2 to be 1[0m
+ [32m✓[0m lib/money.test.ts [38;5;244m(12)[0m [33m21ms[0m
+
+[31m⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯[0m
+
+[41;97m FAIL [0m billing/webhooks.test.ts
+  [38;5;244m>[0m webhooks [38;5;244m>[0m handles a retried event once
+[31mAssertionError[0m: expected 2 to be 1
+
+ [36m❯[0m webhooks.test.ts:[33m48:31[0m
+   46| await post(event, { attempt: 1 });
+   47| await post(event, { attempt: 2 });
+   48| expect(handled).toHaveBeenCalledTimes(1);
+     |                 [31m^[0m
+
+ Test Files  [91m1 failed[0m [38;5;244m|[0m [92m3 passed[0m [38;5;244m(4)[0m
+      Tests  [91m1 failed[0m [38;5;244m|[0m [92m31 passed[0m [38;5;244m(32)[0m
+   Duration  [1m1.84s[0m
+[38;5;114malex@mba2[0m [38;5;75m~/src/billing[0m [2m%[0m pnpm vitest run
+
+ [46;30m RUN [0m [36mv2.1.4[0m [38;5;244m~/src/billing[0m
+
+ [32m✓[0m billing/invoices.test.ts [38;5;244m(5)[0m [33m229ms[0m
+ [32m✓[0m billing/subscriptions.test.ts [38;5;244m(9)[0m [33m296ms[0m
+ [32m✓[0m billing/webhooks.test.ts [38;5;244m(6)[0m [33m412ms[0m
+ [32m✓[0m billing/idempotent.test.ts [38;5;244m(4)[0m [33m187ms[0m
+ [32m✓[0m lib/money.test.ts [38;5;244m(12)[0m [33m19ms[0m
+
+ Test Files  [92m5 passed[0m [38;5;244m(5)[0m
+      Tests  [92m36 passed[0m [38;5;244m(36)[0m
+   Duration  [1m1.92s[0m
+[38;5;114malex@mba2[0m [38;5;75m~/src/billing[0m [2m%[0m 

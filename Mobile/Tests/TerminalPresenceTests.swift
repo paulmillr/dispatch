@@ -55,6 +55,23 @@ final class TerminalPresenceTests: XCTestCase {
         XCTAssertNil(inbox.take(limit: 4))
     }
 
+    /// Batches are taken by moving a read position, the taken bytes dropped only once they are half the buffer: what
+    /// comes out is every byte once, in order, while appends and takes interleave across compactions.
+    func testInboxTakesInOrderAcrossCompactions() {
+        let inbox = TerminalInbox()
+        var sent = Data(), received = Data()
+        for round in 0..<40 {
+            let chunk = Data((0..<(97 * (round % 7 + 1))).map { UInt8(truncatingIfNeeded: $0 &+ round) })
+            sent.append(chunk)
+            _ = inbox.append(chunk)
+            if round % 3 != 0, let batch = inbox.take(limit: 150) { received.append(batch) }
+            XCTAssertEqual(inbox.count, sent.count - received.count)
+        }
+        while let batch = inbox.take(limit: 150) { received.append(batch) }
+        XCTAssertEqual(received, sent)
+        XCTAssertEqual(inbox.count, 0)
+    }
+
     func testInboxRejectsAnEntireAppendAtItsByteLimit() {
         let inbox = TerminalInbox(limit: 5)
         XCTAssertEqual(inbox.append(Data("abc".utf8)), .signal)
@@ -74,6 +91,93 @@ final class TerminalPresenceTests: XCTestCase {
         XCTAssertEqual(UIPasteboard.general.string, "kept")
         XCTAssertEqual(presence.configuration.config().clipboardWrite.rawValue, "deny")
         presence.stop()
+    }
+
+    /// A plain shell's presence (`shell:<uuid>`) scrolls its own history from the first line (the server-history UI
+    /// never shows); its PTY opens at the session's grid when the presence attaches and later grids become
+    /// window-changes; closing the presence closes the shell.
+    func testAPlainShellPresenceOwnsItsScrollbackAndSizesItsPTY() async throws {
+        let opener = ScriptedShellOpener()
+        let presences = TerminalPresences()
+        let key = TerminalPresences.Key(host: UUID(), node: "shell:\(UUID().uuidString)")
+        let presence = presences.open(key, feed: PlainShellFeed(opener: opener))
+        XCTAssertEqual(presence.scrollback, .client)
+        XCTAssertEqual(presence.scroll.server, .appOwned, "Local scrolling before any answer")
+        XCTAssertTrue(opener.shells.isEmpty, "Nothing opened before anyone uses it")
+        presences.retain(key)
+        try await TestSupport.eventually { !opener.shells.isEmpty }
+        let shell = try XCTUnwrap(opener.shells.first)
+        let attached = presence.session.currentSize
+        XCTAssertEqual(shell.size, .init(columns: attached.columns, rows: attached.rows), "The PTY opens at the session's grid")
+        XCTAssertEqual(shell.term, PlainShellFeed.term)
+        shell.emit("$ ")
+        try await TestSupport.eventually { presence.session.frameStats().bytesFed == 2 }
+        presence.session.setGrid(columns: attached.columns + 10, rows: attached.rows + 5)
+        let resized = presence.session.currentSize
+        try await TestSupport.eventually { !shell.resizes.isEmpty }
+        XCTAssertEqual(shell.resizes, [.init(columns: resized.columns, rows: resized.rows)], "A later grid is a window-change")
+        XCTAssertTrue(presences.open(key, feed: PlainShellFeed(opener: opener)) === presence, "Views asking again keep the shell")
+        XCTAssertEqual(opener.shells.count, 1)
+        presences.close(key)
+        try await TestSupport.eventually { shell.isClosed }
+    }
+
+    /// A plain shell's end shows as the ended card and is never restarted: views ask for their presence on every update.
+    func testAnEndedPlainShellIsNotReopened() async throws {
+        let opener = ScriptedShellOpener()
+        let presences = TerminalPresences()
+        let key = TerminalPresences.Key(host: UUID(), node: "shell:\(UUID().uuidString)")
+        let presence = presences.open(key, feed: PlainShellFeed(opener: opener))
+        presences.retain(key)
+        try await TestSupport.eventually { presence.attached && !opener.shells.isEmpty }
+        opener.shells[0].end(.status(130))
+        try await TestSupport.eventually { presence.ended != nil }
+        XCTAssertEqual(presence.ended, .exited(130))
+        for _ in 0..<3 { XCTAssertTrue(presences.open(key, feed: PlainShellFeed(opener: opener)) === presence) }
+        presences.release(key)
+        presences.retain(key)
+        XCTAssertEqual(opener.shells.count, 1, "No second shell")
+        presences.close(key)
+    }
+
+    /// OSC 52 writes reach the pasteboard only from a feed that allows them (a plain shell): its surface is configured
+    /// `clipboard-write = allow`, a helper-like feed keeps `deny` and its program's write goes nowhere. A program's
+    /// read is answered empty either way. Asserted through the presence's `pasteboard` sink.
+    func testClipboardWritesReachThePasteboardOnlyFromAPlainShell() async throws {
+        let write = "\u{1B}]52;c;\(Data("copied on the host".utf8).base64EncodedString())\u{7}"
+        var copied: [String] = []
+
+        let opener = ScriptedShellOpener()
+        let plain = TerminalPresence(feed: PlainShellFeed(opener: opener), configuration: TerminalConfiguration())
+        plain.pasteboard = { copied.append($0) }
+        XCTAssertTrue(plain.configuration.clipboardWrite)
+        XCTAssertEqual(plain.configuration.config().clipboardWrite.rawValue, "allow")
+        var bigger = plain.configuration
+        bigger.fontSize += 2
+        bigger.clipboardWrite = false
+        plain.configure(bigger)
+        XCTAssertTrue(plain.configuration.clipboardWrite, "A new font size keeps the feed's clipboard choice")
+        plain.start()
+        try await TestSupport.eventually { !opener.shells.isEmpty }
+        let shell = opener.shells[0]
+        shell.emit(write)
+        try await TestSupport.eventually { !copied.isEmpty }
+        XCTAssertEqual(copied, ["copied on the host"])
+        shell.emit("\u{1B}]52;c;?\u{7}")
+        try await TestSupport.eventually { !shell.written.isEmpty }
+        XCTAssertEqual(String(decoding: shell.written, as: UTF8.self), "\u{1B}]52;c;\u{1B}\\", "A read gets an empty answer")
+        plain.stop()
+
+        let helperLike = ScriptedTerminalFeed(output: Data(write.utf8) + Data("done".utf8))
+        let denied = TerminalPresence(feed: helperLike, configuration: TerminalConfiguration())
+        denied.pasteboard = { copied.append($0) }
+        XCTAssertFalse(denied.configuration.clipboardWrite)
+        XCTAssertEqual(denied.configuration.config().clipboardWrite.rawValue, "deny")
+        denied.start()
+        try await TestSupport.eventually { denied.session.locked { String(decoding: denied.session.surface.readText(.viewport), as: UTF8.self) } == "done" }
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(copied, ["copied on the host"], "Nothing from a feed without clipboard writes")
+        denied.stop()
     }
 
     func testScrollbackFollowsTheBackendKind() {
@@ -121,6 +225,57 @@ final class TerminalPresenceTests: XCTestCase {
         XCTAssertNil(presence.ended)
         XCTAssertTrue(presence.attached)
         presence.stop()
+    }
+
+    /// tmux keeps one size per window: while the server holds another grid than the view's (another client, a split
+    /// window) for longer than a resize takes, the screen follows the server's, as the Mac's `tmuxGrid`; it goes back
+    /// once they agree. A size right after the phone's own resize is the old one and never shows.
+    func testTheScreenFollowsTheServersGridOnlyOnceItHolds() async throws {
+        let peer = ScriptedHelper.terminal()
+        defer { peer.close() }
+        let presences = TerminalPresences()
+        let key = TerminalPresences.Key(host: UUID(), node: "app:%7")
+        let presence = presences.open(key, feed: HelperTerminalFeed(client: peer.client, terminal: 7), terminal: 7,
+                                      client: peer.client, scrollback: .client)
+        presences.retain(key)
+        _ = try await peer.wait(for: "terminals.attach")
+        presence.offer(TerminalFeedSize(columns: 50, rows: 30))
+        presence.server(grid: (120, 40))
+        XCTAssertNil(presence.shownGrid, "Right after the phone's resize: the server's old size")
+        try await TestSupport.eventually { presence.shownGrid.map { $0 == (120, 40) } ?? false }
+        presence.server(grid: (50, 30))
+        XCTAssertNil(presence.shownGrid, "Agreed: the view's own grid again")
+        presences.close(key)
+    }
+
+    /// A run of grid changes (a live window resize, a slide: a new grid every frame) reaches the feed once, at its last
+    /// size, when it settles (`resizeQuiet`); a run that comes back to the size the feed has sends nothing, and a
+    /// single change goes after the same short wait.
+    func testARunOfGridChangesSendsItsLastSizeOnce() async throws {
+        let feed = ScriptedTerminalFeed(output: Data("$ ".utf8))
+        let presence = TerminalPresence(feed: feed, grid: (columns: 80, rows: 24), configuration: TerminalConfiguration())
+        presence.start()
+        let attached = presence.session.currentSize
+        try await TestSupport.eventually { presence.attached }
+        for columns in 81...100 { presence.session.setGrid(columns: columns, rows: 24) }
+        XCTAssertEqual(feed.record.resizes, [], "Nothing while the run goes on")
+        let last = presence.session.currentSize
+        XCTAssertEqual(last.columns, 100)
+        try await TestSupport.eventually { !feed.record.resizes.isEmpty }
+        try await Task.sleep(for: TerminalPresence.resizeQuiet * 3)
+        XCTAssertEqual(feed.record.resizes, [last], "Once, the last size")
+
+        for columns in [99, 98, 100] { presence.session.setGrid(columns: columns, rows: 24) }
+        try await Task.sleep(for: TerminalPresence.resizeQuiet * 3)
+        XCTAssertEqual(feed.record.resizes, [last], "Back where the feed is: nothing to send")
+
+        presence.session.setGrid(columns: attached.columns, rows: 30)
+        try await TestSupport.eventually { feed.record.resizes.count == 2 }
+        XCTAssertEqual(feed.record.resizes.last?.rows, 30)
+        presence.session.setGrid(columns: attached.columns, rows: 20)
+        presence.stop()
+        try await Task.sleep(for: TerminalPresence.resizeQuiet * 3)
+        XCTAssertEqual(feed.record.resizes.count, 2, "A detached feed gets no size")
     }
 
     /// A terminal shown again right after it was left (release, then retain) attaches the same feed again. The ended

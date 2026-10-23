@@ -2,7 +2,7 @@ import AppKit
 import Observation
 
 /// The modifiers that, with the digit keys, choose a space (1…9), a tab or split pane (1…9) and a
-/// layout (1…4). Settings › Keys records them; they are saved by name. A group with none is unbound: it has no
+/// layout (1…4). Settings › Keyboard records them; they are saved by name. A group with none is unbound: it has no
 /// shortcut at all, and its digits stay typing.
 struct KeyGroups: Codable, Equatable {
     var spaces: NSEvent.ModifierFlags = [.shift, .command]

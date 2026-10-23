@@ -1,0 +1,16 @@
+{
+  "kind": "rewrite",
+  "why": "The Mac's SSH cache check also tells a home folder that cannot run programs (mounted noexec, or blocked by policy) from a missing or other helper: when the verify chain fails it runs SSHBootstrapScript.blocked, which, only for a cached file of the right size and SHA-256, owned by the account with mode 0700, that test -x refuses, dates it (touch -c, so the helpers' cleanup keeps a version no helper runs from) and prints DISPATCH_NOEXEC, then exits 1. A noexec host then answers on the first command and nothing is uploaded at home on every connection after the first. Every recording that holds the check (325 commands in 193 tests, checked with capture inspect) answered status 0 with no output, status 1 with no output, status 1 with a dispatch-setup reason from the unchanged preamble, or a cancelled command; no recorded host was noexec, so the new script prints and returns exactly that: status 0 stops at && exit 0, a failed verify chain returned 1 (test and safe_file fail with 1) and now ends at exit 1 with blocked printing nothing. Text only: the recorded check commands are rewritten.",
+  "ops": [
+    "open.command"
+  ],
+  "replace": [
+    {
+      "new": "checksum() {\n  if command -v sha256sum >/dev/null 2>&1; then sha256sum \"$1\" | cut -d ' ' -f 1\n  elif command -v shasum >/dev/null 2>&1; then shasum -a 256 \"$1\" | cut -d ' ' -f 1\n  else return 1; fi\n}\nsafe_file dispatch-helper && test -x dispatch-helper && test \"$(wc -c < dispatch-helper | tr -d ' ')\" = '{{size}}' && test \"$(checksum dispatch-helper)\" = '{{digest}}' && exit 0\nsafe_file dispatch-helper && set -- $(metadata dispatch-helper) && test \"$2\" = 700 && test \"$(wc -c < dispatch-helper | tr -d ' ')\" = '{{size}}' && test \"$(checksum dispatch-helper)\" = '{{digest}}' && ! test -x dispatch-helper && touch -c dispatch-helper && printf 'DISPATCH_NOEXEC\\n'\nexit 1",
+      "old": "checksum() {\n  if command -v sha256sum >/dev/null 2>&1; then sha256sum \"$1\" | cut -d ' ' -f 1\n  elif command -v shasum >/dev/null 2>&1; then shasum -a 256 \"$1\" | cut -d ' ' -f 1\n  else return 1; fi\n}\nsafe_file dispatch-helper && test -x dispatch-helper && test \"$(wc -c < dispatch-helper | tr -d ' ')\" = '{{size}}' && test \"$(checksum dispatch-helper)\" = '{{digest}}'"
+    }
+  ],
+  "fingerprints": {
+    "ssh-setup": "be09ab172ccb2bdeeff33b8c98e800ee448fd5852f8355446168935b103292fd"
+  }
+}

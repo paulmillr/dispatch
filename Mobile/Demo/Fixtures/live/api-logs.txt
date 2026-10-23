@@ -1,0 +1,34 @@
+[2m10:02:20[0m [32mINFO[0m GET /v1/projects?page=2 [32m200[0m 32ms [2mk_99[0m
+[2m10:02:22[0m [32mINFO[0m GET /v1/projects?page=2 [32m200[0m 44ms [2mk_07[0m
+[2m10:02:24[0m [32mINFO[0m POST /v1/deployments [32m201[0m 23ms [2mk_07[0m
+[2m10:02:26[0m [32mINFO[0m POST /v1/deployments [32m201[0m 55ms [2mk_07[0m
+[2m10:02:28[0m [32mINFO[0m GET /v1/projects?page=2 [32m200[0m 32ms [2mk_31[0m
+[2m10:02:30[0m [32mINFO[0m GET /v1/projects [32m200[0m 7ms [2mk_07[0m
+[2m10:02:32[0m [32mINFO[0m GET /v1/projects/prj_8f2 [32m200[0m 42ms [2mk_31[0m
+[2m10:02:34[0m [32mINFO[0m GET /v1/usage [32m200[0m 32ms [2mk_31[0m
+[2m10:02:36[0m [32mINFO[0m GET /v1/usage [32m200[0m 35ms [2mk_07[0m
+[2m10:02:38[0m [33mWARN[0m GET /v1/projects [33m429[0m retry 14s [2mk_99[0m
+[2m10:02:40[0m [33mWARN[0m GET /v1/projects [33m429[0m retry 14s [2mk_99[0m
+[2m10:02:42[0m [32mINFO[0m GET /v1/projects?page=2 [32m200[0m 39ms [2mk_99[0m
+[2m10:02:44[0m [32mINFO[0m GET /v1/usage [32m200[0m 52ms [2mk_31[0m
+[2m10:02:46[0m [32mINFO[0m GET /v1/projects [32m200[0m 8ms [2mk_07[0m
+[2m10:02:48[0m [32mINFO[0m GET /v1/usage [32m200[0m 28ms [2mk_31[0m
+[2m10:02:50[0m [32mINFO[0m GET /v1/projects [32m200[0m 17ms [2mk_31[0m
+[2m10:02:52[0m [32mINFO[0m GET /v1/projects [32m200[0m 34ms [2mk_07[0m
+[2m10:02:54[0m [32mINFO[0m usage rollup: 1824 rows, 212ms
+[2m10:02:56[0m [32mINFO[0m GET /v1/projects/prj_8f2 [32m200[0m 53ms [2mk_99[0m
+[2m10:02:58[0m [32mINFO[0m GET /v1/usage [32m200[0m 25ms [2mk_12[0m
+[2m10:03:00[0m [32mINFO[0m GET /v1/projects [32m200[0m 12ms [2mk_31[0m
+[2m10:03:02[0m [32mINFO[0m GET /v1/projects [32m200[0m 7ms [2mk_07[0m
+[2m10:03:04[0m [33mWARN[0m GET /v1/projects [33m429[0m retry 14s [2mk_99[0m
+[2m10:03:06[0m [32mINFO[0m GET /v1/projects/prj_8f2 [32m200[0m 32ms [2mk_99[0m
+[2m10:03:08[0m [32mINFO[0m GET /v1/projects/prj_8f2 [32m200[0m 30ms [2mk_07[0m
+[2m10:03:10[0m [32mINFO[0m POST /v1/deployments [32m201[0m 30ms [2mk_99[0m
+[2m10:03:12[0m [32mINFO[0m POST /v1/deployments [32m201[0m 59ms [2mk_07[0m
+[2m10:03:14[0m [32mINFO[0m GET /v1/projects [32m200[0m 17ms [2mk_12[0m
+[2m10:03:16[0m [32mINFO[0m GET /v1/projects [32m200[0m 6ms [2mk_07[0m
+[2m10:03:18[0m [32mINFO[0m GET /v1/usage [32m200[0m 4ms [2mk_07[0m
+[2m10:03:20[0m [32mINFO[0m GET /v1/projects?page=2 [32m200[0m 8ms [2mk_12[0m
+[2m10:03:22[0m [32mINFO[0m POST /v1/deployments [32m201[0m 41ms [2mk_31[0m
+[2m10:03:24[0m [32mINFO[0m POST /v1/deployments [32m201[0m 27ms [2mk_07[0m
+[2m10:03:26[0m [32mINFO[0m GET /v1/projects/prj_8f2 [32m200[0m 41ms [2mk_12[0m

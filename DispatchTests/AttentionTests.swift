@@ -43,12 +43,13 @@ final class AttentionTests: XCTestCase {
 
     func testPreferencesMigrateAndRoundTrip() throws {
         let old = try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8))
-        XCTAssertTrue(old.attentionNotifications, "Notify is on by default")
+        XCTAssertTrue(old.attentionNotifications, "Notifications are on by default")
         XCTAssertTrue(old.attentionDockBadge)
         XCTAssertTrue(old.attentionSound)
+        XCTAssertTrue(old.attentionTextContent, "Banners show the reply's start until turned off")
         XCTAssertFalse(old.shipsBell, "Nautical's bell is off until chosen")
         XCTAssertTrue(old.enableHostDetection)
-        XCTAssertTrue(old.allowRemoteClipboardWrites, "Programs on helper hosts can set the clipboard by default")
+        XCTAssertTrue(old.allowClipboardWrites, "Programs can set the clipboard by default")
         XCTAssertFalse(old.showGitBranches)
         let large = try JSONDecoder().decode(Preferences.self, from: Data(#"{"largeSidebarItems":true}"#.utf8))
         XCTAssertTrue(large.showGitBranches, "Large sidebar items used to show branches")
@@ -67,7 +68,7 @@ final class AttentionTests: XCTestCase {
         updated.attentionSound = false
         updated.shipsBell = true
         updated.enableHostDetection = false
-        updated.allowRemoteClipboardWrites = false
+        updated.allowClipboardWrites = false
         XCTAssertEqual(try JSONDecoder().decode(Preferences.self, from: JSONEncoder().encode(updated)), updated)
     }
 
@@ -194,9 +195,10 @@ final class AttentionTests: XCTestCase {
         XCTAssertEqual(AttentionCoordinator.preview("## Fixed\n\n**Duplicate processing** is fixed. All `12` tests pass.\n\n[Details](https://example.com)."),
                        "Fixed Duplicate processing is fixed. All 12 tests pass. Details.")
         XCTAssertEqual(AttentionCoordinator.preview("- [x] Tested\n> Ready\n\n```sh\nnpm test\n```\n---"), "Tested Ready npm test")
+        // The bound counts scalars (a pathological character can't stretch it): 159 hold 39 of these four-scalar emoji,
+        // whole, their joiners kept as emoji rather than marked as hidden controls.
         let preview = AttentionCoordinator.preview(String(repeating: "👩🏽‍💻", count: 200))
-        XCTAssertEqual(preview.count, 160)
-        XCTAssertEqual(preview, String(repeating: "👩🏽‍💻", count: 159) + "…")
+        XCTAssertEqual(preview, String(repeating: "👩🏽‍💻", count: 39) + "…")
     }
 
     func testNotificationsPreviewResponsesAndQuestionsAndReplaceTheSamePane() throws {
@@ -215,6 +217,17 @@ final class AttentionTests: XCTestCase {
         XCTAssertEqual(response.content.subtitle, entry.path)
         XCTAssertEqual(response.content.body, "Fixed duplicate webhook processing. All 12 tests pass.")
         XCTAssertEqual(response.content.userInfo["row"] as? String, session.transcriptRows.first?.id)
+        // Without text content: which pane and what happened, nothing of the reply or the folder.
+        // Set directly, as the cases above do: applying would also replace the chat theme and Liquid Glass the case
+        // began with.
+        let preferences = runtime.preferences
+        defer { runtime.preferences = preferences }
+        runtime.preferences.attentionTextContent = false
+        let bare = try XCTUnwrap(attention.notificationRequest(for: entry))
+        XCTAssertEqual(bare.content.title, "billing · Response ready")
+        XCTAssertEqual(bare.content.body, "")
+        XCTAssertEqual(bare.content.subtitle, "")
+        runtime.preferences = preferences
         session.busy = true
         XCTAssertNil(attention.notificationRequest(for: entry), "Resuming work invalidates the previous alert")
         session.approvals = [PendingApproval(key: "permission", operation: "Run `npm test` to verify the webhook changes?", turnID: "turn") { _ in }]
@@ -308,6 +321,8 @@ final class AttentionTests: XCTestCase {
         _ = try await PresentationTestSupport.capture(window, named: "settings-1o", in: "attention-validation")
         // AppKit fits the window to the desktop, which clips the page, and with the Files group the page outgrows a
         // 1080 pt display, so a capture of the whole scroll document cannot read it: the text drawn there can.
-        for title in ["Notify", "Dock badge", "Sound"] { try PresentationTestSupport.assertRendered(title, in: root) }
+        for title in ["Notifications", "banner and Dock badge when a pane needs input or finishes a response"] {
+            try PresentationTestSupport.assertRendered(title, in: root)
+        }
     }
 }

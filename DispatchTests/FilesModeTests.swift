@@ -333,8 +333,8 @@ final class FilesModeTests: XCTestCase {
         }
         func checked() -> [String] { items().filter(\.checked).map(\.title) }
         func enabled() -> [String] { items().filter(\.enabled).map(\.title) }
-        let all = ["Terminal", "Chat", "Files", "Changes", "Commits"]
-        // F1a: the menu always lists the modes and the three files tabs; Changes and Commits are enabled as the View
+        let all = ["Terminal", "Chat", "Files", "Review", "Commits"]
+        // F1a: the menu always lists the modes and the three files tabs; Review and Commits are enabled as the View
         // menu's ⇧⌘U and ⇧⌘L are.
         XCTAssertEqual(items().map(\.title), all)
         XCTAssertEqual(enabled(), all, "no files session yet: nothing resolved, so the git tabs may open")
@@ -353,7 +353,7 @@ final class FilesModeTests: XCTestCase {
         XCTAssertEqual(enabled(), all)
         XCTAssertEqual(checked(), ["Terminal"], "the git tabs are checked only while files shows them")
         files.showFiles(id, tab: .changes)
-        XCTAssertEqual(checked(), ["Changes"])
+        XCTAssertEqual(checked(), ["Review"])
         files.showFiles(id, tab: .files)
         XCTAssertEqual(checked(), ["Files"])
         files.switchMode(id, to: .chat)
@@ -366,6 +366,32 @@ final class FilesModeTests: XCTestCase {
                        ["Terminal", "Chat"])
     }
 
+    func testFilesOffOffersNoFilesAndLeavesTheTabsShowingThem() {
+        let fixture = fixture(agent: true), files = fixture.files, id = fixture.id, runtime = TerminalRuntime.shared
+        let preferences = runtime.preferences
+        defer { runtime.preferences = preferences }
+        files.switchMode(id, to: .files)
+        XCTAssertTrue(files.isShowing(id))
+
+        runtime.preferences.filesEnabled = false
+        files.leaveFiles()
+        XCTAssertFalse(files.isShowing(id), "a tab showing files goes back to its terminal")
+        XCTAssertEqual(files.mode(for: id), .terminal)
+        XCTAssertFalse(files.canShowFiles(id))
+        XCTAssertFalse(files.switchState(id).files)
+        XCTAssertNil(files.switchState(id).host, "no host is blamed for files that are off")
+        XCTAssertEqual(ModeSwitchMenuItem.items(files.switchState(id), files: files, id: id) { _ in }.map(\.title),
+                       ["Terminal", "Chat"])
+        files.toggleFiles(id)
+        files.showFiles(id, tab: .commits)
+        XCTAssertFalse(files.isShowing(id), "⇧⌘F and the files tabs' keys do nothing")
+        XCTAssertEqual(files.nextMode(id), .chat, "the strip button goes to chat alone")
+
+        runtime.preferences.filesEnabled = true
+        files.toggleFiles(id)
+        XCTAssertTrue(files.isShowing(id))
+    }
+
     func testGitTabKeysAreBoundAndYieldToAKeysGroup() throws {
         let controller = AppDelegate(), old = (NSApp.mainMenu, NSApp.windowsMenu, NSApp.helpMenu)
         defer { NSApp.mainMenu = old.0; NSApp.windowsMenu = old.1; NSApp.helpMenu = old.2 }
@@ -376,7 +402,7 @@ final class FilesModeTests: XCTestCase {
         }
         let changes = try item(#selector(AppDelegate.openFilesTab(_:)), tag: 1)
         let commits = try item(#selector(AppDelegate.openFilesTab(_:)), tag: 2)
-        XCTAssertEqual([changes.title, changes.keyEquivalent], ["Changes", "U"])
+        XCTAssertEqual([changes.title, changes.keyEquivalent], ["Review Changes", "U"])
         XCTAssertEqual([commits.title, commits.keyEquivalent], ["Commits", "L"])
         XCTAssertEqual(changes.keyEquivalentModifierMask, [.command, .shift])
         XCTAssertFalse(changes.isHidden)
@@ -388,7 +414,7 @@ final class FilesModeTests: XCTestCase {
         let digits = try (0..<3).map { try item(#selector(AppDelegate.showFilesTab(_:)), tag: $0) }
         XCTAssertEqual(digits.map(\.keyEquivalent), ["1", "2", "3"])
         XCTAssertTrue(digits.allSatisfy { $0.keyEquivalentModifierMask == [.control, .command] })
-        XCTAssertEqual(digits.map(\.isHidden), [false, true, true], "⌃⌘2 and ⌃⌘3 reach what Changes and Commits name")
+        XCTAssertEqual(digits.map(\.isHidden), [false, true, true], "⌃⌘2 and ⌃⌘3 reach what Review Changes and Commits name")
         XCTAssertTrue(digits[1].allowsKeyEquivalentWhenHidden)
         var keys = KeyGroups()
         keys.tabs = [.control, .command]
@@ -546,5 +572,93 @@ final class FilesModeTests: XCTestCase {
         XCTAssertEqual(files.previewPreference(for: first), 420)
         XCTAssertFalse(files.session(for: System.uuid()).previewHidden, "hiding is per tab")
         XCTAssertTrue(files.session(for: System.uuid()).previewOff, "and each tab's Files waits for a file to be opened")
+    }
+
+    /// Restore of a detached tab brings back what it showed: Files on Commits with its commit and pinned folder, and the
+    /// user's choice to leave chat. The sessions are gone in between, as detach closes them.
+    func testARestoredTabShowsWhatItShowedWhenDetached() throws {
+        let fixture = fixture(agent: true), files = fixture.files, id = fixture.id
+        let shown = files.session(for: id)
+        files.switchMode(id, to: .files)
+        shown.tab = .commits; shown.selectedCommit = "4f2a9c1"; shown.commitFile = "README.md"; shown.pinnedRoot = "/work/app"
+        shown.selection = ["/work/app/README.md"]; shown.logScope = .all
+        files.retainView(id)
+        files.forget(id); fixture.chat.close(id)
+        XCTAssertNil(files.existing(id))
+
+        files.restoreViews(present: [System.uuid()])
+        XCTAssertNil(files.existing(id), "Only a tab that is back gets its view")
+        files.restoreViews(present: [id])
+        let restored = try XCTUnwrap(files.existing(id))
+        XCTAssertFalse(restored === shown)
+        XCTAssertEqual(files.mode(for: id), .files)
+        XCTAssertEqual(restored.tab, .commits); XCTAssertEqual(restored.selectedCommit, "4f2a9c1")
+        XCTAssertEqual(restored.commitFile, "README.md"); XCTAssertEqual(restored.pinnedRoot, "/work/app")
+        XCTAssertEqual(restored.selection, ["/work/app/README.md"]); XCTAssertEqual(restored.logScope, .all)
+        XCTAssertTrue(fixture.chat.session(for: id).manualViewChoice, "Discovery must not cover the restored files with chat")
+        files.restoreViews(present: [id])
+        XCTAssertTrue(files.existing(id) === restored, "A view is given back once")
+    }
+
+    /// Only leaving chat for the terminal keeps discovery from bringing chat back after Restore; a tab the user put in
+    /// chat comes back to chat once its agent is found.
+    func testARestoredTabKeepsOnlyTheChoiceToLeaveChat() {
+        let fixture = fixture(agent: true), files = fixture.files, id = fixture.id
+        fixture.chat.chooseChat(true, session: fixture.session)
+        XCTAssertTrue(fixture.session.manualViewChoice)
+        files.retainView(id); files.forget(id); fixture.chat.close(id)
+        files.restoreViews(present: [id])
+        XCTAssertFalse(fixture.chat.session(for: id).manualViewChoice, "Chat chosen by hand comes back with discovery")
+
+        let left = fixture.chat.session(for: id)
+        fixture.chat.chooseChat(false, session: left)
+        files.retainView(id); files.forget(id); fixture.chat.close(id)
+        files.restoreViews(present: [id])
+        XCTAssertTrue(fixture.chat.session(for: id).manualViewChoice, "Leaving chat for the terminal is kept")
+    }
+
+    /// A restored view that no longer opens (files unavailable there, the folder or the commit gone, no repository for
+    /// a git tab) leaves the tab on its plain terminal.
+    func testARestoredViewThatNoLongerOpensFallsBackToTheTerminal() async throws {
+        let fixture = fixture(agent: false), files = fixture.files, id = fixture.id
+        let shown = files.session(for: id)
+        files.switchMode(id, to: .files)
+        shown.tab = .commits; shown.selectedCommit = "4f2a9c1"
+        files.retainView(id); files.forget(id)
+        files.restoreViews(present: [id])
+        let restored = try XCTUnwrap(files.existing(id))
+        XCTAssertTrue(restored.visible)
+        restored.availability = .unavailable(message: "The host is gone.")
+        try await TestSupport.eventually { !restored.visible }
+        XCTAssertEqual(files.mode(for: id), .terminal)
+        XCTAssertNil(restored.selectedCommit); XCTAssertEqual(restored.tab, .files)
+    }
+
+    func testRestoredViewsWaitForEachPartToLoad() {
+        let session = FilesSession(id: System.uuid())
+        var state = RetainedTabView.Files(session)
+        state.tab = .commits; state.selectedCommit = "4f2a9c1"; state.pinnedRoot = "/work/app"
+        func outcome() -> FilesCoordinator.RestoreOutcome { FilesCoordinator.restoreOutcome(session, state: state) }
+        XCTAssertEqual(outcome(), .loading)
+        session.availability = .available(FakeFilesSource.mockupAPI())
+        XCTAssertEqual(outcome(), .loading, "the pinned folder's listing")
+        session.listings["/work/app"] = FileListingState(listing: FileListing(path: "/work/app", entries: [], truncated: false))
+        XCTAssertEqual(outcome(), .loading, "the repository")
+        session.git = .repository(GitRepository(root: "/work/app"))
+        XCTAssertEqual(outcome(), .loading, "the commit")
+        session.commitDetail = GitCommitDetail(commit: GitCommit(hash: "4f2a9c1", parents: [], subject: "Fix", body: "",
+                                                                 author: "Sam Example", email: "sam@example.com", date: Date(), refs: []),
+                                               files: [])
+        XCTAssertEqual(outcome(), .shown)
+        session.commitDetail = nil; session.commitDetailError = "unknown revision"
+        XCTAssertEqual(outcome(), .failed, "the commit is gone")
+        session.commitDetailError = nil
+        session.listings["/work/app"] = FileListingState(error: .notFound("/work/app"))
+        XCTAssertEqual(outcome(), .failed, "the pinned folder is gone")
+        session.listings["/work/app"] = FileListingState(listing: FileListing(path: "/work/app", entries: [], truncated: false))
+        session.git = .none
+        XCTAssertEqual(outcome(), .failed, "no repository for Commits")
+        session.availability = .offline(host: "build", since: nil)
+        XCTAssertEqual(outcome(), .failed)
     }
 }

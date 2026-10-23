@@ -102,6 +102,17 @@ final class DynamicTypeTests: XCTestCase {
 /// VoiceOver: what the main rows, the thinking row and the queue say.
 @MainActor
 final class AccessibilityLabelTests: XCTestCase {
+    /// A tab's back pill counts the conversations that need the user elsewhere; with none it names where Back goes,
+    /// never a bare "0".
+    func testATabsBackPillCountsWaitingConversationsOrNamesTheScreenBehind() {
+        let none = TabsBackPill.needsYou(0, back: "app") {}
+        XCTAssertEqual(none.label, "app")
+        XCTAssertFalse(none.count)
+        let two = TabsBackPill.needsYou(2, back: "app") {}
+        XCTAssertEqual(two.label, "2")
+        XCTAssertTrue(two.count)
+    }
+
     func testRowsReadNameDetailTimeAndLineWithTheDotAsValue() {
         let row = MobileRow(dot: .unread, tint: .blue, name: "e2e", detail: "mba2", time: "9:31",
                             subtitle: "Run playwright test --headed? It opens a browser on the host.", lines: 2) { EmptyView() }
@@ -133,6 +144,8 @@ final class AccessibilityLabelTests: XCTestCase {
     func testTheBannerSaysWhereTheLinkIsOnce() {
         XCTAssertEqual(ChatLinkBanner.spoken(.reconnecting(attempt: 2, since: Date()), title: "Reconnecting to mba2"), "Reconnecting to mba2")
         XCTAssertEqual(ChatLinkBanner.spoken(.failed("refused"), title: "Can’t reach mba2"), "Can’t reach mba2, refused")
+        XCTAssertEqual(ChatLinkBanner.spoken(.reconnecting(attempt: 2, since: Date()), title: "Reconnecting to mba2", problem: "This iPhone is offline."),
+                       "Reconnecting to mba2, This iPhone is offline.")
     }
 
     /// The elements a hosted view exposes, depth first.

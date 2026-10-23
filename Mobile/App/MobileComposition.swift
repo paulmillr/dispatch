@@ -21,13 +21,28 @@ final class MobileComposition {
     let modelMemory: ChatModelMemory
     /// Set by `app()`; tests make their own.
     var refresh: BackgroundRefresh?
+    /// Notifications and the badge while the app is open (`AgentAlerts`); set by `app()`, tests make their own.
+    var alerts: AgentAlerts?
     var network: NetworkPathWatcher?
+    /// The Apple Watch link (docs/watch.md); nil where WatchConnectivity is unsupported.
+    var watch: WatchBridge?
+    /// The tabs' repositories and branches, read through helpers with the Files & git grant.
+    let gitFacts = SpaceGitFacts()
+    /// Review's comments, changes and sending (the Files segment's Review mode, `installReviewMode`).
+    let review: MobileReview
+    /// Each tab's Files listing (`installFilesMode`).
+    let filesBrowsers = FilesBrowsers()
+    /// Each tab's Commits mode: its log, filters and the commits opened (`MobileComposition+CommitsMode.swift`).
+    let commits = MobileCommits()
+    /// What each host's git facts were last read through: a new client or grant reads them again.
+    private struct GitSource: Equatable { let client: ObjectIdentifier?; let files: Bool }
+    private var gitSources: [UUID: GitSource] = [:]
     /// Spaces and Agents see a Chat-off host's topology without agents.
     private let topologies = HostTopologies()
     /// What was last handed to the areas per host; an unchanged host is not synced again (latency ticks).
     private var synced: [UUID: Signature] = [:]
     /// False only for the Debug Spaces sample, whose hosts are not sessions.
-    private let feedsTabs: Bool
+    let feedsTabs: Bool
     /// A conversation New chat started: its thread opens with the keyboard up (M3b).
     private var focusing: ChatConversationKey?
     /// The client each host's presences last reattached through (once per connection, on its first live topology).
@@ -36,7 +51,7 @@ final class MobileComposition {
     init(hosts: HostSessions, tabs: MobileTabs = MobileTabs(), presences: TerminalPresences = .shared,
          markers: ChatMarkers = .shared, outbox: ChatOutbox = .shared, drafts: ChatDraftRepository = .shared,
          cache: HostCache = HostCache(url: nil), settings: MobileSettings = MobileSettings(), modelMemory: ChatModelMemory = .shared,
-         feedsTabs: Bool = true) {
+         feedsTabs: Bool = true, splitMemory: UserDefaults? = nil, review: MobileReview? = nil) {
         self.hosts = hosts
         self.tabs = tabs
         self.presences = presences
@@ -44,54 +59,104 @@ final class MobileComposition {
         self.settings = settings
         self.modelMemory = modelMemory
         self.feedsTabs = feedsTabs
+        #if DEBUG
+        self.review = review ?? (feedsTabs ? MobileReview() : MobileReview.sample())
+        #else
+        self.review = review ?? MobileReview()
+        #endif
+        if review == nil, feedsTabs { self.review.file = ReviewFileStore().url }
         conversations = ChatConversations(presence: TerminalChatPresence(presences: presences), markers: markers,
                                           outbox: outbox, drafts: drafts)
-        navigator = SpacesNavigator(model: tabs)
+        navigator = SpacesNavigator(model: tabs, memory: splitMemory)
+        navigator.gitFacts = gitFacts
+        // Shell tabs keep their presences with the rest (plain SSH).
+        hosts.presences = presences
+        gitFacts.client = { [weak hosts] id in
+            guard let session = hosts?.session(id), session.host.files, !session.plainSSH, session.link.isConnected else { return nil }
+            return session.client
+        }
+        if feedsTabs {
+            let gitFacts = gitFacts
+            self.review.reader = { id in gitFacts.client(id).map(ReviewGitReader.helper) }
+        }
+        installReviewDelivery()
         restore()
         wire()
+        wireCommits(sample: !feedsTabs)
         sync()
     }
 
     /// Every saved host's last-known state from the cache, before the first frame: Spaces and Agents are populated at
-    /// once (their rows dim their times until live data arrives) and reconcile in place.
+    /// once (their rows dim their times until live data arrives) and reconcile in place. A plain host's shell tabs come
+    /// back as ended cards without a screen.
     private func restore() {
         for session in hosts.ordered {
             guard let entry = cache.entry(session.id) else { continue }
+            session.shells.restore(entry.shells)
             conversations.restore(host: session.id, summaries: entry.conversations.mapValues(\.summary))
             session.restore(hello: entry.hello, multiplexers: entry.multiplexers.map(\.multiplexer), versions: entry.versions,
-                            following: entry.following, topology: entry.topology)
+                            following: entry.following, topology: entry.topology, updated: cache.updated(session.id))
         }
     }
 
     private func wire() {
         hosts.changed = { [weak self] in self?.sync() }
-        conversations.rowsChanged = { [weak self] in self?.cacheConversations() }
+        conversations.rowsChanged = { [weak self] in
+            guard let self else { return }
+            self.cacheConversations()
+            self.updateBadge()
+        }
+        conversations.arrived = { [weak self] previous, current in self?.arrived(previous, current) }
+        // Close, Detach and Terminate from the phone: those agents leaving is the user's doing, no failure.
+        tabs.userClosed = { [weak self] host, panes in
+            self?.alerts?.userClosed(panes.map { ChatConversationKey(host: host, node: $0) })
+        }
         NotificationRoute.shared.open = { [weak self] key in self?.openChat(key, keyboard: false) }
         let presences = presences
         hosts.clientEnded = { session in presences.stopAll(host: session.id) }
-        hosts.postConnect = [Self.enablePi]
+        hosts.postConnect = [Self.enableIntegrations]
         let conversations = conversations
         // The Debug Spaces sample brings its own urgency and lines (M2a's dots and "thinking 48s", the back pill's
         // count); its hosts are not sessions, so Chat has nothing to say about them.
-        if feedsTabs { wireTabs(conversations) }
+        if feedsTabs {
+            wireTabs(conversations)
+            navigator.agentLauncher = agentLauncher
+        }
+        #if DEBUG
+        if !feedsTabs {
+            TabsSample.gitFacts(gitFacts, model: tabs)
+            navigator.agentLauncher = TabsSample.agentLauncher
+        }
+        #endif
     }
 
     private func wireTabs(_ conversations: ChatConversations) {
         tabs.urgency = { host, terminal in
-            guard let key = conversations.key(host: host, terminal: terminal),
-                  let row = conversations.conversations.first(where: { $0.key == key }) else { return nil }
+            guard let key = conversations.key(host: host, terminal: terminal), let row = conversations.conversation(key) else { return nil }
             return TabUrgency(row)
         }
         tabs.status = { host, terminal in
-            guard let key = conversations.key(host: host, terminal: terminal),
-                  let row = conversations.conversations.first(where: { $0.key == key }) else { return nil }
+            guard let key = conversations.key(host: host, terminal: terminal), let row = conversations.conversation(key) else { return nil }
             return Self.status(row, session: conversations.sessions[key])
+        }
+        let presences = presences
+        tabs.paneTitle = { host, key in presences.presence(.init(host: host, node: key))?.title }
+        tabs.conversationTitle = { host, terminal in
+            guard let key = conversations.key(host: host, terminal: terminal) else { return nil }
+            return conversations.conversation(key)?.summary.title
+        }
+        tabs.agentKey = { host, terminal in
+            guard let key = conversations.key(host: host, terminal: terminal) else { return nil }
+            return conversations.sessions[key]?.agentKey
         }
         tabs.agentActivity = { host, terminal in
             guard let key = conversations.key(host: host, terminal: terminal) else { return nil }
-            return conversations.conversations.first { $0.key == key }?.summary.lastActivity
+            return conversations.conversation(key)?.summary.lastActivity
         }
         let tabs = tabs, hosts = hosts
+        tabs.shellSessions = { hosts.session($0)?.shells }
+        tabs.updated = { hosts.session($0)?.updated }
+        tabs.refresh = { await hosts.refresh() }
         // New space on a multiplexer the host does not show: the host follows it from now on, as Host detail's choice.
         tabs.follow = { id, name in
             guard var record = hosts.session(id)?.host,
@@ -108,6 +173,7 @@ final class MobileComposition {
     private struct Signature: Equatable {
         let record: HostRecord
         let link: HostLink
+        let mode: HostSession.Mode?
         let client: ObjectIdentifier?
         let topology: HelperTopology?
         let live: Bool
@@ -115,24 +181,49 @@ final class MobileComposition {
         let features: [String]
         let following: String?
         let home: String?
+        let sameMachine: String?
+        let shells: [ShellSessions.ShellTab]
+    }
+
+    /// Hosts that reach a machine and account an earlier host in the list already shows (a LAN and a Tailscale address
+    /// of one Mac): the Mac keys a host by machine and uid (`HostRegistry`, `ssh:<machine>:<uid>`) and shows it once, so
+    /// here the first connected one shows its spaces and agents and the others name it. Host id → that host's name.
+    static func sameMachine(_ sessions: [HostSession]) -> [UUID: String] {
+        var first: [String: String] = [:], result: [UUID: String] = [:]
+        // A plain SSH host's hello is an earlier helper's: it names no machine now.
+        for session in sessions where session.link.isConnected && !session.isPlain {
+            guard let identity = session.hello?.identity, let account = session.hello?.account else { continue }
+            let key = identity.host + ":" + String(account.uid)
+            if let name = first[key] { result[session.id] = name } else { first[key] = session.host.name }
+        }
+        return result
     }
 
     /// Hands every host's current state to Spaces and Agents (cheap when nothing changed).
     func sync() {
         let sessions = hosts.ordered
+        let duplicates = Self.sameMachine(sessions)
         var inputs: [TabsHostInput] = []
         var changed = false
         for session in sessions {
-            let signature = Signature(record: session.host, link: session.link, client: session.client.map(ObjectIdentifier.init),
+            let sameMachine = duplicates[session.id]
+            let signature = Signature(record: session.host, link: session.link, mode: session.mode, client: session.client.map(ObjectIdentifier.init),
                                       topology: session.topology, live: session.topologyIsLive,
                                       switching: session.switchingMultiplexer,
                                       features: session.hello?.features ?? [],
-                                      following: session.following, home: session.hello?.account?.home)
+                                      following: session.following, home: session.hello?.account?.home,
+                                      sameMachine: sameMachine, shells: session.shells.tabs)
             if synced[session.id] != signature {
                 synced[session.id] = signature
                 changed = true
-                conversations.update(snapshot(session))
+                var chat = snapshot(session)
+                // The same machine's agents show once, under the host that shows its spaces.
+                if sameMachine != nil { chat.topology = nil }
+                conversations.update(chat)
                 cache.record(session)
+                // A dropped link (or going to the background) keeps when the host last answered.
+                cache.record(heard: session.updated, host: session.id)
+                cache.record(shells: session.shells.entries, host: session.id)
                 if let client = session.client, session.topologyIsLive {
                     // The connection's first live topology: the host's presences attach again by topology key (a stale
                     // snapshot's node ids are another helper's).
@@ -144,11 +235,23 @@ final class MobileComposition {
                     // else ever closes one, and each holds an attachment, a parse task and a render thread.
                     let keeping = Set(session.topology?.nodes.filter { $0.kind == .terminal }.map(\.key) ?? [])
                     presences.prune(host: session.id, keeping: keeping)
+                    if let topology = session.topology { presences.serverGrids(host: session.id, topology: topology) }
                 } else if session.client == nil {
                     reattached[session.id] = nil
                 }
+                // A new connection or grant: the tabs' repositories are read again (not on every topology).
+                let source = GitSource(client: session.client.map(ObjectIdentifier.init), files: session.host.files)
+                if gitSources[session.id] != source {
+                    gitSources[session.id] = source
+                    gitFacts.invalidate(host: session.id)
+                }
             }
-            inputs.append(input(session))
+            var host = input(session)
+            if let sameMachine {
+                host.topology = nil
+                host.host.sameMachine = sameMachine
+            }
+            inputs.append(host)
         }
         let ids = Set(sessions.map(\.id))
         for id in synced.keys where !ids.contains(id) {
@@ -158,16 +261,47 @@ final class MobileComposition {
             presences.closeAll(host: id)
             tabs.dropHost(id)
             topologies.forget(id)
+            gitFacts.forget(host: id)
+            gitSources[id] = nil
             cache.remove(host: id)
             changed = true
         }
-        if feedsTabs, changed || tabs.workspaces.count != inputs.count { tabs.sync(inputs) }
+        if feedsTabs, changed || tabs.workspaces.count != inputs.count {
+            tabs.sync(inputs)
+            // Closed tabs and spaces take their git facts with them.
+            for workspace in tabs.workspaces {
+                gitFacts.retain(host: workspace.host.id,
+                                keys: Set(workspace.tabs.map(\.ref.key)).union(workspace.spaces.map(\.ref.key)))
+            }
+            // And their Files listings.
+            filesBrowsers.retain(Set(tabs.workspaces.flatMap { $0.tabs.map(\.ref) }))
+        }
     }
 
-    /// The live rows of connected hosts go to the cache (offline rows are the cache's own).
+    /// A live conversation changed while the app is open: `AgentAlerts` decides on a banner. A host whose Chat went off
+    /// lost its agents' rows, which is no agent stopping.
+    private func arrived(_ previous: ChatConversation, _ current: ChatConversation?) {
+        // An agent's turn ended (or the agent left): what it changed shows in Review at once.
+        if previous.summary.busy, current?.summary.busy != true { review.changed(host: previous.key.host) }
+        guard let alerts, hosts.session(previous.key.host)?.host.chat == true else { return }
+        let row = current ?? previous
+        Task {
+            await alerts.arrived(row.key, tab: row.name, host: row.hostName, previous: previous.summary,
+                                 current: current?.summary, muted: row.muted)
+        }
+    }
+
+    /// The badge (`AgentAlerts.waiting`): live rows only, so a host offline or a row whose agent left counts as the
+    /// background refresh counts it.
+    func updateBadge() {
+        alerts?.badge(waiting: AgentAlerts.waiting(conversations.conversations.filter { !$0.stale }.map(\.summary)))
+    }
+
+    /// The live rows of connected hosts go to the cache (offline rows are the cache's own); a row whose terminal no
+    /// longer has an agent goes, so the background refresh does not take its last summary for a stop again.
     private func cacheConversations() {
         for session in hosts.ordered where session.link.isConnected {
-            let present = Set(topologies.topology(session)?.nodes.map(\.key) ?? [])
+            let present = Set(topologies.topology(session)?.nodes.filter { $0.agent != nil }.map(\.key) ?? [])
             cache.record(conversations: conversations.liveSummaries(host: session.id), present: present, host: session.id)
         }
     }
@@ -179,20 +313,57 @@ final class MobileComposition {
         let hosts = HostSessions.app()
         #if DEBUG
         if UserDefaults.standard.bool(forKey: "DispatchTabsSample") {
-            return MobileComposition(hosts: hosts, tabs: TabsSample.model(), feedsTabs: false)
+            // `-DispatchSplitMemory YES`: the sample keeps the iPad's shown tab and sidebar too (its relaunch tests).
+            let memory = UserDefaults.standard.bool(forKey: "DispatchSplitMemory") ? UserDefaults.standard : nil
+            // `-DispatchSpacesMockup P1|W0`: the Spaces redesign's mockup data instead (TabsSample+Spaces).
+            let tabs = UserDefaults.standard.string(forKey: "DispatchSpacesMockup").map { TabsSample.spacesMockup(variant: $0) }
+                ?? TabsSample.model()
+            return MobileComposition(hosts: hosts, tabs: tabs, feedsTabs: false, splitMemory: memory)
         }
         let saving = environment["DISPATCH_MOBILE_STORE"] != "memory" && (environment["DISPATCH_MOBILE_SCRIPTED"] ?? "0") == "0"
+            && !DemoScenario.enabled
         #else
         let saving = true
         #endif
-        let composition = MobileComposition(hosts: hosts, cache: HostCache(url: saving ? HostCache.file : nil))
+        // The iPad's shown tab and sidebar (`SpacesNavigator.restoreSplit`) are kept where the cache is.
+        // Spaces' filter and OFFLINE group too: a scripted or live-test run starts from the defaults and leaves nothing.
+        let composition = MobileComposition(hosts: hosts, tabs: saving ? MobileTabs() : MobileTabs(defaults: Self.ephemeralDefaults),
+                                            cache: HostCache(url: saving ? HostCache.file : nil),
+                                            splitMemory: saving ? .standard : nil)
+        let notifier = SystemNotifier()
+        let alerts = AgentAlerts(notifier: notifier, settings: composition.settings)
+        let conversations = composition.conversations
+        alerts.stillGone = { key in !conversations.conversations.contains { $0.key == key } }
+        composition.alerts = alerts
         composition.refresh = BackgroundRefresh(
-            notifier: SystemNotifier(), settings: composition.settings, cache: composition.cache,
+            notifier: notifier, settings: composition.settings, cache: composition.cache,
             markers: composition.conversations.markers, hosts: { [weak hosts] in hosts?.store.hosts ?? [] },
             source: HostSessionsRefreshSource(hosts: hosts))
         let network = NetworkPathWatcher { [weak hosts] in hosts?.networkChanged() }
+        network.observed = { [weak hosts] path in hosts?.networkPath(satisfied: path.satisfied) }
         network.start()
         composition.network = network
+        // Low Power Mode slows every host's stats sampling (HostStatistics.cadence).
+        Task { [weak hosts] in
+            for await _ in NotificationCenter.default.notifications(named: Notification.Name.NSProcessInfoPowerStateDidChange) {
+                hosts?.powerStateChanged()
+            }
+        }
+        // Also in the in-memory and scripted modes, so simulator demos push snapshots.
+        composition.watch = WatchBridge.app(composition)
+        if let watch = composition.watch {
+            #if DEBUG
+            // The scripted hosts' helpers send no statistics: where a host has none, the watch's host screens show the
+            // sample's (the demo's hosts sample their own).
+            let scripted = (environment["DISPATCH_MOBILE_SCRIPTED"] ?? "0") != "0" || DemoScenario.enabled
+            let fallback: (any WatchStatsSource)? = scripted ? WatchSampleStats() : nil
+            #else
+            let fallback: (any WatchStatsSource)? = nil
+            #endif
+            // Each host's own stats store, at most one change every 15 s (WatchHostStatsFeed).
+            watch.stats = WatchHostStatsFeed(hosts: hosts, fallback: fallback)
+            composition.review.watch = watch.reviews
+        }
         return composition
     }
 
@@ -200,8 +371,11 @@ final class MobileComposition {
     /// next background refresh.
     func scenePhaseChanged(_ phase: ScenePhase) {
         hosts.scenePhaseChanged(phase)
+        watch?.scenePhaseChanged()
         if phase == .background {
             cache.flush()
+            // The overall comment is written 300 ms after typing stops: going away writes it now.
+            review.repository.flush()
             refresh?.schedule()
         }
     }
@@ -235,6 +409,14 @@ final class MobileComposition {
             })
     }
 
+    /// Every host's last update, for the subtitle under Agents' title (`HostsSubtitle`).
+    var freshness: [HostFreshness] {
+        hosts.ordered.map { session in
+            HostFreshness(id: session.id, name: session.host.name, tint: HostSummary(session: session).tint,
+                          state: SpacesHostState(session.link), updated: session.updated)
+        }
+    }
+
     /// What Spaces takes from a host session (its topology without agents when the host's Chat is off).
     func input(_ session: HostSession) -> TabsHostInput {
         var input = Self.input(session)
@@ -247,7 +429,16 @@ final class MobileComposition {
         let host = TabsHost(session)
         let override = record.multiplexer == .automatic ? nil : record.multiplexer.rawValue
         return TabsHostInput(host: host, client: session.client, topology: session.topology,
-                             multiplexer: session.following ?? override, features: Set(session.hello?.features ?? []))
+                             multiplexer: session.following ?? override, features: Set(session.hello?.features ?? []),
+                             mode: tabsMode(session), shells: session.shells.tabs)
+    }
+
+    /// The mode Spaces lists a host in: its connection's, else plain when the host's Helper switch is off (its next
+    /// connection is plain too), else unknown. So while it is not connected a plain host keeps its Shell space, every
+    /// card ended; a host that only fell back to plain SSH shows its Shell space only while ended cards are left, until
+    /// a connection decides again.
+    static func tabsMode(_ session: HostSession) -> HostSession.Mode? {
+        session.mode ?? (session.host.helper ? nil : .plain(reason: nil))
     }
 
     /// What Agents takes from a host session: with Chat off, no agents (the host's conversations are terminals only).
@@ -260,33 +451,74 @@ final class MobileComposition {
     }
 
     static func snapshot(_ session: HostSession) -> ChatHostSnapshot {
-        ChatHostSnapshot(id: session.id, name: session.host.name, link: session.link,
+        ChatHostSnapshot(id: session.id, name: session.host.name, link: session.link, problem: session.problem,
                          client: session.topologyIsLive ? session.client : nil, topology: session.topology,
                          features: Set(session.hello?.features ?? []), live: session.topologyIsLive)
     }
 
-    /// Line two of a chat tab's row: the model and what the agent is doing.
-    static func status(_ row: ChatConversation, session: MobileChatSession?) -> String? {
+    /// A chat tab's line in Spaces (P2, P3) and the watch's tab rows: while the agent works, its current step and when
+    /// its turn started (the rows count "· 48s" from it; the watch's agent rows send the same `step` and
+    /// `workingSince`); while it waits, the approval or question ("Allow cargo test --workspace?", as the watch's
+    /// `waitingText`); once done, its last message. The model stays in the chat; the agent is the row's mark. Reads
+    /// the session's cached step (`MobileChatSession.currentStep`), not its transcript, so a streamed word redraws no row.
+    static func status(_ row: ChatConversation, session: MobileChatSession?) -> TabsStatus? {
         if let session, session.phase == .verified {
-            let model = session.modelLabel ?? session.model
-            let doing = session.waitingForUser ? "needs you" : session.working ? (session.activity ?? "working") : nil
-            let parts = [model, doing].compactMap { $0 }
-            if !parts.isEmpty { return parts.joined(separator: " · ") }
+            if session.waitingForUser { return TabsStatus(text: WatchSnapshotBuilder.waiting(session) ?? "needs you") }
+            if session.working {
+                let step = session.currentStep
+                    ?? session.activity.flatMap { $0.isEmpty ? nil : $0.prefix(1).uppercased() + $0.dropFirst() } ?? "working"
+                return TabsStatus(text: step, since: session.submittedAt ?? session.openTurnStarted ?? session.workingSince)
+            }
         }
-        if row.summary.attention != nil { return "needs you" }
-        if row.summary.busy { return "working" }
-        return row.summary.preview
+        if row.summary.waiting { return TabsStatus(text: row.summary.attention ?? "needs you") }
+        if let attention = row.summary.attention { return TabsStatus(text: attention) }
+        if row.summary.busy { return TabsStatus(text: "working") }
+        return row.summary.preview.map { TabsStatus(text: $0) }
     }
 
-    /// Pi's extension is enabled per helper connection (docs/ios.md, Helper contract): re-enabled on every connection where
-    /// Pi and its Dispatch integration are installed. Starting Pi the first time installs it (New chat).
-    static let enablePi: HostPostConnectStep = { _, client in
-        guard let launches = try? await client.launches(), let pi = launches.first(where: { $0.key == "pi" }) else { return }
-        guard let audit: HelperChat.Installation = try? await client.connection.request(
-            "installation.audit", params: HelperChat.Setup(launch: pi.launch, enabled: nil, terminal: nil)),
-              audit.installed == true else { return }
-        let _: HelperChat.Installation? = try? await client.connection.request(
-            "installation.install", params: HelperChat.Setup(launch: pi.launch, enabled: true, terminal: nil))
+    /// New tab's agents (P2e): the host's launches with the model New chat would start each on (its last, from the
+    /// model memory); a start goes through `ChatConversations.start` as New chat's does and opens the thread in Chat.
+    var agentLauncher: SpacesAgentLauncher {
+        let hosts = hosts, conversations = conversations, memory = modelMemory
+        return SpacesAgentLauncher(choices: { id in
+            guard let client = hosts.session(id)?.client, hosts.session(id)?.host.chat == true,
+                  let launches = try? await client.launches() else { return [] }
+            return launches.map { launch in
+                let agent = memory.agent(launch.key)
+                let note = agent.model.map { model in agent.models.first { $0.id == model }?.label ?? model }
+                return SpacesAgentChoice(key: launch.key, label: launch.label, note: note)
+            }
+        }, start: { [weak self] choice, space in
+            guard let session = hosts.session(space.ref.host), let client = session.client else { throw TabsFailure.disconnected }
+            guard let launch = try await client.launches().first(where: { $0.key == choice.key }) else {
+                throw TabsFailure(message: "\(choice.label) is no longer on \(session.host.name).")
+            }
+            let remembered = memory.agent(launch.key)
+            let target = ChatSpaceChoice(host: space.ref.host, hostName: session.host.name, key: space.ref.key, name: space.name)
+            do {
+                let key = try await conversations.start(launch, in: target, settings: remembered.model.map { ($0, remembered.effort) })
+                memory.remember(agent: launch.key, model: remembered.model, effort: remembered.effort)
+                self?.openChat(key, keyboard: true)
+            } catch let consent as ChatIntegrationConsent {
+                throw TabsFailure(message: consent.message + " Start it once from New chat to add it.")
+            }
+        })
+    }
+
+    /// The agents' integrations on every connection, as the Mac's `installHelperIntegrations` does for a newly connected
+    /// host: each non-optional one (Claude Code's and Codex's hooks) is installed, so an agent started outside Dispatch
+    /// still asks here; an optional one (Pi's extension) is opt-in and only enabled again where it is installed (the
+    /// helper keeps that per connection, docs/ios.md, Helper contract). New chat installs it once the user agrees. With
+    /// Chat off the grant has no `hooks.configure` and nothing changes.
+    static let enableIntegrations: HostPostConnectStep = { session, client in
+        guard session.host.chat, let launches = try? await client.launches() else { return }
+        for launch in launches {
+            guard let audit: HelperChat.Installation = try? await client.connection.request(
+                "installation.audit", params: HelperChat.Setup(launch: launch.launch, enabled: nil, terminal: nil)),
+                  audit.optional != true || audit.installed == true else { continue }
+            let _: HelperChat.Installation? = try? await client.connection.request(
+                "installation.install", params: HelperChat.Setup(launch: launch.launch, enabled: true, terminal: nil))
+        }
     }
 
     /// The host's terminal presences attach again through the new connection (a new helper may hand out the same ids).
@@ -303,6 +535,7 @@ final class MobileComposition {
     /// The Terminal and Chat segments of a tab (`TabScreen`).
     var content: TabsContent {
         let hosts = hosts, presences = presences, conversations = conversations, tabs = tabs, memory = modelMemory
+        let navigator = navigator
         #if DEBUG
         // The Spaces sample's hosts are not sessions: its tabs show M6a's dev server so the Terminal segment has a
         // screen (screenshots, the fidelity pairs).
@@ -314,10 +547,16 @@ final class MobileComposition {
             terminal: { tab, pane in
                 #if DEBUG
                 if sample {
-                    let output = Data(String(repeating: "\r\n", count: 60).utf8) + TerminalFixtures.viteDev
-                    return AnyView(TerminalSegmentView(feed: ScriptedTerminalFeed(output: output)))
+                    // `-DispatchTerminalSample theme`: the terminal mockups' screen (T1, T2) instead of M6a's.
+                    let screen = UserDefaults.standard.string(forKey: "DispatchTerminalSample") == "theme"
+                        ? TerminalFixtures.viteTheme : TerminalFixtures.viteDev
+                    let output = Data(String(repeating: "\r\n", count: 60).utf8) + screen
+                    return AnyView(TerminalSegmentView(feed: ScriptedTerminalFeed.sample(output: output)))
                 }
                 #endif
+                if tab.isShell {
+                    return AnyView(ShellSegment(hosts: hosts, presences: presences, navigator: navigator, tab: tab, pane: pane))
+                }
                 return AnyView(TerminalSegment(hosts: hosts, presences: presences, tab: tab, pane: pane))
             },
             chat: { tab, pane in
@@ -335,8 +574,11 @@ final class MobileComposition {
                 let focus = self.focusing == key
                 if focus { self.focusing = nil }
                 // One view per conversation: no state (scroll position, draft field, sheets) carries to another.
+                // On screen, what arrives for the thread shows in it, not as a banner (`AgentAlerts.onScreen`).
                 return AnyView(ChatThreadView(session: conversations.session(for: key), space: space, tab: tab.name, directory: pane.cwd,
                                               homes: HomePath(hosts.session(key.host)?.hello), focusOnAppear: focus, seen: { conversations.markSeen(key) }, memory: memory)
+                    .onAppear { self.alerts?.onScreen.insert(key) }
+                    .onDisappear { self.alerts?.onScreen.remove(key) }
                     .id(key))
             },
             terminalSubtitle: { tab, pane in
@@ -346,18 +588,73 @@ final class MobileComposition {
                 let homes = HomePath(hosts.session(tab.ref.host)?.hello)
                 let text = TerminalSubtitle.text(directory: presence?.directory ?? pane.cwd, shell: tab.program, homes: homes)
                 return text.isEmpty ? nil : text
-            })
+            },
+            chatTrailing: { tab, pane, disc, keepsDisc in
+                #if DEBUG
+                if sample {
+                    let key = ChatConversationKey(host: ChatDemo.host, node: "tmux:s:$0:%0")
+                    return AnyView(ChatHeaderControls(session: self.sampleChat.0.session(for: key), keepsDisc: keepsDisc) { disc })
+                }
+                #endif
+                let key = ChatConversationKey(host: tab.ref.host, node: pane.key)
+                return AnyView(ChatHeaderControls(session: conversations.session(for: key), keepsDisc: keepsDisc) { disc })
+            },
+            files: filesContent,
+            gitFacts: gitFacts)
+    }
+
+    /// The Files segment's modes: the host actions here, each mode's slot from its area's own file
+    /// (`installFilesMode`, `installReviewMode`, `installCommitsMode`).
+    var filesContent: FilesModeContent {
+        let hosts = hosts
+        var content = FilesModeContent()
+        content.installHelper = { hosts.useHelper(host: $0) }
+        content.reconnect = { hosts.session($0)?.retryNow() }
+        installFilesMode(&content.files)
+        installReviewMode(&content.review)
+        installCommitsMode(&content.commits)
+        return content
     }
 
     /// Hosts' screens embedded in Spaces: New host (M8a) and host detail (M1f) with the host's spaces opening in
-    /// Spaces.
+    /// Spaces: the topology's, then a plain host's Shell space (Tabs' own, no topology names it).
     var hostViews: SpacesHostViews {
-        let hosts = hosts, navigator = navigator
+        let hosts = hosts, navigator = navigator, tabs = tabs
         return SpacesHostViews(
             newHost: { done in hosts.newHostSheet(created: { done($0) }) },
             detail: { id in
-                AnyView(hosts.hostDetail(id) { HostSpacesList(session: $0) }.environment(\.hostSpaceOpening, navigator))
+                AnyView(hosts.hostDetail(id, count: { session in
+                    HostSummary(session: session).spaces.count + (tabs.workspace(session.id)?.shellSpace == nil ? 0 : 1)
+                }) { session in
+                    HostSpacesList(session: session)
+                    if let space = tabs.workspace(session.id)?.shellSpace { HostShellSpaceRow(session: session, space: space) }
+                }.environment(\.hostSpaceOpening, navigator))
+            },
+            statsLine: { [feedsTabs] id in
+                #if DEBUG
+                if !feedsTabs { return TabsSample.statsLine(id) }
+                #endif
+                return hosts.session(id).flatMap(Self.statsLine)
             })
+    }
+
+    /// The preferences of a run that saves nothing (`DISPATCH_MOBILE_STORE=memory`, the scripted hosts, the demo):
+    /// a suite emptied at each launch.
+    static var ephemeralDefaults: UserDefaults {
+        let name = "dispatch-ephemeral"
+        let defaults = UserDefaults(suiteName: name) ?? .standard
+        defaults.removePersistentDomain(forName: name)
+        return defaults
+    }
+
+    /// P3's host row: "34% cpu · 34% mem · 18 ms" from the host's stats and latency; nil before a sample, or while the
+    /// host is not connected (the row says how it is instead).
+    static func statsLine(_ session: HostSession) -> String? {
+        guard session.link.isConnected else { return nil }
+        let sample = session.stats.sample
+        let parts = [sample?.cpu.map { "\(Int($0.rounded()))% cpu" }, sample?.memoryPercent.map { "\(Int($0.rounded()))% mem" },
+                     session.latency.map(HostSummary.milliseconds)].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     /// New space for New chat (M9a): its form over New chat (for the recent space's host, as from New tab's picker), or
@@ -391,9 +688,20 @@ private struct TerminalSegment: View {
                 .onAppear { presences.retain(key) }
                 .onDisappear { presences.release(key) }
         } else {
-            Text("\(hosts.session(tab.ref.host)?.host.name ?? "The host") is offline.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+            let session = hosts.session(tab.ref.host)
+            VStack(spacing: 6) {
+                Text(session?.link.isPending == true ? "Connecting to \(session?.host.name ?? "the host")…"
+                     : "\(session?.host.name ?? "The host") is offline.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                if let problem = session?.problem {
+                    Text(problem)
+                        .font(.footnote)
+                        .foregroundStyle(.tertiary)
+                        .multilineTextAlignment(.center)
+                }
+            }
+            .padding(.horizontal, 24)
         }
     }
 
@@ -407,6 +715,75 @@ private struct TerminalSegment: View {
         return presences.open(key, feed: HelperTerminalFeed(client: client, terminal: pane.id), terminal: pane.id, client: client,
                               scrollback: TerminalScrollback(multiplexer: session.following),
                               grid: node?.size.map { (Int($0.columns), Int($0.rows)) })
+    }
+}
+
+/// Host detail's row for a plain host's Shell space, after the topology's rows (`HostSpacesList`), as they draw theirs:
+/// it opens the space (`MobileSpace.shellNode`).
+private struct HostShellSpaceRow: View {
+    let session: HostSession
+    let space: MobileSpace
+    @Environment(\.hostSpaceOpening) private var spaceOpening
+
+    var body: some View {
+        if let spaceOpening {
+            Button { spaceOpening.open(host: session.id, space: MobileSpace.shellNode) } label: {
+                HStack {
+                    row
+                    Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+                }
+            }
+            .foregroundStyle(.primary)
+        } else {
+            row
+        }
+    }
+
+    private var row: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "apple.terminal")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+                .frame(width: 28, height: 28)
+                .background(Color.secondary.opacity(0.15), in: Circle())
+                .accessibilityHidden(true)
+            Text(space.name).font(.headline)
+            Text(space.tabs.count == 1 ? "1 shell" : "\(space.tabs.count) shells")
+                .font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+            Spacer(minLength: 0)
+        }
+    }
+}
+
+/// A plain shell tab's Terminal segment: its presence, which `ShellSessions` keeps attached while the tab lives (this
+/// view's own use comes and goes with it on screen, as any segment's). Once the shell ended (its exit, or the
+/// connection's) the ended card offers New shell and Close over the last screen; a tab the launch cache brought back
+/// has no screen, only the card.
+private struct ShellSegment: View {
+    let hosts: HostSessions
+    let presences: TerminalPresences
+    let navigator: SpacesNavigator
+    let tab: MobileTab
+    let pane: MobilePane
+
+    var body: some View {
+        let key = TerminalPresences.Key(host: tab.ref.host, node: pane.key)
+        let state = hosts.session(tab.ref.host)?.shells.tab(key: pane.key)?.state ?? tab.shell
+        let ref = tab.ref
+        let card = TerminalEndedCard(ended: state?.isLive == false,
+                                     newShell: { navigator.newShell(host: ref.host) },
+                                     close: { navigator.actions.close(.tab(ref), .close) })
+        if let presence = presences.presence(key) {
+            TerminalSegmentView(presence: presence, ended: card).id(key)
+                .onAppear { presences.retain(key) }
+                .onDisappear { presences.release(key) }
+        } else {
+            TerminalEndedCardView(card: card, detail: state?.exitDetail)
+                .frame(maxWidth: 404)
+                .padding(.horizontal, 16)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.black)
+        }
     }
 }
 
@@ -435,6 +812,10 @@ final class TerminalChatPresence: ChatTerminalPresence {
     func attached(_ key: ChatConversationKey) -> Bool {
         presences.presence(.init(host: key.host, node: key.node))?.attached == true
     }
+
+    func sending(_ key: ChatConversationKey, _ busy: Bool) {
+        presences.presence(.init(host: key.host, node: key.node))?.chat(key, sending: busy)
+    }
 }
 
 extension TerminalPresences {
@@ -456,9 +837,10 @@ extension TerminalPresences {
         for key in keys(host: host) { close(key) }
     }
 
-    /// The host's presences of terminals that are gone (not in `keeping`, the live topology's terminal keys) go.
+    /// The host's presences of terminals that are gone (not in `keeping`, the live topology's terminal keys) go. Shell
+    /// tabs' presences are not the topology's: their `ShellSessions` closes them.
     func prune(host: UUID, keeping: Set<String>) {
-        for key in keys(host: host) where !keeping.contains(key.node) { close(key) }
+        for key in keys(host: host) where !keeping.contains(key.node) && !ShellSessions.isKey(key.node) { close(key) }
     }
 }
 
@@ -470,7 +852,23 @@ extension TabsHost {
         self.init(id: record.id, name: record.name, tint: HostSummary(session: session).tint, system: record.system,
                   home: session.hello?.account?.home, loginHome: session.hello?.account?.login_home,
                   state: SpacesHostState(session.link), order: record.order,
-                  live: session.topologyIsLive && !session.switchingMultiplexer, multiplexer: session.spacesMultiplexer)
+                  // A plain connection's Shell space is this connection's own: live, not stale.
+                  live: (session.topologyIsLive || session.isPlain) && !session.switchingMultiplexer,
+                  multiplexer: session.spacesMultiplexer, plain: session.plainSSH,
+                  files: record.files, reconnecting: Self.reconnecting(session.link), offlineSince: Self.offlineSince(session))
+    }
+
+    @MainActor static func reconnecting(_ link: HostLink) -> Bool {
+        if case .reconnecting = link { true } else { false }
+    }
+
+    /// When the host went offline: the reconnect's start, else its last connection; nil while connected or connecting.
+    @MainActor static func offlineSince(_ session: HostSession) -> Date? {
+        switch session.link {
+        case .connected, .connecting, .authenticating, .bootstrapping: nil
+        case .reconnecting(_, let since, _): since
+        case .disconnected, .failed: session.host.lastConnected
+        }
     }
 }
 

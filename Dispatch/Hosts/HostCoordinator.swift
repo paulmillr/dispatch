@@ -50,9 +50,10 @@ final class HostCoordinator {
     private let watcher = HostProcessWatcher()
     lazy var reconnect = SSHReconnectController(runtime: runtime!)
     private var task: Task<Void, Never>?
-    /// Probes wait half a second while Dispatch is active and ten seconds otherwise; activation ends the wait.
+    /// Probes wait half a second while Dispatch is active and a window shows, ten seconds otherwise; activation or a
+    /// window's occlusion change ends the wait.
     private var nap: Task<Void, Never>?
-    private var activation: NSObjectProtocol?
+    private var activation: [NSObjectProtocol] = []
     private var cursor = 0
     private var epoch = System.uuid()
     private var bindings: [UUID: Binding] = [:]
@@ -75,9 +76,11 @@ final class HostCoordinator {
 
     func start() {
         guard task == nil else { return }
-        activation = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification,
-                                                            object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.nap?.cancel() }
+        // Activation and a window coming out from under others end a long nap at once.
+        for name in [NSApplication.didBecomeActiveNotification, NSWindow.didChangeOcclusionStateNotification] {
+            activation.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.nap?.cancel() }
+            })
         }
         task = Task { [weak self] in
             while !Task.isCancelled, let self {
@@ -87,9 +90,12 @@ final class HostCoordinator {
         }
     }
 
+    /// Twice a second while the user can see a terminal; every 10 s while another app is active or every Dispatch
+    /// window is covered (a terminal's process is only shown, never acted on, from here).
     private func wait() async {
-        let interval: Duration = NSApp?.isActive == false ? .seconds(10) : .milliseconds(500)
-        let nap = Task { _ = try? await System.sleep(for: interval, "poll") }
+        let shown = NSApp?.windows.contains { $0.isVisible && $0.occlusionState.contains(.visible) } ?? true
+        let interval: Duration = NSApp?.isActive == false || !shown ? .seconds(10) : .milliseconds(500)
+        let nap = Task { _ = try? await System.sleep(for: interval, "poll", woken: true) }
         self.nap = nap
         await nap.value
     }
@@ -98,7 +104,7 @@ final class HostCoordinator {
         epoch = System.uuid()
         task?.cancel(); task = nil
         nap?.cancel(); nap = nil
-        activation.map(NotificationCenter.default.removeObserver); activation = nil
+        activation.forEach(NotificationCenter.default.removeObserver); activation = []
         reconnect.stop()
         for pending in pendingHosts.values { pending.task?.cancel() }
         pendingHosts.removeAll()

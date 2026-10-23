@@ -79,7 +79,7 @@ final class MobileLiveTests: XCTestCase {
         field.typeText(text)
     }
 
-    /// The back pill of a pushed screen ("Back, 2 need you", "Back to app").
+    /// The back pill of a pushed screen ("Back, 2 conversations need you", "Back to app").
     private func back(_ app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH 'Back'")).firstMatch
     }
@@ -145,15 +145,27 @@ final class MobileLiveTests: XCTestCase {
         app.tabBars.buttons["Agents"].tap()
         app.buttons["New chat"].tap()
         wait(app.staticTexts["New chat"], 5, "M9a")
-        app.buttons.matching(NSPredicate(format: "label CONTAINS 'this-mac' OR label CONTAINS 'Choose a space'")).firstMatch.tap()
+        app.buttons["Space"].tap()
         app.buttons["New space…"].tap()
         wait(app.staticTexts["New space"], 10, "M7a")
-        type("e2e", into: app.textFields["Space name"])
+        // The name field's placeholder is the automatic name (the folder's); it is the form's only field until Other folder….
+        type("e2e", into: app.textFields.firstMatch)
         app.buttons["Other folder…"].tap()
         type(live.work, into: app.textFields["~/src/project"])
         shot("M7a")
         let space = Date()
         app.buttons["Create"].tap()
+        // Made from New chat, the space becomes the chat's (docs/ios.md, Spaces): New chat shows it, and its first tab
+        // opens from Spaces.
+        wait(app.staticTexts["New chat"], 20, "back in New chat with the space made")
+        app.buttons["Close"].tap()
+        app.tabBars.buttons["Spaces"].tap()
+        let made = app.buttons.matching(NSPredicate(format: "label CONTAINS 'e2e'")).firstMatch
+        wait(made, 20, "the new space in Spaces")
+        made.tap()
+        let madeTab = app.buttons.matching(identifier: "space-tab").firstMatch
+        wait(madeTab, 20, "the new space's tab")
+        madeTab.tap()
         let terminal = app.textViews["Terminal"]
         wait(terminal, 20, "the new space's terminal tab")
         measure("new_space_to_terminal", since: space)
@@ -168,8 +180,10 @@ final class MobileLiveTests: XCTestCase {
         measure("printf_to_output", since: printed)
         shot("M6a-printf")
 
-        // M9a: Claude in a new tab of the space, a message, an approval, an answer.
-        back(app).tap()
+        // M9a: Claude in a new tab of the space, a message, an approval, an answer. Back past the space's screen to the
+        // tab bar.
+        while back(app).exists { back(app).tap() }
+        app.tabBars.buttons["Agents"].tap()
         app.buttons["New chat"].tap()
         wait(app.staticTexts["New chat"], 5, "M9a")
         let agent = app.buttons["claude"]
@@ -242,8 +256,11 @@ final class MobileLiveTests: XCTestCase {
             app.navigationBars["Create key"].buttons["Create"].tap()
             waitGone(app.navigationBars["Create key"])
         }
-        let first = app.buttons.matching(NSPredicate(format: "label CONTAINS 'this-mac'")).firstMatch
-        wait(first, 20, "the fixture's tab in Spaces")
+        let space = app.buttons.matching(identifier: "space-row").firstMatch
+        wait(space, 20, "the fixture's space in Spaces")
+        space.tap()
+        let first = app.buttons.matching(identifier: "space-tab").firstMatch
+        wait(first, 20, "the fixture's tab")
         first.tap()
         let terminal = app.textViews["Terminal"]
         wait(terminal, 20, "the terminal")

@@ -3,7 +3,7 @@ import XCTest
 @testable import DispatchApp
 
 /// The diff view's pure side: unified diffs as git prints them parsed into hunks and
-/// numbered lines, the fold rule, the Source fallback, and the Changes tab's words. Fixtures are real `git diff` output.
+/// numbered lines, the fold rule, the Source fallback, and the Review tab's words. Fixtures are real `git diff` output.
 @MainActor
 final class GitDiffTests: XCTestCase {
     private typealias Row = GitDiffPresentation.Row
@@ -405,9 +405,6 @@ final class GitDiffTests: XCTestCase {
         XCTAssertEqual(GitChangesText.binary(old: 0, new: 51_000, kind: .added), "binary · 51 KB")
         XCTAssertEqual(GitChangesText.binary(old: 48_000, new: 0, kind: .deleted), "binary · 48 KB → deleted")
         XCTAssertEqual(GitChangesText.binary(old: nil, new: nil), "binary")
-        XCTAssertEqual(GitChangesText.meta(label: "unstaged", additions: 8, deletions: 5, hunks: 2),
-                       "unstaged · +8 −5 · 2 hunks")
-        XCTAssertEqual(GitChangesText.meta(label: nil, additions: 1, deletions: 0, hunks: 1), "+1 −0 · 1 hunk")
     }
 
     func testKeyboardMovesThroughTheGroupsInOrder() {
@@ -437,33 +434,6 @@ final class GitDiffTests: XCTestCase {
         let committed = before.filter { $0.id != billing }
         XCTAssertEqual(GitChangesText.reconciled(billing, previous: before, current: committed), committed[1].id)
         XCTAssertNil(GitChangesText.reconciled(billing, previous: before, current: []))
-    }
-
-    func testGitLinesTypeFromWhereverTheShellIs() {
-        let repository = "/Users/ivan/src/api"
-        XCTAssertEqual(FilesEditor.git("add -p", repository: repository, shellDirectory: "/Users/ivan/src/api/src"),
-                       "git add -p")
-        XCTAssertEqual(FilesEditor.git("add -p", repository: repository, shellDirectory: repository), "git add -p")
-        XCTAssertEqual(FilesEditor.git("add -p", repository: repository, shellDirectory: "/Users/ivan"),
-                       "git -C '/Users/ivan/src/api' add -p")
-        XCTAssertEqual(FilesEditor.git("show c28855c", repository: repository, shellDirectory: "/Users/ivan/src/apiary"),
-                       "git -C '/Users/ivan/src/api' show c28855c", "a sibling folder sharing the prefix is outside")
-        XCTAssertEqual(FilesEditor.git("add -p", repository: "/Users/ivan/it's", shellDirectory: nil),
-                       #"git -C '/Users/ivan/it'\''s' add -p"#)
-    }
-
-    func testGitLinesGoThroughTheTerminalsRefusals() {
-        // What the Changes and Commits buttons call: a tab with no terminal types nothing and says why.
-        let files = FilesCoordinator { nil }
-        let tab = System.uuid()
-        defer { FilesEditorNotices.shared.clear(tab) }
-        XCTAssertEqual(FilesEditor.runGit("add -p", repository: "/Users/ivan/src/api", tab: tab, files: files), .noTerminal)
-        XCTAssertEqual(FilesEditorNotices.shared.notice(for: tab), FilesEditor.Refusal.noTerminal.message)
-        XCTAssertEqual(FilesEditor.runGit("show c28855c\nrm -rf ~", repository: "/Users/ivan/src/api", tab: tab,
-                                          files: files), .unsafePath, "a newline would run the rest")
-        XCTAssertEqual(FilesEditorNotices.shared.notice(for: tab), FilesEditor.Refusal.unsafePath.message)
-        XCTAssertEqual(FilesEditor.refusal(path: "", action: .line("git add -p"), hasTerminal: true, busy: true), .busy)
-        XCTAssertNil(FilesEditor.refusal(path: "", action: .line("git add -p"), hasTerminal: true, busy: false))
     }
 
     // MARK: Source

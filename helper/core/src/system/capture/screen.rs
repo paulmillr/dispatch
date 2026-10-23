@@ -699,7 +699,7 @@ fn utf8_length(lead: u8) -> usize {
 }
 
 /// The cells a code point takes: 0 (combining, format), 2 (East Asian wide or full width) or 1.
-fn columns(point: u32) -> usize {
+pub fn columns(point: u32) -> usize {
     let inside = |table: &[(u32, u32)]| table.binary_search_by(|(first, last)| {
         if *last < point { std::cmp::Ordering::Less } else if *first > point { std::cmp::Ordering::Greater } else { std::cmp::Ordering::Equal }
     }).is_ok();

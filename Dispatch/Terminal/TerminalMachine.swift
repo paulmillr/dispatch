@@ -27,7 +27,21 @@ struct SSHShell: Equatable, Codable, Sendable {
     var arguments: [String] {
         // Start a shell even if the originating connection supplied a command.
         // Do not duplicate listeners when cloning a connection with forwarding.
-        ["-o", "RemoteCommand=none", "-o", "ClearAllForwardings=yes"] + options + ["-tt", "--", destination]
+        Self.ownOptions.flatMap { ["-o", $0] } + Self.withoutOwnOptions(options) + ["-tt", "--", destination]
+    }
+    static let ownOptions = ["RemoteCommand=none", "ClearAllForwardings=yes"]
+
+    /// `options` without the two `arguments` puts first: a connection the app launched carries them already (parsed
+    /// back from its command, `SSHInvocation`), and a clone of it would repeat them every generation, a command that
+    /// differed with whichever connection a new tab happened to clone.
+    static func withoutOwnOptions(_ options: [String]) -> [String] {
+        var result: [String] = [], index = 0
+        while index < options.count {
+            if options[index] == "-o", index + 1 < options.count, ownOptions.contains(options[index + 1]) { index += 2; continue }
+            if options[index].hasPrefix("-o"), ownOptions.contains(String(options[index].dropFirst(2))) { index += 1; continue }
+            result.append(options[index]); index += 1
+        }
+        return result
     }
     #if canImport(AppKit)
     /// The command a terminal runs for this connection (running `remote` there instead of a shell):

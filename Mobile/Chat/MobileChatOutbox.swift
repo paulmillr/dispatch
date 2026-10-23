@@ -9,10 +9,12 @@ struct ChatConversationKey: Hashable, Codable, Sendable {
     let node: String
 }
 
-/// A queued message, kept on the device until it is delivered (M4c, M5c). The helper's queue dies with the helper
-/// (only Codex's own queue survives a drop), so this is the durable queue: while connected each message is mirrored
-/// into `queue.*`; after a reconnect the device re-adds what the new helper lost. It never sends a message twice: when
-/// the device cannot tell whether a message went out, it pauses it for the user (docs/architecture.md, Delivery).
+/// A queued message, kept on the device until it is delivered (M4c, M5c). While connected each message is mirrored
+/// into `queue.*`. The host keeps a named conversation's queue in its queue store, which outlives the helper: after a
+/// reconnect the device finds its items there by id, and one the store no longer holds was sent or removed there.
+/// Only a queue of a conversation the agent had not named lives in its helper's memory; the device re-adds what a new
+/// helper lost of it. It never sends a message twice: when the device cannot tell whether a message went out, it
+/// pauses it for the user (docs/architecture.md, Delivery).
 struct ChatOutboxItem: Identifiable, Codable, Equatable, Sendable {
     enum State: Codable, Equatable, Sendable {
         /// On the device only: waits for the link and a verified conversation.
@@ -26,6 +28,23 @@ struct ChatOutboxItem: Identifiable, Codable, Equatable, Sendable {
         /// Refused, stopped, or typed for another conversation: edit, send or discard.
         case paused(String)
     }
+    /// The agent process a message was typed for (the topology binding's pid, start and executable), as the Mac's
+    /// `ChatQueuedMessage.binding`: another process in the same pane never receives it.
+    struct Process: Codable, Equatable, Sendable {
+        let pid: UInt64?
+        let start: [UInt64]?
+        let executable: String?
+
+        init?(_ binding: HelperTopology.Binding?) {
+            guard let binding, binding.pid != nil else { return nil }
+            (pid, start, executable) = (binding.pid, binding.start, binding.executable)
+        }
+
+        func matches(_ binding: HelperTopology.Binding?) -> Bool {
+            binding?.pid == pid && binding?.start == start && binding?.executable == executable
+        }
+    }
+
     var id = UUID()
     let key: ChatConversationKey
     /// The conversation it was typed in (the binding's session); nil before the agent named one.
@@ -33,6 +52,39 @@ struct ChatOutboxItem: Identifiable, Codable, Equatable, Sendable {
     var text: String
     var created = Date()
     var state = State.waiting
+    /// A native command (`/…`, `!…`, AgentInput.isCommand): delivered as a command, never fenced as a prompt.
+    var command = false
+    /// The process it belongs to; nil until a verified conversation adopts it (queued before the agent was bound).
+    var process: Process?
+    /// Files already stored on the host (`attachments.put`), sent with the message by path. The file keeps them without
+    /// thumbnails (`ChatOutboxFileStore`); the thread fetches those from the host.
+    var attachments: [ChatAttachment] = []
+
+    init(id: UUID = UUID(), key: ChatConversationKey, conversation: String?, text: String, created: Date = Date(),
+         state: State = .waiting, command: Bool = false, process: Process? = nil, attachments: [ChatAttachment] = []) {
+        (self.id, self.key, self.conversation, self.text, self.created) = (id, key, conversation, text, created)
+        (self.state, self.command, self.process, self.attachments) = (state, command, process, attachments)
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, key, conversation, text, created, state, command, process, attachments }
+
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        key = try c.decode(ChatConversationKey.self, forKey: .key)
+        conversation = try c.decodeIfPresent(String.self, forKey: .conversation)
+        text = try c.decode(String.self, forKey: .text)
+        created = try c.decode(Date.self, forKey: .created)
+        state = try c.decode(State.self, forKey: .state)
+        // Items saved before these fields: prompts of an unknown process (adopted by the next verified conversation).
+        command = try c.decodeIfPresent(Bool.self, forKey: .command) ?? false
+        process = try c.decodeIfPresent(Process.self, forKey: .process)
+        attachments = try c.decodeIfPresent([ChatAttachment].self, forKey: .attachments) ?? []
+    }
+
+    /// A shell command (`!…`): the helper's queue refuses them (`shell_command`), so they stay on the device and run
+    /// by `chat.command` once they reach the head of an idle conversation's queue, as the Mac's local queue does.
+    var shell: Bool { command && text.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("!") }
 
     var pauseReason: String? {
         switch state {
@@ -62,7 +114,15 @@ struct ChatOutboxItem: Identifiable, Codable, Equatable, Sendable {
         return document.items
     }
     func save(_ items: [ChatOutboxItem]) throws {
-        try PrivateFile.write(JSONEncoder().encode(Document(items: items)), to: url, excludedFromBackup: true)
+        try PrivateFile.write(JSONEncoder().encode(Document(items: Self.stored(items))), to: url, excludedFromBackup: true)
+    }
+    /// What the file keeps: thumbnails live in drafts only (docs/ios.md, Attachments).
+    static func stored(_ items: [ChatOutboxItem]) -> [ChatOutboxItem] {
+        items.map { item in
+            var item = item
+            for index in item.attachments.indices { item.attachments[index].thumbnail = nil }
+            return item
+        }
     }
 }
 

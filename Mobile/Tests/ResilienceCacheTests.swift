@@ -56,6 +56,7 @@ final class ResilienceCacheTests: XCTestCase {
         XCTAssertEqual(entry.conversations["tmux:fixture:5"]?.preview, "Run the migration?")
         XCTAssertEqual(entry.conversations["tmux:fixture:5"]?.subagents, 0)
         XCTAssertEqual(entry.saved, .distantPast)
+        XCTAssertEqual(entry.shells, [], "no shell tabs before plain SSH")
         XCTAssertNil(cache.entry(other))
     }
 
@@ -80,8 +81,9 @@ final class ResilienceCacheTests: XCTestCase {
         let row = HostCacheEntry.Conversation(ChatConversationSummary(preview: long, finished: true))
         XCTAssertEqual(row.preview?.count, HostCacheEntry.Conversation.previewLimit)
         let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(row)) as? [String: Any])
-        XCTAssertTrue(Set(fields.keys).isSubset(of: ["busy", "subagents", "attention", "preview", "finished", "lastActivity"]),
-                      "a row's state, its preview and time: no transcript")
+        XCTAssertTrue(Set(fields.keys).isSubset(of: ["busy", "subagents", "attention", "preview", "finished", "lastActivity",
+                                                     "waiting", "title"]),
+                      "a row's state, its preview, title and time: no transcript")
     }
 
     /// Before any host answers (the first frame), Spaces and Agents show the cached hosts, their spaces and the agents'
@@ -182,5 +184,49 @@ struct FixedSummaries: ChatConversationSource {
                                                  lastActivity: Date(timeIntervalSince1970: 1_800_000_050))
         }
         return result
+    }
+}
+
+/// A plain SSH host's shell tabs (docs/ios.md, Plain SSH) in the launch cache.
+extension ResilienceCacheTests {
+    /// The tabs are kept as they change (id, number, the program's title, creation; no screen), and after a relaunch
+    /// they come back ended, in the host's Shell space, before any connection; the next shell takes the next number.
+    func testShellTabsPersistAndComeBackEnded() async throws {
+        let url = try temporaryFile()
+        var pi = ResilienceFixture.host("pi")
+        pi.helper = false
+        let opener = ScriptedShellOpener()
+        let driver = ScriptedHostSessionDriver { _ in [.event(.link(.connecting)), .plain(reason: nil, shells: opener), .hold] }
+        let cache = HostCache(url: url)
+        let hosts = ResilienceFixture.sessions([pi], driver: driver)
+        let app = ResilienceFixture.composition(hosts, cache: cache)
+        let session = try XCTUnwrap(hosts.session(pi.id))
+        try await TestSupport.eventually { session.link == .connected }
+        let workspace = try XCTUnwrap(app.tabs.workspace(pi.id))
+        XCTAssertEqual(workspace.spaces.map(\.name), ["Shell"])
+        let kept = try app.tabs.newShell(on: pi.id)
+        let closed = try app.tabs.newShell(on: pi.id)
+        XCTAssertEqual(cache.entry(pi.id)?.shells.map(\.number), [1, 2])
+        try await TestSupport.eventually { opener.shells.count == 2 }
+        opener.shells[0].emit("\u{1B}]0;build\u{07}")
+        try await TestSupport.eventually { cache.entry(pi.id)?.shells.first?.title == "build" }
+        app.tabs.closeShell(closed.ref)
+        XCTAssertEqual(cache.entry(pi.id)?.shells.map(\.number), [1])
+        cache.flush()
+        hosts.setActive(false)
+
+        let relaunched = ResilienceFixture.sessions([pi], driver: ScriptedHostSessionDriver { _ in [] }, active: false)
+        let again = ResilienceFixture.composition(relaunched, cache: HostCache(url: url))
+        let shells = try XCTUnwrap(relaunched.session(pi.id)).shells
+        XCTAssertEqual(shells.tabs.map(\.key), [kept.ref.key])
+        XCTAssertEqual(shells.tabs.first?.state, .ended(nil))
+        XCTAssertEqual(shells.tabs.first?.title, "build")
+        let space = try XCTUnwrap(again.tabs.workspace(pi.id)?.shellSpace)
+        XCTAssertEqual(space.tabs.map(\.name), ["build"])
+        XCTAssertEqual(space.tabs.first?.shell, .ended(nil))
+        XCTAssertNil(again.presences.presence(shells.presenceKey(shells.tabs[0].id)), "no screen is kept")
+        XCTAssertNil(HostCache(url: url).updated(pi.id), "no helper ever answered")
+        shells.opener = { ScriptedShellOpener() }
+        XCTAssertEqual(shells.newTab()?.number, 2)
     }
 }

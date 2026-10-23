@@ -10,11 +10,6 @@
         "url": "https://github.com/openai/codex/releases/download/rust-v0.163.0/codex-package-aarch64-apple-darwin.tar.gz",
         "sha256": "b0344fc2e41f15e0071147e5869008047b8ff4bf2c4a8897975d3bae3f103b34",
         "binary": "bin/codex"
-      },
-      "x86_64": {
-        "url": "https://github.com/openai/codex/releases/download/rust-v0.163.0/codex-package-x86_64-apple-darwin.tar.gz",
-        "sha256": "0c182d6194da7003943678dc87866b54b3dee719edaf8d092f304affbc6b57d1",
-        "binary": "bin/codex"
       }
     }
   },
@@ -28,12 +23,6 @@
       "arm64": {
         "url": "https://downloads.claude.ai/claude-code-releases/2.1.302/darwin-arm64/claude",
         "sha256": "5262ce9de86243fed0d21edc39b271555d56780d0112e2b194439fe1c6662d37",
-        "binary": "bin/claude",
-        "format": "binary"
-      },
-      "x86_64": {
-        "url": "https://downloads.claude.ai/claude-code-releases/2.1.302/darwin-x64/claude",
-        "sha256": "b9a913114f42870ec8e38848c88c855d73f73187871ec2e1ad05bbe54029d9ac",
         "binary": "bin/claude",
         "format": "binary"
       }
@@ -50,11 +39,6 @@
         "url": "https://github.com/earendil-works/pi/releases/download/v1.3.0/pi-darwin-arm64.tar.gz",
         "sha256": "1f9ae61cdeae04dd68caf1a1e8ab8ec9b292062f6ccb3252e0a9cbe93b5b16f1",
         "binary": "pi/pi"
-      },
-      "x86_64": {
-        "url": "https://github.com/earendil-works/pi/releases/download/v1.3.0/pi-darwin-x64.tar.gz",
-        "sha256": "9ff562e2e439f50971b1f6bd9b62b30946600d9e9baa4ea19635cf630a553066",
-        "binary": "pi/pi"
       }
     }
   },
@@ -70,12 +54,6 @@
         "sha256": "fb77c2232a05a8035421382c894392f4174e4e38a18e48af3dd0290157c3a7e2",
         "binary": "bin/herdr",
         "format": "binary"
-      },
-      "x86_64": {
-        "url": "https://github.com/herdrdev/herdr/releases/download/v0.9.5/herdr-macos-x86_64",
-        "sha256": "5fb0a908ec7f6745e3e245738b06bfad56c46391c391ab3c0955fbead01f1369",
-        "binary": "bin/herdr",
-        "format": "binary"
       }
     }
   },
@@ -87,11 +65,6 @@
     "banner": "tmux {version}",
     "archives": {
       "arm64": {
-        "url": "https://github.com/tmux/tmux/releases/download/3.7/tmux-3.7.tar.gz",
-        "sha256": "2344f191501b8a73eb71dd6c5fd5dcf8c765f5066f34ab46f04b3013dc7bc1a5",
-        "binary": "tmux-3.7/tmux"
-      },
-      "x86_64": {
         "url": "https://github.com/tmux/tmux/releases/download/3.7/tmux-3.7.tar.gz",
         "sha256": "2344f191501b8a73eb71dd6c5fd5dcf8c765f5066f34ab46f04b3013dc7bc1a5",
         "binary": "tmux-3.7/tmux"

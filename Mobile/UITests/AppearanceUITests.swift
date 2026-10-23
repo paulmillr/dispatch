@@ -21,14 +21,17 @@ final class AppearanceUITests: XCTestCase {
             _ = app.navigationBars["New host"].waitForExistence(timeout: 5)
         }),
         Screen(id: "M2a", arguments: sample),
-        Screen(id: "M2b", arguments: sample + ["-DispatchTabsTree", "YES"]),
+        Screen(id: "M2b", arguments: sample + ["-DispatchTabsFilter", "needsYou"]),
         Screen(id: "M1e", arguments: sample + ["-DispatchTabsShow", "edit"]),
         Screen(id: "M2c", arguments: sample + ["-DispatchTabsShow", "space:herdr:app"]),
-        Screen(id: "M4d", arguments: sample + ["-DispatchTabsShow", "details:herdr:app"]),
+        Screen(id: "M4d", arguments: sample + ["-DispatchTabsShow", "switcher:herdr:app:2"]),
         Screen(id: "M7a", arguments: sample + ["-DispatchTabsShow", "new-space"]),
         // A tab on its Terminal segment (the sample has no terminal behind it: M6a itself is AppearanceScreenshotTests').
         Screen(id: "tab", arguments: sample + ["-DispatchTabsShow", "tab:herdr:app:2"]),
-    ] + ["M3a", "M3b", "M4a", "M4b", "M4c", "M5a", "M5b", "M5c", "M5f", "M9a"].map {
+    ] + ["M3a", "M3b", "M4a", "M4b", "M4c", "M5a", "M5b", "M5c", "M5f", "M9a",
+         // The chat redesign: search, slash list, side conversation, goal and its sheet, conversation mode (listening
+         // and reading aloud), Jump to latest, the turn footnote.
+         "C1", "C2", "C3", "C4", "C4b", "C5", "C5r", "C6", "S6"].map {
         Screen(id: $0, environment: ["DISPATCH_MOBILE_CHAT_DEMO": $0])
     } + [
         Screen(id: "M5d", environment: ["DISPATCH_MOBILE_CHAT_DEMO": "M5b"], then: { app in
@@ -129,15 +132,37 @@ final class AppearanceUITests: XCTestCase {
             // zoom.
             // Edit mode's Add host (M1e) is a list row's button: the check reports its title although it grows with the
             // text (seen in the AX5 screenshots).
-            return screen == "M5d" || frame.maxY <= 120 || issue.element?.elementType == .button
+            // Spaces' Needs you count is a badge in the chip row, which scrolls sideways instead of wrapping; a host's
+            // name in edit mode's header keeps one line beside its controls below the accessibility sizes (M1e). The
+            // switcher (M4d) caps its title and path at xxxLarge as a bar's are, in its sheet's bar.
+            // Manage goal (C4b) is a medium sheet, the mockup's: its rows run on below the sheet's edge and scroll.
+            return screen == "M5d" || screen == "C4b" || frame.maxY <= 120 || issue.element?.elementType == .button
                 || (screen == "M1e" && label == "Add host")
+                || (["M2a", "M2b"].contains(screen) && Int(label) != nil) || (screen == "M1e" && frame.height <= 30)
+                || screen == "M4d"
+        case .elementDetection:
+            // Behind the switcher's sheet (M4d) the tab's terminal, a drawn grid, is hidden from VoiceOver while the
+            // sheet is up.
+            return screen == "M4d" && issue.element == nil
         case .sufficientElementDescription:
             // The keyboard's own predictive bar above its keys (its suggestion buttons have no label while empty).
             return label.isEmpty && !keyboard.isNull && frame.minY >= keyboard.minY - 60 && frame.maxY <= keyboard.maxY
         case .textClipped:
             // Row previews clamp to one or two lines as Mail's do (M2a, M3a: the list reports them without an
             // element), and New host's address placeholder is the system field's, truncated by the Form.
-            return issue.element == nil || (screen == "M8a" && issue.element?.elementType == .textField)
+            // The space switcher (M4d, P3) is a sheet at its 560-point detent, which iOS draws a little scaled: the
+            // check reports every text in it.
+            // A space's title with its branch (P2) is one text with the branch glyph in it: the check measures the glyph's
+            // spoken name ("branch") as text, wider than the glyph drawn.
+            // Manage goal's rows below its medium sheet's edge (C4b), as above. Conversation mode's listening bar (C5,
+            // C5r): its live words wrap and keep their end, but the audit measures them against the whole capsule,
+            // waveform included, and reports them clipped however short.
+            return issue.element == nil || (screen == "M8a" && issue.element?.elementType == .textField) || screen == "M4d"
+                || (frame.maxY <= 120 && label.contains("  branch ")) || screen == "C4b"
+                || (screen.hasPrefix("C5") && frame.height <= 60 && frame.minY > 600)
+        case .elementDetection where screen == "C4b":
+            // The thread dimmed behind the medium sheet, which is modal: its text is not reachable while it is up.
+            return issue.element == nil
         default:
             return false
         }

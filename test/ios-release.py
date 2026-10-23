@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""Release check for Dispatch for iPhone (docs/ios.md, Release).
+"""Release check for Dispatch for iPhone and iPad (docs/ios.md, Release).
 
 usage: python3 test/ios-release.py [--simulator NAME] [--helper-profile release|local] [--skip-build] [--no-launch]
                                    [--with-fast-suite]
 
 Builds Release for the simulator and for devices (unsigned, CODE_SIGNING_ALLOWED=NO, with a link map), into
 build/dd, then checks both bundles: the three helper binaries with their architectures, `version` (the hash of the
-three) and `protocol-version` (HelperBinary.version); Info.plist's device keys; the privacy manifest's form, and that
-every required-reason API the device executable imports is declared there. It launches the Release simulator build
+three) and `protocol-version` (HelperBinary.version); Info.plist's device keys (the prompts, background refresh, iPhone
+and iPad families and orientations); the privacy manifest's form, and that every required-reason API the device
+executable imports is declared there; and the same for the embedded watch app (docs/watch.md) against
+Watch/App/PrivacyInfo.xcprivacy, which it needs only once it uses such an API. It launches the Release simulator build
 once (it must still run after five seconds; a screenshot lands in build/release-check) and prints the size table.
 
 The fast suite cannot run against Release: the tests import the app with @testable (Release has no testability) and
@@ -26,16 +28,20 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / 'scripts'))
+from ios_simulator import find_simulator  # noqa: E402
 PRODUCTS = ROOT / 'build/dd/Build/Products'
 APP = 'DispatchMobile.app'
 EXECUTABLE = 'DispatchMobile'
+WATCH_EXECUTABLE = 'Watch/DispatchWatch.app/DispatchWatch'
+WATCH_MANIFEST = ROOT / 'Watch/App/PrivacyInfo.xcprivacy'
 MAPS = ROOT / 'build/dd/maps'
 OUTPUT = ROOT / 'build/release-check'
-HELPERS = ('darwin-universal', 'linux-aarch64', 'linux-x86_64')
+HELPERS = ('darwin-arm64', 'linux-aarch64', 'linux-x86_64')
 # ELF e_machine values of the two Linux helpers.
 ELF_MACHINES = {'linux-aarch64': 183, 'linux-x86_64': 62}
 # Intel Macs are hosts: the Mac helper keeps both slices.
-MAC_ARCHS = {'arm64', 'x86_64'}
+MAC_ARCHS = {'arm64'}
 
 # Apple's required-reason APIs (developer.apple.com, "Describing use of required reason API"): per category the
 # reasons that exist, and how the executable shows a use: an imported symbol or an Objective-C selector.
@@ -88,9 +94,9 @@ def helper_problems(app, protocol, mac_archs, built_version=None):
     for name in HELPERS:
         if not os.access(directory / name, os.X_OK):
             problems.append(f'helper/{name} is not executable')
-    archs = set(mac_archs(directory / 'darwin-universal'))
+    archs = set(mac_archs(directory / 'darwin-arm64'))
     if archs != MAC_ARCHS:
-        problems.append(f'helper/darwin-universal has {sorted(archs)}, not {sorted(MAC_ARCHS)}')
+        problems.append(f'helper/darwin-arm64 has {sorted(archs)}, not {sorted(MAC_ARCHS)}')
     for name, machine in ELF_MACHINES.items():
         found = elf_machine(directory / name)
         if found != machine:
@@ -158,12 +164,36 @@ def used_categories(symbols, selectors):
     return used
 
 
+# The orientations each family turns to (UISupportedInterfaceOrientations and its ~ipad variant): never upside down
+# on an iPhone, every way on an iPad.
+IPHONE_ORIENTATIONS = {'UIInterfaceOrientationPortrait', 'UIInterfaceOrientationLandscapeLeft',
+                       'UIInterfaceOrientationLandscapeRight'}
+IPAD_ORIENTATIONS = IPHONE_ORIENTATIONS | {'UIInterfaceOrientationPortraitUpsideDown'}
+# The prompts the app can show: Face ID for the Keychain keys, the local network, and dictation's two.
+USAGE_KEYS = ('NSFaceIDUsageDescription', 'NSLocalNetworkUsageDescription', 'NSMicrophoneUsageDescription',
+              'NSSpeechRecognitionUsageDescription')
+
+
 def info_problems(info):
-    """The Info.plist keys a device needs: Face ID for the Keychain keys, the local network prompt, background refresh."""
+    """The Info.plist keys a device needs: the prompts' texts (which show on an iPad too, so they name no device), background
+    refresh, both device families (UIDeviceFamily 1 and 2, from TARGETED_DEVICE_FAMILY), each family's orientations, and
+    iPad multitasking (Split View, Slide Over and Stage Manager need UIRequiresFullScreen off)."""
     problems = []
-    for key in ('NSFaceIDUsageDescription', 'NSLocalNetworkUsageDescription'):
-        if not str(info.get(key, '')).strip():
+    for key in USAGE_KEYS:
+        text = str(info.get(key, '')).strip()
+        if not text:
             problems.append(f'Info.plist has no {key}')
+        elif 'iPhone' in text or 'iPad' in text:
+            problems.append(f'{key} names a device (it shows on iPhones and iPads): {text}')
+    if sorted(info.get('UIDeviceFamily', [])) != [1, 2]:
+        problems.append(f'UIDeviceFamily is {info.get("UIDeviceFamily")}, not [1, 2] (iPhone and iPad)')
+    for key, expected in (('UISupportedInterfaceOrientations', IPHONE_ORIENTATIONS),
+                          ('UISupportedInterfaceOrientations~ipad', IPAD_ORIENTATIONS)):
+        found = set(info.get(key, []))
+        if found != expected:
+            problems.append(f'{key} is {sorted(found)}, not {sorted(expected)}')
+    if info.get('UIRequiresFullScreen') is True:
+        problems.append('UIRequiresFullScreen is set: the iPad would lose Split View, Slide Over and Stage Manager')
     identifier = info.get('CFBundleIdentifier', '')
     if identifier + '.refresh' not in info.get('BGTaskSchedulerPermittedIdentifiers', []):
         problems.append(f'BGTaskSchedulerPermittedIdentifiers lacks {identifier}.refresh')
@@ -224,7 +254,8 @@ def size_rows(app, link_sizes=None):
             groups[code_group(path)] = groups.get(code_group(path), 0) + size
         parts += [(label, size, True) for label, size in sorted(groups.items(), key=lambda item: -item[1])]
     parts += [('Terminal fonts (TermFonts)', tree_size(app / 'TermFonts'), False),
-              ('Licences (ThirdPartyLicenses)', tree_size(app / 'ThirdPartyLicenses'), False)]
+              ('Licences (ThirdPartyLicenses)', tree_size(app / 'ThirdPartyLicenses'), False),
+              ('Apple Watch app (Watch)', tree_size(app / 'Watch'), False)]
     counted = sum(size for label, size, indented in parts if not indented)
     parts.append(('The rest (assets, themes, plists, icons)', total - counted, False))
     return [('Bundle total', total, False), *parts]
@@ -307,7 +338,8 @@ def check_bundle(app, protocol, built_version, log_name):
 def main(arguments=None):
     parser = argparse.ArgumentParser(prog='test/ios-release.py', description=__doc__.split('\n\n')[0],
                                      epilog=__doc__.split('\n\n', 2)[2], formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--simulator', default=os.environ.get('DISPATCH_IOS_SIMULATOR', 'iPhone 17'), metavar='NAME')
+    parser.add_argument('--simulator', default=os.environ.get('DISPATCH_IOS_SIMULATOR', 'iPhone Air'), metavar='NAME',
+                        help='name or UDID; a booted one, then the newest runtime, when several share the name')
     parser.add_argument('--helper-profile', choices=('release', 'local'), default='release',
                         help="the helpers' Cargo profile (default release: fat LTO, what ./run.sh --prod ships)")
     parser.add_argument('--skip-build', action='store_true', help='check the existing Release builds in build/dd')
@@ -330,10 +362,15 @@ def main(arguments=None):
         problems += ['privacy manifest: ' + problem for problem in privacy_problems(manifest)]
     simulator_app = PRODUCTS / 'Release-iphonesimulator' / APP
     device_app = PRODUCTS / 'Release-iphoneos' / APP
+
+    def simulator():
+        # By UDID, looked up only when a step needs it (--skip-build --no-launch needs none).
+        return find_simulator(args.simulator)[0]
+
     if not args.skip_build:
         run([sys.executable, 'scripts/setup_mobile.py', '--offline'], log, env)
         run([sys.executable, 'scripts/generate-project.py'], log, env)
-        seconds = build(f'platform=iOS Simulator,name={args.simulator}', log, env)
+        seconds = build(f'platform=iOS Simulator,id={simulator()}', log, env)
         print(f'Built Release for the simulator in {seconds:.0f}s', flush=True)
         seconds = build('generic/platform=iOS', log, env, [
             'CODE_SIGNING_ALLOWED=NO', 'LD_GENERATE_MAP_FILE=YES',
@@ -363,8 +400,22 @@ def main(arguments=None):
             print('note: the device build is signed; sizes include the signature')
         symbols = subprocess.run(['xcrun', 'nm', str(executable)], capture_output=True, text=True).stdout.count('\n')
         print(f'Device executable: {symbols} symbols left (a stripped Release keeps only what dyld needs)')
+    watch = device_app / WATCH_EXECUTABLE
+    if device_app.is_dir() and not watch.is_file():
+        problems.append(f'device: no embedded watch app ({WATCH_EXECUTABLE})')
+    elif watch.is_file():
+        watch_manifest = plistlib.loads(WATCH_MANIFEST.read_bytes()) if WATCH_MANIFEST.is_file() else {}
+        if WATCH_MANIFEST.is_file():
+            problems += ['watch privacy manifest: ' + problem for problem in privacy_problems(watch_manifest)]
+            if not (watch.parent / 'PrivacyInfo.xcprivacy').is_file():
+                problems.append('device: the watch app has no PrivacyInfo.xcprivacy')
+        used = used_categories(imported_symbols(watch), selectors(watch))
+        print('Watch app required-reason APIs: ' + (', '.join(sorted(used)) or 'none'))
+        problems += [f'watch privacy manifest: {category} is used ({", ".join(evidence)}) but not declared in '
+                     f'{os.path.relpath(WATCH_MANIFEST, ROOT)}'
+                     for category, evidence in sorted(used.items()) if category not in declared(watch_manifest)]
     if not args.no_launch and simulator_app.is_dir():
-        problems += launch(simulator_app, args.simulator, log)
+        problems += launch(simulator_app, simulator(), log)
         print(f'Launched the Release simulator build: screenshot {os.path.relpath(OUTPUT / "launch.png", ROOT)}')
     if device_app.is_dir():
         maps = sorted(MAPS.glob('DispatchMobile-normal-arm64.txt'))
@@ -375,7 +426,7 @@ def main(arguments=None):
             print('  (code rows: live symbols in the link map after dead-stripping; the executable adds headers, '
                   'tables and padding)')
     if args.with_fast_suite:
-        status = subprocess.run([sys.executable, 'test/ios.py', '--simulator', args.simulator], cwd=ROOT).returncode
+        status = subprocess.run([sys.executable, 'test/ios.py', '--simulator', simulator()], cwd=ROOT).returncode
         if status:
             problems.append(f'the fast suite failed ({status})')
     for problem in problems:

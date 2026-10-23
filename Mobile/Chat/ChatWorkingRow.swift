@@ -110,6 +110,14 @@ struct ChatWorkingRow: View {
         return ChatStep.steps(turn, directory: directory, reasoning: true)
     }
 
+    /// What the agent waits for, when it waits for the user (the Mac's AgentWorkingIndicator).
+    private var waiting: String? {
+        guard session.waitingForUser else { return nil }
+        let question = session.questions.contains { $0.blocking && !$0.submitted }
+            || session.approvals.contains { $0.pending.pending && $0.pending.questions != nil }
+        return question ? "waiting for your answer" : "waiting for your approval"
+    }
+
     /// The clock: the prompt this phone sent, else the turn's start, else when the agent began working.
     private var started: Date? {
         if let sent = session.submittedAt { return sent }
@@ -127,9 +135,14 @@ struct ChatWorkingRow: View {
             HStack(spacing: 8) {
                 HStack(spacing: 8) {
                     ChatThinkingGlyph(size: glyph)
-                    ChatShimmerText(text: "thinking")
-                    Text("·").foregroundStyle(.tertiary)
-                    ChatElapsed(since: started)
+                    if let waiting {
+                        // Blocked on the user, as the Mac's indicator says: no thinking shimmer, no clock.
+                        Text(waiting)
+                    } else {
+                        ChatShimmerText(text: "thinking")
+                        Text("·").foregroundStyle(.tertiary)
+                        ChatElapsed(since: started)
+                    }
                     Spacer(minLength: 8)
                     if !tools.isEmpty {
                         Text("\(tools.count) \(tools.count == 1 ? "step" : "steps")" + (expanded ? "" : " · " + (tools.last?.kind.label ?? "")))
@@ -147,7 +160,7 @@ struct ChatWorkingRow: View {
                 // reads it again as it changes (updates frequently), never every second.
                 .accessibilityElement(children: .ignore)
                 .modifier(ChatWorkingAccessibility(agent: session.agentName, since: started, steps: tools.count,
-                                                   current: tools.last?.kind.label))
+                                                   current: tools.last?.kind.label, waiting: waiting))
                 Button {
                     // The rows below appear in place; nothing else in the thread moves.
                     expanded.toggle()
@@ -158,6 +171,8 @@ struct ChatWorkingRow: View {
                         .foregroundStyle(.secondary)
                         .frame(width: disclosure, height: disclosure)
                         .background(Color.chipFill, in: Circle())
+                        .contentShape(.hoverEffect, Circle())
+                        .hoverEffect(.highlight)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(expanded ? "Hide steps" : "Show steps")
@@ -201,11 +216,14 @@ struct ChatWorkingAccessibility: ViewModifier {
     let since: Date?
     let steps: Int
     let current: String?
+    /// "waiting for your approval": said instead of the time.
+    var waiting: String? = nil
 
     func body(content: Content) -> some View {
         TimelineView(.periodic(from: since ?? .now, by: 10)) { context in
             content
-                .accessibilityLabel(Self.label(agent: agent, elapsed: since.map { context.date.timeIntervalSince($0) } ?? 0))
+                .accessibilityLabel(waiting.map { "\(agent) is \($0)" }
+                    ?? Self.label(agent: agent, elapsed: since.map { context.date.timeIntervalSince($0) } ?? 0))
                 .accessibilityValue(Self.value(steps: steps, current: current))
                 .accessibilityAddTraits(.updatesFrequently)
         }

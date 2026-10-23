@@ -3,19 +3,27 @@ import LocalAuthentication
 import Security
 import Synchronization
 
-/// How a secret is guarded beyond the device being unlocked.
+/// How a secret is guarded. Neither class ever leaves this device or reaches a backup (`ThisDeviceOnly`).
 enum KeyProtection: Sendable, Equatable {
-    /// Face ID (or the passcode's biometry set) unlocks each use: private keys on a device.
+    /// `WhenUnlockedThisDeviceOnly` behind `biometryCurrentSet`: Face ID unlocks each use, never with the phone locked
+    /// or unattended. Private keys on a device.
     case biometry
-    /// Only `WhenUnlockedThisDeviceOnly`: passwords and passphrases, and every secret in tests (the simulator has
-    /// no enrolled Face ID, so a biometry item cannot be read back there).
+    /// `AfterFirstUnlockThisDeviceOnly`: readable once the phone was unlocked since it started, also while it is locked,
+    /// so a watch request or background refresh can log in with a password (docs/security.md, Dispatch for iPhone).
+    /// Passwords, passphrases, Secure Enclave handles (the enclave's own access control asks Face ID), and every secret
+    /// in tests (the simulator has no enrolled Face ID, so a biometry item cannot be read back there).
     case none
 
-    /// The Keychain access control for this protection, never migrating to another device or a backup.
+    /// The Keychain class.
+    var accessible: CFString {
+        self == .biometry ? kSecAttrAccessibleWhenUnlockedThisDeviceOnly : kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+    }
+
+    /// The Keychain access control for this protection.
     func accessControl(privateKeyUsage: Bool = false) -> SecAccessControl? {
         var flags: SecAccessControlCreateFlags = privateKeyUsage ? [.privateKeyUsage] : []
         if self == .biometry { flags.insert(.biometryCurrentSet) }
-        return SecAccessControlCreateWithFlags(nil, kSecAttrAccessibleWhenUnlockedThisDeviceOnly, flags, nil)
+        return SecAccessControlCreateWithFlags(nil, accessible, flags, nil)
     }
 }
 
@@ -56,7 +64,8 @@ extension SecretVault {
     }
 }
 
-/// Generic passwords in the app's Keychain, `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`, not synchronizable.
+/// Generic passwords in the app's Keychain, not synchronizable, of `KeyProtection.accessible`'s class:
+/// `WhenUnlockedThisDeviceOnly` behind Face ID, else `AfterFirstUnlockThisDeviceOnly`.
 struct KeychainVault: SecretVault {
     let service: String
 
@@ -76,7 +85,7 @@ struct KeychainVault: SecretVault {
         if let control = protection.accessControl() {
             item[kSecAttrAccessControl as String] = control
         } else {
-            item[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+            item[kSecAttrAccessible as String] = protection.accessible
         }
         let status = SecItemAdd(item as CFDictionary, nil)
         guard status == errSecSuccess else { throw SecretVaultError.keychain(status) }
@@ -126,21 +135,64 @@ struct KeychainVault: SecretVault {
         let accounts = (result as? [[String: Any]] ?? []).compactMap { $0[kSecAttrAccount as String] as? String }
         for account in accounts where !keeping(account) { try remove(account) }
     }
+
+    /// What `migrate` did: items moved to after first unlock, items left as they were though `moving` named them.
+    struct Migration: Equatable, Sendable {
+        var moved = 0
+        var failed = 0
+    }
+
+    /// Moves the items `moving` names from `WhenUnlockedThisDeviceOnly` (builds before passwords became readable while
+    /// the phone is locked) to `KeyProtection.none`'s class, keeping their secret. Attributes only: no secret is read,
+    /// so nothing prompts. Items already moved, and every item `moving` does not name, are left alone; nothing is
+    /// deleted. Run while the phone is unlocked: a when-unlocked item cannot be listed or changed while it is locked.
+    func migrate(moving: (String) -> Bool) throws -> Migration {
+        var request: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
+                                      kSecAttrSynchronizable as String: false]
+        request[kSecReturnAttributes as String] = true
+        request[kSecMatchLimit as String] = kSecMatchLimitAll
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(request as CFDictionary, &result)
+        guard status == errSecSuccess || status == errSecItemNotFound else { throw SecretVaultError.keychain(status) }
+        let old = kSecAttrAccessibleWhenUnlockedThisDeviceOnly as String
+        var migration = Migration()
+        for attributes in result as? [[String: Any]] ?? [] {
+            guard let account = attributes[kSecAttrAccount as String] as? String, moving(account),
+                  attributes[kSecAttrAccessible as String] as? String == old,
+                  let control = KeyProtection.none.accessControl() else { continue }
+            let update = [kSecAttrAccessControl as String: control] as CFDictionary
+            if SecItemUpdate(query(account) as CFDictionary, update) == errSecSuccess {
+                migration.moved += 1
+            } else {
+                migration.failed += 1
+            }
+        }
+        return migration
+    }
 }
 
 /// Secrets in memory, remembering each one's protection for tests.
 final class MemoryVault: SecretVault {
     private let items = Mutex<[String: (Data, KeyProtection)]>([:])
+    private let lock = Mutex(false)
+
+    /// The phone is locked: as the Keychain's classes go, a `.none` item (after first unlock) still reads, a
+    /// `.biometry` one (when unlocked) does not.
+    var locked: Bool {
+        get { lock.withLock { $0 } }
+        set { lock.withLock { $0 = newValue } }
+    }
 
     func set(_ secret: Data, for account: String, protection: KeyProtection) throws {
         items.withLock { $0[account] = (secret, protection) }
     }
 
-    /// Like the Keychain: an item stored behind Face ID fails a read that may not prompt.
+    /// Like the Keychain: an item stored behind Face ID fails a read that may not prompt, or any read while locked.
     func secret(for account: String, reason: String, interactive: Bool) throws -> Data? {
-        try items.withLock { items in
+        let locked = locked
+        return try items.withLock { items in
             guard let (secret, protection) = items[account] else { return nil }
-            if !interactive, protection == .biometry { throw SecretVaultError.interactionNotAllowed }
+            if !interactive || locked, protection == .biometry { throw SecretVaultError.interactionNotAllowed }
             return secret
         }
     }

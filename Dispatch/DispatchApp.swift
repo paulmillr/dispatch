@@ -7,6 +7,7 @@ enum DispatchApp {
             exit(SSHLauncherCommand.run(Array(CommandLine.arguments.dropFirst(2))))
         }
         Home.isolate()
+        Home.protect()
         AppFont.register()
         let app = NSApplication.shared
         let delegate = AppDelegate()

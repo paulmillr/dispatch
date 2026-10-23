@@ -303,8 +303,19 @@ impl Multiplexer for Herdr {
         before: Option<Id>,
         done: Done<()>,
     ) {
+        self.move_member(io, node, parent, before, false, done);
+    }
+    fn move_member(
+        &mut self,
+        io: &mut dyn Io,
+        node: Id,
+        parent: Id,
+        before: Option<Id>,
+        append: bool,
+        done: Done<()>,
+    ) {
         if let Some(endpoint) = self.endpoint(node) {
-            endpoint.r#move(io, node, parent, before, done);
+            endpoint.move_member(io, node, parent, before, append, done);
             return;
         }
         let source = self.locate(node);
@@ -439,10 +450,14 @@ impl Multiplexer for Herdr {
                             .map(|t| &t.key)
                             .collect()
                     };
-                    let index = before
-                        .as_ref()
-                        .and_then(|(_, key)| keys.iter().position(|k| *k == key))
-                        .unwrap_or(keys.len().saturating_sub(1));
+                    let before = before.as_ref().map(|(_, key)| key);
+                    let index = if kind == Kind::Workspace {
+                        before
+                            .and_then(|key| keys.iter().position(|k| *k == key))
+                            .unwrap_or(keys.len().saturating_sub(1))
+                    } else {
+                        tab_insert_index(&keys, before, append)
+                    };
                     self.node(
                         io,
                         node,
@@ -597,6 +612,8 @@ impl Multiplexer for Herdr {
             self.defer(io, done, Err(error("Invalid herdr terminal size.")));
             return;
         }
+        // The client renders and publishes this terminal from now on.
+        self.unobserve(io, terminal, None);
         self.reveal(terminal);
         self.topology();
         if let Some(c) = self.controllers.get_mut(&terminal)
@@ -791,6 +808,7 @@ impl Multiplexer for Herdr {
             );
         } else {
             self.screens.read(io, terminal, changed, done);
+            self.observe_screen(io, terminal);
         }
     }
     fn publish(&mut self, io: &mut dyn Io, terminal: Id, screen: Screen) {
@@ -798,11 +816,27 @@ impl Multiplexer for Herdr {
             endpoint.publish(io, terminal, screen);
             return;
         }
+        // A client renders this terminal: its screens are the only ones read from now on.
+        self.clients.insert(terminal);
+        self.unobserve(io, terminal, None);
         self.screens.publish(io, terminal, screen);
+    }
+    fn host_screens(&mut self, enabled: bool) {
+        self.set_host_screens(enabled);
     }
     fn event(&mut self, io: &mut dyn Io, ui: &mut dyn Ui, event: Event) {
         self.route(io, ui, event);
     }
+}
+
+/// `tab.move`'s `insert_index` for a tab moved within its workspace: herdr inserts before the tab now at that index
+/// (counting the moved tab where it still is, as `actions.rs`'s Order step does), so the place before `before` is
+/// `before`'s index. Without `before`, a `memberships.append` client (`append`) gets the end, one past the last tab;
+/// every other client keeps the last tab's index, which puts the tab before that tab: the Mac's recorded moves
+/// (its restores and drops after the last tab) send exactly that.
+fn tab_insert_index(keys: &[&String], before: Option<&String>, append: bool) -> usize {
+    let end = if append { keys.len() } else { keys.len().saturating_sub(1) };
+    before.and_then(|key| keys.iter().position(|k| *k == key)).unwrap_or(end)
 }
 
 #[cfg(test)]

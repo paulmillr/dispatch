@@ -58,7 +58,7 @@ struct FilesUnavailableView: View {
         .accessibilityIdentifier("files-unavailable")
     }
 
-    /// The integration sheet of this tab's login, else Settings, where Agents & Hosts lists every host.
+    /// The integration sheet of this tab's login, else Settings, where Hosts lists every host.
     private func openIntegration(_ scope: SSHIntegrationScope?) {
         let ssh = TerminalRuntime.shared.ssh
         if let scope {

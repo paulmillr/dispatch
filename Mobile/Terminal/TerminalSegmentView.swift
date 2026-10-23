@@ -2,20 +2,29 @@ import SwiftUI
 import UIKit
 
 /// The Terminal segment of a tab (M6a): the terminal fills the space under Tabs' header, the glass key capsule sits
-/// at the bottom (above the keyboard while it shows), and the d-pad's arrow cluster pops up over the terminal's
-/// bottom right while held or pinned. The feed is the tab's terminal node; leaving the segment stops observing it
-/// and never ends anything on the host.
+/// at the bottom (above the keyboard while it is docked; at the bottom under a floating or split one), and the
+/// d-pad's arrow cluster pops up over the terminal's bottom right while held or pinned. On an iPad with a hardware
+/// keyboard the capsule collapses to a small button over the terminal's bottom right, and the terminal gets its rows.
+/// The feed is the tab's terminal node; leaving the segment stops observing it and never ends anything on the host.
+/// A plain shell's tab passes an ended card (`TerminalEndedCard`): once its shell ended, the card ("Session ended",
+/// New shell, Close) takes the capsule's place under the last screen. Helper terminals pass none.
 struct TerminalSegmentView: View {
     private let make: @MainActor () -> TerminalController
+    private var endedCard: TerminalEndedCard?
     /// Holds the controller across view updates (made once, on the first body).
     @State private var slot = Slot()
+    /// The app's appearance, before the capsule forces dark: the key bar's menu follows it.
+    @Environment(\.colorScheme) private var scheme
 
     @MainActor final class Slot {
         var controller: TerminalController?
     }
 
     /// A presence Tabs keeps (shared with Chat through `TerminalPresences`).
-    init(presence: TerminalPresence) { make = { TerminalController(presence: presence) } }
+    init(presence: TerminalPresence, ended: TerminalEndedCard? = nil) {
+        make = { TerminalController(presence: presence) }
+        endedCard = ended
+    }
 
     /// A feed's terminal through a presence of its own (previews, a tab without Chat).
     init(feed: any TerminalFeed, scrollback: TerminalScrollback = .unknown) {
@@ -33,24 +42,114 @@ struct TerminalSegmentView: View {
 
     var body: some View {
         let controller = controller
+        // A shell that ended: its last screen stays, the card offers what is next, and the keys have nothing to reach.
+        let ended = endedCard.flatMap { card in card.ended || controller.ended != nil ? card : nil }
+        let full = controller.capsuleForm == .full && ended == nil
+        // Searching (T1): the search capsule takes the key capsule's place (or the collapsed button's).
+        let searching = controller.search.visible && ended == nil
         TerminalSurfaceView(controller: controller)
             .overlay(alignment: .bottomTrailing) {
-                TerminalDPadCluster(controller: controller)
-                    .padding(.trailing, 14)
-                    .padding(.bottom, 12)
-                    // Over the terminal, which keeps its own (dark) theme in either appearance.
-                    .environment(\.colorScheme, .dark)
+                Group {
+                    if ended != nil || searching {
+                        EmptyView()
+                    } else if full {
+                        TerminalDPadCluster(controller: controller)
+                            .padding(.trailing, 14)
+                    } else {
+                        TerminalKeysButton(controller: controller)
+                            .padding(.trailing, 10)
+                    }
+                }
+                .padding(.bottom, 12)
+                // Over the terminal, which keeps its own (dark) theme in either appearance.
+                .environment(\.colorScheme, .dark)
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                TerminalKeyCapsule(controller: controller)
-                    .padding(.horizontal, 10)
-                    .padding(.bottom, 8)
-                    .environment(\.colorScheme, .dark)
+                if let ended {
+                    TerminalEndedCardView(card: ended, detail: ended.detail ?? Self.detail(controller.ended))
+                        .frame(maxWidth: TerminalAdaptation.capsuleMaxWidth(idiom: controller.idiom))
+                        .padding(.horizontal, 10)
+                        .padding(.bottom, 8)
+                } else if searching {
+                    TerminalSearchBar(controller: controller)
+                        .frame(maxWidth: TerminalAdaptation.capsuleMaxWidth(idiom: controller.idiom))
+                        .padding(.horizontal, 10)
+                        .padding(.bottom, 8)
+                        .environment(\.colorScheme, .dark)
+                } else if full {
+                    TerminalKeyCapsule(controller: controller)
+                        .frame(maxWidth: TerminalAdaptation.capsuleMaxWidth(idiom: controller.idiom))
+                        .padding(.horizontal, 10)
+                        .padding(.bottom, 8)
+                        .environment(\.terminalMenuScheme, scheme)
+                        .environment(\.colorScheme, .dark)
+                }
             }
+            // SwiftUI keeps a keyboard inset for a floating (or split) keyboard too, lifting the capsule under it; the
+            // capsule rides only a docked keyboard.
+            .ignoresSafeArea(.keyboard, edges: controller.keyboard == .floating ? .bottom : [])
             .coordinateSpace(.named(TerminalDPadCluster.space))
             .background(Color(controller.hostView.backgroundColor ?? .black))
             .onAppear { controller.appear() }
             .onDisappear { controller.disappear() }
+    }
+}
+
+extension TerminalSegmentView {
+    /// The card's line from the presence's end: a failed attachment's reason, an exit status.
+    static func detail(_ ended: TerminalFeedEvent?) -> String? {
+        switch ended {
+        case .failed(let message)?: message
+        case .exited(0?)?: "Exited"
+        case .exited(let status?)?: "Exited with status \(status)"
+        default: nil
+        }
+    }
+}
+
+/// What a terminal that ended offers (a plain shell's tab): a new shell in its space, or closing the tab.
+struct TerminalEndedCard {
+    /// The shell ended though the presence may not have said so (its connection closed): the card shows anyway.
+    var ended = false
+    /// The line under "Session ended"; nil: from the presence's end (`TerminalSegmentView.detail`).
+    var detail: String? = nil
+    var newShell: @MainActor () -> Void
+    var close: @MainActor () -> Void
+}
+
+/// The ended card: "Session ended", how, and New shell / Close. Over the last screen (`TerminalSegmentView`), or alone
+/// for a tab the launch cache brought back without a screen.
+struct TerminalEndedCardView: View {
+    let card: TerminalEndedCard
+    var detail: String?
+
+    var body: some View {
+        VStack(spacing: 12) {
+            VStack(spacing: 3) {
+                Text("Session ended").font(.headline)
+                if let detail {
+                    Text(detail).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                }
+            }
+            .accessibilityElement(children: .combine)
+            HStack(spacing: 10) {
+                Button { card.newShell() } label: {
+                    Label("New shell", systemImage: "plus").frame(maxWidth: .infinity).frame(minHeight: 30)
+                }
+                .buttonStyle(.glassProminent)
+                .tint(.dispatchPink)
+                Button { card.close() } label: {
+                    Label("Close", systemImage: "xmark").frame(maxWidth: .infinity).frame(minHeight: 30)
+                }
+                .buttonStyle(.glass)
+            }
+            .font(.callout.weight(.semibold))
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24))
+        // Over the terminal, which keeps its own (dark) theme in either appearance.
+        .environment(\.colorScheme, .dark)
     }
 }
 
@@ -63,8 +162,8 @@ struct TerminalSurfaceView: UIViewRepresentable {
 }
 
 /// The key capsule (M6a): Liquid Glass like the tab bar, six keys of equal width with no gaps: Ctrl, Esc, Tab and Alt
-/// in the monospaced system font, the d-pad, and the keyboard key. Ctrl and Alt light up while latched (tinted when
-/// locked by a double tap).
+/// in the monospaced system font, the d-pad, and the keyboard key with the terminal's menu (T2,
+/// `TerminalMenuKey`). Ctrl and Alt light up while latched (tinted when locked by a double tap).
 struct TerminalKeyCapsule: View {
     let controller: TerminalController
     @State private var dpadTouched = false
@@ -77,13 +176,9 @@ struct TerminalKeyCapsule: View {
             key("Tab") { controller.press(.tab) }
             modifier("Alt", .alt)
             dpad
-            Button { controller.toggleKeyboard() } label: {
-                Image(systemName: controller.keyboardVisible ? "keyboard.chevron.compact.down" : "keyboard")
-                    .scaledFont(19, relativeTo: .callout)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .contentShape(Rectangle())
-            }
-            .accessibilityLabel(controller.keyboardVisible ? "Hide keyboard" : "Show keyboard")
+            // The keyboard key, the menu's ellipsis while the software keyboard is up, or (a hardware keyboard on an
+            // iPad) the key that folds the capsule; a long press opens the menu (T2).
+            TerminalMenuKey(controller: controller)
         }
         .buttonStyle(KeyCapsuleButtonStyle())
         // A colour, not the hierarchical `.primary`: the d-pad's Canvas draws with it.
@@ -93,7 +188,10 @@ struct TerminalKeyCapsule: View {
     }
 
     @Environment(\.dynamicTypeSize) private var typeSize
-    private var height: CGFloat { min(typeSize, .accessibility1).scaled(Self.height, relativeTo: .callout) }
+    private var height: CGFloat { Self.height(typeSize) }
+
+    /// The capsule's height at a text size (the search capsule keeps the slot this tall, so the terminal keeps its rows).
+    static func height(_ typeSize: DynamicTypeSize) -> CGFloat { min(typeSize, .accessibility1).scaled(height, relativeTo: .callout) }
 
     private func key(_ label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
@@ -151,6 +249,28 @@ struct TerminalKeyCapsule: View {
             )
             .accessibilityLabel("Arrow keys")
             .accessibilityAddTraits(.isButton)
+    }
+}
+
+/// The collapsed capsule (an iPad with a hardware keyboard): one glass key over the terminal's bottom right that
+/// brings the six keys back (Esc for a keyboard without one, the latches, the d-pad). Its glyph is the capsule's
+/// own keyboard key.
+struct TerminalKeysButton: View {
+    let controller: TerminalController
+    static let side = 44.0
+
+    var body: some View {
+        Button { controller.showKeys() } label: {
+            Image(systemName: "keyboard")
+                .scaledFont(17, relativeTo: .callout)
+                .frame(width: Self.side, height: Self.side)
+                .contentShape(Circle())
+        }
+        .buttonStyle(KeyCapsuleButtonStyle())
+        .foregroundStyle(Color.primary)
+        .glassEffect(.regular.interactive(), in: .circle)
+        .dynamicTypeSize(...DynamicTypeSize.accessibility1)
+        .accessibilityLabel("Show terminal keys")
     }
 }
 

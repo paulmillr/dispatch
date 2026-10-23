@@ -27,6 +27,8 @@ final class HelperChat {
     var items: [String]?
     var held: Bool?
     var transcript: Transcript?
+    /// Host paths `attachments.put` answered with, sent with `chat.send`/`queue.add` (feature `chat.attachments`).
+    var attachments: [String]?
 
     init(_ route: Route) {
       terminal = route.terminal
@@ -67,6 +69,27 @@ final class HelperChat {
 
     var display: ChatRecord? { display(at: Date(timeIntervalSince1970: 0)) }
 
+    /// Claude's shell mode writes `!ls` as `<bash-input>ls</bash-input>`: shown as typed.
+    static func shellInput(_ text: String) -> String? {
+      let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard trimmed.hasPrefix("<bash-input>"), trimmed.hasSuffix("</bash-input>") else { return nil }
+      return "!" + trimmed.dropFirst("<bash-input>".count).dropLast("</bash-input>".count)
+    }
+
+    /// …and its output as `<bash-stdout>…</bash-stdout><bash-stderr>…</bash-stderr>`: the text, stderr after stdout.
+    static func shellOutput(_ text: String) -> String? {
+      let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard trimmed.hasPrefix("<bash-stdout>") || trimmed.hasPrefix("<bash-stderr>") else { return nil }
+      func element(_ tag: String) -> String? {
+        guard let start = trimmed.range(of: "<\(tag)>"), let end = trimmed.range(of: "</\(tag)>", range: start.upperBound..<trimmed.endIndex)
+        else { return nil }
+        return String(trimmed[start.upperBound..<end.lowerBound])
+      }
+      let parts = [element("bash-stdout"), element("bash-stderr")].compactMap { $0 }.filter { !$0.isEmpty }
+      guard trimmed.hasSuffix("</bash-stdout>") || trimmed.hasSuffix("</bash-stderr>") else { return nil }
+      return parts.joined(separator: "\n")
+    }
+
     /// A tool's call and its result can be separate records under one id, and
     /// only the call carries the presentation. Keep it whichever lands last.
     func filled(from other: Record) -> Record {
@@ -83,13 +106,16 @@ final class HelperChat {
       case "turn_ended": action = .ended
       // What a native command printed: the pending command's result, never a chat row.
       case "output": action = .commandOutput(text)
+      // Claude's shell mode records what a `!` command printed as a user message in markup: the same result.
+      case "user" where Self.shellOutput(text) != nil: action = .commandOutput(Self.shellOutput(text) ?? "")
       default:
         guard let kind = ChatItem.Kind(rawValue: kind) else { return nil }
         var item = ChatItem(
-          id: id, kind: kind, text: text, title: title,
+          id: id, kind: kind, text: kind == .user ? Self.shellInput(text) ?? text : text, title: title,
           output: output, completed: completed, exitCode: exit_code.map(Int.init))
         item.source = self
         item.directory = tool?.directory
+        if kind == .user { item.attachments = attachments }
         if !documents.isEmpty {
           item.patch = ChatPatch(
             documents: documents.map {
@@ -242,6 +268,9 @@ final class HelperChat {
   static func setup(
     _ endpoint: HelperWorkspace.Endpoint, key: String, enabled: Bool?, terminal: UInt64?
   ) async throws -> Installation? {
+    if enabled == true, let connection = endpoint.connection, await TerminalRuntime.shared.ssh.helperOutsideHome(connection) {
+      throw HelperFailure(code: "unsupported", message: SSHSetupFailure.hooksUnavailable)
+    }
     let client = HelperClient(try await HelperApp.shared.connection(endpoint))
     await TerminalRuntime.shared.helpers[endpoint]?.discovering()
     guard let launch = try await client.launches().first(where: { $0.key == key }) else { return nil }
@@ -327,9 +356,14 @@ final class HelperChat {
       if let record, let item = turns.flatMap(\.items).first(where: { $0.id == record }) {
         return ChatItem(id: id, kind: .tool, text: item.text, title: question.header)
       }
+      return ChatItem(id: id, kind: .tool, text: operation ?? "", title: question.header)
+    }
+
+    /// The first question's operation without the "<tool>\n" prefix an approval's text carries.
+    var operation: String? {
+      guard let question = questions.first else { return nil }
       let prefix = question.header + "\n"
-      let input = question.text.hasPrefix(prefix) ? String(question.text.dropFirst(prefix.count)) : question.text
-      return ChatItem(id: id, kind: .tool, text: input, title: question.header)
+      return question.text.hasPrefix(prefix) ? String(question.text.dropFirst(prefix.count)) : question.text
     }
 
     /// A completed question form's answers (question text -> the chosen labels joined by ", ", or the
@@ -535,11 +569,16 @@ final class HelperChat {
     var archive = Input(route)
     archive.terminal = nil
     archive.transcript = transcript
+    // One main-queue hop per burst of notifications (`batch`): a helper read publishes a turn's records and its
+    // state as several frames at once, and each hop would wake the main thread and lay the transcript out once
+    // more. The chat's one batch keeps the order across an old and a new watch, and the `ended` callback below
+    // still follows the hop scheduled before it.
+    let batch = batch
     func subscribe<P: Encodable & Sendable>(_ params: P) async throws -> UInt64 {
       try await connection.subscribe(
       "chat.open", params: params,
       notify: { [weak self] method, data in
-        DispatchQueue.main.async {
+        batch.add { [weak self] in
           guard let self, self.stream == next || self.pending?.stream == next else { return }
           if self.pending?.stream == next {
             // Both watches decode on one transport queue and deliver on the main queue.
@@ -618,6 +657,36 @@ final class HelperChat {
     let connection = try await HelperApp.shared.connection(endpoint)
     self.connection = connection
     return connection
+  }
+
+  /// This chat's watch notifications, taken off the transport queue and run on the main queue in one hop per burst,
+  /// in the order they arrived.
+  private let batch = Batch()
+
+  final class Batch: @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [@MainActor () -> Void] = []
+    private var scheduled = false
+
+    /// Queues `deliver`; the first of a burst schedules the drain on the main queue.
+    func add(_ deliver: @escaping @MainActor () -> Void) {
+      lock.lock()
+      items.append(deliver)
+      let schedule = !scheduled
+      scheduled = true
+      lock.unlock()
+      if schedule { DispatchQueue.main.async { MainActor.assumeIsolated { self.drain() } } }
+    }
+
+    /// Runs everything queued so far, in order; what arrives from now on schedules its own drain.
+    @MainActor private func drain() {
+      lock.lock()
+      scheduled = false
+      let taken = items
+      items.removeAll(keepingCapacity: true)
+      lock.unlock()
+      for deliver in taken { deliver() }
+    }
   }
 
   private func accepts(_ terminal: UInt64, session: String) -> Bool {

@@ -45,7 +45,7 @@ final class TransitionUITests: XCTestCase {
 
         let app = launch(environment: ["DISPATCH_MOBILE_SCRIPTED": "1"])
         rest()
-        tap(app.buttons["Agents"])
+        tap(app.tabBars.buttons["Agents"])
         tap(app.buttons["New chat"])
         XCTAssertTrue(app.staticTexts["New chat"].exists)
         tap(app.buttons["Close"])
@@ -81,7 +81,7 @@ final class TransitionUITests: XCTestCase {
     /// M2b: a host's whole row (not only its disclosure) hides and shows its spaces; a host without spaces offers New
     /// space, which opens the form for it, and held, the quick menu of its multiplexers.
     func testHostRowsAndNewSpaceLine() {
-        let app = launch(arguments: Self.sample + ["-DispatchTabsTree", "YES", "-DispatchTabsEmptyHost", "YES"])
+        let app = launch(arguments: Self.sample + ["-DispatchTabsEmptyHost", "YES"])
         rest()
         let host = app.buttons["mba2"]
         XCTAssertTrue(host.waitForExistence(timeout: 5))
@@ -117,7 +117,7 @@ final class TransitionUITests: XCTestCase {
     func testNewChatNewSpace() {
         let app = launch(arguments: Self.sample)
         rest()
-        tap(app.buttons["Agents"])
+        tap(app.tabBars.buttons["Agents"])
         tap(app.buttons["New chat"])
         tap(app.buttons["Space"])
         tap(app.buttons["New space on"])
@@ -157,6 +157,31 @@ final class TransitionUITests: XCTestCase {
         }
     }
 
+    /// Files (H1, F2): the segment, a folder opened and left by its crumb, a file pushed, Find, and back.
+    func testFilesListingAndPreview() {
+        let app = launch(arguments: Self.sample + ["-DispatchTabsShow", "tab:herdr:app:1", "-DispatchTabsSegment", "files"])
+        rest()
+        let row = { (name: String) in app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", name + ",")).firstMatch }
+        tap(row("src"))
+        XCTAssertTrue(row("theme.ts").waitForExistence(timeout: 5), "src's rows")
+        XCTAssertTrue(app.staticTexts["9 items"].exists)
+        tap(app.buttons["app"])
+        XCTAssertTrue(row("README.md").waitForExistence(timeout: 5), "The crumb opened the root")
+        tap(row("src"))
+        tap(row("theme.ts"))
+        XCTAssertTrue(app.buttons["Ask claude"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["Line 1, import { useEffect, useState } from \"react\";"].exists)
+        tap(app.buttons["Find in file"])
+        app.typeText("theme")
+        rest()
+        XCTAssertTrue(app.staticTexts["find-position"].label.hasSuffix(" of 15"), app.staticTexts["find-position"].label)
+        tap(app.buttons["Next match"])
+        XCTAssertTrue(app.staticTexts["find-position"].label.hasPrefix("2 of"))
+        tap(app.buttons["Done finding"])
+        tap(app.buttons["Back to Files"])
+        XCTAssertTrue(row("theme.ts").waitForExistence(timeout: 5), "Back on the listing, in src")
+    }
+
     /// M5a's thinking row unfolds into M5f and folds back.
     func testThinkingRow() {
         let app = launch(environment: ["DISPATCH_MOBILE_CHAT_DEMO": "M5a"])
@@ -185,7 +210,7 @@ final class TransitionUITests: XCTestCase {
         rest()
     }
 
-    /// The Agents filter pill (M3a) and Spaces' filter menu (M2a) on and off.
+    /// The Agents filter pill (M3a) and Spaces' filter chips (P1) on and off.
     func testFilters() {
         let agents = launch(environment: ["DISPATCH_MOBILE_CHAT_DEMO": "M3a"])
         rest()
@@ -194,9 +219,11 @@ final class TransitionUITests: XCTestCase {
 
         let app = launch(arguments: Self.sample)
         rest()
-        tap(app.buttons["Sort and filter"])
-        tap(app.buttons["Needs you"])
-        tap(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Sort and filter'")).firstMatch)
-        tap(app.buttons["All"])
+        let chips = app.descendants(matching: .any)["spaces-filter"]
+        tap(chips.buttons["Needs you"])
+        XCTAssertTrue(chips.buttons["Needs you"].isSelected)
+        tap(chips.buttons["Agents"])
+        tap(chips.buttons["All"])
+        XCTAssertTrue(chips.buttons["All"].isSelected)
     }
 }

@@ -1,3 +1,4 @@
+import Dictation
 import XCTest
 @testable import DispatchMobile
 
@@ -22,10 +23,26 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(MobileSettings.Appearance.allCases.map(\.rawValue), ["system", "dark", "light"])
     }
 
+    func testDictationDefaultsToAppleAndRemembersWhisper() {
+        let store = defaults()
+        let settings = MobileSettings(defaults: store)
+        XCTAssertEqual(settings.dictationEngine, .apple)
+        XCTAssertEqual(settings.whisperModel, .small)
+        settings.dictationEngine = .whisper
+        settings.whisperModel = .turbo
+        XCTAssertEqual(MobileSettings.dictation(store).engine, .whisper, "what the composer's mic reads")
+        XCTAssertEqual(MobileSettings.dictation(store).model, .turbo)
+        XCTAssertEqual(MobileSettings(defaults: store).dictationEngine, .whisper)
+        store.set("unknown", forKey: MobileSettings.dictationEngineKey)
+        store.set("unknown", forKey: MobileSettings.whisperModelKey)
+        XCTAssertEqual(MobileSettings(defaults: store).dictationEngine, .apple)
+        XCTAssertEqual(MobileSettings(defaults: store).whisperModel, .small)
+    }
+
     func testTerminalFontSizeIsTheTerminalsDefault() {
         let store = defaults()
         let settings = MobileSettings(defaults: store)
-        XCTAssertEqual(settings.terminalFontSize, TerminalConfiguration().fontSize)
+        XCTAssertEqual(settings.terminalFontSize, TerminalController.defaultFontSize, "the device class's default")
         settings.terminalFontSize = 15
         XCTAssertEqual(store.double(forKey: TerminalController.fontSizeKey), 15, "the key pinch zoom writes and terminals read")
         XCTAssertEqual(MobileSettings(defaults: store).terminalFontSize, 15)
@@ -38,7 +55,7 @@ final class SettingsTests: XCTestCase {
     func testTheFontSizeFollowsAPinchAndASlideAlwaysSaves() {
         let store = defaults()
         let settings = MobileSettings(defaults: store)
-        XCTAssertEqual(settings.terminalFontSize, 12)
+        XCTAssertEqual(settings.terminalFontSize, TerminalController.defaultFontSize)
         store.set(13.5, forKey: TerminalController.fontSizeKey)
         XCTAssertEqual(settings.terminalFontSize, 13.5)
         XCTAssertTrue(MobileSettings.fontSizeRange.contains(13.5))
@@ -138,6 +155,22 @@ final class SettingsTests: XCTestCase {
     /// Remove all data: hosts, Keychain secrets, trusted host keys, markers, the cache, drafts, the outbox, the
     /// remembered models (`chat-models.json`) and Spaces' per-host values (`spaces.json` and older UserDefaults keys);
     /// appearance and the font size stay.
+    /// The Apple Watch row says what WatchConnectivity says: no watch, a watch without the app, the app installed.
+    func testTheAppleWatchRowFollowsTheSession() {
+        let app = ResilienceFixture.composition(ResilienceFixture.sessions([], active: false))
+        XCTAssertNil(app.watch, "hidden without a bridge (no WatchConnectivity)")
+        let session = ScriptedWatchSession()
+        let bridge = WatchBridge(composition: app, session: session, backgroundTask: { _ in {} })
+        XCTAssertEqual(bridge.status.pairing.label, "Not paired")
+        session.isPaired = true
+        bridge.watchStateChanged()
+        XCTAssertEqual(bridge.status.pairing.label, "Not installed")
+        XCTAssertTrue(SettingsView.watchFooter(bridge.status.pairing).contains("Install Dispatch from the Watch app"))
+        session.isWatchAppInstalled = true
+        bridge.watchStateChanged()
+        XCTAssertEqual(bridge.status.pairing.label, "Installed")
+    }
+
     func testRemoveAllData() async throws {
         let vault = MemoryVault()
         let known = KnownHostStore(url: nil)

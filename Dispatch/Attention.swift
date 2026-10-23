@@ -20,7 +20,8 @@ enum PaneUrgency: Int, CaseIterable {
     #if canImport(AppKit)
     /// `programs`: the surface's visible OSC 7501 records.
     @MainActor init(session: ChatSession?, programs: [ProgramStatus] = []) {
-        let waiting = session?.approvals.contains(where: \.pending) == true || programs.contains { $0.state == .blocked }
+        let waiting = session?.approvals.contains(where: \.pending) == true || session?.agentAttention != nil
+            || programs.contains { $0.state == .blocked }
         let working = session?.active == true && session?.busy == true || programs.contains { $0.state == .working }
         let unread = session?.hasNewMessages == true || programs.contains(where: \.finished)
         self.init(waiting: waiting, working: working, unread: unread)
@@ -93,15 +94,19 @@ final class AttentionCoordinator: NSObject, UNUserNotificationCenterDelegate {
         entries.first { $0.urgency == .waiting && $0.id != controller?.workspace.activeSurfaceID }
     }
 
+    /// With previews hidden (System Settings › Notifications › Show previews), a banner shows only the placeholder: no
+    /// pane name, folder or agent text, on the lock screen or in screen shares.
+    static let category = UNNotificationCategory(identifier: "pane-attention", actions: [
+        UNNotificationAction(identifier: "show-pane", title: "Show", options: [.foreground])
+    ], intentIdentifiers: [], hiddenPreviewsBodyPlaceholder: "An agent needs you", options: [.customDismissAction])
+
     func start() {
         guard !started else { return }
         started = true
         generation += 1
         let center = UNUserNotificationCenter.current()
         center.delegate = self
-        center.setNotificationCategories([UNNotificationCategory(identifier: "pane-attention", actions: [
-            UNNotificationAction(identifier: "show-pane", title: "Show", options: [.foreground])
-        ], intentIdentifiers: [], options: [.customDismissAction])])
+        center.setNotificationCategories([Self.category])
         observe()
     }
 
@@ -216,7 +221,7 @@ final class AttentionCoordinator: NSObject, UNUserNotificationCenterDelegate {
     /// Native banners choose their own wrapping; keep the excerpt short enough
     /// for roughly two lines, without changing or summarizing the agent's words.
     static func preview(_ text: String) -> String {
-        let blocks = ChatMarkdownBlock.parse(String(text.prefix(8192)))
+        let blocks = ChatMarkdownBlock.parse(TextRendering.visible(TextRendering.prefix(text, scalars: 8_192).text))
         let plain = blocks.compactMap { block -> String? in
             let source: String
             switch block.kind {
@@ -229,7 +234,14 @@ final class AttentionCoordinator: NSObject, UNUserNotificationCenterDelegate {
             return value.map { String($0.characters) } ?? source
         }.joined(separator: " ")
         let compact = plain.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        return compact.count > 160 ? String(compact.prefix(159)) + "…" : compact
+        let bounded = TextRendering.prefix(compact, scalars: 159)
+        guard bounded.truncated else { return bounded.text }
+        // Whole characters only: a bound inside one (an emoji's joiner or skin tone) leaves it out rather than half.
+        var text = Substring(bounded.text)
+        if let last = text.last, last != compact[compact.index(compact.startIndex, offsetBy: text.count - 1)] {
+            text = text.dropLast()
+        }
+        return String(text) + "…"
     }
 
     func notificationRequest(for entry: AttentionEntry) -> UNNotificationRequest? {
@@ -248,6 +260,8 @@ final class AttentionCoordinator: NSObject, UNUserNotificationCenterDelegate {
             rowID = response.rowID ?? "\(turn.id.utf8.count):\(turn.id):\(response.id)"
         }
         content.subtitle = entry.path
+        // Without text content a banner says only which pane and what happened (it can show on the lock screen).
+        if !TerminalRuntime.shared.preferences.attentionTextContent { (content.body, content.subtitle) = ("", "") }
         content.categoryIdentifier = "pane-attention"
         content.threadIdentifier = "pane-\(entry.id)"
         content.userInfo = ["surface": entry.id.uuidString, "conversation": session.sessionID ?? "", "row": rowID, "event": key]
@@ -331,18 +345,23 @@ final class AttentionCoordinator: NSObject, UNUserNotificationCenterDelegate {
     }
 }
 
-/// Nautical's ship's bell: two strikes, synthesized once as a short WAV (a struck bell's inharmonic partials, each
-/// decaying at its own rate), so nothing ships as a sound file.
+/// Nautical's ship's bell: two strikes of `ShipsBellSound`.
 @MainActor enum ShipsBell {
-    private static let sound: NSSound? = NSSound(data: wav())
+    private static let sound: NSSound? = NSSound(data: ShipsBellSound.wav())
 
     static func strike() {
         guard let sound else { return }
         sound.stop()
         sound.play()
     }
+}
+#endif
 
-    nonisolated static func wav(rate: Int = 44_100) -> Data {
+/// The ship's bell's sound: two strikes, synthesized as a short WAV (a struck bell's inharmonic partials, each decaying
+/// at its own rate), so nothing ships as a sound file. The Mac strikes it for Nautical (`ShipsBell`); the iPhone writes
+/// it to `Library/Sounds` as its notifications' Ship's bell.
+enum ShipsBellSound {
+    static func wav(rate: Int = 44_100) -> Data {
         let fundamental = 880.0
         // Ratio to the fundamental, level, decay time in seconds.
         let partials: [(Double, Double, Double)] = [(0.5, 0.35, 1.8), (1, 1, 1.4), (2.0, 0.45, 0.9), (2.76, 0.3, 0.6),
@@ -373,4 +392,3 @@ final class AttentionCoordinator: NSObject, UNUserNotificationCenterDelegate {
         return data
     }
 }
-#endif

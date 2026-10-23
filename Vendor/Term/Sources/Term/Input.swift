@@ -191,6 +191,10 @@ func isControl(_ cp: UInt32) -> Bool { cp < 0x20 || cp == 0x7F }
 
 /// The renderer's size (Ghostty's renderer.Size): the surface in pixels, the cell, the padding.
 public struct RenderSize {
+    /// A conservative limit shared by the host surfaces. It matches the largest 2D texture on the
+    /// Apple GPU families this renderer supports and prevents geometry from becoming an attempted
+    /// multi-gigabyte IOSurface or drawable allocation.
+    public static let maxPixelDimension = 16_384
     public var screen: (width: Int, height: Int), cell: (width: Int, height: Int)
     public var padding: (top: Int, bottom: Int, right: Int, left: Int)
     public init(screen: (width: Int, height: Int), cell: (width: Int, height: Int), padding: (top: Int, bottom: Int, right: Int, left: Int) = (0, 0, 0, 0)) {
@@ -198,28 +202,49 @@ public struct RenderSize {
     }
     public enum Balance: String { case off = "false", on = "true", equal }
 
+    /// Host-provided backing scales must stay usable by CoreText, Core Animation, and integer DPI.
+    public static func contentScale(_ value: Double) -> Double {
+        value.isFinite ? min(max(value, 1), 16) : 1
+    }
+
     /// Pixels for a padding given in points (Ghostty's scaledPadding: f32 arithmetic, floored).
-    public static func pixels(points: Int, dpi: Float) -> Int { Int((Float(points) * dpi / 72).rounded(.down)) }
+    public static func pixels(points: Int, dpi: Float) -> Int {
+        let value = (Double(max(points, 0)) * Double(dpi) / 72).rounded(.down)
+        guard value.isFinite, value > 0 else { return 0 }
+        return value >= Double(Int.max) ? Int.max : Int(value)
+    }
 
     /// The explicit padding, or (balanced) the padding that centers the grid the explicit one leaves
     /// (Ghostty's Size.balancePadding; `on` then moves the extra top space to the bottom).
     public mutating func pad(_ explicit: (top: Int, bottom: Int, right: Int, left: Int), _ balance: Balance) {
-        padding = explicit
+        padding = (max(explicit.top, 0), max(explicit.bottom, 0), max(explicit.right, 0), max(explicit.left, 0))
         guard balance != .off else { return }
         let g = grid
-        let space = { (screen: Int, n: Int, cell: Int) in max(0, Int(((Float(screen) - Float(n) * Float(cell)) / 2).rounded(.down))) }
+        let space = { (screen: Int, n: Int, cell: Int) in
+            let value = ((Double(screen) - Double(n) * Double(cell)) / 2).rounded(.down)
+            return value.isFinite && value > 0 ? (value >= Double(Int.max) ? Int.max : Int(value)) : 0
+        }
         let (h, v) = (space(screen.width, g.cols, cell.width), space(screen.height, g.rows, cell.height))
         padding = (v, v, h, h)
         if balance == .on {
-            let shift = max(0, v - (explicit.left + explicit.right + cell.width) / 2)
-            (padding.top, padding.bottom) = (v - shift, v + shift)
+            let inset = (Double(max(explicit.left, 0)) + Double(max(explicit.right, 0)) + Double(max(cell.width, 0))) / 2
+            let shift = max(0, v - (inset >= Double(Int.max) ? Int.max : Int(inset)))
+            let bottom = v.addingReportingOverflow(shift)
+            (padding.top, padding.bottom) = (v - shift, bottom.overflow ? Int.max : bottom.partialValue)
         }
     }
 
     /// Columns and rows that fit (at least 1 each), in Ghostty's float arithmetic.
     public var grid: (cols: Int, rows: Int) {
-        let (w, h) = (max(screen.width - padding.left - padding.right, 0), max(screen.height - padding.top - padding.bottom, 0))
-        return (max(1, Int(Float(w) / Float(cell.width))), max(1, Int(Float(h) / Float(cell.height))))
+        // Terminal pages and the renderer ABI store both dimensions as UInt16. Compute in Double
+        // so hostile/extreme embedding geometry cannot overflow the Int subtraction or trap while
+        // converting a non-finite quotient, then cap at the representable grid boundary.
+        let w = max(Double(screen.width) - Double(max(padding.left, 0)) - Double(max(padding.right, 0)), 0)
+        let h = max(Double(screen.height) - Double(max(padding.top, 0)) - Double(max(padding.bottom, 0)), 0)
+        let count = { (pixels: Double, cell: Int) in
+            max(1, min(Int(UInt16.max), Int(min(pixels / Double(max(cell, 1)), Double(UInt16.max)))))
+        }
+        return (count(w, cell.width), count(h, cell.height))
     }
 }
 

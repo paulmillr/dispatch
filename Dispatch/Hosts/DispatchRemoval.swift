@@ -11,7 +11,15 @@ enum DispatchRemoval {
         var removed: Bool { status == 0 }
         /// The host has no stable helper copy: Dispatch never ran there, or was removed already.
         var absent: Bool { status == 127 }
+        /// The stable helper copy is there but cannot run: the host's home folder cannot run programs (mounted noexec).
+        var cannotRun: Bool { status == 126 }
     }
+
+    /// What to do by hand where the home folder cannot run programs, so the helper there cannot remove itself.
+    static let cannotRunAdvice = "Its home folder cannot run programs, so Dispatch’s helper there cannot remove itself. "
+        + "If a copy runs from its runtime folder, run $XDG_RUNTIME_DIR/dispatch/bin/versions/*/dispatch-helper uninstall there "
+        + "(it removes every Dispatch hook too). Otherwise delete ~/.dispatch and $XDG_RUNTIME_DIR/dispatch, and remove "
+        + "Dispatch’s hook entries from ~/.claude/settings.json and ~/.codex/hooks.json if the iPhone app installed any."
 
     /// What to run by hand where the app cannot reach.
     static let command = "~/.dispatch/bin/dispatch-helper uninstall"
@@ -76,7 +84,7 @@ enum DispatchRemoval {
         let alert = NSAlert()
         if outcome.removed && problems.isEmpty {
             alert.messageText = "Dispatch was removed from this Mac"
-            alert.informativeText = "You can move Dispatch to the Trash now. SSH hosts keep their own copy: remove it there from Settings › Agents & Hosts before, or run \(command) on them."
+            alert.informativeText = "You can move Dispatch to the Trash now. SSH hosts keep their own copy: remove it there from Settings › Hosts before, or run \(command) on them."
         } else {
             alert.alertStyle = .warning
             alert.messageText = "Dispatch couldn’t remove everything"
@@ -91,7 +99,11 @@ enum DispatchRemoval {
     /// A removal's result for an SSH host, after it was forgotten.
     static func report(_ outcome: Outcome, host: String) {
         let alert = NSAlert()
-        if outcome.removed || outcome.absent {
+        if outcome.cannotRun {
+            alert.alertStyle = .warning
+            alert.messageText = "Dispatch couldn’t be removed from \(host)"
+            alert.informativeText = cannotRunAdvice + "\n\nThe host was forgotten."
+        } else if outcome.removed || outcome.absent {
             alert.messageText = outcome.absent ? "Dispatch wasn’t installed on \(host)" : "Dispatch was removed from \(host)"
             alert.informativeText = outcome.absent ? "The host was forgotten." : outcome.output
         } else {

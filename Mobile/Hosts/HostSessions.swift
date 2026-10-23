@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import Synchronization
 import SwiftUI
 
 /// A host key waiting for the user (the trust-on-first-use sheet).
@@ -38,6 +39,17 @@ enum HostQuestion: Identifiable, Equatable {
     }
 }
 
+/// Why a quiet connection (a watch request's hold in the background, docs/watch.md, Background) stopped short: only
+/// the phone's screen can get past it.
+enum HostQuietRefusal: Equatable, Sendable {
+    /// The key needs Face ID (`SecretVaultError.interactionNotAllowed`).
+    case faceID
+    /// The host key is not trusted yet: the trust sheet would have asked.
+    case hostKey
+    /// The server asked a keyboard-interactive round.
+    case login
+}
+
 /// Every stored host's session (docs/ios.md, Areas and seams): one per host, connected while the app is in the foreground
 /// and disconnected in the background. Also the stores the host screens edit, and the host key questions.
 @MainActor @Observable
@@ -61,6 +73,10 @@ final class HostSessions {
     @ObservationIgnored var clientEnded: ((HostSession) -> Void)? {
         didSet { for case let session? in sessionOf.values.map(\.session) { session.clientEnded = clientEnded } }
     }
+    /// Where every session's shell tabs keep their presences (the composition's `TerminalPresences`).
+    @ObservationIgnored var presences: TerminalPresences = .shared {
+        didSet { for case let session? in sessionOf.values.map(\.session) { session.shells.presences = presences } }
+    }
 
     private(set) var sessions: [UUID: HostSession] = [:]
     /// Waiting host key questions, oldest first; the sheet shows the first.
@@ -69,6 +85,15 @@ final class HostSessions {
     private(set) var loginPrompts: [HostLoginPrompt] = []
     /// The app is in the foreground: sessions connect.
     private(set) var active: Bool
+    /// Hosts whose latest quiet attempt (a hold in the background) needed the phone's screen; cleared when the host
+    /// connects or the app comes to the foreground.
+    private(set) var quietRefusals: [UUID: HostQuietRefusal] = [:]
+    /// How long a hold keeps its host connected in the background after its last extension.
+    @ObservationIgnored var holdLength: Duration = .seconds(60)
+    /// How long `hold` waits for the link to settle.
+    @ObservationIgnored var holdBudget: Duration = .seconds(15)
+    /// Each held host's expiry.
+    @ObservationIgnored private var holds: [UUID: Task<Void, Never>] = [:]
 
     @ObservationIgnored private var waiting: [UUID: CheckedContinuation<Bool, Never>] = [:]
     @ObservationIgnored private var answering: [UUID: CheckedContinuation<[String]?, Never>] = [:]
@@ -109,9 +134,149 @@ final class HostSessions {
             return
         }
         self.active = active
+        // Foreground: every host connects interactively, so no hold is left to expire; background: everything
+        // disconnects, holds included.
+        for task in holds.values { task.cancel() }
+        holds = [:]
+        if active, !quietRefusals.isEmpty { quietRefusals = [:] }
         for session in ordered {
+            session.stats.active = active
             if active { session.retryNow() } else { session.disconnect() }
         }
+    }
+
+    /// The user disconnected this host (`HostSession.park`): background refresh and watch requests leave it alone until
+    /// Connect or the next launch.
+    func isParked(_ id: UUID) -> Bool { sessions[id]?.parked ?? false }
+
+    /// Low Power Mode changed: each host's stats take its cadence (`HostStatistics.cadence`).
+    func powerStateChanged() {
+        for session in ordered { session.stats.powerStateChanged() }
+    }
+
+    /// A watch request needs this saved host (docs/watch.md, Background). In the background its own session connects
+    /// quietly (Keychain reads that may not prompt, already-trusted host keys only, no keyboard-interactive) and stays
+    /// connected until `holdLength` after the last hold, unless the app comes to the foreground first. A locked phone
+    /// is no reason to refuse: passwords read after first unlock, and a key behind Face ID fails the quiet read itself
+    /// (`quietRefusals`). In the foreground the live session serves it. Returns once the link is
+    /// connected, failed or retrying, the attempt waits on the user (a host key or login sheet, in the foreground), after
+    /// `holdBudget`, or when the caller is cancelled.
+    func hold(_ id: UUID) async {
+        // A host the user disconnected is left alone (`HostSession.park`).
+        guard let session = sessions[id], !session.parked else { return }
+        if !active { extendHold(id) }
+        guard session.link != .connected else {
+            // The app may have been suspended since the last request: a dead link is found by an `echo` probe within
+            // seconds and reconnects.
+            if !active { session.retryNow() }
+            return
+        }
+        // Starts a run when none is going (not after a host key mismatch), or tries a waiting reconnect now.
+        session.retryNow()
+        let start = session.link
+        let deadline = ContinuousClock.now + holdBudget
+        while sessions[id] === session, !Self.settled(session.link, from: start), !asks(id), ContinuousClock.now < deadline,
+              !Task.isCancelled {
+            await change(of: session, until: deadline)
+        }
+    }
+
+    /// A sheet waits for the user on this host's attempt: the request is answered "Open Dispatch" now, not after the budget.
+    private func asks(_ id: UUID) -> Bool {
+        trustRequests.contains { $0.hostID == id } || loginPrompts.contains { $0.hostID == id }
+    }
+
+    func isHeld(_ id: UUID) -> Bool { holds[id] != nil }
+
+    private func extendHold(_ id: UUID) {
+        holds[id]?.cancel()
+        let length = holdLength
+        holds[id] = Task { [weak self] in
+            try? await Task.sleep(for: length)
+            guard !Task.isCancelled, let self else { return }
+            self.holds[id] = nil
+            if !self.active { self.sessions[id]?.disconnect() }
+        }
+    }
+
+    /// Connected, ended, or a retry that moved on from where the hold found it.
+    private static func settled(_ link: HostLink, from start: HostLink) -> Bool {
+        switch link {
+        case .connected, .failed, .disconnected: true
+        case .reconnecting: link != start
+        case .connecting, .authenticating, .bootstrapping: false
+        }
+    }
+
+    /// Pull to refresh (Spaces, Agents): every host is asked at once, as on a network change (`retryNow`: a connected
+    /// one checks that its link still answers, a waiting reconnect tries now, a failed one connects again). Returns
+    /// when each host has answered since (`HostSession.updated`), failed, tried and is still down, or waits on the
+    /// user (a host key or login sheet); at the latest after `timeout`, or when the pull is cancelled.
+    func refresh(timeout: Duration = .seconds(10)) async {
+        guard active else { return }
+        let start = System.date()
+        let sessions = ordered
+        let links = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0.link) })
+        for session in sessions { session.retryNow() }
+        let deadline = ContinuousClock.now + timeout
+        func answered(_ session: HostSession) -> Bool {
+            if let updated = session.updated, updated >= start { return true }
+            // Plain SSH: no helper to answer (the SSH keepalive watches the link).
+            if session.link == .connected, session.isPlain { return true }
+            if self.sessions[session.id] !== session || session.hostKeyMismatch != nil || asks(session.id) { return true }
+            switch session.link {
+            case .failed, .disconnected: return true
+            case .reconnecting: return session.link != links[session.id]
+            case .connected, .connecting, .authenticating, .bootstrapping: return false
+            }
+        }
+        while !sessions.allSatisfy(answered), ContinuousClock.now < deadline, !Task.isCancelled {
+            await change(until: deadline) {
+                for session in sessions {
+                    _ = session.link
+                    _ = session.updated
+                }
+            }
+        }
+    }
+
+    /// Returns at the session's next link change or question, at `deadline`, or when the caller is cancelled (the watch
+    /// request was answered without it).
+    private func change(of session: HostSession, until deadline: ContinuousClock.Instant) async {
+        await change(until: deadline) { _ = session.link }
+    }
+
+    /// Returns at the next change of what `observing` reads or of the questions, at `deadline`, or when the caller is
+    /// cancelled.
+    private func change(until deadline: ContinuousClock.Instant, observing: () -> Void) async {
+        let once = ResumeOnce()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                once.start(continuation)
+                withObservationTracking {
+                    observing()
+                    _ = trustRequests
+                    _ = loginPrompts
+                } onChange: { once.resume() }
+                once.timer = Task {
+                    try? await Task.sleep(until: deadline, clock: .continuous)
+                    once.resume()
+                }
+            }
+        } onCancel: {
+            once.resume()
+        }
+    }
+
+    /// The connection attempt asks the user nothing: a watch hold in the background (the background refresh's sessions
+    /// are always quiet).
+    private func isQuiet(_ id: UUID) -> Bool { !active && holds[id] != nil }
+
+    /// Whether this read may prompt: `fixed` when the session's context says, else unless the attempt is quiet.
+    private func interactive(_ fixed: Bool?, _ id: UUID) -> Bool { fixed ?? !isQuiet(id) }
+
+    private func refusedQuietly(_ id: UUID, _ refusal: HostQuietRefusal) {
+        if quietRefusals[id] != refusal { quietRefusals[id] = refusal }
     }
 
     /// The network path became usable or moved to other interfaces (`NetworkPathWatcher`): in the foreground every
@@ -119,6 +284,17 @@ final class HostSessions {
     func networkChanged() {
         guard active else { return }
         for session in ordered { session.retryNow() }
+    }
+
+    /// Whether this iPhone has a usable network, for what the hosts say while they cannot connect.
+    private(set) var networkUnavailable = false
+    @ObservationIgnored private var probes: [Weak] = []
+
+    /// Each reading of the network path (`NetworkPathWatcher.observed`).
+    func networkPath(satisfied: Bool) {
+        networkUnavailable = !satisfied
+        probes.removeAll { $0.session == nil }
+        for session in ordered + probes.compactMap(\.session) { session.networkUnavailable = !satisfied }
     }
 
     func scenePhaseChanged(_ phase: ScenePhase) {
@@ -132,11 +308,18 @@ final class HostSessions {
 
     /// A session for a host that is not saved yet: New host connects it once to verify (M8a). Pass it to `add`
     /// to keep its connection.
-    func probe(_ record: HostRecord) -> HostSession { makeSession(record) }
+    func probe(_ record: HostRecord) -> HostSession {
+        let session = makeSession(record)
+        // Verifying a host samples no stats; `add` turns them on with the session it keeps.
+        session.stats.active = false
+        probes.append(Weak(session: session))
+        return session
+    }
 
     /// A session for background work (the app refresh task) that asks the user nothing: a host key that is not
     /// already trusted and a keyboard-interactive login fail it, as does a key behind Face ID (no prompt can show).
     /// It is not one of `sessions`: nothing it does reaches the lists.
+    /// A host the user disconnected (`HostSession.park`) is left alone: the caller skips it (`isParked`).
     func backgroundSession(_ record: HostRecord) -> HostSession {
         let session = HostSession(host: record, driver: driver) { [weak self] session in
             guard let self else {
@@ -180,6 +363,7 @@ final class HostSessions {
         store.add(record)
         guard let saved = store.record(record.id) else { return }
         if let probe, probe.id == record.id {
+            probe.stats.active = active
             probe.update(saved)
             sessions[record.id] = probe
         }
@@ -188,20 +372,31 @@ final class HostSessions {
     }
 
     /// Saves an edit: the session keeps its connection unless the address, port, user or authentication changed. A new
-    /// multiplexer preference is followed on the live connection. Chat turned off withdraws the hooks and agent
-    /// capabilities from the running helper (`permissions.reduce`; a reconnect when that fails); turned on, the session
-    /// reconnects, as a helper's grant only ever shrinks.
+    /// multiplexer preference is followed on the live connection. Chat or Files & git turned off withdraws their
+    /// capabilities (hooks and the agents', `git.read`) from the running helper (`permissions.reduce`; a reconnect when
+    /// that fails); turned on, the session reconnects, as a helper's grant only ever shrinks. The Helper switch reconnects (plain SSH or the helper), unless it
+    /// goes off while the connection is already plain.
     func update(_ record: HostRecord) {
         guard let previous = store.record(record.id) else { return }
         store.update(record)
         guard let saved = store.record(record.id), let session = sessions[record.id] else { return }
         if previous.sameConnection(as: saved) {
             session.update(saved)
-            if previous.chat != saved.chat { chatChanged(session) }
+            // The Helper switch decides at each connection (plain SSH or the helper): a new run, except when it goes off on a
+            // connection that is already plain ("Use plain SSH for this host"): that one stays, and so do its shells.
+            if previous.helper != saved.helper {
+                if saved.helper || !session.isPlain { reconnect(session) }
+            } else if previous.chat != saved.chat || previous.files != saved.files {
+                grantChanged(session, widened: (saved.chat && !previous.chat) || (saved.files && !previous.files))
+            }
         } else {
             session.disconnect()
             sessionOf[session.id] = nil
             let replacement = makeSession(saved)
+            // The shells ended with the old connection; their cards stay with the host.
+            replacement.shells.adopt(session.shells)
+            replacement.stats.adopt(session.stats)
+            if session.parked { replacement.park() }
             sessions[record.id] = replacement
             if active { replacement.connect() }
         }
@@ -213,6 +408,8 @@ final class HostSessions {
     func remove(_ id: UUID) {
         guard let record = store.record(id) else { return }
         sessions[id]?.disconnect()
+        holds.removeValue(forKey: id)?.cancel()
+        quietRefusals[id] = nil
         withdrawQuestions(of: id, mismatches: true)
         store.remove(id)
         keys.removePassword(for: id)
@@ -223,12 +420,12 @@ final class HostSessions {
         changed?()
     }
 
-    private func chatChanged(_ session: HostSession) {
-        guard !session.host.chat, let client = session.client else {
+    private func grantChanged(_ session: HostSession, widened: Bool) {
+        guard !widened, let client = session.client else {
             if session.client != nil || session.link.isPending { reconnect(session) }
             return
         }
-        let reduced = HelperGrant.capabilities(chat: false).sorted()
+        let reduced = HelperGrant.capabilities(chat: session.host.chat, files: session.host.files).sorted()
         Task { [weak self, weak session] in
             do {
                 let _: HelperClient.Empty = try await client.connection.request("permissions.reduce", params: ["capabilities": reduced])
@@ -236,6 +433,17 @@ final class HostSessions {
                 guard let self, let session, session.client === client else { return }
                 self.reconnect(session)
             }
+        }
+    }
+
+    /// Files' Install helper… (S1): the Helper switch on, which reconnects with the helper; a host whose switch is on
+    /// already (its helper could not start last time) connects again and tries once more.
+    func useHelper(host id: UUID) {
+        guard let record = store.record(id) else { return }
+        if record.helper {
+            if let session = sessions[id] { reconnect(session) }
+        } else {
+            setHelper(true, host: id)
         }
     }
 
@@ -283,8 +491,9 @@ final class HostSessions {
         trustRequests.removeAll { $0.id == request.id }
         knownHosts.forget(host: request.offer.host, port: request.offer.port)
         guard let session = sessionOf[request.hostID]?.session ?? sessions[request.hostID] else { return }
-        // The refused run may still be ending: start a fresh one.
+        // The refused run may still be ending: start a fresh one (the user asked: a Disconnect is lifted).
         session.disconnect()
+        session.unpark()
         session.connect()
     }
 
@@ -316,6 +525,11 @@ final class HostSessions {
             }
             return false
         case .unknown:
+            // A hold in the background: the sheet waits for the phone's screen, so the attempt fails now.
+            if isQuiet(session.id), sessions[session.id] === session {
+                refusedQuietly(session.id, .hostKey)
+                return false
+            }
             withdrawQuestions(of: session.id)
             let request = HostTrustRequest(hostID: session.id, hostName: session.host.name, offer: offer, kind: .unknown)
             return await withTaskCancellationHandler {
@@ -377,24 +591,33 @@ final class HostSessions {
                                                                password: { nil }, retries: AsyncStream { $0.finish() })
         }
         session.helloReceived = { [weak self] session, hello in self?.received(hello, on: session) }
+        session.plainConnected = { [weak self] session in self?.connectedPlain(session) }
         session.refusal = { [weak self] in self?.connectionRefusal }
         session.postConnect = postConnect
         session.clientEnded = clientEnded
+        session.shells.presences = presences
+        session.networkUnavailable = networkUnavailable
+        session.stats.active = active
         session.changed = { [weak self] session in
             guard let self, self.sessions[session.id] === session else { return }
             // Disconnected (backgrounded, or the user's own disconnect): no run is left to take an answer.
             if session.link == .disconnected { self.withdrawQuestions(of: session.id) }
+            if session.link == .connected, self.quietRefusals[session.id] != nil { self.quietRefusals[session.id] = nil }
             self.changed?()
         }
         sessionOf[record.id] = Weak(session: session)
         return session
     }
 
-    /// `interactive` false: Keychain reads never prompt (the background session).
-    private func context(for session: HostSession, interactive: Bool = true) -> HostSessionContext {
+    /// `interactive` false: Keychain reads never prompt (the background session). Nil: chosen at each read, quiet while
+    /// the app is in the background and the host is held for a watch request (`hold`), so a held run that the foreground
+    /// takes over asks again as usual.
+    private func context(for session: HostSession, interactive fixed: Bool? = nil) -> HostSessionContext {
         let auth = session.host.auth, id = session.id
         var launch = launch(session.host)
-        if !session.host.chat { launch.capabilities = HelperGrant.capabilityList(chat: false) }
+        if !session.host.chat || !session.host.files {
+            launch.capabilities = HelperGrant.capabilityList(chat: session.host.chat, files: session.host.files)
+        }
         return HostSessionContext(
             launch: launch,
             verifyHostKey: { [weak self, weak session] offer in
@@ -403,15 +626,26 @@ final class HostSessions {
             },
             key: { [weak self] in
                 guard case .key(let key) = auth, let self else { return nil }
-                return try await self.keys.material(for: key, interactive: interactive)
+                let interactive = await self.interactive(fixed, id)
+                do {
+                    return try await self.keys.material(for: key, interactive: interactive)
+                } catch SecretVaultError.interactionNotAllowed {
+                    if fixed == nil { await self.refusedQuietly(id, .faceID) }
+                    throw SecretVaultError.interactionNotAllowed
+                }
             },
             password: { [weak self] in
                 guard case .password = auth, let self else { return nil }
+                let interactive = await self.interactive(fixed, id)
                 return try await self.keys.password(for: id, interactive: interactive)
             },
             retries: AsyncStream { $0.finish() },
             keyboardInteractive: { [weak self, weak session] challenge in
                 guard let self, let session else { return nil }
+                if await !self.interactive(nil, id) {
+                    await self.refusedQuietly(id, .login)
+                    return nil
+                }
                 return await self.ask(challenge, for: session)
             },
             keyAvailable: { @MainActor [weak self] in
@@ -421,6 +655,14 @@ final class HostSessions {
     }
 
     /// Saves what the helper said about the host and when it was reached.
+    /// A plain SSH connection: the connection time (no helper reports the OS).
+    private func connectedPlain(_ session: HostSession) {
+        guard var record = store.record(session.id) else { return }
+        record.lastConnected = Date()
+        store.update(record)
+        if let saved = store.record(record.id) { session.update(saved) }
+    }
+
     private func received(_ hello: HelperSession.Info, on session: HostSession) {
         guard var record = store.record(session.id) else { return }
         if let identity = hello.identity {
@@ -430,5 +672,45 @@ final class HostSessions {
         record.lastConnected = Date()
         store.update(record)
         if let saved = store.record(record.id) { session.update(saved) }
+    }
+}
+
+/// A continuation resumed once, by whichever comes first: an observed change or the timer (cancelled then).
+private final class ResumeOnce: Sendable {
+    private struct State {
+        var continuation: CheckedContinuation<Void, Never>?
+        var timer: Task<Void, Never>?
+        var done = false
+    }
+    private let state = Mutex(State())
+
+    func start(_ continuation: CheckedContinuation<Void, Never>) {
+        let done = state.withLock { value in
+            if !value.done { value.continuation = continuation }
+            return value.done
+        }
+        if done { continuation.resume() }
+    }
+
+    var timer: Task<Void, Never>? {
+        get { state.withLock { $0.timer } }
+        set {
+            let done = state.withLock { value in
+                value.timer = newValue
+                return value.done
+            }
+            if done { newValue?.cancel() }
+        }
+    }
+
+    func resume() {
+        let (continuation, timer) = state.withLock { value -> (CheckedContinuation<Void, Never>?, Task<Void, Never>?) in
+            guard !value.done else { return (nil, nil) }
+            value.done = true
+            defer { value.continuation = nil }
+            return (value.continuation, value.timer)
+        }
+        timer?.cancel()
+        continuation?.resume()
     }
 }

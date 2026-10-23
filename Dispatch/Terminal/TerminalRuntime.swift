@@ -1,4 +1,5 @@
 import AppKit
+import Dictation
 import Term
 
 @MainActor
@@ -86,6 +87,7 @@ final class TerminalRuntime {
         workspace?.closeLaunching = preferences.closeLaunching
         workspace?.tabsOnly = preferences.tabsOnly
         hosts.reconnect.automatic = preferences.autoReconnectSSH
+        SecureKeyboardEntry.enabled = preferences.secureKeyboardEntry
         if !System.testing {
             ChatViewportTrace.shared.setEnabled(preferences.enableDiagnostics)
         }
@@ -94,6 +96,12 @@ final class TerminalRuntime {
         LiquidGlassStore.shared.enabled = preferences.liquidGlass
         HostColorStore.shared.choices = preferences.hostColors
         HostColorStore.shared.enabled = preferences.showHostColors
+        HostColorStore.shared.vision = preferences.colorVision
+        DictationStore.shared.enabled = preferences.dictationEnabled
+        DictationStore.shared.rightCommand = preferences.dictationRightCommand
+        DictationStore.shared.navigation = preferences.dictationNavigation
+        DictationStore.shared.readReplies = preferences.dictationReadReplies
+        DictationStore.shared.wakeWords = preferences.dictationWakeWords
         chat.start()
         installFileTransfers()
         let resources = System.resources
@@ -127,14 +135,17 @@ final class TerminalRuntime {
         } catch { self.error = error.localizedDescription }
     }
 
-    /// Programs set the clipboard (OSC 52, kitty clipboard, tmux buffers) on this Mac
-    /// and over plain SSH. Over a connection that has had the helper, Settings decides.
-    func allowsClipboardWrite(from surface: UUID) -> Bool {
-        preferences.allowRemoteClipboardWrites || !ssh.helperBacked(surface)
-    }
+    /// Programs set the clipboard (OSC 52, kitty clipboard, tmux buffers) in every tab alike, local or remote, as
+    /// Settings › General › Programs can copy says: a program relaying a remote one (mosh, docker exec, a local tmux)
+    /// can't be told apart from a local one.
+    var allowsClipboardWrites: Bool { preferences.allowClipboardWrites }
 
-    func allowsClipboardWrite(over connection: SSHConnectionID?) -> Bool {
-        preferences.allowRemoteClipboardWrites || !(connection.map(ssh.helperInstalled) ?? false)
+    /// Settings › General › Shell for a new local tab: nil for the login shell, or while its program is missing or
+    /// can't run, so a moved shell never leaves tabs that close as they open.
+    var shellCommand: String? {
+        guard let program = preferences.shellProgram, program.hasPrefix("/"),
+              FileManager.default.isExecutableFile(atPath: program) else { return nil }
+        return preferences.shell.trimmingCharacters(in: .whitespaces)
     }
 
     func apply(_ preferences: Preferences) throws {
@@ -147,15 +158,24 @@ final class TerminalRuntime {
         self.preferences = preferences
         // Files views drop or resolve their repositories now rather than on the next tick.
         if gitChanged { for id in files.sessions.keys { files.refresh(id) } }
+        if !preferences.filesEnabled { files.leaveFiles() }
         workspace?.closeLaunching = preferences.closeLaunching
         workspace?.tabsOnly = preferences.tabsOnly
         hosts.reconnect.automatic = preferences.autoReconnectSSH
+        SecureKeyboardEntry.enabled = preferences.secureKeyboardEntry
         for helper in helpers.values { helper.claim(preferences.spaces) }
         SidebarThemeStore.shared.current = preferences.resolvedSidebarTheme
         KeyGroupsStore.shared.current = preferences.keyGroups
         LiquidGlassStore.shared.enabled = preferences.liquidGlass
         HostColorStore.shared.choices = preferences.hostColors
         HostColorStore.shared.enabled = preferences.showHostColors
+        DictationStore.shared.enabled = preferences.dictationEnabled
+        DictationStore.shared.rightCommand = preferences.dictationRightCommand
+        DictationStore.shared.navigation = preferences.dictationNavigation
+        DictationStore.shared.readReplies = preferences.dictationReadReplies
+        DictationStore.shared.wakeWords = preferences.dictationWakeWords
+        // Dictation turned off mid-sentence: nothing it hears goes anywhere.
+        if !preferences.dictationEnabled { Dictation.shared.cancel() }
         for view in views.values { configureBackground(view) }
     }
 
@@ -171,7 +191,8 @@ final class TerminalRuntime {
     /// Dispatch's terminal config text (Ghostty's config syntax, read by the Swift terminal).
     private func makeConfig(_ settings: Preferences) throws -> String {
         try SettingsStore.validate(settings)
-        let theme = settings.resolvedTheme(systemIsDark: systemIsDark)
+        // A custom scheme by its file's path; one that's gone, Dispatch's own (Settings says which).
+        let resolution = ThemeResolution.value(for: settings.resolvedTheme(systemIsDark: systemIsDark)), theme = resolution.value
         // A small app-owned config keeps unsupported standalone Ghostty actions
         // and external command wrappers out of this embedding.
         return """
@@ -179,12 +200,15 @@ final class TerminalRuntime {
         font-family = \(settings.fontFamily)
         font-size = \(settings.fontSize)
         theme = \(theme)
-        \(settings.usesDefaultColorScheme(systemIsDark: systemIsDark) ? settings.resolvedSidebarTheme.defaultColorSchemeOverrides : "")
+        \(settings.usesDefaultColorScheme(systemIsDark: systemIsDark) || resolution.missing ? settings.resolvedSidebarTheme.defaultColorSchemeOverrides : "")
         minimum-contrast = \(settings.improveTextContrast ? 4.5 : 1)
-        macos-option-as-alt = \(settings.optionAsAlt ? "true" : "false")
+        background-opacity = \(settings.terminalOpacity)
+        macos-option-as-alt = \(settings.optionAsAlt.ghostty)
+        cursor-style = \(settings.cursor.rawValue)
+        \(settings.cursorBlink ? "" : "cursor-style-blink = false")
         window-padding-x = 10
         window-padding-y = 8
-        scrollback-limit-bytes = \(Self.scrollbackLimit(System.machine.memory))
+        scrollback-limit-bytes = \(settings.scrollback.limit(automatic: Self.scrollbackLimit(System.machine.memory)))
         image-storage-limit = \(settings.enableKittyGraphics ? ImageStorage.defaultTotalLimit : 0)
         clipboard-read = ask
         clipboard-write = ask
@@ -258,7 +282,11 @@ final class TerminalRuntime {
     func close(_ ids: [UUID]) {
         let ids = ids.filter { id in !helpers.values.contains { $0.retains(id) } }
         for helper in helpers.values { ids.forEach(helper.detach) }
-        for id in ids { ssh.closeTab(id); hosts.close(id); herdrLaunch.close(id); chat.close(id); files.forget(id); programs.close(id); views.removeValue(forKey: id)?.destroy() }
+        for id in ids {
+            // Kept for Restore of a detached tab, which comes back with the same id (`FilesCoordinator.restoreViews`).
+            files.retainView(id)
+            ssh.closeTab(id); hosts.close(id); herdrLaunch.close(id); chat.close(id); files.forget(id); programs.close(id); views.removeValue(forKey: id)?.destroy()
+        }
         prune()
     }
 

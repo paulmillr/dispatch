@@ -11,6 +11,9 @@ class ChatEditorTextView: ChatCaretTextView {
     var fences: [ComposerFence] = []
     private var highlightedText: String?
     private var highlightedTheme: ChatTheme?
+    private var highlightedProvisional: NSRange?
+    /// Text that is not the user's yet (dictation still listening): drawn muted.
+    var provisional: NSRange?
     var appliedTheme: ChatTheme?
     var placeholderColor = NSColor(Chrome.muted)
     var placeholder = "Reply…"
@@ -201,8 +204,8 @@ class ChatEditorTextView: ChatCaretTextView {
     }
     func highlight() {
         guard !hasMarkedText(), let theme = appliedTheme, let storage = textStorage,
-              highlightedText != string || highlightedTheme != theme else { return }
-        highlightedText = string; highlightedTheme = theme
+              highlightedText != string || highlightedTheme != theme || highlightedProvisional != provisional else { return }
+        highlightedText = string; highlightedTheme = theme; highlightedProvisional = provisional
         fences = ComposerFence.scan(string)
         applyingState = true
         storage.beginEditing()
@@ -215,6 +218,9 @@ class ChatEditorTextView: ChatCaretTextView {
             for token in SyntaxHighlight.tokens(code, language: fence.language, theme: theme) {
                 storage.addAttribute(.foregroundColor, value: NSColor(token.color), range: NSRange(location: fence.body.location + token.range.location, length: token.range.length))
             }
+        }
+        if let provisional, provisional.length > 0, NSMaxRange(provisional) <= storage.length {
+            storage.addAttribute(.foregroundColor, value: NSColor(theme.muted), range: provisional)
         }
         storage.endEditing()
         typingAttributes = [.font: theme.typography.reply, .foregroundColor: NSColor(theme.ink)]

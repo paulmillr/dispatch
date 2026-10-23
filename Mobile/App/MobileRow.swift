@@ -97,8 +97,26 @@ struct MobileRow<Glyph: View>: View {
         [name, detail, time, subtitle].compactMap { $0?.isEmpty == false ? $0 : nil }.joined(separator: ", ")
     }
 
-    /// Up to xxxLarge: name, detail, time and chevron on one line, the line(s) under them (M2a, M3a).
-    private var regular: some View {
+    /// Up to xxxLarge: name, detail, time and chevron on one line, the line(s) under them (M2a, M3a). Beside the disc,
+    /// a row without a line keeps a lined row's height, its name centred: shorter, its separator ran above the disc's
+    /// lower edge (the column centres beside the disc) and the list lost its rhythm.
+    @ViewBuilder private var regular: some View {
+        if disc, subtitle == nil {
+            ZStack(alignment: .leading) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(" ").font(.headline)
+                    subtitleText(" ")
+                }
+                .hidden()
+                .accessibilityHidden(true)
+                textColumn(subtitle: nil)
+            }
+        } else {
+            textColumn(subtitle: subtitle)
+        }
+    }
+
+    private func textColumn(subtitle: String?) -> some View {
         VStack(alignment: .leading, spacing: 1) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(name)
@@ -121,17 +139,19 @@ struct MobileRow<Glyph: View>: View {
                 }
                 chevron
             }
-            if let subtitle {
-                Text(subtitle)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(lines)
-                    .truncationMode(.tail)
-                    // The mockup sets the line at 20 points on 15-point type, about 2 more than the font's own.
-                    .lineSpacing(lineGap)
-                    .padding(.vertical, lineGap / 2)
-            }
+            if let subtitle { subtitleText(subtitle) }
         }
+    }
+
+    private func subtitleText(_ subtitle: String) -> some View {
+        Text(subtitle)
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            .lineLimit(lines)
+            .truncationMode(.tail)
+            // The mockup sets the line at 20 points on 15-point type, about 2 more than the font's own.
+            .lineSpacing(lineGap)
+            .padding(.vertical, lineGap / 2)
     }
 
     @ScaledMetric(relativeTo: .subheadline) private var lineGap: CGFloat = 2
@@ -191,7 +211,7 @@ struct MobileRow<Glyph: View>: View {
             MobileRow(dot: .working, tint: mba2, name: "claude", detail: "app · mba2", time: "now", subtitle: "fable-5.1 · thinking 48s") {
                 HostGlyph(host: HostRecord(name: "mba2", address: "mba2", user: "alex", auth: .password, system: .mac), size: 24)
             }
-            MobileRow(dot: nil, tint: studio, name: "zsh", detail: "docs · studio", time: "Yesterday", subtitle: "~/src/docs") {
+            MobileRow(dot: nil, tint: studio, name: "zsh", detail: "docs · studio", time: "Yesterday", subtitle: nil) {
                 HostGlyph(host: HostRecord(name: "studio", address: "studio", user: "alex", auth: .password, system: .mac), size: 24)
             }
             MobileRow(dot: .unread, tint: ai, name: "claude", detail: "curves · ai", time: "Yesterday", subtitle: "fable-5.1 · finished", separator: false) {

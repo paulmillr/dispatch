@@ -228,7 +228,7 @@ final class GitEndToEndTests: XCTestCase {
         }
     }
 
-    /// The loader end to end: the repository, the status with its counts, the marks on the listing and the log.
+    /// The loader end to end: the repository, the status with its counts, the listing and the log.
     @MainActor
     func testTheLoaderShowsTheRepositoryItsMarksAndLog() async throws {
         try makeRepository()
@@ -249,12 +249,8 @@ final class GitEndToEndTests: XCTestCase {
         }
         XCTAssertEqual(session.git, .repository(GitRepository(root: path)))
         try await TestSupport.eventually(timeout: .seconds(20)) {
-            session.listings[path]?.entries.contains { $0.name == "notes.md" && $0.mark == "U" } == true
+            session.status?.changes.contains { $0.path == "notes.md" } == true && session.listings[path]?.listing != nil
         }
-        let marks = Dictionary(uniqueKeysWithValues: (session.listings[path]?.entries ?? []).compactMap { entry in
-            entry.mark.map { (entry.name, $0) }
-        })
-        XCTAssertEqual(marks, ["logo.png": "M", "new.txt": "R", "node_modules": "!", "notes.md": "U", "tests": "U"])
         let status = try XCTUnwrap(session.status)
         XCTAssertEqual(status.changes.first { $0.path == "notes.md" }?.additions, 2, "Untracked lines count as additions")
         XCTAssertEqual(status.changes.first { $0.area == .staged && $0.path == "src/routes/billing.ts" }?.additions, 1)
@@ -267,8 +263,8 @@ final class GitEndToEndTests: XCTestCase {
         XCTAssertEqual(session.commitDetail?.files.map(\.path), ["src/routes/billing.ts"])
     }
 
-    /// The three tabs end to end on this Mac's helper: a visible, presented session's loader fills the Files listing's
-    /// marks, the Changes tab's status, counts and diffs, and the Commits tab's log, refs, a commit's files with their
+    /// The three tabs end to end on this Mac's helper: a visible, presented session's loader fills the Files listing,
+    /// the Review tab's status, counts and diffs, and the Commits tab's log, refs, a commit's files with their
     /// letters and a file's diff, as the tab switches.
     @MainActor
     func testTheThreeTabsShowARealRepository() async throws {
@@ -284,16 +280,16 @@ final class GitEndToEndTests: XCTestCase {
         coordinator.observe(session)
         defer { coordinator.forget(session.id) }
 
-        // Files: the repository resolved, the segments shown, the marks on the listing.
+        // Files: the repository resolved, the segments shown, the listing without git on it.
         XCTAssertEqual(session.tab, .files)
         try await TestSupport.eventually(timeout: .seconds(20)) { session.git != .loading }
         XCTAssertEqual(session.git, .repository(GitRepository(root: path)))
-        try await TestSupport.eventually(timeout: .seconds(20), diagnostic: "marks \(self.marks(session, path))") {
-            self.marks(session, path) == ["logo.png": "M", "new.txt": "R", "node_modules": "!", "notes.md": "U"]
+        try await TestSupport.eventually(timeout: .seconds(20)) {
+            session.status?.changes.contains { $0.path == "new.txt" } == true && session.listings[path]?.listing != nil
         }
         XCTAssertEqual(FilesHeader.segments(for: session).map(\.id), [.files, .changes, .commits])
         try await TestSupport.eventually(timeout: .seconds(20)) { session.changedCount == 5 }
-        XCTAssertEqual(FilesHeader.segments(for: session)[1].count, 5)
+        XCTAssertNil(FilesHeader.segments(for: session)[1].count, "Review counts its comments, not the changed files")
 
         // Changes: the status with every file's counts, then a text diff and a binary one.
         session.select(.changes)
@@ -368,16 +364,5 @@ final class GitEndToEndTests: XCTestCase {
         let added = try XCTUnwrap(session.commitDiff?.diff)
         XCTAssertTrue(added.text.contains("new file mode"), added.text)
         XCTAssertTrue(added.text.contains("\n+export const verify = true\n"), added.text)
-
-        // Back on Files, the marks still stand.
-        session.select(.files)
-        XCTAssertEqual(marks(session, path)["new.txt"], "R")
-    }
-
-    @MainActor
-    private func marks(_ session: FilesSession, _ path: String) -> [String: String] {
-        Dictionary(uniqueKeysWithValues: (session.listings[path]?.entries ?? []).compactMap { entry in
-            entry.mark.map { (entry.name, $0) }
-        })
     }
 }

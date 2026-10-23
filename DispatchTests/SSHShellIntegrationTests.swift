@@ -209,20 +209,22 @@ final class SSHShellIntegrationTests: XCTestCase {
         pasteboard.clearContents(); pasteboard.setString("untouched", forType: .string)
         let remote = try await activeTerminal()
         try await ssh(helper, from: remote, helper: true)
-        XCTAssertTrue(app.runtime.preferences.allowRemoteClipboardWrites, "Programs on helper hosts can copy by default")
-        app.runtime.preferences.allowRemoteClipboardWrites = false
+        XCTAssertTrue(app.runtime.preferences.allowClipboardWrites, "Programs can copy by default")
+        app.runtime.preferences.allowClipboardWrites = false
         try await copy("helper-off", in: remote)
         try await assertRefused("Programs on helper hosts cannot copy with the setting off")
-        app.runtime.preferences.allowRemoteClipboardWrites = true
+        app.runtime.preferences.allowClipboardWrites = true
         try await copy("helper-on", in: remote)
         try await app.wait { pasteboard.string(forType: .string) == "helper-on" }
-        app.runtime.preferences.allowRemoteClipboardWrites = false
+        app.runtime.preferences.allowClipboardWrites = false
 
+        // Plain SSH follows the same setting: the terminal can't tell it from a local program.
         app.workspace.newLocalSpace()
         let ordinary = try await activeTerminal()
         try await ssh(plain, from: ordinary, helper: false)
+        pasteboard.clearContents(); pasteboard.setString("untouched", forType: .string)
         try await copy("plain", in: ordinary)
-        try await app.wait { pasteboard.string(forType: .string) == "plain" }
+        try await assertRefused("Programs over plain SSH cannot copy with the setting off either")
 
         // tmux reached over the helper connection: buffers follow the same setting.
         pasteboard.clearContents(); pasteboard.setString("untouched", forType: .string)
@@ -230,7 +232,7 @@ final class SSHShellIntegrationTests: XCTestCase {
         try await TestSupport.eventually(timeout: .seconds(10)) { app.workspace.spaces.contains { $0.structured && $0.remote != nil && $0.remote == app.runtime.link(of: remote.id)?.launch.connectionID } }
         _ = try app.server(["set-buffer", "-b", "remote", "tmux-off"])
         try await assertRefused("tmux over the helper cannot copy with the setting off")
-        app.runtime.preferences.allowRemoteClipboardWrites = true
+        app.runtime.preferences.allowClipboardWrites = true
         _ = try app.server(["set-buffer", "-b", "remote", "tmux-on"])
         try await app.wait { pasteboard.string(forType: .string) == "tmux-on" }
     }

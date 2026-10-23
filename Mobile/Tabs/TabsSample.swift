@@ -17,12 +17,15 @@ struct TopologySketch {
         var panes: [Pane]
         var focus = 0
         var detached = false
+        /// Detached with no parent: a tmux retained view (the helper's descriptor of detached work).
+        var retained = false
     }
     struct Space {
         var key: String
         var name: String
         var cwd: String? = nil
         var tabs: [Tab]
+        var detached = false
     }
 
     var backend: UInt64 = 1
@@ -59,10 +62,12 @@ struct TopologySketch {
         }
         for space in spaces {
             let spaceID = next; next += 1
-            nodes.append(node(spaceID, nil, space.key, "workspace", space.name, cwd: space.cwd))
+            nodes.append(node(spaceID, space.detached ? backend : nil, space.key, "workspace", space.name, cwd: space.cwd,
+                              detached: space.detached))
             for tab in space.tabs {
                 let tabID = next; next += 1
-                nodes.append(node(tabID, spaceID, tab.key, "tab", tab.name, renamed: tab.renamed, detached: tab.detached))
+                nodes.append(node(tabID, tab.retained ? nil : spaceID, tab.key, "tab", tab.name, renamed: tab.renamed,
+                                  detached: tab.detached || tab.retained))
                 var paneIDs: [UInt64] = []
                 for pane in tab.panes {
                     paneIDs.append(next)
@@ -168,9 +173,19 @@ enum TabsSample {
         let installed = [mba2.id: ["herdr", "tmux"], studio.id: ["tmux"], ai.id: ["herdr", "tmux"], vps.id: ["tmux"]]
         var hosts = [(mba2, mbaSketch), (studio, studioSketch), (ai, aiSketch)]
         if emptyHost { hosts.append((vps, TopologySketch(backend: 1, first: 300, spaces: []))) }
+        // `-DispatchTabsFiles plain|denied|offline`: mba2 as Files' S1, S2 and S3 see it.
+        let files = UserDefaults.standard.string(forKey: "DispatchTabsFiles")
         for (sample, sketch) in hosts {
             // The multiplexer each host shows: tmux on studio and vps, herdr on the others.
             var host = sample
+            if sample.id == mba2.id {
+                switch files {
+                case "plain": host.plain = true
+                case "denied": host.files = false
+                case "offline": host.state = .offline; host.offlineSince = now.addingTimeInterval(-120)
+                default: break
+                }
+            }
             host.multiplexer = sample.id == studio.id || sample.id == vps.id ? "tmux" : "herdr"
             let workspace = MobileWorkspace(host: host, client: sampleClient, activity: store, now: { now })
             workspace.features = ["projects.recent", "multiplexers.versions"]
@@ -181,13 +196,13 @@ enum TabsSample {
             for (key, id) in sketch.ids { keys[id] = key }
         }
         model.urgency = { _, terminal in keys[terminal].flatMap { urgency[$0] } }
-        model.status = { _, terminal in keys[terminal].flatMap { status[$0] } }
+        model.status = { _, terminal in keys[terminal].flatMap { status[$0] }.map { TabsStatus(text: $0) } }
         return model
     }
 
     /// A client answered in process: the sample's hosts count as connected, so the screens offer their actions;
     /// `projects.recent` gives the mockup's folders (M7a), anything else an "unavailable" error.
-    private static let sampleClient: HelperClient = {
+    static let sampleClient: HelperClient = {
         let incoming = Pipe(), outgoing = Pipe()
         let peer = HelperTransport(read: outgoing.fileHandleForReading, write: incoming.fileHandleForWriting)
         nonisolated(unsafe) var decoder = HelperWire.Decoder()
@@ -214,6 +229,29 @@ enum TabsSample {
         return HelperClient(HelperConnection(read: incoming.fileHandleForReading, write: outgoing.fileHandleForWriting))
     }()
     nonisolated(unsafe) private static var sampleTransport: HelperTransport?
+
+    /// The sample's repositories: every tab's folder under `~/src` is one, on the branch `dark-mode` (H1, H2, H3); the
+    /// spaces' folders are on the mockup's branches (`spaceBranches`, P1).
+    static func gitFacts(_ facts: SpaceGitFacts, model: MobileTabs) {
+        for workspace in model.workspaces {
+            for space in workspace.spaces {
+                guard let directory = space.cwd else { continue }
+                let branch = spaceBranches[space.ref.key]
+                facts.seed(SpaceGitFacts.Key(host: workspace.host.id, key: space.ref.key),
+                           SpaceGitFacts.Facts(directory: directory, root: branch == nil ? nil : directory, branch: branch))
+            }
+            for tab in workspace.tabs {
+                guard let directory = tab.activePane?.cwd else { continue }
+                let repository = directory.contains("/src/")
+                let root = repository ? directory.components(separatedBy: "/").prefix(5).joined(separator: "/") : nil
+                facts.seed(SpaceGitFacts.Key(host: workspace.host.id, key: tab.ref.key),
+                           SpaceGitFacts.Facts(directory: directory, root: root, branch: repository ? "dark-mode" : nil))
+            }
+        }
+    }
+
+    /// The review comments the sample's tabs carry (H0's Files badge, H2's Review badge).
+    static let reviewCount = 3
 }
 
 #Preview("M2a Tabs") {

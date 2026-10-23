@@ -213,8 +213,15 @@ final class HelperTerminalFeed: TerminalFeed {
                 if !accepted { events.finish() }
                 return accepted
             }
+            // Input, sizes and screens wait for the helper to confirm the attach (`terminal.attached`), as the Mac's do: a
+            // multiplexer may refuse input to a terminal it has not attached yet. A failed or ended attach releases them.
+            let (confirmed, confirm) = AsyncStream<Void>.makeStream()
             do {
                 let request = try await client.attach(.init(terminal: terminal, size: grid(size), takeover: false)) { result in
+                    switch result {
+                    case .success(.attached), .success(.exit), .failure: confirm.finish()
+                    default: break
+                    }
                     switch result {
                     case .success(.output(let output)) where output.terminal == terminal:
                         var offset = output.bytes.startIndex
@@ -238,9 +245,20 @@ final class HelperTerminalFeed: TerminalFeed {
                     state.request = request
                     return false
                 }
-                if stale { client.connection.cancel(request) }
+                if stale {
+                    client.connection.cancel(request)
+                    confirm.finish()
+                }
             } catch {
+                confirm.finish()
                 emit(.failed(message(error)), true)
+            }
+            await withTaskGroup(of: Void.self) { group in
+                group.addTask { for await _ in confirmed {} }
+                // Never held for good by a reply that does not come: the queue goes on as it did before the wait.
+                group.addTask { try? await Task.sleep(for: Self.attachWait) }
+                await group.next()
+                group.cancelAll()
             }
         case .input(let bytes):
             guard current(shared, generation) else { return }
@@ -276,6 +294,9 @@ final class HelperTerminalFeed: TerminalFeed {
             }
         }
     }
+
+    /// The longest the queue waits for `terminal.attached`.
+    static let attachWait = Duration.seconds(10)
 
     private static func message(_ error: any Error) -> String {
         guard let failure = error as? HelperFailure else { return error.localizedDescription }

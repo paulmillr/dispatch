@@ -51,9 +51,38 @@ final class TerminalPresence {
     /// The attachment ended: the process exited or the attachment failed.
     private(set) var ended: TerminalFeedEvent?
     private(set) var attached = false
+    /// The conversations sending through this terminal now (`chat.send`, a queue start, an answer: the helper verifies
+    /// them against the screen this presence publishes). Reset terminal waits for them.
+    private(set) var chatSends: Set<AnyHashable> = []
+    var chatSending: Bool { !chatSends.isEmpty }
+    /// The grid the screen is laid out at when it is not the view's: tmux keeps one size per window for every client,
+    /// so while another client (the Mac) holds the window at its size, output comes for that grid. As the Mac's
+    /// `tmuxGrid`, the view then draws it at the same font size from the top left, and keeps asking for its own.
+    private(set) var shownGrid: (columns: Int, rows: Int)?
+    /// The view's own grid, the size `resize` asks for.
+    @ObservationIgnored private var available: TerminalFeedSize?
+    /// The window's size on the server (the topology's `size`, tmux only).
+    @ObservationIgnored private var serverGrid: (columns: Int, rows: Int)?
+    @ObservationIgnored private var lastResize = ContinuousClock.now - .seconds(60)
+    @ObservationIgnored private var settling: Task<Void, Never>?
+    /// The view's grid waiting for its run to settle (`resizeQuiet`) before the feed gets it.
+    @ObservationIgnored private var resizing: Task<Void, Never>?
+    /// The grid the feed last got (or attached at).
+    @ObservationIgnored private var sent: TerminalFeedSize?
+    /// The view showing this presence lays out again (the shown grid changed).
+    @ObservationIgnored var relayout: (() -> Void)?
+    /// A server size different from the view's right after a resize is the old one: the server's comes within this.
+    nonisolated static let resizeSettle = Duration.milliseconds(1500)
+    /// A run of grid changes (a live window resize, a pinch, the keyboard's frames) reaches the server once, at its
+    /// last size, when none has come for this long: each `terminals.resize` makes tmux and the program redraw, and
+    /// the redraws of sizes the view has already left arrived after it and repainted the screen at the wrong size,
+    /// several times over. The view's own grid follows every frame, as the Mac's does in a live resize.
+    nonisolated static let resizeQuiet = Duration.milliseconds(100)
 
-    /// What the view showing this presence handles (selection, background, bell, clipboard).
+    /// What the view showing this presence handles (selection, background, bell).
     @ObservationIgnored var onViewEvent: ((TerminalSession.Event) -> Void)?
+    /// Where a program's clipboard write goes (only from a feed with `clipboardWrite`); tests give their own.
+    @ObservationIgnored var pasteboard: @MainActor (String) -> Void = TerminalPresence.systemPasteboard
     @ObservationIgnored private var consumer: Task<Void, Never>?
     @ObservationIgnored private var parser: Task<Void, Never>?
     @ObservationIgnored private var attachments = 0
@@ -70,6 +99,8 @@ final class TerminalPresence {
     /// an unbounded claim on the phone's memory. Overflow ends the attachment: dropping terminal bytes would leave its
     /// parser in a state different from the remote terminal. (8 MiB alone ended every attach of a long history.)
     nonisolated static let inboxLimit = HelperConnection.replyLimit + 8 * 1024 * 1024
+    /// Where the consumer stops taking output until the parser drains (`inboxLimit` stays the hard bound).
+    nonisolated static let inboxHighWater = 16 * 1024 * 1024
     nonisolated static let publishInterval = Duration.milliseconds(33)
 
     private struct Publication {
@@ -79,9 +110,13 @@ final class TerminalPresence {
     }
 
     /// `grid`: the size to attach at until a view sizes it (the node's size in the topology keeps a shared tmux
-    /// window as it is); nil: 80 x 24.
+    /// window as it is); nil: 80 x 24. `scrollback` unknown takes the feed's own (a plain shell's is the client's),
+    /// and the feed decides whether programs may write the pasteboard (`TerminalFeed.clipboardWrite`).
     init(feed: any TerminalFeed, scrollback: TerminalScrollback = .unknown, grid: (columns: Int, rows: Int)? = nil,
          configuration: TerminalConfiguration = TerminalController.storedConfiguration(), scale: Double = 3) {
+        let scrollback = scrollback == .unknown ? feed.scrollback : scrollback
+        var configuration = configuration
+        configuration.clipboardWrite = feed.clipboardWrite
         self.feed = feed
         self.scrollback = scrollback
         self.configuration = configuration
@@ -95,8 +130,9 @@ final class TerminalPresence {
         session.setGrid(columns: grid.columns, rows: grid.rows)
         session.output = { [weak feed] data in feed?.send(data) }
         session.onGrid = { [weak self] size in
-            guard let self, self.attached else { return }
-            self.feed.resize(size)
+            // Laid out at the server's grid: the view asks for its own (`offer`), never for the grid it shows.
+            guard let self, self.attached, self.shownGrid == nil else { return }
+            self.resize(size)
         }
         session.onEvent = { [weak self] event in self?.handle(event) }
         let queued = publishQueued
@@ -104,14 +140,98 @@ final class TerminalPresence {
             guard queued.withLock({ queued in defer { queued = true }; return !queued }) else { return }
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.schedulePublication() } }
         }
+        // Settings' terminal style reaches every open terminal at once (its font size stays: a pinch made it).
+        styleObserver = NotificationCenter.default.addObserver(forName: TerminalStyle.changed, object: nil, queue: .main) { [weak self] note in
+            let style = TerminalStyle(note.object as? UserDefaults ?? .standard)
+            MainActor.assumeIsolated { self?.restyle(style) }
+        }
+    }
+
+    @ObservationIgnored private var styleObserver: (any NSObjectProtocol)?
+    /// The view showing this presence redraws what it draws itself (its background, the selection handles) after a
+    /// restyle (`TerminalHostView`).
+    @ObservationIgnored var restyled: (() -> Void)?
+
+    /// Settings changed the terminal style: this terminal draws with it, at its own font size, and its view follows.
+    func restyle(_ style: TerminalStyle) {
+        let next = style.applied(to: configuration)
+        guard next != configuration else { return }
+        configure(next)
+        restyled?()
     }
 
     isolated deinit {
+        if let styleObserver { NotificationCenter.default.removeObserver(styleObserver) }
+        settling?.cancel()
+        resizing?.cancel()
         consumer?.cancel()
         parser?.cancel()
         publication.pending?.cancel()
         if attached { feed.detach() }
         session.close()
+    }
+
+    private func resize(_ size: TerminalFeedSize) {
+        available = size
+        request(size)
+    }
+
+    /// The view's own grid while it shows the server's: asked for when it changes.
+    func offer(_ size: TerminalFeedSize) {
+        guard size != available else { return }
+        available = size
+        guard attached else { return }
+        request(size)
+    }
+
+    /// The feed gets `size` once the run it belongs to settles (`resizeQuiet`); a run that ends where it began sends
+    /// nothing. Meanwhile the server's size counts as the old one (`evaluate`).
+    private func request(_ size: TerminalFeedSize) {
+        lastResize = .now
+        resizing?.cancel()
+        resizing = nil
+        if size != sent {
+            resizing = Task { [weak self] in
+                try? await Task.sleep(for: Self.resizeQuiet)
+                guard !Task.isCancelled, let self, self.attached, self.available == size else { return }
+                self.resizing = nil
+                self.sent = size
+                self.lastResize = .now
+                self.feed.resize(size)
+                self.evaluate()
+            }
+        }
+        evaluate()
+    }
+
+    /// The window's size on the server, from each topology (nil: unknown). Only tmux shares one size between clients.
+    func server(grid: (columns: Int, rows: Int)?) {
+        serverGrid = scrollback == .client ? grid : nil
+        evaluate()
+    }
+
+    /// The screen follows the server's grid once it has differed from the view's for longer than a resize takes, and
+    /// the view's again as soon as they agree: never a frame of a size the server is about to leave.
+    private func evaluate() {
+        settling?.cancel()
+        settling = nil
+        guard let server = serverGrid, let available, attached,
+              server.columns != available.columns || server.rows != available.rows else {
+            if shownGrid != nil { shownGrid = nil; relayout?() }
+            return
+        }
+        if let shown = shownGrid, shown == server { return }
+        let waited = ContinuousClock.now - lastResize
+        guard waited >= Self.resizeSettle else {
+            settling = Task { [weak self] in
+                try? await Task.sleep(for: Self.resizeSettle - waited)
+                guard !Task.isCancelled else { return }
+                self?.evaluate()
+            }
+            return
+        }
+        shownGrid = server
+        relayout?()
     }
 
     /// Attaches the feed at the session's grid (no-op while attached).
@@ -123,20 +243,26 @@ final class TerminalPresence {
         // A later attachment repaints the whole screen; the last one stays shown until its first output arrives, so a
         // terminal shown again (or reattached after a reconnect) never flashes empty.
         let repaint = attachments > 1
+        sent = session.currentSize
         let stream = feed.attach(session.currentSize)
         inbox = TerminalInbox(limit: Self.inboxLimit)
         let session = session, inbox = inbox, attachment = attachments, feed = feed
         let (signals, signal) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        // The parse task says when it took a batch, so a consumer ahead of it can wait instead of filling the inbox.
+        let (drains, drained) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
         parser = Task.detached(priority: .userInitiated) {
             var clear = repaint
             for await _ in signals {
                 while !Task.isCancelled, let batch = inbox.take(limit: Self.batchLimit) {
+                    drained.yield()
                     if clear { session.reset(); clear = false }
                     session.feed(batch)
                 }
             }
+            drained.finish()
         }
         consumer = Task.detached(priority: .userInitiated) { [weak self] in
+            var draining = drains.makeAsyncIterator()
             for await event in stream {
                 if case .output(let bytes) = event {
                     switch inbox.append(bytes) {
@@ -148,6 +274,12 @@ final class TerminalPresence {
                             self?.end(attachment, feed: feed, "Terminal output exceeded the device buffer limit.")
                         }
                         return
+                    }
+                    // Backpressure: past the high-water mark the next events wait in the feed's own bounded stream
+                    // until the parser catches up, so a burst never reaches the inbox's limit (which ends the
+                    // attachment) while the parser is merely behind.
+                    while inbox.count > Self.inboxHighWater, !Task.isCancelled {
+                        guard await draining.next() != nil else { break }
                     }
                 } else {
                     await MainActor.run { self?.handle(event, attachment: attachment) }
@@ -164,6 +296,8 @@ final class TerminalPresence {
     func stop() {
         guard attached else { return }
         attached = false
+        resizing?.cancel()
+        resizing = nil
         consumer?.cancel()
         consumer = nil
         parser?.cancel()
@@ -172,6 +306,27 @@ final class TerminalPresence {
         inbox.clear()
         publication.pending?.cancel()
         publication = Publication()
+    }
+
+    /// Reset terminal (the key bar's menu): a new attachment of the same feed, whose first output repaints a terminal
+    /// fully reset (RIS) from the server's screen and history, as a reattach does. A feed that ends on detach (a plain
+    /// shell), or a presence not attached, resets the emulator alone (Ghostty's `reset`): the program's next output
+    /// draws on the fresh terminal.
+    /// A send in flight (`chatSending`) refuses it: the reattach would drop the screen publication the helper is
+    /// verifying the send against.
+    func resetTerminal() {
+        guard !chatSending else { return }
+        guard attached, !feed.endsOnDetach else {
+            session.fullReset()
+            return
+        }
+        // A reattach of the same feed: the server's history position starts over (herdr reports it again).
+        reattach(feed)
+    }
+
+    /// A conversation (`token`) started or finished sending through this terminal.
+    func chat(_ token: AnyHashable, sending: Bool) {
+        if sending { chatSends.insert(token) } else { chatSends.remove(token) }
     }
 
     /// The same terminal through a new feed: node ids are per helper process, so after a reconnect Tabs finds the
@@ -183,6 +338,8 @@ final class TerminalPresence {
         self.feed = feed
         session.output = { [weak feed] data in feed?.send(data) }
         scroll.reattached()
+        learn(feed.scrollback)
+        configure(configuration)
         if wasAttached { start() }
     }
 
@@ -194,7 +351,10 @@ final class TerminalPresence {
         scroll.learn(scrollback)
     }
 
+    /// A new configuration (font size, theme); whether programs may write the pasteboard stays the feed's.
     func configure(_ configuration: TerminalConfiguration) {
+        var configuration = configuration
+        configuration.clipboardWrite = feed.clipboardWrite
         guard configuration != self.configuration else { return }
         self.configuration = configuration
         session.configure(configuration)
@@ -230,11 +390,17 @@ final class TerminalPresence {
         switch event {
         case .title(let text): title = text.isEmpty ? nil : text
         case .pwd(let url): directory = TerminalSubtitle.path(fromWorkingDirectory: url)
-        case .clipboard: return
+        // A program's OSC 52 write: the session posts it only under `clipboard-write = allow`; checked again here so a
+        // configuration slip cannot open the pasteboard to a helper feed.
+        case .clipboard(let text):
+            if feed.clipboardWrite { pasteboard(text) }
+            return
         default: break
         }
         onViewEvent?(event)
     }
+
+    static func systemPasteboard(_ text: String) { UIPasteboard.general.string = text }
 
     /// The screen as the helper reads it (the Mac's `publishScreen`).
     var screen: TerminalScreen {
@@ -268,7 +434,15 @@ final class TerminalPresence {
 final class TerminalInbox: Sendable {
     enum Append: Equatable { case signal, queued, overflow }
 
-    private let state = Mutex(Data())
+    /// The bytes and where the next batch starts: a batch is taken by moving `head`, never by copying what is left
+    /// (which made draining a full inbox quadratic: every 256 KiB batch copied the tens of MiB behind it).
+    private struct Pending {
+        var bytes = Data()
+        var head = 0
+        var count: Int { bytes.count - head }
+    }
+
+    private let state = Mutex(Pending())
     private let limit: Int
 
     init(limit: Int = TerminalPresence.inboxLimit) { self.limit = limit }
@@ -277,25 +451,33 @@ final class TerminalInbox: Sendable {
     func append(_ bytes: Data) -> Append {
         state.withLock { pending in
             guard pending.count <= limit, bytes.count <= limit - pending.count else { return .overflow }
-            let wasEmpty = pending.isEmpty
-            pending.append(bytes)
+            let wasEmpty = pending.count == 0
+            pending.bytes.append(bytes)
             return wasEmpty ? .signal : .queued
         }
     }
 
-    func clear() { state.withLock { $0 = Data() } }
+    /// The bytes waiting for the parse task.
+    var count: Int { state.withLock { $0.count } }
+
+    func clear() { state.withLock { $0 = Pending() } }
 
     /// Up to `limit` bytes, oldest first; nil: empty.
     func take(limit: Int) -> Data? {
         state.withLock { pending in
-            guard !pending.isEmpty else { return nil }
-            if pending.count <= limit {
-                defer { pending = Data() }
-                return pending
+            guard pending.count > 0 else { return nil }
+            let start = pending.bytes.startIndex + pending.head
+            let end = start + min(limit, pending.count)
+            let batch = Data(pending.bytes[start..<end])
+            pending.head += end - start
+            if pending.count == 0 {
+                pending = Pending()
+            } else if pending.head >= pending.bytes.count / 2 {
+                // Taken bytes go once they are half the buffer: each byte is moved at most once more, on average.
+                pending.bytes.removeSubrange(pending.bytes.startIndex..<pending.bytes.startIndex + pending.head)
+                pending.head = 0
             }
-            let batch = pending.prefix(limit)
-            pending = Data(pending.dropFirst(limit))
-            return Data(batch)
+            return batch
         }
     }
 }
@@ -337,7 +519,9 @@ final class TerminalPresences {
     /// feed unless `feed` names another terminal id or another client (a new helper after a reconnect: its node ids
     /// start over, so the same id comes back for an unchanged layout), which it reattaches to. An attachment that
     /// ended (the program exited, the attach failed) is not started again on the same feed: views ask for their
-    /// presence on every update.
+    /// presence on every update. A plain shell (`shell:<uuid>`, `PlainShellFeed`) never reattaches here (it names no
+    /// terminal or client), scrolls locally from the start (the feed's `scrollback`), and ends when its last user lets
+    /// go: its detach closes the channel.
     func open(_ key: Key, feed: @autoclosure () -> any TerminalFeed, terminal: UInt64? = nil, client: HelperClient? = nil,
               scrollback: TerminalScrollback = .unknown, grid: (columns: Int, rows: Int)? = nil) -> TerminalPresence {
         if let existing = presences[key] {
@@ -378,6 +562,13 @@ final class TerminalPresences {
     func close(_ key: Key) {
         users[key] = nil
         presences.removeValue(forKey: key)?.stop()
+    }
+
+    /// Each terminal's window size on the server, from the host's topology (`TerminalPresence.server(grid:)`).
+    func serverGrids(host: UUID, topology: HelperTopology) {
+        for node in topology.nodes where node.kind == .terminal {
+            presences[Key(host: host, node: node.key)]?.server(grid: node.size.map { (Int($0.columns), Int($0.rows)) })
+        }
     }
 
     /// The host disconnected: every presence of it stops (those in use reattach after the reconnect).

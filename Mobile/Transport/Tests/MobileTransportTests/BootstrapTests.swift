@@ -17,7 +17,7 @@ final class BootstrapTests: XCTestCase {
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     var bytes = Data(count: size)
     bytes.withUnsafeMutableBytes { _ = SecRandomCopyBytes(kSecRandomDefault, size, $0.baseAddress!) }
-    for name in ["darwin-universal", "linux-aarch64", "linux-x86_64"] {
+    for name in ["darwin-arm64", "linux-aarch64", "linux-x86_64"] {
       try bytes.write(to: directory.appendingPathComponent(name))
     }
     return directory
@@ -30,7 +30,7 @@ final class BootstrapTests: XCTestCase {
     let binaries = try dummyBinaries(size: 3 << 20)
     let first = try await HelperBootstrap.install(on: connection, binaries: binaries)
     XCTAssertTrue(first.uploaded)
-    XCTAssertEqual(first.platform, "darwin-universal")
+    XCTAssertEqual(first.platform, "darwin-arm64")
     let installed = fixture.home.appendingPathComponent(first.relativePath)
     let attributes = try FileManager.default.attributesOfItem(atPath: installed.path)
     XCTAssertEqual(attributes[.size] as? Int, 3 << 20)
@@ -86,12 +86,15 @@ final class BootstrapTests: XCTestCase {
   func testPlatformNames() {
     XCTAssertEqual(SSHBootstrapScript.platform("DISPATCH_PLATFORM=Linux:aarch64\n"), .helper("linux-aarch64"))
     XCTAssertEqual(SSHBootstrapScript.platform("DISPATCH_PLATFORM=Linux:x86_64\n"), .helper("linux-x86_64"))
+    XCTAssertEqual(SSHBootstrapScript.platform("DISPATCH_PLATFORM=Darwin:arm64\n"), .helper("darwin-arm64"))
+    // Intel Macs are no longer supported: plain SSH.
+    XCTAssertEqual(SSHBootstrapScript.platform("DISPATCH_PLATFORM=Darwin:x86_64\n"), .unsupported)
     XCTAssertEqual(SSHBootstrapScript.platform("DISPATCH_PLATFORM=FreeBSD:amd64\n"), .unsupported)
     XCTAssertEqual(SSHBootstrapScript.platform("motd\n"), .unidentified)
   }
 
   func testInstallsRealHelper() async throws {
-    guard FileManager.default.fileExists(atPath: Self.realHelpers.appendingPathComponent("darwin-universal").path) else {
+    guard FileManager.default.fileExists(atPath: Self.realHelpers.appendingPathComponent("darwin-arm64").path) else {
       throw XCTSkip("No helper build at \(Self.realHelpers.path) (scripts/build-ssh-helper.py --build-only)")
     }
     let fixture = try SSHFixture()
@@ -105,7 +108,7 @@ final class BootstrapTests: XCTestCase {
     let again = ContinuousClock.now
     let cached = try await HelperBootstrap.install(on: connection, binaries: Self.realHelpers)
     XCTAssertFalse(cached.uploaded)
-    report(String(format: "bootstrap real helper (%.1f MB darwin-universal): upload %.2f s, cached check %.0f ms",
+    report(String(format: "bootstrap real helper (%.1f MB darwin-arm64): upload %.2f s, cached check %.0f ms",
                   Double(installed.size) / 1e6, elapsed, seconds(ContinuousClock.now - again) * 1000))
   }
 }

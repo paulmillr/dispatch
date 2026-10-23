@@ -221,9 +221,13 @@ enum System {
     /// replay wakes when the recording reaches it. Identified by its file and name, never its line: an edit elsewhere in
     /// the file keeps every recording of it (the duration is the clock's). A test's own pause is a step instead
     /// (TestSupport.pause): the test goes on only after the app handled what came before.
-    nonisolated(nonsending) static func sleep(for duration: Duration, _ name: String, _ file: String = #fileID) async throws {
+    /// `woken`: a window or activation notification may cut it short (a nap between polls). Replay cannot count on that
+    /// notification coming again at the same point, so a recorded cut ends the wait where the recording did, and a live
+    /// one ends it only when the recording never saw it end.
+    nonisolated(nonsending) static func sleep(for duration: Duration, _ name: String, woken: Bool = false,
+                                              _ file: String = #fileID) async throws {
         guard !polling else { return try await Task.sleep(for: duration) }
-        _ = try await AppReplay.run(kind: "clock", input: .string(file + ":" + name), caller: true) {
+        _ = try await AppReplay.run(kind: "clock", input: .string(file + ":" + name), caller: !woken, woken: woken) {
             try await Task.sleep(for: duration)
             return .null
         }

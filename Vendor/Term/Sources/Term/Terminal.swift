@@ -69,7 +69,9 @@ public struct TerminalOptions {
     public var kitty = KittySystem()
     /// Zero disables Kitty graphics entirely.
     public var kittyImageStorageLimit = ImageStorage.defaultTotalLimit
-    public init(cols: Int, rows: Int) { (self.cols, self.rows) = (cols, rows) }
+    public init(cols: Int, rows: Int) {
+        (self.cols, self.rows) = (min(max(cols, 1), Int(UInt16.max)), min(max(rows, 1), Int(UInt16.max)))
+    }
 }
 
 /// Class storage stays internal: Swift keeps a dynamic exclusivity check on every access to a
@@ -125,14 +127,17 @@ public final class Terminal {
     }
 
     public init(_ o: TerminalOptions) {
+        // Options are mutable after their initializer, so normalize again at the allocation
+        // boundary before page capacities narrow the grid to UInt16.
+        let (cols, rows) = (min(max(o.cols, 1), Int(UInt16.max)), min(max(o.rows, 1), Int(UInt16.max)))
         let imageLimit = min(max(0, o.kittyImageStorageLimit), ImageStorage.defaultTotalLimit)
-        (rows, cols, widthPx, heightPx) = (o.rows, o.cols, o.widthPx, o.heightPx)
+        (self.rows, self.cols, widthPx, heightPx) = (rows, cols, o.widthPx, o.heightPx)
         (blocks, kittySystem, kittyImageStorageLimit) = (o.blocks, o.kitty, imageLimit)
-        primary = Screen(cols: o.cols, rows: o.rows, maxBytes: o.maxScrollbackBytes, maxLines: o.maxScrollbackLines, blocks: o.blocks)
+        primary = Screen(cols: cols, rows: rows, maxBytes: o.maxScrollbackBytes, maxLines: o.maxScrollbackLines, blocks: o.blocks)
         primary.images.totalLimit = imageLimit
         active = primary
-        tabstops = Terminal.tabs(o.cols)
-        scrollingRegion = ScrollingRegion(top: 0, bottom: o.rows - 1, left: 0, right: o.cols - 1)
+        tabstops = Terminal.tabs(cols)
+        scrollingRegion = ScrollingRegion(top: 0, bottom: rows - 1, left: 0, right: cols - 1)
         colors = Colors(foreground: DynamicRGB(default: o.foreground), background: DynamicRGB(default: o.background), cursor: DynamicRGB(), palette: Palette(Palette.standard))
         var m = ModeState.tableDefaults
         for (name, v) in o.defaultModes { let i = UInt64(Mode(name).index); m = v ? m | 1 << i : m & ~(1 << i) }
@@ -148,6 +153,14 @@ public final class Terminal {
         for i in palette.indices where !colors.palette.mask[i] { colors.palette.current[i] = palette[i] }
         dirty.palette = true
         (colors.foreground.default, colors.background.default, colors.cursor.default) = (foreground, background, cursor)
+    }
+
+    /// The config's cursor (Termio.changeConfig): the shape and blinking a program has not chosen with
+    /// DECSCUSR; a cursor it has chosen stays until it asks for the default again.
+    public func changeCursorDefaults(style: CursorShape, blink: Bool?) {
+        guard style != cursorDefaults.defaultStyle || blink != cursorDefaults.defaultBlink else { return }
+        (cursorDefaults.defaultStyle, cursorDefaults.defaultBlink) = (style, blink)
+        if cursorDefaults.isDefault { setCursorStyle(.default) }
     }
 
     deinit { primary.free(); alternate?.free() }
@@ -1006,7 +1019,12 @@ public final class Terminal {
 
     public func resize(cols newCols: Int, rows newRows: Int, cellWidth: Int? = nil, cellHeight: Int? = nil) {
         guard newCols > 0, newRows > 0 else { return }
-        if let w = cellWidth, let h = cellHeight { (widthPx, heightPx) = (newCols * w, newRows * h) }
+        let (newCols, newRows) = (min(newCols, Int(UInt16.max)), min(newRows, Int(UInt16.max)))
+        if let w = cellWidth, let h = cellHeight {
+            let width = newCols.multipliedReportingOverflow(by: max(w, 0))
+            let height = newRows.multipliedReportingOverflow(by: max(h, 0))
+            (widthPx, heightPx) = (width.overflow ? .max : width.partialValue, height.overflow ? .max : height.partialValue)
+        }
         modes.set(.synchronizedOutput, false)
         if cols == newCols, rows == newRows { return }
         primary.resize(cols: newCols, rows: newRows, reflow: modes.get(.wraparound), promptRedraw: flags.shellRedrawsPrompt)

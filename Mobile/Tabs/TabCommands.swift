@@ -109,7 +109,8 @@ struct TabsServerActivity: Decodable, Equatable, Sendable {
 
 /// The three ways to close, with the Mac's names (its tab and space menus: Close Tab, Detach, Terminate…).
 enum TabsClose: Equatable, Sendable {
-    /// Close Tab / Close Space: terminate only when every pane is verified idle, else detach (docs/integrations.md).
+    /// Close Tab: terminate only when every pane is verified idle, else detach. A space always detaches, as on the Mac
+    /// (docs/integrations.md: "Close space, Detach, and quit always detach").
     case close
     /// Keep the work running on the server; the tab leaves this connection's lists.
     case detach
@@ -184,18 +185,28 @@ struct TabCommands: Sendable {
         try await client.place(HelperClient.Placement(node: tab.node, place: .init(kind: "workspace", label: space)))
     }
 
+    /// `memberships.move` of a tab within its space (P2d's reorder), or of detached work back under its parent.
+    func move(_ node: UInt64, parent: UInt64, before: UInt64?) async throws {
+        try await client.move(HelperClient.Membership(node: node, parent: parent, before: before))
+    }
+
+    /// `memberships.place` of detached work (a tmux retained view) back into its session.
+    func place(_ node: UInt64, label: String) async throws {
+        try await client.place(HelperClient.Placement(node: node, place: .init(kind: "workspace", label: label)))
+    }
+
     /// `entities.rename` of a space or tab.
     func rename(_ node: UInt64, to name: String) async throws {
         try await client.rename(HelperClient.Rename(node: node, name: name))
     }
 
-    /// `close.request` with the Mac's policy. Close asks the helper first (`check`, nothing changes): when every pane is
-    /// verified idle the node is terminated, otherwise, or when the check is unavailable, it is detached and its work
-    /// keeps running. A tab terminates through `prompt`, which re-verifies on the server and detaches what turned busy in
-    /// between; a space through `terminate` (tmux detaches a session on `prompt` whatever it runs).
+    /// `close.request` with the Mac's policy. Closing a space detaches it. Closing a tab asks the helper first (`check`,
+    /// nothing changes): when every pane is verified idle the tab is terminated through `prompt`, which re-verifies on
+    /// the server and detaches what turned busy in between; otherwise, or when the check is unavailable, it is detached
+    /// and its work keeps running.
     func close(_ node: UInt64, _ how: TabsClose, space: Bool = false) async throws -> TabsCloseOutcome {
         switch how {
-        case .detach:
+        case .close where space, .detach:
             _ = try await client.close(.init(node: node, policy: .detach))
             return .detached
         case .terminate:
@@ -215,10 +226,6 @@ struct TabCommands: Sendable {
             guard idle else {
                 _ = try await client.close(.init(node: node, policy: .detach))
                 return .detached
-            }
-            if space {
-                _ = try await client.close(.init(node: node, policy: .terminate))
-                return .terminated
             }
             let closed = try await client.close(.init(node: node, policy: .prompt))
             guard closed.confirmation else { return .terminated }
@@ -241,7 +248,7 @@ struct TabsFailure: Error, Equatable, LocalizedError {
 extension MobileWorkspace {
     /// The commands on this connection; `nodes`: the request names node ids from the spaces shown, which must then be
     /// this connection's (`TabsHost.live`).
-    private func commands(nodes: Bool = true) throws -> TabCommands {
+    func commands(nodes: Bool = true) throws -> TabCommands {
         guard let client else { throw TabsFailure.disconnected }
         if nodes, !host.live { throw TabsFailure.loading }
         return TabCommands(client: client)
@@ -343,10 +350,12 @@ extension MobileWorkspace {
         await waitUntil(timeout: timeout) { spaces.contains { $0.backend == backend } }
     }
 
-    /// New tab in a space: a new window (tmux) or tab (herdr) in the directory the space's active tab is in.
+    /// New tab in a space: a new window (tmux) or tab (herdr) in the directory the space's active tab is in. No `cwd`,
+    /// as the Mac sends none to a multiplexer: the server knows its focused pane's live directory (tmux
+    /// `#{pane_current_path}`), which a folder the topology last reported may no longer be.
     func newTab(in space: MobileSpace, timeout: Duration = .seconds(10)) async throws -> MobileTab {
         let commands = try commands()
-        let terminal = try await commands.createTerminal(parent: space.node, cwd: space.tabs.first?.cwd ?? space.cwd)
+        let terminal = try await commands.createTerminal(parent: space.node, cwd: nil)
         guard let tab = await tab(for: terminal, timeout: timeout) else {
             throw TabsFailure(message: "The tab was created, but the host has not shown it yet.")
         }

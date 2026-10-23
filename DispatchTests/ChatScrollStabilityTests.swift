@@ -745,6 +745,8 @@ final class ChatScrollStabilityTests: XCTestCase {
             .max { ($0.documentView?.bounds.height ?? 0) < ($1.documentView?.bounds.height ?? 0) })
         func gap() -> CGFloat { (scroll.documentView?.bounds.maxY ?? 0) - scroll.contentView.bounds.maxY }
         XCTAssertTrue(session.atBottom)
+        // One burst however slow the machine: twelve 80 ms turns overrun the 1 s interval in the test VM.
+        session.transcriptArrivals.burstInterval = 10
         session.active = true; session.busy = true; session.activeTurnID = "live"
         for index in 0..<12 {
             session.insert(.init(id: "burst-\(index)", kind: .assistant,

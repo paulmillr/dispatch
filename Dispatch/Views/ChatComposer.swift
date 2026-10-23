@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 struct ChatComposer: NSViewRepresentable {
     @Environment(\.chatTheme) private var theme
@@ -15,6 +16,11 @@ struct ChatComposer: NSViewRepresentable {
     var queueAction: ((UUID, String) -> Void)?
     var optionChanged: ((Bool) -> Void)?
     var showShortcuts: (() -> Void)?
+    /// Attachments (ChatCoordinator.attach): whether the draft takes them now, files or image data to upload, and the
+    /// open panel (⇧⌘A).
+    var canAttach: () -> Bool = { false }
+    var attach: (([ChatAttachmentSource]) -> Void)?
+    var chooseAttachments: ((NSWindow?) -> Void)?
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = NSScrollView()
         // TextKit 1 from the start: measure() and the code bands use the layout manager, and reading
@@ -35,6 +41,7 @@ struct ChatComposer: NSViewRepresentable {
         text.delegate = context.coordinator; text.submit = submit; text.pickModel = pickModel
         text.interrupt = interrupt; text.exitChat = exitChat; text.exitPrompt = exitPrompt
         text.sendNow = sendNow; text.queueAction = queueAction; text.showShortcuts = showShortcuts
+        text.canAttach = canAttach; text.attach = attach; text.chooseAttachments = chooseAttachments
         text.session = session
         configureFocus(text)
         text.setAccessibilityLabel("Message agent")
@@ -88,9 +95,11 @@ struct ChatComposer: NSViewRepresentable {
         }
         let placeholder = TerminalRuntime.shared.chat.placeholder(session)
         text.placeholder = placeholder
+        let provisional = ChatDictation.shared.provisional(session.id)
+        text.provisional = provisional
         text.highlight()
         text.measure()
-        if revealRestoredSelection { text.scrollRangeToVisible(text.selectedRange()) }
+        if revealRestoredSelection || provisional != nil { text.scrollRangeToVisible(text.selectedRange()) }
         // Edits redraw what they change. This runs on every keystroke, so redraw the whole editor only for
         // what draw() shows besides the text: the placeholder and its colors.
         let drawn = Coordinator.Drawn(placeholder: placeholder, empty: text.string.isEmpty, theme: theme)
@@ -101,6 +110,7 @@ struct ChatComposer: NSViewRepresentable {
         text.submit = submit; text.pickModel = pickModel
         text.interrupt = interrupt; text.exitChat = exitChat; text.exitPrompt = exitPrompt
         text.sendNow = sendNow; text.queueAction = queueAction; text.showShortcuts = showShortcuts
+        text.canAttach = canAttach; text.attach = attach; text.chooseAttachments = chooseAttachments
         text.session = session
         configureFocus(text)
         let canFocus = focused && text.canAcceptFocus()
@@ -162,6 +172,32 @@ struct ChatComposer: NSViewRepresentable {
         var queueAction: ((UUID, String) -> Void)?
         var pickModel: ((ChatModelPicker.Column, Bool) -> Void)?
         var showShortcuts: (() -> Void)?
+        var canAttach: () -> Bool = { false }
+        var attach: (([ChatAttachmentSource]) -> Void)?
+        var chooseAttachments: ((NSWindow?) -> Void)?
+        /// What a paste or drop may attach besides text: Finder's files, image data, and rows of a files view.
+        static let attachmentTypes: [NSPasteboard.PasteboardType] = [.filesPaths, .fileURL, .png, .init(UTType.jpeg.identifier), .tiff]
+        override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
+            super.readablePasteboardTypes + Self.attachmentTypes.filter { !super.readablePasteboardTypes.contains($0) }
+        }
+        override var acceptableDragTypes: [NSPasteboard.PasteboardType] {
+            super.acceptableDragTypes + Self.attachmentTypes.filter { !super.acceptableDragTypes.contains($0) }
+        }
+        /// Paste (⌘V) and drops both read here. Rows of a files view type their quoted paths, as on a terminal (they
+        /// are already on a host); Finder's files and image data (a screenshot on the clipboard) become attachments
+        /// when the draft takes them; anything else, plain text included, is the text view's.
+        override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
+            if let paths = FilesDragPayload.read(pboard)?.paths {
+                guard let text = TerminalDrop.text(paths) else { return false }
+                insertText(text, replacementRange: selectedRange())
+                return true
+            }
+            if canAttach(), let attach {
+                let sources = ChatAttachmentSource.read(pboard)
+                if !sources.isEmpty { attach(sources); return true }
+            }
+            return super.readSelection(from: pboard, type: type)
+        }
         override var multiline: Bool {
             get { session?.drafts.current.multiline ?? false }
             set { session?.drafts.edit(multiline: newValue) }
@@ -184,7 +220,8 @@ struct ChatComposer: NSViewRepresentable {
             // Chat tabs answer the same prefix keys as their terminal; ⌃B twice keeps the editor's ⌃B.
             if let session, !hasMarkedText(), TerminalRuntime.shared.workspace?.prefixKeys.handle(event, surface: session.id) == true { return }
             if latestMessagesShortcut(event) { return }
-            if editorModeShortcut(event) || helpShortcut(event) || exitShortcut(event) || queueShortcut(event) || commandShortcut(event) { return }
+            if editorModeShortcut(event) || helpShortcut(event) || exitShortcut(event) || queueShortcut(event) || commandShortcut(event)
+                || attachShortcut(event) { return }
             if event.keyCode == 53, !hasMarkedText(), !multiline,
                event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty,
                interrupt?() == true { return }
@@ -207,18 +244,21 @@ struct ChatComposer: NSViewRepresentable {
             }
             if latestMessagesShortcut(event) { return true }
             if editorModeShortcut(event) || helpShortcut(event) || exitShortcut(event) || queueShortcut(event) || commandShortcut(event)
-                || modelShortcut(event) { return true }
+                || modelShortcut(event) || attachShortcut(event) { return true }
             return super.performKeyEquivalent(with: event)
         }
         private func latestMessagesShortcut(_ event: NSEvent) -> Bool {
             guard event.keyCode == 36 || event.keyCode == 76,
                   event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty,
                   !hasMarkedText(), !multiline, string.isEmpty,
-                  let session, session.hasNewMessages, !session.atBottom else { return false }
+                  // Attachments alone are a message: Return sends them.
+                  let session, !session.drafts.shape.hasAttachments, session.hasNewMessages, !session.atBottom else { return false }
             session.revealLatestMessages()
             return true
         }
         override func shouldChangeText(in affectedCharRange: NSRange, replacementString: String?) -> Bool {
+            // While dictation writes the draft, typing would be overwritten by its next words.
+            if let session, ChatDictation.shared.blocksTyping(session.id) { return false }
             guard super.shouldChangeText(in: affectedCharRange, replacementString: replacementString) else { return false }
             resetExitShortcut()
             return true
@@ -315,6 +355,13 @@ struct ChatComposer: NSViewRepresentable {
                 multiline = false; return true
             }
             return false
+        }
+        /// ⇧⌘A: the open panel, while the draft takes attachments.
+        private func attachShortcut(_ event: NSEvent) -> Bool {
+            guard !hasMarkedText(), event.keyCode == 0,
+                  event.modifierFlags.intersection([.command, .control, .option, .shift]) == [.command, .shift],
+                  canAttach(), let chooseAttachments else { return false }
+            chooseAttachments(window); return true
         }
         private func helpShortcut(_ event: NSEvent) -> Bool {
             guard !hasMarkedText(), event.keyCode == 44,

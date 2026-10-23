@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import Observation
+import os
 
 /// A key's private half as the transport signs with it.
 enum KeyMaterial: @unchecked Sendable {
@@ -12,8 +13,9 @@ enum KeyMaterial: @unchecked Sendable {
 }
 
 /// The keys and login secrets on this phone (plan 3.6). Key records are in `keys.json`; every secret is in the
-/// Keychain (`SecretVault`), `WhenUnlockedThisDeviceOnly`: private keys behind Face ID (`keyProtection`), passwords
-/// and passphrases without. Nothing syncs.
+/// Keychain (`SecretVault`): private keys `WhenUnlockedThisDeviceOnly` behind Face ID (`keyProtection`), so never
+/// used unattended; passwords, passphrases and Secure Enclave handles `AfterFirstUnlockThisDeviceOnly`, so a watch
+/// request or background refresh can log in with a password while the phone is locked. Nothing syncs.
 @MainActor @Observable
 final class KeyStore {
     private struct Document: Codable {
@@ -61,7 +63,7 @@ final class KeyStore {
     /// A new P-256 key in the Secure Enclave, used with Face ID; the Keychain keeps the enclave's handle to it.
     @discardableResult
     func generateSecureEnclaveP256(label: String) throws -> KeyRecord {
-        guard secureEnclaveAvailable else { throw OpenSSHKeyError.unsupported("This iPhone has no Secure Enclave available.") }
+        guard secureEnclaveAvailable else { throw OpenSSHKeyError.unsupported("This \(MobileDevice.name) has no Secure Enclave available.") }
         var error: Unmanaged<CFError>?
         var flags: SecAccessControlCreateFlags = [.privateKeyUsage]
         if keyProtection == .biometry { flags.insert(.biometryCurrentSet) }
@@ -130,6 +132,9 @@ final class KeyStore {
                 // CryptoKit keeps (and zeroes) its own copy; ours is wiped when `secret` goes.
                 return .ed25519(try Curve25519.Signing.PrivateKey(rawRepresentation: secret.data))
             case .secureEnclaveP256:
+                // The handle reads unattended, but the enclave would ask Face ID at the first signature, where no
+                // prompt can show: refuse now, as a key behind Face ID does.
+                guard interactive else { throw SecretVaultError.interactionNotAllowed }
                 return .secureEnclaveP256(try SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: secret.data))
             case .imported:
                 // The passphrase stays bytes (never a String) until the engine has parsed the file.
@@ -154,9 +159,39 @@ final class KeyStore {
 
     func removePassword(for host: UUID) { try? vault.remove(Self.passwordAccount(host)) }
 
+    /// Moves the secrets older builds kept `WhenUnlockedThisDeviceOnly` without Face ID (passwords, passphrases, Secure
+    /// Enclave handles, and keys where `keyProtection` is `.none`) to `KeyProtection.none`'s after-first-unlock class.
+    /// Accounts are chosen by what this store wrote, never by reading an item's access control (which has no public
+    /// reader): a key behind Face ID is never named, so never touched. Nothing records that it ran: listing the
+    /// service's few items' attributes is cheap and a second run moves nothing. Nil without the Keychain (tests'
+    /// `MemoryVault`) or when listing failed (the phone locked: the next launch tries again).
+    @discardableResult
+    func migrateSecrets() async -> KeychainVault.Migration? {
+        guard let vault = vault as? KeychainVault else { return nil }
+        let plain = Set(keys.filter { $0.kind == .secureEnclaveP256 || keyProtection == .none }.map { Self.privateAccount($0.id) })
+        return await Task.detached(priority: .utility) {
+            do {
+                let migration = try vault.migrate { account in
+                    account.hasPrefix(Self.passwordPrefix) || account.hasPrefix(Self.passphrasePrefix) || plain.contains(account)
+                }
+                if migration != KeychainVault.Migration() {
+                    Self.log.notice("Keychain: \(migration.moved) moved to after first unlock, \(migration.failed) failed")
+                }
+                return migration
+            } catch {
+                Self.log.error("Keychain: listing for the move to after first unlock failed: \(error.localizedDescription)")
+                return nil
+            }
+        }.value
+    }
+
+    private nonisolated static let log = Logger(subsystem: "yachts.dispatch.mobile", category: "Keys")
+    private nonisolated static let passwordPrefix = "password:"
+    private nonisolated static let passphrasePrefix = "passphrase:"
+
     nonisolated static func privateAccount(_ id: UUID) -> String { "key:" + id.uuidString }
-    nonisolated static func passphraseAccount(_ id: UUID) -> String { "passphrase:" + id.uuidString }
-    nonisolated static func passwordAccount(_ host: UUID) -> String { "password:" + host.uuidString }
+    nonisolated static func passphraseAccount(_ id: UUID) -> String { passphrasePrefix + id.uuidString }
+    nonisolated static func passwordAccount(_ host: UUID) -> String { passwordPrefix + host.uuidString }
 
     nonisolated static func defaultLabel(_ algorithm: String) -> String {
         switch algorithm {

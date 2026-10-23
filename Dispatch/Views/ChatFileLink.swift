@@ -48,7 +48,7 @@ struct ChatFileLinkPreview: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text(link.id).font(theme.typography.codeDetail).textSelection(.enabled)
+                Text(TextRendering.visible(link.id)).font(theme.typography.codeDetail).textSelection(.enabled)
                 Spacer(minLength: 12)
                 Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
             }
@@ -74,7 +74,7 @@ struct ChatFileLinkPreview: View {
                     }.onAppear { if let line = link.line { proxy.scrollTo(line, anchor: .center) } }
                 }
             } else if let failure {
-                Text(failure).foregroundStyle(theme.muted).textSelection(.enabled)
+                Text(TextRendering.visible(failure)).foregroundStyle(theme.muted).textSelection(.enabled)
                 Spacer()
             } else { ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity) }
         }.padding(18).frame(width: 820, height: 560)

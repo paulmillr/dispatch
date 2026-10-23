@@ -1,12 +1,13 @@
 import Foundation
 import Observation
 
-/// Settings › Files › Drag and drop and Ask before replacing, as the transfer code reads them.
+/// Settings › Features › Files › Drag and drop, as the transfer code reads it.
 @MainActor enum FilesTransferSettings {
-    /// Drag and drop: drop targets, drag sources and terminal drops.
-    static func enabled() -> Bool { TerminalRuntime.shared.preferences.filesDragAndDrop }
-    /// Ask before replacing: off keeps both without asking.
-    static func asksBeforeReplacing() -> Bool { TerminalRuntime.shared.preferences.filesAskBeforeReplacing }
+    /// Drag and drop: drop targets, drag sources and terminal drops; off with Files itself.
+    static func enabled() -> Bool {
+        let preferences = TerminalRuntime.shared.preferences
+        return preferences.filesEnabled && preferences.filesDragAndDrop
+    }
 }
 
 /// Copies files between two `FilesSource`s and drives the rows under the list.
@@ -59,6 +60,7 @@ import Observation
     }
 
     private let coordinator: @MainActor () -> FilesCoordinator
+    /// The app always asks; tests can keep both without asking.
     private let asksBeforeReplacing: @MainActor () -> Bool
     private var runs: [UUID: Run] = [:]
     /// One pack and one open unpack per helper at a time (the helper answers `busy` otherwise): archive copies
@@ -69,7 +71,7 @@ import Observation
     private var watchingSessions = false
 
     init(coordinator: @escaping @MainActor () -> FilesCoordinator = { TerminalRuntime.shared.files },
-         asksBeforeReplacing: @escaping @MainActor () -> Bool = FilesTransferSettings.asksBeforeReplacing) {
+         asksBeforeReplacing: @escaping @MainActor () -> Bool = { true }) {
         self.coordinator = coordinator
         self.asksBeforeReplacing = asksBeforeReplacing
     }

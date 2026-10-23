@@ -465,7 +465,7 @@ final class NewSpacePresentationTests: XCTestCase {
         _ = try await PresentationTestSupport.capture(window, named: "shared-flat-two-line", in: "new-space-validation")
         let flatText = try await PresentationTestSupport.capture(root).text()
         XCTAssertTrue(flatText.contains("local"), flatText)
-        // Every style puts them on one row, "+ local" first, beside "+ space".
+        // Every style puts them on one row, "+ space" first, beside "+ local".
         for style in SidebarStyle.bySize {
             controller.settings.values.sidebarStyle = style
             try await TestSupport.eventually {
@@ -474,7 +474,7 @@ final class NewSpacePresentationTests: XCTestCase {
                 guard let here = controls.first(where: { $0.host == nil }), let local = controls.first(where: { $0.host == .local })
                 else { return false }
                 let (a, b) = (here.convert(here.bounds, to: nil), local.convert(local.bounds, to: nil))
-                return abs(a.midY - b.midY) < 1 && abs(a.width - b.width) < 1 && b.maxX <= a.minX + 1
+                return abs(a.midY - b.midY) < 1 && abs(a.width - b.width) < 1 && a.maxX <= b.minX + 1
             }
         }
         let flatControls = PresentationTestSupport.views(of: NewSpaceNativeButton.self, in: root)

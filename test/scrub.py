@@ -38,6 +38,14 @@ AUTOMATIC = ('machine, boot and hardware ids', 'network addresses', 'time zone',
 CREDENTIAL = re.compile(r'TOKEN|SECRET|PASSW|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL|AUTH', re.I)
 # The app's own per-launch values, made from the journal's seed (HerdrLaunch): worthless after the run, needed by replay.
 MADE = {'DISPATCH_HERDR_TOKEN'}
+# The test fixtures' own public placeholders (scripts/claude_fixture.py): allowed only with exactly these values.
+FIXTURE = {'ANTHROPIC_API_KEY': {'dispatch-local-fixture'}}
+# A socket path, not a secret: a login shell may point it at its own agent (a gpg agent's socket in the home folder), and
+# its private part, launchd's per-session folder name, is a needle already (test/leak.py).
+PATHS = {'SSH_AUTH_SOCK'}
+# Per-launch tokens of the agents under test (a Claude session's hook messaging): masked by value, as a token a shell
+# running the capture passed on would be.
+MASKED = {'CLAUDE_CODE_MESSAGING_TOKEN'}
 CAPTURES = ('*.rpl.zst', '*.rpl.bz2', '*.rpl')
 
 
@@ -98,18 +106,36 @@ def expanded(path):
 
 
 def environment(helper, directory):
-    """The variable names the captures' helpers recorded at startup (capture grep's first section)."""
+    """The variable names the captures' helpers recorded at startup (capture grep's first section), each with the
+    values recorded for it."""
     output = subprocess.run([str(helper), 'capture', 'grep', str(directory), '--needles', os.devnull, '--limit', '100000'],
                             capture_output=True, text=True).stdout
-    names, section = set(), False
+    names, section, name = {}, False, None
     for line in output.splitlines():
         if line.startswith('environment at startup'):
             section = True
         elif section and not line.startswith(' '):
             break
         elif section and (match := re.match(r'^  ([A-Za-z_][A-Za-z0-9_]*): \d+ values?$', line)):
-            names.add(match[1])
+            name = match[1]
+            names[name] = set()
+        elif section and name and (match := re.match(r'^    "((?:[^"\\]|\\.)*)" \(in ', line)):
+            names[name].add(match[1])
     return names
+
+
+def credentials(names):
+    """The credential-like names among `names` (name -> recorded values): all but the app's own and the fixtures'."""
+    return sorted(name for name, values in names.items() if CREDENTIAL.search(name) and name not in MADE | PATHS | MASKED
+                  and not (name in FIXTURE and values and values <= FIXTURE[name]))
+
+
+def masked(names):
+    """Needle lines for the MASKED variables' values (name -> recorded values): each its own stand-in of its length
+    ("MASKED0001XXXX…"; capture replace refuses two needles one stand-in). Values too short to be a token (a "0") are
+    left alone, or every such byte run in the captures would be masked."""
+    values = sorted({value for name in MASKED for value in names.get(name, ()) if len(value) >= 16 and '\\' not in value})
+    return [f'{value}\t{f"MASKED{index:04d}".ljust(len(value.encode()), "X")}' for index, value in enumerate(values, 1)]
 
 
 def leaks(paths, lines):
@@ -117,6 +143,8 @@ def leaks(paths, lines):
     wrapped ones)."""
     kept = {line.split('\t')[0] for line in lines if '\t' in line and line.split('\t')[0] == line.split('\t')[1]}
     plain = [line.split('\t')[0].encode() for line in lines if line and line.split('\t')[0] not in kept]
+    # A path as JSON writes it (`\/`, Foundation's JSONEncoder): `capture replace` replaces that form too.
+    plain += [needle.replace(b'/', b'\\/') for needle in plain if b'/' in needle]
     found = {}
     for path in files(paths):
         data = expanded(path)
@@ -129,8 +157,9 @@ def leaks(paths, lines):
 def scrub(helper, source, output, captures=()):
     """Every capture under `source` into `output` (absent), scrubbed and verified: capture replace (which replays each
     helper capture before and after), then the plain check. Files that are not captures are copied as they are."""
-    lines = needles(captures)
-    secret = sorted(name for name in environment(helper, source) if CREDENTIAL.search(name) and name not in MADE)
+    recorded = environment(helper, source)
+    lines = needles(captures) + masked(recorded)
+    secret = credentials(recorded)
     if secret:
         raise SystemExit('Scrub stopped: recorded environments hold credential-like variables ' + ', '.join(secret)
                          + ': keep them out of the test environment and record again')
@@ -154,7 +183,10 @@ def scrub(helper, source, output, captures=()):
 def store(stage, replays, helper=HELPER, failed=False):
     """A capture run's tests into the corpus, scrubbed first. Returns capture store's process."""
     output = Path(stage).with_name(Path(stage).name + '-scrubbed')
-    shutil.rmtree(output, ignore_errors=True)
+    # `capture replace` also writes OUT.rows and its replay results beside OUT, and refuses to start over any of them:
+    # an earlier run's leftovers stopped every later store ("File exists").
+    for path in (output, *(output.with_name(output.name + suffix) for suffix in ('.rows', '.replay-original', '.replay-candidate'))):
+        shutil.rmtree(path, ignore_errors=True)
     scrub(helper, stage, output, captures=[stage])
     return subprocess.run([str(helper), 'capture', 'store', str(output), str(replays)] + (['--failed'] if failed else []),
                           stdout=subprocess.PIPE, text=True)

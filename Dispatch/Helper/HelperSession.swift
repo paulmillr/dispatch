@@ -61,8 +61,7 @@ final class HelperSession: @unchecked Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-      // `features` is written only when the helper accepted some: the Mac names none, so its records never carry it;
-      // the iPhone's launch cache keeps them with the hello.
+      // `features` is written only when the helper accepted some; the iPhone's launch cache keeps them with the hello.
       case version, os, arch, plugins, unavailable_harnesses, ops, account, identity, terminal, process, features
       case limit = "frame_limit"
       case chunkKind = "chunk_kind"
@@ -87,6 +86,10 @@ final class HelperSession: @unchecked Sendable {
       try fields.encodeIfPresent(features, forKey: .features)
     }
   }
+
+  /// The opt-in hello features the Mac names (docs/ios.md lists the iPhone's).
+  static let features = ["terminals.coalesce", ChatAttachment.feature]
+  private struct Hello: Encodable, Sendable { let features: [String] }
 
   // The Mac app runs its helper as a child process; the iPhone app reaches helpers over SSH channels only.
   #if canImport(AppKit)
@@ -145,7 +148,11 @@ final class HelperSession: @unchecked Sendable {
     self.connection = connection
     self.exited = exited
     do {
-      info = try await connection.request("hello", params: [String: String]())
+      // Features the Mac asks for (helper/PROTOCOL.md, Features). `terminals.coalesce`: the helper joins a terminal's
+      // output notifications for up to 4 ms, so a redrawing agent costs one frame per batch instead of one per tmux
+      // output line (fewer wakeups here, fewer packets over SSH). `chat.attachments`: `attachments.put`/`.read` and
+      // attachment paths on `chat.send`/`queue.add` (ChatAttachment). A helper that knows no feature answers as before.
+      info = try await connection.request("hello", params: Hello(features: Self.features))
       guard info.version == HelperBinary.version else {
         throw HelperFailure(
           code: "protocol_version", message: "The helper protocol is incompatible.")
@@ -190,13 +197,23 @@ actor HelperApp {
   private var pending: (UUID, Task<HelperSession, any Error>)?
   private var closing: Task<(pid: Int32, status: Int32)?, Never>?
   private var remote: [SSHConnectionID: HelperConnection] = [:]
+  private var remoteFeatures: [SSHConnectionID: Set<String>] = [:]
 
-  func borrow(_ connection: HelperConnection, for provider: SSHConnectionID) {
+  /// `features`: what the remote helper's hello accepted (`Info.features`).
+  func borrow(_ connection: HelperConnection, for provider: SSHConnectionID, features: [String]? = nil) {
     remote[provider] = connection
+    remoteFeatures[provider] = Set(features ?? [])
   }
 
   func forget(_ provider: SSHConnectionID) {
     remote.removeValue(forKey: provider)
+    remoteFeatures.removeValue(forKey: provider)
+  }
+
+  /// The opt-in features `endpoint`'s helper accepted in its hello; none while it is unavailable.
+  func features(_ endpoint: HelperWorkspace.Endpoint) async -> Set<String> {
+    guard let provider = endpoint.connection else { return Set((try? await session().info.features) ?? []) }
+    return remoteFeatures[provider] ?? []
   }
 
   func connection(_ endpoint: HelperWorkspace.Endpoint) async throws -> HelperConnection {

@@ -114,6 +114,7 @@ impl<T: Harness> Harness for Registered<T> {
         fn read(source: &Transcript) -> Archive;
         fn state(binding: &Binding) -> State;
         fn send(binding: &Binding, text: &str, mode: Mode, command: bool) -> Sent;
+        fn send_attached(binding: &Binding, text: &str, mode: Mode, attachments: &[Attachment]) -> Sent;
         fn stop(binding: &Binding) -> Sent;
         fn models(binding: &Binding) -> Menu;
         fn efforts(binding: &Binding, model: &str) -> Menu;
@@ -122,6 +123,7 @@ impl<T: Harness> Harness for Registered<T> {
         fn tool(binding: &Binding, record: &str) -> Record;
         fn queue(binding: &Binding) -> Vec<Queued>;
         fn queue_add(binding: &Binding, text: &str, mode: Mode) -> Queued;
+        fn queue_add_attached(binding: &Binding, text: &str, mode: Mode, attachments: &[Attachment]) -> Queued;
         fn queue_edit(binding: &Binding, item: &str, revision: u64, text: Option<&str>) -> ();
         fn queue_send(binding: &Binding, item: &str, revision: u64, mode: Mode) -> Sent;
         fn queue_order(binding: &Binding, items: &[String]) -> ();
@@ -173,6 +175,9 @@ impl<T: Multiplexer> Multiplexer for Registered<T> {
     fn running(&self, status: Option<i32>, stdout: &[u8]) -> bool {
         self.part.running(status, stdout)
     }
+    fn host_screens(&mut self, enabled: bool) {
+        self.part.host_screens(enabled);
+    }
     calls! {
         fn control(terminal: Id) -> Process;
         fn claim(process: &Process, write: ControlWrite) -> Option<ControlTarget>;
@@ -187,6 +192,7 @@ impl<T: Multiplexer> Multiplexer for Registered<T> {
         fn rename(node: Id, name: &str) -> ();
         fn focus(node: Id) -> ();
         fn r#move(node: Id, parent: Id, before: Option<Id>) -> ();
+        fn move_member(node: Id, parent: Id, before: Option<Id>, append: bool) -> ();
         fn split(node: Id, ratio: f64) -> ();
         fn zoom(terminal: Id, zoomed: bool) -> ();
         fn close(node: Id, how: Close) -> ();

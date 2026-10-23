@@ -108,9 +108,14 @@ enum SSHLauncherCommand {
         defer { child = 0; signal(SIGHUP, previousHup); signal(SIGTERM, previousTerm); signal(SIGINT, previousInt) }
         var status: Int32 = 0
         while true {
-            let result = waitpid(pid, &status, WNOHANG)
+            // Until the ready request is announced the control socket is watched 20 times a second (connecting and
+            // authenticating take seconds). After it, nothing here changes until ssh exits: block in waitpid, so this
+            // process wakes no more for the session's lifetime (hours). A signal forwarded to ssh interrupts the wait
+            // (EINTR) and it resumes.
+            let result = waitpid(pid, &status, announced ? 0 : WNOHANG)
             if result == pid { break }
             if result < 0 && errno != EINTR { break }
+            if announced { continue }
             let ready = FileManager.default.fileExists(atPath: master.controlPath)
             if (!connectingAnnounced || ready) && !announced {
                 let request = SSHLaunchRequest(tabID: tab, token: token, connectionID: id, credential: credential,
@@ -288,6 +293,21 @@ enum SSHLauncherCommand {
               else fail "no sha256sum or shasum"; fi
               test "$hash" = "$digest" || fail "cached helper checksum mismatch"
               printf '%s\\n' "$helper";;
+            dispatch/bin/versions/*/dispatch-helper)
+              digest=${helper#dispatch/bin/versions/}
+              digest=${digest%/dispatch-helper}
+              test "${#digest}" = 64 || fail "malformed helper path"
+              case "$digest" in *[!0-9a-f]*) fail "malformed helper path";; esac
+              case "$XDG_RUNTIME_DIR" in /*) ;; *) fail "no runtime folder (XDG_RUNTIME_DIR)";; esac
+              cd -P "$XDG_RUNTIME_DIR" || fail "cannot enter the runtime folder"
+              private_directory . || fail "runtime folder not private"
+              enter_private dispatch && enter_private bin && enter_private versions && enter_private "$digest"
+              safe_file dispatch-helper && test -x dispatch-helper || fail "cached helper missing or unsafe"
+              if command -v sha256sum >/dev/null 2>&1; then hash=$(sha256sum dispatch-helper | cut -d ' ' -f 1)
+              elif command -v shasum >/dev/null 2>&1; then hash=$(shasum -a 256 dispatch-helper | cut -d ' ' -f 1)
+              else fail "no sha256sum or shasum"; fi
+              test "$hash" = "$digest" || fail "cached helper checksum mismatch"
+              printf '%s/dispatch-helper\\n' "$(pwd -P)";;
             "unavailable: "*) fail "${helper#unavailable: }";;
             *) fail "setup did not finish";;
           esac
@@ -295,7 +315,8 @@ enum SSHLauncherCommand {
         helper=$(prepare 2>/dev/null)
         if test "$?" = 0; then
           cd "$HOME" || exit 1
-          \(SSHBootstrap.captureExport)exec "$HOME/$helper" login \(grant.profile.rawValue)\(grant.hooks ? " --hooks" : "")\(capabilities) --session '\(sessionID)'\(command.map { " " + HerdrLaunch.quote($0) } ?? "")
+          case "$helper" in /*) ;; *) helper="$HOME/$helper";; esac
+          \(SSHBootstrap.captureExport)exec "$helper" login \(grant.profile.rawValue)\(grant.hooks ? " --hooks" : "")\(capabilities) --session '\(sessionID)'\(command.map { " " + HerdrLaunch.quote($0) } ?? "")
         fi
         case "$helper" in "dispatch-setup: "*) reason=${helper#dispatch-setup: };; *) reason="unknown reason";; esac
         printf 'Dispatch SSH integration unavailable (%s); opening the remote shell.\\r\\n' "$reason" >&2

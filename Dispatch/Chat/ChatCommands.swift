@@ -110,7 +110,7 @@ struct ChatGoal: Sendable, Equatable {
     }
 }
 
-struct ChatCommandResult: Equatable {
+struct ChatCommandResult: Hashable {
     var title: String
     var text: String
 }

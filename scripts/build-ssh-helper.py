@@ -18,7 +18,7 @@ import sys
 import tempfile
 
 ROOT = Path(os.environ.get("SRCROOT", Path(__file__).resolve().parent.parent))
-NAMES = ("darwin-universal", "linux-aarch64", "linux-x86_64")
+NAMES = ("darwin-arm64", "linux-aarch64", "linux-x86_64")
 ARTIFACTS = (*NAMES, "version", "protocol-version")
 # Remote helpers bundled for SSH hosts: protocol marker the app checks (helper: its generated wire schema
 # version).
@@ -164,13 +164,11 @@ def build(profile, target_dir, helper="helper", dry_run=False, capture=None):
                 fcntl.flock(lock, fcntl.LOCK_EX)
         rustc = subprocess.check_output([str(toolchain / "bin/rustc"), "-vV"], env=env, text=True)
         host = next(line.removeprefix("host: ") for line in rustc.splitlines() if line.startswith("host: "))
-        darwin = ["aarch64-apple-darwin", "x86_64-apple-darwin"]
-        if not universal(profile) and host in darwin:
-            darwin = [host]
+        # Apple silicon only: the app and every macOS SSH host it sets up (an Intel Mac falls back to plain SSH).
+        darwin = ["aarch64-apple-darwin"]
         print(("Planning " if dry_run else "Building ") + helper +
               " (" + profile + (", capture" if capture else ", without capture") +
-              f", {len(darwin) + 2} targets in parallel" +
-              ("" if len(darwin) > 1 else ", Mac " + host.split("-")[0] + " only") + ")", flush=True)
+              f", {len(darwin) + 2} targets in parallel)", flush=True)
         linker = toolchain / "lib/rustlib" / host / "bin/rust-lld"
         linux_flags = ["-C", "linker=" + str(linker), "-C", "linker-flavor=ld.lld", "-C", "target-feature=+crt-static"]
         # One Cargo scheduler shares host dependencies and the CPU job budget
@@ -200,7 +198,7 @@ def build(profile, target_dir, helper="helper", dry_run=False, capture=None):
                                   outputs=[str(output / name) for name in NAMES]), indent=2))
             return
         # Each variant keeps its last build, published to bin/ from there: switching between Debug and Release, or
-        # building unchanged sources (a Swift edit, a VM given the host's build), runs neither Cargo nor lipo.
+        # building unchanged sources (a Swift edit, a VM given the host's build), runs no Cargo.
         variant = target_dir / "variants" / (profile + ("-capture" if capture else ""))
         stamp = variant / "inputs"
         parameters = [helper, profile, capture, darwin, mac_flags, rustc]
@@ -217,10 +215,8 @@ def build(profile, target_dir, helper="helper", dry_run=False, capture=None):
         variant.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="package-", dir=target_dir) as directory:
             stage = Path(directory)
-            native = stage / "darwin-universal"
-            # Named universal even when it is this Mac's architecture only (Debug: universal()).
-            run("xcrun", "lipo", "-create", *(str(cache / target / profile / binary) for target in darwin),
-                "-output", str(native))
+            native = stage / "darwin-arm64"
+            shutil.copyfile(cache / darwin[0] / profile / binary, native)
             run("codesign", "--force", "--sign", "-", "--identifier", "yachts.dispatch." + helper, str(native))
             for arch in ("aarch64", "x86_64"):
                 shutil.copyfile(cache / (arch + "-unknown-linux-musl") / profile / binary, stage / ("linux-" + arch))
@@ -238,15 +234,6 @@ def build(profile, target_dir, helper="helper", dry_run=False, capture=None):
             write_if_changed(stamp, inputs_key(parameters, after))
         else:
             print("Helper inputs changed during the build (" + ", ".join(changed[:3]) + "): the next build runs Cargo again", flush=True)
-
-
-def universal(profile):
-    """Whether the Mac helper gets both architectures. Debug builds make this Mac's only: a quarter less Rust work
-    after each helper edit, and a Debug helper serves this Mac and arm64 test VMs (an Intel SSH host needs
-    DISPATCH_HELPER_UNIVERSAL=1). Release configurations, archives and the release profile ship both
-    (test/ios-release.py checks)."""
-    return (profile == "release" or os.environ.get("CONFIGURATION") == "Release"
-            or os.environ.get("ACTION") == "install" or os.environ.get("DISPATCH_HELPER_UNIVERSAL") == "1")
 
 
 def publish(variant, output):
@@ -269,8 +256,8 @@ def install(target_dir, helper="helper"):
     for directory in (compatibility, destination):
         directory.mkdir(parents=True, exist_ok=True)
         for name in ARTIFACTS:
-            # The Mac app's darwin-universal links to the one signed dispatch-helper (scripts/bundle-helper.sh).
-            if directory == destination and name == "darwin-universal" and not phone:
+            # The Mac app's darwin-arm64 links to the one signed dispatch-helper (scripts/bundle-helper.sh).
+            if directory == destination and name == "darwin-arm64" and not phone:
                 continue
             replace_if_changed(output / name, directory / name)
 
@@ -284,7 +271,7 @@ def verify(target_dir):
         print("warning: no replay corpus in " + str(corpus) + " (git submodule update --init replays); the helper is not checked against it", flush=True)
         return
     output = target_dir / ("replay-results-" + str(os.getpid()))
-    helper = target_dir / "bin/darwin-universal"
+    helper = target_dir / "bin/darwin-arm64"
     # The corpus first comes up to the code (docs/replay.md, Migrations): what a change did to recordings ships as a
     # migration in test/replay-migrations, applied here once; the corpus's own git status shows it, ledger included.
     migrations = ROOT / "test/replay-migrations"

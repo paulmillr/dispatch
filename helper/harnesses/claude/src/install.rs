@@ -21,6 +21,7 @@ enum Stage {
 }
 pub(crate) struct Setup {
     stage: Stage,
+    process: Option<Process>,
     home: Option<PathBuf>,
     path: PathBuf,
     command: String,
@@ -42,10 +43,12 @@ impl Setup {
         enabled: Option<bool>,
         remote: bool,
         command: String,
+        process: Option<Process>,
         done: Done<Install>,
     ) -> Self {
         Self {
             stage: Stage::Process,
+            process,
             home,
             path: PathBuf::new(),
             command,
@@ -143,6 +146,11 @@ impl Setup {
         }))
     }
     pub fn complete(&mut self, output: io::Result<Output>) -> Result<Next, Error> {
+        if matches!(self.stage, Stage::Process | Stage::Environment)
+            && output.as_ref().is_err_and(|e| e.kind() == io::ErrorKind::NotFound)
+        {
+            return Err(error("process", "The agent exited."));
+        }
         if matches!(self.stage, Stage::Write)
             && output.as_ref().is_err_and(|e| {
                 matches!(
@@ -171,10 +179,11 @@ impl Setup {
         }
         match (&self.stage, output.map_err(|e| error("io", e))?) {
             (Stage::Process, Output::Process(process)) => {
+                if self.process.as_ref().is_some_and(|expected| !crate::identity::same(expected, &process)) {
+                    return Err(error("process", "The agent exited."));
+                }
                 self.stage = Stage::Environment;
-                Ok(Next::Job(Job::Native {
-                    name: "environment",
-                    value: dispatch_helper_core::wire::body::encode_plain(&Data::Object(vec![
+                let mut fields = vec![
                         ("pid", Data::Unsigned(process.pid.into())),
                         (
                             "names",
@@ -183,7 +192,16 @@ impl Setup {
                                 Data::String("CLAUDE_CONFIG_DIR"),
                             ]),
                         ),
-                    ]))?,
+                ];
+                // A bound peer can exit or exec between jobs. The helper's own process
+                // cannot change identity while this operation is still running.
+                if self.process.is_some() {
+                    fields.push(("start", Data::Array(process.start.iter().copied().map(Data::Unsigned).collect())));
+                    fields.push(("executable", Data::from(process.executable.as_path())));
+                }
+                Ok(Next::Job(Job::Native {
+                    name: "environment",
+                    value: dispatch_helper_core::wire::body::encode_plain(&Data::Object(fields))?,
                 }))
             }
             (Stage::Environment, Output::Value(bytes)) => {
@@ -252,3 +270,7 @@ impl Setup {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "install.test.rs"]
+mod tests;

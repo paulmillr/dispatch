@@ -23,7 +23,7 @@ Dispatch is a normal terminal. The goal is to improve user's workflow, not to ch
 2. Try **Native Tabs**: run `tmux -CC` / `tmux -CC attach` or `herdr` locally / remotely
 3. Try **Chat Mode**: Start an agent in a terminal, it would auto-switch the tab to chat.
     - It uses hooks, local usage needs pre setup, remote usage is easier
-    - For local usage: Settings => Agents & Hosts => This Mac => Install (next to codex, claude etc)
+    - For local usage: Settings => Hosts => This Mac => Install (next to codex, claude etc)
     - For usage over SSH: just ssh somewhere, ensure to check the checkbox while connecting to auto-install hooks
     - All sent messages are queued - not steered
     - There is a separate key combo to steer; also it's possible to steer queued message
@@ -35,7 +35,8 @@ Dispatch is a normal terminal. The goal is to improve user's workflow, not to ch
 Extra features:
 
 - Spaces: tree view, reopen on launch, restore history, git branch titles, compact space list
-- Tabs only (Settings › Appearance): no tab strips; the sidebar lists every tab and "+ tab" replaces "+ space"
+- Review tab (files mode, ⇧⌘U): comment on any line of the uncommitted changes, then Create review sends the comments as one review to an agent chat (this tab's or another's), or copies it to paste anywhere; ⌥↓/⌥↑ step through the comments, ⇧⌘⏎ creates the review
+- Disable spaces (Settings › Appearance): no tab strips; the sidebar lists every tab and "+ tab" replaces "+ space"
 - Check out sidebar footer: clicking on a host brings up stats widget
 - Auto-improve text contrast on light themes
 - Single window for *everything*: no multiple windows
@@ -66,20 +67,25 @@ All deps are downloaded into `build`.
 
 Official website (redirects to GitHub): https://dispatch.yachts
 
-## Dispatch for iPhone
+## Dispatch for iPhone and iPad
 
 A thin client for your Macs and Linux machines: Spaces (tmux/herdr tabs and a real terminal) and Agents (chat with
-approvals, queue and diffs) over SSH. The same Rust helper does the work on each host; nothing leaves the phone but
-your SSH connections. Needs iOS 26+, Xcode 27, and on each host tmux 3.7+ or herdr 0.9.3+. Sideloaded, no App Store.
+approvals, queue and diffs) over SSH. The same Rust helper does the work on each host; nothing leaves the device but
+your SSH connections. On an iPad, Spaces sits beside the tab it opens, and a hardware keyboard adds the menu bar and
+the Mac's ⌘ shortcuts. Needs iOS or iPadOS 26+, Xcode 27, and on each host tmux 3.7+ or herdr 0.9.3+. Sideloaded, no
+App Store.
 
 ```sh
 ./run.sh --ios                                         # try it in the simulator
+./run.sh --ios --simulator "iPad Pro 11-inch (M5)"     # on an iPad (the iOS 27.0 runtime has the iPads)
 python3 scripts/ios-signing.py TEAMID --suffix .you    # once: your team from Xcode, Settings, Accounts
-# on the phone: pair it by cable, turn on Developer Mode
+# on the iPhone or iPad: pair it by cable, turn on Developer Mode
 ./run.sh --ios-device --prod                           # build, install, launch; again weekly on a free Apple ID
 ```
 
 See [docs/ios.md](docs/ios.md).
+
+The Apple Watch companion: `./run.sh --watch` (paired iPhone and watch simulators), [docs/watch.md](docs/watch.md).
 
 ## Releasing
 

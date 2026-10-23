@@ -7,8 +7,8 @@ mod uninstall;
 
 /// Programs typed in a helper shell run through `launch <key>`, and the helper invoked under
 /// such a name is that launch (old ssh-helper main.rs:47-51 argv0 aliases, startup.rs AGENTS;
-/// ShellCommandWrapper.swift:5). Claude follows once its launch takes arguments.
-const TYPED: [(&str, &str); 3] = [("codex", "codex"), ("pi", "pi"), ("herdr", "herdr")];
+/// ShellCommandWrapper.swift:5). All supported agent launchers preserve their arguments.
+const TYPED: [(&str, &str); 4] = [("claude", "claude"), ("codex", "codex"), ("pi", "pi"), ("herdr", "herdr")];
 
 fn main() -> std::io::Result<()> {
     // Replay is a test instrument (the `capture` feature). Without it DISPATCH_REPLAY is ignored
@@ -67,6 +67,12 @@ fn main() -> std::io::Result<()> {
     if first("renderer") {
         return dispatch_helper_core::system::renderer::run();
     }
+    // The account's queue drainer (core/src/drain.rs): its own arguments are the multiplexer
+    // options of the helper it runs.
+    if first("queue-drain") {
+        let program = std::env::current_exe()?;
+        std::process::exit(dispatch_helper_core::drain::run(&program, &argv[1..])?);
+    }
     if first("uninstall-hooks") || first("uninstall") {
         std::process::exit(uninstall::run(&argv[1..], first("uninstall"))?);
     }
@@ -120,6 +126,7 @@ fn main() -> std::io::Result<()> {
     let mut socket = None;
     let mut options = BTreeMap::new();
     let mut remote = false;
+    let mut draining = false;
     // Malformed hook invocations also fail open below; None = nothing to send.
     let hook = first("hook").then(|| {
         args.next();
@@ -172,6 +179,8 @@ fn main() -> std::io::Result<()> {
                 capabilities.insert("hooks.configure".into());
             }
         } else if arg == "--stdio" {
+        } else if arg == "--drain" {
+            draining = true;
         } else if arg == "--remote" {
             remote = true;
         } else if matches!(
@@ -281,7 +290,11 @@ fn main() -> std::io::Result<()> {
             helper.add_harness(dispatch_helper_codex::Codex::new()),
         ),
     ];
-    for (program, key) in TYPED {
+    // Local shells already receive their app-side integrations. Add Claude's setup wrapper
+    // to SSH shells, including the login wrapper as well as --remote exec channels.
+    let typed = TYPED.into_iter().filter(|(program, _)| *program != "claude"
+        || remote || mode.as_deref() == Some(std::ffi::OsStr::new("login")));
+    for (program, key) in typed.clone() {
         if let Some((_, harness)) = harnesses.iter().find(|(name, _)| *name == key) {
             helper.typed(harness, program);
         }
@@ -346,8 +359,7 @@ fn main() -> std::io::Result<()> {
         },
     ));
     helper.default_backend(&native, "native");
-    helper.add_multiplexer(dispatch_helper_herdr::Herdr::new(
-        dispatch_helper_herdr::Config {
+    let herdr = dispatch_helper_herdr::Config {
             executable: options
                 .get(std::ffi::OsStr::new("--herdr"))
                 .map(PathBuf::from)
@@ -367,11 +379,25 @@ fn main() -> std::io::Result<()> {
             directory: cwd.clone(),
             environment: std::env::vars().collect(),
             uid,
-        },
-    ));
+    };
+    // A helper that leaves stored queues behind starts the drainer with its herdr options, so
+    // the drainer's helper opens the same server.
+    helper.draining = draining;
+    if !draining && System::recording().is_none() {
+        let mut arguments: Vec<std::ffi::OsString> = vec!["queue-drain".into(), "--herdr".into(), herdr.executable.clone().into()];
+        if !herdr.socket.as_os_str().is_empty() {
+            arguments.extend(["--herdr-socket".into(), herdr.socket.clone().into()]);
+        }
+        arguments.extend(["--herdr-session".into(), herdr.session.clone().into()]);
+        helper.drain = Some((System::image()?, arguments));
+    }
+    helper.add_multiplexer(dispatch_helper_herdr::Herdr::new(herdr));
+    // No app renders the drainer's terminals: tmux and herdr report their screens themselves.
+    if draining {
+        helper.host_screens(true);
+    }
     // Interactive shells of every mux define the typed programs (old ssh-helper startup.rs).
-    let typed: Vec<_> = TYPED
-        .iter()
+    let typed: Vec<_> = typed
         .map(|(p, k)| (p.to_string(), k.to_string()))
         .collect();
     helper.startup(dispatch_helper_core::system::startup::Integration::typed(

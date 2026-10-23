@@ -86,7 +86,8 @@ struct AgentWorkingState: Equatable {
     }
 
     private static func preview(_ text: String) -> String {
-        String(text.prefix(180)).components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }.joined(separator: " ")
+        TextRendering.visible(TextRendering.prefix(text, scalars: 180).text)
+            .components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }.joined(separator: " ")
     }
 
     /// By `presentationID`, which changes with the item: each record rebuilds the state in every footer variant.
@@ -109,7 +110,8 @@ struct AgentWorkingState: Equatable {
         let rawShell = ["shell", "bash", "exec_command", "shell_command"].contains(name) && object == nil
         if let command = command ?? (rawShell ? item.text : nil) {
             let directory = object?["workdir"] as? String ?? object?["cwd"] as? String ?? item.directory
-            let shown = String((ToolCommandWords.droppingRedundantCd(command, directory: directory) ?? command).prefix(8_192))
+            let shown = TextRendering.visible(TextRendering.prefix(
+                ToolCommandWords.droppingRedundantCd(command, directory: directory) ?? command, scalars: 8_192).text)
             let executable = String(shown.drop(while: { $0.isWhitespace }).prefix(while: { !$0.isWhitespace }))
             let base = (executable as NSString).lastPathComponent
             let label = ["rg", "grep", "find"].contains(base) ? "searching"
@@ -119,7 +121,8 @@ struct AgentWorkingState: Equatable {
         let target = object?["file_path"] as? String ?? object?["path"] as? String
             ?? object?["query"] as? String ?? object?["description"] as? String
         let label = ["read", "read_file"].contains(name) ? "reading" : (["search", "web_search"].contains(name) ? "searching" : "working")
-        return (label, String((target ?? (item.title.isEmpty ? "Tool activity" : item.title)).prefix(8_192)))
+        return (label, TextRendering.visible(TextRendering.prefix(
+            target ?? (item.title.isEmpty ? "Tool activity" : item.title), scalars: 8_192).text))
     }
 }
 
@@ -188,12 +191,7 @@ struct AgentWorkingAnimation: View {
     @State private var appeared = Date()
     @State private var finishedClock = Date()
 
-    static func elapsedText(_ interval: TimeInterval) -> String {
-        let seconds = max(0, Int(interval))
-        if seconds < 60 { return "\(seconds)s" }
-        if seconds < 3600 { return "\(seconds / 60)m \(seconds % 60)s" }
-        return "\(seconds / 3600)h \(seconds / 60 % 60)m"
-    }
+    static func elapsedText(_ interval: TimeInterval) -> String { ChatTranscript.elapsed(interval) }
 
     /// With Reduce Motion a running clock counts the first 10 seconds, then steps every 5 (10s, 15s, 20s…), so it
     /// changes less often; a finished turn keeps its exact duration.

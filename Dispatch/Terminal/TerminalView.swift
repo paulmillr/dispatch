@@ -307,9 +307,11 @@ final class TerminalView: NSView {
 
     /// A tmux renderer covers only the server's grid. The remainder shows the
     /// terminal's background, not the window behind it, so overlays stay seamless.
+    /// At the terminal's opacity, so a translucent terminal's margin matches its grid.
     func setBackground(r: UInt8, g: UInt8, b: UInt8) {
         scrollbar.setBackground(r: r, g: g, b: b)
-        layer?.backgroundColor = CGColor(srgbRed: CGFloat(r) / 255, green: CGFloat(g) / 255, blue: CGFloat(b) / 255, alpha: 1)
+        let alpha = TerminalRuntime.shared.config?.backgroundOpacity ?? 1
+        layer?.backgroundColor = CGColor(srgbRed: CGFloat(r) / 255, green: CGFloat(g) / 255, blue: CGFloat(b) / 255, alpha: alpha)
     }
 
     func updateScrollback(_ state: TerminalScrollState) {

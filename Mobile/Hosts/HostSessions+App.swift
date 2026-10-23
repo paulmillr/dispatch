@@ -1,4 +1,5 @@
 import Foundation
+import os
 import UIKit
 
 extension HostSessions {
@@ -7,6 +8,8 @@ extension HostSessions {
     /// screenshots and UI tests; nothing is read or written.
     static func app(environment: [String: String] = ProcessInfo.processInfo.environment) -> HostSessions {
         #if DEBUG
+        // The simulator demo (`./run.sh --ios --demo`): demo hosts behind an in-process helper, nothing saved.
+        if DemoScenario.enabled { return DemoScenario.sessions() }
         if let scripted = environment["DISPATCH_MOBILE_SCRIPTED"], scripted != "0" {
             return demo(empty: scripted == "empty", studio: scripted == "empty" ? .trust : DemoStudio(rawValue: scripted) ?? .connects)
         }
@@ -24,7 +27,27 @@ extension HostSessions {
         #if DEBUG
         sessions.testHooks(environment)
         #endif
+        migrateProtection(sessions.keys)
         return sessions
+    }
+
+    /// Older builds kept passwords and passphrases `WhenUnlockedThisDeviceOnly` and the app's files class A, so nothing
+    /// could log in with the phone locked: moves both to after first unlock (`MobileFiles.reclassify`,
+    /// `KeyStore.migrateSecrets`; neither touches a key behind Face ID). Now if the phone is unlocked, else at its next
+    /// unlock: a launch for a watch request or background refresh can come while it is locked.
+    private static func migrateProtection(_ keys: KeyStore) {
+        Task { @MainActor in
+            if !UIApplication.shared.isProtectedDataAvailable {
+                for await _ in NotificationCenter.default.notifications(named: UIApplication.protectedDataDidBecomeAvailableNotification) {
+                    break
+                }
+            }
+            let files = await Task.detached(priority: .utility) { MobileFiles.reclassify() }.value
+            if files > 0 {
+                Logger(subsystem: "yachts.dispatch.mobile", category: "Keys").notice("Files: \(files) moved to class C")
+            }
+            await keys.migrateSecrets()
+        }
     }
 
     /// The app's sessions over SSH, connecting in the foreground. A launch in the background (the app refresh task)

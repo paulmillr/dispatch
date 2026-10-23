@@ -29,6 +29,11 @@ enum Engine {
     case DMS_CLOSED: return .channelClosed
     case DMS_REFUSED: return .commandFailed(status: -1, stderr: text)
     case DMS_NETWORK: return .network(text)
+    // The connection's endpoint is filled in by `SessionLink.explain`.
+    case DMS_HOST_NOT_FOUND: return .connectFailed(.hostNotFound, host: "", port: 0)
+    case DMS_CONNECTION_REFUSED: return .connectFailed(.refused, host: "", port: 0)
+    case DMS_UNREACHABLE: return .connectFailed(.unreachable, host: "", port: 0)
+    case DMS_NO_ANSWER: return .connectFailed(.noAnswer, host: "", port: 0)
     default: return .protocolError(text)
     }
   }

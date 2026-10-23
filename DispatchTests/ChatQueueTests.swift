@@ -685,3 +685,169 @@ final class ChatQueueTests: XCTestCase {
     }
 
 }
+
+/// Attachments in the queue: queued rows keep them, `queue.add` names them, and such rows are not edited here.
+extension ChatQueueTests {
+    private func attachment(_ name: String) -> ChatAttachment {
+        ChatAttachment(name: name, kind: .image, size: 4_096,
+                       path: "/home/example/.dispatch/attachments/0123456789abcdef0123456789abcdef/" + name, thumbnail: Data([0xFF, 0xD8]))
+    }
+
+    private func attachmentSession() throws -> (ChatCoordinator, ChatSession) {
+        let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
+        let session = chat.session(for: System.uuid())
+        session.active = true; session.busy = true
+        session.process = try XCTUnwrap(AgentProcess.capture(System.pid))
+        // Queueing belongs to a helper chat; terminal 0 is no helper terminal (only the app's queue state).
+        session.helper = HelperChat(terminal: 0)
+        session.helperNativeQueue = true // Held rows stay in the app: no stand-in requests.
+        return (chat, session)
+    }
+
+    func testAttachmentsRideQueuedRowsAndQueueAddAndAreNotEdited() throws {
+        let (chat, session) = try attachmentSession()
+        let chart = attachment("chart.png")
+        session.drafts.attach([chart])
+        chat.queue(session)
+        XCTAssertEqual(session.queuedMessages.count, 1, "Attachments alone are a message")
+        let row = try XCTUnwrap(session.queuedMessages.first)
+        XCTAssertEqual(row.text, "")
+        XCTAssertEqual(row.attachments, [chart])
+        XCTAssertTrue(session.drafts.current.isEmpty)
+        XCTAssertEqual(ChatQueueView.text(row), "chart.png")
+
+        let input = ChatCoordinator.queueInput(row, route: HelperChat.Route(terminal: 7, session: "conversation"))
+        XCTAssertEqual(input.attachments, [try XCTUnwrap(chart.path)])
+        XCTAssertEqual(input.text, "")
+        XCTAssertEqual(input.mode, "prompt")
+        XCTAssertEqual(input.command, false)
+        XCTAssertNil(ChatCoordinator.queueInput(ChatQueuedMessage(text: "plain"), route: .init(terminal: 7)).attachments,
+                     "No attachments: none on the wire")
+
+        chat.editQueued(row.id, in: session)
+        XCTAssertNil(session.editingQueuedID, "An edit would drop the attachments")
+        XCTAssertTrue(session.drafts.current.isEmpty)
+
+        // A command takes none: nothing is queued and the draft keeps both.
+        session.draft = "/status"
+        session.drafts.attach([attachment("deck.jpg")])
+        chat.queue(session)
+        XCTAssertEqual(session.queuedMessages.count, 1)
+        XCTAssertNotNil(session.submissionFailure)
+        XCTAssertEqual(session.draft, "/status")
+        XCTAssertEqual(session.drafts.current.attachments.map(\.name), ["deck.jpg"])
+        session.clearDraft()
+
+        // An upload still running would be left out: the message waits for it.
+        session.draft = "and this one"
+        session.attachmentUploads = [ChatAttachmentUpload(id: "upload", draft: session.drafts.current.id, scope: session.drafts.scope,
+                                                          name: "deck.jpg", source: .data(name: "deck.jpg", Data([1])))]
+        chat.queue(session)
+        XCTAssertEqual(session.queuedMessages.count, 1)
+        XCTAssertNotNil(session.submissionFailure)
+        session.attachmentUploads = []
+        chat.queue(session)
+        XCTAssertEqual(session.queuedMessages.map(\.text), ["", "and this one"])
+        XCTAssertEqual(session.queuedMessages.last?.attachments, [])
+    }
+
+    func testNativeRowsShowAttachmentPlaceholders() throws {
+        let (chat, session) = try attachmentSession()
+        let preview: [[String: Any]] = [["kind": "text", "text": "look"], ["kind": "attachment", "type": "image"],
+                                        ["kind": "attachment", "type": "file"]]
+        let entry = try JSONDecoder().decode(HelperChat.Queued.self, from: JSONSerialization.data(withJSONObject: [
+            "id": "one", "mode": "prompt", "revision": 1, "preview": preview,
+            "editable": false, "editing": false, "paused": NSNull(), "error": NSNull()]))
+        chat.receiveHelperQueue([entry], session: session)
+        let row = try XCTUnwrap(session.queuedMessages.first)
+        XCTAssertEqual(row.text, "look", "The attachments show as chips, not in the text")
+        XCTAssertEqual(row.attachments.map(\.kind), [.image, .file])
+        XCTAssertEqual(row.attachments.map(\.name), ["Image", "File"])
+        XCTAssertFalse(row.editable)
+        chat.receiveHelperQueue([entry], session: session)
+        XCTAssertEqual(session.queuedMessages.first?.attachments.map(\.id), row.attachments.map(\.id), "Snapshots keep the chips")
+        chat.editQueued(row.id, in: session)
+        XCTAssertNil(session.editingQueuedID)
+    }
+
+    func testAttachIsOfferedOnlyWhereTheHelperKeepsAttachments() throws {
+        let (chat, session) = try attachmentSession()
+        XCTAssertFalse(chat.canAttach(session), "A helper that did not accept chat.attachments")
+        session.acceptsAttachments = true
+        XCTAssertTrue(chat.canAttach(session))
+        session.draft = "/status"
+        XCTAssertFalse(chat.canAttach(session), "Commands take none")
+        session.draft = ""
+        session.editingQueuedID = System.uuid()
+        XCTAssertFalse(chat.canAttach(session), "A queued message keeps its own")
+        session.editingQueuedID = nil
+        session.active = false
+        XCTAssertFalse(chat.canAttach(session))
+        session.active = true
+
+        // Too many for one message: nothing is uploaded.
+        session.drafts.attach((1...9).map { attachment("photo \($0).jpg") })
+        chat.attach([.data(name: "Pasted image.png", Data([1])), .data(name: "Pasted image.png", Data([2]))], to: session)
+        XCTAssertTrue(session.attachmentUploads.isEmpty)
+        XCTAssertEqual(session.attachmentError, ChatAttachmentError.tooMany.localizedDescription)
+        XCTAssertNil(ChatCoordinator.attachmentPaths([]))
+    }
+
+    private func upload(_ id: String, for session: ChatSession) -> ChatAttachmentUpload {
+        ChatAttachmentUpload(id: id, draft: session.drafts.current.id, scope: session.drafts.scope, name: id + ".png",
+                             source: .data(name: id + ".png", Data([1])))
+    }
+
+    /// An upload lands in the draft it was started for, also after the user switched drafts; with that draft gone, its
+    /// chip moves to the current draft with the reason. Meanwhile a queued message cannot be edited into the draft.
+    @MainActor
+    func testUploadsLandInTheDraftTheyWereStartedFor() throws {
+        let (chat, session) = try attachmentSession()
+        session.acceptsAttachments = true
+        session.busy = false
+        session.draft = "first draft"
+        let first = session.drafts.current.id
+        session.attachmentUploads = [upload("chart", for: session)]
+        XCTAssertEqual(session.draftUploads.map(\.id), ["chart"])
+        // A queued message is not edited while an upload runs for the draft (its draft would take the file).
+        session.queuedMessages = [ChatQueuedMessage(text: "queued")]
+        session.drafts.edit(text: "")
+        chat.editQueued(try XCTUnwrap(session.queuedMessages.first?.id), in: session)
+        XCTAssertNil(session.editingQueuedID, "Not while the draft's upload runs")
+        session.draft = "first draft"
+
+        // The user keeps that draft and starts another: the chip stays with the first.
+        session.drafts.keep()
+        XCTAssertNotEqual(session.drafts.current.id, first)
+        XCTAssertTrue(session.draftUploads.isEmpty, "The new draft shows none")
+        let stored = attachment("chart.png")
+        try ChatCoordinator.land(stored, upload: try XCTUnwrap(session.attachmentUploads.first), endpoint: .local, in: session)
+        XCTAssertTrue(session.attachmentUploads.isEmpty)
+        XCTAssertTrue(session.drafts.current.attachments.isEmpty, "Not the draft shown now")
+        XCTAssertEqual(session.drafts.saved.first { $0.id == first }?.attachments, [stored])
+
+        // The draft it was for is gone (discarded): the chip moves to the current draft, failed, and nothing is attached.
+        session.drafts.select(first)
+        session.attachmentUploads = [upload("deck", for: session)]
+        session.drafts.discard()
+        XCTAssertThrowsError(try ChatCoordinator.land(attachment("deck.png"), upload: try XCTUnwrap(session.attachmentUploads.first),
+                                                      endpoint: .local, in: session))
+        XCTAssertEqual(session.draftUploads.map(\.id), ["deck"], "Shown on the current draft for Retry")
+        XCTAssertTrue(session.drafts.current.attachments.isEmpty)
+    }
+
+    /// `/btw` and `/side` take text only: a draft with attachments stays, with the reason.
+    @MainActor
+    func testSideConversationsKeepADraftWithAttachments() throws {
+        let (chat, session) = try attachmentSession()
+        session.busy = false
+        session.sessionID = "conversation"
+        session.draft = "/btw what does this chart show?"
+        session.drafts.attach([attachment("chart.png")])
+        chat.sendFromComposer(session)
+        XCTAssertNil(session.sideConversation)
+        XCTAssertEqual(session.submissionFailure?.hasPrefix("Side conversations cannot carry attachments"), true)
+        XCTAssertEqual(session.draft, "/btw what does this chart show?")
+        XCTAssertEqual(session.drafts.current.attachments.map(\.name), ["chart.png"])
+    }
+}

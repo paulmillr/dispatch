@@ -57,6 +57,16 @@ impl Controller {
     }
 }
 
+/// A started `herdr terminal session` process (Herdr::session).
+pub(super) struct Session {
+    pub(super) owner: auth::Endpoint,
+    pub(super) relay: relay::Relay,
+    pub(super) pid: u32,
+    pub(super) input: std::os::fd::RawFd,
+    pub(super) output: std::os::fd::RawFd,
+    pub(super) stderr: Option<std::os::fd::RawFd>,
+}
+
 impl Herdr {
     pub(super) fn controller(
         &mut self,
@@ -70,6 +80,37 @@ impl Herdr {
         if !native::size(grid) {
             return Err(error("Invalid herdr terminal size."));
         }
+        let columns = grid.columns.max(1).to_string();
+        let rows = grid.rows.max(1).to_string();
+        let mut arguments = vec!["control", "--cols", &columns, "--rows", &rows];
+        if takeover {
+            arguments.push("--takeover");
+        }
+        let Session { owner, relay, pid, input, output, stderr } = self.session(io, id, &arguments)?;
+        let deadline = relay.deadline;
+        let mut controller = self
+            .controllers
+            .remove(&id)
+            .unwrap_or_else(|| Controller::new(grid, initial));
+        controller.pid = Some(pid);
+        controller.stream = Some(Stream::new(input, output));
+        controller.stderr = stderr;
+        controller.relay = Some(relay);
+        if grid.pixels.is_some() {
+            if let Err(reason) = controller.resize(io, grid) {
+                controller.close(io, reason.clone());
+                return Err(reason);
+            }
+        }
+        controller.waiters.extend(done);
+        self.controllers.insert(id, controller);
+        self.relay_setup(io, relay::Holder::Controller(id), owner);
+        io.timer(deadline);
+        Ok(())
+    }
+    /// `herdr terminal session <mode> <terminal key> <arguments>` with its stdio piped and its client socket
+    /// connection relayed through a verified relay (relay.rs); the caller sets the relay up once it holds it.
+    pub(super) fn session(&mut self, io: &mut dyn Io, id: Id, arguments: &[&str]) -> Result<Session, Error> {
         let mut terminals = self
             .snapshot
             .panes
@@ -88,22 +129,10 @@ impl Herdr {
             .ok_or_else(|| error("Herdr server identity is unavailable."))?
             .clone();
         let relay = relay::Relay::new(io, &owner)?;
-        let deadline = relay.deadline;
         let executable = &owner.server.executable;
         let mut command = Command::new(executable);
-        command.args([
-            "terminal",
-            "session",
-            "control",
-            &key,
-            "--cols",
-            &grid.columns.max(1).to_string(),
-            "--rows",
-            &grid.rows.max(1).to_string(),
-        ]);
-        if takeover {
-            command.arg("--takeover");
-        }
+        command.args(["terminal", "session", arguments[0], &key]);
+        command.args(&arguments[1..]);
         command
             .env_clear()
             .envs(client::environment(&self.config.environment, false))
@@ -151,25 +180,7 @@ impl Herdr {
             relay.close(io);
             return Err(error(e.to_string()));
         }
-        let mut controller = self
-            .controllers
-            .remove(&id)
-            .unwrap_or_else(|| Controller::new(grid, initial));
-        controller.pid = Some(child.pid);
-        controller.stream = Some(Stream::new(input, output));
-        controller.stderr = child.stderr;
-        controller.relay = Some(relay);
-        if grid.pixels.is_some() {
-            if let Err(reason) = controller.resize(io, grid) {
-                controller.close(io, reason.clone());
-                return Err(reason);
-            }
-        }
-        controller.waiters.extend(done);
-        self.controllers.insert(id, controller);
-        self.relay_setup(io, id, owner);
-        io.timer(deadline);
-        Ok(())
+        Ok(Session { owner, relay, pid: child.pid, input, output, stderr: child.stderr })
     }
     pub(super) fn finish(&mut self, io: &mut dyn Io, id: Id, status: Option<i32>) {
         self.agents.remove(&id);

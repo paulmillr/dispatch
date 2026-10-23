@@ -8,6 +8,13 @@ final class TerminalKeyCapsuleTests: XCTestCase {
     /// Milliseconds on the test clock.
     private func ms(_ value: Int) -> Duration { .milliseconds(value) }
 
+    /// A hardware chord with Shift carries the shifted character on the key's own keycode, as the Mac's does.
+    func testShiftedChordsCarryTheShiftedCharacter() {
+        XCTAssertEqual(TerminalInputKey.withShift("a"), TerminalInputKey(keycode: 0x00, text: "A"))
+        XCTAssertEqual(TerminalInputKey.withShift("1"), TerminalInputKey(keycode: 0x12, text: "!"))
+        XCTAssertEqual(TerminalInputKey.withShift("/"), TerminalInputKey(keycode: 0x2C, text: "?"))
+    }
+
     func testModifierTapLatchesForOneKey() {
         var model = KeyCapsuleModel()
         model.tap(.ctrl, at: ms(0))

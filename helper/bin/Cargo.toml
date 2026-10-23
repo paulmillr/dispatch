@@ -33,3 +33,13 @@ test = false
 name = "terminals"
 path = "benches/terminals.bench.rs"
 harness = false
+
+# Live: real Claude Code, tmux and the loopback fixture (ignored by default; see the file).
+[[test]]
+name = "queue_drain"
+path = "tests/queue_drain.rs"
+
+# Live: chat attachments through the shipped helper, and to real Claude Code (ignored by default).
+[[test]]
+name = "chat_attachments"
+path = "tests/chat_attachments.rs"

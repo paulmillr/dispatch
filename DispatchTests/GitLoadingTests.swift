@@ -60,7 +60,7 @@ final class GitLoadingTests: XCTestCase {
     ].joined(separator: "\0") + "\0"
 
     private static func record(_ hash: String, parents: [String], subject: String, at: Int, refs: String = "") -> String {
-        [hash, parents.joined(separator: " "), "Paul Miller", "paul@example.com", String(at), refs, subject, ""]
+        [hash, parents.joined(separator: " "), "Sam Example", "sam@example.com", String(at), refs, subject, ""]
             .joined(separator: "\u{1F}") + "\0\n"
     }
 
@@ -82,7 +82,7 @@ final class GitLoadingTests: XCTestCase {
         source.gitAnswers[Self.refs] = ok("refs/heads/main\t\(Self.hash)\t*\t\nrefs/remotes/origin/main\t\(Self.parent)\t \t\n")
         source.gitAnswers["log -n 200 --skip=0 \(Self.format) --date=unix \(Self.hash)"] =
             ok(Self.record(Self.hash, parents: [Self.parent], subject: "Make webhook retries idempotent", at: 1_760_000_000))
-        // The Changes tab selects its first change when it opens.
+        // The Review tab selects its first change when it opens.
         source.gitAnswers["diff --cached -U3 -- CHANGELOG.md"] = ok(Self.diff("CHANGELOG.md"))
         // Above the repository git finds none.
         source.gitAnswers["/Users/ivan rev-parse --show-toplevel"] =
@@ -186,6 +186,7 @@ final class GitLoadingTests: XCTestCase {
 
     // MARK: Status and marks
 
+    /// The Review tab reads only the status, on the tick like the Files tab.
     func testStatusRefreshesOnTheTickWhileFilesOrChangesShows() async throws {
         let source = FakeFilesSource.mockupAPI()
         repository(source)
@@ -208,7 +209,7 @@ final class GitLoadingTests: XCTestCase {
         XCTAssertEqual(calls(source, "status").count, 2, "The Files tab reads the status every 2 s")
         f.session.tab = .changes
         try await f.tick()
-        XCTAssertEqual(calls(source, "status").count, 3, "So does the Changes tab")
+        XCTAssertEqual(calls(source, "status").count, 3, "So does the Review tab")
 
         // Commits reads it on entry and on the tick: its uncommitted row and the branch's ahead and behind show it.
         f.session.tab = .commits
@@ -237,51 +238,53 @@ final class GitLoadingTests: XCTestCase {
         try await TestSupport.eventually { calls(source, "status").count == before + 3 }
     }
 
-    func testMarksFollowTheStatusOnEveryLoadedFolderWithoutMoreGit() async throws {
+    /// The Review tab reads the status (on the tick, as the Files tab does) and the selected change's diff, never the
+    /// log; Commits reads the log on entry.
+    func testTheReviewTabReadsNoLog() async throws {
         let source = FakeFilesSource.mockupAPI()
         repository(source)
         let f = fixture(source, directory: api)
-        func marks(_ folder: String) -> [String: String] {
-            Dictionary(uniqueKeysWithValues: (f.session.listings[folder]?.entries ?? []).compactMap { entry in
-                entry.mark.map { (entry.name, $0) }
-            })
-        }
-        try await TestSupport.eventually { !marks(api).isEmpty }
-        XCTAssertEqual(marks(api), ["CHANGELOG.md": "A", "node_modules": "!", "tests": "U"].merging(["CHANGELOG.md": "M"]) { $1 })
+        try await TestSupport.eventually { f.session.status != nil }
         try await f.idle()
-        let statuses = calls(source, "status").count
+        XCTAssertEqual(calls(source, "status").count, 1)
+        XCTAssertTrue(calls(source, "log").isEmpty, "Files reads no log")
 
-        f.session.expanded = [api + "/src", api + "/src/routes", api + "/tests", api + "/node_modules"]
-        try await TestSupport.eventually { f.session.listings[api + "/src/routes"]?.listing != nil
-            && f.session.listings[api + "/tests"]?.listing != nil && f.session.listings[api + "/node_modules"]?.listing != nil }
-        XCTAssertEqual(marks(api + "/src"), [:], "Folders holding changes show no mark")
-        XCTAssertEqual(marks(api + "/src/routes"), ["billing.ts": "M"])
-        XCTAssertEqual(marks(api + "/tests"), ["idempotency.test.ts": "U"], "Inside a folder git lists whole as untracked")
-        XCTAssertEqual(marks(api + "/node_modules"), ["left-pad": "!"], "Inside an ignored folder")
-        XCTAssertTrue(f.session.listings[api + "/node_modules"].map { FilesRow(id: "x", parent: api, depth: 0, kind: .entry,
-            entry: $0.entries[0], title: "", modified: "", size: "").dimmed } ?? false, "Ignored entries dim")
+        f.session.tab = .changes
+        try await f.tick()
+        XCTAssertEqual(calls(source, "status").count, 2)
+        XCTAssertTrue(calls(source, "log").isEmpty, "nor does Review")
+        XCTAssertNil(f.session.log)
+
+        f.session.tab = .commits
+        try await TestSupport.eventually { f.session.log != nil }
+        XCTAssertGreaterThan(calls(source, "log").count, 0, "Commits reads the log")
+    }
+
+    func testStatusChangesLeaveTheFilesListingsAlone() async throws {
+        let source = FakeFilesSource.mockupAPI()
+        repository(source)
+        let f = fixture(source, directory: api)
+        f.session.expanded = [api + "/src", api + "/src/routes"]
+        try await TestSupport.eventually { f.session.status != nil && f.session.listings[api + "/src/routes"]?.listing != nil }
         try await f.idle()
-        XCTAssertEqual(calls(source, "status").count, statuses, "Marks come from the status already read")
+        let listings = f.session.listings.mapValues(\.listing)
+        let redraws = Redraws()
+        withObservationTracking { _ = f.session.listings } onChange: { redraws.mark() }
 
-        // billing.ts is committed: its mark goes with the next status.
+        // billing.ts is committed: the Review tab hears of it, the Files tab shows nothing of git.
         source.gitAnswers[Self.status] =
             ok(Self.porcelain.replacingOccurrences(of: "1 .M N... 100644 100644 100644 ddddddd ddddddd src/routes/billing.ts\0", with: ""))
         try await f.tick()
-        XCTAssertEqual(marks(api + "/src/routes"), [:])
-
-        // Leaving the repository clears every mark.
-        f.session.pinnedRoot = "/Users/ivan"
-        try await TestSupport.eventually { f.session.git == GitState.none && f.session.listings["/Users/ivan"]?.listing != nil }
-        f.session.expanded = ["/Users/ivan/src", "/Users/ivan/src/api"]
-        try await TestSupport.eventually { f.session.listings["/Users/ivan/src/api"]?.listing != nil }
-        XCTAssertEqual(marks("/Users/ivan/src/api"), [:])
+        XCTAssertFalse(f.session.status?.changes.contains { $0.path == "src/routes/billing.ts" } ?? true)
+        XCTAssertFalse(redraws.marked, "a new status rewrites no listing")
+        XCTAssertEqual(f.session.listings.mapValues(\.listing), listings)
     }
 
-    func testUnchangedStatusAndMarksAreNotRewritten() async throws {
+    func testUnchangedStatusIsNotRewritten() async throws {
         let source = FakeFilesSource.mockupAPI()
         repository(source)
         let f = fixture(source, directory: api)
-        try await TestSupport.eventually { f.session.status != nil && f.session.listings[api]?.entries.contains { $0.mark != nil } == true }
+        try await TestSupport.eventually { f.session.status != nil && f.session.listings[api]?.listing != nil }
         try await f.idle()
         let loadedAt = f.session.status?.loadedAt
         let redraws = Redraws()
@@ -293,7 +296,7 @@ final class GitLoadingTests: XCTestCase {
         try await f.tick()
         try await f.tick()
         XCTAssertEqual(calls(source, "status").count, 3)
-        XCTAssertFalse(redraws.marked, "An identical status, its marks and the listing they mark are left alone")
+        XCTAssertFalse(redraws.marked, "An identical status and the listings are left alone")
         XCTAssertEqual(f.session.status?.loadedAt, loadedAt)
     }
 
@@ -308,7 +311,6 @@ final class GitLoadingTests: XCTestCase {
         let notes = try XCTUnwrap(f.session.status?.changes.first { $0.path == "notes.md" })
         XCTAssertEqual(notes.additions, 3)
         XCTAssertEqual(notes.deletions, 0)
-        XCTAssertEqual(f.session.listings[api]?.entries.first { $0.name == "notes.md" }?.mark, "U")
         try await f.tick()
         XCTAssertEqual(source.calls.filter { $0 == "read " + api + "/notes.md" }.count, 1, "An unchanged file is counted once")
 
@@ -368,11 +370,11 @@ final class GitLoadingTests: XCTestCase {
         // A filter runs against messages and authors and merges them by hash, newest first.
         let first = Self.record(String(format: "%040x", 1_000), parents: [], subject: "Commit 0", at: 1_760_000_000)
         let third = Self.record(String(format: "%040x", 1_002), parents: [], subject: "Commit 2", at: 1_759_999_880)
-        source.gitAnswers["log -n 200 --skip=0 \(format) --date=unix --all --grep=paul --regexp-ignore-case --fixed-strings"] = ok(third)
-        source.gitAnswers["log -n 200 --skip=0 \(format) --date=unix --all --author=paul --regexp-ignore-case --fixed-strings"] = ok(first + third)
+        source.gitAnswers["log -n 200 --skip=0 \(format) --date=unix --all --grep=sam --regexp-ignore-case --fixed-strings"] = ok(third)
+        source.gitAnswers["log -n 200 --skip=0 \(format) --date=unix --all --author=sam --regexp-ignore-case --fixed-strings"] = ok(first + third)
         f.session.logScope = .all
-        f.session.logFilter = "paul"
-        try await TestSupport.eventually { f.session.log?.filter == "paul" }
+        f.session.logFilter = "sam"
+        try await TestSupport.eventually { f.session.log?.filter == "sam" }
         XCTAssertEqual(f.session.log?.commits.map(\.subject), ["Commit 0", "Commit 2"])
         XCTAssertEqual(f.session.log?.scope, .all)
         XCTAssertEqual(f.session.log?.exhausted, true)
@@ -412,7 +414,7 @@ final class GitLoadingTests: XCTestCase {
                 .dropLast() + "\0\nM\0CHANGELOG.md\0")
         source.gitAnswers["show --format= -U3 \(Self.hash) -- CHANGELOG.md"] = ok(Self.diff("CHANGELOG.md"))
         source.gitAnswers["verify-commit --raw \(Self.hash)"] = ok(
-            "[GNUPG:] GOODSIG 697079DA6878B89B Paul Miller <paul@example.com>\n[GNUPG:] TRUST_ULTIMATE 0 pgp\n")
+            "[GNUPG:] GOODSIG 0123456789ABCDEF Sam Example <sam@example.com>\n[GNUPG:] TRUST_ULTIMATE 0 pgp\n")
         let f = fixture(source, directory: api)
         try await TestSupport.eventually { f.session.status != nil }
         f.session.tab = .commits
@@ -447,8 +449,6 @@ final class GitLoadingTests: XCTestCase {
         XCTAssertFalse(f.session.showsGitTabs)
         XCTAssertNil(f.session.status)
         XCTAssertNil(f.session.log)
-        XCTAssertNil(FilesFooter.gitSummary(f.session.git), "the footer says nothing of git")
-        XCTAssertFalse(f.session.listings.values.contains { $0.entries.contains { $0.mark != nil } }, "no marks")
         let asked = source.gitCalls.count
         try await f.tick()
         XCTAssertEqual(source.gitCalls.count, asked, "nothing is asked while git is off")
@@ -641,7 +641,7 @@ final class GitLoadingTests: XCTestCase {
         let f = fixture(source, directory: api)
         try await TestSupport.eventually { f.session.status != nil }
         try await f.idle()
-        XCTAssertNil(f.session.changesSelection, "Off the Changes tab nothing is picked")
+        XCTAssertNil(f.session.changesSelection, "Off the Review tab nothing is picked")
         f.session.tab = .changes
         try await TestSupport.eventually { f.session.changesSelection == "staged:CHANGELOG.md" }
         f.session.changesSelection = "unstaged:src/lib/db.ts"

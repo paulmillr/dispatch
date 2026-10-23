@@ -80,7 +80,7 @@ import SwiftUI
         guard key != self.key else { return }
         self.key = key
         // Swift treats "\r\n" as one character, so CRLF text is normalized before it is split or highlighted.
-        let source = Self.normalized(text())
+        let source = TextRendering.visible(Self.normalized(text()))
         let shown = source.hasSuffix("\n") ? String(source.dropLast()) : source
         lines = Self.split(shown)
         cut = Self.cut(lines)
@@ -123,12 +123,13 @@ import SwiftUI
         return text
     }
 
-    /// The lines past `lineLimit` characters, cut there with " …". A line's UTF-8 length bounds its characters, so
-    /// only lines that long in bytes are counted.
+    /// The lines past `lineLimit` scalars, cut there with " …". Scalar iteration also bounds a single extended
+    /// grapheme made from an adversarial number of combining marks.
     static func cut(_ lines: [String]) -> [Int: String] {
         var result: [Int: String] = [:]
-        for (index, line) in lines.enumerated() where line.utf8.count > lineLimit && line.count > lineLimit {
-            result[index] = String(line.prefix(lineLimit)) + " …"
+        for (index, line) in lines.enumerated() where line.utf8.count > lineLimit {
+            let bounded = TextRendering.prefix(line, scalars: lineLimit)
+            if bounded.truncated { result[index] = bounded.text + " …" }
         }
         return result
     }

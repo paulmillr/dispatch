@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// A tab in files mode: under the strip a 34 pt header, then the files tab it shows. The
-/// Files tab is the outline with the transfer rows and footer under it and the preview on the right; Changes (F3a) and
-/// Commits (F4a) are their own views. Header, outline, transfer rows, footer and preview are separate views.
+/// Files tab is the outline with the transfer rows and footer under it and the preview on the right; Review (F3a's
+/// Changes, with comments) and Commits (F4a) are views of their own. Header, outline, transfer rows, footer and preview are separate views.
 struct FilesView: View {
     let session: FilesSession
     /// The tab's pane has the focus (as for `ChatView`): the list takes the keyboard only then.
@@ -45,7 +45,7 @@ struct FilesView: View {
 
     private func browser(_ root: String?, offline: (host: String, since: Date?)?) -> some View {
         VStack(spacing: 0) {
-            FilesHeader(session: session, root: root)
+            FilesHeader(session: session, root: root, focused: focused)
             if let offline { FilesOfflineBar(session: session, host: offline.host, since: offline.since) }
             // The tabs change as the modes do: the old body fades down and out, the new one in. The animation is this
             // body's alone; the header (its segments included) and the strip never animate with it.
@@ -57,7 +57,8 @@ struct FilesView: View {
                     FilesSplit(session: session,
                                list: FilesListColumn(session: session, root: root, focused: focused, dimmed: offline != nil,
                                                      builder: builder).equatable(),
-                               detail: FilePreviewPane(session: session))
+                               detail: FilePreviewPane(session: session),
+                               back: "Files")
                         .overlay { FilesWriteRefusal(session: session) }
                         .transition(tabTransition)
                 case .changes:
@@ -105,22 +106,30 @@ struct FilesSplitColumns: Equatable {
 
 /// The list beside the preview, split where the tab's width (or the last one chosen) puts the divider. Only this view
 /// reads the widths and the hidden flag, so dragging the divider or hiding the pane redraws the split and nothing above it.
-/// The Changes tab puts its diff in the preview's place (`detail`), so both tabs share the divider and ⌥⌘P.
+/// The git tabs put their detail in the preview's place (`detail`), so all tabs share the divider and ⌥⌘P. Given a
+/// `back` title (the git tabs), a view too narrow for two columns shows the detail in the list's place once a row is
+/// chosen (`FilesSession.narrowDetail`), under a bar back to the list.
 struct FilesSplit<List: View, Detail: View>: View {
     let session: FilesSession
     let list: List
     let detail: Detail
+    var back: String?
 
     var body: some View {
         GeometryReader { geometry in
             let width = geometry.size.width
             let preference = TerminalRuntime.shared.files.previewPreference(for: session)
             let columns = FilesView.layout(width: width, preference: preference, hidden: session.previewOff)
+            let narrow = back != nil && width < FilesView.collapseWidth
+            let drilled = narrow && session.narrowDetail
             // The list stays the HStack's first child whatever the preview does, so its outline keeps its identity
-            // (and its scroll and selection) when the pane hides, shows or collapses.
+            // (and its scroll and selection) when the pane hides, shows or collapses, or the detail covers it.
             HStack(spacing: 0) {
                 list.frame(maxWidth: .infinity, maxHeight: .infinity)
-                if let preview = columns.preview {
+                    .opacity(drilled ? 0 : 1)
+                    .allowsHitTesting(!drilled)
+                    .accessibilityHidden(drilled)
+                if !narrow, let preview = columns.preview {
                     Chrome.border.frame(width: 1)
                     // Not mounted while hidden or collapsed: the pane's task is what loads the selection.
                     detail
@@ -128,8 +137,24 @@ struct FilesSplit<List: View, Detail: View>: View {
                         .frame(maxHeight: .infinity)
                 }
             }
+            .overlay {
+                if drilled, let back {
+                    VStack(spacing: 0) {
+                        FilesBackBar(title: back) { session.narrowDetail = false }
+                        detail.frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                    .background(ChatThemeStore.shared.current.terminal)
+                    // Esc the detail did not take itself (a find field, a diff's own) goes back to the list.
+                    .onExitCommand { session.narrowDetail = false }
+                }
+            }
+            .environment(\.filesSplitNarrow, narrow)
+            // The header's toggle and ⌥⌘P act on what this layout shows.
+            .onChange(of: narrow, initial: true) { _, narrow in
+                if session.splitNarrow != narrow { session.splitNarrow = narrow }
+            }
             .overlay(alignment: .leading) {
-                if let preview = columns.preview {
+                if !narrow, let preview = columns.preview {
                     // Over the line and the edges of both columns, above the outline's and the preview's own views.
                     FilesPreviewDivider(session: session, preview: preview, width: width)
                         .frame(width: FilesPreviewDividerView.hitWidth)
@@ -138,6 +163,48 @@ struct FilesSplit<List: View, Detail: View>: View {
                 }
             }
         }
+    }
+}
+
+/// The narrow split's bar over a row's detail: back to the list it covers.
+private struct FilesBackBar: View {
+    let title: String
+    let back: () -> Void
+    @Environment(\.appTypography) private var typography
+
+    var body: some View {
+        let palette = Chrome.palette
+        HStack(spacing: 0) {
+            Button(action: back) {
+                HStack(spacing: 5) {
+                    Image(systemName: "chevron.left").font(.system(size: typography.size(offset: -2), weight: .semibold))
+                    Text(verbatim: title)
+                }
+                .foregroundStyle(palette.accent)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Back to \(title) · esc")
+            .accessibilityIdentifier("files-split-back")
+            Spacer(minLength: 0)
+        }
+        .font(AppFont.ui(size: typography.size(offset: -1)))
+        .padding(.horizontal, 14)
+        .frame(height: typography.expanded(28))
+        .background(Chrome.window)
+        .overlay(alignment: .bottom) { palette.separator.frame(height: 1) }
+    }
+}
+
+private struct FilesSplitNarrowKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    /// The git tabs' split is a single column (`FilesSplit`): choosing a row shows its detail in the list's place.
+    var filesSplitNarrow: Bool {
+        get { self[FilesSplitNarrowKey.self] }
+        set { self[FilesSplitNarrowKey.self] = newValue }
     }
 }
 

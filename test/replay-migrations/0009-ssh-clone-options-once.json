@@ -1,0 +1,11 @@
+{
+  "kind": "rerecord",
+  "why": "A clone of an SSH connection the app launched repeated `-o RemoteCommand=none -o ClearAllForwardings=yes` (the launcher's own invocation options went back into the clone's options, and `SSHShell.arguments` put the pair first again). `arguments` now drops copies of its own pair, so a new tab's `terminals.create` command is the same whichever connection it clones; before, it differed with timing and TabCloseSelectionTests/testSSHCloseSelection stalled in the VM. These tests recorded the repeated pair and are recorded again.",
+  "tests": [
+    "HostLinuxIntegrationTests/testLinuxIdentityAndCreationInPlainSSH",
+    "SSHHerdrIntegrationTests/testDisconnectDuringCreationRecoversConfirmedHerdrTerminals",
+    "SSHLinuxIntegrationTests/testLinuxDetachedTmuxRestorePreservesProcesses",
+    "SSHLinuxIntegrationTests/testLinuxGranularTmuxGrantSurvivesDetachAndReconnect",
+    "SSHReconnectIntegrationTests/testClosingRemoteDetachedRestoreAfterSSHStartsAllowsCleanRetry"
+  ]
+}

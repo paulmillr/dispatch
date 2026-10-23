@@ -8,8 +8,12 @@ struct FilesSegments<ID: Hashable>: View {
         let title: String
         let symbol: String
         var count: Int?
+        /// The count pill's colour; nil draws it quiet.
+        var countTint: Color?
         var enabled = true
         let help: String
+        /// Read for the segment instead of its title and count.
+        var accessibilityLabel: String?
         let accessibilityID: String
     }
 
@@ -27,13 +31,15 @@ struct FilesSegments<ID: Hashable>: View {
                 Button { selection = segment.id } label: {
                     HStack(spacing: 6) {
                         Image(systemName: segment.symbol).font(.system(size: typography.size(offset: -2)))
-                        if !compact { Text(segment.title) }
+                        if !compact {
+                            Text(verbatim: segment.title).lineLimit(1)
+                        }
                         if let count = segment.count {
                             Text("\(count)")
                                 .font(AppFont.ui(size: typography.size(offset: -2.5)))
-                                .foregroundStyle(on ? palette.sidebarHostLabel : palette.detail)
+                                .foregroundStyle(segment.countTint ?? (on ? palette.sidebarHostLabel : palette.detail))
                                 .padding(.horizontal, 5).padding(.vertical, 1)
-                                .background(Capsule().fill(palette.ink.opacity(0.06)))
+                                .background(Capsule().fill(segment.countTint.map { $0.opacity(0.16) } ?? palette.ink.opacity(0.06)))
                         }
                     }
                     .foregroundStyle(!segment.enabled ? palette.faint : on ? palette.ink : palette.muted)
@@ -46,7 +52,7 @@ struct FilesSegments<ID: Hashable>: View {
                 .disabled(!segment.enabled)
                 .help(segment.help)
                 // As drawn: "Changes 4".
-                .accessibilityLabel(segment.count.map { "\(segment.title) \($0)" } ?? segment.title)
+                .accessibilityLabel(segment.accessibilityLabel ?? segment.count.map { "\(segment.title) \($0)" } ?? segment.title)
                 .accessibilityIdentifier(segment.accessibilityID)
                 .accessibilityAddTraits(on ? .isSelected : [])
             }
@@ -57,13 +63,16 @@ struct FilesSegments<ID: Hashable>: View {
     }
 }
 
-/// The 34 pt bar over the tab (F2a, F3a, F4a), laid out the same on every tab: the files tabs, then where you are (the
-/// path as crumbs, a right click offering Finder's folder menu, and inside a repository its branch), then the tab's
-/// own control (Files: follow the shell; Commits: which branches), the search and the pane's toggle, always last. Counts
-/// and totals live in the footers. Changes and Commits show the path to the repository's top folder.
+/// The 34 pt bar over the tab (F2a, F4a), laid out the same on every tab: where you are, then (on Review, once it holds
+/// comments) Create review; at the trailing end the search and the pane's toggle, then the files tabs (Files · Review ·
+/// Commits), always last. Where you are is the path as crumbs on Files (a right click offering Finder's folder menu, the
+/// follow-the-shell link after it, the host first), and on Review and Commits the repository and its branch. The Files
+/// tab shows nothing of git.
 struct FilesHeader: View {
     @Bindable var session: FilesSession
     let root: String?
+    /// The tab's pane has the keyboard: ⇧⌘⏎ is Create review's.
+    var focused = true
     @Environment(\.appTypography) private var typography
     @Environment(\.chatTheme) private var theme
     /// Room for the floating mode switch over the header's trailing end.
@@ -76,9 +85,33 @@ struct FilesHeader: View {
     var body: some View {
         let palette = Chrome.palette
         HStack(spacing: 12) {
-            // Three named segments beside a tab's line overflow a narrow pane: there they drop their names, but only
-            // once the line has given up what it can (the crumbs folded and the filter narrowed, the git lines' text
-            // clipped); the higher priority is offered room first.
+            // Where you are: the crumbs fold and clip rather than push the controls out.
+            Group {
+                if session.tab == .files {
+                    HStack(spacing: 6) {
+                        crumbs(root)
+                        // The link belongs to the folder it follows: right after the path, the crumbs folding before it.
+                        if root != nil { followToggle.layoutPriority(1) }
+                    }
+                } else {
+                    repositoryLine
+                }
+            }
+            .frame(minWidth: 0, alignment: .leading)
+            .clipped()
+            .layoutPriority(0.5)
+            if session.tab == .files, session.source?.readOnly == true { FilesReadOnlyTag() }
+            if session.tab == .changes { ReviewHeaderButton(session: session, focused: focused).layoutPriority(1) }
+            Spacer(minLength: 0)
+            // The search and the pane's toggle: one glass pill with Liquid Glass.
+            HStack(spacing: glass ? 2 : 12) {
+                searchSlot
+                paneToggle
+            }
+            .glassControlGroup()
+            .layoutPriority(1)
+            // Named segments overflow a narrow pane: there they drop their names, but only once the line has given up
+            // what it can (the crumbs folded and the filter narrowed); the higher priority is offered room first.
             let segments = Self.segments(for: session)
             let selection = Binding(get: { session.tab }, set: { session.select($0) })
             ViewThatFits(in: .horizontal) {
@@ -86,33 +119,6 @@ struct FilesHeader: View {
                 FilesSegments(segments: segments, selection: selection, compact: true)
             }
             .layoutPriority(2)
-            // Where you are: the crumbs fold and clip before the branch shortens; neither pushes the controls out.
-            let location = session.tab == .files ? root : session.git.repository?.root ?? root
-            HStack(spacing: 10) {
-                crumbs(location)
-                branchChip.layoutPriority(1)
-            }
-            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
-            .clipped()
-            if session.tab == .files, session.source?.readOnly == true { FilesReadOnlyTag() }
-            // The tab's control, the search and the pane's toggle: one glass pill with Liquid Glass.
-            HStack(spacing: glass ? 2 : 12) {
-                switch session.tab {
-                case .files: if root != nil { followToggle }
-                case .changes: EmptyView()
-                case .commits:
-                    // Narrow views keep the menu as "All ▾" / "Branch ▾".
-                    ViewThatFits(in: .horizontal) {
-                        scopeMenu(short: false)
-                        scopeMenu(short: true)
-                    }
-                    .padding(.horizontal, glass ? 8 : 0)
-                }
-                searchSlot
-                paneToggle
-            }
-            .glassControlGroup()
-            .layoutPriority(1)
         }
         .padding(.leading, 12)
         .padding(.trailing, 12 + trailingInset)
@@ -134,23 +140,29 @@ struct FilesHeader: View {
         .onChange(of: searchText) { _, text in
             if text.isEmpty, !filterFocused { searching = false }
         }
-        .onChange(of: session.tab) { _, _ in searching = false }
+        // Moving between Commits' rows keeps its search open.
+        .onChange(of: session.tab == .files ? 0 : session.showsLog ? 1 : 2) { _, _ in searching = false }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("files-header")
     }
 
-    /// The files tabs as the header shows them (F2a): Files alone outside a repository; inside one Files · Changes, with
-    /// the count of changed files once the status is in (none for a clean tree) · Commits.
+    /// The files tabs as the header shows them (F2a): Files alone outside a repository; inside one Files · Review, with
+    /// the count of its review comments in the review's blue once there are any · Commits. Fixed names: the branch is
+    /// where you are (`repositoryLine`), not a tab.
     static func segments(for session: FilesSession) -> [FilesSegments<FilesTab>.Segment] {
         let files = FilesSegments<FilesTab>.Segment(id: .files, title: "Files", symbol: "folder", help: "Files · ⌃⌘1",
                                                     accessibilityID: "files-segment-files")
         guard session.showsGitTabs else { return [files] }
-        let count = session.changedCount.flatMap { $0 > 0 ? $0 : nil }
+        let comments = session.reviewCommentCount
+        let commits = FilesSegments<FilesTab>.Segment(id: .commits, title: "Commits", symbol: "clock.arrow.circlepath",
+                                                      help: "Commits · ⌃⌘3", accessibilityID: "files-segment-commits")
         return [files,
-                .init(id: .changes, title: "Changes", symbol: "doc.badge.plus", count: count, help: "Changes · ⌃⌘2",
+                .init(id: .changes, title: "Review", symbol: "text.bubble", count: comments,
+                      countTint: ChatThemeStore.shared.current.blue,
+                      help: comments.map { "Review · \(ReviewText.count($0)) · ⌃⌘2" } ?? "Review · ⌃⌘2",
+                      accessibilityLabel: comments.map { "Review, \(ReviewText.count($0))" },
                       accessibilityID: "files-segment-changes"),
-                .init(id: .commits, title: "Commits", symbol: "arrow.triangle.branch", help: "Commits · ⌃⌘3",
-                      accessibilityID: "files-segment-commits")]
+                commits]
     }
 
     // MARK: Crumbs
@@ -164,6 +176,18 @@ struct FilesHeader: View {
                 if all.count > last + 1 { crumbRow(all, root: root, keepingLast: last) }
             }
             crumbRow(all, root: root, keepingLast: 0)
+            // Too narrow even for "… / api": the folder's name alone, else nothing, rather than a row clipped to a dot.
+            if let last = all.last {
+                Text(verbatim: last.title)
+                    .font(AppFont.ui(size: typography.size(offset: -0.5)))
+                    .foregroundStyle(Chrome.palette.secondary)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .help(last.path)
+                    .accessibilityLabel(root.map { FilesPath.crumbLine(root: $0, home: session.home, host: session.hostLabel) } ?? "")
+                    .accessibilityIdentifier("files-crumbs")
+            }
+            Color.clear.frame(width: 0, height: 0)
         }
     }
 
@@ -240,43 +264,37 @@ struct FilesHeader: View {
         .accessibilityIdentifier("files-follow-shell")
     }
 
-    /// Inside a repository, its branch and how far it is from its upstream ("main ↑2"); a click opens Commits. The
-    /// counts go first when room runs short.
-    @ViewBuilder private var branchChip: some View {
-        if session.git.repository != nil, let status = session.status {
-            let palette = Chrome.palette
-            Button { session.select(.commits) } label: {
-                ViewThatFits(in: .horizontal) {
-                    branchLabel(status, counts: true)
-                    branchLabel(status, counts: false)
-                }
-                .padding(.horizontal, glass ? 9 : 7)
-                .frame(height: typography.expanded(glass ? 24 : 20))
-                .liquidGlass(in: Capsule(), fallback: palette.ink.opacity(0.06), interactive: true)
-                .contentShape(Capsule())
-            }
-            .buttonStyle(.plain)
-            .help(Self.branchHelp(status))
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel(Self.branchHelp(status))
-            .accessibilityIdentifier("files-branch")
-        }
-    }
-
-    private func branchLabel(_ status: GitStatus, counts: Bool) -> some View {
+    /// "main · 2 ahead of origin/main · 4 files uncommitted · Commits ⌃⌘3".
+    /// Review's and Commits' place: the repository's name, its branch and how far it is from its upstream. No host and
+    /// no path: on these tabs neither changes what they show, and the crumbs' clicks are the Files tab's.
+    private var repositoryLine: some View {
         let palette = Chrome.palette
-        return HStack(spacing: 5) {
-            Image(systemName: "arrow.triangle.branch").font(.system(size: typography.size(offset: -2.5)))
-            Text(verbatim: GitChangesText.branch(status)).foregroundStyle(palette.secondary)
-            if counts, status.ahead > 0 { Text(verbatim: "↑\(status.ahead)").foregroundStyle(palette.green) }
-            if counts, status.behind > 0 { Text(verbatim: "↓\(status.behind)").foregroundStyle(palette.warning) }
+        let name = session.git.repository.map { FilesPath.name($0.root) } ?? ""
+        let status = session.git.repository == nil ? nil : session.status
+        return HStack(spacing: 6) {
+            Text(verbatim: name).foregroundStyle(palette.secondary)
+            if let status {
+                Image(systemName: "arrow.triangle.branch")
+                    .font(.system(size: typography.size(offset: -2)))
+                    .foregroundStyle(palette.faint)
+                Text(verbatim: GitChangesText.branch(status)).truncationMode(.middle)
+                if status.ahead > 0 { Text(verbatim: "↑\(status.ahead)").foregroundStyle(palette.green) }
+                if status.behind > 0 { Text(verbatim: "↓\(status.behind)").foregroundStyle(palette.warning) }
+            }
         }
-        .font(AppFont.ui(size: typography.size(offset: -1)))
+        .font(AppFont.ui(size: typography.size(offset: -0.5)))
         .lineLimit(1)
-        .fixedSize()
+        .help(session.git.repository?.root ?? "")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Self.repositoryLabel(name: name, status: status))
+        .accessibilityIdentifier("files-location")
     }
 
-    /// "main · 2 ahead of origin/main · Commits ⌃⌘3".
+    /// "api · main · 2 ahead of origin/main", as VoiceOver reads the repository line.
+    static func repositoryLabel(name: String, status: GitStatus?) -> String {
+        ([name] + (status.map { [branchHelp($0)] } ?? [])).joined(separator: " · ")
+    }
+
     static func branchHelp(_ status: GitStatus) -> String {
         var parts = [GitChangesText.branch(status)]
         if let upstream = status.upstream {
@@ -284,36 +302,7 @@ struct FilesHeader: View {
                 .compactMap { $0 }
             parts.append(moves.isEmpty ? "up to date with \(upstream)" : moves.joined(separator: ", ") + " of \(upstream)")
         }
-        parts.append("Commits ⌃⌘3")
         return parts.joined(separator: " · ")
-    }
-
-    /// Commits: this branch's history or every branch's.
-    private func scopeMenu(short: Bool) -> some View {
-        let title = session.logScope == .all ? (short ? "All" : "All branches") : (short ? "Branch" : "This branch")
-        return Menu {
-            Picker("Show", selection: Binding(get: { session.logScope }, set: { scope in
-                guard scope != session.logScope else { return }
-                session.logScope = scope
-                // Another query starts again from one page.
-                session.logWanted = GitLoader.page
-            })) {
-                Text("This branch").tag(GitLogScope.branch)
-                Text("All branches").tag(GitLogScope.all)
-            }
-            .pickerStyle(.inline)
-        } label: {
-            // One text, so the menu keeps the chevron after the title and draws both in the bar's muted ink.
-            (Text(verbatim: title + " ") + Text(Image(systemName: "chevron.down")).font(.system(size: typography.size(offset: -4),
-                                                                                               weight: .semibold)))
-                .font(AppFont.ui(size: typography.size(offset: -1)))
-                .foregroundStyle(Chrome.palette.muted)
-        }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("Show this branch’s history or all branches")
-        .accessibilityIdentifier("git-log-scope")
     }
 
     /// A crumb's right click, as Finder's title menu: the shown folder, then each one enclosing it down to "/", each
@@ -362,27 +351,23 @@ struct FilesHeader: View {
 
     // MARK: Search, sort
 
-    /// What the shown tab's search holds: the list's filter, the changed files' or the log's.
+    /// What the shown tab's search holds: the list's filter, the Review tab's or the log's.
     private var searchText: String {
-        switch session.tab {
-        case .files: session.filter
-        case .changes: session.changesFilter
-        case .commits: session.logFilter
-        }
+        if session.tab == .files { return session.filter }
+        return session.showsLog ? session.logFilter : session.changesFilter
     }
 
     /// The same place and the same behaviour on every tab: the glyph, or the field while it is open or holds text.
     @ViewBuilder private var searchSlot: some View {
         if searching || !searchText.isEmpty {
-            switch session.tab {
-            case .files:
+            if session.tab == .files {
                 filterField($session.filter, prompt: "Search", help: "Search the list · ⌘F", identifier: "files-filter")
                     .layoutPriority(1)
-            case .changes:
+            } else if !session.showsLog {
                 filterField($session.changesFilter, prompt: "Search changes", help: "Search the changed files · ⌘F",
                             identifier: "git-changes-filter")
                     .layoutPriority(1)
-            case .commits:
+            } else {
                 GitCommitsFilterField(session: session, focusOnAppear: searching, fold: { searching = false })
                     .layoutPriority(1)
             }
@@ -435,7 +420,7 @@ struct FilesHeader: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(FilesHeaderButtonStyle())
-        .help(session.tab == .commits ? "Search messages and authors · ⌘F" : "Search · ⌘F")
+        .help(session.showsLog ? "Search messages and authors · ⌘F" : "Search · ⌘F")
         .accessibilityLabel("Search")
         .accessibilityIdentifier("files-search")
     }
@@ -449,16 +434,13 @@ struct FilesHeader: View {
     /// ⌥⌘P: lit while the pane is on (the preview, the change's diff, the commit's detail). A view under 600 pt has no
     /// room for it, but the button still says whether it comes back when there is.
     private var paneToggle: some View {
-        let showing = !session.previewOff
-        let pane = switch session.tab {
-        case .files: "preview"
-        case .changes: "diff"
-        case .commits: "details"
-        }
+        let showing = session.paneShown
+        let pane = session.tab == .files ? "preview" : session.showsLog ? "details" : "diff"
         return Button {
             session.togglePreview()
         } label: {
-            Image(systemName: "sidebar.trailing")
+            // Not a sidebar glyph: the window's sidebar button already draws one.
+            Image(systemName: "rectangle.righthalf.inset.filled")
                 .font(.system(size: typography.size(offset: -1.5)))
                 .frame(minWidth: typography.expanded(22), minHeight: typography.expanded(22))
                 .contentShape(Rectangle())
@@ -504,13 +486,20 @@ struct FilesColumnHeader: View {
 
     var body: some View {
         let palette = Chrome.palette
-        HStack(spacing: 0) {
-            column("Name", .name).frame(maxWidth: .infinity, alignment: .leading)
-            column("Modified", .modified).frame(width: FilesColumns.modified(typography), alignment: .trailing)
-            column("Size", .size).frame(width: FilesColumns.size(typography), alignment: .trailing)
+        // The outline hides the same columns at the same widths (`FilesColumns.shown`).
+        GeometryReader { geometry in
+            let shown = FilesColumns.shown(width: geometry.size.width, typography: typography)
+            HStack(spacing: 0) {
+                column("Name", .name).frame(maxWidth: .infinity, alignment: .leading)
+                if shown.modified {
+                    column("Modified", .modified).frame(width: FilesColumns.modified(typography), alignment: .trailing)
+                }
+                if shown.size { column("Size", .size).frame(width: FilesColumns.size(typography), alignment: .trailing) }
+            }
+            .padding(.leading, FilesColumns.leading)
+            .padding(.trailing, FilesColumns.trailing)
+            .frame(maxHeight: .infinity)
         }
-        .padding(.leading, FilesColumns.leading)
-        .padding(.trailing, FilesColumns.trailing)
         .frame(height: typography.expanded(24))
         .font(AppFont.ui(size: typography.size(offset: -2)))
         .foregroundStyle(palette.detail)

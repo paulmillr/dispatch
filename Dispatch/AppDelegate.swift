@@ -1,4 +1,5 @@
 import AppKit
+import Quartz
 import SwiftUI
 
 @MainActor
@@ -18,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     /// Recent keystrokes in the Settings window, matched against `AppTheme.nauticalCode`.
     private var settingsKeystrokes = ""
     private var settingsKeyMonitor: Any?
+    private var dictationShortcut: DictationShortcut?
     private var appearanceObservation: NSKeyValueObservation?
     private var termination: Task<Void, Never>?
     /// Settings' "Remove Dispatch from this Mac": run once the runtime stopped (true also deletes the app's data).
@@ -176,6 +178,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         window.setFrameAutosaveName("Dispatch.Local.MainWindow")
         window.contentView = NSHostingView(rootView: MainView(workspace: workspace, settings: settings, controller: self))
         buildMenus()
+        dictationShortcut = DictationShortcut { [weak self] in self?.dictationTarget() }
+        VoiceNavigation.shared.startTracking()
+        VoiceNavigation.shared.sidebar = { [weak self] visible in
+            guard let self else { return false }
+            if visible != self.sidebarVisible { self.toggleSidebar() }
+            return self.sidebarVisible
+        }
         attention.start()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -184,8 +193,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         Task { await LocalAgentsConsent.start(over: window, chat: runtime.chat) }
     }
 
-    func applicationDidBecomeActive(_ notification: Notification) { TerminalRuntime.shared.setActive(true) }
-    func applicationDidResignActive(_ notification: Notification) { TerminalRuntime.shared.setActive(false) }
+    /// What the right ⌘ shortcut dictates into: the main window's active pane's chat while it shows, else
+    /// "Dispatch, …" commands (with Navigate by voice on).
+    private func dictationTarget() -> DictationShortcut.Target? {
+        guard NSApp.keyWindow === window else { return nil }
+        if let id = workspace.activeSurfaceID, !TerminalRuntime.shared.files.isShowing(id),
+           let session = TerminalRuntime.shared.chat.sessions[id], session.showChat {
+            return session.waitingForAnswer ? nil : .chat(session)
+        }
+        return DictationStore.shared.navigation ? .commands : nil
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        SecureKeyboardEntry.active = true
+        TerminalRuntime.shared.setActive(true)
+    }
+    func applicationDidResignActive(_ notification: Notification) {
+        SecureKeyboardEntry.active = false
+        TerminalRuntime.shared.setActive(false)
+    }
     func windowDidBecomeKey(_ notification: Notification) {
         TerminalRuntime.shared.setActive(true)
     }
@@ -200,8 +226,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     // Full-screen transitions use temporary AppKit windows. Only an explicit
     // close of our main window should end the application session.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+    /// AppKit waits for a `.terminateLater` reply in a nested event loop that runs neither main-queue blocks nor
+    /// main-actor tasks (measured on macOS 27: `DispatchQueue.main.async` and `Task { @MainActor }` both wait until the
+    /// reply), so the cleanup `requestTermination` awaits could never finish there and the app sat in that loop
+    /// for days at 1% CPU. The user's quit is refused at once instead, the cleanup runs on the outer loop (the window
+    /// is already gone), and the quit is repeated when it ends, then granted. A quit the system sends for a logout,
+    /// shutdown or restart (the quit event names its reason) cannot be refused without refusing the logout: the
+    /// session is saved and the quit granted at once, the processes end with the session anyway.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        requestTermination { sender.reply(toApplicationShouldTerminate: $0) }
+        if terminationGranted { return .terminateNow }
+        if Self.systemQuit {
+            saveHostSession()
+            return .terminateNow
+        }
+        let reply = requestTermination { [weak self] allowed in
+            guard allowed, let self else { return }
+            terminationGranted = true
+            sender.terminate(nil)
+        }
+        return reply == .terminateLater ? .terminateCancel : reply
+    }
+    private var terminationGranted = false
+    /// Whether the quit being handled came from loginwindow (logout, shutdown, restart): the quit Apple event then
+    /// carries a reason; the Dock's and AppleScript's carry none.
+    private static var systemQuit: Bool {
+        guard let event = NSAppleEventManager.shared().currentAppleEvent,
+              event.eventClass == AEEventClass(kCoreEventClass), event.eventID == AEEventID(kAEQuitApplication)
+        else { return false }
+        // keyAEQuitReason ('why?', AERegistry.h: kAELogOut, kAEReallyLogOut, kAEShowRestartDialog, kAEShowShutdownDialog)
+        // is not imported into Swift.
+        return event.attributeDescriptor(forKeyword: AEKeyword(0x7768_793F)) != nil
     }
     func requestTermination(reply: @escaping @MainActor (Bool) -> Void) -> NSApplication.TerminateReply {
         guard termination == nil else { return .terminateLater }
@@ -236,7 +290,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         attention.stop()
         HostStats.shared.stop()
         TerminalRuntime.shared.stop()
+        ReviewRepository.flushShared()
+        ChatAttachmentPreview.shared.removeAll()
     }
+    // Quick Look: the responder chain ends here, so the attachment preview takes the panel through the app delegate.
+    override func acceptsPreviewPanelControl(_ panel: QLPreviewPanel!) -> Bool { ChatAttachmentPreview.shared.acceptsControl }
+    override func beginPreviewPanelControl(_ panel: QLPreviewPanel!) { ChatAttachmentPreview.shared.begin(panel) }
+    override func endPreviewPanelControl(_ panel: QLPreviewPanel!) { ChatAttachmentPreview.shared.end(panel) }
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         guard sender === window else { return true }
         guard confirmClosing(Array(workspace.allTabIDs), detaching: true) else { return false }
@@ -428,12 +488,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
               let files = TerminalRuntime.shared.files.existing(id), files.visible else { return }
         files.togglePreview()
     }
-    /// ⌃⌘1 opens files on its Files tab from any mode; ⌃⌘2 and ⌃⌘3 select Changes and Commits while files shows.
+    /// ⌃⌘1 opens files on its Files tab from any mode; ⌃⌘2 and ⌃⌘3 select Review or Commits while files shows.
     @objc func showFilesTab(_ sender: NSMenuItem) {
         guard NSApp.keyWindow === window, let id = workspace.activeSurfaceID, let tab = Self.filesTab(sender.tag) else { return }
         TerminalRuntime.shared.files.showFiles(id, tab: tab)
     }
-    /// ⇧⌘U and ⇧⌘L: files on its Changes or Commits tab, from any mode.
+    /// ⇧⌘U and ⇧⌘L: files on the Review or Commits tab, from any mode.
     @objc func openFilesTab(_ sender: NSMenuItem) { showFilesTab(sender) }
     static func filesTab(_ tag: Int) -> FilesTab? { FilesTab.allCases.indices.contains(tag) ? FilesTab.allCases[tag] : nil }
     /// ⇧⌘U / ⇧⌘L, and ⌃⌘2 / ⌃⌘3 (`showing`: only while files shows): a tab that can show files, on a folder not known to
@@ -452,6 +512,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         for window in [window, settingsWindow].compactMap({ $0 }) {
             window.appearance = NSAppearance(named: theme.isDark ? .darkAqua : .aqua)
             window.backgroundColor = NSColor(theme.palette.window)
+        }
+        // Translucent terminals show the desktop: the main window stops covering it, and MainView paints the window
+        // color everywhere else.
+        if let window, TerminalRuntime.shared.preferences.terminalOpacity < 1 {
+            window.isOpaque = false
+            window.backgroundColor = .clear
+        } else {
+            window?.isOpaque = true
         }
     }
 
@@ -544,7 +612,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             return filesTabMenuEnabled(workspace.activeTab, tab, showing: item.action == #selector(showFilesTab(_:)))
         case #selector(togglePreview):
             let files = workspace.activeSurfaceID.flatMap { TerminalRuntime.shared.files.existing($0) }
-            item.title = files?.previewOff == true ? "Show Preview" : "Hide Preview"
+            item.title = files?.paneShown == false ? "Show Preview" : "Hide Preview"
             return NSApp.keyWindow === window && files?.visible == true
         case #selector(nextPane), #selector(previousPane):
             return (workspace.current?.layout.paneIDs.count ?? 0) > 1

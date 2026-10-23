@@ -8,6 +8,36 @@ final class ChatTranscriptTests: XCTestCase {
         try JSONDecoder().decode([HelperChat.Record].self, from: JSONSerialization.data(withJSONObject: objects))
     }
 
+    /// Claude's thinking (`inline_reasoning`) is a row of its own, shown inline as on the Mac; a reasoning summary
+    /// (Codex) stays in the live log.
+    func testClaudeThinkingIsARowAndSummariesAreNot() throws {
+        var thinking = ChatFixture.record("think-1", "reasoning", turn: "t1", text: "Checking the retry path first.")
+        thinking["inline_reasoning"] = true
+        let summary = ChatFixture.record("sum-1", "reasoning", turn: "t1", text: "**Planning**")
+        let records = [ChatFixture.record("t1:started", "turn_started", turn: "t1"),
+                       ChatFixture.record("user-1", "user", turn: "t1", text: "Fix it"), thinking, summary,
+                       ChatFixture.record("agent-1", "assistant", turn: "t1", text: "Done.")]
+        var transcript = MobileTranscript()
+        transcript.apply(try JSONDecoder().decode([HelperChat.Record].self, from: JSONSerialization.data(withJSONObject: records)),
+                         historical: true)
+        XCTAssertEqual(transcript.rows.map(\.kind.label), ["user", "thinking", "agent"])
+        XCTAssertEqual(transcript.rows[1].item.text, "Checking the retry path first.")
+    }
+
+    /// Claude's shell mode records `!cmd` and its output as user messages in markup: the command reads as typed, and
+    /// the output is the command's result (never a row), as a native command's printed output is.
+    func testShellModeMarkupReadsAsTyped() throws {
+        let records = [ChatFixture.record("t1:started", "turn_started", turn: "t1"),
+                       ChatFixture.record("in", "user", turn: "t1", text: "<bash-input>ls -a</bash-input>"),
+                       ChatFixture.record("out", "user", turn: "t1", text: "<bash-stdout>a\nb</bash-stdout><bash-stderr>warn</bash-stderr>")]
+        var transcript = MobileTranscript()
+        let applied = transcript.apply(try JSONDecoder().decode([HelperChat.Record].self,
+                                                                from: JSONSerialization.data(withJSONObject: records)), historical: false)
+        XCTAssertEqual(transcript.rows.map(\.item.text), ["!ls -a"])
+        XCTAssertTrue(applied.contains { if case .output("a\nb\nwarn") = $0 { true } else { false } })
+        XCTAssertNil(HelperChat.Record.shellInput("<bash-input>ls"), "Not markup: shown as written")
+    }
+
     func testElapsedTextMatchesTheMac() {
         XCTAssertEqual(ChatTurnSummary.elapsed(0), "0s")
         XCTAssertEqual(ChatTurnSummary.elapsed(52.9), "52s")

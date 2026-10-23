@@ -1,6 +1,10 @@
 import Foundation
 import XCTest
+#if canImport(AppKit)
 @testable import DispatchApp
+#else
+@testable import DispatchMobile
+#endif
 
 /// The git parsers against output recorded from real git 2.54 (`git -c core.quotepath=false -c color.ui=never`, the
 /// arguments GitQueries sends) in two scratch repositories: one with staged, unstaged, renamed, deleted, binary,
@@ -111,42 +115,90 @@ final class GitParsersTests: XCTestCase {
 
             gpgsig -----BEGIN PGP SIGNATURE----- in a message is not a header
         """
-        XCTAssertEqual(GitParsers.signatures(raw), [a: .gpg, b: .ssh])
+        let headers = GitParsers.rawHeaders(raw)
+        XCTAssertEqual(headers.compactMapValues(\.signature), [a: .gpg, b: .ssh])
+        XCTAssertEqual(headers[a]?.author, GitPerson(name: "P", email: "p@x", date: Date(timeIntervalSince1970: 1), zone: "+0000"))
+        XCTAssertNil(headers[c]?.author, "no author header")
     }
 
+    /// The raw headers' author and committer: name, email, time and the offset git wrote, a name with `<` in it too.
+    func testRawLogReadsTheAuthorAndCommitterWithTheirOffsets() {
+        let a = String(repeating: "a", count: 40)
+        let raw = """
+        commit \(a)
+        tree 1111111111111111111111111111111111111111
+        parent 2222222222222222222222222222222222222222
+        author Robin Example <robin@example.com> 1792349447 +0200
+        committer GitHub <noreply@github.com> 1792363575 -0730
+
+            Merge pull request #12
+        """
+        let headers = GitParsers.rawHeaders(raw)[a]
+        XCTAssertEqual(headers?.author, GitPerson(name: "Robin Example", email: "robin@example.com",
+                                                  date: Date(timeIntervalSince1970: 1792349447), zone: "+0200"))
+        XCTAssertEqual(headers?.committer, GitPerson(name: "GitHub", email: "noreply@github.com",
+                                                     date: Date(timeIntervalSince1970: 1792363575), zone: "-0730"))
+        XCTAssertEqual(GitParsers.person("a <b> <c@d> 5 +0100")?.name, "a <b>")
+        XCTAssertNil(GitParsers.person("Nobody <n@x>"), "no time")
+        XCTAssertNil(GitParsers.person("Nobody <n@x> 5 0100"), "no sign on the offset")
+
+        var commit = GitCommit(hash: a, parents: [], subject: "", body: "", author: "Robin Example", email: "robin@example.com",
+                               date: Date(timeIntervalSince1970: 1792349447), refs: [])
+        XCTAssertNil(commit.distinctCommitter, "not read yet")
+        commit.committer = headers?.author
+        XCTAssertNil(commit.distinctCommitter, "the author committed it then")
+        commit.committer?.date = Date(timeIntervalSince1970: 1792363575)
+        XCTAssertEqual(commit.distinctCommitter?.name, "Robin Example", "committed later: rebased or amended")
+        commit.committer = headers?.committer
+        XCTAssertEqual(commit.distinctCommitter?.name, "GitHub")
+    }
+
+    #if canImport(AppKit)
     /// `verify-commit --raw`: gpg's status lines (as this Mac's gpg 2.5 printed them) and ssh-keygen's words.
     func testSignatureChecksReadGpgAndSshVerdicts() {
         let good = """
-        [GNUPG:] NEWSIG paul@paulmillr.com
-        [GNUPG:] KEY_CONSIDERED 78A89CD10959782E23FF8447697079DA6878B89B 0
-        [GNUPG:] GOODSIG 697079DA6878B89B Paul Miller <paul@paulmillr.com>
-        [GNUPG:] VALIDSIG 78A89CD10959782E23FF8447697079DA6878B89B 2026-10-18 1792363575 0 4 0 22 10 00 78A89CD10959782E23FF8447697079DA6878B89B
-        [GNUPG:] TRUST_ULTIMATE 0 pgp paul@paulmillr.com
+        [GNUPG:] NEWSIG sam@example.com
+        [GNUPG:] KEY_CONSIDERED 0123456789ABCDEF0123456789ABCDEF89ABCDEF 0
+        [GNUPG:] GOODSIG 0123456789ABCDEF Sam Example <sam@example.com>
+        [GNUPG:] VALIDSIG 0123456789ABCDEF0123456789ABCDEF89ABCDEF 2026-10-18 1792363575 0 4 0 22 10 00 0123456789ABCDEF0123456789ABCDEF89ABCDEF
+        [GNUPG:] TRUST_ULTIMATE 0 pgp sam@example.com
         """
         let check = GitParsers.signatureCheck(good, status: 0)
         XCTAssertEqual(check, GitSignatureCheck(verdict: .good(certified: true), kind: .gpg,
-                                                signer: "Paul Miller <paul@paulmillr.com>",
-                                                key: "78A89CD10959782E23FF8447697079DA6878B89B"))
-        XCTAssertEqual(GitSignatureText.line(check, kind: .gpg),
-                       "Good GPG signature · Paul Miller <paul@paulmillr.com> · 78A89CD10959782E23FF8447697079DA6878B89B")
+                                                signer: "Sam Example <sam@example.com>",
+                                                key: "0123456789ABCDEF0123456789ABCDEF89ABCDEF"))
+        XCTAssertEqual(GitSignatureText.short(check), "Signed")
+        XCTAssertEqual(GitSignatureText.detail(check, kind: .gpg),
+                       "Sam Example <sam@example.com> · GPG key ID: 0123456789ABCDEF0123456789ABCDEF89ABCDEF")
+        XCTAssertEqual(GitSignatureText.detail(nil, kind: .gpg), "Checking the GPG signature…")
+        XCTAssertEqual(GitSignatureText.short(nil), "Signed")
+        var uncertified = check
+        uncertified.verdict = .good(certified: false)
+        XCTAssertEqual(GitSignatureText.detail(uncertified, kind: .gpg),
+                       "Good GPG signature, key not certified · Sam Example <sam@example.com> · GPG key ID: 0123456789ABCDEF0123456789ABCDEF89ABCDEF")
+        XCTAssertEqual(GitSignatureText.detail(GitSignatureCheck(verdict: .good(certified: true)), kind: .gpg), "Good GPG signature")
         XCTAssertEqual(GitParsers.signatureCheck(good.replacingOccurrences(of: "TRUST_ULTIMATE", with: "TRUST_UNDEFINED"),
                                                  status: 0).verdict, .good(certified: false))
-        XCTAssertEqual(GitParsers.signatureCheck("[GNUPG:] NEWSIG\n[GNUPG:] BADSIG 697079DA6878B89B Paul <p@x>", status: 1).verdict, .bad)
-        XCTAssertEqual(GitParsers.signatureCheck("[GNUPG:] ERRSIG 697079DA6878B89B 22 10 00 1 9 -\n[GNUPG:] NO_PUBKEY 697079DA6878B89B",
+        XCTAssertEqual(GitParsers.signatureCheck("[GNUPG:] NEWSIG\n[GNUPG:] BADSIG 0123456789ABCDEF Sam <s@x>", status: 1).verdict, .bad)
+        XCTAssertEqual(GitParsers.signatureCheck("[GNUPG:] ERRSIG 0123456789ABCDEF 22 10 00 1 9 -\n[GNUPG:] NO_PUBKEY 0123456789ABCDEF",
                                                  status: 1),
-                       GitSignatureCheck(verdict: .unknownKey, kind: .gpg, key: "697079DA6878B89B"))
-        XCTAssertEqual(GitParsers.signatureCheck("[GNUPG:] EXPKEYSIG 6978 Paul <p@x>", status: 1).verdict, .expiredKey)
-        XCTAssertEqual(GitParsers.signatureCheck("[GNUPG:] REVKEYSIG 6978 Paul <p@x>", status: 1).verdict, .revokedKey)
+                       GitSignatureCheck(verdict: .unknownKey, kind: .gpg, key: "0123456789ABCDEF"))
+        XCTAssertEqual(GitParsers.signatureCheck("[GNUPG:] EXPKEYSIG 6978 Sam <s@x>", status: 1).verdict, .expiredKey)
+        XCTAssertEqual(GitParsers.signatureCheck("[GNUPG:] REVKEYSIG 6978 Sam <s@x>", status: 1).verdict, .revokedKey)
 
-        let ssh = GitParsers.signatureCheck("Good \"git\" signature for paul@x.com with ED25519 key SHA256:abcDEF", status: 0)
-        XCTAssertEqual(ssh, GitSignatureCheck(verdict: .good(certified: true), kind: .ssh, signer: "paul@x.com", key: "SHA256:abcDEF"))
+        let ssh = GitParsers.signatureCheck("Good \"git\" signature for sam@x.com with ED25519 key SHA256:abcDEF", status: 0)
+        XCTAssertEqual(ssh, GitSignatureCheck(verdict: .good(certified: true), kind: .ssh, signer: "sam@x.com", key: "SHA256:abcDEF"))
         XCTAssertEqual(GitParsers.signatureCheck("No principal matched.", status: 1).verdict, .unknownKey)
         XCTAssertEqual(GitParsers.signatureCheck("", status: 1).verdict, .unsigned)
         let unchecked = GitParsers.signatureCheck("error: cannot run /nonexistent: No such file or directory", status: 1)
         XCTAssertEqual(unchecked.verdict, .unchecked("cannot run /nonexistent: No such file or directory"))
-        XCTAssertEqual(GitSignatureText.line(unchecked, kind: .gpg),
+        XCTAssertEqual(GitSignatureText.short(unchecked), "Unverified")
+        XCTAssertEqual(GitSignatureText.detail(unchecked, kind: .gpg),
                        "Signed with GPG · couldn’t check: cannot run /nonexistent: No such file or directory")
+        XCTAssertEqual(GitSignatureText.detail(ssh, kind: .gpg), "sam@x.com · SSH key: SHA256:abcDEF", "the check's own kind")
+        XCTAssertEqual(GitSignatureText.short(GitSignatureCheck(verdict: .bad)), "Bad signature")
     }
+    #endif
 
     /// A commit's file for Source: the new side of its one-hunk patch, without the removed lines or git's markers.
     func testNewSideReadsTheWholeFileFromAOneHunkPatch() {
@@ -365,19 +417,5 @@ final class GitParsersTests: XCTestCase {
                                           GitChange(path: "b", kind: .modified, area: .staged), GitChange(path: "b", kind: .deleted, area: .unstaged)])
         XCTAssertEqual(GitMarks(both).mark("a", directory: false), "A")
         XCTAssertEqual(GitMarks(both).mark("b", directory: false), "D")
-    }
-
-    func testMarksApplyToAListingAndClear() {
-        let marks = GitMarks(GitParsers.porcelain(Recorded.status))
-        func entry(_ name: String, _ kind: FileEntryKind = .file, mark: String? = nil) -> FileEntry {
-            FileEntry(name: name, kind: kind, size: 0, modified: nil, targetKind: nil, mark: mark)
-        }
-        let top = FileListing(path: "/r", entries: [entry(".git", .directory), entry("node_modules", .directory), entry("notes.md"),
-                                                    entry("src", .directory), entry("tests", .directory)], truncated: false)
-        XCTAssertEqual(GitMarks.apply(marks, folder: "", to: top).entries.map(\.mark), [nil, "!", "U", nil, "U"])
-        let routes = FileListing(path: "/r/src/routes", entries: [entry("billing.ts"), entry("health.ts", mark: "M")], truncated: false)
-        XCTAssertEqual(GitMarks.apply(marks, folder: "src/routes", to: routes).entries.map(\.mark), ["M", nil],
-                       "A mark the status no longer gives goes")
-        XCTAssertEqual(GitMarks.apply(nil, folder: nil, to: routes).entries.map(\.mark), [nil, nil])
     }
 }

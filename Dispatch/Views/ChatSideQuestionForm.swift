@@ -96,7 +96,7 @@ struct ChatSideQuestionForm: View {
                     .foregroundStyle(chosen ? theme.accent : theme.muted)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(option.label).foregroundStyle(theme.ink)
-                    Text(option.description).foregroundStyle(theme.muted)
+                    Text(option.description).font(theme.typography.codeDetail).foregroundStyle(theme.muted)
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }.padding(8).contentShape(Rectangle()).chatPanel()
         }.buttonStyle(.plain).accessibilityAddTraits(chosen ? .isSelected : [])

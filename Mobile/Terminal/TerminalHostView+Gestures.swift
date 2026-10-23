@@ -5,18 +5,48 @@ import UIKit
 /// (`TerminalScrollModel`); a tap focuses the terminal, clears a selection, or clicks for programs that read the
 /// mouse; a long press selects the word under the finger, with handles to extend it and an edit menu with Copy and
 /// Paste; a pinch changes the font size, which resizes the grid through the feed.
-extension TerminalHostView: @MainActor UIEditMenuInteractionDelegate {
+///
+/// A pointer (iPad trackpad or mouse) works as on the Mac: a click, double click or drag selects through the
+/// surface's own mouse handling (or reaches a program that reads the mouse), a secondary click selects the word under
+/// it as Ghostty's context-menu click does and opens the edit menu there, hovering moves the surface's mouse (links,
+/// programs tracking motion) under an I-beam, a trackpad's two-finger scroll is a finger's (with momentum) and a
+/// wheel's notches scroll without momentum.
+extension TerminalHostView: @MainActor UIEditMenuInteractionDelegate, @MainActor UIPointerInteractionDelegate {
+    /// Fingers and the Pencil; a pointer has recognizers of its own.
+    static let touchTypes = [UITouch.TouchType.direct, .pencil].map { NSNumber(value: $0.rawValue) }
+    static let pointerTypes = [NSNumber(value: UITouch.TouchType.indirectPointer.rawValue)]
+
     func installGestures() {
         let pan = UIPanGestureRecognizer(target: self, action: #selector(panned(_:)))
         pan.maximumNumberOfTouches = 1
+        pan.allowedTouchTypes = Self.touchTypes
+        pan.allowedScrollTypesMask = .continuous
         addGestureRecognizer(pan)
+        let wheel = UIPanGestureRecognizer(target: self, action: #selector(wheeled(_:)))
+        wheel.allowedTouchTypes = []
+        wheel.allowedScrollTypesMask = .discrete
+        addGestureRecognizer(wheel)
         let pinch = UIPinchGestureRecognizer(target: self, action: #selector(pinched(_:)))
         addGestureRecognizer(pinch)
         let press = UILongPressGestureRecognizer(target: self, action: #selector(longPressed(_:)))
+        press.allowedTouchTypes = Self.touchTypes
         addGestureRecognizer(press)
         let tap = UITapGestureRecognizer(target: self, action: #selector(tapped(_:)))
+        tap.allowedTouchTypes = Self.touchTypes
         tap.require(toFail: press)
         addGestureRecognizer(tap)
+        let click = UILongPressGestureRecognizer(target: self, action: #selector(clicked(_:)))
+        click.minimumPressDuration = 0
+        click.allowableMovement = .greatestFiniteMagnitude
+        click.allowedTouchTypes = Self.pointerTypes
+        addGestureRecognizer(click)
+        let secondary = UITapGestureRecognizer(target: self, action: #selector(secondaryClicked(_:)))
+        secondary.allowedTouchTypes = Self.pointerTypes
+        secondary.buttonMaskRequired = .secondary
+        addGestureRecognizer(secondary)
+        addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(hovered(_:))))
+        addInteraction(UIPointerInteraction(delegate: self))
+        pointerRecognizers = (pan: pan, wheel: wheel, click: click, secondary: secondary)
         let menu = UIEditMenuInteraction(delegate: self)
         addInteraction(menu)
         editMenu = menu
@@ -27,8 +57,10 @@ extension TerminalHostView: @MainActor UIEditMenuInteractionDelegate {
         }
     }
 
-    /// The scroll pan starts only for mostly vertical movement.
+    /// The scroll pan starts only for mostly vertical movement; the pointer's press only for the primary button
+    /// (the secondary one is the edit menu's tap).
     override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        if gestureRecognizer === pointerRecognizers?.click { return gestureRecognizer.buttonMask == .primary }
         if let pan = gestureRecognizer as? UIPanGestureRecognizer, pan.view === self {
             let v = pan.velocity(in: self)
             return abs(v.y) >= abs(v.x)
@@ -108,6 +140,96 @@ extension TerminalHostView: @MainActor UIEditMenuInteractionDelegate {
         }
     }
 
+    /// A mouse wheel's notches: lines, no momentum.
+    @objc private func wheeled(_ pan: UIPanGestureRecognizer) {
+        switch pan.state {
+        case .began:
+            stopMomentum()
+            scroll.endGesture()
+        case .changed:
+            let dy = pan.translation(in: self).y
+            pan.setTranslation(.zero, in: self)
+            scrollBy(points: dy, at: pan.location(in: self))
+        default:
+            scroll.endGesture()
+        }
+    }
+
+    /// Keyboard modifiers held during a pointer gesture, as the surface's.
+    static func mods(_ flags: UIKeyModifierFlags) -> Mods {
+        var mods: Mods = []
+        if flags.contains(.shift) { mods.insert(.shift) }
+        if flags.contains(.control) { mods.insert(.ctrl) }
+        if flags.contains(.alternate) { mods.insert(.alt) }
+        if flags.contains(.command) { mods.insert(.super) }
+        return mods
+    }
+
+    /// The primary button: pressed, dragged, released, as the Mac's mouseDown/Dragged/Up. The surface counts double
+    /// and triple clicks (word, line) and drags the selection, or reports the clicks to a program that asked.
+    @objc private func clicked(_ press: UILongPressGestureRecognizer) {
+        pointerPress(press.state, at: press.location(in: self), mods: Self.mods(press.modifierFlags))
+    }
+
+    func pointerPress(_ state: UIGestureRecognizer.State, at point: CGPoint, mods: Mods) {
+        switch state {
+        case .began:
+            stopMomentum()
+            editMenu?.dismissMenu()
+            pointerSelection = true
+            if !isFirstResponder { _ = becomeFirstResponder() }
+            session.locked {
+                session.surface.mousePos(x: point.x, y: point.y, mods: mods)
+                _ = session.surface.mouseButton(.press, .left, mods: mods)
+            }
+        case .changed:
+            session.locked { session.surface.mousePos(x: point.x, y: point.y, mods: mods) }
+        default:
+            session.locked {
+                session.surface.mousePos(x: point.x, y: point.y, mods: mods)
+                _ = session.surface.mouseButton(.release, .left, mods: mods)
+            }
+        }
+        session.pump()
+        updateSelectionHandles()
+    }
+
+    /// The secondary button: the surface selects the word under it (unless inside the selection) or reports the click
+    /// to a program that reads the mouse; otherwise the edit menu opens at the pointer.
+    @objc private func secondaryClicked(_ tap: UITapGestureRecognizer) {
+        secondaryClick(at: tap.location(in: self), mods: Self.mods(tap.modifierFlags))
+    }
+
+    func secondaryClick(at point: CGPoint, mods: Mods) {
+        stopMomentum()
+        pointerSelection = true
+        if !isFirstResponder { _ = becomeFirstResponder() }
+        let reported = session.locked {
+            session.surface.mousePos(x: point.x, y: point.y, mods: mods)
+            let used = session.surface.mouseButton(.press, .right, mods: mods)
+            _ = session.surface.mouseButton(.release, .right, mods: mods)
+            return used
+        }
+        session.pump()
+        updateSelectionHandles()
+        guard !reported else { return }
+        editMenu?.presentEditMenu(with: UIEditMenuConfiguration(identifier: Self.pointerMenu, sourcePoint: point))
+    }
+
+    static let pointerMenu = "pointer" as NSString
+
+    /// The pointer moved over the terminal (links, programs tracking motion); it left: off the grid.
+    @objc private func hovered(_ hover: UIHoverGestureRecognizer) {
+        let point = hover.state == .ended || hover.state == .cancelled ? CGPoint(x: -1, y: -1) : hover.location(in: self)
+        session.locked { session.surface.mousePos(x: point.x, y: point.y, mods: Self.mods(hover.modifierFlags)) }
+        session.pump()
+    }
+
+    /// An I-beam a cell tall over the text, as the Mac's text cursor.
+    func pointerInteraction(_ interaction: UIPointerInteraction, styleFor region: UIPointerRegion) -> UIPointerStyle? {
+        UIPointerStyle(shape: .verticalBeam(length: max(8, cellSize.height)), constrainedAxes: [])
+    }
+
     @objc private func pinched(_ pinch: UIPinchGestureRecognizer) {
         switch pinch.state {
         case .began:
@@ -149,6 +271,7 @@ extension TerminalHostView: @MainActor UIEditMenuInteractionDelegate {
         guard press.state == .began else { return }
         stopMomentum()
         let cell = cell(at: press.location(in: self))
+        pointerSelection = false
         guard session.locked({ session.surface.touchSelectWord(cell) }) else { return }
         session.pump()
         UISelectionFeedbackGenerator().selectionChanged()
@@ -176,10 +299,11 @@ extension TerminalHostView: @MainActor UIEditMenuInteractionDelegate {
         }
     }
 
-    /// The handles follow the selection's ends (hidden for an end off the viewport, or no selection).
+    /// The handles follow the selection's ends (hidden for an end off the viewport, or no selection, or a selection
+    /// a pointer made: it changes it with the pointer, as in iPadOS's text views).
     func updateSelectionHandles() {
         let ends = session.locked { session.surface.touchSelection }
-        guard let ends else {
+        guard let ends, !pointerSelection else {
             startHandle.isHidden = true
             endHandle.isHidden = true
             return
@@ -197,7 +321,16 @@ extension TerminalHostView: @MainActor UIEditMenuInteractionDelegate {
         endHandle.isHidden = ends.end == nil
     }
 
-    private func showEditMenu() {
+    /// Select all from the key bar's menu: the whole screen and history selected with handles, and the edit menu
+    /// (Copy) over it, as after a long press.
+    func selectAllWithMenu() {
+        pointerSelection = false
+        selectAll(nil)
+        updateSelectionHandles()
+        showEditMenu()
+    }
+
+    func showEditMenu() {
         guard let ends = session.locked({ session.surface.touchSelection }), let start = ends.start ?? ends.end else { return }
         let r = rect(of: start)
         editMenu?.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: CGPoint(x: r.midX, y: r.minY)))
@@ -205,6 +338,7 @@ extension TerminalHostView: @MainActor UIEditMenuInteractionDelegate {
 
     func editMenuInteraction(_ interaction: UIEditMenuInteraction, menuFor configuration: UIEditMenuConfiguration,
                              suggestedActions: [UIMenuElement]) -> UIMenu? {
+        if configuration.identifier as? NSString == Self.pointerMenu { return pointerMenu() }
         var actions: [UIMenuElement] = [UIAction(title: "Copy") { [weak self] _ in self?.copy(nil) }]
         if UIPasteboard.general.hasStrings {
             actions.append(UIAction(title: "Paste") { [weak self] _ in
@@ -216,7 +350,27 @@ extension TerminalHostView: @MainActor UIEditMenuInteractionDelegate {
         return UIMenu(children: actions)
     }
 
+    /// The secondary click's menu: Copy with a selection, Paste with text, Select All (the Mac's Edit menu).
+    func pointerMenu() -> UIMenu {
+        var actions: [UIMenuElement] = []
+        if session.locked({ session.surface.hasSelection }) {
+            actions.append(UIAction(title: "Copy", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in self?.copy(nil) })
+        }
+        if UIPasteboard.general.hasStrings {
+            actions.append(UIAction(title: "Paste", image: UIImage(systemName: "doc.on.clipboard")) { [weak self] _ in
+                guard let self else { return }
+                self.session.locked { self.session.surface.touchClearSelection() }
+                self.paste(nil)
+            })
+        }
+        actions.append(UIAction(title: "Select All", image: UIImage(systemName: "selection.pin.in.out")) { [weak self] _ in self?.selectAll(nil) })
+        return UIMenu(children: actions)
+    }
+
     func editMenuInteraction(_ interaction: UIEditMenuInteraction, targetRectFor configuration: UIEditMenuConfiguration) -> CGRect {
+        if configuration.identifier as? NSString == Self.pointerMenu {
+            return CGRect(origin: configuration.sourcePoint, size: .zero)
+        }
         guard let ends = session.locked({ session.surface.touchSelection }) else { return .zero }
         let a = ends.start.map { rect(of: $0) }, b = ends.end.map { rect(of: $0) }
         switch (a, b) {
@@ -238,7 +392,8 @@ final class TerminalSelectionHandle: UIView {
     init(end: Bool) {
         self.end = end
         super.init(frame: CGRect(x: 0, y: 0, width: Self.touch, height: Self.touch))
-        let tint = UIColor(named: "AccentColor") ?? .systemPink
+        // The app's tint, the theme's when one is chosen (resolved by the window's trait as it draws).
+        let tint = UIColor.themed("AccentColor", \.accent)
         stem.backgroundColor = tint
         knob.backgroundColor = tint
         knob.layer.cornerRadius = 5

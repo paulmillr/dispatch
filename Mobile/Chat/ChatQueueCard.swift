@@ -13,6 +13,7 @@ struct ChatQueueCard: View {
     @State private var swiped: String?
     @FocusState private var focused: Bool
     @Environment(\.chatColumnWidth) private var column
+    @Environment(\.chatMeasure) private var measure
     @Environment(\.dynamicTypeSize) private var typeSize
     private static let rowHeight: CGFloat = 52
 
@@ -31,7 +32,7 @@ struct ChatQueueCard: View {
                 .background(Color.groupedRow, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.dispatchPink.opacity(0.35), lineWidth: 0.5))
                 .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .frame(width: column * 0.92)
+                .frame(width: ChatMeasure.queueCard(column: column, measure: measure))
                 .frame(maxWidth: .infinity, alignment: .trailing)
             } else {
                 Button { expanded = true } label: {
@@ -109,8 +110,12 @@ struct ChatQueueCard: View {
                             .tint(Color.dispatchPink)
                             .focused($focused)
                             .onSubmit(commit)
-                    } else {
+                    } else if !row.text.isEmpty {
                         Text(row.text).font(.subheadline).lineSpacing(1).lineLimit(typeSize > .large ? 6 : 2)
+                    }
+                    if !row.attachments.isEmpty, !isEditing {
+                        ChatQueuedAttachments(attachments: row.attachments, host: session.key.host,
+                                              read: { [session] in try await session.attachmentBytes($0) })
                     }
                     if let status = row.status {
                         Text(status).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -140,7 +145,7 @@ struct ChatQueueCard: View {
             .contentShape(Rectangle())
             .offset(x: swiped == row.id ? -84 : 0)
             .onTapGesture { edit(row, held: held) }
-            .onLongPressGesture { if !held { session.sendQueuedNow(row) } }
+            .onLongPressGesture { if !held, session.canSendNow(row) { session.sendQueuedNow(row) } }
             .simultaneousGesture(DragGesture(minimumDistance: 20).onEnded { value in
                 if value.translation.width < -40, abs(value.translation.height) < 30 { swiped = row.id }
                 else if value.translation.width > 20 { swiped = nil }
@@ -149,11 +154,13 @@ struct ChatQueueCard: View {
                 if row.status != nil, case .device = row.source {
                     Button("Send", systemImage: "paperplane") { session.resendQueued(row) }
                 }
-                if !held { Button("Send now", systemImage: "arrow.up.circle") { session.sendQueuedNow(row) } }
+                if !held, session.canSendNow(row) {
+                    Button("Send now", systemImage: "arrow.up.circle") { session.sendQueuedNow(row) }
+                }
                 Button("Delete", systemImage: "trash", role: .destructive) { session.removeQueued(row) }
             }
             .modifier(QueueRowAccessibility(row: row, editing: isEditing, edit: { edit(row, held: held) },
-                                            sendNow: held ? nil : { session.sendQueuedNow(row) },
+                                            sendNow: held || !session.canSendNow(row) ? nil : { session.sendQueuedNow(row) },
                                             moveUp: held || index == 0 ? nil : { session.moveQueued(from: index, to: index - 1) },
                                             moveDown: held || index == count - 1 ? nil : { session.moveQueued(from: index, to: index + 1) },
                                             delete: { session.removeQueued(row) }))
@@ -209,9 +216,30 @@ private struct QueueRowAccessibility: ViewModifier {
 }
 
 extension ChatQueueCard {
-    /// "Run the migration, paused after Stop": the message, then its status.
+    /// "Run the migration, paused after Stop": the message, its attachments, then its status.
     static func accessibilityLabel(_ row: MobileChatSession.QueueRow) -> String {
-        [row.text, row.status].compactMap { $0 }.joined(separator: ", ")
+        [row.text.isEmpty ? nil : row.text, row.attachments.isEmpty ? nil : ChatAttachmentSummary.text(row.attachments),
+         row.status].compactMap { $0 }.joined(separator: ", ")
+    }
+}
+
+/// A queue row's attachments: small thumbnails, then how many files.
+private struct ChatQueuedAttachments: View {
+    let attachments: [ChatAttachment]
+    var host: UUID?
+    var read: (@MainActor (String) async throws -> Data?)?
+
+    var body: some View {
+        let images = attachments.filter { $0.kind == .image }
+        let files = attachments.count - images.count
+        HStack(spacing: 4) {
+            ForEach(images.prefix(6)) { ChatAttachmentTile(attachment: $0, host: host, read: read, side: 28, corner: 6) }
+            if files > 0 {
+                Label(files == 1 ? "1 file" : "\(files) files", systemImage: "doc").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(.top, 2)
+        .accessibilityHidden(true)
     }
 }
 
@@ -223,7 +251,8 @@ struct ChatQueuedBubbles: View {
         let rows = session.queueRows
         ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
             VStack(spacing: 5) {
-                ChatBubble(side: .user, faded: true) { Text(row.text) }
+                ChatUserMessage(text: row.text, attachments: row.attachments, host: session.key.host,
+                                read: { [session] in try await session.attachmentBytes($0) }, faded: true)
                     .contextMenu {
                         if row.status != nil { Button("Send", systemImage: "paperplane") { session.resendQueued(row) } }
                         if case .device = row.source { Button("Edit", systemImage: "pencil") { session.editInComposer(row) } }

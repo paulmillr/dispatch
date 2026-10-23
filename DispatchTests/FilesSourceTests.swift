@@ -113,7 +113,6 @@ final class FilesSourceTests: XCTestCase {
         XCTAssertEqual(entries["link"]?.kind, .symlink)
         XCTAssertEqual(entries["link"]?.targetKind, .file)
         XCTAssertNil(entries["dangling"]?.targetKind)
-        XCTAssertNil(entries["a.txt"]?.mark)
         let hidden = try await source.list(root.path, hidden: true)
         XCTAssertEqual(hidden.entries.map(\.name), [".hidden", "a.txt", "dangling", "dir", "link"])
 

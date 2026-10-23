@@ -31,6 +31,10 @@ pub(crate) struct Terminal {
     dimensions: Option<([String; 2], [u32; 2])>,
     /// The last restore failed: no restore is coming until the app attaches again.
     failed: bool,
+    /// A client attached this terminal or published its screen: its screens are the only ones read.
+    pub(crate) client: bool,
+    /// Screens read from tmux while no client renders the terminal (Tmux::host_screens).
+    pub(crate) host: crate::host::Host,
 }
 impl Default for Terminal {
     fn default() -> Self {
@@ -48,6 +52,8 @@ impl Default for Terminal {
             unsettled: 0,
             dimensions: None,
             failed: false,
+            client: false,
+            host: Default::default(),
         }
     }
 }
@@ -277,9 +283,13 @@ impl Tmux {
         done: Done<()>,
     ) {
         let preserve = !takeover && self.terminals.get(&node).is_some_and(|s| s.history);
+        // A client renders this terminal from now on and publishes its screens.
+        if self.location(node).is_ok() {
+            self.terminals.entry(node).or_default().client = true;
+        }
         self.capture(io, node, Some(size), preserve, done);
     }
-    fn checked(
+    pub(crate) fn checked(
         &mut self,
         io: &mut dyn Io,
         loc: Location,
@@ -520,6 +530,7 @@ impl Tmux {
             } else {
                 state.readers.push(done);
             }
+            mux.read_screen(io, node);
         });
     }
     pub(crate) fn output(&mut self, io: &mut dyn Io, loc: Location, bytes: &[u8]) {
@@ -529,6 +540,7 @@ impl Tmux {
         // A live process can change conversations without changing pane topology. Output
         // rescans are paced (discover): agents redraw continuously.
         self.discovery.output = true;
+        self.output_screen(io, node);
         if let Some(state) = self.terminals.get_mut(&node).filter(|s| s.ready) {
             match state.filter.feed(bytes) {
                 Ok(b) if !b.is_empty() => self.updates.push(Update::Output {

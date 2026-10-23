@@ -12,6 +12,10 @@ struct ChatToolCard: View {
     var layouts: ChatToolLayoutCache?
     var layoutWidth: CGFloat = 0
     var live = false
+    /// Its time on an opened group's timeline, shown before its status.
+    var elapsed: TimeInterval? = nil
+    /// An opened group's steps share one title width, so what follows each title starts at the same place.
+    var titleColumn: CGFloat? = nil
     @State private var formatted: (id: UUID, value: ToolPresentation)?
     @State private var rawExpanded = false
     @State private var singleFileState = CodeDocumentState()
@@ -140,8 +144,26 @@ struct ChatToolCard: View {
     private func header(_ tool: ToolPresentation?) -> some View {
             HStack(spacing: 9) {
                 Image(systemName: tool?.symbol ?? "wrench.and.screwdriver").foregroundStyle(theme.muted).frame(width: 14)
-                Text(ChatSearchHighlight.text(AttributedString((requested ? tool?.title : tool?.displayTitle) ?? "Tools"), query: query, theme: theme)).fontWeight(.semibold).fixedSize()
-                Text(ChatSearchHighlight.text(AttributedString(String((tool?.displaySummary(in: directory) ?? "").prefix(180))), query: query, theme: theme))
+                let title = TextRendering.visible(TextRendering.prefix(
+                    (requested ? tool?.title : tool?.displayTitle) ?? "Tools", scalars: 256).text)
+                let summary = TextRendering.visible(TextRendering.prefix(
+                    tool?.displaySummary(in: directory) ?? "", scalars: 180).text)
+                let titleText = Text(ChatSearchHighlight.text(AttributedString(title), query: query, theme: theme)).fontWeight(.semibold)
+                if let titleColumn {
+                    // A longer name fits its column with an ellipsis; one with nothing after it, or a running step (shown
+                    // alone), keeps all of it.
+                    if tool?.completed ?? item.completed, !summary.isEmpty {
+                        // The full name on hover only where it can be cut: a tooltip on every step costs a toggle a third.
+                        if title.count > 10 {
+                            titleText.lineLimit(1).truncationMode(.tail).frame(width: titleColumn, alignment: .leading).help(title)
+                        } else {
+                            titleText.lineLimit(1).frame(width: titleColumn, alignment: .leading)
+                        }
+                    } else {
+                        titleText.fixedSize().frame(minWidth: titleColumn, alignment: .leading)
+                    }
+                } else { titleText.fixedSize() }
+                Text(ChatSearchHighlight.text(AttributedString(summary), query: query, theme: theme))
                     .lineLimit(1).truncationMode(.middle).foregroundStyle(theme.muted)
                 Spacer(minLength: 0)
                 if let result = tool?.confirmedResult {
@@ -151,6 +173,10 @@ struct ChatToolCard: View {
                 if let tool, tool.deletions > 0 { Text("−\(tool.deletions)").foregroundStyle(theme.red).fixedSize() }
                 if let tool, tool.failed {
                     Text(tool.exitCode.map { $0 != 0 ? "exit \($0)" : "Failed" } ?? "Failed").foregroundStyle(theme.yellow).fixedSize()
+                }
+                if let elapsed {
+                    // A fixed label per step: no monospaced-digit font variant to build for every row.
+                    Text(ChatTranscript.elapsed(elapsed.rounded())).foregroundStyle(theme.muted.opacity(0.75)).fixedSize()
                 }
                 if !requested {
                     statusIcon(failed: tool?.failed == true, completed: tool?.completed ?? item.completed)

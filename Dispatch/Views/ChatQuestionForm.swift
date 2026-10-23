@@ -73,7 +73,7 @@ struct ChatQuestionForm: View {
                         Image(systemName: chosen ? "checkmark.circle.fill" : "circle").foregroundStyle(chosen ? theme.accent : theme.muted)
                         VStack(alignment: .leading, spacing: 3) {
                             Text(option.label).foregroundStyle(theme.ink)
-                            if !option.description.isEmpty { Text(option.description).foregroundStyle(theme.muted) }
+                            if !option.description.isEmpty { Text(option.description).font(theme.typography.codeDetail).foregroundStyle(theme.muted) }
                         }.frame(maxWidth: .infinity, alignment: .leading)
                     }.padding(9).contentShape(Rectangle())
                         .background(chosen ? theme.accent.opacity(0.08) : .clear, in: RoundedRectangle(cornerRadius: 5))
@@ -82,7 +82,7 @@ struct ChatQuestionForm: View {
                     .accessibilityAddTraits(chosen ? .isSelected : [])
                     .accessibilityIdentifier("claude-question-option-\(index)-\(option.label)")
                 if let preview = option.preview, chosen {
-                    ScrollView { Text(preview).foregroundStyle(theme.muted).textSelection(.enabled)
+                    ScrollView { Text(preview).font(theme.typography.codeDetail).foregroundStyle(theme.muted).textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading) }.frame(maxHeight: 140)
                 }
             }

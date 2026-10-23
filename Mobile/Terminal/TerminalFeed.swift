@@ -56,12 +56,17 @@ enum TerminalFeedEvent: Equatable, Sendable {
 }
 
 /// Terminal bytes in, input, size and scroll steps out, for one terminal node (docs/ios.md, Areas and seams).
-/// `HelperTerminalFeed` speaks the helper protocol; `ScriptedTerminalFeed` plays fixtures for tests and previews.
+/// `HelperTerminalFeed` speaks the helper protocol; `PlainShellFeed` is a PTY shell on a plain SSH host's own
+/// connection; `ScriptedTerminalFeed` plays fixtures for tests and previews.
 ///
 /// Lifecycle: `attach(_:)` starts an attachment at a size and returns its events; `detach()` ends it (the stream
 /// finishes). Detaching only stops observing: the server-owned session keeps running. A later `attach` starts a new
 /// attachment whose output repaints the screen. Input, resizes and scroll steps are delivered in the order they were
 /// made, and only while attached.
+///
+/// The one semantic difference: detaching a plain shell (`PlainShellFeed`) ends it. Nothing on the host keeps it, so
+/// its channel is closed and a later `attach` is refused (`.failed`); whoever shows a plain shell keeps it attached
+/// for as long as the shell should live.
 protocol TerminalFeed: AnyObject, Sendable {
     func attach(_ size: TerminalFeedSize) -> AsyncStream<TerminalFeedEvent>
     func detach()
@@ -71,4 +76,19 @@ protocol TerminalFeed: AnyObject, Sendable {
     func scroll(_ request: TerminalScrollRequest) async -> TerminalScrollResult
     /// The screen the helper verifies chat input against (`terminals.publish`); only the latest matters.
     func publish(_ screen: TerminalScreen)
+
+    /// Which side keeps the history, when the feed knows it regardless of the multiplexer (`.unknown`: ask the
+    /// topology, or learn it from the first scroll answer).
+    var scrollback: TerminalScrollback { get }
+    /// Whether the emulator may write the phone's pasteboard for the program (OSC 52, kitty clipboard): only a feed
+    /// whose programs the user started directly (a plain shell). Reading the pasteboard is never allowed.
+    var clipboardWrite: Bool { get }
+    /// Detaching ends the program (a plain shell): nothing reattaches to repaint its screen.
+    var endsOnDetach: Bool { get }
+}
+
+extension TerminalFeed {
+    var scrollback: TerminalScrollback { .unknown }
+    var clipboardWrite: Bool { false }
+    var endsOnDetach: Bool { false }
 }

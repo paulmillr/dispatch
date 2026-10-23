@@ -10,11 +10,13 @@ pub mod ffi;
 mod keys;
 mod reply;
 mod session;
+mod shell;
 
-pub use error::Code;
+pub use error::{Code, Failure};
 pub use exec::{ExecEvents, Exit, exec};
 pub use keys::{KeyInfo, LoadedKey};
 pub use session::{AuthOutcome, BoxFuture, ConnectOptions, HostKey, Prompt, Session, SessionEvents, SignCallback};
+pub use shell::{Resizer, Shell, shell};
 
 use std::sync::OnceLock;
 use tokio::runtime::Runtime;
