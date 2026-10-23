@@ -76,7 +76,11 @@ def device(platform):
     fits = [(r, d) for r, d in devices if (want in (d['udid'], d['name']) if want else pattern.match(d['name']))]
     if not fits:
         sys.exit(f'no {platform} simulator available' + (f' matching {want}' if want else ''))
-    booted = [d for _, d in fits if d['state'] == 'Booted']
+    # Among booted ones, a plain device first: not a fold (the Duo opens to a 2853-pixel inner screen) and the shortest
+    # name wins ("iPhone 17" before "iPhone 17 Pro Max"), so the shots keep one size across runs.
+    booted = sorted((d for _, d in fits if d['state'] == 'Booted' and not want), key=lambda d: ('Duo' in d['name'], len(d['name']), d['name']))
+    if want:
+        booted = [d for _, d in fits if d['state'] == 'Booted']
     if booted:
         return booted[0]['udid']
     runtime, chosen = sorted(fits, key=lambda rd: rd[0])[-1]
