@@ -140,6 +140,8 @@ struct HybridReviewScreen: View {
 }
 
 struct HybridCommitsScreen: View {
+    var rows = MockLog.rows
+    var palette = GraphPalette.status
     var body: some View {
         HybridShell(mode: .commits) {
             HStack(spacing: 4) {
@@ -151,7 +153,7 @@ struct HybridCommitsScreen: View {
         } trailing: {
             BarButton(symbol: "magnifyingglass"); BarButton(symbol: "line.3.horizontal.decrease")
         } accessory: { EmptyView() } content: {
-            ScrollView { CommitGraphList().padding(.top, 4) }
+            ScrollView { CommitGraphList(rows: rows, palette: palette).padding(.top, 4) }
         }
     }
 }
