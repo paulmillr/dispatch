@@ -255,7 +255,11 @@ impl Approvals {
                 "SessionStart" | "SessionEnd" => std::mem::take(agents).len() > 0,
                 _ => false,
             };
-            let kinds: Vec<String> = agents.iter().map(|(_, kind)| kind.clone()).collect();
+            // Codex keeps no subagent files: id and type only, timed by the client.
+            let kinds: Vec<Agent> = agents
+                .iter()
+                .map(|(id, kind)| Agent { id: id.clone(), kind: kind.clone(), ..Agent::default() })
+                .collect();
             if kinds.is_empty() {
                 self.agents.remove(session);
             }

@@ -38,6 +38,7 @@ enum SettingsExport {
         if p.improveTextContrast { lines.append("minimum-contrast = 4.5") }
         lines.append("cursor-style = \(p.cursor.rawValue)")
         if !p.cursorBlink { lines.append("cursor-style-blink = false") }
+        if let height = p.lineSpacing.cellHeight { lines.append("adjust-cell-height = \(height)") }
         lines.append("macos-option-as-alt = \(p.optionAsAlt.ghostty)")
         switch p.scrollback {
         case .automatic: break

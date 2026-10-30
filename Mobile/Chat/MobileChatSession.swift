@@ -261,7 +261,7 @@ final class MobileChatSession: Identifiable {
         presence?.sending(key, busy)
     }
 
-    /// The terminal is attached and publishes its screen: chat input can be verified (ChatTerminalPresence).
+    /// The terminal is attached, so the helper can read its screen: chat input can be verified (ChatTerminalPresence).
     var terminalAttached: Bool {
         guard let presence else { return true }
         return terminal != nil && client != nil && presence.attached(key)
@@ -450,7 +450,7 @@ final class MobileChatSession: Identifiable {
             phase = .paused(error.localizedDescription)
         }
         if !wasVerified, phase == .verified, let client, let terminal, !retained {
-            presence?.retain(key, terminal: terminal, client: client)
+            presence?.retain(key, terminal: terminal, client: client, features: features)
             retained = true
         }
         if history.history_pending {
@@ -504,7 +504,7 @@ final class MobileChatSession: Identifiable {
 
     private func receive(state: HelperChat.State) {
         if let version = state.version { self.version = version }
-        subagents = state.agents ?? []
+        subagents = (state.agents ?? []).map(\.kind)
         busy = state.busy
         if state.busy { awaitingAck = false }
         starting = false

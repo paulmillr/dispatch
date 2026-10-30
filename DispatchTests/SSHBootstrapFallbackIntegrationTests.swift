@@ -24,18 +24,18 @@ final class SSHBootstrapFallbackIntegrationTests: XCTestCase {
         done
         if test "$auxiliary" = yes; then
           case \(HerdrLaunch.quote(stage)) in
-            probe) case "$command" in *DISPATCH_PLATFORM*) printf reached > \(HerdrLaunch.quote(reached.path)); printf 'DISPATCH_PLATFORM=Unknown:mips\\n'; exit 0;; esac ;;
+            probe) case "$command" in *DISPATCH_PLATFORM*) printf reached > \(HerdrLaunch.quote(reached.path)); printf 'DISPATCH_PLATFORM=Unknown:mips\\n' >&2; exit 3;; esac ;;
             upload)
               case "$command" in
                 *'cat >'*) printf reached > \(HerdrLaunch.quote(reached.path)); exit 1 ;;
-                *'safe_file dispatch-helper && test -x dispatch-helper'*) exit 1 ;;
+                *'exec ./dispatch-helper'*) printf 'DISPATCH_PLATFORM=%s:%s\\n' "$(uname -s)" "$(uname -m)" >&2; exit 3 ;;
               esac ;;
             greeting) case "$command" in *'dispatch-helper --remote --capabilities'*) printf reached > \(HerdrLaunch.quote(reached.path)); printf invalid-greeting; exit 0;; esac ;;
           esac
         fi
         exec /usr/bin/ssh "$@"
         """
-        // Force the real bootstrap's cache probe to miss even on a warm VM.
+        // Force the real bootstrap's launch to find no cached helper even on a warm VM (what its script says then).
         // Otherwise an already verified helper skips upload and this fixture
         // would exercise a successful connection instead of upload fallback.
         try System.write(Data(script.utf8), to: executable, permissions: 0o700)

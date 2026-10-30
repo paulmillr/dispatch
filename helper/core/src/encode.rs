@@ -239,6 +239,13 @@ records! {
         mode,
         agents
     };
+    Agent {
+        id,
+        kind,
+        name,
+        tokens,
+        started_ms
+    };
     Choice {
         id,
         label,

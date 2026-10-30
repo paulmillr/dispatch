@@ -29,13 +29,14 @@ def test(executable, state):
     extension = Path(__file__).resolve().parents[1] / 'Dispatch/Resources/pi-chat.js'
     navigation = Path(__file__).resolve().parent.parent / 'scripts/fixtures/pi-navigation.js'
     with FixtureServer(state, delay=0.015) as server:
-        configure(state, server.server_port)
+        home = state / 'pi-home'
+        configure(state, server.server_port, home)
         worker = threading.Thread(target=lambda: server.serve_forever(poll_interval=0.02), daemon=True)
         worker.start()
         pid, fd = pty.fork()
         if pid == 0:
             os.chdir(state / 'work')
-            os.execvpe(executable, command(executable, '--extension', str(extension), '--extension', str(navigation)), environment(state, server.server_port))
+            os.execvpe(executable, command(executable, '--extension', str(extension), '--extension', str(navigation)), environment(state, server.server_port, home))
         fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', 40, 120, 0, 0))
         output = bytearray()
 

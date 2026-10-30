@@ -10,7 +10,8 @@ enum TerminalCursorStyle: String, CaseIterable, Identifiable, Sendable {
 }
 
 /// A terminal font Settings offers (G2): the monospaced fonts the app bundles (the Mac's, in the app's `TermFonts`
-/// folder beside TermApple's JetBrains Mono) and the system's Menlo.
+/// folder beside TermApple's JetBrains Mono) and the system's Menlo. Source Code Pro by default, as the Mac's.
+/// Ioskeley Mono, the one Mac font left out, would add 0.9 MB to the bundle.
 struct TerminalFont: Identifiable, Equatable, Sendable {
     /// The name the list shows, which is also the font's family name.
     let name: String
@@ -24,19 +25,21 @@ struct TerminalFont: Identifiable, Equatable, Sendable {
     var id: String { name }
 
     static let jetBrainsMono = TerminalFont(name: "JetBrains Mono", family: nil, ligatures: true)
+    /// The default, as the Mac's (`Settings.fontFamily`).
+    static let sourceCodePro = TerminalFont(name: "Source Code Pro", family: "Source Code Pro")
 
     /// The list's order: the default first, the system's last.
     static let all: [TerminalFont] = [
+        sourceCodePro,
         jetBrainsMono,
-        TerminalFont(name: "Source Code Pro", family: "Source Code Pro"),
         TerminalFont(name: "Fira Code", family: "Fira Code", ligatures: true),
         TerminalFont(name: "0xProto", family: "0xProto", ligatures: true),
         TerminalFont(name: "Departure Mono", family: "Departure Mono"),
         TerminalFont(name: "Menlo", family: "Menlo", system: true),
     ]
 
-    /// A saved name; one no longer offered falls back to JetBrains Mono.
-    static func named(_ name: String?) -> TerminalFont { all.first { $0.name == name } ?? jetBrainsMono }
+    /// A saved name; one no longer offered falls back to Source Code Pro.
+    static func named(_ name: String?) -> TerminalFont { all.first { $0.name == name } ?? sourceCodePro }
 
     /// The sample line each row draws in its font: ambiguous glyphs, braces and a ligature candidate.
     static let sample = "$ cargo test --workspace 0O1lI {} <=>"
@@ -49,12 +52,13 @@ struct TerminalStyle: Equatable, Sendable {
     /// Posted when Settings saves one of them; the open terminals restyle (`TerminalPresence`).
     static let changed = Notification.Name("DispatchTerminalStyleChanged")
 
-    var font = TerminalFont.jetBrainsMono
+    var font = TerminalFont.sourceCodePro
     var scheme = TerminalConfiguration.defaultScheme
-    var improveTextContrast = false
+    var textContrast = TextContrast.lightThemes
     var boldIsBright = false
     var cursor = TerminalCursorStyle.block
     var cursorBlink = true
+    var lineSpacing = LineSpacing.normal
 
     init() {}
 
@@ -62,10 +66,13 @@ struct TerminalStyle: Equatable, Sendable {
         font = TerminalFont.named(defaults.string(forKey: MobileSettings.terminalFontKey))
         scheme = defaults.string(forKey: MobileSettings.terminalSchemeKey).flatMap { TerminalSchemes.url($0) == nil ? nil : $0 }
             ?? TerminalConfiguration.defaultScheme
-        improveTextContrast = defaults.bool(forKey: MobileSettings.terminalContrastKey)
+        // Replaces the `terminal.contrast` switch, saved only when changed: on stays on, off stays off.
+        textContrast = defaults.string(forKey: MobileSettings.textContrastKey).flatMap(TextContrast.init(rawValue:))
+            ?? (defaults.object(forKey: MobileSettings.terminalContrastKey) as? Bool).map { $0 ? .always : .never } ?? .lightThemes
         boldIsBright = defaults.bool(forKey: MobileSettings.boldIsBrightKey)
         cursor = defaults.string(forKey: MobileSettings.cursorKey).flatMap(TerminalCursorStyle.init(rawValue:)) ?? .block
         cursorBlink = defaults.object(forKey: MobileSettings.cursorBlinkKey) as? Bool ?? true
+        lineSpacing = defaults.string(forKey: MobileSettings.lineSpacingKey).flatMap(LineSpacing.init(rawValue:)) ?? .normal
     }
 
     /// `configuration` drawn with this style; its size and pasteboard access stay.
@@ -73,10 +80,11 @@ struct TerminalStyle: Equatable, Sendable {
         var next = configuration
         next.fontFamily = font.family
         next.theme = scheme
-        next.improveTextContrast = improveTextContrast
+        next.textContrast = textContrast
         next.boldIsBright = boldIsBright
         next.cursor = cursor
         next.cursorBlink = cursorBlink
+        next.lineSpacing = lineSpacing
         return next
     }
 }

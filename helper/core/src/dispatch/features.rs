@@ -29,11 +29,34 @@ pub(crate) const TERMINALS_ACTIVITY: &str = "terminals.activity";
 /// herdr's old index (before the last tab), which the Mac's recorded moves expect.
 pub(crate) const MEMBERSHIPS_APPEND: &str = "memberships.append";
 
+/// The client does not publish screens of tmux and herdr terminals: the helper reads them from the multiplexer
+/// (`Multiplexer::host_screens`) for the terminals it attaches, until some other client publishes one.
+pub(crate) const SCREENS_HOST: &str = "screens.host";
+/// The `terminals.follow` operation: hold a hidden terminal's output for one attach subscription, and repaint it for
+/// that subscription alone when it follows again (dispatch/following.rs).
+pub(crate) const TERMINALS_FOLLOW: &str = "terminals.follow";
+
+/// The helper keeps reading and answering this client's requests while its output is backed up
+/// (helper/client.rs BACKLOG); without it a full output queue stops reading the client, as
+/// recorded clients expect. A stdio.liveness client (the iPhone) and a terminals.window client get
+/// it too.
+pub(crate) const REQUESTS_BACKLOG: &str = "requests.backlog";
+/// At most `OUTPUT_WINDOW` bytes of terminal.output unacknowledged per client, acknowledged with
+/// the `terminals.ack` operation; past it output waits and the multiplexers are paused. Implies
+/// requests.backlog, or the acks that reopen the window would wait behind that pause.
+pub(crate) const TERMINALS_WINDOW: &str = "terminals.window";
+pub(crate) const TERMINALS_ACK: &str = "terminals.ack";
+
 /// The `attachments.put` and `attachments.read` operations, and `attachments` on chat.send and
 /// queue.add (dispatch/attachments.rs).
 pub(crate) const ATTACHMENTS: &str = "chat.attachments";
 pub(crate) const ATTACHMENTS_PUT: &str = "attachments.put";
 pub(crate) const ATTACHMENTS_READ: &str = "attachments.read";
+
+/// The `login.release` operation (dispatch/release.rs): the Mac's greeting probe releases the SSH login waiting for it.
+/// Accepted only by a `--remote --stdio` helper without the login wrapper (helper.rs), so no other helper's hello
+/// changes.
+pub(crate) const LOGIN_RELEASE: &str = "login.release";
 
 /// The features this helper offers.
 pub(crate) const KNOWN: &[&str] = &[
@@ -47,6 +70,11 @@ pub(crate) const KNOWN: &[&str] = &[
     TERMINALS_ACTIVITY,
     ATTACHMENTS,
     MEMBERSHIPS_APPEND,
+    SCREENS_HOST,
+    TERMINALS_FOLLOW,
+    REQUESTS_BACKLOG,
+    TERMINALS_WINDOW,
+    LOGIN_RELEASE,
 ];
 
 /// Choice ids only interaction.options clients see, appended after a producer's ordinary
@@ -82,7 +110,21 @@ pub(crate) const OPERATIONS: &[(&str, &str)] = &[
     (TERMINALS_ACTIVITY, TERMINALS_ACTIVITY),
     (ATTACHMENTS_PUT, ATTACHMENTS),
     (ATTACHMENTS_READ, ATTACHMENTS),
+    (TERMINALS_FOLLOW, TERMINALS_FOLLOW),
+    (TERMINALS_ACK, TERMINALS_WINDOW),
+    (LOGIN_RELEASE, LOGIN_RELEASE),
 ];
+
+/// The feature operations a hello reply adds to `ops`: those of the `accepted` features that the client's grant
+/// `allows`, in OPERATIONS order. The app sends only what `ops` lists (HelperConnection), so an operation missing here
+/// is never called.
+pub(crate) fn offered(accepted: &[String], allows: impl Fn(&str) -> bool) -> Vec<String> {
+    OPERATIONS
+        .iter()
+        .filter(|(op, feature)| accepted.iter().any(|f| f == feature) && allows(op))
+        .map(|(op, _)| op.to_string())
+        .collect()
+}
 
 /// The feature `method` is an operation of, if it is one of OPERATIONS.
 pub(crate) fn operation(method: &str) -> Option<&'static str> {
@@ -94,6 +136,11 @@ pub(crate) type Features = Rc<RefCell<BTreeMap<RawFd, BTreeSet<&'static str>>>>;
 
 pub(crate) fn enabled(features: &Features, fd: RawFd, feature: &str) -> bool {
     features.borrow().get(&fd).is_some_and(|set| set.contains(feature))
+}
+
+/// Whether client `fd` publishes the screens of the terminals it attaches (it does not name screens.host).
+pub(crate) fn publishes(features: &Features, fd: RawFd) -> bool {
+    !enabled(features, fd, SCREENS_HOST)
 }
 
 /// The features a `hello` names (None: it names none, the field is absent). Unknown names are
@@ -162,10 +209,60 @@ impl Request<'_> {
         if method == ATTACHMENTS_READ {
             return self.attachments_read(params);
         }
+        if method == TERMINALS_FOLLOW {
+            return self.terminals_follow(params);
+        }
+        if method == TERMINALS_ACK {
+            return self.terminals_ack(params);
+        }
+        if method == LOGIN_RELEASE {
+            return self.login_release(params);
+        }
         Err(Error {
             code: "unsupported",
             message: format!("Unknown operation {method}"),
         })
+    }
+}
+
+impl Request<'_> {
+    /// terminals.ack {terminal, bytes, subscription?}: the client handed `bytes` more
+    /// terminal.output payload bytes of its attach subscription of `terminal` (found as
+    /// terminals.follow finds it) to its renderer. Applied before the helper next admits output
+    /// (DispatchHelper::start); more than is outstanding counts as all of it. A subscription that
+    /// ended meanwhile (its own outstanding output went with it) makes it a no-op.
+    pub(crate) fn terminals_ack(&mut self, params: &Data<'_>) -> Result<(), Error> {
+        let known = params
+            .object()
+            .ok_or_else(|| invalid("params"))?
+            .all(|(key, _)| matches!(key, "terminal" | "bytes" | "subscription"));
+        if !known {
+            return Err(invalid("params"));
+        }
+        let bytes = params.get("bytes").and_then(Data::unsigned).ok_or_else(|| invalid("bytes"))?;
+        let (index, _) = self.mux(params)?;
+        let terminal = reference(index, local(number(params, "terminal")?));
+        // The client's attach subscriptions of `terminal`, as terminals.follow finds them.
+        let streams: Vec<u64> = self
+            .helper
+            .windows
+            .borrow()
+            .iter()
+            .filter(|((fd, _), (id, _))| *fd == self.fd && *id == terminal)
+            .filter_map(|((_, stream), _)| *stream)
+            .collect();
+        let subscription = match optional(params, "subscription") {
+            Some(stream) => streams.contains(&stream).then_some(stream),
+            None if streams.len() > 1 => return Err(invalid("subscription")),
+            None => streams.first().copied(),
+        };
+        // None: it ended (its outstanding output went with it), nothing to acknowledge.
+        if let Some(subscription) = subscription {
+            self.helper.acks.push((self.fd, subscription, bytes));
+        }
+        let done = self.done::<()>(None);
+        deferred(done)(self.io, Ok(()));
+        Ok(())
     }
 }
 
@@ -313,6 +410,32 @@ pub(crate) struct Liveness {
     pub last: std::time::Instant,
     pub limit: std::time::Duration,
     pub armed: bool,
+    /// Since when the helper has had read interest off on this client (its output backed up,
+    /// too many replies waiting): silence the helper did not listen to is not the client's, so
+    /// `last` moves on by that time when reading resumes, and no deadline runs meanwhile.
+    pub unread: Option<std::time::Instant>,
+}
+
+impl Liveness {
+    /// Follow whether the helper reads the client now (`Client::listening`); the clock is read
+    /// only when that changes.
+    pub(crate) fn listening(&mut self, listening: bool, now: impl FnOnce() -> std::time::Instant) {
+        match (listening, self.unread) {
+            (false, None) => self.unread = Some(now()),
+            (true, Some(since)) => {
+                self.last += now().saturating_duration_since(since);
+                self.unread = None;
+                // The deadline moved: arm again for the new one.
+                self.armed = false;
+            }
+            _ => {}
+        }
+    }
+
+    /// Whether the silence limit has passed at `now` (never while the helper is not reading).
+    pub(crate) fn expired(&self, now: std::time::Instant) -> bool {
+        self.unread.is_none() && now >= self.last + self.limit
+    }
 }
 
 #[cfg(test)]

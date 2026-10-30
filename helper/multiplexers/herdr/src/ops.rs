@@ -602,18 +602,25 @@ impl Multiplexer for Herdr {
         terminal: Id,
         size: Grid,
         takeover: bool,
+        publishes: bool,
         done: Done<()>,
     ) {
         if let Some(endpoint) = self.endpoint(terminal) {
-            endpoint.attach(io, terminal, size, takeover, done);
+            endpoint.attach(io, terminal, size, takeover, publishes, done);
             return;
         }
         if !native::size(size) {
             self.defer(io, done, Err(error("Invalid herdr terminal size.")));
             return;
         }
-        // The client renders and publishes this terminal from now on.
-        self.unobserve(io, terminal, None);
+        // A screens.host client renders this terminal without publishing: its screens come from herdr's observer
+        // (observe.rs). A client that publishes turns host reads off with its first publication (publish).
+        if !publishes {
+            self.hosting.insert(terminal);
+        }
+        if !self.hosted(terminal) {
+            self.unobserve(io, terminal, None);
+        }
         self.reveal(terminal);
         self.topology();
         if let Some(c) = self.controllers.get_mut(&terminal)
@@ -807,6 +814,10 @@ impl Multiplexer for Herdr {
                 Err(expired("This herdr terminal is no longer available.")),
             );
         } else {
+            // "The screen now": a frame waiting for the output to settle is current (observe.rs).
+            if !changed {
+                self.flush_screen(io, terminal);
+            }
             self.screens.read(io, terminal, changed, done);
             self.observe_screen(io, terminal);
         }
@@ -816,13 +827,34 @@ impl Multiplexer for Herdr {
             endpoint.publish(io, terminal, screen);
             return;
         }
-        // A client renders this terminal: its screens are the only ones read from now on.
-        self.clients.insert(terminal);
+        // A client renders this terminal: its screens are the only ones read while it keeps it attached.
+        self.published.insert(terminal);
         self.unobserve(io, terminal, None);
         self.screens.publish(io, terminal, screen);
     }
     fn host_screens(&mut self, enabled: bool) {
         self.set_host_screens(enabled);
+    }
+    fn restores(&self) -> bool {
+        true
+    }
+    fn restore(&mut self, io: &mut dyn Io, terminal: Id, token: u64, done: Done<()>) {
+        if let Some(endpoint) = self.endpoint(terminal) {
+            Multiplexer::restore(endpoint, io, terminal, token, done);
+            return;
+        }
+        self.follow_restore(io, terminal, token, done);
+    }
+    fn screen_clients(&mut self, io: &mut dyn Io, terminal: Id, hosting: bool, published: bool) {
+        if let Some(endpoint) = self.endpoint(terminal) {
+            endpoint.screen_clients(io, terminal, hosting, published);
+            return;
+        }
+        self.set_screen_clients(io, terminal, hosting, published);
+    }
+    fn hosted(&self, terminal: Id) -> bool {
+        let owner = self.endpoints.values().find(|endpoint| endpoint.graph.ids.values().any(|current| *current == terminal));
+        owner.map_or_else(|| Herdr::hosted(self, terminal), |endpoint| Herdr::hosted(endpoint, terminal))
     }
     fn event(&mut self, io: &mut dyn Io, ui: &mut dyn Ui, event: Event) {
         self.route(io, ui, event);

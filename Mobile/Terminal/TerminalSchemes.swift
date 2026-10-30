@@ -12,9 +12,16 @@ enum TerminalSchemes {
         var foreground = RGB(255, 255, 255)
         /// Palette colours 1 to 6 (red to cyan), the swatch's dots.
         var accents: [RGB] = []
+        /// What makes it hard to use (SchemeAudit), shown as a warning sign after its name.
+        var problems: [String] = []
         var id: String { file }
         /// A dark background (relative luminance under a half).
         var isDark: Bool { background.luminance < 0.5 }
+        /// Its section among the dark or the light schemes.
+        var group: SchemeGroup {
+            let rgb = { (c: RGB) in (c.red, c.green, c.blue) }
+            return SchemeGroup.of(file, background: rgb(background), accents: accents.map(rgb), light: !isDark)
+        }
     }
 
     struct RGB: Equatable, Sendable {
@@ -31,8 +38,10 @@ enum TerminalSchemes {
         var luminance: Double { 0.2126 * red + 0.7152 * green + 0.0722 * blue }
     }
 
-    /// Dispatch's own, first in the list.
-    static let dispatch = ["dispatch-black": "Dispatch Black", "dispatch": "Dispatch"]
+    /// Dispatch's own, first in the list, by their titles (SchemeGroup.titles).
+    static let dispatch = Dictionary(uniqueKeysWithValues: ["dispatch-black", "dispatch"].map {
+        ($0, SchemeGroup.title($0))
+    })
 
     static var dispatchFolder: URL { Bundle.main.bundleURL.appendingPathComponent("ghostty") }
     static var ghosttyFolder: URL { Bundle.main.bundleURL.appendingPathComponent("themes") }
@@ -43,10 +52,10 @@ enum TerminalSchemes {
         return folders.map { $0.appendingPathComponent(file) }.first { FileManager.default.fileExists(atPath: $0.path) }
     }
 
-    /// The name the row shows: Dispatch's by name, Ghostty's by file name.
-    static func title(_ file: String) -> String { dispatch[file] ?? file }
+    /// The name the row shows (SchemeGroup.title): a few by title, the rest by file name.
+    static func title(_ file: String) -> String { SchemeGroup.title(file) }
 
-    /// Every scheme the app has: Dispatch Black and Dispatch, then Ghostty's by name.
+    /// Every scheme the app has: Dispatch and Dispatch Gray, then Ghostty's by name.
     static func all(folders: [URL] = [dispatchFolder, ghosttyFolder]) -> [Scheme] {
         var files: [URL] = []
         for folder in folders {
@@ -80,6 +89,7 @@ enum TerminalSchemes {
             }
         }
         scheme.accents = (1...6).compactMap { palette[$0] }
+        scheme.problems = SchemeAudit.problems(name: file, theme: text)
         return scheme
     }
 }

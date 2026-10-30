@@ -16,17 +16,21 @@ struct TerminalConfiguration: Equatable, Sendable {
     static let defaultScheme = "dispatch-black"
 
     var fontSize = defaultFontSize
-    /// `font-family`: nil leaves JetBrains Mono, which every terminal falls back to.
+    /// `font-family`: nil leaves JetBrains Mono, which every terminal falls back to (`TerminalStyle` names Source Code Pro
+    /// by default).
     var fontFamily: String?
     /// The scheme's file name (`TerminalSchemes`).
     var theme = defaultScheme
-    /// The Mac's "Improve text contrast": the contrast shader raises text to 4.5:1 against its background.
-    var improveTextContrast = false
+    /// The Mac's "Improve text contrast": the contrast shader raises text to 4.5:1 against its background, by default
+    /// only on a light scheme (`config()` reads the loaded scheme's background).
+    var textContrast = TextContrast.lightThemes
     /// Bold text in the first eight colours draws bright (`DrawConfig.bold`; Term's config has no `bold-color`).
     var boldIsBright = false
     var cursor = TerminalCursorStyle.block
     /// Off writes `cursor-style-blink = false`; on leaves the program's choice, as the Mac does.
     var cursorBlink = true
+    /// Writes `adjust-cell-height` unless Normal, as the Mac does.
+    var lineSpacing = LineSpacing.normal
     var paddingX = 14
     var paddingY = 10
     /// Kept small on a phone: the multiplexer keeps the long history (herdr), or tmux's own history is replayed.
@@ -46,15 +50,18 @@ struct TerminalConfiguration: Equatable, Sendable {
     /// `clipboard-read` is answered by the host, which denies every read (an empty reply) for every feed: a remote
     /// program never reads the phone's pasteboard.
     var text: String {
-        let themePath = (TerminalSchemes.url(theme) ?? Self.themes.appendingPathComponent(Self.defaultScheme)).path
         var lines = ["term = xterm-256color"]
         if let fontFamily { lines.append("font-family = \(fontFamily)") }
         lines.append("cursor-style = \(cursor.rawValue)")
         if !cursorBlink { lines.append("cursor-style-blink = false") }
+        if let height = lineSpacing.cellHeight { lines.append("adjust-cell-height = \(height)") }
+        // At Source Code Pro's apparent size, as the Mac's (`TerminalFontScale`); no family is JetBrains Mono.
+        MobileFonts.register()
+        let size = TerminalFontScale.size(fontSize, family: fontFamily ?? "JetBrains Mono")
         return lines.joined(separator: "\n") + "\n" + """
-        font-size = \(fontSize)
+        font-size = \(size)
         theme = \(themePath)
-        minimum-contrast = \(improveTextContrast ? 4.5 : 1)
+        minimum-contrast = \(textContrast == .always ? 4.5 : 1)
         macos-option-as-alt = true
         window-padding-x = \(paddingX)
         window-padding-y = \(paddingY)
@@ -75,7 +82,17 @@ struct TerminalConfiguration: Equatable, Sendable {
         config.finalize(dark: true) { name, diagnostics in
             Config.theme(name, resources: Self.themes.path, environment: [:], diagnostics: &diagnostics)
         }
+        if textContrast == .lightThemes && !Self.isDark(config.background) { config.minimumContrast = 4.5 }
+        config.glow = SchemeGroup.glowing.contains(URL(fileURLWithPath: themePath).lastPathComponent)
         return config
+    }
+
+    /// The scheme's file, Dispatch's own when the app has no such scheme.
+    var themePath: String { (TerminalSchemes.url(theme) ?? Self.themes.appendingPathComponent(Self.defaultScheme)).path }
+
+    /// A dark background, as `TerminalSchemes.Scheme.isDark` judges a scheme: relative luminance under a half.
+    static func isDark(_ background: RGB) -> Bool {
+        (0.2126 * Double(background.r) + 0.7152 * Double(background.g) + 0.0722 * Double(background.b)) / 255 < 0.5
     }
 
     /// The pinch's font size: the base size scaled, kept within `fontSizes`, in half-point steps.

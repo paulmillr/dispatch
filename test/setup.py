@@ -363,7 +363,8 @@ class BuildEntryPointTests(unittest.TestCase):
         scripts = self.root / 'scripts'
         scripts.mkdir()
         source = Path(__file__).resolve().parent.parent / 'scripts'
-        for name in ('build.sh', 'run.py', 'generate-project.py', 'build-ssh-helper.sh', 'setup_consent.py', 'build.lock.json'):
+        for name in ('build.sh', 'run.py', 'ios_simulator.py', 'watch_simulator.py', 'generate-project.py',
+                     'build-ssh-helper.sh', 'setup_consent.py', 'build.lock.json'):
             shutil.copyfile(source / name, scripts / name)
         shutil.copyfile(source.parent / 'run.sh', self.root / 'run.sh')
         self.log = self.root / 'calls'
@@ -867,19 +868,35 @@ class ConsentTests(unittest.TestCase):
     def testFreshPlanIsLocalOnly(self):
         tools = Mock()
         tools.resolve.side_effect = RuntimeError('Missing compatible tool')
-        rust = Mock()
+        rust, mobile = Mock(), Mock()
         rust.available.return_value = False
-        with patch.object(consent, 'load_script', side_effect=[tools, rust]):
-            self.assertEqual(consent.plan(), ['xcodegen', 'rust'])
+        mobile.downloads.return_value = True
+        with patch.object(consent, 'load_script', side_effect=[tools, rust, mobile]):
+            self.assertEqual(consent.plan(), ['xcodegen', 'rust', 'ssh-engine'])
             for call in tools.resolve.call_args_list:
                 self.assertTrue(call.kwargs['offline'])
 
     def testWarmPlanHasNothingToApprove(self):
-        tools, rust = Mock(), Mock()
+        tools, rust, mobile = Mock(), Mock(), Mock()
         rust.available.return_value = True
-        with patch.object(consent, 'load_script', side_effect=[tools, rust]):
+        mobile.downloads.return_value = False
+        with patch.object(consent, 'load_script', side_effect=[tools, rust, mobile]):
             self.assertEqual(consent.plan(), [])
             self.assertEqual(tools.resolve.call_args_list, [call('xcodegen', offline=True)])
+
+    def testStaleEngineWithCachedCratesBuildsWithoutConsent(self):
+        # Xcode resolves the iPhone package for the Mac app's scheme too: setup always prepares it, offline when it can.
+        mobile = consent.load_script('setup_mobile')
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(mobile, 'current', return_value=False), \
+                patch.object(mobile, 'CARGO', Path(directory) / 'cargo'):
+            self.assertTrue(mobile.downloads())
+            (Path(directory) / 'cargo').touch()
+            with patch.object(mobile.subprocess, 'run', return_value=Mock(returncode=0)) as run:
+                self.assertFalse(mobile.downloads())
+                self.assertEqual(run.call_args.args[0][1:], ['fetch', '--locked', '--offline'])
+        with patch.object(mobile, 'current', return_value=True):
+            self.assertFalse(mobile.downloads())
 
     def testStandaloneToolDeclinePreventsDownloads(self):
         with tempfile.TemporaryDirectory() as directory, \

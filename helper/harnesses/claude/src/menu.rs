@@ -725,13 +725,18 @@ impl Walk {
         if answers.len() != 1 || answers[0].0 != "confirmation" {
             return Err(error("invalid", "Choose one confirmation answer"));
         }
-        self.decision = match &answers[0].1 {
+        let decision = match &answers[0].1 {
             Answer::Options(v) if v.len() == 1 && v[0] < 2 => v[0],
             Answer::Skip => 1,
             _ => return Err(error("invalid", "Choose Yes or No")),
         };
-        self.cancelled = self.decision == 1;
-        let selected = scope.choices[self.decision].name == scope.selected;
+        let choice = scope
+            .choices
+            .get(decision)
+            .ok_or_else(|| error("changed", "Claude's confirmation changed"))?;
+        let selected = choice.name == scope.selected;
+        self.decision = decision;
+        self.cancelled = decision == 1;
         self.stage = if selected {
             Stage::Verify
         } else {
@@ -839,11 +844,24 @@ impl Walk {
         match self.stage {
             Stage::Ask => return Step::Wait,
             Stage::Enter => {
-                if !confirmation(&screen.text).is_some_and(|now| {
+                let now = confirmation(&screen.text);
+                let same = |now: &Confirmation, old: &Confirmation| {
+                    now.title == old.title && now.choices == old.choices
+                };
+                // Claude redraws the highlight after the arrow, later than core's 40 ms samples:
+                // the unchanged confirmation counts as changed only once the screen settled.
+                if !repeated
+                    && now.as_ref().zip(self.scope.as_ref()).is_some_and(|(now, old)| {
+                        same(now, old) && now.selected == old.selected
+                    })
+                {
+                    return Step::Wait;
+                }
+                if !now.is_some_and(|now| {
                     self.scope.as_ref().is_some_and(|old| {
-                        now.title == old.title
-                            && now.choices == old.choices
-                            && now.selected == old.choices[self.decision].name
+                        old.choices
+                            .get(self.decision)
+                            .is_some_and(|choice| same(&now, old) && now.selected == choice.name)
                     })
                 }) {
                     return Step::Fail(error(
@@ -1355,5 +1373,66 @@ mod tests {
         };
         assert_eq!(drafted(&screen, false, None).as_deref(), Some("[Image #1] [Image #2] [Image #3] [Image #4]"));
         assert_eq!(drafted(&composer(""), false, None).as_deref(), Some(""));
+    }
+
+    // Claude 2.1.311's switch confirmation, as the 2026-10-30 VM run showed it.
+    fn switch(no: bool) -> Screen {
+        let (yes, back) = if no { ("  ", "❯ ") } else { ("❯ ", "  ") };
+        Screen {
+            text: format!(
+                "❯ /model\n{}\n Switch model?\n Your next response will be slower and use more tokens\n\n \
+                 This conversation is cached for the current model.\n\n   {yes}1. Yes, switch to Fable 5.1\n   {back}2. No, go back\n",
+                "▔".repeat(40)
+            ),
+            cursor: (0, 0),
+            faint_tail: false,
+        }
+    }
+
+    #[test]
+    fn declining_a_switch_waits_for_the_highlight_to_move() {
+        let goal = Goal::Select { model: "fable".into(), effort: Some("high".into()) };
+        let asked = || {
+            let mut walk = Walk::default();
+            walk.goal = Some(goal.clone());
+            walk.stage = Stage::Ask;
+            walk.scope = confirmation(&switch(false).text);
+            assert_eq!(
+                walk.answer(vec![("confirmation".into(), Answer::Options(vec![1]))]),
+                Ok(Sent::Keys(vec![Input::Key(Key::Down)]))
+            );
+            walk
+        };
+        // Samples before Claude redraws the highlight are not a changed confirmation.
+        let mut walk = asked();
+        assert_eq!(step(&mut walk, &goal, &switch(false), false), Step::Wait);
+        assert_eq!(step(&mut walk, &goal, &switch(true), false), Step::Keys(vec![Input::Key(Key::Enter)]));
+        // A highlight that never moved by the settle mark still fails.
+        let mut walk = asked();
+        assert!(matches!(step(&mut walk, &goal, &switch(false), true), Step::Fail(_)));
+    }
+
+    #[test]
+    fn a_malformed_switch_confirmation_is_refused_not_indexed() {
+        let goal = Goal::Select { model: "fable".into(), effort: Some("high".into()) };
+        let malformed = || {
+            let mut scope = confirmation(&switch(false).text).unwrap();
+            scope.choices.pop();
+            scope
+        };
+
+        let mut walk = Walk::default();
+        walk.goal = Some(goal.clone());
+        walk.stage = Stage::Ask;
+        walk.scope = Some(malformed());
+        assert!(matches!(
+            walk.answer(vec![("confirmation".into(), Answer::Skip)]),
+            Err(Error { code: "changed", .. })
+        ));
+
+        walk.stage = Stage::Enter;
+        walk.scope = Some(malformed());
+        walk.decision = 1;
+        assert!(matches!(step(&mut walk, &goal, &switch(true), true), Step::Fail(_)));
     }
 }

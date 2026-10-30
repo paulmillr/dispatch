@@ -53,10 +53,10 @@ struct SettingsExtraPage: View {
                 Button("Choose…") { chooseExport() }.accessibilityIdentifier("settings-import-dispatch")
             }
             profileRow("Terminal", preferences: terminal, profiles: terminal.map(TerminalAppImport.profiles(in:)) ?? [], selection: $terminalProfile) { profile in
-                terminal.map { TerminalAppImport.plan(preferences: $0, profile: profile.id, fonts: SettingsView.monospacedFontFamilies) }
+                terminal.map { TerminalAppImport.plan(preferences: $0, profile: profile.id, fonts: SettingsView.terminalFontFamilies) }
             }
             profileRow("iTerm2", preferences: iterm, profiles: iterm.map(ITermImport.profiles(in:)) ?? [], selection: $itermProfile) { profile in
-                iterm.map { ITermImport.plan(preferences: $0, profile: profile.id, fonts: SettingsView.monospacedFontFamilies) }
+                iterm.map { ITermImport.plan(preferences: $0, profile: profile.id, fonts: SettingsView.terminalFontFamilies) }
             }
             let ghostty = GhosttyImport.configURL
             SettingsRow(title: "Ghostty", detail: ghostty.map { "its config, " + $0.path.replacingOccurrences(of: System.home.path, with: "~") }
@@ -70,7 +70,7 @@ struct SettingsExtraPage: View {
     /// An app with profiles: which one (the default first), then Import….
     private func profileRow(_ app: String, preferences: [String: Any]?, profiles: [ImportPlan.Profile],
                             selection: Binding<ImportPlan.Profile?>, plan: @escaping (ImportPlan.Profile) -> ImportPlan?) -> some View {
-        SettingsRow(title: app, detail: preferences == nil ? "no \(app) settings on this Mac" : "font, colors, cursor, keys and shell of a profile") {
+        SettingsRow(title: app, detail: preferences == nil ? "no \(app) settings on this Mac" : "a profile’s look, keys and shell") {
             HStack(spacing: 8) {
                 if profiles.count > 1 {
                     SettingsDropdown(title: "\(app) profile", selection: Binding(
@@ -115,7 +115,7 @@ struct SettingsExtraPage: View {
         var saved: [String] = [], failed: [String] = []
         for theme in plan.themes {
             let name: String
-            do { name = try YourColorSchemes.save(theme) } catch { failed.append(error.localizedDescription); continue }
+            do { name = try ColorSchemeGallery.save(theme) } catch { failed.append(error.localizedDescription); continue }
             saved.append(name)
             switch theme.role {
             case .light: next.lightTheme = name
@@ -136,7 +136,7 @@ struct SettingsExtraPage: View {
 
     private var exportGroup: some View {
         SettingsGroup(title: "Export") {
-            SettingsRow(title: "Export settings", detail: "a Ghostty config, your color schemes and Dispatch’s settings, in one folder") {
+            SettingsRow(title: "Export settings", detail: "a folder: Ghostty config, color schemes, settings") {
                 Button("Export…") { export() }.accessibilityIdentifier("settings-export")
             }
         }

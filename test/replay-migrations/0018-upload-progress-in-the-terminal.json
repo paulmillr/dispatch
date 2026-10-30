@@ -1,0 +1,28 @@
+{
+  "kind": "rewrite",
+  "why": "A helper upload that runs past 10 s shows its progress in the terminal: the upload script writes the size it expects beside the file it receives (upload-*/size, removed with it), and the waiting login, which already polls for its ready file every 0.2 s, reads both and, once an upload has run for 50 polls, redraws one line on the terminal (bar, megabytes, speed by the host's date +%s, time left) (fd 3, the login's stderr before prepare's 2>/dev/null), erased when the upload ends or the login goes on. Text only: what either script answers is unchanged (the size file is extra and removed; the progress line goes to the terminal, never to the command's output, and no recorded login waited 10 s with an upload running), so the recorded login and upload commands are rewritten.",
+  "ops": [
+    "open.command"
+  ],
+  "replace": [
+    {
+      "old": "prepare() {\n  umask 077\n",
+      "new": "progress() {\n  for staged in \"$HOME\"/.dispatch/bin/versions/*/upload-*/size \"${XDG_RUNTIME_DIR:-/nonexistent}\"/dispatch/bin/versions/*/upload-*/size; do\n    test -f \"$staged\" || continue\n    total=$(cat \"$staged\" 2>/dev/null)\n    case \"$total\" in \"\"|*[!0-9]*) continue;; esac\n    test \"$total\" -gt 0 || continue\n    got=$(wc -c < \"${staged%/size}/dispatch-helper\" 2>/dev/null | tr -d \" \")\n    case \"$got\" in \"\"|*[!0-9]*) got=0;; esac\n    uploading=$((uploading + 1))\n    now=$(date +%s)\n    case \"$now\" in \"\"|*[!0-9]*) now=0;; esac\n    if test -z \"$since\"; then mark=$got since=$now\n    elif test $((now - since)) -ge 2; then speed=$(((got - mark) / (now - since))) mark=$got since=$now\n    fi\n    test \"$uploading\" -ge 50 || return 0\n    test \"$got\" -le \"$total\" || got=$total\n    filled=$((got * 16 / total)) full= empty= i=0\n    while test \"$i\" -lt 16; do\n      if test \"$i\" -lt \"$filled\"; then full=\"${full}━\"; else empty=\"${empty}─\"; fi\n      i=$((i + 1))\n    done\n    case $((attempt % 10)) in\n      0) spin=⠋;; 1) spin=⠙;; 2) spin=⠹;; 3) spin=⠸;; 4) spin=⠼;; 5) spin=⠴;; 6) spin=⠦;; 7) spin=⠧;; 8) spin=⠇;; *) spin=⠏;;\n    esac\n    rate= left=\n    if test -n \"$speed\"; then\n      if test \"$speed\" -ge 1048576; then rate=\" · $((speed / 1048576)).$((speed % 1048576 * 10 / 1048576)) MB/s\"\n      else rate=\" · $((speed / 1024)) KB/s\"; fi\n      if test \"$speed\" -gt 0; then\n        left=$(((total - got) / speed))\n        if test \"$left\" -ge 60; then left=\" · $((left / 60)) min $((left % 60)) s\"; else left=\" · $left s\"; fi\n      fi\n    fi\n    printf \"\\033[?7l\\r\\033[K\\033[36m%s\\033[0m Installing Dispatch \\033[36m%s\\033[0m\\033[2m%s\\033[0m %3s%%  \\033[2m%s.%s of %s.%s MB%s%s\\033[0m\\033[?7h\" \\\n      \"$spin\" \"$full\" \"$empty\" \\\n      $((got * 100 / total)) $((got / 1048576)) $((got % 1048576 * 10 / 1048576)) \\\n      $((total / 1048576)) $((total % 1048576 * 10 / 1048576)) \"$rate\" \"$left\" >&3\n    drawn=1\n    return 0\n  done\n  uploading=0 mark= since= speed=\n  test -z \"$drawn\" || printf \"\\r\\033[K\" >&3\n  drawn=\n}\nprepare() {\n  umask 077\n"
+    },
+    {
+      "old": "  attempt=0\n  while test ! -e ready && test ! -L ready && test \"$attempt\" -lt 325; do\n    sleep 0.2\n    attempt=$((attempt + 1))\n  done\n",
+      "new": "  attempt=0 uploading=0 drawn=\n  while test ! -e ready && test ! -L ready && test \"$attempt\" -lt 325; do\n    sleep 0.2\n    attempt=$((attempt + 1))\n    progress\n  done\n  test -z \"$drawn\" || printf \"\\r\\033[K\" >&3\n"
+    },
+    {
+      "old": "helper=$(prepare 2>/dev/null)",
+      "new": "helper=$(prepare 3>&2 2>/dev/null)"
+    },
+    {
+      "old": "trap 'rm -f {{staging}}/dispatch-helper; rmdir {{staging}} 2>/dev/null' EXIT HUP INT TERM\n(set -C; cat > '{{staging}}/dispatch-helper') || fail \"upload interrupted\"\ntest \"$(wc -c < '{{staging}}/dispatch-helper' | tr -d ' ')\" = '{{size}}'",
+      "new": "trap 'rm -f {{staging}}/dispatch-helper {{staging}}/size; rmdir {{staging}} 2>/dev/null' EXIT HUP INT TERM\nprintf '%s\\n' '{{size}}' > '{{staging}}/size' 2>/dev/null || :\n(set -C; cat > '{{staging}}/dispatch-helper') || fail \"upload interrupted\"\ntest \"$(wc -c < '{{staging}}/dispatch-helper' | tr -d ' ')\" = '{{size}}'"
+    }
+  ],
+  "fingerprints": {
+    "ssh-setup": "d93a98a861914307d5fe1553a57364c58a552ce3a94b950743c2fe0750d495a4"
+  }
+}

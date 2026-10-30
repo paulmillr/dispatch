@@ -6,8 +6,11 @@ struct ChatComposerShortcuts: View {
     @Binding var presented: Bool
 
     var body: some View {
-        ShortcutSheetButton(presented: $presented, keyFont: AppFont.shortcut(size: theme.typography.codeDetailSize),
-                            ink: theme.ink, muted: theme.muted, label: "Composer shortcuts", identifier: "chat-shortcuts") {
+        // The ⌘/ chip sits beside the paperclip and microphone: as tall and heavy as those symbols, in their square.
+        ShortcutSheetButton(presented: $presented,
+                            keyFont: .system(size: theme.typography.detailSize + 2, weight: .medium, design: .monospaced),
+                            ink: theme.ink, muted: theme.muted, label: "Composer shortcuts", identifier: "chat-shortcuts",
+                            side: max(24, theme.typography.detailLineHeight + 10)) {
             ShortcutSheet(style: .init(ink: theme.ink, muted: theme.muted, background: theme.sidebar,
                                        colorScheme: theme.isDark ? .dark : .light, font: theme.typography.detail,
                                        keyFont: AppFont.shortcut(size: theme.typography.codeDetailSize)),
@@ -28,10 +31,10 @@ struct ChatComposerShortcuts: View {
             .init("⌘S", "save draft"),
             .init("/", "commands · type / to browse agent commands"),
             multiline ? .init("⎋", "exit editor · keep your draft") : .init("⎋", "stop · end the current turn, keeping your draft"),
-        ] + (DictationStore.shared.enabled && DictationStore.shared.rightCommand ? [
-            .init("hold right ⌘", "dictate one message · release inserts, ⏎ sends, ⎋ cancels"),
-            .init("tap right ⌘", "conversation mode · “\(DictationStore.shared.wakeWord), send / steer / scratch that / stop / deny / option 2”"),
-        ] : [])
+        ] + (DictationStore.shared.shortcut.map { key in [
+            .init("hold \(key.name)", "dictate one message · release inserts, ⏎ sends, ⎋ cancels"),
+            .init("tap \(key.name)", "conversation mode · “\(DictationStore.shared.wakeWord), send / steer / scratch that / stop / deny / option 2”"),
+        ] } ?? [])
     }
 
     /// Only where the conversation's helper keeps attachments (the paperclip shows then too).
@@ -59,26 +62,11 @@ struct ChatComposerShortcuts: View {
 }
 
 /// The agent's running subagents beside its activity, while they run (they can outlive their turn): their
-/// count, and their types on click.
+/// count, and on click one row each with its task, type, tokens and how long it has run.
 struct ChatComposerAgents: View {
     @Environment(\.chatTheme) private var theme
     let session: ChatSession
     @State private var details = false
-
-    struct Kind: Identifiable, Equatable {
-        let id: String
-        let count: Int
-    }
-
-    /// Types in the order they started, each once with how many run.
-    static func kinds(_ agents: [String]) -> [Kind] {
-        var order: [String] = [], counts: [String: Int] = [:]
-        for agent in agents {
-            if counts[agent] == nil { order.append(agent) }
-            counts[agent, default: 0] += 1
-        }
-        return order.map { Kind(id: $0, count: counts[$0] ?? 0) }
-    }
 
     static func title(_ count: Int) -> String { count == 1 ? "1 agent running" : "\(count) agents running" }
 
@@ -96,18 +84,64 @@ struct ChatComposerAgents: View {
                 .accessibilityLabel(Self.title(agents.count))
                 .accessibilityIdentifier("chat-agents")
                 .popover(isPresented: $details) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(Self.title(agents.count)).foregroundStyle(theme.ink)
-                        ForEach(Self.kinds(agents)) { kind in
-                            Text(kind.count > 1 ? "\(kind.id) ×\(kind.count)" : kind.id)
-                        }
-                    }.font(theme.typography.detail).foregroundStyle(theme.muted)
-                        .padding(14).frame(minWidth: 200, alignment: .leading)
+                    ChatSubagentList(session: session)
                         // On glass the popover's own system glass shows through instead of the sidebar fill.
                         .background(LiquidGlassStore.shared.active ? Color.clear : theme.sidebar)
                         .preferredColorScheme(theme.isDark ? .dark : .light)
                 }
         }
+    }
+}
+
+/// The agents popover: one row per running subagent, oldest first. The clocks tick once a second while it shows.
+struct ChatSubagentList: View {
+    @Environment(\.chatTheme) private var theme
+    let session: ChatSession
+
+    /// "Find the timer": its task, else its type.
+    static func title(_ agent: ChatSubagent) -> String { agent.name ?? agent.kind }
+    /// Its type under the task; nothing when the type is already the title.
+    static func subtitle(_ agent: ChatSubagent) -> String? { agent.name == nil ? nil : agent.kind }
+    /// "12.3K tokens"; nil when the helper cannot count them.
+    static func tokens(_ agent: ChatSubagent) -> String? {
+        agent.tokens.map { "\(ChatSessionStats.count(Int(clamping: $0))) tokens" }
+    }
+    static func elapsed(_ agent: ChatSubagent, now: Date) -> String { ChatTranscript.elapsed(now.timeIntervalSince(agent.started)) }
+
+    var body: some View {
+        let agents = session.subagents
+        VStack(alignment: .leading, spacing: 10) {
+            Text(ChatComposerAgents.title(agents.count)).foregroundStyle(theme.ink)
+            ScrollView {
+                TimelineView(.periodic(from: .now, by: 1)) { timeline in
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(agents) { agent in row(agent, now: timeline.date) }
+                    }
+                }
+            }
+            .scrollBounceBehavior(.basedOnSize)
+            .frame(maxHeight: 360)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .font(theme.typography.detail).foregroundStyle(theme.muted)
+        .padding(14).frame(width: 360, alignment: .leading)
+        .accessibilityIdentifier("chat-agents-list")
+    }
+
+    private func row(_ agent: ChatSubagent, now: Date) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(Self.title(agent)).foregroundStyle(theme.ink).lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let subtitle = Self.subtitle(agent) { Text(subtitle).lineLimit(1) }
+            }.frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(Self.elapsed(agent, now: now)).foregroundStyle(theme.ink)
+                if let tokens = Self.tokens(agent) { Text(tokens) }
+            }.monospacedDigit().fixedSize()
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("chat-agent-\(agent.id)")
     }
 }
 

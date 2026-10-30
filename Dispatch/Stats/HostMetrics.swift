@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 import Darwin
 import Observation
 
@@ -42,10 +42,25 @@ struct HostSample: Codable, Sendable {
     var uptimeText: String { "up \(Int(uptime) / 86400)d \(Int(uptime) / 3600 % 24)h" }
 }
 
-/// How often stats are sampled with no stats view open: often enough that every 15 s bar of the chart holds a
-/// sample. Each sample starts one short helper process (about 2 ms of CPU), so Low Power Mode takes a third of them.
+/// Whether the user can see Dispatch: it is the active app and one of its windows is on screen, not wholly covered.
+/// Background work that only feeds what a window shows slows down otherwise. Without an application (a tool), shown.
+@MainActor
+enum AppPresence {
+    static var shown: Bool {
+        guard let app = NSApp else { return true }
+        return app.isActive && app.windows.contains { $0.isVisible && $0.occlusionState.contains(.visible) }
+    }
+}
+
+/// How often stats are sampled with no stats view open (a stats view samples every 2 s). While Dispatch is shown
+/// (AppPresence) every 15 s bar of the chart gets a sample; while it is not, or in Low Power Mode, one a minute does.
+/// Each sample is a helper request, over SSH a frame that wakes the link and the Wi-Fi radio. Read before every wait,
+/// so a change applies from the next sample; opening a stats view samples at once whatever the wait.
 enum StatisticsCadence {
-    static var background: Duration { ProcessInfo.processInfo.isLowPowerModeEnabled ? .seconds(15) : .seconds(5) }
+    static func background(shown: Bool, lowPower: Bool) -> Duration { shown && !lowPower ? .seconds(15) : .seconds(60) }
+    @MainActor static var background: Duration {
+        background(shown: AppPresence.shown, lowPower: ProcessInfo.processInfo.isLowPowerModeEnabled)
+    }
 }
 
 /// This Mac's counters, read by the helper's stats plugin.
@@ -79,9 +94,12 @@ final class HostStats {
     @ObservationIgnored private let diskWorker = HostDiskSamplingWorker()
     @ObservationIgnored private let historyExpiry = StatisticsHistoryExpiry()
     @ObservationIgnored private let historyRetention: TimeInterval
+    @ObservationIgnored private let backgroundCadence: @MainActor () -> Duration
 
-    init(historyRetention: TimeInterval = 3600) {
+    /// `backgroundCadence`: the wait between samples with no viewer, read before each wait (StatisticsCadence).
+    init(historyRetention: TimeInterval = 3600, backgroundCadence: @escaping @MainActor () -> Duration = { StatisticsCadence.background }) {
         self.historyRetention = historyRetention.isFinite ? min(3600, max(0.001, historyRetention)) : 3600
+        self.backgroundCadence = backgroundCadence
     }
     private func trimHistory() {
         let cutoff = System.date().addingTimeInterval(-historyRetention)
@@ -92,7 +110,16 @@ final class HostStats {
     }
 
     func subscribe() -> UUID {
-        let token = System.uuid(); subscriptions.insert(token); start(); startDisks(); return token
+        let token = System.uuid(), first = subscriptions.isEmpty
+        subscriptions.insert(token)
+        // The first viewer samples at once (with processes) rather than after the background wait, up to a minute.
+        // The sampler keeps its baseline: the first sample after the wait still has rates.
+        if first, let task {
+            task.cancel(); retired = task; self.task = nil
+            start(resettingSampler: false)
+        } else { start() }
+        startDisks()
+        return token
     }
     func unsubscribe(_ token: UUID) {
         subscriptions.remove(token)
@@ -108,13 +135,14 @@ final class HostStats {
         tracksHistoryInBackground = true
         start()
     }
-    func start() {
+    func start() { start(resettingSampler: true) }
+    private func start(resettingSampler: Bool) {
         guard task == nil else { return }
         let generation = generation, retired = retired
         self.retired = nil
         task = Task { [weak self, worker] in
             await retired?.value
-            await worker.reset()
+            if resettingSampler { await worker.reset() }
             while !Task.isCancelled {
                 do {
                     let sample = try await worker.sample(includeProcesses: self?.subscriptions.isEmpty == false)
@@ -137,8 +165,8 @@ final class HostStats {
                 }
                 guard let self else { return }
                 // With a viewer the chart moves every 2 s. Without one the history only pre-fills the chart for the
-                // next popover.
-                let interval: Duration = subscriptions.isEmpty ? StatisticsCadence.background : .seconds(2)
+                // next popover, at the background cadence of this wait.
+                let interval: Duration = subscriptions.isEmpty ? backgroundCadence() : .seconds(2)
                 do { try await System.sleep(for: interval, "sample") } catch { return }
             }
         }

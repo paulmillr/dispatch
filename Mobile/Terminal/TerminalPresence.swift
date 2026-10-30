@@ -29,11 +29,18 @@ struct TerminalScreen: Equatable, Sendable {
     var faintTail: Bool
 }
 
-/// One terminal node of a host on the phone, attached and parsed whether or not a view shows it: the Chat segment
-/// needs it too, since the helper refuses `chat.send` (`terminal_unavailable`) unless someone publishes the
-/// terminal's screen. The presence attaches its feed, parses output into its `TerminalSession` (frames only while a
-/// `TerminalHostView` shows it), answers the program through the feed, publishes the screen at most 30 times a
-/// second, and keeps the scroll model and what the header shows (title, directory, the end).
+/// One terminal node of a host on the phone, attached whether or not a view shows it: the Chat segment needs it too,
+/// since the helper verifies `chat.send` against the terminal's screen, which it reads only for an attached terminal:
+/// from tmux or herdr itself when its hello accepted `screens.host` (`TerminalFeed.hostsScreens`), else from the
+/// screens a client publishes (`terminal_unavailable` without one). The presence attaches its feed, parses output into
+/// its `TerminalSession` (frames only while a `TerminalHostView` shows it), answers the program through the feed,
+/// publishes the screen at most 30 times a second to a helper that does not read it itself (and reads nothing for one
+/// that does), and keeps the scroll model and what the header shows (title, directory, the end).
+///
+/// Held output (`terminals.follow`, `TerminalFeed.holdsOutput`): while no terminal view shows an attached presence (only
+/// a conversation uses it: the Chat segment, another tab), its output is held on the host after `followGrace`, so
+/// nothing arrives, is parsed or drawn; a view showing it again asks for one whole repaint at once, which is parsed as
+/// ordinary output (tmux: `\ec` and the whole history; herdr: the alternate screen's full frame).
 ///
 /// Output is coalesced: the feed's events only append to an inbox; a parse task feeds everything that arrived
 /// since its last turn in one batch (tmux sends one `terminal.output` per `%output` line, 29 bytes on average), up to
@@ -85,13 +92,29 @@ final class TerminalPresence {
     @ObservationIgnored var pasteboard: @MainActor (String) -> Void = TerminalPresence.systemPasteboard
     @ObservationIgnored private var consumer: Task<Void, Never>?
     @ObservationIgnored private var parser: Task<Void, Never>?
-    @ObservationIgnored private var attachments = 0
+    @ObservationIgnored private(set) var attachments = 0
     /// The current attachment's output; each attachment has its own, so a parse task still draining after `stop`
     /// never takes the next attachment's bytes.
     @ObservationIgnored private var inbox = TerminalInbox()
     @ObservationIgnored private var publication = Publication()
     /// A publication is on its way to the main queue (set by the parse task, cleared when it is scheduled).
     @ObservationIgnored private let publishQueued = TerminalFlag()
+    /// The current attachment publishes its screens (its helper does not read them itself): the parse task asks for
+    /// no publication otherwise, so nothing reads the screen's text.
+    @ObservationIgnored private let publishing = TerminalFlag()
+    /// How many terminal views show this presence (`TerminalPresences.retain(_:showing:)`).
+    @ObservationIgnored private var views = 0
+    /// This presence asked the helper to hold the current attachment's output (`terminals.follow` false).
+    private(set) var holding = false
+    /// Waiting out `followGrace` before the output is held.
+    @ObservationIgnored private var grace: Task<Void, Never>?
+    /// The `terminals.follow` calls, one after the other in the order asked.
+    @ObservationIgnored private var follows: Task<Void, Never>?
+    /// The multiplexer answered `unsupported`: this presence keeps following and never asks again.
+    @ObservationIgnored private(set) var unfollowable = false
+    /// How long no view shows an attached presence before its output is held: a glance at Chat and back holds nothing.
+    nonisolated static let followGrace = Duration.seconds(2)
+    @ObservationIgnored var followGrace = TerminalPresence.followGrace
 
     nonisolated static let batchLimit = 256 * 1024
     /// One whole helper reply (an attach replays a tmux pane's entire history as one `terminal.output`, up to the
@@ -135,10 +158,17 @@ final class TerminalPresence {
             self.resize(size)
         }
         session.onEvent = { [weak self] event in self?.handle(event) }
-        let queued = publishQueued
+        let queued = publishQueued, publishing = publishing
         session.onParsed = { [weak self] in
-            guard queued.withLock({ queued in defer { queued = true }; return !queued }) else { return }
+            guard publishing.withLock({ $0 }),
+                  queued.withLock({ queued in defer { queued = true }; return !queued }) else { return }
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.schedulePublication() } }
+        }
+        // A change of system text size scales every open terminal's size by the same ratio (a pinched one too).
+        textScale = TerminalAdaptation.textScale(TerminalAdaptation.category)
+        textSizeObserver = NotificationCenter.default.addObserver(forName: UIContentSizeCategory.didChangeNotification, object: nil,
+                                                                  queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.textSizeChanged(TerminalAdaptation.category) }
         }
         // Settings' terminal style reaches every open terminal at once (its font size stays: a pinch made it).
         styleObserver = NotificationCenter.default.addObserver(forName: TerminalStyle.changed, object: nil, queue: .main) { [weak self] note in
@@ -148,6 +178,9 @@ final class TerminalPresence {
     }
 
     @ObservationIgnored private var styleObserver: (any NSObjectProtocol)?
+    @ObservationIgnored private var textSizeObserver: (any NSObjectProtocol)?
+    /// The system text size's factor this terminal's size was last scaled for.
+    @ObservationIgnored private var textScale = 1.0
     /// The view showing this presence redraws what it draws itself (its background, the selection handles) after a
     /// restyle (`TerminalHostView`).
     @ObservationIgnored var restyled: (() -> Void)?
@@ -160,13 +193,29 @@ final class TerminalPresence {
         restyled?()
     }
 
+    /// The system text size changed: this terminal's size moves by the change in its factor, within the terminal's sizes.
+    func textSizeChanged(_ category: UIContentSizeCategory) {
+        let scale = TerminalAdaptation.textScale(category)
+        guard scale != textScale else { return }
+        var next = configuration
+        let size = (configuration.fontSize * scale / textScale * 100).rounded() / 100
+        next.fontSize = min(max(size, TerminalConfiguration.fontSizes.lowerBound), TerminalConfiguration.fontSizes.upperBound)
+        textScale = scale
+        guard next != configuration else { return }
+        configure(next)
+        restyled?()
+    }
+
     isolated deinit {
         if let styleObserver { NotificationCenter.default.removeObserver(styleObserver) }
+        if let textSizeObserver { NotificationCenter.default.removeObserver(textSizeObserver) }
         settling?.cancel()
         resizing?.cancel()
         consumer?.cancel()
         parser?.cancel()
         publication.pending?.cancel()
+        grace?.cancel()
+        follows?.cancel()
         if attached { feed.detach() }
         session.close()
     }
@@ -240,6 +289,9 @@ final class TerminalPresence {
         attached = true
         ended = nil
         attachments += 1
+        // A new attachment follows: the helper forgot the last one's hold with it.
+        holding = false
+        publishing.withLock { $0 = !feed.hostsScreens }
         // A later attachment repaints the whole screen; the last one stays shown until its first output arrives, so a
         // terminal shown again (or reattached after a reconnect) never flashes empty.
         let repaint = attachments > 1
@@ -290,6 +342,7 @@ final class TerminalPresence {
             // subscription. Cancel it and make the loss visible; continuing after dropped terminal bytes is unsafe.
             await MainActor.run { self?.end(attachment, feed: feed, "Terminal output stream ended unexpectedly.") }
         }
+        reconsider()
     }
 
     /// Stops observing; the server-owned session keeps running (docs/architecture.md).
@@ -306,14 +359,78 @@ final class TerminalPresence {
         inbox.clear()
         publication.pending?.cancel()
         publication = Publication()
+        // The attachment's hold ends with it.
+        grace?.cancel()
+        grace = nil
+        holding = false
+    }
+
+    /// Whether a terminal view shows this presence (`TerminalPresences`): hidden, its output is held after
+    /// `followGrace`; shown, it follows again at once.
+    func show(_ shown: Bool) {
+        views = max(0, views + (shown ? 1 : -1))
+        reconsider()
+    }
+
+    /// Whether a terminal view shows this presence.
+    var shown: Bool { views > 0 }
+
+    /// Whether the current attachment's output should be held now: attached, on a helper that reads the screens itself
+    /// and holds output (`holdsOutput`), whose multiplexer can repaint, and no terminal view shows it.
+    private var holds: Bool { attached && feed.holdsOutput && !unfollowable && !shown }
+
+    /// The view or the attachment changed: hold the output once nothing has shown it for `followGrace`, follow again
+    /// at once when a view shows it.
+    private func reconsider() {
+        guard holds else {
+            grace?.cancel()
+            grace = nil
+            if holding {
+                holding = false
+                follow(true)
+            }
+            return
+        }
+        guard !holding, grace == nil else { return }
+        let attachment = attachments, wait = followGrace
+        grace = Task { [weak self] in
+            do { try await Task.sleep(for: wait) } catch { return }
+            guard let self, !Task.isCancelled, self.attachments == attachment else { return }
+            self.grace = nil
+            guard self.holds, !self.holding else { return }
+            self.holding = true
+            self.follow(false)
+        }
+    }
+
+    /// Sends `terminals.follow` for the current attachment after the previous call. `unsupported`: it keeps following
+    /// and never asks again. A failed `false` keeps following; a failed `true` leaves the output held, so the terminal
+    /// attaches again for a fresh screen. Answers for an attachment that is gone change nothing.
+    private func follow(_ following: Bool) {
+        let previous = follows, attachment = attachments, feed = feed
+        follows = Task { [weak self] in
+            await previous?.value
+            let result = await feed.follow(following)
+            guard let self, self.attached, self.attachments == attachment, self.feed === feed else { return }
+            switch result {
+            case .done, .stale: break
+            case .unsupported:
+                self.unfollowable = true
+                self.holding = false
+            case .failed where following:
+                self.reattach(feed)
+            case .failed:
+                self.holding = false
+            }
+        }
     }
 
     /// Reset terminal (the key bar's menu): a new attachment of the same feed, whose first output repaints a terminal
     /// fully reset (RIS) from the server's screen and history, as a reattach does. A feed that ends on detach (a plain
     /// shell), or a presence not attached, resets the emulator alone (Ghostty's `reset`): the program's next output
     /// draws on the fresh terminal.
-    /// A send in flight (`chatSending`) refuses it: the reattach would drop the screen publication the helper is
-    /// verifying the send against.
+    /// A send in flight (`chatSending`) refuses it: the reattach would end the attachment the helper is verifying the
+    /// send against (its own reads need it as much as a publication does).
     func resetTerminal() {
         guard !chatSending else { return }
         guard attached, !feed.endsOnDetach else {
@@ -383,6 +500,9 @@ final class TerminalPresence {
         case .exited, .failed:
             ended = event
             attached = false
+            grace?.cancel()
+            grace = nil
+            holding = false
         }
     }
 
@@ -402,19 +522,24 @@ final class TerminalPresence {
 
     static func systemPasteboard(_ text: String) { UIPasteboard.general.string = text }
 
+    /// How often the screen's text was read for a publication (tests: a helper reading the screens itself costs none).
+    @ObservationIgnored private(set) var screensRead = 0
+
     /// The screen as the helper reads it (the Mac's `publishScreen`).
     var screen: TerminalScreen {
-        session.locked {
+        screensRead += 1
+        return session.locked {
             let cursor = session.surface.cursorFaintTail()
             return TerminalScreen(text: String(decoding: session.surface.readText(.active), as: UTF8.self),
                                   column: UInt32(cursor.x), row: UInt32(cursor.y), faintTail: cursor.faint)
         }
     }
 
-    /// After output or input: the screen goes to the helper at most every 33 ms, the latest always last.
+    /// After output or input: the screen goes to the helper at most every 33 ms, the latest always last; never to a
+    /// helper that reads it itself (`hostsScreens`).
     func schedulePublication() {
         publishQueued.withLock { $0 = false }
-        guard attached, publication.pending == nil else { return }
+        guard attached, !feed.hostsScreens, publication.pending == nil else { return }
         let now = ContinuousClock.now
         let wait = publication.lastTime.map { max(.zero, $0 + Self.publishInterval - now) } ?? .zero
         publication.pending = Task { [weak self] in
@@ -492,9 +617,10 @@ final class TerminalFlag: Sendable {
 /// the Chat stream share one per node, and a reconnect hands the same presence the new helper's feed.
 ///
 /// A presence is attached only while something uses it (`retain`/`release`): the Terminal segment while it is on
-/// screen, a conversation while its chat needs the screen published. When the last user lets go the attachment ends
-/// (nothing is parsed or published) but the presence keeps its last screen, so showing the terminal again draws it at
-/// once while the new attachment repaints it. A reconnect reattaches only presences in use.
+/// screen (`showing`), a conversation while its chat needs the terminal attached. When the last user lets go the
+/// attachment ends (nothing is parsed or published) but the presence keeps its last screen, so showing the terminal
+/// again draws it at once while the new attachment repaints it. A presence only conversations use holds its output
+/// (`TerminalPresence.show`). A reconnect reattaches only presences in use.
 @MainActor
 final class TerminalPresences {
     struct Key: Hashable, Sendable {
@@ -506,6 +632,8 @@ final class TerminalPresences {
     private var presences: [Key: TerminalPresence] = [:]
     /// How many users each presence has (absent: none).
     private var users: [Key: Int] = [:]
+    /// How many of them are terminal views (absent: none).
+    private var views: [Key: Int] = [:]
 
     func presence(_ key: Key) -> TerminalPresence? { presences[key] }
 
@@ -537,30 +665,42 @@ final class TerminalPresences {
         }
         let presence = TerminalPresence(feed: feed(), scrollback: scrollback, grid: grid)
         presences[key] = presence
+        for _ in 0..<(views[key] ?? 0) { presence.show(true) }
         if inUse(key) { presence.start() }
         return presence
     }
 
     /// One more user of the node's presence: it attaches (when it exists and its attachment has not ended).
-    func retain(_ key: Key) {
+    /// `showing`: the user is a terminal view on screen (the Terminal segment), which keeps its output following.
+    func retain(_ key: Key, showing: Bool = false) {
         users[key, default: 0] += 1
+        if showing {
+            views[key, default: 0] += 1
+            presences[key]?.show(true)
+        }
         if let presence = presences[key], !presence.attached, presence.ended == nil { presence.start() }
     }
 
-    /// One user fewer: the last one detaches the presence, which keeps its screen for the next time it shows.
-    func release(_ key: Key) {
+    /// One user fewer (`showing` as it was retained): the last one detaches the presence, which keeps its screen for the
+    /// next time it shows; the last view leaves the rest holding its output.
+    func release(_ key: Key, showing: Bool = false) {
         guard let count = users[key] else { return }
         if count > 1 {
             users[key] = count - 1
-            return
+        } else {
+            users[key] = nil
+            presences[key]?.stop()
         }
-        users[key] = nil
-        presences[key]?.stop()
+        if showing, let shown = views[key] {
+            views[key] = shown > 1 ? shown - 1 : nil
+            presences[key]?.show(false)
+        }
     }
 
     /// The node closed: stop observing it and forget it.
     func close(_ key: Key) {
         users[key] = nil
+        views[key] = nil
         presences.removeValue(forKey: key)?.stop()
     }
 

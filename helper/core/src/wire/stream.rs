@@ -17,6 +17,9 @@ pub struct Message {
     metadata: Option<Vec<u8>>,
     streamed: bool,
     finished: bool,
+    /// terminal.output payload bytes this message carries for a client with an output window
+    /// (feature terminals.window); counted when its last frame is admitted. 0: not counted.
+    pub credit: u64,
 }
 
 impl Message {
@@ -59,7 +62,18 @@ impl Message {
             streamed: streamed || metadata.is_some(),
             metadata,
             finished: false,
+            credit: 0,
         }
+    }
+
+    /// Terminal output or chunks: replies may pass it (`select`).
+    pub fn bulk(&self) -> bool {
+        self.bulk
+    }
+
+    /// Encoded bytes not yet taken as frames (headers aside).
+    pub fn remaining(&self) -> usize {
+        if self.finished { 0 } else { self.bytes.len() - self.offset }
     }
 
     pub fn binary(kind: Kind, id: u64, bytes: Vec<u8>, metadata: Vec<u8>) -> Result<Self, Error> {

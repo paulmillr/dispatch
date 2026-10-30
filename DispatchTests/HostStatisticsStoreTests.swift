@@ -236,3 +236,22 @@ extension HostStatisticsStoreTests {
         XCTAssertTrue(snapshot.processesPartial)
     }
 }
+
+// At the end of the file: replays mark test steps by source line, so lines added above a recorded step stall it.
+extension HostStatisticsStoreTests {
+    /// The local background wait is up to a minute: the first viewer must not wait for it, nor lose the CPU baseline.
+    func testLocalFirstViewerSamplesAtOnceDuringALongBackgroundWait() async throws {
+        let local = HostStats(backgroundCadence: { .seconds(3600) })
+        defer { local.stop() }
+        local.startBackgroundHistory()
+        try await TestSupport.eventually { local.history.count == 1 }
+        XCTAssertTrue(local.latest.processes.isEmpty)
+        try await TestSupport.pause(for: .milliseconds(100))
+        XCTAssertEqual(local.history.count, 1, "The background wait is the cadence's")
+        let viewer = local.subscribe()
+        try await TestSupport.eventually(timeout: .seconds(5)) { local.history.count >= 2 && !local.latest.processes.isEmpty }
+        XCTAssertTrue(local.latest.cpuAvailable, "Waking the sampler keeps its baseline")
+        local.unsubscribe(viewer)
+        XCTAssertTrue(local.disksStale)
+    }
+}

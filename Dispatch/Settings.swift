@@ -79,6 +79,29 @@ enum OptionKeys: String, Codable, CaseIterable {
     }
 }
 
+/// The key that dictates (Settings › Keyboard › Voice; DictationShortcut): held alone, one message; tapped,
+/// conversation mode. With another key or a click it is an ordinary modifier.
+enum VoiceKey: String, Codable, CaseIterable {
+    case rightCommand, rightOption, function, off
+    var title: String {
+        switch self {
+        case .rightCommand: "Right ⌘"
+        case .rightOption: "Right ⌥"
+        case .function: "fn 🌐"
+        case .off: "Off"
+        }
+    }
+    /// How hints name it: "hold right ⌘".
+    var name: String {
+        switch self {
+        case .rightCommand: "right ⌘"
+        case .rightOption: "right ⌥"
+        case .function: "fn"
+        case .off: ""
+        }
+    }
+}
+
 /// Each new terminal's scrollback: sized from the Mac's memory, a fixed size, or unlimited.
 enum Scrollback: String, Codable, CaseIterable {
     case automatic, small, large, unlimited
@@ -119,21 +142,55 @@ enum ChatFont: String, Codable, CaseIterable {
     case system = "San Francisco"
     case sameAsCode = "Same as code"
     case comicSans = "Comic Sans"
+    case latinModernRoman = "Latin Modern Roman"
+    case newYork = "New York"
+    case sfRounded = "SF Rounded"
+
+    /// The system font's own designs (San Francisco, New York, SF Rounded): drawn as the system font, never by name.
+    var systemDesign: NSFontDescriptor.SystemDesign? {
+        switch self {
+        case .system: .default
+        case .newYork: .serif
+        case .sfRounded: .rounded
+        case .sameAsCode, .comicSans, .latinModernRoman: nil
+        }
+    }
+
+    /// The system font in this choice's design; nil for fonts drawn by name.
+    func systemFont(ofSize size: CGFloat) -> NSFont? {
+        guard let design = systemDesign else { return nil }
+        let font = NSFont.systemFont(ofSize: size)
+        // San Francisco stays the system UI font: a design applied to it resolves to the plain SFNS face.
+        guard design != .default else { return font }
+        return font.fontDescriptor.withDesign(design).flatMap { NSFont(descriptor: $0, size: size) } ?? font
+    }
 
     // Match median rendered lowercase height, not font-reported x-height, to Source Code Pro at 14 pt.
     // Named fonts keep this calibration when the code font changes; Same as code stays unscaled.
     // Recalibrate after font replacements with `swift scripts/measure-chat-fonts.swift`.
     var sizeScale: CGFloat {
         switch self {
-        case .sameAsCode, .system: 1
+        case .sameAsCode, .system, .newYork, .sfRounded: 1
         case .comicSans: 0.907
+        case .latinModernRoman: 1.126
         }
     }
 
     var postScriptName: String? {
         switch self {
         case .comicSans: "ComicSansMS"
-        case .sameAsCode, .system: nil
+        case .latinModernRoman: "LMRoman10-Regular"
+        case .sameAsCode, .system, .newYork, .sfRounded: nil
+        }
+    }
+
+    /// Latin Modern Mono (chat's Same as code with it as the terminal font) has no bold of its own: its bold faces are
+    /// Latin Modern Mono Light's, as TeX pairs them. nil: the face bolds within its own family.
+    static func boldPostScriptName(_ name: String) -> String? {
+        switch name {
+        case "LMMono10-Regular": "LMMonoLt10-Bold"
+        case "LMMono10-Italic": "LMMonoLt10-BoldOblique"
+        default: nil
         }
     }
 }
@@ -143,8 +200,13 @@ struct Preferences: Codable, Equatable {
     /// Tabs follow the agent's conversation, a running program's title, then the folder.
     var automaticTabNames = true
     var fontFamily = "Source Code Pro"
+    /// The code font's ligatures (`->` as an arrow, in Hasklig, Fira Code…) in terminals, code and the file preview.
+    var fontLigatures = true
     var chatFont = ChatFont.system
-    var fontSize = 12.5
+    /// Terminal and interface text: Source Code Pro at 14 has the lowercase height of the system's 13-point text, and
+    /// every terminal font draws at that apparent size (`TerminalFontScale`). Layouts grow from a 12.5 design base
+    /// (`AppTypography.expanded`).
+    var fontSize = 14.0
     /// The host picker's rows are the default.
     var sidebarStyle = SidebarStyle.icons
     /// Any but the dense, compact sidebar; setting it picks large or compact.
@@ -177,7 +239,12 @@ struct Preferences: Codable, Equatable {
     var appTheme = AppTheme.automatic
     var theme = "Default"
     var lightTheme = "Default"
-    var improveTextContrast = false
+    var textContrast = TextContrast.lightThemes
+    /// Contrast on every scheme; off leaves the light-theme default (imports, which can't say which side they mean).
+    var improveTextContrast: Bool {
+        get { textContrast == .always }
+        set { textContrast = newValue ? .always : .lightThemes }
+    }
     /// Colorblind-friendly: the scheme pickers offer only schemes made for this vision, and new schemes are made for it.
     var colorVision = ColorVision.typical
     /// How opaque terminals' backgrounds are, `terminalOpacityRange`; below 1 the desktop shows through terminals only.
@@ -187,15 +254,19 @@ struct Preferences: Codable, Equatable {
     var optionAsAlt = OptionKeys.both
     var cursor = TerminalCursor.block
     var cursorBlink = true
+    /// The terminal's rows and chat's lines together (Settings › General › Text).
+    var lineSpacing = LineSpacing.normal
     var scrollback = Scrollback.automatic
-    /// tmux- or herdr-style ⌃B prefix keys in native spaces; off by default because ⌃B is a shell
-    /// and editor key there.
-    var prefixKeys = PrefixStyle.off
-    /// tmux and herdr spaces answer their own tool's prefix keys.
-    var backendPrefixKeys = true
+    /// Which spaces answer ⌃B prefix keys: tmux and herdr spaces their own tool's, native spaces tmux's. Native
+    /// spaces are left out by default because ⌃B is a shell and editor key there.
+    var prefixKeys = PrefixSpaces.multiplexers
     /// The modifiers for choosing spaces, tabs and layouts with the digit keys.
     var keyGroups = KeyGroups()
     var enableDiagnostics = false
+    /// Settings › Experimental › Slow connection mode: helpers started from then on keep at most 256 KB of terminal output in
+    /// flight to this app (`terminals.window`, HelperOutputWindow), so a keystroke or a reply never waits behind megabytes
+    /// parked in SSH and TCP buffers on a slow link. Off: output streams as before.
+    var outputWindow = false
     var hideSingleSpace = true
     /// Tabs only: no tab strips, and the sidebar lists every tab (a tmux or herdr space's windows) instead of spaces,
     /// with "+ tab" in place of "+ space". Spaces still exist underneath (⌘N, splits, layouts); they are just not shown.
@@ -217,6 +288,8 @@ struct Preferences: Codable, Equatable {
     /// Programs in any tab, local or remote, can set the clipboard (OSC 52, kitty clipboard, tmux buffers). Stored under
     /// its old name, from when it covered helper hosts only.
     var allowClipboardWrites = true
+    /// Preserve the existing paste behavior; off asks before an unsafe clipboard paste.
+    var autoApproveUnsafePastes = true
     /// A helper connection lost while Dispatch runs logs back in by itself, with keys or the SSH agent only.
     var autoReconnectSSH = false
     /// Keystrokes kept from other apps while Dispatch is active (SecureKeyboardEntry).
@@ -240,19 +313,29 @@ struct Preferences: Codable, Equatable {
         let command = shell.trimmingCharacters(in: .whitespaces)
         return command.isEmpty ? nil : String(command.split(separator: " ", maxSplits: 1)[0])
     }
+    /// A line typed into each new local shell as it starts (iTerm's "send text at start"); empty types nothing.
+    var startupCommand = ""
     /// Files mode itself. Off, no tab offers it and tabs showing it return to their terminals.
     var filesEnabled = true
     /// Files mode: copy in from Finder, out to Finder, or onto a terminal as paths.
     var filesDragAndDrop = true
     /// Each tab's ⇧⌘. overrides this for that tab only (FilesSession.showHidden).
     var filesShowHidden = true
+    /// The Files tab's preview. Off, no file's contents are read to show it: the list spans the view and ⌥⌘P does
+    /// nothing there (Review's and Commits' diffs still show).
+    var filesPreviews = true
+    /// The file preview's line numbers.
+    var filesLineNumbers = true
+    /// The file preview wraps long lines; each tab's wrap button overrides it for that tab (FilesSession.previewWrap).
+    var filesWrapLines = false
     /// Git in files mode (the Review and Commits tabs) and the sidebar's branch names. Off, Dispatch reads nothing of any repository.
     var gitEnabled = true
-    /// Chat dictation's engine, and the Whisper model it uses when Whisper is chosen (WhisperModelStore downloads it).
+    /// Chat dictation's engine, and the Whisper model it uses when Whisper is chosen (DictationModelStore downloads it,
+    /// and Parakeet's).
     /// Chat's microphone beside Send. Off, the composer shows none.
     var dictationEnabled = true
-    /// Hold right ⌘ to dictate into the active chat (release inserts, ↩ sends); tap it to dictate hands-free.
-    var dictationRightCommand = true
+    /// Hold this key to dictate into the active chat (release inserts, ↩ sends); tap it to dictate hands-free.
+    var dictationKey = VoiceKey.rightCommand
     /// "Dispatch, …" switches spaces and tabs (VoiceNavigation) instead of becoming text.
     var dictationNavigation = true
     /// Conversation mode reads its chat's replies aloud and says when other agents finish or need you.
@@ -280,26 +363,28 @@ struct Preferences: Codable, Equatable {
     // Settings saved by earlier local builds gain defaults for new fields.
     // Explicit user choices remain unchanged.
     private enum CodingKeys: String, CodingKey {
-        case enableHostDetection, autoGrantNewHosts, autoReconnectSSH, secureKeyboardEntry, attentionNotifications, attentionDockBadge, attentionSound, attentionTextContent, shipsBell
-        case spaceOrder, automaticTabNames, fontFamily, chatFont, fontSize, appTheme, theme, lightTheme, cursor, cursorBlink, scrollback
-        case prefixKeys, backendPrefixKeys, keyGroups
-        case hideSingleSpace, tabsOnly, startingDirectory, shell, rememberHosts, restoreTerminalOutput
-        case enableDiagnostics
+        case enableHostDetection, autoGrantNewHosts, autoReconnectSSH, secureKeyboardEntry, autoApproveUnsafePastes, attentionNotifications, attentionDockBadge, attentionSound, attentionTextContent, shipsBell
+        case spaceOrder, automaticTabNames, fontFamily, fontLigatures, chatFont, fontSize, appTheme, theme, lightTheme, cursor, cursorBlink, lineSpacing, scrollback
+        case keyGroups
+        case hideSingleSpace, tabsOnly, startingDirectory, shell, startupCommand, rememberHosts, restoreTerminalOutput
+        case enableDiagnostics, outputWindow
         case sidebarStyle, showGitBranches, liquidGlass, hostColors, showHostColors
-        case improveTextContrast, colorVision, terminalOpacity
+        case textContrast, colorVision, terminalOpacity
         case spaces, closeLaunching, enableKittyGraphics
-        case filesEnabled, filesDragAndDrop, gitEnabled
-        case dictationEnabled, dictationRightCommand, dictationNavigation, dictationReadReplies, dictationWakeWords, dictationEngine, whisperModel
+        case filesEnabled, filesDragAndDrop, filesPreviews, filesLineNumbers, filesWrapLines, gitEnabled
+        case dictationEnabled, dictationKey, dictationNavigation, dictationReadReplies, dictationWakeWords, dictationEngine, whisperModel
         // Stored under a new name since hidden files show by default: every save wrote the old key, so its `false`
         // was usually the old default rather than a choice.
         case filesShowHidden = "filesShowHiddenFiles"
         case allowClipboardWrites = "allowRemoteClipboardWrites"
         case optionAsAlt = "optionKeysAsAlt"
+        case prefixKeys = "prefixSpaces"
     }
 
     private enum LegacyCodingKeys: String, CodingKey {
-        case autoCloseNativeSpace, sidebarTheme, appearance, largeSidebarItems, optionAsAlt
+        case autoCloseNativeSpace, sidebarTheme, appearance, largeSidebarItems, optionAsAlt, improveTextContrast
         case enableTmuxIntegration, enableHerdrIntegration, autoCloseTmuxNativeSpace, autoCloseHerdrNativeSpace
+        case dictationRightCommand, prefixKeys, backendPrefixKeys
     }
 
     init(from decoder: Decoder) throws {
@@ -307,6 +392,7 @@ struct Preferences: Codable, Equatable {
         enableHostDetection = try fields.decodeIfPresent(Bool.self, forKey: .enableHostDetection) ?? enableHostDetection
         autoGrantNewHosts = try fields.decodeIfPresent(Bool.self, forKey: .autoGrantNewHosts) ?? autoGrantNewHosts
         allowClipboardWrites = try fields.decodeIfPresent(Bool.self, forKey: .allowClipboardWrites) ?? allowClipboardWrites
+        autoApproveUnsafePastes = try fields.decodeIfPresent(Bool.self, forKey: .autoApproveUnsafePastes) ?? autoApproveUnsafePastes
         autoReconnectSSH = try fields.decodeIfPresent(Bool.self, forKey: .autoReconnectSSH) ?? autoReconnectSSH
         secureKeyboardEntry = try fields.decodeIfPresent(Bool.self, forKey: .secureKeyboardEntry) ?? secureKeyboardEntry
         attentionNotifications = try fields.decodeIfPresent(Bool.self, forKey: .attentionNotifications) ?? attentionNotifications
@@ -318,6 +404,7 @@ struct Preferences: Codable, Equatable {
         // Replaces `tabNaming`, whose stored "terminal" was usually the old default rather than a choice.
         automaticTabNames = try fields.decodeIfPresent(Bool.self, forKey: .automaticTabNames) ?? automaticTabNames
         fontFamily = try fields.decodeIfPresent(String.self, forKey: .fontFamily) ?? fontFamily
+        fontLigatures = try fields.decodeIfPresent(Bool.self, forKey: .fontLigatures) ?? fontLigatures
         // Removed font choices fall back without discarding the other settings.
         chatFont = try fields.decodeIfPresent(String.self, forKey: .chatFont).flatMap(ChatFont.init(rawValue:)) ?? chatFont
         fontSize = try fields.decodeIfPresent(Double.self, forKey: .fontSize) ?? fontSize
@@ -346,7 +433,10 @@ struct Preferences: Codable, Equatable {
         let savedTheme = try fields.decodeIfPresent(String.self, forKey: .theme)
         theme = savedTheme ?? theme
         lightTheme = try fields.decodeIfPresent(String.self, forKey: .lightTheme) ?? theme
-        improveTextContrast = try fields.decodeIfPresent(Bool.self, forKey: .improveTextContrast) ?? improveTextContrast
+        // Replaces the `improveTextContrast` switch. Every save wrote it, so off was usually the old default rather
+        // than a choice: it takes the light-theme default, while on stays on for every scheme.
+        textContrast = try fields.decodeIfPresent(String.self, forKey: .textContrast).flatMap(TextContrast.init(rawValue:))
+            ?? (try legacy.decodeIfPresent(Bool.self, forKey: .improveTextContrast) == true ? .always : textContrast)
         colorVision = try fields.decodeIfPresent(String.self, forKey: .colorVision).flatMap(ColorVision.init(rawValue:)) ?? colorVision
         terminalOpacity = (try fields.decodeIfPresent(Double.self, forKey: .terminalOpacity)).map {
             $0.isFinite ? min(max($0, Self.terminalOpacityRange.lowerBound), 1) : 1
@@ -357,13 +447,19 @@ struct Preferences: Codable, Equatable {
             ?? optionSwitch.map { $0 ? .both : .off } ?? optionAsAlt
         cursor = try fields.decodeIfPresent(String.self, forKey: .cursor).flatMap(TerminalCursor.init(rawValue:)) ?? cursor
         cursorBlink = try fields.decodeIfPresent(Bool.self, forKey: .cursorBlink) ?? cursorBlink
+        lineSpacing = try fields.decodeIfPresent(String.self, forKey: .lineSpacing).flatMap(LineSpacing.init(rawValue:)) ?? lineSpacing
         scrollback = try fields.decodeIfPresent(String.self, forKey: .scrollback).flatMap(Scrollback.init(rawValue:)) ?? scrollback
-        prefixKeys = try fields.decodeIfPresent(String.self, forKey: .prefixKeys).flatMap(PrefixStyle.init(rawValue:)) ?? prefixKeys
-        backendPrefixKeys = try fields.decodeIfPresent(Bool.self, forKey: .backendPrefixKeys) ?? backendPrefixKeys
+        // Settings before one choice saved a style for native spaces (tmux or herdr, either now all spaces with
+        // tmux's keys) and a switch for tmux and herdr spaces.
+        let nativeStyle = try legacy.decodeIfPresent(String.self, forKey: .prefixKeys).flatMap(PrefixStyle.init(rawValue:))
+        let backendSwitch = try legacy.decodeIfPresent(Bool.self, forKey: .backendPrefixKeys)
+        prefixKeys = try fields.decodeIfPresent(String.self, forKey: .prefixKeys).flatMap(PrefixSpaces.init(rawValue:))
+            ?? (nativeStyle.map { $0 != .off } == true ? .all : backendSwitch == false ? .off : prefixKeys)
         keyGroups = try fields.decodeIfPresent(KeyGroups.self, forKey: .keyGroups) ?? keyGroups
         rememberHosts = try fields.decodeIfPresent(Bool.self, forKey: .rememberHosts) ?? rememberHosts
         restoreTerminalOutput = try fields.decodeIfPresent(Bool.self, forKey: .restoreTerminalOutput) ?? restoreTerminalOutput
         enableDiagnostics = try fields.decodeIfPresent(Bool.self, forKey: .enableDiagnostics) ?? false
+        outputWindow = try fields.decodeIfPresent(Bool.self, forKey: .outputWindow) ?? false
         hideSingleSpace = try fields.decodeIfPresent(Bool.self, forKey: .hideSingleSpace) ?? hideSingleSpace
         tabsOnly = try fields.decodeIfPresent(Bool.self, forKey: .tabsOnly) ?? tabsOnly
         spaces = try fields.decodeIfPresent([String: Bool].self, forKey: .spaces) ?? [:]
@@ -378,12 +474,19 @@ struct Preferences: Codable, Equatable {
         }
         startingDirectory = try fields.decodeIfPresent(String.self, forKey: .startingDirectory) ?? startingDirectory
         shell = try fields.decodeIfPresent(String.self, forKey: .shell) ?? shell
+        startupCommand = try fields.decodeIfPresent(String.self, forKey: .startupCommand) ?? startupCommand
         filesEnabled = try fields.decodeIfPresent(Bool.self, forKey: .filesEnabled) ?? filesEnabled
         filesDragAndDrop = try fields.decodeIfPresent(Bool.self, forKey: .filesDragAndDrop) ?? filesDragAndDrop
         filesShowHidden = try fields.decodeIfPresent(Bool.self, forKey: .filesShowHidden) ?? filesShowHidden
+        filesPreviews = try fields.decodeIfPresent(Bool.self, forKey: .filesPreviews) ?? filesPreviews
+        filesLineNumbers = try fields.decodeIfPresent(Bool.self, forKey: .filesLineNumbers) ?? filesLineNumbers
+        filesWrapLines = try fields.decodeIfPresent(Bool.self, forKey: .filesWrapLines) ?? filesWrapLines
         gitEnabled = try fields.decodeIfPresent(Bool.self, forKey: .gitEnabled) ?? gitEnabled
         dictationEnabled = try fields.decodeIfPresent(Bool.self, forKey: .dictationEnabled) ?? dictationEnabled
-        dictationRightCommand = try fields.decodeIfPresent(Bool.self, forKey: .dictationRightCommand) ?? dictationRightCommand
+        // Settings before the key could be chosen saved a right ⌘ switch: off stays off.
+        let rightCommandSwitch = try legacy.decodeIfPresent(Bool.self, forKey: .dictationRightCommand)
+        dictationKey = try fields.decodeIfPresent(String.self, forKey: .dictationKey).flatMap(VoiceKey.init(rawValue:))
+            ?? (rightCommandSwitch == false ? .off : dictationKey)
         dictationNavigation = try fields.decodeIfPresent(Bool.self, forKey: .dictationNavigation) ?? dictationNavigation
         dictationReadReplies = try fields.decodeIfPresent(Bool.self, forKey: .dictationReadReplies) ?? dictationReadReplies
         // A hand-edited list with no usable word keeps the defaults.

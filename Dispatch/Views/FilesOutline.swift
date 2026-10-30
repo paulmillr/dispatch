@@ -22,6 +22,8 @@ enum FilesColumns {
         shown(width: width, name: nameMinimum(typography), modified: modified(typography), size: size(typography))
     }
     static func rowHeight(_ typography: AppTypography) -> CGFloat { typography.expanded(24) }
+    /// The list's column header and the preview's header, side by side: one height above their 1 pt rules.
+    static func headerHeight(_ typography: AppTypography) -> CGFloat { max(40, typography.expanded(34)).rounded() }
     /// `.d1`, `.d2`: each level 20 pt further in.
     static func indent(_ typography: AppTypography) -> CGFloat { typography.expanded(20) }
 }
@@ -437,7 +439,12 @@ final class FilesOutlineView: NSOutlineView {
             }
         }
         if restyled { fitColumns() }
-        apply(configuration.rows, root: configuration.root, reload: restyled)
+        // The same filter and hidden setting: rows that come or go are the folder's own changes, which may animate. A
+        // filter typed or hidden files shown changes the listing at once.
+        let listing = (filter: configuration.session.filter, hidden: configuration.settingHidden)
+        let refresh = shownListing.map { $0 == listing } ?? false
+        shownListing = listing
+        apply(configuration.rows, root: configuration.root, reload: restyled, refresh: refresh)
         syncSelection()
         syncDrag(configuration.drag)
         if let request = configuration.focusRequest, Self.answeredFocus[configuration.session.id] != request {
@@ -449,7 +456,10 @@ final class FilesOutlineView: NSOutlineView {
 
     // MARK: Rows
 
-    private func apply(_ rows: [FilesRow], root: String, reload: Bool) {
+    /// The filter and hidden setting the rows were last listed with.
+    private var shownListing: (filter: String, hidden: Bool)?
+
+    private func apply(_ rows: [FilesRow], root: String, reload: Bool, refresh: Bool) {
         guard let outline else { return }
         guard reload || root != self.root || rows != self.rows else { return }
         applying = true
@@ -520,8 +530,12 @@ final class FilesOutlineView: NSOutlineView {
             }
             let removals = IndexSet(old.indices.filter { !newSet.contains(old[$0]) })
             let insertions = IndexSet(new.indices.filter { !oldSet.contains(new[$0]) })
-            if !removals.isEmpty { outline.removeItems(at: removals, inParent: parentNode, withAnimation: []) }
-            if !insertions.isEmpty { outline.insertItems(at: insertions, inParent: parentNode, withAnimation: []) }
+            // A file or two appearing or going in a folder already listed (a build's output, an agent's edit) fades
+            // and slides; a first listing, a checkout's worth of change, or Reduce Motion stays instant.
+            let animated = refresh && !old.isEmpty && removals.count + insertions.count <= 20
+                && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            if !removals.isEmpty { outline.removeItems(at: removals, inParent: parentNode, withAnimation: animated ? [.effectFade, .slideUp] : []) }
+            if !insertions.isEmpty { outline.insertItems(at: insertions, inParent: parentNode, withAnimation: animated ? [.effectFade, .slideDown] : []) }
         }
         outline.endUpdates()
         if reordered {

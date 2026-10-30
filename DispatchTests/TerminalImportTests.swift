@@ -92,7 +92,8 @@ import XCTest
         keybind = super+w=close_surface
         copy-on-select = clipboard
         font-feature = -calt
-        adjust-cell-height = 10%
+        adjust-cell-width = 10%
+        adjust-cell-height = 2
         shell-integration = zsh
         some-future-key = 1
         """
@@ -103,13 +104,14 @@ import XCTest
             "font-family Not Installed Mono (not a monospaced font on this Mac)",
             "font-size 48 pt (Dispatch takes 8–32 pt)",
             "theme Missing Theme (not found)",
+            "adjust-cell-height 2 (Dispatch takes a percentage)",
             "command (not a program by its full path)",
             "working-directory (folder not found)",
             "background-blur (terminal opacity only)",
             "window-padding-x, window-theme, window-height and 1 more (Dispatch arranges its own windows)",
             "keybind (Dispatch keeps its own shortcuts)",
             "font-feature (font styles and features)",
-            "adjust-cell-height (no cell adjustments)",
+            "adjust-cell-width (no cell adjustments)",
             "copy-on-select (mouse behavior)",
             "shell-integration (Dispatch's own shell integration)",
         ])
@@ -125,6 +127,24 @@ import XCTest
         case "Example Day": latte
         default: nil
         }
+    }
+
+    /// Ghostty's adjust-cell-height as a percentage is the nearest line spacing; export writes it back.
+    func testGhosttyCellHeightIsLineSpacing() {
+        for (text, expected) in [("20%", LineSpacing.relaxed), ("-5%", .tight), ("2%", .normal), ("-50%", .tight)] {
+            let plan = GhosttyImport.plan(text: "adjust-cell-height = \(text)", fonts: fonts, theme: { _ in nil })
+            XCTAssertEqual(plan.changes.map(\.setting), ["Line spacing"], text)
+            XCTAssertEqual(applied(plan).lineSpacing, expected, text)
+        }
+        XCTAssertEqual(LineSpacing.tight.cellHeight, "-6%")
+        XCTAssertEqual(LineSpacing.relaxed.cellHeight, "18%")
+        XCTAssertNil(LineSpacing.normal.cellHeight, "Normal is the font's own line")
+        // Saved with the other settings; older files and unknown values read as Normal.
+        var chosen = Preferences()
+        chosen.lineSpacing = .tight
+        XCTAssertEqual(try JSONDecoder().decode(Preferences.self, from: JSONEncoder().encode(chosen)).lineSpacing, .tight)
+        XCTAssertEqual(try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8)).lineSpacing, .normal)
+        XCTAssertEqual(try JSONDecoder().decode(Preferences.self, from: Data(#"{"lineSpacing":"airy"}"#.utf8)).lineSpacing, .normal)
     }
 
     /// Ghostty's background-opacity is Terminal opacity, within what Settings offers.
@@ -333,7 +353,7 @@ import XCTest
     }
 
     func testITermColorSpacesAndSeparateLightAndDarkColors() throws {
-        XCTAssertEqual(ITermImport.color(iTermColor(1, 0, 0, space: "P3")), ThemeColor(r: 255, g: 0, b: 0), "P3's red clamps to sRGB's")
+        XCTAssertEqual(ITermImport.color(iTermColor(1, 0, 0, space: "P3")), ThemeColor(displayP3Red: 1, green: 0, blue: 0), "P3's red stays P3")
         let calibrated = try XCTUnwrap(NSColor(calibratedRed: 0.5, green: 0.25, blue: 0.75, alpha: 1).usingColorSpace(.sRGB))
         let expected = ThemeColor(red: Double(calibrated.redComponent), green: Double(calibrated.greenComponent), blue: Double(calibrated.blueComponent))
         XCTAssertEqual(ITermImport.color(iTermColor(0.5, 0.25, 0.75, space: nil)), expected, "no color space is calibrated RGB")

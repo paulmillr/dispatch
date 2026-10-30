@@ -57,6 +57,7 @@ final class SSHBootstrapScriptTests: XCTestCase {
             "preamble": SSHBootstrapScript.privateDirectoryScript,
             "cache": SSHBootstrapScript.cacheCheck(size: helper.count, digest: digest),
             "upload": SSHBootstrapScript.upload(digest: digest, size: helper.count, staging: "upload-0123"),
+            "compressed upload": SSHBootstrapScript.upload(digest: digest, size: helper.count, staging: "upload-0123", compressed: true),
             "publish": SSHBootstrap.publish(sessionID: session, relativePath: relative),
             "release": SSHBootstrap.publish(sessionID: session, relativePath: nil, reason: "setup timed out"),
             "login": SSHLauncherCommand.remoteCommand(sessionID: session, grant: .init(profile: .statistics), command: "exit 3"),
@@ -65,15 +66,23 @@ final class SSHBootstrapScriptTests: XCTestCase {
             "runtime upload": SSHBootstrapScript.upload(digest: digest, size: helper.count, staging: "upload-0123", root: .runtimeDirectory),
             "runtime probe": SSHBootstrapScript.runtimeProbe,
             "blocked": SSHBootstrapScript.cachePreamble(digest: digest) + "\n" + SSHBootstrapScript.blocked(size: helper.count, digest: digest),
-            "runtime launch": runtimeInstalled.command("--remote --capabilities '' --stdio"),
+            "launch": launcher(.home).command(probeArguments, export: ""),
+            "runtime launch": launcher(.runtimeDirectory).command(probeArguments, export: ""),
         ]
     }
 
-    private var runtimeInstalled: SSHBootstrap.Installed {
-        .init(root: .runtimeDirectory, published: SSHBootstrapScript.relativePath(digest: digest, root: .runtimeDirectory),
-              path: "/run/user/1000/" + SSHBootstrapScript.relativePath(digest: digest, root: .runtimeDirectory),
-              runtimeDirectory: "/run/user/1000", preamble: SSHBootstrapScript.cachePreamble(digest: digest, root: .runtimeDirectory),
-              verify: SSHBootstrapScript.verify(size: helper.count, digest: digest))
+    private let probeArguments = "--remote --capabilities '' --stdio"
+
+    /// The app's launcher for this test's helper, as the bundled one for this Mac (`others`: the bundle's other platforms).
+    private func launcher(_ root: SSHBootstrapScript.Root, others: Bool = true, this: Bool = true) -> SSHBootstrap.Launcher {
+        let other = { (name: String, fill: Character) in
+            SSHBootstrap.Bundled(name: name, url: URL(fileURLWithPath: "/nonexistent/" + name), archive: nil, size: 3,
+                                 digest: String(repeating: fill, count: 64))
+        }
+        return .init(root: root, runtimeDirectory: root == .home ? nil : "/run/user/1000",
+                     helpers: (this ? [SSHBootstrap.Bundled(name: "darwin-arm64", url: URL(fileURLWithPath: "/nonexistent"), archive: nil,
+                                                            size: helper.count, digest: digest)] : [])
+                        + (others ? [other("linux-aarch64", "b"), other("linux-x86_64", "c")] : []))
     }
 
     // MARK: What no script may contain
@@ -194,15 +203,31 @@ final class SSHBootstrapScriptTests: XCTestCase {
                     return try run(script, home: home, input: input, path: path)
                 }
                 var failure: String?
-                let check = try step(scripts["cache"]!)
-                if check.status != 0 {
-                    if let reason = SSHBootstrapScript.reason(check.output) { failure = reason } else {
+                // The probe's folded launch: the stand-in helper greets by printing its arguments.
+                let launch = scripts["launch"]!
+                func greeted(_ ran: Ran) -> Bool { ran.status == 0 && ran.output.hasPrefix("--remote\n") }
+                /// Why a launch started no helper, as the app reads its stderr (nil: the cache lacks it).
+                func refusal(_ ran: Ran) -> String? {
+                    if SSHBootstrapScript.blocked(ran.errors) { return "cannot run programs" }
+                    switch SSHBootstrapScript.launchPlatform(ran.errors) {
+                    case .helper?: return nil
+                    case .unsupported?, .unidentified?: return "unsupported host platform"
+                    case nil: return SSHBootstrapScript.reason(ran.errors) ?? "the helper stopped before it answered"
+                    }
+                }
+                var probe = try run(launch, home: home, path: path)
+                if !greeted(probe) {
+                    if let reason = refusal(probe) { failure = reason } else {
                         let upload = try step(SSHBootstrapScript.upload(digest: digest, size: helper.count,
                                                                         staging: "upload-" + System.uuid().uuidString.lowercased()),
                                               input: helper)
-                        if upload.status != 0 { failure = SSHBootstrapScript.reason(upload.output) ?? "the upload failed" }
+                        if upload.status != 0 { failure = SSHBootstrapScript.reason(upload.output) ?? "the upload failed" } else {
+                            probe = try run(launch, home: home, path: path)
+                            if !greeted(probe) { failure = refusal(probe) ?? "installed helper does not verify" }
+                        }
                     }
                 }
+                // The release: the probe's login.release runs these checks without tools; this script is its fallback.
                 if failure == nil {
                     let publish = try step(SSHBootstrap.publish(sessionID: session, relativePath: relative))
                     if publish.status != 0 { failure = SSHBootstrapScript.reason(publish.output) ?? "could not release the login" }
@@ -257,6 +282,50 @@ final class SSHBootstrapScriptTests: XCTestCase {
             XCTAssertEqual(fallback.status, 7, shell)
             XCTAssertTrue(fallback.errors.contains("Dispatch SSH integration unavailable (unsafe folder sessions); opening the remote shell."),
                           "\(shell): \(fallback.text)")
+        }
+    }
+
+    /// An upload the waiting login sees for 10 s (50 polls) draws one progress line on the terminal, redrawn in place
+    /// and erased when the upload ends; a shorter one draws nothing. The stand-in `sleep` returns at once, receives 43 000
+    /// bytes a poll and ends the upload after `polls` polls; the stand-in `date` is a 5-poll second, so the speed is
+    /// 215 000 bytes a second. The login then times out and runs the user's command, as without a release.
+    func testWaitingLoginShowsAnUploadOnlyPastTenSeconds() throws {
+        for (polls, shown) in [(40, false), (70, true)] {
+            let home = try temporary()
+            var folder = home
+            for name in [".dispatch", "bin", "versions", digest, "upload-0123"] {
+                folder.appendPathComponent(name)
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+            }
+            try System.write(Data("3145728\n".utf8), to: folder.appendingPathComponent("size"), permissions: 0o600)
+            try System.write(Data(), to: folder.appendingPathComponent("dispatch-helper"), permissions: 0o600)
+            let bin = home.appendingPathComponent(".shims")
+            try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: false)
+            let counter = home.appendingPathComponent(".count").path
+            try System.write(Data("""
+            #!/bin/sh
+            n=0; read n < '\(counter)' 2>/dev/null; n=$((n + 1)); printf '%s' "$n" > '\(counter)'
+            test "$n" = \(polls) && rm -rf '\(folder.path)'
+            test -d '\(folder.path)' && head -c 43000 /dev/zero >> '\(folder.path)/dispatch-helper'
+            exit 0
+
+            """.utf8), to: bin.appendingPathComponent("sleep"), permissions: 0o755)
+            try System.write(Data("#!/bin/sh\nn=0; read n < '\(counter)' 2>/dev/null; echo $((n / 5))\n".utf8),
+                             to: bin.appendingPathComponent("date"), permissions: 0o755)
+            let login = try run(SSHLauncherCommand.remoteCommand(sessionID: session, grant: .init(profile: .statistics), command: "exit 3"),
+                                home: home, path: bin.path + ":/usr/bin:/bin")
+            XCTAssertEqual(login.status, 3, login.text)
+            XCTAssertTrue(login.errors.contains("Dispatch SSH integration unavailable"), login.text)
+            let frames = login.errors.components(separatedBy: "Installing Dispatch").count - 1
+            guard shown else { XCTAssertEqual(frames, 0, login.text); continue }
+            // Polls 50 through 69 drew; the 70th found the upload gone and erased the line.
+            XCTAssertEqual(frames, polls - 50, login.text)
+            let plain = login.errors.replacingOccurrences(of: "\u{1b}\\[[0-9;?]*[A-Za-z]", with: "", options: .regularExpression)
+            // The first line drawn, at poll 50: 2 150 000 of 3 145 728 bytes, 995 728 left at 215 000 a second.
+            XCTAssertTrue(plain.contains("Installing Dispatch ━━━━━━━━━━──────  68%  2.0 of 3.0 MB · 209 KB/s · 4 s"), plain)
+            let erased = try XCTUnwrap(login.errors.range(of: "\r\u{1b}[K", options: .backwards))
+            XCTAssertFalse(login.errors[erased.upperBound...].contains("Installing"), "the last line drawn is erased")
+            XCTAssertLessThan(erased.lowerBound, try XCTUnwrap(login.errors.range(of: "Dispatch SSH integration unavailable")).lowerBound)
         }
     }
 
@@ -348,6 +417,70 @@ final class SSHBootstrapScriptTests: XCTestCase {
         XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: versions.path)), [digest, recent.lastPathComponent])
     }
 
+    /// `data` as `gzip -9` writes it; `named` keeps the file name in the header (FNAME), as `gzip` without `-n` does.
+    private func gzipped(_ data: Data, named: Bool = false) throws -> Data {
+        let folder = try temporary(), file = folder.appendingPathComponent("helper")
+        try System.write(data, to: file, permissions: 0o600)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/gzip")
+        process.arguments = named ? ["-9", "-c", file.path] : ["-9", "-n", "-c", file.path]
+        let ran = try TestSupport.live(process, input: Data(), timeout: 15)
+        XCTAssertEqual(ran.status, 0)
+        return ran.output
+    }
+
+    /// A gzipped upload: expanded by the host's `gzip`, then checked like any other. A host without `gzip` says so before
+    /// it reads anything, and one whose `gzip` cannot expand what arrived says that; either way nothing is left behind and
+    /// the app's uncompressed upload that follows installs the helper.
+    func testCompressedUploadExpandsOrSaysWhyTheFullHelperFollows() throws {
+        let compressed = try gzipped(helper)
+        let installed = try temporary()
+        let upload = try run(SSHBootstrapScript.upload(digest: digest, size: helper.count, staging: "upload-0123", compressed: true),
+                             home: installed, input: compressed)
+        XCTAssertEqual(upload.status, 0, upload.text)
+        XCTAssertEqual(try System.read(installed.appendingPathComponent(relative)), helper)
+
+        // Every tool the scripts use but gzip.
+        let home = try temporary(), bin = home.appendingPathComponent(".tools")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: false)
+        for folder in ["/bin", "/usr/bin"] {
+            for tool in try FileManager.default.contentsOfDirectory(atPath: folder) where tool != "gzip"
+                && !FileManager.default.fileExists(atPath: bin.appendingPathComponent(tool).path) {
+                try FileManager.default.createSymbolicLink(atPath: bin.appendingPathComponent(tool).path, withDestinationPath: folder + "/" + tool)
+            }
+        }
+        let missing = try run(SSHBootstrapScript.upload(digest: digest, size: helper.count, staging: "upload-0123", compressed: true),
+                              home: home, input: compressed, path: bin.path)
+        XCTAssertNotEqual(missing.status, 0)
+        XCTAssertEqual(SSHBootstrapScript.reason(missing.output), SSHBootstrapScript.noGzip, missing.text)
+        let full = try run(SSHBootstrapScript.upload(digest: digest, size: helper.count, staging: "upload-4567"), home: home,
+                           input: helper, path: bin.path)
+        XCTAssertEqual(full.status, 0, full.text)
+
+        let broken = try temporary()
+        let garbled = try run(SSHBootstrapScript.upload(digest: digest, size: helper.count, staging: "upload-0123", compressed: true),
+                              home: broken, input: helper)
+        XCTAssertEqual(SSHBootstrapScript.reason(garbled.output), SSHBootstrapScript.gzipFailed, garbled.text)
+        let versions = broken.appendingPathComponent(".dispatch/bin/versions/" + digest)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: versions.path), [], "the staging folder is removed")
+        XCTAssertFalse(SSHBootstrapScript.transient(SSHBootstrapScript.noGzip))
+        XCTAssertFalse(SSHBootstrapScript.transient(SSHBootstrapScript.gzipFailed))
+        XCTAssertEqual(SSHBootstrapScript.upload(digest: digest, size: helper.count, staging: "upload-0123", compressed: false),
+                       SSHBootstrapScript.upload(digest: digest, size: helper.count, staging: "upload-0123"))
+    }
+
+    /// The bundled archive as the app expands it for a host without gzip: what `gzip` wrote, with or without a name in
+    /// its header; anything else is refused.
+    func testHelperArchiveExpandsWhatGzipWrote() throws {
+        let data = Data((0..<200_000).map { UInt8(truncatingIfNeeded: $0 &* 2_654_435_761 >> 13) } + Array(repeating: 7, count: 50_000))
+        XCTAssertEqual(try SSHHelperArchive.expand(gzipped(data)), data)
+        XCTAssertEqual(try SSHHelperArchive.expand(gzipped(data, named: true)), data)
+        XCTAssertThrowsError(try SSHHelperArchive.expand(data))
+        var truncated = try gzipped(data)
+        truncated.removeSubrange(truncated.count / 2 ..< truncated.count - 8)
+        XCTAssertThrowsError(try SSHHelperArchive.expand(truncated))
+    }
+
     /// What a helper that ended before it greeted says, on the Mac's login line and the iPhone alike: whole through
     /// `printable` and within its 160 characters (but what stderr adds).
     func testLaunchFailureTextSurvivesTheLoginLine() {
@@ -384,13 +517,24 @@ final class SSHBootstrapScriptTests: XCTestCase {
     /// `again`: the same host as an earlier call (its home and runtime folder as that call left them).
     /// `prepare` runs once a probe helper greeted (as the app's reconnect does); a stand-in that never greets fails first.
     private func startHelper(helper body: String, refuseTestX: Bool, runtime: Bool = true, runtimeAllowed: Bool = true,
-                             again: URL? = nil, prepare: (@MainActor (String, HelperSession.Info) throws -> Void)? = nil)
+                             again: URL? = nil, sessionID: String? = nil, released: Bool = false,
+                             prepare: (@MainActor (String, HelperSession.Info) throws -> Void)? = nil)
         async throws -> (failure: SSHSetupFailure?, home: URL, commands: [String]) {
         let root = try again.map { $0.deletingLastPathComponent() } ?? temporary(), home = root.appendingPathComponent("home")
         let folder = root.appendingPathComponent(".run")
+        let session = sessionID ?? self.session
         if again == nil {
             try FileManager.default.createDirectory(at: home, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
             _ = try self.runtime(in: root)
+        }
+        if released {
+            // Another release got there first: the login's session folder already names a helper.
+            var sessions = home
+            for name in [".dispatch", "sessions", session] {
+                sessions.appendPathComponent(name)
+                try? FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+            }
+            try System.write(Data("elsewhere\n".utf8), to: sessions.appendingPathComponent("ready"), permissions: 0o600)
         }
         let log = root.appendingPathComponent("commands")
         try System.write(Data(), to: log)
@@ -417,7 +561,10 @@ final class SSHBootstrapScriptTests: XCTestCase {
             _ = try await SSHBootstrap.startHelper(master: master, resources: resources, sessionID: session, publish: prepare == nil,
                                                    runtimeAllowed: runtimeAllowed, prepare: prepare)
             XCTFail("the stand-in helper never greets")
-        } catch let error as SSHSetupFailure { failure = error } catch is Greeted {}
+        } catch let error as SSHSetupFailure { failure = error } catch is Greeted {
+        } catch where released || sessionID != nil {
+            // `connect` finds no login here: how it fails is the caller's to check (the commands).
+        }
         let commands = String(decoding: try System.read(log), as: UTF8.self).components(separatedBy: "\n--\n").filter { !$0.isEmpty }
         return (failure, home, commands)
     }
@@ -441,12 +588,14 @@ final class SSHBootstrapScriptTests: XCTestCase {
         let retried = try await startHelper(helper: body, refuseTestX: false) { _, _ in greeted.raised = true; throw Greeted() }
         XCTAssertNil(retried.failure, "\(retried.commands)")
         XCTAssertTrue(greeted.raised)
-        XCTAssertEqual(launches(retried.commands), 2)
+        // The first launch finds the cache empty and starts nothing (the upload follows), the second ends, the third greets.
+        XCTAssertEqual(launches(retried.commands), 3)
+        XCTAssertEqual(uploads(retried.commands).count, 1)
         let twice = try await startHelper(helper: "echo 'the login bus did not appear' >&2\nexit 1\n", refuseTestX: false)
         XCTAssertEqual(twice.failure?.reason, "The helper stopped before it answered: the login bus did not appear")
         XCTAssertEqual(twice.failure?.permanent, false)
         XCTAssertEqual(twice.failure?.exitStatus, 1)
-        XCTAssertEqual(launches(twice.commands), 2, "one more attempt, as before")
+        XCTAssertEqual(launches(twice.commands), 3, "one more attempt after the upload's, as before")
     }
 
     private func uploads(_ commands: [String]) -> [String] {
@@ -499,4 +648,127 @@ final class SSHBootstrapScriptTests: XCTestCase {
         XCTAssertFalse(System.exists(hooks.home.deletingLastPathComponent().appendingPathComponent(".run/dispatch")))
     }
 
+}
+
+extension SSHBootstrapScriptTests {
+    /// The Mac's folded launch (`SSHBootstrapScript.launch`): the platform probe and the cache check in the helper's own
+    /// exec channel. It starts the cached helper with stdout its own; otherwise it starts nothing, writes nothing on
+    /// stdout (the client's frame stream) and says why on stderr: the platform for a cache that lacks the helper (the
+    /// app uploads it, then launches again) or for a platform no bundled helper serves, `DISPATCH_NOEXEC` for a folder
+    /// that cannot run it, or the private-folder checks' reason.
+    func testFoldedLaunchStartsTheCachedHelperOrSaysWhy() throws {
+        let home = try temporary()
+        let launch = launcher(.home).command(probeArguments, export: "")
+        let missing = try run(launch, home: home)
+        XCTAssertEqual(missing.status, 3, missing.text)
+        XCTAssertEqual(missing.output, "", "nothing on the frame stream")
+        XCTAssertEqual(SSHBootstrapScript.launchPlatform(missing.errors), .helper("darwin-arm64"), missing.text)
+        XCTAssertFalse(SSHBootstrapScript.blocked(missing.errors))
+
+        XCTAssertEqual(try run(SSHBootstrapScript.upload(digest: digest, size: helper.count, staging: "upload-0123"),
+                               home: home, input: helper).status, 0)
+        let started = try run(launch, home: home)
+        XCTAssertEqual(started.status, 0, started.text)
+        XCTAssertEqual(started.output, "--remote\n--capabilities\n\n--stdio\n", "the helper's stdout is the channel's")
+        XCTAssertEqual(started.errors, "")
+        // A damaged copy of the same size is a miss, never started.
+        let file = home.appendingPathComponent(relative)
+        try System.write(Data(repeating: 0x23, count: helper.count), to: file, permissions: 0o700)
+        let damaged = try run(launch, home: home)
+        XCTAssertEqual(SSHBootstrapScript.launchPlatform(damaged.errors), .helper("darwin-arm64"), damaged.text)
+        XCTAssertEqual(damaged.output, "")
+        try System.write(helper, to: file, permissions: 0o700)
+
+        // This Mac's platform without a bundled helper: its name, which the app reads as the bundled helper missing.
+        let unbundled = try run(launcher(.home, this: false).command(probeArguments, export: ""), home: home)
+        XCTAssertEqual(unbundled.status, 3)
+        XCTAssertEqual(SSHBootstrapScript.launchPlatform(unbundled.errors), .helper("darwin-arm64"), unbundled.text)
+        let none = try run(launcher(.home, others: false, this: false).command(probeArguments, export: ""), home: home)
+        XCTAssertEqual(SSHBootstrapScript.launchPlatform(none.errors), .helper("darwin-arm64"), none.text)
+        XCTAssertEqual(SSHBootstrapScript.launchPlatform("DISPATCH_PLATFORM=Unknown:mips\n"), .unsupported)
+        XCTAssertNil(SSHBootstrapScript.launchPlatform("boom\n"))
+
+        // test -x refused, as on a noexec mount.
+        let refusing = "test() { if [ \"$1\" = -x ]; then return 1; fi; command test \"$@\"; }\n"
+        let blocked = try run(refusing + launch, home: home)
+        XCTAssertTrue(SSHBootstrapScript.blocked(blocked.errors), blocked.text)
+        XCTAssertEqual(blocked.output, "")
+
+        // An unsafe home: the script's reason, on stderr only.
+        try FileManager.default.setAttributes([.posixPermissions: 0o777], ofItemAtPath: home.path)
+        let unsafe = try run(launch, home: home)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: home.path)
+        XCTAssertEqual(unsafe.status, 1)
+        XCTAssertEqual(unsafe.output, "")
+        XCTAssertEqual(SSHBootstrapScript.reason(unsafe.errors), "home folder writable by others")
+        XCTAssertNil(SSHBootstrapScript.launchPlatform(unsafe.errors))
+
+        // The runtime folder's launch, from where its upload put the helper.
+        let runtime = try self.runtime(in: home)
+        let environment = ["XDG_RUNTIME_DIR": runtime.path]
+        let runtimeLaunch = launcher(.runtimeDirectory).command(probeArguments, export: "")
+        XCTAssertEqual(SSHBootstrapScript.launchPlatform(try run(runtimeLaunch, home: home, environment: environment).errors),
+                       .helper("darwin-arm64"))
+        XCTAssertEqual(try run(SSHBootstrapScript.upload(digest: digest, size: helper.count, staging: "upload-0123", root: .runtimeDirectory),
+                               home: home, input: helper, environment: environment).status, 0)
+        XCTAssertEqual(try run(runtimeLaunch, home: home, environment: environment).output, "--remote\n--capabilities\n\n--stdio\n")
+        XCTAssertEqual(SSHBootstrap.helperName(os: "macos", arch: "aarch64"), "darwin-arm64")
+        XCTAssertEqual(SSHBootstrap.helperName(os: "linux", arch: "x86_64"), "linux-x86_64")
+        XCTAssertEqual(SSHBootstrap.helperName(os: "linux", arch: "aarch64"), "linux-aarch64")
+        XCTAssertNil(SSHBootstrap.helperName(os: "macos", arch: "x86_64"))
+    }
+
+    /// Processes running a helper `connect` for `session` (the stand-in `ssh` execs the helper with these arguments).
+    private static func connecting(_ session: String) throws -> [String] {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        process.arguments = ["-f", "dispatch-helper connect --session " + session]
+        let ran = try TestSupport.live(process, input: Data(), timeout: 15)
+        return String(decoding: ran.output, as: UTF8.self).split(separator: "\n").map(String.init)
+    }
+
+    /// Within 2.5 s no `connect` for `session` runs (its own wait for a bus would last 5 s).
+    @MainActor private static func noneConnecting(_ session: String) async throws {
+        try await TestSupport.eventually(timeout: .milliseconds(2500), interval: .milliseconds(200)) {
+            (try? connecting(session).isEmpty) == true
+        }
+    }
+
+    /// Within 2.5 s the stand-in `ssh` at `log` ran a command holding `text`.
+    @MainActor private static func logged(_ log: URL, _ text: String) async throws {
+        try await TestSupport.eventually(timeout: .milliseconds(2500), interval: .milliseconds(100)) {
+            String(decoding: (try? System.read(log)) ?? Data(), as: UTF8.self).contains(text)
+        }
+    }
+
+    /// The app releases a waiting login through its verified probe (`login.release`), never with the publish script's
+    /// exec channel, and `connect` starts as the release is sent. A refused release (the session was released already)
+    /// fails the setup with the release's own reason, does not run the script, and leaves no `connect` waiting for a bus.
+    func testTheProbeReleasesTheLoginAndARefusedReleaseLeavesNothingRunning() async throws {
+        let helper = try XCTUnwrap(HelperApp.executable).path
+        let body = "exec \(HerdrLaunch.quote(helper)) \"$@\"\n"
+        let released = "00000000000000000000beef"
+        let refused = try await startHelper(helper: body, refuseTestX: false, sessionID: released, released: true)
+        XCTAssertEqual(refused.failure?.reason, "session already released", "\(refused.commands)")
+        XCTAssertEqual(refused.failure?.permanent, false)
+        XCTAssertFalse(refused.commands.contains { $0.contains("ready.$$") }, "no publish script: \(refused.commands)")
+        XCTAssertEqual(refused.commands.filter { $0.contains("exec ./dispatch-helper --remote") }.count, 2, "a miss, then the probe")
+        // The connect started with the release (its stand-in `ssh` logs it moments after the setup returned).
+        try await Self.logged(refused.home.deletingLastPathComponent().appendingPathComponent("commands"), "dispatch-helper connect --session")
+        // Its own wait for the bus would last 5 s: closed with the setup, it is gone well before.
+        try await Self.noneConnecting(released)
+        XCTAssertEqual(try System.read(refused.home.appendingPathComponent(".dispatch/sessions/" + released + "/ready")),
+                       Data("elsewhere\n".utf8), "nothing written over the other release")
+
+        // Released: `ready` names the cached helper, written by the probe (no script ran); the connect then waits for a
+        // login that never comes here, and fails on its own.
+        let fresh = "00000000000000000000cafe"
+        let warm = try await startHelper(helper: body, refuseTestX: false, sessionID: fresh)
+        XCTAssertFalse(warm.commands.contains { $0.contains("ready.$$") }, "no publish script: \(warm.commands)")
+        XCTAssertEqual(warm.commands.filter { $0.contains("exec ./dispatch-helper --remote") }.count, 2, "a miss, then the probe")
+        let bundled = SHA256.hash(data: Data(("#!/bin/sh\n" + body).utf8)).map { String(format: "%02x", $0) }.joined()
+        XCTAssertEqual(String(decoding: try System.read(warm.home.appendingPathComponent(".dispatch/sessions/" + fresh + "/ready")),
+                              as: UTF8.self), SSHBootstrapScript.relativePath(digest: bundled) + "\n")
+        try await Self.noneConnecting(fresh)
+    }
 }

@@ -76,9 +76,9 @@ enum DispatchRemoval {
             do {
                 if FileManager.default.fileExists(atPath: Home.support.path) { try FileManager.default.removeItem(at: Home.support) }
             } catch { problems.append("\(Home.support.path): \(error.localizedDescription)") }
-            if let domain = Bundle.main.bundleIdentifier {
-                UserDefaults.standard.removePersistentDomain(forName: domain)
-                UserDefaults.standard.synchronize()
+            if let defaults = UserDefaults.app, let domain = Bundle.main.bundleIdentifier {
+                defaults.removePersistentDomain(forName: domain)
+                defaults.synchronize()
             }
         }
         let alert = NSAlert()

@@ -41,13 +41,63 @@ https://github.com/0xType/0xProto/releases/tag/2.502.
 
 Departure Mono 1.500 (Helena Zhang), Ioskeley Mono Term 2.1.0 (Ahmed Hatem),
 and JetBrains Mono 2.304 (The JetBrains Mono Project Authors) are bundled
-unmodified under the SIL Open Font License 1.1. Their original notices are in
+under the SIL Open Font License 1.1. Their original notices are in
 `ThirdPartyLicenses/DepartureMono-OFL.txt`, `ThirdPartyLicenses/IoskeleyMono-OFL.txt`,
-and `ThirdPartyLicenses/JetBrainsMono-OFL.txt`. Ioskeley uses the normal-width,
-unhinted terminal build. Sources:
+and `ThirdPartyLicenses/JetBrainsMono-OFL.txt`. Departure Mono and JetBrains Mono
+are unmodified. Ioskeley uses the normal-width, unhinted terminal build, subset with
+fontTools 4.60.2 to JetBrains Mono 2.304's characters plus arrows, geometric shapes,
+Ѐ ѐ Ѝ ѝ and the status symbols command-line tools print (checks, stars, suits, media
+controls, circled numbers, currency, sub/superscripts, fractions), without the ranges
+the terminal draws itself (box drawing, blocks, Braille, Powerline, legacy computing),
+the opt-in language ligature sets and glyph names; kept glyphs, metrics and features
+are unchanged:
+
+```sh
+python3 -c '
+import sys; from fontTools.ttLib import TTFont
+u, j = (set(TTFont(p).getBestCmap()) for p in sys.argv[1:])
+inr = lambda c, rs: any(a <= c <= b for a, b in rs)
+keep = [(0x2190,0x21FF),(0x25A0,0x25FF),(0x27F0,0x27FF),(0x2900,0x297F),(0x400,0x400),(0x40D,0x40D),(0x450,0x450),(0x45D,0x45D)]
+drawn = [(0x2500,0x259F),(0x25E2,0x25E5),(0x25F8,0x25FA),(0x25FF,0x25FF),(0x2800,0x28FF),(0xE0B0,0xE0BF),(0xE0D2,0xE0D2),(0xE0D4,0xE0D4),(0xF5D0,0xF60D)]
+symbols = "✔✘✖☐☑☒❌★☆✦✧✱✲✳✴✷✸✹✺❇❈❉❊❋♥♡♠♤♣♧♦♢❤⚙⚑⚐☀☹☺☻⚛⚪⚫⚬⛭♩♪♫♬♮☜☝☞☟➡➢➣➤➥➦➧⬅⬆⬇⬈⬉⬊⬋⬌⬍①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳⓪❶❷❸❹❺❻❼❽❾❿➀➁➂➃➄➅➆➇➈➉➊➋➌➍➎➏➐➑➒➓⏏⏩⏪⏫⏬⏭⏮⏯⏰⏱⏲⏳⏴⏵⏶⏷⏸⏹⏺⌚⌛⌧⎈⎇₡₣₤₥₦₧₨₩₪₭₯₱₲₳₵₸₹₺₼₾⁻⁽⁾ⁱⁿ₊₋₌₍₎ₐₑₒₓₔₕₖₗₘₙₚₛₜ⅓⅔⅕⅖⅗⅘⅙⅚⅛⅜⅝⅞⅐⅑⅒↉℃℉℗℠ℹ℧⁇⁈⁉‣⁃※‱‵⁎⁑⁂⸮⹀‧"
+print(",".join("U+%04X" % c for c in sorted(u) if 0x20 <= c <= 0xFFFD and c != 0xFEFF and (c in j or chr(c) in symbols or inr(c, keep)) and not inr(c, drawn)))
+' IoskeleyMonoTerm-Regular.ttf JetBrainsMono-Variable.ttf > unicodes.txt
+pyftsubset IoskeleyMonoTerm-$STYLE.ttf --output-file=IoskeleyMonoTerm-$STYLE.ttf --unicodes-file=unicodes.txt \
+  --layout-features='calt,ccmp,dlig,dnom,frac,lnum,locl,numr,onum,zero,mark,mkmk' \
+  --name-IDs='*' --name-languages='*' --notdef-outline --legacy-kern --no-bidi-closure --drop-tables=
+```
+
+Sources:
 https://github.com/rektdeckard/departure-mono/releases/tag/v1.500,
 https://github.com/ahatem/IoskeleyMono/releases/tag/v2.1.0, and
 https://github.com/JetBrains/JetBrainsMono/releases/tag/v2.304.
+
+Latin Modern 2.004 (B. Jackowski and J. M. Nowacki, on behalf of TeX users
+groups) is bundled unmodified under the GUST Font License, whose text is in
+`ThirdPartyLicenses/LatinModern-GUST.txt`: Roman 10 (regular, italic, bold, bold
+italic), Mono 10 (regular, italic) and Mono Light 10 (bold, bold oblique, Mono's
+bold faces). Source: https://www.gust.org.pl/projects/e-foundry/latin-modern
+(also CTAN `fonts/lm`).
+
+More coding fonts, listed under a separator in Settings' terminal font menu (Mac only), are bundled unmodified, each
+with its license text in `ThirdPartyLicenses/`:
+
+| Font | Version | License | Files | Source |
+|---|---|---|---|---|
+| Cascadia Code | 2407.24 | OFL 1.1 (`CascadiaCode-OFL.txt`) | variable upright and italic | https://github.com/google/fonts/tree/main/ofl/cascadiacode |
+| Commit Mono | 1.143 | OFL 1.1 (`CommitMono-LICENSE.txt`) | 400 and 700, upright and italic | https://github.com/eigilnikolajsen/commit-mono/releases/tag/v1.143 |
+| Geist Mono | 1.701 | OFL 1.1 (`GeistMono-OFL.txt`) | variable upright and italic | https://github.com/google/fonts/tree/main/ofl/geistmono |
+| Hack | 3.003 | MIT and Bitstream Vera (`Hack-LICENSE.md`) | regular, bold, italic, bold italic | https://github.com/source-foundry/Hack/releases/tag/v3.003 |
+| Hasklig | 1.2 | OFL 1.1 (`Hasklig-OFL.md`) | regular, bold, italic, bold italic | https://github.com/i-tu/Hasklig/releases/tag/v1.2 |
+| IBM Plex Mono | 2.3 | OFL 1.1 (`IBMPlexMono-OFL.txt`) | regular, bold, italic, bold italic | https://github.com/google/fonts/tree/main/ofl/ibmplexmono |
+| Inconsolata | 3.000 | OFL 1.1 (`Inconsolata-OFL.txt`) | variable | https://github.com/googlefonts/Inconsolata/releases/tag/v3.000 |
+| Intel One Mono | 1.400 | OFL 1.1 (`IntelOneMono-OFL.txt`) | regular, bold, italic, bold italic | https://github.com/intel/intel-one-mono/releases/tag/V1.4.0 |
+| Maple Mono | 7.9 | OFL 1.1 (`MapleMono-OFL.txt`) | variable upright and italic | https://github.com/subframe7536/maple-font/releases/tag/v7.9 |
+| Rec Mono Casual (Recursive) | 1.085 | OFL 1.1 (`Recursive-OFL.txt`) | regular, bold, italic, bold italic | https://github.com/arrowtype/recursive/releases/tag/v1.085 |
+| Victor Mono | 1.561 | OFL 1.1 (`VictorMono-OFL.txt`) | variable upright and italic | https://github.com/google/fonts/tree/main/ofl/victormono |
+
+Variable files are renamed `<Family>-Variable.ttf` and `<Family>-Italic-Variable.ttf`; Rec Mono drops the version from
+its file names. The fonts themselves are unchanged.
 
 ## Rust SSH helper
 

@@ -710,6 +710,26 @@ final class ChatSessionTests: XCTestCase {
         XCTAssertTrue(presence.retained.isEmpty)
     }
 
+    /// A helper that reads the terminal's screen itself (`screens.host`) still needs the terminal attached: the
+    /// conversation retains it with the features its hello accepted (so the feed publishes nothing and may hold its
+    /// output), counts it as attached, and sends at once.
+    func testATerminalOfAHelperReadingItsScreensIsRetainedWithTheHellosFeatures() async throws {
+        let presence = ChatTerminalPresenceStub()
+        let helper = ScriptedHelper()
+        script(helper)
+        let chat = MobileChatSession.scripted(helper, presence: presence)
+        let features: Set<String> = [HelperSession.screensHost, HelperSession.terminalsFollow, ChatAttachment.feature]
+        chat.update(link: .connected, client: helper.client, features: features)
+        try await TestSupport.eventually { helper.subscription("chat.open") != nil }
+        helper.notify(helper.subscription("chat.open")!, "chat.history", ChatFixture.history())
+        try await TestSupport.eventually { chat.phase == .verified }
+        XCTAssertEqual(presence.retained, [chat.key: 7])
+        XCTAssertEqual(presence.features[chat.key], features)
+        XCTAssertTrue(chat.terminalAttached)
+        XCTAssertEqual(chat.route(steer: false), .prompt)
+        XCTAssertTrue(helper.requests("terminals.publish").isEmpty)
+    }
+
     func testAPromptRefusedWhileTheAgentStartsIsSentOnceMore() async throws {
         let helper = ScriptedHelper()
         script(helper) { request in

@@ -250,7 +250,9 @@ def real_cli(executable, state):
             resumed, _ = run('resume', 'line one\nline two', '--resume', a['session_id'])
             assert resumed['session_id'] == a['session_id'], 'Resume changed session ID'
             _, thinking = run('thinking', 'thinking formatting preview')
-            assert any(row.get('event', {}).get('delta', {}).get('type') == 'thinking_delta' for row in thinking)
+            # Only stream_event rows carry API events; system rows name UI ones ("event": "ui.render").
+            assert any(row['event'].get('delta', {}).get('type') == 'thinking_delta'
+                       for row in thinking if row.get('type') == 'stream_event')
             allowed, _ = run('tool', 'tool check', '--allowedTools', 'Bash(printf *)')
             assert 'Tool result received: completed.' in allowed['result'], allowed
             denied, _ = run('denied', 'tool denial check', '--permission-mode', 'dontAsk',

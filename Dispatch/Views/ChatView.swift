@@ -12,6 +12,7 @@ struct ChatView: View {
     var topInset: CGFloat = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var availableChatHeight: CGFloat = 800
+    @State private var chatWidth: CGFloat = 0
     @State private var optionHeld = false
     @State private var queueTipPresented = false
     @State private var floatingInputHeight: CGFloat = 0
@@ -53,9 +54,16 @@ struct ChatView: View {
         }
         .frame(maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
         .background(GeometryReader { geometry in
-            Color.clear.onAppear { availableChatHeight = geometry.size.height }
+            Color.clear.onAppear { availableChatHeight = geometry.size.height; chatWidth = geometry.size.width }
                 .onChange(of: geometry.size.height) { _, height in availableChatHeight = height }
+                .onChange(of: geometry.size.width) { _, width in chatWidth = width }
         })
+        // A sent message flies from the composer to its bubble or queue row over everything else.
+        .overlay(alignment: .topLeading) {
+            ChatSendFlightLayer(session: session,
+                                bubbleWidth: ChatUserMessage.maxWidth(max(0, chatWidth - 44), characterWidth: theme.typography.characterWidth))
+        }
+        .coordinateSpace(.named(ChatFlightFrames.space))
         .background(theme.terminal)
         .foregroundStyle(theme.ink).tint(theme.blue)
         .environment(\.chatTheme, theme)
@@ -138,7 +146,10 @@ struct ChatView: View {
     private var inputContent: some View {
         VStack(alignment: .leading, spacing: 8) {
             if session.sideConversation == nil && (!session.questions.isEmpty || session.command != nil || session.commandEditor != nil || session.nativePrompt != nil || session.commandResult != nil) {
+                // Usually inserted with its first content (a result, a running command), which then can't make its
+                // own entrance: the controls make it.
                 ChatCommandControls(session: session, coordinator: coordinator)
+                    .transition(ChatCommandControls.entrance(reduceMotion))
             }
             if session.sideConversation != nil || session.loadingHistory {
                 AgentWorkingIndicator(session: session, canStop: coordinator.canInterrupt(session)) {
@@ -164,14 +175,21 @@ struct ChatView: View {
                               shortcutsEnabled: focused && session.showChat)
                     .transition(reduceMotion ? .opacity : .offset(y: 10).combined(with: .opacity))
             } else {
-                if !session.queuedMessages.isEmpty {
-                    ChatQueueView(session: session, coordinator: coordinator,
-                                  maximumHeight: session.queuedMessages.count == 1
-                                      ? availableChatHeight * 0.55 : min(180, availableChatHeight * 0.3))
-                        .floatingGlassPanel()
+                // The panel opens with the first queued message and folds shut after the last, so the transcript
+                // above moves with it instead of jumping.
+                ChatInputFold(present: !session.queuedMessages.isEmpty, spacing: 8, reduceMotion: reduceMotion) {
+                    // Every message in it flew out to its bubble and is sending: the panel fades rather than
+                    // standing empty until the agent confirms.
+                    let emptied = session.queuedMessages.allSatisfy {
+                        session.queuedSubmissionID == $0.id && session.flownQueuedIDs.contains($0.id)
+                    }
+                    ChatQueueView(session: session, coordinator: coordinator, maximumHeight: min(180, availableChatHeight * 0.3))
+                        .modifier(ChatQueueSurface())
+                        .opacity(emptied ? 0 : 1)
+                        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: emptied)
                 }
                 if !matchingCommands.isEmpty { commands }
-                if queueTipPresented {
+                ChatInputFold(present: queueTipPresented, spacing: 8, reduceMotion: reduceMotion) {
                     HStack(alignment: .top, spacing: 8) {
                         Text("Queued messages run after this turn. Use ⌥⏎ to steer: interrupt and redirect the current turn.")
                             .fixedSize(horizontal: false, vertical: true)
@@ -190,7 +208,9 @@ struct ChatView: View {
                                 Button("cancel") { coordinator.cancelQueuedEdit(session) }.buttonStyle(.plain)
                             }.font(theme.typography.detail).foregroundStyle(theme.muted).padding(.horizontal, 12).padding(.top, 6)
                         }
-                        if attachmentsShown {
+                        // The first chip opens its row and the last one closes it, the composer growing and shrinking
+                        // with it rather than jumping.
+                        ChatInputFold(present: attachmentsShown, spacing: 6, reduceMotion: reduceMotion) {
                             ChatComposerAttachments(session: session, coordinator: coordinator)
                         }
                         ChatComposer(session: session, focused: focused && session.showChat, submit: { coordinator.sendFromComposer(session) },
@@ -214,9 +234,14 @@ struct ChatView: View {
                             }, optionChanged: { optionHeld = $0 }, showShortcuts: { session.shortcutsPresented.toggle() },
                             canAttach: { coordinator.canAttach(session) }, attach: { coordinator.attach($0, to: session) },
                             chooseAttachments: { ChatAttachButton.choose(session: session, coordinator: coordinator, window: $0) })
+                            .background(ChatFlightAnchor(place: .composer, frames: session.flightFrames))
                             // The attachment chips share the composer's bound: the editor gives up their height.
                             .frame(height: min(max(theme.typography.replyLineHeight + 10, session.composerHeight), max(theme.typography.replyLineHeight + 10, min(320, availableChatHeight * 0.4) - theme.typography.detailLineHeight - 26
                                 - (attachmentsShown ? ChatComposerAttachments.height(session, theme: theme) : 0))))
+                            // Emptied (a message sent, the text cleared), the editor gives its lines back smoothly;
+                            // typing resizes it at once.
+                            .animation(session.draft.isEmpty ? InterfaceMotion.animation(reduce: reduceMotion, duration: 0.24) : nil,
+                                       value: session.composerHeight)
                             .overlay(alignment: .topTrailing) {
                                 if session.drafts.shape.multiline {
                                     Text("editor")
@@ -537,7 +562,9 @@ struct ChatSessionStats: View {
         }.font(theme.typography.detail).foregroundStyle(theme.muted)
             .fixedSize(horizontal: true, vertical: false).accessibilityIdentifier("chat-session-stats")
     }
-    private func count(_ value: Int?) -> String {
+    private func count(_ value: Int?) -> String { Self.count(value) }
+    /// "980", "12.3K", "1.2M"; "—" when unknown.
+    static func count(_ value: Int?) -> String {
         guard let value else { return "—" }
         if value >= 1_000_000 { return String(format: "%.1fM", Double(value) / 1_000_000) }
         if value >= 1_000 { return String(format: "%.1fK", Double(value) / 1_000) }
@@ -554,5 +581,60 @@ private extension View {
 private struct QueueTipSurface: ViewModifier {
     func body(content: Content) -> some View {
         if LiquidGlassStore.shared.active { content.floatingGlassPanel() } else { content.padding(10).chatPanel() }
+    }
+}
+
+/// Something in the input stack that unfolds as it comes and folds away as it goes: its height (and the stack's
+/// `spacing` after it) grows from nothing or shrinks to nothing, fading with it, so what sits above follows instead of
+/// jumping. It stays mounted while it folds shut, and renders nothing at all once shut (so the stack adds no spacing).
+struct ChatInputFold<Content: View>: View {
+    let present: Bool
+    let spacing: CGFloat
+    let reduceMotion: Bool
+    @ViewBuilder let content: () -> Content
+    /// `present` as last handled: still true in the update that turns `present` off, so the fold has a view to run on.
+    @State private var handled: Bool
+    @State private var folding = false
+    @State private var shown: Double
+
+    init(present: Bool, spacing: CGFloat, reduceMotion: Bool, @ViewBuilder content: @escaping () -> Content) {
+        self.present = present; self.spacing = spacing; self.reduceMotion = reduceMotion; self.content = content
+        _handled = State(initialValue: present)
+        _shown = State(initialValue: present ? 1 : 0)
+    }
+
+    var body: some View {
+        if present || handled || folding {
+            // The stack's spacing after it rides in the fold, and the negative padding gives it back: at full height
+            // it adds exactly what it did, folded shut nothing.
+            ChatFoldLayout(shown: shown) {
+                content().padding(.bottom, spacing)
+            }
+            .opacity(shown)
+            .clipped()
+            .padding(.bottom, -spacing)
+            .onAppear { if present && shown < 1 { open() } }
+            .onChange(of: present) { _, present in
+                handled = present
+                if present { open() } else { close() }
+            }
+        }
+    }
+
+    private func open() {
+        handled = true; folding = false
+        guard !reduceMotion else { shown = 1; return }
+        // Mounted folded for a frame, then unfolds.
+        Task { @MainActor in
+            withAnimation(.timingCurve(0.33, 1, 0.68, 1, duration: 0.26)) { shown = 1 }
+        }
+    }
+
+    private func close() {
+        guard !reduceMotion else { shown = 0; return }
+        folding = true
+        withAnimation(.timingCurve(0.33, 1, 0.68, 1, duration: 0.24)) { shown = 0 } completion: {
+            if !present { folding = false }
+        }
     }
 }

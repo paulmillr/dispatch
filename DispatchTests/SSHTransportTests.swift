@@ -304,7 +304,8 @@ final class SSHTransportTests: XCTestCase {
     }
 
     func testBootstrapCancellationAndUnsupportedPlatformLeaveNoLiveChannel() async throws {
-        for stage in ["probe", "upload", "connect"] {
+        // The platform probe is the launch's own (`connect` here): no stage of its own.
+        for stage in ["upload", "connect"] {
             let fixture = try BootstrapFixture(paused: stage)
             defer { fixture.remove() }
             let task = Task { _ = try await SSHBootstrap.startHelper(master: fixture.master, resources: fixture.resources, sessionID: BootstrapFixture.session, publish: false) }
@@ -547,12 +548,14 @@ private struct BootstrapFixture: Sendable {
         export PATH=\(HerdrLaunch.quote(bin.path + (checksums ? ":/usr/bin:/bin" : "")))
         for argument do command=$argument; done
         case "$command" in
-          *DISPATCH_PLATFORM*) stage=probe ;;
           *'cat >'*) stage=upload; printf 'upload\\n' >> \(HerdrLaunch.quote(root.appendingPathComponent("uploads").path)) ;;
           *' connect --session'*) stage=connect ;;
           *) stage=check ;;
         esac
-        if test \(HerdrLaunch.quote(paused)) = unsupported && test "$stage" = probe; then printf 'DISPATCH_PLATFORM=Unknown:mips\\n'; exit; fi
+        # Every helper launch probes the platform first (SSHBootstrapScript.launch): what it says on one it does not serve.
+        case \(HerdrLaunch.quote(paused)):"$command" in
+          unsupported:*DISPATCH_PLATFORM*) printf 'DISPATCH_PLATFORM=Unknown:mips\\n' >&2; exit 3 ;;
+        esac
         if test "$stage" = \(HerdrLaunch.quote(paused)); then printf '%s\\n' "$$" > \(HerdrLaunch.quote(marker.path)); exec /bin/sleep 30; fi
         exec /bin/sh -c "$command"
         """
@@ -593,4 +596,52 @@ private struct BootstrapFixture: Sendable {
         return String(decoding: try System.read(path), as: UTF8.self).split(separator: "\n").count
     }
     func remove() { try? FileManager.default.removeItem(at: root) }
+}
+
+extension SSHTransportTests {
+    /// The master's keepalive comes after the connection's own options, so OpenSSH (first value wins) keeps a user's own,
+    /// and is left out when the connection's configuration sets one. `ssh -G` resolves without connecting.
+    func testMasterKeepaliveFollowsTheConnectionsOwnOptions() async throws {
+        func resolved(_ arguments: [String]) async throws -> [String: String] {
+            let result = try await SSHCommand.run(executable: "/usr/bin/ssh", arguments: ["-G"] + arguments)
+            XCTAssertEqual(result.status, 0)
+            var fields: [String: String] = [:]
+            for line in String(decoding: result.output, as: UTF8.self).split(separator: "\n") {
+                let parts = line.split(maxSplits: 1, whereSeparator: \.isWhitespace)
+                if parts.count == 2, parts[0].hasPrefix("serveralive") { fields[String(parts[0])] = String(parts[1]) }
+            }
+            return fields
+        }
+        let control = "/tmp/dispatch-keepalive-test/master"
+        let plain = try XCTUnwrap(SSHInvocation.parse(["-F", "/dev/null", "example.invalid"], isTerminal: true))
+        let defaults = String(decoding: try await SSHCommand.run(executable: "/usr/bin/ssh",
+            arguments: ["-G", "-F", "/dev/null", "example.invalid"]).output, as: UTF8.self)
+        let arguments = plain.masterArguments(controlPath: control, remoteCommand: "exec true", configuration: defaults)
+        XCTAssertEqual(Array(arguments.suffix(8)), ["-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=8",
+                                                    "-tt", "--", "example.invalid", "exec true"])
+        let applied = try await resolved(arguments)
+        XCTAssertEqual(applied, ["serveraliveinterval": "15", "serveralivecountmax": "8"])
+
+        // A user's own interval wins on the command line; ssh -G of the connection shows it, and then none is added.
+        let own = try XCTUnwrap(SSHInvocation.parse(["-F", "/dev/null", "-o", "ServerAliveInterval=60", "example.invalid"], isTerminal: true))
+        let kept = try await resolved(own.masterArguments(controlPath: control, remoteCommand: "exec true", configuration: nil))
+        XCTAssertEqual(kept, ["serveraliveinterval": "60", "serveralivecountmax": "8"], "Without a configuration the user's -o still wins")
+        let configured = String(decoding: try await SSHCommand.run(executable: "/usr/bin/ssh",
+            arguments: ["-G"] + own.options + ["example.invalid"]).output, as: UTF8.self)
+        XCTAssertEqual(SSHKeepalive.options(configuration: configured), [])
+        XCTAssertEqual(own.masterArguments(controlPath: control, remoteCommand: "exec true", configuration: configured)
+            .filter { $0.hasPrefix("ServerAlive") }, ["ServerAliveInterval=60"])
+        // One from ssh_config (ssh -G prints it the same way): the user's file decides.
+        XCTAssertEqual(SSHKeepalive.options(configuration: "user sam\nserveraliveinterval 30\nserveralivecountmax 3\n"), [])
+        XCTAssertEqual(SSHKeepalive.options(configuration: "user sam\nserveraliveinterval 0\n").count, 4)
+
+        // The automatic reconnect's login: BatchMode first, the keepalive after the connection's options.
+        let shell = SSHShell(destination: "example.invalid", options: ["-F", "/dev/null", "-o", "ServerAliveCountMax=2"])
+        let master = SSHMaster(executable: "/usr/bin/ssh", controlPath: control, destination: "example.invalid")
+        let silent = SSHReconnectLogin.silentArguments(shell: shell, master: master, configuration: nil)
+        XCTAssertEqual(Array(silent.prefix(2)), ["-o", "BatchMode=yes"])
+        XCTAssertEqual(Array(silent.suffix(6)), ["-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=8", "--", "example.invalid"])
+        let login = try await resolved(silent)
+        XCTAssertEqual(login, ["serveraliveinterval": "15", "serveralivecountmax": "2"])
+    }
 }

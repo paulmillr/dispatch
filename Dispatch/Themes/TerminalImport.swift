@@ -35,6 +35,7 @@ extension ImportPlan {
 
     mutating func setCursor(_ cursor: TerminalCursor) { set("Cursor", cursor.title, \.cursor, cursor) }
     mutating func setCursorBlink(_ on: Bool) { set("Blinking cursor", on ? "On" : "Off", \.cursorBlink, on) }
+    mutating func setLineSpacing(_ spacing: LineSpacing) { set("Line spacing", spacing.title, \.lineSpacing, spacing) }
     mutating func setOptionAsAlt(_ keys: OptionKeys) { set("Option as Alt", keys.title, \.optionAsAlt, keys) }
     mutating func setScrollback(_ size: Scrollback) { set("Scrollback", size.title, \.scrollback, size) }
     mutating func setContrast(_ on: Bool) { set("Improve text contrast", on ? "On" : "Off", \.improveTextContrast, on) }
@@ -134,9 +135,19 @@ enum ImportMapping {
 }
 
 extension ThemeColor {
-    /// An AppKit color in sRGB (colors outside it clamped); nil for a pattern or other color without components.
+    /// An AppKit color in sRGB, or in Display P3 when it lies outside sRGB (colors outside P3 too clamped to it); nil
+    /// for a pattern or other color without components.
     init?(_ color: NSColor) {
-        guard let srgb = color.usingColorSpace(.sRGB) else { return nil }
-        self.init(red: Double(srgb.redComponent), green: Double(srgb.greenComponent), blue: Double(srgb.blueComponent))
+        guard let srgb = color.usingColorSpace(.sRGB), let extended = color.usingColorSpace(.extendedSRGB) else { return nil }
+        let e = 0.5 / 255
+        let components = [extended.redComponent, extended.greenComponent, extended.blueComponent].map(Double.init)
+        if components.allSatisfy({ (-e...(1 + e)).contains($0) }) {
+            self.init(red: Double(srgb.redComponent), green: Double(srgb.greenComponent), blue: Double(srgb.blueComponent))
+        } else if let p3 = color.usingColorSpace(.displayP3) {
+            let clamp = { (c: CGFloat) in min(1, max(0, Double(c))) }
+            self.init(displayP3Red: clamp(p3.redComponent), green: clamp(p3.greenComponent), blue: clamp(p3.blueComponent))
+        } else {
+            return nil
+        }
     }
 }

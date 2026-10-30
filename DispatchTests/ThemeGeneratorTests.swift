@@ -1,7 +1,7 @@
 import XCTest
 @testable import DispatchApp
 
-/// Made color schemes: OKLab conversions, the contrast floor and slot roles over every mode, harmony and preset, and
+/// Made color schemes: OKLab conversions, the contrast floor and slot roles over every mode, harmony and style, and
 /// a sweep of seeds.
 final class ThemeGeneratorTests: XCTestCase {
     func testOKLabMatchesReferenceValuesAndRoundTrips() {
@@ -44,7 +44,7 @@ final class ThemeGeneratorTests: XCTestCase {
     }
 
     func testEveryRecipeMeetsTheContrastFloorAndSlotRoles() {
-        var recipes = ThemeRecipe.presets.map(\.recipe) + (0..<64).map { ThemeRecipe.random(seed: UInt64($0)) }
+        var recipes = Self.styleDraws + (0..<64).map { ThemeRecipe.random(seed: UInt64($0)) }
         for light in [false, true] {
             for harmony in ThemeRecipe.Harmony.allCases {
                 for hue in stride(from: 0.0, to: 360, by: 30) {
@@ -127,7 +127,7 @@ final class ThemeGeneratorTests: XCTestCase {
         XCTAssertTrue((0..<32).contains { !ThemeRecipe.random(seed: UInt64($0)).light })
 
         // Saved as a file and read back, a made theme still names its recipe.
-        let recipe = ThemeRecipe.presets[1].recipe
+        let recipe = ThemeRecipe.random(seed: 1, style: .cool, light: false)
         let theme = ThemeGenerator.make(recipe)
         let reread = try XCTUnwrap(TerminalTheme(text: theme.text))
         XCTAssertEqual(ThemeRecipe(theme: reread), recipe)
@@ -136,18 +136,34 @@ final class ThemeGeneratorTests: XCTestCase {
         let json = try JSONEncoder().encode(recipe)
         XCTAssertEqual(try JSONDecoder().decode(ThemeRecipe.self, from: json), recipe)
 
-        XCTAssertEqual(Set(ThemeRecipe.presets.map(\.name)).count, ThemeRecipe.presets.count)
-        XCTAssertTrue(ThemeRecipe.presets.contains { $0.recipe.light } && ThemeRecipe.presets.contains { !$0.recipe.light })
+        // Each style draws inside its ranges, on the side asked for, the same recipe for the same seed.
+        for style in ThemeRecipe.Style.allCases {
+            for seed: UInt64 in 0..<16 {
+                let recipe = ThemeRecipe.random(seed: seed, style: style, light: seed % 2 == 0)
+                XCTAssertEqual(recipe, ThemeRecipe.random(seed: seed, style: style, light: seed % 2 == 0))
+                XCTAssertEqual(recipe.light, seed % 2 == 0)
+                XCTAssertTrue(style.harmonies.contains(recipe.harmony), "\(style) \(recipe.harmony)")
+                for (knob, range) in [(recipe.vibrancy, style.vibrancy), (recipe.contrast, style.contrast), (recipe.tint, style.tint)] {
+                    XCTAssertTrue(range.contains(knob), "\(style): \(knob) outside \(range)")
+                }
+                let seedColor = recipe.seed.oklch
+                XCTAssertEqual(seedColor.l, min(max(seedColor.l, style.lightness.lowerBound - 0.01), style.lightness.upperBound + 0.01),
+                               "\(style)'s seed lightness")
+                if let hues = style.hues, seedColor.c > 0.04 {
+                    XCTAssertTrue((hues.lowerBound - 3)...(hues.upperBound + 3) ~= seedColor.h, "\(style)'s seed hue \(seedColor.h)")
+                }
+            }
+        }
         XCTAssertEqual(ThemeGenerator.suggestedName(for: ThemeRecipe(seed: ThemeColor(r: 0x80, g: 0x80, b: 0x80))), "Graphite")
         XCTAssertEqual(ThemeGenerator.suggestedName(for: ThemeRecipe(seed: ThemeColor(r: 0x80, g: 0x80, b: 0x80), light: true)), "Paper")
-        XCTAssertEqual(ThemeGenerator.suggestedName(for: ThemeRecipe.presets[0].recipe), "Dusk")
+        XCTAssertEqual(ThemeGenerator.suggestedName(for: ThemeRecipe.standard), "Dusk")
     }
 
-    /// The recipes the colorblind checks run over: every preset and a spread of random ones, dark and light, at the
+    /// The recipes the colorblind checks run over: a draw from every style and a spread of random ones, dark and light, at the
     /// knobs' ends and middle.
     private func colorblindRecipes(_ vision: ColorVision) -> [ThemeRecipe] {
         var recipes: [ThemeRecipe] = []
-        for base in ThemeRecipe.presets.map(\.recipe) + (0..<24).map({ ThemeRecipe.random(seed: UInt64($0)) }) {
+        for base in Self.styleDraws + (0..<24).map({ ThemeRecipe.random(seed: UInt64($0)) }) {
             for light in [false, true] {
                 for knob in [0.0, 0.5, 1.0] {
                     var recipe = base.with(vision: vision)
@@ -190,11 +206,11 @@ final class ThemeGeneratorTests: XCTestCase {
     }
 
     func testColorVisionTravelsWithTheRecipe() throws {
-        let recipe = ThemeRecipe.presets[0].recipe.with(vision: .redGreen)
+        let recipe = ThemeRecipe.standard.with(vision: .redGreen)
         let reread = try XCTUnwrap(TerminalTheme(text: ThemeGenerator.make(recipe).text))
         XCTAssertEqual(ThemeRecipe(theme: reread)?.vision, .redGreen)
         // A typical recipe is written as before, and recipes saved before colorblind schemes read as typical.
-        XCTAssertFalse(ThemeRecipe.presets[0].recipe.line.contains("vision"))
+        XCTAssertFalse(ThemeRecipe.standard.line.contains("vision"))
         let old = ##"{"contrast":0.5,"harmony":"analogous","light":false,"seed":"#8b6cf0","tint":0.6,"vibrancy":0.55}"##
         XCTAssertEqual(try JSONDecoder().decode(ThemeRecipe.self, from: Data(old.utf8)).vision, .typical)
     }
@@ -208,7 +224,7 @@ final class ThemeGeneratorTests: XCTestCase {
         for seed: UInt64 in 0..<64 { taken.insert(ThemeGenerator.suggestedName(for: ThemeRecipe.random(seed: seed), taken: taken)) }
         XCTAssertEqual(taken.count, 64)
         XCTAssertLessThan(taken.filter { $0.last?.isNumber == true }.count, 4, "\(taken.sorted())")
-        let dusk = ThemeRecipe.presets[0].recipe
+        let dusk = ThemeRecipe.standard
         XCTAssertEqual(ThemeGenerator.suggestedName(for: dusk), "Dusk")
         XCTAssertEqual(ThemeGenerator.suggestedName(for: dusk, taken: ["Dusk"]), "Twilight")
         XCTAssertEqual(ThemeGenerator.suggestedName(for: dusk, taken: ["Dusk", "Twilight", "Violet"]), "Dusk 2")
@@ -218,5 +234,95 @@ final class ThemeGeneratorTests: XCTestCase {
         var soft = dusk
         (soft.contrast, soft.light) = (0.1, true)
         XCTAssertEqual(ThemeGenerator.suggestedName(for: soft), "Soft Lilac")
+    }
+}
+
+extension ThemeGeneratorTests {
+    func testDisplayP3RecipesGoBeyondSRGBAndKeepEveryFloor() throws {
+        var recipes: [ThemeRecipe] = []
+        for light in [false, true] {
+            for hue in stride(from: 0.0, to: 360, by: 30) {
+                for knob in [0.0, 0.5, 1.0] {
+                    recipes.append(ThemeRecipe(seed: ThemeColor(oklch: OKLCH(l: 0.65, c: 0.3, h: hue), displayP3: true), light: light,
+                                               vibrancy: knob, contrast: 1 - knob, tint: knob, displayP3: true))
+                }
+            }
+        }
+        recipes += recipes.prefix(12).flatMap { [$0.with(vision: .redGreen), $0.with(vision: .blueYellow)] }
+        var wide = 0
+        for recipe in recipes {
+            let theme = ThemeGenerator.make(recipe), label = recipe.line
+            let palette = theme.palette.compactMap { $0 }
+            XCTAssertEqual(palette.count, 16, label)
+            wide += palette.filter { $0.displayP3 != nil }.count
+            // The floors hold for the P3 colors this terminal draws and for the sRGB stand-ins Ghostty draws.
+            for (color, floor) in [1, 2, 3, 4, 5, 6, 9, 10, 11, 12, 13, 14].map({ (palette[$0], ThemeGenerator.accentFloor) })
+                + [(theme.foreground, ThemeGenerator.textFloor), (palette[8], ThemeGenerator.dimFloor), (theme.cursor!, ThemeGenerator.accentFloor)] {
+                XCTAssertGreaterThanOrEqual(ThemeGenerator.minContrast(color, theme.background), floor - 1e-9, label)
+            }
+            // Saved and read back, the P3 colors and the recipe come along.
+            let reread = try XCTUnwrap(TerminalTheme(text: theme.text))
+            XCTAssertEqual(reread.palette, theme.palette, label)
+            XCTAssertEqual(ThemeRecipe(theme: reread), recipe, label)
+        }
+        XCTAssertGreaterThan(wide, recipes.count * 4, "vivid accents go past sRGB")
+        // The same recipe in sRGB has no P3 color, and recipes saved before P3 read as sRGB.
+        var srgb = recipes[recipes.count / 2]
+        srgb.displayP3 = false
+        srgb.seed = srgb.seed.sRGBStandIn
+        let plain = ThemeGenerator.make(srgb)
+        XCTAssertTrue(([plain.background, plain.foreground] + plain.palette.compactMap { $0 }).allSatisfy { $0.displayP3 == nil })
+        XCTAssertFalse(srgb.line.contains("displayP3"), "an sRGB recipe is written as before")
+        let old = try JSONDecoder().decode(ThemeRecipe.self, from: Data(##"{"seed":"#8b6cf0","light":false,"harmony":"analogous","vibrancy":0.6,"contrast":0.55,"tint":0.45}"##.utf8))
+        XCTAssertFalse(old.displayP3)
+    }
+}
+
+/// The maker's and editor's color disc: sRGB's most colorful color for each hue on the core's edge in either gamut, so
+/// Display P3 only adds a band outside it, and every point maps to a chroma and back.
+extension ThemeGeneratorTests {
+    func testTheDiscKeepsSRGBInItsCoreAndP3OnlyAddsABand() {
+        for l in [0.3, 0.6, 0.85] {
+            for hue in stride(from: 0.0, to: 360, by: 30) {
+                let srgb = OKLCHDisc.maxChroma(l: l, h: hue, displayP3: false)
+                let p3 = OKLCHDisc.maxChroma(l: l, h: hue, displayP3: true)
+                XCTAssertGreaterThanOrEqual(p3, srgb, "P3 holds all of sRGB (l \(l), hue \(hue))")
+                for c in [0, srgb / 3, srgb * 0.9, srgb] {
+                    let off = OKLCHDisc.radius(chroma: c, hue: hue, l: l, displayP3: false)
+                    let on = OKLCHDisc.radius(chroma: c, hue: hue, l: l, displayP3: true)
+                    XCTAssertEqual(off, on, accuracy: 1e-9, "an sRGB color stays put when P3 turns on (l \(l), hue \(hue))")
+                }
+                XCTAssertEqual(OKLCHDisc.radius(chroma: srgb, hue: hue, l: l, displayP3: true), OKLCHDisc.core, accuracy: 1e-9)
+                for r in [0, 0.3, 0.8, 0.9, 1] {
+                    let c = OKLCHDisc.chroma(radius: r, hue: hue, l: l, displayP3: true)
+                    if p3 - srgb > 1e-4 || r <= OKLCHDisc.core {
+                        XCTAssertEqual(OKLCHDisc.radius(chroma: c, hue: hue, l: l, displayP3: true), r, accuracy: 1e-6)
+                    }
+                    XCTAssertTrue(ThemeColor.inGamut(OKLCH(l: l, c: c, h: hue), displayP3: true), "every point is in the gamut")
+                }
+                XCTAssertEqual(OKLCHDisc.chroma(radius: 1, hue: hue, l: l, displayP3: false), srgb, accuracy: 1e-9,
+                               "without P3 the band picks sRGB's most colorful color")
+                XCTAssertEqual(OKLCHDisc.radius(chroma: 0.5, hue: hue, l: l, displayP3: false), OKLCHDisc.core,
+                               "a color beyond sRGB sits on the sRGB disc's edge")
+            }
+        }
+        let image = OKLCHDisc.image(l: 0.6, displayP3: true, pixels: 40)
+        XCTAssertEqual(image?.width, 40)
+        XCTAssertEqual(image?.colorSpace?.name, CGColorSpace.displayP3)
+    }
+
+    func testColorsReadAsCSSOKLCH() throws {
+        XCTAssertEqual(try XCTUnwrap(ThemeColor(hex: "#ff0000")).oklchText, "oklch(63% 0.258 29)")
+        XCTAssertEqual(try XCTUnwrap(ThemeColor(hex: "#808080")).oklchText, "oklch(60% 0.000 none)", "a gray has no hue")
+        let wide = ThemeColor(displayP3Red: 1, green: 0, blue: 0)
+        XCTAssertNotNil(wide.displayP3)
+        XCTAssertTrue(wide.oklchText.hasPrefix("oklch(65% 0.29"), "a P3 color reads as itself, not its stand-in: \(wide.oklchText)")
+    }
+}
+
+extension ThemeGeneratorTests {
+    /// A draw from every style, dark and light, which the generator's checks run over beside random recipes.
+    static var styleDraws: [ThemeRecipe] {
+        ThemeRecipe.Style.allCases.flatMap { style in [false, true].map { ThemeRecipe.random(seed: 3, style: style, light: $0) } }
     }
 }

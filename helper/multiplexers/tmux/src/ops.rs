@@ -31,9 +31,12 @@ pub(crate) struct Terminal {
     dimensions: Option<([String; 2], [u32; 2])>,
     /// The last restore failed: no restore is coming until the app attaches again.
     failed: bool,
-    /// A client attached this terminal or published its screen: its screens are the only ones read.
-    pub(crate) client: bool,
-    /// Screens read from tmux while no client renders the terminal (Tmux::host_screens).
+    /// A screens.host client has this terminal attached: `screen` reads it from tmux (host.rs) unless `published`.
+    pub(crate) hosting: bool,
+    /// A client that publishes screens published one and keeps the terminal attached: its screens are the only
+    /// ones read (core helper.rs reports when it leaves, Multiplexer::screen_clients).
+    pub(crate) published: bool,
+    /// Screens read from tmux while hosted (host.rs).
     pub(crate) host: crate::host::Host,
 }
 impl Default for Terminal {
@@ -52,7 +55,8 @@ impl Default for Terminal {
             unsettled: 0,
             dimensions: None,
             failed: false,
-            client: false,
+            hosting: false,
+            published: false,
             host: Default::default(),
         }
     }
@@ -280,12 +284,14 @@ impl Tmux {
         node: Id,
         size: Grid,
         takeover: bool,
+        publishes: bool,
         done: Done<()>,
     ) {
         let preserve = !takeover && self.terminals.get(&node).is_some_and(|s| s.history);
-        // A client renders this terminal from now on and publishes its screens.
-        if self.location(node).is_ok() {
-            self.terminals.entry(node).or_default().client = true;
+        // A screens.host client renders this terminal without publishing: its screens come from tmux (host.rs). A
+        // client that publishes turns host reads off with its first publication (publish).
+        if !publishes && self.location(node).is_ok() {
+            self.screen_clients(io, node, true, self.terminals.get(&node).is_some_and(|s| s.published));
         }
         self.capture(io, node, Some(size), preserve, done);
     }
@@ -386,52 +392,7 @@ impl Tmux {
                             return Err(error);
                         }
                         let rows = result?;
-                        let rows = &rows[rows.len() - 5..];
-                        let text = String::from_utf8_lossy(rows[3].text()).into_owned();
-                        let state = text
-                            .split('|')
-                            .map(|s| {
-                                s.split_once('=')
-                                    .map(|(k, v)| (k.into(), v.into()))
-                                    .ok_or_else(|| error("Invalid pane state"))
-                            })
-                            .collect::<Result<std::collections::BTreeMap<String, String>, _>>()?;
-                        let native = mux.backends[&loc.backend].clients[loc.client]
-                            .snapshot
-                            .as_ref()
-                            .and_then(|s| s.panes.get(&loc.pane))
-                            .ok_or_else(|| gone("Tmux pane closed during capture"))?;
-                        if state.get("pane_id") != Some(&format!("%{}", loc.pane)) {
-                            return Err(error("Tmux pane changed during capture"));
-                        }
-                        let actual = ["pane_width", "pane_height"]
-                            .map(|key| state.get(key).cloned().unwrap_or_default());
-                        let expected = [native.width, native.height];
-                        if actual != expected.map(|value| value.to_string()) {
-                            dimensions = Some((actual, expected));
-                            return Err(Error {
-                                code: "stale",
-                                message: "Tmux capture needs refreshed dimensions".into(),
-                            });
-                        }
-                        let decode = |rows: &control::Lines| {
-                            rows.iter()
-                                .map(|r| control::decode(r, true).map(Cow::into_owned))
-                                .collect::<Result<Vec<_>, _>>()
-                        };
-                        let capture = terminal::Snapshot {
-                            screen: decode(&rows[0])?,
-                            saved: decode(&rows[1])?,
-                            cursor: control::decode(
-                                rows[2].iter().next().unwrap_or_default(),
-                                true,
-                            )?
-                            .into_owned(),
-                            state,
-                            preserve,
-                        };
-                        let mut bytes = capture.bytes(control::MAXIMUM)?;
-                        let pending = control::decode(rows[4].text(), false)?.into_owned();
+                        let (mut bytes, pending) = mux.repaint(loc, &rows, preserve, &mut dimensions)?;
                         let state = mux.terminals.get_mut(&node).unwrap();
                         state.filter = terminal::Filter::new(control::MAXIMUM);
                         bytes.extend_from_slice(&state.filter.feed(&pending)?);
@@ -510,6 +471,137 @@ impl Tmux {
             );
         });
     }
+    /// A capture.tmux reply as the bytes that repaint the pane whole, and tmux's pending output (the start of a
+    /// sequence it has not finished). "stale", with the sizes in `dimensions`, while the pane's size differs from the
+    /// topology's.
+    fn repaint(
+        &self,
+        loc: Location,
+        rows: &crate::client::Batch,
+        preserve: bool,
+        dimensions: &mut Option<([String; 2], [u32; 2])>,
+    ) -> Result<(Vec<u8>, Vec<u8>), Error> {
+        let rows = &rows[rows.len() - 5..];
+        let text = String::from_utf8_lossy(rows[3].text()).into_owned();
+        let state = text
+            .split('|')
+            .map(|s| {
+                s.split_once('=')
+                    .map(|(k, v)| (k.into(), v.into()))
+                    .ok_or_else(|| error("Invalid pane state"))
+            })
+            .collect::<Result<std::collections::BTreeMap<String, String>, _>>()?;
+        let native = self.backends[&loc.backend].clients[loc.client]
+            .snapshot
+            .as_ref()
+            .and_then(|s| s.panes.get(&loc.pane))
+            .ok_or_else(|| gone("Tmux pane closed during capture"))?;
+        if state.get("pane_id") != Some(&format!("%{}", loc.pane)) {
+            return Err(error("Tmux pane changed during capture"));
+        }
+        let actual = ["pane_width", "pane_height"]
+            .map(|key| state.get(key).cloned().unwrap_or_default());
+        let expected = [native.width, native.height];
+        if actual != expected.map(|value| value.to_string()) {
+            *dimensions = Some((actual, expected));
+            return Err(Error {
+                code: "stale",
+                message: "Tmux capture needs refreshed dimensions".into(),
+            });
+        }
+        let decode = |rows: &control::Lines| {
+            rows.iter()
+                .map(|r| control::decode(r, true).map(Cow::into_owned))
+                .collect::<Result<Vec<_>, _>>()
+        };
+        let capture = terminal::Snapshot {
+            screen: decode(&rows[0])?,
+            saved: decode(&rows[1])?,
+            cursor: control::decode(
+                rows[2].iter().next().unwrap_or_default(),
+                true,
+            )?
+            .into_owned(),
+            state,
+            preserve,
+        };
+        let bytes = capture.bytes(control::MAXIMUM)?;
+        let pending = control::decode(rows[4].text(), false)?.into_owned();
+        Ok((bytes, pending))
+    }
+    /// One observer's repaint (terminals.follow): the capture the restore after `%pause` takes (the whole history,
+    /// so that observer's scrollback is complete again), sent as `Update::Restore` for it alone. The shared stream is
+    /// left as it is: no `ready` gap and no new filter, so other observers' output goes on. tmux sends the output it
+    /// reads after running the capture after the capture's reply, so what follows the repaint applies on top of it; a
+    /// sequence tmux had not finished stays in the shared filter and reaches that observer whole, after the repaint.
+    pub(crate) fn follow_restore(&mut self, io: &mut dyn Io, node: Id, token: u64, done: Done<()>) {
+        self.repaint_for(io, node, token, 0, done);
+    }
+    fn repaint_for(&mut self, io: &mut dyn Io, node: Id, token: u64, attempts: u32, done: Done<()>) {
+        self.on(io, node, done, move |mux, io, loc, done| {
+            let commands = include_str!("capture.tmux")
+                .lines()
+                .map(|s| s.replace("PANE", &format!("%{}", loc.pane)).replace("HISTORY", "-"))
+                .collect();
+            mux.request(
+                io,
+                loc,
+                commands,
+                Box::new(move |mux, io, result| {
+                    mux.checked(
+                        io,
+                        loc,
+                        node,
+                        result,
+                        Box::new(move |mux, io, result| mux.repainted(io, loc, node, token, attempts, result, done)),
+                    );
+                }),
+            );
+        });
+    }
+    /// A repaint's capture came back (`follow_restore`). A resize racing it is captured again after a relist, twice at most,
+    /// as `capture` does.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn repainted(
+        &mut self,
+        io: &mut dyn Io,
+        loc: Location,
+        node: Id,
+        token: u64,
+        attempts: u32,
+        result: Result<crate::client::Batch, Error>,
+        done: Done<()>,
+    ) {
+        if !self.terminals.contains_key(&node) {
+            finish(io, done, Err(gone("Tmux pane detached during capture")));
+            return;
+        }
+        if let Err(error) = self.location(node)
+            && error.code == "expired"
+        {
+            finish(io, done, Err(error));
+            return;
+        }
+        let mut dimensions = None;
+        match result.and_then(|rows| self.repaint(loc, &rows, false, &mut dimensions)) {
+            Ok((bytes, _)) => {
+                self.updates.push(Update::Restore { terminal: node, token, bytes });
+                finish(io, done, Ok(()));
+            }
+            Err(e) if e.code == "stale" && attempts < 2 => self.refresh(
+                io,
+                loc,
+                Some(Box::new(move |mux, io, result| match result {
+                    Ok(()) => mux.repaint_for(io, node, token, attempts + 1, done),
+                    Err(e) => finish(io, done, Err(e)),
+                })),
+            ),
+            Err(e) if e.code == "stale" => {
+                finish(io, done, Err(error("Tmux pane size kept changing during capture")))
+            }
+            Err(e) => finish(io, done, Err(e)),
+        }
+    }
     fn captured(&mut self, io: &mut dyn Io, node: Id, done: Done<()>, result: Result<(), Error>) {
         let captures = self
             .terminals
@@ -522,16 +614,7 @@ impl Tmux {
         }
     }
     pub(crate) fn screen(&mut self, io: &mut dyn Io, node: Id, changed: bool, done: Done<Screen>) {
-        self.on(io, node, done, |mux, io, _, done| {
-            let state = mux.terminals.entry(node).or_default();
-            if let Some(screen) = state.screen.clone().filter(|_| !changed || state.changed) {
-                state.changed = false;
-                finish(io, done, Ok(screen));
-            } else {
-                state.readers.push(done);
-            }
-            mux.read_screen(io, node);
-        });
+        self.on(io, node, done, |mux, io, _, done| mux.read(io, node, changed, done));
     }
     pub(crate) fn output(&mut self, io: &mut dyn Io, loc: Location, bytes: &[u8]) {
         let Some(node) = self.terminal(loc) else {
@@ -630,8 +713,8 @@ impl Tmux {
             })
             .collect::<Vec<_>>()
         {
-            let state = self.terminals.remove(&node).unwrap();
-            for done in state.readers {
+            let mut state = self.terminals.remove(&node).unwrap();
+            for done in state.readers.into_iter().chain(state.host.readers()) {
                 finish(io, done, Err(gone("Tmux pane closed")));
             }
             for done in state.writers {
@@ -987,3 +1070,7 @@ impl Tmux {
     }
 }
 use std::borrow::Cow;
+
+#[cfg(test)]
+#[path = "ops.test.rs"]
+mod tests;

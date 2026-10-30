@@ -1,5 +1,6 @@
 /tmp/
 /build/
+/replays/
 /com.apple.DeveloperTools/
 **/xcuserdata/
 .DS_Store

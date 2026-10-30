@@ -159,11 +159,13 @@ final class SSHDriverTests: XCTestCase {
     }
 
     /// The phone's hello (docs/ios.md, Helper contract, and helper/PROTOCOL.md Features): with `stdio.liveness` the helper
-    /// ends after 45 s without a frame, so the latency ping keeps it alive at most every 15 s.
+    /// ends after 45 s without a frame, so the latency ping keeps it alive at most every 15 s; `screens.host` and
+    /// `terminals.follow` (the helper reads the screens itself, hidden chat terminals hold their output) are the Mac's.
     func testHelloFeaturesAndTheLivenessPing() {
         XCTAssertEqual(SSHHostSessionDriver.features, ["interaction.options", "chat.list", "projects.recent", "multiplexers.versions",
                                                        "terminals.coalesce", "launch.names", "stdio.liveness",
-                                                       "terminals.activity", "chat.attachments", "memberships.append"])
+                                                       "terminals.activity", "chat.attachments", "memberships.append",
+                                                       "screens.host", "terminals.follow"])
         XCTAssertLessThanOrEqual(SSHHostSessionDriver().pingInterval, SSHHostSessionDriver.livenessPing)
         XCTAssertEqual(SSHHostSessionDriver.livenessPing, .seconds(15))
     }
@@ -472,6 +474,48 @@ extension SSHDriverTests {
         XCTAssertTrue(login.isOpen)
     }
 
+    /// The hello names every phone feature, `screens.host` and `terminals.follow` among them; what the reply accepted
+    /// is the session's `features`, which the terminal feeds are made with (an older helper accepts neither: publish).
+    func testTheHelloNamesHostScreensAndFollowAndTheSessionKeepsWhatWasAccepted() async throws {
+        let processes = Recorder<ScriptedHelperProcess>()
+        var reply = ScriptedHelperProcess.hello()
+        reply["features"] = ["chat.list", "screens.host", "terminals.follow"]
+        nonisolated(unsafe) let accepted = reply
+        let login = ScriptedLogin { root, _ in
+            let made = ScriptedHelperProcess(root: root, hello: accepted)
+            processes.append(made)
+            return made
+        }
+        let (events, _, task) = run(host(), login: login.step)
+        defer { task.cancel() }
+        try await TestSupport.eventually(diagnostic: "\(events.values)") { events.values.contains(.ready) }
+        let hello = try XCTUnwrap(processes.values.first?.requests("hello").first)
+        let named = hello.params["features"] as? [String]
+        XCTAssertEqual(named, SSHHostSessionDriver.features)
+        XCTAssertTrue(named?.contains("screens.host") == true && named?.contains("terminals.follow") == true)
+
+        let record = HostRecord(name: "studio", address: "studio.local", user: "alex", auth: .password)
+        let steps: [ScriptedHostSessionDriver.Step] = [
+            .ready(hello: ResilienceFixture.hello(features: ["chat.list", "screens.host", "terminals.follow"]),
+                   multiplexers: HostFixture.multiplexers(["tmux"]), versions: [:], topology: HostFixture.topology()), .hold]
+        let sessions = HostSessions(store: HostStore(url: nil, hosts: [record]),
+                                          keys: KeyStore(url: nil, vault: MemoryVault(), keyProtection: .none, secureEnclaveAvailable: false),
+                                          knownHosts: KnownHostStore(url: nil), driver: ScriptedHostSessionDriver { _ in steps })
+        let session = sessions.ordered[0]
+        session.connect()
+        try await TestSupport.eventually { session.client != nil }
+        let features = session.features
+        XCTAssertEqual(features, ["chat.list", "screens.host", "terminals.follow"])
+        let feed = HelperTerminalFeed(client: try XCTUnwrap(session.client), terminal: 1, features: features)
+        XCTAssertTrue(feed.hostsScreens)
+        XCTAssertTrue(feed.holdsOutput)
+        let older = HelperTerminalFeed(client: try XCTUnwrap(session.client), terminal: 1, features: ["chat.list"])
+        XCTAssertFalse(older.hostsScreens, "an older helper: the phone publishes")
+        XCTAssertFalse(older.holdsOutput)
+        XCTAssertFalse(HelperTerminalFeed(client: try XCTUnwrap(session.client), terminal: 1, features: ["terminals.follow"]).holdsOutput,
+                       "held output needs the helper's own screen reads")
+    }
+
     /// The runtime folder cannot run it either: plain SSH with the bootstrap's text about running programs, no reconnect.
     func testAHelperNoFolderCanRunIsPlainSSHWithWhy() async throws {
         let login = ScriptedLogin { root, _ in
@@ -667,6 +711,8 @@ final class ScriptedHelperProcess: HelperProcess, @unchecked Sendable {
 
     var connection: HelperConnection { helper.client.connection }
     var isClosed: Bool { state.withLock { $0.closed } }
+    /// What the phone asked this helper (`hello` and on).
+    func requests(_ method: String) -> [ScriptedHelper.Request] { helper.requests(method) }
 
     /// `lost`: the channel ends with no exit status before answering (a signal, or the connection going).
     init(root: HelperBootstrap.Root, runtime: String? = nil, hello: [String: Any]? = nil, exit: Int32? = nil, lost: Bool = false,

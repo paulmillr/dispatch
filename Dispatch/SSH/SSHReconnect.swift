@@ -2,14 +2,45 @@ import AppKit
 import Network
 import Observation
 
-/// Why an automatic reconnect stopped short. Only an unreachable host is tried again by itself;
-/// a refusal (a password or passphrase, a changed host key, a closed login tab) waits for Reconnect.
+/// Why an automatic reconnect stopped short. An unreachable host, and a login whose later steps did not finish in time
+/// (`interrupted`: a slow link), are tried again by themselves; a refusal (a password or passphrase, a changed host key,
+/// a closed login tab) waits for Reconnect.
 enum SSHAutomaticFailure: LocalizedError {
     case unreachable(String)
     case refused(String)
+    case interrupted(String)
     var errorDescription: String? {
-        switch self { case .unreachable(let message), .refused(let message): message }
+        switch self { case .unreachable(let message), .refused(let message), .interrupted(let message): message }
     }
+
+    /// Whether automatic reconnect tries again after an attempt failed with `error`.
+    static func retries(after error: Error) -> Bool {
+        switch error as? SSHAutomaticFailure {
+        case .unreachable?, .interrupted?: true
+        case .refused?, nil: false
+        }
+    }
+
+    /// Whether a recovery step after the login failed in a way another attempt may pass: a step or the whole setup ran
+    /// out of time, a setup step's transient failure (`SSHSetupFailure.transient`), or the replacement shell or its
+    /// spaces not ready in time (`SSHRecoveryIncomplete`). Never a cancellation, a permanent setup failure, a changed
+    /// host, grant or launcher.
+    static func transient(_ error: Error) -> Bool {
+        if error is CancellationError { return false }
+        if error is SSHRecoveryIncomplete { return true }
+        if let failure = error as? SSHSetupFailure { return failure.reason == SSHSetupFailure.timedOut || SSHSetupFailure.transient(failure) }
+        if let failure = error as? HerdrFailure {
+            return [SSHTimeout.message, SSHCommand.timedOut, SSHCommand.stalled(SSHBootstrap.uploadStall)].contains(failure.message)
+        }
+        return false
+    }
+}
+
+/// A replacement shell, or the spaces it restores, not ready in time: on a slow link another attempt may pass.
+struct SSHRecoveryIncomplete: LocalizedError {
+    let message: String
+    init(_ message: String) { self.message = message }
+    var errorDescription: String? { message }
 }
 
 /// One retained connection owns its consumers, even when another login to the
@@ -184,12 +215,20 @@ final class SSHReconnectController {
                         for surface in recipe.surfaces where self.completed[surface] == token { self.completed[surface] = nil }
                     }
                 } catch {
-                    guard epochs[hostID] == epoch, recipes[id] != nil else { continue }
+                    guard epochs[hostID] == epoch else { continue }
+                    let retry = automatic && SSHAutomaticFailure.retries(after: error)
+                    guard recipes[id] != nil else {
+                        // The replacement had started (its login worked) and then failed: it is the lost connection now.
+                        let successors = replacements.filter { $0.value == id && recipes[$0.key] != nil }.map(\.key)
+                        losses.remove(id)
+                        if retry, !successors.isEmpty { losses.formUnion(successors); unreachable = true }
+                        continue
+                    }
                     var state = states[id] ?? State()
                     state.reconnecting = false
                     state.error = error is CancellationError ? nil : error.localizedDescription
                     states[id] = state
-                    if case .unreachable? = error as? SSHAutomaticFailure { unreachable = true } else { losses.remove(id) }
+                    if retry { unreachable = true } else { losses.remove(id) }
                 }
                 runtime?.workspace?.hostMoveMotion.connecting.subtract(recipe.surfaces)
             }
@@ -326,12 +365,13 @@ final class SSHReconnectController {
 /// copied into a recipe, argv, or app field. The private master is fresh each time.
 @MainActor
 enum SSHReconnectLogin {
-    static func authenticate(shell: SSHShell, master: SSHMaster, window: NSWindow?) async throws {
+    /// `configuration`: the connection's `ssh -G`, which decides the master's keepalive (`SSHKeepalive`).
+    static func authenticate(shell: SSHShell, master: SSHMaster, window: NSWindow?, configuration: String? = nil) async throws {
         guard let window = window ?? NSApp.keyWindow?.sheetParent ?? NSApp.keyWindow ?? NSApp.mainWindow else {
             throw HerdrFailure("Open a Dispatch window to authenticate this connection.")
         }
         let arguments = ["-o", "ControlMaster=yes", "-o", "ControlPersist=yes", "-S", master.controlPath,
-                         "-f", "-N"] + shell.options + ["--", shell.destination]
+                         "-f", "-N"] + shell.options + SSHKeepalive.options(configuration: configuration) + ["--", shell.destination]
         let command = ([shell.executable] + arguments).map(HerdrLaunch.quote).joined(separator: " ")
         // Authentication owns this short-lived helper, not a workspace terminal. Keeping its
         // topology private avoids importing password prompts into the user's tabs; its existing
@@ -452,10 +492,8 @@ enum SSHReconnectLogin {
     }
     /// Keys and the SSH agent only: an automatic reconnect never prompts. OpenSSH refusing the login
     /// (a password or passphrase it would ask for, a changed host key) is `.refused`; the rest `.unreachable`.
-    static func authenticateSilently(shell: SSHShell, master: SSHMaster) async throws {
-        // The first value given for an option wins, so these hold over the connection's own options.
-        let arguments = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ControlMaster=yes", "-o", "ControlPersist=yes",
-                         "-S", master.controlPath, "-f", "-N"] + shell.options + ["--", shell.destination]
+    static func authenticateSilently(shell: SSHShell, master: SSHMaster, configuration: String? = nil) async throws {
+        let arguments = silentArguments(shell: shell, master: master, configuration: configuration)
         let result: SSHCommand.Result
         do { result = try await SSHCommand.run(executable: shell.executable, arguments: arguments, timeout: 30, errors: true) }
         catch {
@@ -478,6 +516,13 @@ enum SSHReconnectLogin {
             try await System.sleep(for: .milliseconds(100), "master")
         }
         throw SSHAutomaticFailure.unreachable("SSH logged in, but its connection did not become ready.")
+    }
+    /// The first value given for an option wins, so BatchMode and the rest hold over the connection's own options; the
+    /// keepalive comes after them, so the connection's own keepalive holds over it.
+    nonisolated static func silentArguments(shell: SSHShell, master: SSHMaster, configuration: String?) -> [String] {
+        ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ControlMaster=yes", "-o", "ControlPersist=yes",
+         "-S", master.controlPath, "-f", "-N"] + shell.options + SSHKeepalive.options(configuration: configuration)
+            + ["--", shell.destination]
     }
     @MainActor private final class LoginCancellation: NSObject {
         var cancelled = false

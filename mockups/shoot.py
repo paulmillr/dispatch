@@ -22,7 +22,6 @@ REPO = ROOT.parent
 GROUPS = {
     'phone': {
         'tab': ['H0-terminal', 'H1-files', 'H2-review', 'H3-commits'],
-        'graph': ['H3x-commits-status', 'H3d-commits-vivid', 'H3e-commits-saturated', 'H3f-commits-vivid-blue', 'H3g-commits-vivid-rose', 'H3h-commits-vivid-cyan', 'H3i-commits-vivid-gray', 'H3a-commits-tint', 'H3b-commits-hues', 'H3c-commits-ink'],
         'review': ['R2-diff-comments', 'R3-diff-select', 'R4-diff-compose', 'R5-review-sheet', 'R5b-review-sheet-swipe',
                    'R5c-review-sheet-noagent'],
         'pushed': ['F2-file', 'C2-commit'],

@@ -83,3 +83,22 @@ extension SSHStatisticsTests {
         XCTAssertNil(try rates.sample(processes(12), connection: connection)[0].cpu)
     }
 }
+
+extension SSHStatisticsTests {
+    /// Requests to a host wait 3 s (the floor) plus ten of its round trips, at most 30 s; without a current reading at
+    /// least 10 s. Restoring retained spaces gets 30 s plus 30 round trips, at most 120 s, 60 s without a reading.
+    func testLinkTimeoutsScaleWithTheMeasuredLatency() {
+        XCTAssertEqual(SSHLinkTimeout.reply(milliseconds: 20, current: true), .milliseconds(3200))
+        XCTAssertEqual(SSHLinkTimeout.reply(milliseconds: 1000, current: true), .seconds(13))
+        XCTAssertEqual(SSHLinkTimeout.reply(milliseconds: 5000, current: true), .seconds(30))
+        XCTAssertEqual(SSHLinkTimeout.reply(milliseconds: nil, current: false), .seconds(10))
+        XCTAssertEqual(SSHLinkTimeout.reply(milliseconds: 20, current: false), .seconds(10), "A timed-out probe waits longer next time")
+        XCTAssertEqual(SSHLinkTimeout.reply(milliseconds: 1500, current: false), .seconds(18))
+        XCTAssertEqual(SSHLinkTimeout.reply(milliseconds: 20, current: true, floor: 5), .milliseconds(5200))
+        XCTAssertEqual(SSHLinkTimeout.reply(milliseconds: -4, current: true), .seconds(3))
+        XCTAssertEqual(SSHLinkTimeout.restore(milliseconds: nil), .seconds(60))
+        XCTAssertEqual(SSHLinkTimeout.restore(milliseconds: 20), .milliseconds(30600))
+        XCTAssertEqual(SSHLinkTimeout.restore(milliseconds: 1000), .seconds(60))
+        XCTAssertEqual(SSHLinkTimeout.restore(milliseconds: 10_000), .seconds(120))
+    }
+}

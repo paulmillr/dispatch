@@ -166,7 +166,7 @@ final class ChatComposerTests: XCTestCase {
         let shimmer = try XCTUnwrap(PresentationTestSupport.views(of: ChatComposerShimmer.ShimmerView.self, in: host).first)
         let loops = [orbit.diamond, orbit.orbit, shimmer.band].map { $0.animation(forKey: key) }
         XCTAssertEqual(loops.map { $0?.duration }, [1.6, 1.4, 2.4], "Pulse, orbit and sweep keep their periods")
-        XCTAssertEqual(loops.map { $0?.preferredFrameRateRange.preferred }, Array(repeating: Float(fps), count: 3))
+        XCTAssertEqual(loops.map { $0?.preferredFrameRateRange.preferred }, [MotionRate.glow, MotionRate.orbit, MotionRate.shimmer].map { Float(min(fps, MotionRate.limit, $0)) })
         XCTAssertNil(orbit.hitTest(.zero)); XCTAssertNil(shimmer.hitTest(.zero))
         session.busy = false
         try await TestSupport.eventually { [orbit.diamond, orbit.orbit, shimmer.band].allSatisfy { $0.animation(forKey: key) == nil } }
@@ -624,4 +624,39 @@ private final class UpdateCountingHost: NSHostingView<AnyView> {
     var updates = 0
     override func updateConstraints() { updates += 1; super.updateConstraints() }
     override func layout() { updates += 1; super.layout() }
+}
+
+extension ChatComposerTests {
+    // The Thinking row (side conversations, history loading) moves in the compositor like the composer: SwiftUI
+    // updates only its seconds, and the label breathes with the ◆ while its own text is hidden.
+    func testThinkingRowMovesInCompositorWithoutPerFrameSwiftUIUpdates() async throws {
+        try DesktopTestSupport.requireUnlocked()
+        AppFont.register()
+        let session = ChatSession(id: System.uuid())
+        session.active = true; session.busy = true; session.showChat = true
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 80), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close(); window.contentView = nil }
+        let host = UpdateCountingHost(rootView: AnyView(AgentWorkingIndicator(session: session).padding(12).background(Chrome.terminal)
+            .preferredColorScheme(.dark)))
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        try await Task.sleep(for: .milliseconds(500))
+        host.updates = 0
+        try await Task.sleep(for: .seconds(1))
+        let fps = window.screen?.maximumFramesPerSecond ?? 60
+        XCTAssertLessThan(host.updates, fps / 4, "A working Thinking row must not update SwiftUI every display frame")
+        let key = CompositorView.animationKey
+        let orbit = try XCTUnwrap(PresentationTestSupport.views(of: ChatComposerOrbit.OrbitView.self, in: host).first)
+        let shimmer = try XCTUnwrap(PresentationTestSupport.views(of: ChatComposerShimmer.ShimmerView.self, in: host).first)
+        let sweep = try XCTUnwrap(PresentationTestSupport.views(of: AgentWorkingSweep.SweepView.self, in: host).first)
+        let layers = [orbit.diamond, orbit.orbit, shimmer.base, shimmer.band, sweep.band]
+        let loops = layers.map { $0.animation(forKey: key) }
+        XCTAssertEqual(loops.map { $0?.duration }, [1.6, 1.4, 1.6, 2.4, 2.2], "Pulse, orbit, label breath, shimmer and sweep keep their periods")
+        XCTAssertEqual(loops.map { $0?.preferredFrameRateRange.preferred },
+                       [MotionRate.glow, MotionRate.orbit, MotionRate.glow, MotionRate.shimmer, .max].map { Float(min(fps, MotionRate.limit, $0)) })
+        XCTAssertFalse(shimmer.base.isHidden, "The breathing label stands in for the hidden one")
+        session.busy = false
+        try await TestSupport.eventually { layers.allSatisfy { $0.animation(forKey: key) == nil } }
+    }
 }

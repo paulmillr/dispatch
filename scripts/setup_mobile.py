@@ -2,7 +2,8 @@
 """What a fresh checkout needs before Xcode resolves the iPhone app's SSH package (docs/ios.md, Building and running):
 the pinned Rust with its iOS targets (scripts/setup-ssh-rust.py) and the engine's XCFramework
 (scripts/build-mobile-ssh.py, which fetches the locked crates once). SwiftPM resolves the binary target before any
-pre-build script runs, so `./run.sh --ios` and `test/run.sh --platform ios` call this first.
+pre-build script runs, and for every scheme of the project (the Mac's too), so scripts/setup.sh calls this, as does
+`test/run.sh --platform ios`.
 
 Offline-aware like the Mac's setup: with DISPATCH_SETUP_OFFLINE=1 nothing is downloaded; a missing toolchain or
 crate cache then fails with the command to run online once."""
@@ -14,6 +15,7 @@ import sys
 ROOT = Path(__file__).resolve().parent.parent
 FRAMEWORK = ROOT / 'build/mobile-ssh/DispatchMobileSSHCore.xcframework'
 HEADERS = ROOT / 'Mobile/Transport/Core/include'
+CARGO = ROOT / 'build/rust/bin/cargo'
 
 
 def current(framework=FRAMEWORK, headers=HEADERS):
@@ -22,6 +24,19 @@ def current(framework=FRAMEWORK, headers=HEADERS):
     slices = [path for path in framework.glob('*/Headers') if path.is_dir()]
     return bool(slices) and all((folder / file.name).is_file() and (folder / file.name).read_bytes() == file.read_bytes()
                                 for folder in slices for file in headers.iterdir())
+
+
+def downloads():
+    """Whether ensure() would download: the XCFramework is stale and the locked crates are not all in build/cargo
+    (or there is no toolchain yet to tell). setup.sh asks consent for it with the other downloads."""
+    if current():
+        return False
+    if not CARGO.is_file():
+        return True
+    env = dict(os.environ, CARGO_HOME=str(ROOT / 'build/cargo'),
+               PATH=str(CARGO.parent) + os.pathsep + os.environ.get('PATH', ''))
+    return subprocess.run([CARGO, 'fetch', '--locked', '--offline'], cwd=ROOT / 'Mobile/Transport/Core', env=env,
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0
 
 
 def ensure(offline=None, quiet=False):

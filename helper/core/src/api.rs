@@ -285,6 +285,7 @@ pub enum Job {
     ///   Linux rows start and cpuNanos (CPU time so far).
     /// - "attachment.put", "attachment.read": chat attachments' private copies; "attachment.clock"
     ///   -> {ms}, the wall clock for the delivery index (system/attachment.rs).
+    /// - "clock": {} -> {ms}; the wall clock in Unix milliseconds (when a subagent started).
     /// - "stats.disks": {local:bool} -> {disks:[{identity:string,paths:[string],total,free}]};
     ///   identity is the native signed fsid pair, "word:word". No fabricated identity.
     Native {
@@ -525,6 +526,12 @@ pub trait Io {
     }
     /// Resize a PTY master; c1654cc Helpers/ssh-helper/src/pty.rs:39.
     fn resize(&mut self, master: RawFd, grid: Grid) -> io::Result<()>;
+    /// Bytes written to a PTY master that its child has not read yet (the slave side's input queue): a key typed
+    /// for an agent waits for the agent to take the input before it (native Terminal::draining). 0 where it cannot
+    /// be known.
+    fn unread(&mut self, _master: RawFd) -> io::Result<usize> {
+        Ok(0)
+    }
     /// Hang up a PTY: close the master so the child gets SIGHUP; c1654cc Helpers/ssh-helper/src/pty.rs:53, 73.
     fn hangup(&mut self, master: RawFd) -> io::Result<()>;
     /// Nonblocking connect; helper2 system.rs:1652.
@@ -618,6 +625,14 @@ pub enum Update {
     },
     Output {
         terminal: Id,
+        bytes: Vec<u8>,
+    },
+    /// A whole repaint of `terminal` for the one observer whose output was held and that asked for it with `token`
+    /// (terminals.follow, `Multiplexer::restore`): published to it alone as `terminal.output`, in order with the
+    /// Output that follows; other observers never see it.
+    Restore {
+        terminal: Id,
+        token: u64,
         bytes: Vec<u8>,
     },
     /// Native controller diagnostics, distinct from terminal VT bytes (SSHProtocolV2Tests.swift:529-539).
@@ -854,9 +869,27 @@ pub struct State {
     pub service_tier: Option<String>,
     /// Native collaboration mode, including the acknowledged /plan setting.
     pub mode: Option<String>,
-    /// Running subagents' types, oldest first (Claude and Codex SubagentStart until
-    /// SubagentStop). They can outlive the turn that started them (background agents).
-    pub agents: Vec<String>,
+    /// Running subagents, oldest first (Claude and Codex SubagentStart until SubagentStop).
+    /// They can outlive the turn that started them (background agents).
+    pub agents: Vec<Agent>,
+}
+
+/// One running subagent (`State.agents`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Agent {
+    /// The harness's id for it (SubagentStart `agent_id`).
+    pub id: String,
+    /// Its type (`agent_type`); "agent" when the harness names none.
+    pub kind: String,
+    /// The task its parent gave it (Claude: `agent-<id>.meta.json` "description"); None until
+    /// read, and for harnesses that keep none.
+    pub name: Option<String>,
+    /// Input, output and cache-creation tokens of its model calls, each message once (Claude:
+    /// `agent-<id>.jsonl`); None until its transcript was read, and for harnesses without one.
+    pub tokens: Option<u64>,
+    /// When SubagentStart reached the helper, in the host's Unix milliseconds; None until the
+    /// clock answered, and for harnesses that do not ask it (the client times it from then).
+    pub started_ms: Option<u64>,
 }
 
 /// A backend's prefix key table (Multiplexer::prefix): raw native key and command strings.
@@ -1539,7 +1572,10 @@ pub trait Multiplexer {
         );
     }
     /// Start output as VT bytes via `Update::Output`; c1654cc Dispatch/Herdr/HerdrTerminal.swift:18-59, Dispatch/Tmux/TmuxSession.swift:343.
-    fn attach(&mut self, io: &mut dyn Io, terminal: Id, size: Grid, takeover: bool, done: Done<()>);
+    /// `publishes`: the attaching client publishes this terminal's screens (`publish`); false for a client of
+    /// feature screens.host, which reads them from the helper: `screen` then reads the multiplexer itself
+    /// (`host_screens`) until some client publishes. Native has no such source and ignores it.
+    fn attach(&mut self, io: &mut dyn Io, terminal: Id, size: Grid, takeover: bool, publishes: bool, done: Done<()>);
     /// User typing; c1654cc Dispatch/Chat/ChatCoordinator.swift:2016.
     /// Complete only after all bytes reach native stdin; queued or discarded bytes must not renew credit.
     fn input(&mut self, io: &mut dyn Io, terminal: Id, bytes: &[u8], done: Done<()>);
@@ -1639,6 +1675,23 @@ pub trait Multiplexer {
     fn running(&self, status: Option<i32>, _stdout: &[u8]) -> bool {
         status == Some(0)
     }
+    /// Whether `restore` can repaint this multiplexer's terminals: only then may a client hold their output
+    /// (terminals.follow), since showing them again needs the screen back.
+    fn restores(&self) -> bool {
+        false
+    }
+    /// Repaint `terminal` whole for one observer that held its output (terminals.follow): `Update::Restore` with
+    /// `token`, queued in order with the terminal's `Update::Output` (what follows it applies on top of it), without
+    /// resetting what other observers render. `done` once it is queued.
+    fn restore(&mut self, io: &mut dyn Io, _terminal: Id, _token: u64, done: Done<()>) {
+        deferred(done)(
+            io,
+            Err(Error {
+                code: "unsupported",
+                message: "This multiplexer cannot restore a terminal's screen".into(),
+            }),
+        );
+    }
     /// When the server last saw activity in this multiplexer's published nodes: (node, Unix
     /// milliseconds) as the native program reports it (feature terminals.activity). Asked only
     /// for a client that named the feature, so no other client's native traffic changes.
@@ -1648,13 +1701,27 @@ pub trait Multiplexer {
     }
     /// Active screen text now, or after its next change when `changed`; c1654cc Dispatch/Chat/ChatModelPicker.swift:72, 231-248.
     fn screen(&mut self, io: &mut dyn Io, terminal: Id, changed: bool, done: Done<Screen>);
-    /// Screen text the app publishes for a terminal it renders itself; c1654cc Dispatch/Chat/ChatCoordinator.swift:2098-2100.
+    /// Screen text a client publishes for a terminal it renders itself (the iPhone; the Mac for native terminals,
+    /// SSH-login observers, and tmux/herdr ones when it does not name screens.host); c1654cc
+    /// Dispatch/Chat/ChatCoordinator.swift:2098-2100. A published screen wins: no host reads for that terminal while
+    /// its publisher keeps it attached (`screen_clients`).
     fn publish(&mut self, io: &mut dyn Io, terminal: Id, screen: Screen);
-    /// Let `screen` read terminals no client renders from the multiplexer itself (tmux `capture-pane`, herdr's
+    /// Let `screen` read every terminal nobody publishes for from the multiplexer itself (tmux `capture-pane`, herdr's
     /// terminal observer), as the screen a client would publish (crate::cells). For a helper without clients (the
-    /// queue drainer); off by default, so a client helper reads only published screens and records nothing new. A
-    /// terminal a client attached or published for keeps reading the client's screens.
+    /// queue drainer); off by default. A screens.host client's attach turns the same reads on for that terminal
+    /// alone (`attach`, `screen_clients`), so a helper whose clients name no feature reads only published screens
+    /// and records nothing new. Native has no host source: its screens are only published.
     fn host_screens(&mut self, _enabled: bool) {}
+    /// Who supplies `terminal`'s screens now (core helper.rs, when it changes: an attach ended, a client left):
+    /// `hosting`, a screens.host client has it attached; `published`, a client that published a screen for it still
+    /// has it attached (or published without attaching and is still connected). `attach` and `publish` already
+    /// set both as they happen; this mostly clears them, so host reads resume once the publisher (a phone) leaves.
+    fn screen_clients(&mut self, _io: &mut dyn Io, _terminal: Id, _hosting: bool, _published: bool) {}
+    /// Whether `screen` reads `terminal` from the multiplexer itself now (host_screens, screens.host), paced to its
+    /// output settling; false for a terminal whose screens are published.
+    fn hosted(&self, _terminal: Id) -> bool {
+        false
+    }
     /// Completion of IO this multiplexer submitted; also reports `Update::Clipboard`, c1654cc Dispatch/Tmux/TmuxSession.swift:178-191.
     fn event(&mut self, io: &mut dyn Io, ui: &mut dyn Ui, event: Event);
 }

@@ -173,11 +173,11 @@ final class MainMockupPresentationTests: XCTestCase {
         XCTAssertTrue(before.contains("more"), before)
         let sidebar = try sidebarText(beforeSnapshot, window: window)
         XCTAssertTrue(sidebar.contains("needs you"), sidebar)
-        XCTAssertTrue(before.contains("job-13"), "Selected overflowing tab must stay visible: \(before)")
+        XCTAssertTrue(before.lowercased().contains("job-13"), "Selected overflowing tab must stay visible: \(before)") // Vision may read "Job"
         // The overflow pill's left side pages the strip back to the tabs scrolled
         // out before the selected one, without changing the selection.
         func visibleJobs(_ text: String) -> [Int] {
-            text.matches(of: /job-(\d\d)/).compactMap { Int($0.1) }
+            text.matches(of: /job-(\d\d)/.ignoresCase()).compactMap { Int($0.1) }
         }
         let firstVisible = try XCTUnwrap(visibleJobs(before).min(), before)
         XCTAssertGreaterThan(firstVisible, 1, "Earlier tabs are scrolled out: \(before)")

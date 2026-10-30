@@ -214,7 +214,7 @@ impl Herdr {
                     .iter()
                     .any(|pane| self.graph.ids.get(&pane.terminal) == Some(&id))
             {
-                if self.agents.get(&id) != Some(&(index, binding.clone())) {
+                if !self.agents.get(&id).is_some_and(|known| same_agent(known, index, &binding)) {
                     changed.insert(id);
                 }
                 self.agents.insert(id, (index, binding));
@@ -265,3 +265,18 @@ impl Herdr {
         }
     }
 }
+
+/// Re-identification runs on every output frame. Only who the agent is (its harness, session,
+/// transcript, process) is a change for its chats: open files, the foreground group and arguments
+/// moved with the agent's own writes and reopened its chat each time (tmux discovery.rs compares
+/// the same fields).
+fn same_agent((known, old): &(usize, Binding), index: usize, binding: &Binding) -> bool {
+    *known == index
+        && old.session == binding.session
+        && old.transcript == binding.transcript
+        && (old.process.pid, old.process.start) == (binding.process.pid, binding.process.start)
+}
+
+#[cfg(test)]
+#[path = "bindings.test.rs"]
+mod tests;

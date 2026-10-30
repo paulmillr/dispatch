@@ -82,6 +82,64 @@ final class InterfaceMotionTests: XCTestCase {
         XCTAssertNil(receipt("reply"), "A reply right after the prompt joins its entrance")
     }
 
+    func testLiveStepsHandOffFromTheStepLastShownEvenInABurst() throws {
+        let session = ChatSession(id: System.uuid())
+        session.showChat = true; session.busy = true; session.activeTurnID = "live"
+        func step(_ id: String) -> ChatItem { ChatItem(id: id, kind: .tool, text: "{}", title: "exec_command") }
+        func current() -> ChatTranscriptRow? { session.visibleTranscriptRows.last { $0.timeline?.current == true } }
+        session.insert(.init(id: "reply", kind: .assistant, text: "Looking"), turnID: "live")
+        session.insert(step("one"), turnID: "live")
+        session.insert(step("two"), turnID: "live")
+        XCTAssertEqual(current()?.item?.id, "two")
+        XCTAssertNil(current()?.timeline?.replaced, "A group's first shown step has nothing to hand off from")
+        session.insert(step("three"), turnID: "live")
+        let three = try XCTUnwrap(current())
+        XCTAssertEqual(three.timeline?.replaced?.item.id, "two")
+        XCTAssertNotNil(session.transcriptArrivals.handoff(for: three.id), "A step inside the burst interval still hands off")
+        XCTAssertNil(session.transcriptArrivals.receipt(for: three.id))
+        XCTAssertEqual(current()?.timeline?.replaced?.item.id, "two", "The step keeps what it replaced while it is current")
+        // Steps that arrive between two looks at the transcript were never shown: the next hands off from "three".
+        session.insert(step("four"), turnID: "live")
+        session.insert(step("five"), turnID: "live")
+        XCTAssertEqual(current()?.item?.id, "five")
+        XCTAssertEqual(current()?.timeline?.replaced?.item.id, "three")
+        session.setGroupExpanded(try XCTUnwrap(session.transcriptRows.last?.group), true)
+        XCTAssertTrue(session.visibleTranscriptRows.allSatisfy { $0.timeline?.replaced == nil }, "An opened group's steps don't hand off")
+    }
+
+    func testSendFlightsLeaveFromTheTextAndSkipWhatCannotFly() throws {
+        try XCTSkipIf(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, "Reduce Motion sends without flights")
+        let session = ChatSession(id: System.uuid())
+        session.showChat = true; session.atBottom = true
+        let coordinator = ChatCoordinator(enabled: false)
+        session.showOptimisticPrompt("Keep the buffer")
+        let prompt = ChatSendFlight.Place.prompt(try XCTUnwrap(session.optimisticPrompt).id)
+        coordinator.launchFlight(session, text: "Keep the buffer", hasAttachments: false, from: .composer, to: prompt)
+        XCTAssertNil(session.sendFlight, "A composer that was never laid out has nothing to fly from")
+        session.flightFrames[.composer] = CGRect(x: 20, y: 400, width: 600, height: 28)
+        coordinator.launchFlight(session, text: "Keep the buffer", hasAttachments: false, from: .composer, to: prompt)
+        XCTAssertEqual(session.sendFlight?.source, CGRect(x: 32, y: 405, width: 576, height: 18), "It leaves from the editor's text, inside its insets")
+        session.sendFlight = nil
+        coordinator.launchFlight(session, text: "Keep the buffer", hasAttachments: true, from: .composer, to: prompt)
+        XCTAssertNil(session.sendFlight, "Attachment chips don't fly: the message enters as before")
+        coordinator.launchFlight(session, text: "  ", hasAttachments: false, from: .composer, to: prompt)
+        XCTAssertNil(session.sendFlight)
+        session.atBottom = false
+        coordinator.launchFlight(session, text: "Keep the buffer", hasAttachments: false, from: .composer, to: prompt)
+        XCTAssertNil(session.sendFlight, "A transcript read away from its end doesn't show the bubble to land on")
+        let message = ChatQueuedMessage(text: "Add a test")
+        session.queuedMessages = [message]
+        coordinator.launchFlight(session, text: "Add a test", hasAttachments: false, from: .composer, to: .queued(message.id))
+        XCTAssertEqual(session.sendFlight?.to, .queued(message.id), "The queue row shows wherever the transcript is")
+        session.sendFlight = nil; session.atBottom = true
+        let row = CGRect(x: 60, y: 300, width: 400, height: 18)
+        session.flightFrames[.queued(message.id)] = row
+        session.flownQueuedIDs = [UUID()]
+        coordinator.launchFlight(session, text: "Add a test", hasAttachments: false, from: .queued(message.id), to: prompt)
+        XCTAssertEqual(session.sendFlight?.source, row)
+        XCTAssertEqual(session.flownQueuedIDs, [message.id], "The row it left stays hidden while it sends; rows no longer queued are forgotten")
+    }
+
     func testChatArrivalFadesAndMovesWithoutChangingLayoutAndReducedMotionOnlyFades() async throws {
         try DesktopTestSupport.requireUnlocked()
         guard #available(macOS 14.4, *) else { throw XCTSkip("Composited capture requires macOS 14.4") }
@@ -479,7 +537,8 @@ final class InterfaceMotionTests: XCTestCase {
                                abs(c.blueComponent - background.blueComponent)) > 0.15 { rows.append(y) }
                     }
                     let minY = try XCTUnwrap(rows.min()), maxY = try XCTUnwrap(rows.max())
-                    XCTAssertEqual((CGFloat(minY + maxY) / 2 + 0.5) / scale, 15, accuracy: 0.75,
+                    // Drawn where the button is (its frame, from the window's top), whatever the title bar's height.
+                    XCTAssertEqual((CGFloat(minY + maxY) / 2 + 0.5) / scale, window.frame.height - after.midY, accuracy: 0.75,
                         "Traffic lights jumped during open \(opened), frame \(sample), kind=\(kind.rawValue), before=\(String(describing: before[index])), after=\(after), pixels=\(minY)...\(maxY), scale=\(scale)")
                 }
                 if sample == 0 {

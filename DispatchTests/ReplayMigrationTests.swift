@@ -18,19 +18,23 @@ final class ReplayMigrationTests: XCTestCase {
     }
 
     /// The setup scripts as the app sends them for fixed values (SSHBootstrap, SSHLauncherCommand): the probe, the cache
-    /// check, the upload, the home root's helper launch, the login's release and the login itself.
+    /// check, the upload, the home root's helper launch (the platform probe and the cache check folded in), the login's
+    /// release and the login itself.
     private static var sshSetup: String {
         let digest = String(repeating: "a", count: 64), session = String(repeating: "0", count: 24)
         let relative = SSHBootstrapScript.relativePath(digest: digest)
+        let helpers = ["darwin-arm64", "linux-aarch64", "linux-x86_64"].enumerated().map { index, name in
+            SSHBootstrap.Bundled(name: name, url: URL(fileURLWithPath: "/" + name), archive: nil, size: index + 1,
+                                 digest: String(repeating: Character(String(index + 1)), count: 64))
+        }
         return hash([
             SSHBootstrapScript.probe,
             SSHBootstrapScript.cacheCheck(size: 1, digest: digest),
             // The home root's helper launch (open.helper), without the observed capture export.
-            SSHBootstrap.Installed(root: .home, published: relative, path: relative, runtimeDirectory: nil,
-                                   preamble: SSHBootstrapScript.cachePreamble(digest: digest),
-                                   verify: SSHBootstrapScript.verify(size: 1, digest: digest))
+            SSHBootstrap.Launcher(root: .home, runtimeDirectory: nil, helpers: helpers)
                 .command("--remote --capabilities '' --stdio", export: ""),
             SSHBootstrapScript.upload(digest: digest, size: 1, staging: "upload-0"),
+            SSHBootstrapScript.upload(digest: digest, size: 1, staging: "upload-0", compressed: true),
             SSHBootstrap.publish(sessionID: session, relativePath: relative),
             SSHBootstrap.publish(sessionID: session, relativePath: nil, reason: "reason"),
             SSHLauncherCommand.remoteCommand(sessionID: session, grant: .init(profile: .statistics), command: nil),

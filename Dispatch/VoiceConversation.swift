@@ -7,7 +7,7 @@ import Dictation
 /// - with Settings › Dictation › Read replies aloud: the reply of the chat it listens to, read aloud once its turn
 ///   ends, the request or question that chat's agent stops for, and a word when another chat's agent finishes or
 ///   needs you. The microphone is ignored while it speaks (it would hear itself), and it waits for the user to finish
-///   an utterance before speaking. Esc, a tap of right ⌘ or "Dispatch, quiet" (said after it finishes) stop it;
+///   an utterance before speaking. Esc, a tap of the voice key or "Dispatch, quiet" (said after it finishes) stop it;
 /// - it stops listening while Dispatch isn't frontmost or the screen is locked, and listens again after.
 @MainActor
 final class VoiceConversation: NSObject {

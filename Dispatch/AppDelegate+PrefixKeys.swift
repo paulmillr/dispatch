@@ -2,11 +2,12 @@ import AppKit
 
 extension AppDelegate {
     /// A multiplexer's space answers that tool's table (by the name its helper gives it; a local
-    /// herdr's own config.toml), a native space the style chosen in Settings.
+    /// herdr's own config.toml), a native space tmux's, as far as Settings lets them.
     func prefixTable(for surface: UUID) -> PrefixTable? {
         guard let space = workspace.spaces.first(where: { $0.tabs.contains { $0.surfaceIDs.contains(surface) } }) else { return nil }
-        guard space.structured else { return settings.values.prefixKeys.table }
-        guard settings.values.backendPrefixKeys,
+        let scope = settings.values.prefixKeys
+        guard space.structured else { return scope == .all ? PrefixStyle.tmux.table : nil }
+        guard scope != .off,
               let style = space.backend.flatMap({ workspace.helper(space)?.multiplexer(of: $0) }).flatMap(PrefixStyle.init(rawValue:))
         else { return nil }
         return style == .herdr && space.remote == nil ? HerdrKeyConfig.shared.table : style.table

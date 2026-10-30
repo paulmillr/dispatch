@@ -189,3 +189,57 @@ fn attachment_operations_belong_to_chat_attachments() {
     assert_eq!(crate::helper::login::required(ATTACHMENTS_PUT), "agent.submit");
     assert_eq!(crate::helper::login::required(ATTACHMENTS_READ), "agent.inspect");
 }
+
+#[test]
+fn liveness_does_not_count_time_the_helper_was_not_reading() {
+    let start = std::time::Instant::now();
+    let second = std::time::Duration::from_secs(1);
+    let mut liveness = Liveness { fd: 0, last: start, limit: 45 * second, armed: true, unread: None };
+    assert!(!liveness.expired(start + 44 * second) && liveness.expired(start + 45 * second));
+    // Output backed up at 10 s: the helper stops reading the client until 70 s.
+    liveness.listening(false, || start + 10 * second);
+    assert_eq!(liveness.unread, Some(start + 10 * second));
+    liveness.listening(false, || unreachable!("the clock is read only when listening changes"));
+    assert!(!liveness.expired(start + 69 * second), "no deadline while not reading");
+    liveness.listening(true, || start + 70 * second);
+    assert_eq!(liveness.unread, None);
+    assert!(!liveness.armed, "armed again for the moved deadline");
+    // 10 s of silence before, none during: 35 s more after reading resumed.
+    assert_eq!(liveness.last, start + 60 * second);
+    assert!(!liveness.expired(start + 104 * second) && liveness.expired(start + 105 * second));
+    liveness.listening(true, || unreachable!());
+}
+
+#[test]
+fn the_window_and_backlog_are_features_and_the_ack_needs_no_grant() {
+    assert!(KNOWN.contains(&REQUESTS_BACKLOG) && KNOWN.contains(&TERMINALS_WINDOW));
+    assert_eq!(operation(TERMINALS_ACK), Some(TERMINALS_WINDOW));
+    assert_eq!(operation(REQUESTS_BACKLOG), None, "requests.backlog is behaviour, not an operation");
+    assert_eq!(crate::helper::login::required(TERMINALS_ACK), "", "it moves only the client's own window");
+}
+
+#[test]
+fn the_login_release_is_a_feature_operation_that_needs_no_grant() {
+    assert!(KNOWN.contains(&LOGIN_RELEASE));
+    assert_eq!(operation(LOGIN_RELEASE), Some(LOGIN_RELEASE));
+    // The Mac's greeting probe runs with no grant (`--capabilities ''`): like hello, it needs none.
+    assert_eq!(crate::helper::login::required(LOGIN_RELEASE), "");
+    let grants = Rc::new(RefCell::new(Some(std::collections::BTreeSet::new())));
+    assert!(crate::helper::login::permits(&grants, crate::helper::login::required(LOGIN_RELEASE)));
+    // A hello naming it is accepted here; helper.rs drops it for every helper but a remote stdio one without a login.
+    let root = hello(Data::Object(vec![("features", Data::Array(vec![Data::String(LOGIN_RELEASE)]))]));
+    assert_eq!(requested(&root).unwrap().unwrap().into_iter().collect::<Vec<_>>(), [LOGIN_RELEASE]);
+}
+
+#[test]
+fn a_probe_that_accepted_the_login_release_offers_it_in_ops() {
+    // The Mac's greeting probe: no grant at all (`--capabilities ''`), the feature accepted.
+    let grants = Rc::new(RefCell::new(Some(std::collections::BTreeSet::<String>::new())));
+    let allows = |op: &str| crate::helper::login::permits(&grants, crate::helper::login::required(op));
+    assert_eq!(offered(&[LOGIN_RELEASE.to_owned()], allows), [LOGIN_RELEASE]);
+    // Not accepted (any other helper drops it, helper.rs): not offered, so the app never sends it.
+    assert!(offered(&[TERMINALS_COALESCE.to_owned()], allows).is_empty());
+    // Beside other accepted features, in table order; a granted-out operation is left out.
+    let accepted = [TERMINALS_WINDOW.to_owned(), CHAT_LIST.to_owned(), LOGIN_RELEASE.to_owned()];
+    assert_eq!(offered(&accepted, allows), [TERMINALS_ACK, LOGIN_RELEASE], "chat.list needs agent.inspect");
+}

@@ -37,6 +37,8 @@ final class TerminalView: NSView {
     private(set) var surface: (any TerminalBackend)?
     /// `surface` shows restored output with no process yet: a restored SSH tab before it reconnects.
     private var previewing = false
+    /// `onScreen` as last told to the tab's helper.
+    private var reportedOnScreen = false
     private var destroyed = false
     var herdrScrollAccumulator = HerdrScrollAccumulator()
     let scrollbar = TerminalScrollbar()
@@ -234,12 +236,22 @@ final class TerminalView: NSView {
     /// The displays woke: the frames' display link can stay asleep, even on the same display.
     @objc private func screensDidWake(_ notification: Notification) { surface?.relink() }
 
+    /// The terminal is on screen: presented (its tab shown in its pane, Terminal rather than Chat or Files) in a window
+    /// that is at least partly visible. Off screen the engine does not render, and a chat tab's helper may hold its
+    /// output (`HelperWorkspace.reconsider`).
+    var onScreen: Bool { isPresented && window?.occlusionState.contains(.visible) == true }
+
     private func updateVisibility() {
-        history?.setActive(isPresented && window?.occlusionState.contains(.visible) == true)
+        let shown = onScreen
+        history?.setActive(shown)
+        if shown != reportedOnScreen {
+            reportedOnScreen = shown
+            TerminalRuntime.shared.workspace?.helper(containing: id)?.reconsider(id)
+        }
         guard let surface else { return }
         // Chat keeps the view mounted. Pause rendering while hidden, but leave
         // terminal IO running so the same session is current when revealed.
-        surface.setOcclusion(isPresented && window?.occlusionState.contains(.visible) == true)
+        surface.setOcclusion(shown)
     }
 
     override func becomeFirstResponder() -> Bool {

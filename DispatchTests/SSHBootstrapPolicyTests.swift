@@ -181,3 +181,41 @@ final class SSHBootstrapPolicyTests: XCTestCase {
         XCTAssertEqual(String(decoding: try System.read(target), as: UTF8.self), relative + "\n")
     }
 }
+
+extension SSHBootstrapPolicyTests {
+    /// A stall is time without progress while input is left; finishing the input ends the stall watch.
+    func testInputPaceStallsOnlyWithoutProgress() {
+        let second: UInt64 = 1_000_000_000
+        let pace = SSHInputPace(stall: 25, now: 0)
+        XCTAssertFalse(pace.stalled(at: 24 * second))
+        XCTAssertTrue(pace.stalled(at: 25 * second))
+        pace.took(at: 20 * second)
+        XCTAssertFalse(pace.stalled(at: 44 * second))
+        XCTAssertTrue(pace.stalled(at: 46 * second))
+        pace.took(at: 10 * second)
+        XCTAssertTrue(pace.stalled(at: 46 * second), "Progress never moves back")
+        pace.finish()
+        XCTAssertFalse(pace.stalled(at: 1000 * second))
+        XCTAssertEqual(SSHBootstrap.uploadTail(2_097_152), 542)
+    }
+
+    /// An upload is paced by what the child takes: a slow reader that keeps taking outlasts `timeout`, one that takes
+    /// nothing fails after `stall`, saying so.
+    func testUploadFailsOnStallNotOnTotalTime() async throws {
+        let chunk = 65_536, input = Data(repeating: 0x61, count: chunk * 8)
+        // Reads 64 KiB every 0.4 s: about 3.2 s in all, longer than the 1.5 s timeout that starts once it took everything.
+        let slow = try await SSHCommand.run(executable: "/bin/sh", arguments: ["-c",
+            "i=0; while [ $i -lt 8 ]; do dd bs=65536 count=1 of=/dev/null 2>/dev/null; sleep 0.4; i=$((i + 1)); done; "
+            + "cat > /dev/null; echo done"], input: input, timeout: 1.5, stall: 2)
+        XCTAssertEqual(slow.status, 0)
+        XCTAssertEqual(String(decoding: slow.output, as: UTF8.self), "done\n")
+        let started = ContinuousClock.now
+        do {
+            _ = try await SSHCommand.run(executable: "/bin/sh", arguments: ["-c", "exec sleep 30"], input: input, timeout: 60, stall: 1)
+            XCTFail("A child that takes nothing must stall")
+        } catch {
+            XCTAssertEqual((error as? HerdrFailure)?.message, SSHCommand.stalled(1))
+        }
+        XCTAssertLessThan(started.duration(to: .now), .seconds(10))
+    }
+}

@@ -68,6 +68,9 @@ struct SidebarPalette: Sendable {
     var accent: Color { color(0xe07be0, 0xb8449e, 0x2a5bd7, 0x5648c4, 0x8be28f) }
     var green: Color { color(0x7fd3a1, 0x2f9a5c, 0x2f9a5c, 0x2f9a5c, 0x7fd3a1) }
     var warning: Color { color(0xd9b36a, 0xb07a1a, 0xb07a1a, 0xb07a1a, 0xd9b36a) }
+    /// The commit graph's lanes: the current branch a vivid green, merged branches slate (Nautical's grey-green).
+    var graphCurrent: Color { color(0x3fd98a, 0x12804a, 0x12804a, 0x12804a, 0x3fd98a) }
+    var graphMerged: Color { color(0x8fa6c7, 0x56698a, 0x56698a, 0x56698a, 0x9aa89b) }
     var selection: Color { (isDark ? Color.white : Color.black).opacity(0.07) }
     var hover: Color { (isDark ? Color.white : Color.black).opacity(0.04) }
     var hostGroup: Color { theme == .dark ? Chrome.terminal.opacity(0.55) : color(0, 0xe4e4e8, 0xdddddd, 0xe0dcec, 0x111612) }

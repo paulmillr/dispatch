@@ -42,11 +42,29 @@ class SigningConfigTests(unittest.TestCase):
             settings, other = signing.parse(path.read_text())
             self.assertEqual(settings, {'DEVELOPMENT_TEAM': 'ABCDE12345', 'DISPATCH_BUNDLE_ID_SUFFIX': '.paul'})
             self.assertEqual(signing.problems(settings, other), [])
-            self.assertEqual(signing.bundle_id(settings), 'yachts.dispatch.mobile.paul')
+            self.assertEqual(signing.bundle_id(settings), 'yachts.dispatch.pilot.mobile.paul')
             previous = signing.write('ZYXWV98765', '', path)
             self.assertEqual(previous['DEVELOPMENT_TEAM'], 'ABCDE12345')
             self.assertEqual(signing.parse(path.read_text())[0], {'DEVELOPMENT_TEAM': 'ZYXWV98765'})
             self.assertEqual(list(Path(directory, 'build').iterdir()), [path])
+
+    def test_the_stable_account_signs_from_its_own_file_through_command_line_settings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'signing-stable.xcconfig'
+            signing.write('ZYXWV98765', '.sam', path, stable=True)
+            self.assertIn('--stable', path.read_text())
+            settings = signing.parse(path.read_text())[0]
+            self.assertEqual(signing.bundle_id(settings, stable=True), 'yachts.dispatch.mobile.sam')
+            self.assertEqual(signing.stable_overrides(settings), ['DISPATCH_BUNDLE_ID_PREFIX=yachts.dispatch',
+                                                                  'DEVELOPMENT_TEAM=ZYXWV98765',
+                                                                  'DISPATCH_BUNDLE_ID_SUFFIX=.sam'])
+            # Without a suffix the stable build still overrides the Pilot file's: an empty one.
+            signing.write('ZYXWV98765', '', path, stable=True)
+            self.assertEqual(signing.stable_overrides(signing.parse(path.read_text())[0])[-1], 'DISPATCH_BUNDLE_ID_SUFFIX=')
+            # The simulator and the Mac need no team: the prefix alone.
+            self.assertEqual(signing.stable_overrides(), ['DISPATCH_BUNDLE_ID_PREFIX=yachts.dispatch'])
+        self.assertEqual(signing.main(['--stable', '--path', '/dev/null/x', '--remove']), 0)
+        self.assertEqual(signing.STABLE_CONFIG.name, 'signing-stable.xcconfig')
 
     def test_refuses_what_cannot_sign(self):
         for team, suffix in (('abcde12345', ''), ('ABCDE1234', ''), ('', ''), ('ABCDE12345', 'paul'),
@@ -76,7 +94,7 @@ class SigningConfigTests(unittest.TestCase):
                     self.assertEqual(signing.check(path), 1)
                     signing.write('ABCDE12345', '', path)
                     self.assertEqual(signing.check(path), 0)
-                self.assertIn('Team ABCDE12345, bundle id yachts.dispatch.mobile', printed.getvalue())
+                self.assertIn('Team ABCDE12345, bundle id yachts.dispatch.pilot.mobile\n', printed.getvalue())
             finally:
                 signing.known_teams = original
 
@@ -85,7 +103,9 @@ class SigningConfigTests(unittest.TestCase):
         self.assertIn('#include? "../../build/signing.xcconfig"', tracked)
         self.assertEqual(signing.parse(tracked)[0], {'DISPATCH_BUNDLE_ID_SUFFIX': ''})
         project = (ROOT / 'project.yml').read_text()
-        self.assertIn('PRODUCT_BUNDLE_IDENTIFIER: yachts.dispatch.mobile$(DISPATCH_BUNDLE_ID_SUFFIX)', project)
+        self.assertIn('PRODUCT_BUNDLE_IDENTIFIER: $(DISPATCH_BUNDLE_ID_PREFIX).mobile$(DISPATCH_BUNDLE_ID_SUFFIX)', project)
+        # The prefix ios-signing.py reports is the project's default.
+        self.assertIn(f'    DISPATCH_BUNDLE_ID_PREFIX: {signing.PREFIX}\n', project)
 
 
 class SigningTeamTests(unittest.TestCase):
@@ -250,6 +270,7 @@ class DeviceDiscoveryTests(unittest.TestCase):
             self.assertIn('not a team id', runner.signing_problem(path))
             signing.write('ABCDE12345', '', path)
             self.assertIsNone(runner.signing_problem(path))
+        self.assertIn('--stable', runner.signing_problem(Path('/dev/null/missing'), stable=True))
 
 
 class EngineFrameworkTests(unittest.TestCase):

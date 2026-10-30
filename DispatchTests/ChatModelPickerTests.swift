@@ -535,7 +535,7 @@ final class ChatModelPickerTests: XCTestCase {
                 XCTAssertEqual(cached.models.filter(\.current).map(\.name), [try model(cached, "gpt-5.6-sol")])
                 XCTAssertEqual(cached.efforts.filter(\.current).compactMap(\.effort), ["low"])
                 try await Task.sleep(for: .milliseconds(80))
-                XCTAssertNil(AgentModelMenu(terminal.agentMenuScreen), "Browsing cached choices must leave the live terminal alone")
+                if !runtime.helpers.values.contains(where: { $0.holding(id) }) { XCTAssertNil(AgentModelMenu(terminal.agentMenuScreen), "Browsing cached choices must leave the live terminal alone") } // A held terminal (terminals.follow) still shows the last walk.
                 runtime.chat.closeModelPicker(session)
                 XCTAssertNil(session.modelPicker, "Cached dismissal is immediate")
             }

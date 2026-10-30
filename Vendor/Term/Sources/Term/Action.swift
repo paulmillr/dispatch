@@ -35,7 +35,7 @@ public enum Action {
     case deviceStatus(DeviceStatus)
     case kittyKeyboardQuery, kittyKeyboardPop(UInt16)
     case kittyKeyboardPush(KittyFlags), kittyKeyboardSet(KittyFlags), kittyKeyboardSetOr(KittyFlags), kittyKeyboardSetNot(KittyFlags)
-    case index, nextLine, reverseIndex, saveCursor, restoreCursor, fullReset, decaln, xtversion
+    case index, nextLine, reverseIndex, saveCursor, restoreCursor, fullReset, softReset, decaln, xtversion
     case tabSet, tabClearCurrent, tabClearAll, tabReset
     case protectedModeOff, protectedModeIso, protectedModeDec
     case activeStatusDisplay(StatusDisplay)
@@ -90,7 +90,7 @@ public enum CursorStyle: UInt16 {
 public enum ModifyKeyFormat {
     case legacy, cursorKeys, functionKeys, otherKeysNone, otherKeysNumericExcept, otherKeysNumeric
 }
-public enum SizeReport: String { case csi14t = "csi_14_t", csi16t = "csi_16_t", csi18t = "csi_18_t", csi21t = "csi_21_t" }
+public enum SizeReport: String { case csi14t = "csi_14_t", csi16t = "csi_16_t", csi18t = "csi_18_t", csi19t = "csi_19_t", csi21t = "csi_21_t" }
 public enum DeviceAttributes { case primary, secondary, tertiary }
 public enum StatusDisplay: UInt16 { case main, statusLine }
 
@@ -108,6 +108,8 @@ public enum Underline: UInt16 { case none, single, double, curly, dotted, dashed
 public struct RGB: Equatable, Sendable {
     public var r, g, b: UInt8
     public init(r: UInt8, g: UInt8, b: UInt8) { (self.r, self.g, self.b) = (r, g, b) }
+    /// 0xRRGGBB, as a key.
+    public var packed: UInt32 { UInt32(r) << 16 | UInt32(g) << 8 | UInt32(b) }
 }
 public struct ColorName { public var value: UInt8 }
 

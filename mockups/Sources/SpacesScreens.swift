@@ -120,7 +120,7 @@ struct SpacesRootScreen: View {
                     if compactFilters, barFilter != 0 {
                         Image(systemName: "pencil").font(.body.weight(.semibold)).frame(width: 44, height: 44).glassEffect(.regular.interactive(), in: Circle())
                     } else {
-                        Text("Edit").padding(.horizontal, 18).frame(height: 44).glassEffect(.regular.interactive(), in: Capsule())
+                        Text("Edit").fixedSize().padding(.horizontal, 18).frame(height: 44).glassEffect(.regular.interactive(), in: Capsule())
                     }
                 }
                 .sharedBackgroundVisibility(.hidden)

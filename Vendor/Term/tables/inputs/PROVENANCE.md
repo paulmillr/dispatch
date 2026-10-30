@@ -2,6 +2,10 @@
 
 Written by `tables/extract.py <ghostty checkout> <ghostty-oracle --tables output> inputs` (do not edit).
 Ghostty: 31bdcd5a79639bbac97c1a94e0f41d0f5ff84ca2 (MIT, see Resources/ghostty/LICENSE); its Unicode data: uucode 0.2.0 (Unicode 17.0.0).
+The device-status entries additionally backport `cursor_position_extended` (DECXCPR) from
+Ghostty v1.4.0, commit fbda61b8. The hashes below identify the original baseline files;
+`device_status.zig`'s kept entries include that additional row. Preserve it if extracting
+again from the old baseline, or extract from a newer baseline containing the fix.
 `ghostty/src/...` hold verbatim regions of those files (extract.py RULES); the oracle is that Ghostty
 plus tables/ghostty-oracle.patch (`git diff HEAD` of the oracle checkout, trailing blanks stripped: `git apply`
 gives the same tree), built with `zig build -Dapp-runtime=none -Demit-bench=true -Doptimize=ReleaseFast`.

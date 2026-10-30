@@ -111,7 +111,7 @@ final class ThinkingAnimationTests: XCTestCase {
         XCTAssertEqual(state.started, since, "An ended turn still busy counts from when the session started working")
         // A tab switch rebuilds the view, so `appeared` is later; the clock must not restart from it.
         XCTAssertEqual(AgentWorkingAnimation.timeText(state, now: since.addingTimeInterval(90), appeared: since.addingTimeInterval(80)), "1m 30s")
-        session.subagents = ["Explore"]
+        session.subagents = [.init(id: "a1", kind: "Explore", started: .now)]
         session.busy = false
         XCTAssertEqual(session.workingSince, since, "Agents outliving their turn keep the same clock")
         session.subagents = []
@@ -122,17 +122,15 @@ final class ThinkingAnimationTests: XCTestCase {
         let session = ChatSession(id: System.uuid())
         session.active = true; session.busy = true; session.activeTurnID = "turn"
         session.turns = [.init(id: "turn", items: [.init(id: "agent", kind: .tool, text: #"{"description":"Find the timer"}"#, title: "Agent")])]
-        session.subagents = ["Explore", "general-purpose", "Explore"]
+        session.subagents = ["Explore", "general-purpose", "Explore"].enumerated().map { .init(id: "a\($0.offset)", kind: $0.element, started: .now) }
         var state = AgentWorkingState(session)
         XCTAssertEqual(state.label, "waiting on agents")
         XCTAssertEqual(state.fragment, "Explore, general-purpose")
-        XCTAssertEqual(ChatComposerAgents.kinds(session.subagents), [.init(id: "Explore", count: 2), .init(id: "general-purpose", count: 1)],
-                       "The footer badge lists each type once, in start order")
         XCTAssertEqual(ChatComposerAgents.title(3), "3 agents running")
         session.turns[0].items.append(.init(id: "shell", kind: .tool, text: #"{"command":"git status"}"#, title: "Bash"))
         XCTAssertEqual(AgentWorkingState(session).label, "running", "The agent's own tool work keeps its label")
         // Background agents: the turn ended and the agent is idle, but its agents still run.
-        session.turns[0].ended = .now; session.busy = false; session.subagents = ["Explore"]
+        session.turns[0].ended = .now; session.busy = false; session.subagents = [.init(id: "a1", kind: "Explore", started: .now)]
         state = AgentWorkingState(session)
         XCTAssertTrue(state.visible)
         XCTAssertTrue(AgentWorkingState.isWorking(session))

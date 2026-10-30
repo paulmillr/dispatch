@@ -72,8 +72,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         self.settings = settings
         self.hostSessionStore = hostSessionStore
         super.init()
+        HelperSession.outputWindow = settings.values.outputWindow
         settings.onSave = { [weak self] preferences in
             ChatViewportTrace.shared.setEnabled(preferences.enableDiagnostics)
+            HelperSession.outputWindow = preferences.outputWindow
             self?.applyKeyGroups(preferences.keyGroups)
             if !preferences.rememberHosts { self?.persistHostSession() }
             if !preferences.restoreTerminalOutput {
@@ -193,7 +195,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         Task { await LocalAgentsConsent.start(over: window, chat: runtime.chat) }
     }
 
-    /// What the right ⌘ shortcut dictates into: the main window's active pane's chat while it shows, else
+    /// What the voice key shortcut dictates into: the main window's active pane's chat while it shows, else
     /// "Dispatch, …" commands (with Navigate by voice on).
     private func dictationTarget() -> DictationShortcut.Target? {
         guard NSApp.keyWindow === window else { return nil }
@@ -613,7 +615,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         case #selector(togglePreview):
             let files = workspace.activeSurfaceID.flatMap { TerminalRuntime.shared.files.existing($0) }
             item.title = files?.paneShown == false ? "Show Preview" : "Hide Preview"
-            return NSApp.keyWindow === window && files?.visible == true
+            return NSApp.keyWindow === window && files?.visible == true && files?.hasPane == true
         case #selector(nextPane), #selector(previousPane):
             return (workspace.current?.layout.paneIDs.count ?? 0) > 1
         case #selector(moveTabToNextPane):

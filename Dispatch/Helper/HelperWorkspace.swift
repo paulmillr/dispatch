@@ -136,7 +136,10 @@
     @ObservationIgnored private var following: [UInt64: UUID] = [:]
     @ObservationIgnored private var selections:
       [UInt64: (space: UUID, split: Workspace.NativeSplitPlacement?)] = [:]
-    @ObservationIgnored private var sending: [UUID: Task<Void, Never>] = [:]
+    /// Each attached tab's outgoing input, in order and without waiting for replies (`HelperInputQueue`).
+    @ObservationIgnored private var sending: [UUID: HelperInputQueue<(Keys.Binding, Endpoint)>] = [:]
+    /// Herdr scroll steps joined while one is in flight, per tab.
+    @ObservationIgnored private var scrolling: [UUID: HelperScrollSteps<@MainActor () -> Void>] = [:]
     @ObservationIgnored private var controlling: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var controlEvents: [UUID: [(event: HelperClient.Control.Event, bytes: Data?, session: Int)]] = [:]
     @ObservationIgnored private var controlTerminals: [UUID: UInt64] = [:]
@@ -170,6 +173,35 @@
     @ObservationIgnored private var scrollback: Set<UInt64> = []
     /// Every multiplexer kind the helper hosts (Settings rows, per-name preferences).
     private(set) var multiplexers: [HelperClient.Multiplexer] = []
+    /// Whether this helper reads the screens of its tmux and herdr terminals itself (its hello accepted
+    /// `screens.host`); nil until the hello is known (`publishes`).
+    @ObservationIgnored private(set) var hostsScreens: Bool?
+    /// The multiplexers whose screens a `screens.host` helper reads itself (helper/PROTOCOL.md, Features); native
+    /// terminals have no host source and are always published.
+    static let hostedScreens: Set<String> = ["tmux", "herdr"]
+    /// Whether this helper accepted `terminals.follow`; nil until the hello is known (`holds`).
+    @ObservationIgnored private(set) var followsOutput: Bool?
+    /// Chat tabs whose attach subscription this app asked the helper to hold (`terminals.follow` false), by the
+    /// subscription asked for: a later attach of the tab follows again by itself.
+    @ObservationIgnored private var held: [UUID: UInt64] = [:]
+    /// Hidden chat tabs waiting out `Self.followGrace` before their output is held.
+    @ObservationIgnored private var graces: [UUID: Task<Void, Never>] = [:]
+    /// Since when a tab's terminal has been off screen and unread (its grace counts from there, `reconsider`).
+    @ObservationIgnored private var hidden: [UUID: ContinuousClock.Instant] = [:]
+    /// One `terminals.follow` at a time per tab, in the order asked.
+    @ObservationIgnored private var follows: [UUID: Task<Void, Never>] = [:]
+    /// Hidden tabs whose chat session's `active` is observed (it decides whether they are chat tabs).
+    @ObservationIgnored private var watched: Set<UUID> = []
+    /// Hidden tabs whose screen this app read lately (`screenRead`), and whether again since the last look: they
+    /// follow, so what is read here is current.
+    @ObservationIgnored private var read: [UUID: Bool] = [:]
+    /// Terminals whose multiplexer answered `unsupported`: they keep following, never asked again.
+    @ObservationIgnored private var unfollowable: Set<UInt64> = []
+    /// How long a chat tab's terminal is off screen before its output is held: switching back and forth (a glance at
+    /// the transcript, a space switch) costs no repaint.
+    static let followGrace: Duration = .seconds(2)
+    /// Whether a tab's terminal is on screen (`TerminalView.onScreen`); tests decide it themselves.
+    @ObservationIgnored var onScreen: @MainActor (UUID) -> Bool = { TerminalRuntime.shared.views[$0]?.onScreen == true }
 
     private struct Key: Hashable {
       enum Entity: Hashable {
@@ -288,9 +320,19 @@
           guard !stopped else {
             return
           }
+          // Known before anything is sent: a single publication for a tmux or herdr terminal of a screens.host
+          // helper turns its host reads off until the attach ends.
+          let features = await HelperApp.shared.features(endpoint)
+          let hostsScreens = features.contains(HelperSession.screensHost)
+          self.hostsScreens = hostsScreens
+          followsOutput = features.contains(HelperSession.terminalsFollow)
+          print("Helper screens: endpoint=\(endpoint), host=\(hostsScreens), follow=\(features.contains(HelperSession.terminalsFollow))")
+          guard !stopped else { return }
           self.connection = connection
           connected(.success(connection))
           multiplexers = try await kinds.value
+          // Tabs that waited for the hello and the kinds publish now (`publishes`).
+          TerminalView.wakeScreens()
           for var entry in retained where permitted(entry.route.mux) {
             if saved.isEmpty, previous != nil {
               entry.presentation.removeAll { space in workspace?.spaces.contains(where: { $0.id == space.id }) != true }
@@ -357,6 +399,145 @@
     /// The spaces this helper's backends show: ids are only unique within one helper.
     private var owned: [Space] {
       workspace?.spaces.filter { $0.remote == endpoint.connection } ?? []
+    }
+
+    /// Whether `tab`, a tab of this helper's spaces, publishes its screen to it (`TerminalView.publishScreen`): always
+    /// to a helper without `screens.host`, and to one with it only for a native terminal, which has no host source;
+    /// that helper reads tmux and herdr screens itself. Nothing before the hello is known or while the tab's
+    /// multiplexer is unknown: one publication would turn the host reads off for that terminal until the Mac's attach
+    /// of it ends. An SSH login this helper observes in a tab is published regardless (`observedTerminal`).
+    func publishes(_ tab: UUID) -> Bool {
+      guard let hostsScreens else { return false }
+      guard hostsScreens else { return true }
+      guard let backend = workspace?.spaces.first(where: {
+        $0.remote == endpoint.connection && $0.tabs.contains { $0.id == tab }
+      })?.backend, let kind = kind(of: backend) else { return false }
+      return !Self.hostedScreens.contains(kind.name)
+    }
+
+    /// Whether `tab`'s attach subscription should be held now (`terminals.follow` false): a chat tab (its session has
+    /// an agent bound) of a tmux or herdr terminal whose view is not on screen (`TerminalView.onScreen`: not shown in a
+    /// visible window, or the session shows its transcript or files), on a helper that accepted `terminals.follow` and
+    /// reads the screens itself (`screens.host`: the prompt watcher and sends then need nothing from this app). Plain
+    /// terminal tabs always follow: their scrollback must stay complete. `chat`: false asks only about the rest.
+    private func holds(_ tab: UUID, chat: Bool = true) -> Bool {
+      guard !stopped, followsOutput == true, hostsScreens == true, attachments[tab] != nil,
+            let space = owned.first(where: { $0.tabs.contains { $0.id == tab } }),
+            let terminal = space.tabs.first(where: { $0.id == tab })?.terminal, !unfollowable.contains(terminal),
+            let kind = space.backend.flatMap(kind(of:)), Self.hostedScreens.contains(kind.name),
+            !onScreen(tab), read[tab] == nil else { return false }
+      return !chat || TerminalRuntime.shared.chat.sessions[tab]?.active == true
+    }
+
+    /// The tab's view came on or went off screen (TerminalView), its subscription or its chat session changed: hold its
+    /// output once it has been hidden for `followGrace`, follow again at once when it shows. The repaint that comes
+    /// back is ordinary output for its renderer.
+    ///
+    /// The grace counts from when the terminal went off screen (or this app's reads of it stopped, `screenRead`), not
+    /// from when the tab last became a chat tab: a brief `active` flip (an agent re-binding) cancels the grace's timer and
+    /// the next one waits only what is left, so the hold comes when it would have. Each cancel and restart still opens a
+    /// new `follow grace` timer: replay pairs them with the recorded clocks in order, never by duration.
+    func reconsider(_ tab: UUID) {
+      // A later attach is a new subscription, which follows: the helper forgot the old one's hold.
+      if let subscription = held[tab], subscription != attachments[tab] { held.removeValue(forKey: tab) }
+      if stopped || onScreen(tab) || attachments[tab] == nil {
+        hidden.removeValue(forKey: tab)
+      } else if read[tab] == nil, hidden[tab] == nil {
+        hidden[tab] = .now
+      }
+      guard holds(tab) else {
+        graces.removeValue(forKey: tab)?.cancel()
+        if held.removeValue(forKey: tab) != nil { follow(tab, true) }
+        // A hidden terminal tab becomes a chat tab when an agent binds in it (and back when it exits).
+        if holds(tab, chat: false) { watch(tab) }
+        return
+      }
+      watch(tab)
+      guard held[tab] == nil, graces[tab] == nil else { return }
+      let left = max(.zero, Self.followGrace - (hidden[tab]?.duration(to: .now) ?? .zero))
+      graces[tab] = appTask { [weak self] in
+        do { try await System.sleep(for: left, "follow grace") } catch { return }
+        guard let self, !Task.isCancelled else { return }
+        graces.removeValue(forKey: tab)
+        guard holds(tab), held[tab] == nil, let subscription = attachments[tab] else { return }
+        held[tab] = subscription
+        follow(tab, false)
+      }
+    }
+
+    /// This app reads `tab`'s screen from its own renderer (`TerminalView.agentMenuScreen`: Chat adopting what was
+    /// typed in Claude's prompt, tests): a held tab follows again, so the next read is current, and is held again only
+    /// once nothing read it for `followGrace`.
+    func screenRead(_ tab: UUID) {
+      if read[tab] != nil { read[tab] = true; return }
+      guard held[tab] != nil || holds(tab, chat: false) else { return }
+      read[tab] = false
+      hidden.removeValue(forKey: tab)
+      reconsider(tab)
+      appTask { [weak self] in
+        while true {
+          do { try await System.sleep(for: Self.followGrace, "follow read") } catch { return }
+          guard let self, self.read[tab] != nil else { return }
+          if self.read[tab] == true { self.read[tab] = false; continue }
+          self.read.removeValue(forKey: tab)
+          self.reconsider(tab)
+          return
+        }
+      }
+    }
+
+    /// The follow policy's own work (a grace, a read's hold-off, a `terminals.follow` call), however it was reached: a
+    /// test's condition reading `agentMenuScreen` must not make it the test's poll (System.polling), whose waits and
+    /// requests replay as reads, nor the check's own (AppReplay.asking), whose timers and answers replay delivers at
+    /// once, ahead of the recording: a `follow read` ending before the check's next read let a grace start, and a later
+    /// read cancel it, where capture's reads had kept the window open. These are the app's, recorded and replayed in order.
+    @discardableResult
+    private func appTask(_ body: @escaping @MainActor () async -> Void) -> Task<Void, Never> {
+      System.$polling.withValue(false) { AppReplay.$asking.withValue(false) { Task { @MainActor in await body() } } }
+    }
+
+    /// This app asked the helper to hold `tab`'s output (`reconsider`).
+    func holding(_ tab: UUID) -> Bool { held[tab] != nil }
+
+    private func watch(_ tab: UUID) {
+      guard !watched.contains(tab), let session = TerminalRuntime.shared.chat.sessions[tab] else { return }
+      watched.insert(tab)
+      withObservationTracking { _ = session.active } onChange: { [weak self] in
+        DispatchQueue.main.async {
+          MainActor.assumeIsolated {
+            guard let self else { return }
+            self.watched.remove(tab)
+            self.reconsider(tab)
+          }
+        }
+      }
+    }
+
+    /// Sends `terminals.follow` for `tab`'s terminal after the previous one. `unsupported` (native): it keeps following
+    /// and is never asked again. A failed `true` leaves the output held: a new attach brings a fresh screen.
+    private func follow(_ tab: UUID, _ following: Bool) {
+      guard let terminal = owned.flatMap(\.tabs).first(where: { $0.id == tab })?.terminal else { return }
+      let previous = follows[tab]
+      print("Helper follow: endpoint=\(endpoint), tab=\(tab), terminal=\(terminal), following=\(following)")
+      follows[tab] = appTask { [weak self] in
+        await previous?.value
+        guard let self, !stopped, !Task.isCancelled else { return }
+        do {
+          try await client().follow(.init(terminal: terminal, following: following))
+        } catch {
+          guard !stopped, !Task.isCancelled else { return }
+          print("Helper follow failed: endpoint=\(endpoint), tab=\(tab), following=\(following), error=\(error)")
+          if (error as? HelperFailure)?.code == "unsupported" { unfollowable.insert(terminal) }
+          if following {
+            if let channel = terminals[tab], let request = attachments.removeValue(forKey: tab) {
+              connection?.cancel(request)
+              attach(tab, channel)
+            }
+          } else if held[tab] != nil {
+            held.removeValue(forKey: tab)
+          }
+        }
+      }
     }
 
     /// The tab showing a terminal of this helper, or the tab an observed terminal belongs to.
@@ -463,7 +644,7 @@
           let local = endpoint == .local
           // The tab as it is now: its command or directory can have changed since it was shown.
           let latest = owned.flatMap(\.tabs).first { $0.id == tab.id } ?? tab
-          // Settings › General › Shell: a plain local tab runs it instead of the login shell, integrated as the
+          // Settings › General › New tabs › Shell: a plain local tab runs it instead of the login shell, integrated as the
           // engine would integrate it.
           let shell = local && latest.machine == .local && latest.launchCommand == nil ? TerminalRuntime.shared.shellCommand : nil
           let prepared = local ? environment(surface, shell: shell) : (variables: [], integrated: false, command: nil)
@@ -476,6 +657,13 @@
           guard !stopped, owned.flatMap(\.tabs).contains(where: { $0.id == tab.id }) else {
             _ = try await client.close(.init(node: terminal, policy: .terminate))
             throw CancellationError()
+          }
+          // Settings › General › New tabs › Startup command: typed into a plain local shell, which reads it at its
+          // first prompt.
+          let startup = TerminalRuntime.shared.preferences.startupCommand.trimmingCharacters(in: .whitespaces)
+          if local, latest.machine == .local, latest.launchCommand == nil, !startup.isEmpty,
+             !FilesEditor.hasControlCharacters(startup) {
+            try? await client.input(.init(terminal: terminal, bytes: Data((startup + "\r").utf8)))
           }
           assigned[terminal] = tab.id
           workspace?.updateLayout { next in
@@ -603,6 +791,8 @@
         surface.markRows()
         marked[terminal] = ObjectIdentifier(surface)
       }
+      // A tab nobody read (a tmux or herdr tab of a screens.host helper) publishes to this observer from now on.
+      TerminalView.wakeScreens()
       perform { client in
         // Claims are checked against the multiplexer names, so those come first.
         self.multiplexers = try await self.kinds.value
@@ -1287,23 +1477,46 @@
     }
 
     /// Sends a gesture to the tab's multiplexer; when the renderer keeps that history instead, `local`
-    /// replays the gesture there (scrolls(tab) is false from then on).
+    /// replays the gesture there (scrolls(tab) is false from then on). Steps made while one is in flight join
+    /// into one (`HelperScrollSteps`): each step cost a round trip and a repaint.
     func scroll(
       _ tab: UUID, lines: Int64, page: Bool, at cell: (column: UInt16, row: UInt16)?, modifiers: UInt8,
       local: @escaping @MainActor () -> Void
     ) {
-      guard let terminal = owned.flatMap(\.tabs).first(where: { $0.id == tab })?.terminal else { return }
-      perform { client in
+      guard owned.flatMap(\.tabs).contains(where: { $0.id == tab && $0.terminal != nil }) else { return }
+      let step = HelperScrollSteps<@MainActor () -> Void>.Step(
+        lines: lines, page: page, column: cell?.column, row: cell?.row, modifiers: modifiers)
+      guard let first = scrolling[tab, default: .init()].add(step, local) else { return }
+      scroll(tab, first)
+    }
+
+    private func scroll(_ tab: UUID, _ next: (step: HelperScrollSteps<@MainActor () -> Void>.Step, locals: [@MainActor () -> Void])) {
+      guard let terminal = owned.flatMap(\.tabs).first(where: { $0.id == tab })?.terminal else {
+        scrolling.removeValue(forKey: tab)
+        return
+      }
+      let (step, locals) = next
+      // As perform, with the next step started before this one's operation ends (helper.operations never reads 0
+      // between them).
+      operations += 1
+      Task {
+        defer { operations -= 1; retire() }
         do {
+          let client = try await client()
           try await client.scroll(
             .init(
-              terminal: terminal, lines: lines, page: page, column: cell?.column, row: cell?.row,
-              modifiers: modifiers))
+              terminal: terminal, lines: step.lines, page: step.page, column: step.column, row: step.row,
+              modifiers: step.modifiers))
         } catch let failure as HelperFailure where failure.code == "scrollback_app_owned" {
-          self.scrollback.insert(terminal)
+          scrollback.insert(terminal)
           TerminalRuntime.shared.views[tab]?.history?.setActive(false)
           TerminalRuntime.shared.views[tab]?.history = nil
-          local()
+          for local in locals + (scrolling[tab]?.drain() ?? []) { local() }
+        } catch { if !stopped && !Task.isCancelled { fail(error) } }
+        if let next = scrolling[tab]?.finish() {
+          scroll(tab, next)
+        } else if scrolling[tab]?.idle == true {
+          scrolling.removeValue(forKey: tab)
         }
       }
     }
@@ -1899,6 +2112,9 @@
 
     func detach(_ tab: UUID) {
       guard !retains(tab) else { return }
+      graces.removeValue(forKey: tab)?.cancel()
+      held.removeValue(forKey: tab)
+      hidden.removeValue(forKey: tab)
       gateways.removeValue(forKey: tab)
       keys.removeValue(forKey: tab)
       if let request = attachments.removeValue(forKey: tab) {
@@ -1959,6 +2175,13 @@
       activating.removeAll()
       unrouted.removeAll()
       publishing.values.forEach { $0.cancel() }
+      graces.values.forEach { $0.cancel() }
+      graces.removeAll()
+      follows.values.forEach { $0.cancel() }
+      follows.removeAll()
+      held.removeAll()
+      hidden.removeAll()
+      read.removeAll()
       screens.removeAll()
       published.removeAll()
       selections.removeAll()
@@ -2065,6 +2288,8 @@
         return
       }
       assigned[terminal] = tab
+      // Its terminal is known now: a view that found nobody to publish to looks again (`publishes`).
+      TerminalView.wakeScreens()
       let generation = System.uuid()
       sized.removeValue(forKey: terminal)
       TerminalRuntime.shared.views[tab]?.onProcessExit = nil
@@ -2081,29 +2306,47 @@
       // Input waits for the helper to confirm the attach (terminal.attached), in order: a multiplexer
       // may refuse input to a terminal it has not attached yet. A failed or closed attach releases it.
       let (attached, confirm) = AsyncStream<Void>.makeStream()
-      channel.onInput = { [weak self] bytes in
-        guard let self, bound() else { return }
-        let checked = keys.removeValue(forKey: tab)
-        let previous = sending[tab]
-        sending[tab] = Task {
-          await previous?.value
+      // Keys go out in order without waiting for the previous key's reply (HelperInputQueue).
+      let queue = HelperInputQueue<(Keys.Binding, Endpoint)>(
+        gate: { [weak self] in
           for await _ in attached {}
           // The original terminal can be shown before detach-client finishes. Its input still
           // belongs to the shell, never to the multiplexer's protocol running in that PTY.
-          while let control = controlInput[tab], !Task.isCancelled { for await _ in control.stream {} }
-          guard !Task.isCancelled, bound() else { return }
+          while let control = self?.controlInput[tab], !Task.isCancelled { for await _ in control.stream {} }
+          return !Task.isCancelled && self != nil && bound()
+        },
+        send: { [weak self] item in
+          guard let self else { return nil }
           do {
-            let client = try await client(checked?.1)
-            guard !Task.isCancelled, bound() else { return }
-            if let checked {
-              let _: HelperClient.Empty = try await client.connection.request(
-                "terminals.keys",
-                params: Keys(terminal: terminal, keys: bytes, binding: checked.0))
-            } else {
-              try await client.input(.init(terminal: terminal, bytes: bytes))
+            let call: HelperConnection.Call<HelperClient.Empty>
+            switch item {
+            case .input(let bytes):
+              let client = try await client()
+              guard !Task.isCancelled, bound() else { return nil }
+              call = await client.connection.submit(
+                "terminals.input", params: HelperClient.Output(terminal: terminal, bytes: bytes))
+            case .keys(let bytes, let checked):
+              let client = try await client(checked.1)
+              guard !Task.isCancelled, bound() else { return nil }
+              call = await client.connection.submit(
+                "terminals.keys", params: Keys(terminal: terminal, keys: bytes, binding: checked.0))
             }
-          } catch { if !stopped { fail(error) } }
+            return { [weak self] in
+              do { _ = try await call.value } catch { if let self, !stopped { fail(error) } }
+            }
+          } catch {
+            if !stopped { fail(error) }
+            return nil
+          }
+        })
+      channel.onInput = { [weak self] bytes in
+        guard let self, bound() else { return }
+        let checked = keys.removeValue(forKey: tab)
+        if sending[tab] !== queue {
+          queue.follow(sending[tab])
+          sending[tab] = queue
         }
+        queue.append(checked.map { .keys(bytes, $0) } ?? .input(bytes))
       }
       channel.onResize = { [weak self] size in
         // A pane rendering its server grid reports the cells it could show instead (constrain).
@@ -2127,6 +2370,8 @@
         // answer is recorded, so a replay attaches exactly when its capture did.
         guard (try? System.observe("bound", terminal) { bound() }) ?? bound() else { confirm.finish(); return }
         let request: UInt64
+        // terminals.window acknowledgements name this subscription (HelperOutputWindow).
+        let outputWindow = HelperOutputWindow.Subscription()
         do {
           let size = self.available[terminal] ?? channel.grid
           request = try await client.attach(
@@ -2138,6 +2383,8 @@
             }
             DispatchQueue.main.async {
               MainActor.assumeIsolated {
+                // terminals.window: output counts as delivered once handled here, written or dropped.
+                defer { HelperOutputWindow.delivered(result, on: client.connection, subscription: outputWindow) }
                 // A hidden SSH origin still carries output for another helper's control gateway.
                 guard let self, !self.stopped, self.terminals[tab] === channel,
                   self.assigned[terminal] == tab else { return }
@@ -2156,10 +2403,13 @@
           confirm.finish()
           throw error
         }
+        outputWindow.identify(request)
         if self.stopped || self.terminals[tab] !== channel || !bound() {
           client.connection.cancel(request)
         } else {
           self.attachments[tab] = request
+          // A new subscription follows; a hidden chat tab holds it again after the grace.
+          self.reconsider(tab)
         }
       }
     }
@@ -2413,6 +2663,8 @@
     }
 
     private func apply(_ topology: HelperTopology, route: HelperBackend.Route) throws {
+      // Its tabs' multiplexer is known now (or changed): a tab that published to nobody looks again (`publishes`).
+      defer { TerminalView.wakeScreens() }
       // A detached view remains visible until its native control session has ended.
       // Keep processing snapshots, but publish the completed dismissal atomically.
       guard !dismissals.values.contains(where: { $0.route == route }) else { return }

@@ -9,7 +9,13 @@ final class TerminalContrastTests: XCTestCase {
     func testContrastPreferencePreservesExistingSchemesAndPersists() throws {
         let legacy = try JSONDecoder().decode(Preferences.self, from: Data(
             #"{"theme":"Dracula","lightTheme":"Ayu Light","appearance":"system"}"#.utf8))
-        XCTAssertFalse(legacy.improveTextContrast)
+        XCTAssertEqual(legacy.textContrast, .lightThemes, "light schemes improve by default, dark ones don't")
+        XCTAssertTrue(legacy.textContrast.improves(dark: false))
+        XCTAssertFalse(legacy.textContrast.improves(dark: true))
+        // The old switch: on stays on everywhere; off, written by every save, takes the default.
+        XCTAssertEqual(try JSONDecoder().decode(Preferences.self, from: Data(#"{"improveTextContrast":true}"#.utf8)).textContrast, .always)
+        XCTAssertEqual(try JSONDecoder().decode(Preferences.self, from: Data(#"{"improveTextContrast":false}"#.utf8)).textContrast, .lightThemes)
+        XCTAssertFalse(TextContrast.never.improves(dark: false))
         let directory = System.temporary.appendingPathComponent(System.uuid().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let file = directory.appendingPathComponent("settings.json")
@@ -70,7 +76,7 @@ final class TerminalContrastTests: XCTestCase {
             preferences.appTheme = appearance
             var originalGreen = 0
             for (step, enabled) in [false, true, false].enumerated() {
-                preferences.improveTextContrast = enabled
+                preferences.textContrast = enabled ? .always : .never
                 try runtime.apply(preferences)
                 // Allow the render thread and window compositor to present the update.
                 try await Task.sleep(for: .milliseconds(350))

@@ -450,13 +450,13 @@ final class ChatQueueTests: XCTestCase {
         defer { window.orderOut(nil); window.contentView = nil }
         try await TestSupport.eventually { !PresentationTestSupport.views(of: ChatComposer.ComposerTextView.self, in: content).isEmpty }
         for text in ["first", "second", "third"] { session.draft = text; chat.queue(session) }
-        let ids = session.queuedMessages.map(\.id)
+        let ids = session.queuedMessages.map(\.id); session.selectedQueuedID = ids.last  // opens the folded queue's list
         XCTAssertEqual(ids.count, 3)
         XCTAssertTrue(chat.canReorderQueue(session))
         func handle(_ id: UUID) -> ReorderTrackingView? {
             PresentationTestSupport.views(of: ReorderTrackingView.self, in: content).first { $0.configuration.item == .queued(id) }
         }
-        try await TestSupport.eventually { content.layoutSubtreeIfNeeded(); return ids.allSatisfy { handle($0) != nil } }
+        try await TestSupport.eventually { content.layoutSubtreeIfNeeded(); return ids.allSatisfy { handle($0).map { $0.bounds.intersection($0.visibleRect).height >= $0.bounds.height } == true } }
         let source = try XCTUnwrap(handle(ids[0])), target = try XCTUnwrap(handle(ids[2]))
         func mouse(_ type: NSEvent.EventType, _ point: NSPoint) -> NSEvent {
             NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: 0,
@@ -849,5 +849,44 @@ extension ChatQueueTests {
         XCTAssertEqual(session.submissionFailure?.hasPrefix("Side conversations cannot carry attachments"), true)
         XCTAssertEqual(session.draft, "/btw what does this chart show?")
         XCTAssertEqual(session.drafts.current.attachments.map(\.name), ["chart.png"])
+    }
+}
+
+extension ChatQueueTests {
+    /// A command queued while an answer was on its way (nativeInputInFlight) or a question was open (waitingForAnswer)
+    /// goes once that input finished or the question closed, as one queued during a turn goes when the turn ends.
+    func testQueuedCommandGoesOnceTheAnswerInFlightOrTheQuestionIsDone() throws {
+        func fixture() throws -> (ChatCoordinator, ChatSession) {
+            let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
+            let session = chat.session(for: System.uuid())
+            session.active = true; session.showChat = true; session.sessionID = "conversation"
+            session.process = try XCTUnwrap(AgentProcess.capture(System.pid))
+            // Terminal 0 is no helper terminal: the submission starts here and its call fails, which is all this needs.
+            session.helper = HelperChat(terminal: 0)
+            let pid = UInt64(System.pid)
+            session.binding = .init(session: "conversation", transcript: nil, pid: pid, start: [pid, 0], executable: "/bin/codex")
+            return (chat, session)
+        }
+        let (chat, answering) = try fixture()
+        let answer = System.uuid()
+        answering.nativeInputs.insert(answer)
+        answering.draft = "/new"; chat.sendFromComposer(answering)
+        XCTAssertEqual(answering.queuedMessages.map(\.text), ["/new"])
+        XCTAssertNil(answering.queuedSubmissionID, "Held while the answer is in flight")
+        chat.finishNativeInput(answer, session: answering)
+        XCTAssertEqual(answering.queuedSubmissionID, answering.queuedMessages.first?.id, "Sent once the answer reached the helper")
+
+        let (other, asked) = try fixture()
+        let options: [HelperChat.Choice] = [.init(id: "small", label: "Small", detail: nil), .init(id: "large", label: "Large", detail: nil)]
+        other.receiveHelper(.interaction(.init(id: "question", key: nil, approval: false, blocking: true,
+            questions: [.init(id: "size", header: "Size", text: "Choose an option", secret: false, options: options,
+                multiple: false, custom: false, blocks: nil)], turn: nil, record: nil)), session: asked)
+        asked.draft = "/new"; other.sendFromComposer(asked)
+        XCTAssertEqual(asked.queuedMessages.map(\.text), ["/new"])
+        XCTAssertNil(asked.queuedSubmissionID, "Held while the question is open")
+        other.receiveHelper(.interaction(.init(id: "question", key: nil, approval: false, blocking: true,
+            questions: [], turn: nil, record: nil)), session: asked)
+        XCTAssertFalse(asked.waitingForAnswer)
+        XCTAssertEqual(asked.queuedSubmissionID, asked.queuedMessages.first?.id, "Sent once the question closed")
     }
 }

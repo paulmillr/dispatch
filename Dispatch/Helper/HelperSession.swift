@@ -87,8 +87,31 @@ final class HelperSession: @unchecked Sendable {
     }
   }
 
-  /// The opt-in hello features the Mac names (docs/ios.md lists the iPhone's).
-  static let features = ["terminals.coalesce", ChatAttachment.feature]
+  /// The opt-in hello features the Mac names (docs/ios.md lists the iPhone's). `terminals.window` only with
+  /// `outputWindow` on.
+  static var features: [String] {
+    ["terminals.coalesce", ChatAttachment.feature, screensHost, terminalsFollow, requestsBacklog]
+      + (outputWindow ? [terminalsWindow] : [])
+  }
+  /// `requests.backlog`: the helper keeps reading this app's requests (keystrokes, cancels, `terminals.follow`,
+  /// pings) while terminal output to it is backed up, instead of reading nothing until the output drains.
+  static let requestsBacklog = "requests.backlog"
+  /// `terminals.window`: the helper keeps at most 256 KB of terminal output unacknowledged in flight to this app, and
+  /// the app acknowledges what it handed to its terminals (`HelperOutputWindow`), so a reply never waits behind
+  /// megabytes parked in SSH and TCP buffers. Off: named only while `outputWindow` is set.
+  static let terminalsWindow = "terminals.window"
+  /// Names `terminals.window` in the hello of helpers started from now on: Settings › Experimental › Slow connection mode
+  /// (`Preferences.outputWindow`, applied by AppDelegate on every save); off by default, and tests turn it on directly.
+  nonisolated(unsafe) static var outputWindow = false
+  /// The Mac publishes no screens for the tmux and herdr terminals of a helper that accepted this: it reads them from
+  /// the multiplexer itself (`HelperWorkspace.publishes`).
+  static let screensHost = "screens.host"
+  /// `terminals.follow`: a chat tab whose terminal is not on screen stops that terminal's output stream
+  /// (`HelperWorkspace.reconsider`); showing it again gets a whole repaint.
+  static let terminalsFollow = "terminals.follow"
+  /// `login.release`: named only by the SSH greeting probe, whose helper then releases the waiting login
+  /// (`SSHBootstrap.startHelper`); a helper that is not such a probe accepts nothing for it.
+  static let loginRelease = "login.release"
   private struct Hello: Encodable, Sendable { let features: [String] }
 
   // The Mac app runs its helper as a child process; the iPhone app reaches helpers over SSH channels only.
@@ -97,17 +120,59 @@ final class HelperSession: @unchecked Sendable {
   let info: Info
   let exited: AsyncStream<Int32>
   fileprivate let process: Process
-  private final class Identifier: @unchecked Sendable {
+  fileprivate final class Identifier: @unchecked Sendable {
     let lock = NSLock()
     var value: Int32 = 0
   }
   private let identifier: Identifier
   fileprivate var pid: Int32 { identifier.lock.withLock { identifier.value } }
 
-  init(process: Process) async throws {
+  /// A helper started, its hello sent, not yet greeted (`start`; `init(started:)` waits for the greeting): a caller can
+  /// send something on another connection between the two, in a fixed order. One dropped before it became a session
+  /// is closed.
+  final class Started: @unchecked Sendable {
+    fileprivate let connection: HelperConnection
+    fileprivate let process: Process
+    fileprivate let exited: AsyncStream<Int32>
+    fileprivate let identifier: Identifier
+    fileprivate let hello: HelperConnection.Call<Info>
+    private let lock = NSLock()
+    private var adopted = false
+
+    fileprivate init(connection: HelperConnection, process: Process, exited: AsyncStream<Int32>, identifier: Identifier,
+                     hello: HelperConnection.Call<Info>) {
+      self.connection = connection
+      self.process = process
+      self.exited = exited
+      self.identifier = identifier
+      self.hello = hello
+    }
+
+    /// Taken by the session it becomes (`init(started:)`), once; false when it was closed or taken before.
+    fileprivate func adopt() -> Bool {
+      lock.withLock {
+        defer { adopted = true }
+        return !adopted
+      }
+    }
+
+    /// Closes the helper unless it became a session (which closes it itself). Idempotent.
+    func close() {
+      if adopt() { HelperSession.close(connection, process) }
+    }
+
+    deinit { close() }
+  }
+
+  /// `features`: what the hello names (the Mac's own list unless a caller adds one, as the SSH greeting probe does).
+  convenience init(process: Process, features: [String] = HelperSession.features) async throws {
+    try await self.init(started: Self.start(process: process, features: features))
+  }
+
+  /// Starts `process` and sends its hello (`Started`).
+  static func start(process: Process, features: [String] = HelperSession.features) async throws -> Started {
     let ticket = try AppReplay.open(kind: "helper", input: AppReplay.value(AppReplay.Launch(process)))
     let identifier = Identifier()
-    self.identifier = identifier
     let input = Pipe()
     let output = Pipe()
     process.standardInput = input
@@ -144,15 +209,30 @@ final class HelperSession: @unchecked Sendable {
           continuation.finish()
         }
       })
-    self.process = process
-    self.connection = connection
-    self.exited = exited
+    // Features the Mac asks for (helper/PROTOCOL.md, Features). `terminals.coalesce`: the helper joins a terminal's
+    // output notifications for up to 4 ms, so a redrawing agent costs one frame per batch instead of one per tmux
+    // output line (fewer wakeups here, fewer packets over SSH). `chat.attachments`: `attachments.put`/`.read` and
+    // attachment paths on `chat.send`/`queue.add` (ChatAttachment). `screens.host`: the helper reads the screens of
+    // the tmux and herdr terminals this app attaches from the multiplexer (capture-pane, herdr observe) instead of
+    // having them published 30 times a second (HelperWorkspace.publishes). `terminals.follow`: the output of a hidden
+    // chat tab's terminal is held on the host and repainted when it shows (HelperWorkspace.reconsider).
+    // `requests.backlog`: requests are read while output to this app is backed up. `terminals.window` (only with
+    // `outputWindow`): acknowledged output (HelperOutputWindow). `login.release` (the SSH greeting probe only):
+    // SSHBootstrap.startHelper releases the waiting login through it. A helper that knows no feature answers as before.
+    let hello: HelperConnection.Call<Info> = await connection.submit("hello", params: Hello(features: features))
+    return Started(connection: connection, process: process, exited: exited, identifier: identifier, hello: hello)
+  }
+
+  /// Waits for `started`'s greeting; a helper that fails it is closed.
+  init(started: Started) async throws {
+    guard started.adopt() else { throw CancellationError() }
+    identifier = started.identifier
+    process = started.process
+    connection = started.connection
+    exited = started.exited
     do {
-      // Features the Mac asks for (helper/PROTOCOL.md, Features). `terminals.coalesce`: the helper joins a terminal's
-      // output notifications for up to 4 ms, so a redrawing agent costs one frame per batch instead of one per tmux
-      // output line (fewer wakeups here, fewer packets over SSH). `chat.attachments`: `attachments.put`/`.read` and
-      // attachment paths on `chat.send`/`queue.add` (ChatAttachment). A helper that knows no feature answers as before.
-      info = try await connection.request("hello", params: Hello(features: Self.features))
+      info = try await started.hello.value
+      if info.features?.contains(Self.terminalsWindow) == true { HelperOutputWindow.enable(connection) }
       guard info.version == HelperBinary.version else {
         throw HelperFailure(
           code: "protocol_version", message: "The helper protocol is incompatible.")
@@ -180,7 +260,7 @@ final class HelperSession: @unchecked Sendable {
   /// EOF on its stdin is the helper's orderly shutdown (replies and capture flushed; SIGTERM would
   /// lose the capture's last rows, all of them while it starts); one still running a second later
   /// is terminated. Also when its hello failed.
-  private static func close(_ connection: HelperConnection, _ process: Process) {
+  fileprivate static func close(_ connection: HelperConnection, _ process: Process) {
     connection.close()
     DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + .seconds(1)) {
       if process.isRunning { process.terminate() }

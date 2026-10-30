@@ -70,7 +70,7 @@ final class TerminalFPSBenchmarkTests: XCTestCase {
                 // Alternating order across fresh processes helps expose drift.
                 let order = (options["reverse"] as? Bool == true) ? [true, false] : [false, true]
                 for enabled in order {
-                    preferences.improveTextContrast = enabled
+                    preferences.textContrast = enabled ? .always : .never
                     try runtime.apply(preferences)
                     try await Task.sleep(for: .seconds(2))
                     reader.reset()

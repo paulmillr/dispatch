@@ -178,8 +178,11 @@ enum TabMode: String, Hashable, Sendable {
 
     // Hooks the files view calls.
 
-    /// The shell printed a prompt: the visible files view refreshes once.
-    func shellPrompted(_ id: UUID) { shellPromptedNow(id) }
+    /// The shell printed a prompt: the visible files view refreshes once, and the sidebar reads that space's branch.
+    func shellPrompted(_ id: UUID) {
+        shellPromptedNow(id)
+        SpaceBranchPrompts.shared.prompted(id)
+    }
     /// ⌘R: list the root and the expanded folders again now.
     func refresh(_ id: UUID) { refreshNow(id) }
     // openInEditor(_:path:) and changeDirectory(_:to:) live in FilesCoordinator+Editor.swift, paste(_:) in

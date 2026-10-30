@@ -529,8 +529,10 @@ final class UIBenchmarkTests: XCTestCase {
 
     def testFastSourcePreparationDoesNotSynchronizeAgentCLI(self):
         profile = Profile(self.root / 'profile.json')
-        with patch.object(vm, 'synchronize', return_value='copied') as source, patch.object(vm, 'sync_codex') as cli:
+        with patch.object(vm, 'synchronize', return_value='copied') as source, patch.object(vm, 'sync_codex') as cli, \
+                patch.object(vm, 'sync_helper'), patch.object(vm, 'sync_products', return_value='') as products:
             vm.prepare_test_inputs('desktop', profile, needs_codex=False)
+            products.assert_called_once_with('desktop')
             # The sources, then the iPhone engine when the checkout has it: nothing else.
             self.assertIn('Dispatch', source.call_args_list[0].args[1])
             self.assertEqual([call.args[1] for call in source.call_args_list[1:]],
@@ -753,9 +755,11 @@ class ShardTests(unittest.TestCase):
                 patch.object(vm, 'run'), \
                 patch.object(vm, 'host_lock', side_effect=lambda *a, **k: contextmanager(lambda: (yield))()), \
                 patch.object(vm.shards, 'history', return_value=({}, None)), \
-                patch.object(vm.subprocess, 'Popen', side_effect=Process), patch('builtins.print'):
+                patch.object(vm.subprocess, 'Popen', side_effect=Process), patch('builtins.print'), \
+                patch.object(vm, 'host_build') as build:
             groups, loads = vm.shard_plan('first', selection)
             self.assertEqual(vm.test_sharded('first', 'second', args, groups, loads), 1)  # No shard results were written.
+            build.assert_called_once_with(True)  # Once for both runners, which only receive its products.
         self.assertEqual([command[command.index('--vm') + 1] for command in commands], ['first', 'second'])
         self.assertEqual([command[command.index('--shard-role') + 1] for command in commands], ['primary', 'secondary'])
         for command in commands:

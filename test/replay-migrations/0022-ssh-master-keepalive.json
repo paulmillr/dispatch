@@ -1,0 +1,32 @@
+{
+  "kind": "rerecord",
+  "why": "The SSH masters Dispatch starts now keep the link alive: `-o ServerAliveInterval=15 -o ServerAliveCountMax=8`, placed after the connection's own options (OpenSSH keeps the first value given, so a user's own wins) and left out when the connection's ssh -G already sets an interval, so a link that died while idle ends in about two minutes instead of after TCP's two hours. Besides the typed login (whose master the launcher starts outside any recording), both reconnect logins gained those four arguments: the login sheet's ssh command, which the app sends to the native helper as terminals.create (recorded as the app's out.wire request and the helper's read and spawn), and automatic reconnect's silent login (open.command arguments, a list). A rewrite changes only text inside the app's open.* records: it can neither add list elements nor change a helper request, so every test whose recording holds either login is recorded again. The list is the 24 reconnect and recovery cases that failed replay with the new command (run 20261028-144158-63857: 'unrecorded terminals.create' with the login-sheet command) plus the two SSHReconnectTests login cases, and matches a scan of all 3660 corpus captures for a recorded ControlMaster=yes login with -f -N. Recorded process observations of running masters keep the old arguments as results, which the app only reads.",
+  "tests": [
+    "SSHClaudeIntegrationTests/testRemoteTmuxClaudeChatSurvivesInPlaceReconnect",
+    "SSHHerdrIntegrationTests/testDisablingHelperRetainsHerdrRecovery",
+    "SSHHerdrIntegrationTests/testHerdrThenTmuxRevocationRetainsBothSessions",
+    "SSHHerdrIntegrationTests/testRemovingHerdrPermissionRetainsRecovery",
+    "SSHHerdrIntegrationTests/testRemovingOnlyHerdrPermissionRetainsRecovery",
+    "SSHHerdrIntegrationTests/testTmuxThenHerdrRevocationRetainsBothSessions",
+    "SSHLinuxIntegrationTests/testLinuxExit255ReturnsToEditableLocalShell",
+    "SSHReconnectIntegrationTests/testBrokerOnlyFailureRetiresOldMasterBeforeResumingLauncher",
+    "SSHReconnectIntegrationTests/testDisablingHelperRetainsNativeTmuxRecovery",
+    "SSHReconnectIntegrationTests/testDisconnectDuringReplacementShellStartupCanRetry",
+    "SSHReconnectIntegrationTests/testInputImmediatelyAfterShellRecoveryReachesRemoteShell",
+    "SSHReconnectIntegrationTests/testNewRemoteTmuxTabFollowsFocusedPaneDirectoryAcrossReconnect",
+    "SSHReconnectIntegrationTests/testOfflineSpaceGroupingAndNameArePersistedAfterReconnect",
+    "SSHReconnectIntegrationTests/testOfflineTmuxPaneClosureAndMissingServerNeverRecreateCommands",
+    "SSHReconnectIntegrationTests/testPermissionRevocationDuringReplacementShellStartupCanRetry",
+    "SSHReconnectIntegrationTests/testRecoveryKeepsRemoteTmuxTabsAndServerPanes",
+    "SSHReconnectIntegrationTests/testRemovingTmuxPermissionRetainsRecovery",
+    "SSHReconnectIntegrationTests/testRepeatedDetachFreshSSHAttachAndReconnectKeepDetachedAndVisibleDisjoint",
+    "SSHReconnectIntegrationTests/testShellRecoveryPreservesSurfacesAndHealthyConnectionsAcrossSpaces",
+    "SSHReconnectIntegrationTests/testTmuxSuspensionDropsInputAndPreservesBackendState",
+    "SSHReconnectTests/testLoginSheetReceivesPasswordKeysAndRestoresWorkspaceFocus",
+    "SSHReconnectTests/testSilentLoginNeverPromptsAndTellsRefusalFromUnreachable",
+    "SSHRecoveryIntegrationTests/testRemoteTmuxMasterLossPreservesDraftLayoutAndPendingApprovalWithoutReplay",
+    "SSHRecoveryIntegrationTests/testRemoteTmuxReconnectPreservesDraftBeforeFirstTurn",
+    "SSHShellIntegrationTests/testHostTintFollowsSSHAcrossMixedPanesAndReconnect",
+    "SSHSpaceTests/testSSHTmuxHandoffLoginStaysHiddenAcrossReconnect"
+  ]
+}

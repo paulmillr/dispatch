@@ -1,10 +1,33 @@
 import Foundation
 
-/// An sRGB color as a theme file writes it (`#rrggbb`).
+/// An sRGB color as a theme file writes it (`#rrggbb`), or a Display P3 one outside sRGB with its sRGB stand-in.
 struct ThemeColor: Hashable, Sendable {
+    /// sRGB; for a Display P3 color, the nearest sRGB color (chroma reduced at the same OKLCH lightness and hue),
+    /// which contrast checks, Ghostty and every other reader use.
     var r: UInt8, g: UInt8, b: UInt8
+    /// The color in Display P3, when it lies outside sRGB; Dispatch's terminal draws it (`# display-p3:` lines).
+    var displayP3: P3?
+
+    struct P3: Hashable, Sendable {
+        var r: UInt8, g: UInt8, b: UInt8
+        var hex: String { String(format: "#%02x%02x%02x", r, g, b) }
+    }
 
     init(r: UInt8, g: UInt8, b: UInt8) { (self.r, self.g, self.b) = (r, g, b) }
+
+    /// Display P3 components in 0...1: an sRGB color when it fits sRGB, else this P3 color with its sRGB stand-in.
+    init(displayP3Red red: Double, green: Double, blue: Double) {
+        let (r, g, b) = Self.linearSRGB(displayP3: (Self.linear(red), Self.linear(green), Self.linear(blue)))
+        // Within half an 8-bit step of sRGB is sRGB.
+        let e = 0.5 / 255
+        if [r, g, b].allSatisfy({ (-e...(1 + e)).contains(Self.gamma(max(0, $0))) && $0 >= -e }) {
+            self.init(red: Self.gamma(max(0, r)), green: Self.gamma(max(0, g)), blue: Self.gamma(max(0, b)))
+            return
+        }
+        self.init(oklch: OKLCH(lab: Self.oklab(linear: r, g, b)))
+        func byte(_ c: Double) -> UInt8 { UInt8(max(0, min(255, (c * 255).rounded()))) }
+        displayP3 = P3(r: byte(red), g: byte(green), b: byte(blue))
+    }
 
     /// Components in 0...1, clamped and rounded.
     init(red: Double, green: Double, blue: Double) {
@@ -24,11 +47,10 @@ struct ThemeColor: Hashable, Sendable {
     var hex: String { String(format: "#%02x%02x%02x", r, g, b) }
     var components: (Double, Double, Double) { (Double(r) / 255, Double(g) / 255, Double(b) / 255) }
 
-    /// WCAG relative luminance.
+    /// WCAG relative luminance, of a Display P3 color itself rather than its stand-in.
     var luminance: Double {
-        func linear(_ c: Double) -> Double { c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4) }
-        let (red, green, blue) = components
-        return 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
+        let (red, green, blue) = linearSRGB
+        return 0.2126 * red + 0.7152 * green + 0.0722 * blue
     }
 
     /// WCAG contrast ratio, 1...21.
@@ -60,6 +82,7 @@ struct TerminalTheme: Equatable, Sendable {
         for raw in text.split(separator: "\n", omittingEmptySubsequences: false) {
             let line = raw.trimmingCharacters(in: .whitespaces)
             guard !line.isEmpty else { continue }
+            if line.hasPrefix(Self.displayP3Prefix) { wide(line); continue }
             guard !line.hasPrefix("#"), let eq = line.firstIndex(of: "=") else { extra.append(line); continue }
             let key = line[..<eq].trimmingCharacters(in: .whitespaces)
             var value = line[line.index(after: eq)...].trimmingCharacters(in: .whitespaces)
@@ -83,17 +106,51 @@ struct TerminalTheme: Equatable, Sendable {
         guard sawColor else { return nil }
     }
 
-    /// The theme file's text.
+    /// The theme file's text. A Display P3 color is its sRGB stand-in's line, then the same line in P3 as a comment
+    /// (`# display-p3: background = #rrggbb`), which Ghostty skips and Dispatch's terminal reads.
     var text: String {
         var lines: [String] = []
-        for (index, color) in palette.enumerated() { if let color { lines.append("palette = \(index)=\(color.hex)") } }
-        lines.append("background = \(background.hex)")
-        lines.append("foreground = \(foreground.hex)")
-        if let cursor { lines.append("cursor-color = \(cursor.hex)") }
-        if let cursorText { lines.append("cursor-text = \(cursorText.hex)") }
-        if let selectionBackground { lines.append("selection-background = \(selectionBackground.hex)") }
-        if let selectionForeground { lines.append("selection-foreground = \(selectionForeground.hex)") }
+        func add(_ key: String, _ color: ThemeColor?, prefix: String = "") {
+            guard let color else { return }
+            lines.append("\(key) = \(prefix)\(color.hex)")
+            if let wide = color.displayP3 { lines.append("\(Self.displayP3Prefix) \(key) = \(prefix)\(wide.hex)") }
+        }
+        for (index, color) in palette.enumerated() { add("palette", color, prefix: "\(index)=") }
+        add("background", background)
+        add("foreground", foreground)
+        add("cursor-color", cursor)
+        add("cursor-text", cursorText)
+        add("selection-background", selectionBackground)
+        add("selection-foreground", selectionForeground)
         return (lines + extra).joined(separator: "\n") + "\n"
+    }
+
+    static let displayP3Prefix = "# display-p3:"
+
+    /// The colors a theme file's `# display-p3:` lines give, over the sRGB ones already read.
+    private mutating func wide(_ line: String) {
+        let rest = line.dropFirst(Self.displayP3Prefix.count)
+        guard let eq = rest.firstIndex(of: "=") else { return }
+        let key = rest[..<eq].trimmingCharacters(in: .whitespaces)
+        var value = rest[rest.index(after: eq)...].trimmingCharacters(in: .whitespaces)
+        var index: Int?
+        if key == "palette" {
+            let parts = value.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            guard parts.count == 2, let i = Int(parts[0]), (0..<16).contains(i) else { return }
+            (index, value) = (i, parts[1])
+        }
+        guard let p3 = ThemeColor(hex: value) else { return }
+        let wide = ThemeColor.P3(r: p3.r, g: p3.g, b: p3.b)
+        switch key {
+        case "background": background.displayP3 = wide
+        case "foreground": foreground.displayP3 = wide
+        case "cursor-color": cursor?.displayP3 = wide
+        case "cursor-text": cursorText?.displayP3 = wide
+        case "selection-background": selectionBackground?.displayP3 = wide
+        case "selection-foreground": selectionForeground?.displayP3 = wide
+        case "palette": if let index { palette[index]?.displayP3 = wide }
+        default: break
+        }
     }
 
     /// true: light, false: dark, nil: either.

@@ -1,13 +1,17 @@
-//! Screens read from herdr itself for terminals no client renders (`Multiplexer::host_screens`, the queue drainer).
+//! Screens read from herdr itself for terminals no client publishes for: every one with `Multiplexer::host_screens`
+//! (the queue drainer), and those a screens.host client attaches (the Mac; `Herdr::hosting`).
 //!
-//! A client renders herdr's terminal frames and publishes its screen (TerminalBackend.swift publishScreen). herdr's
-//! socket API reads a pane's text (`pane.read`) but not its cursor, which the faint tail needs (Claude's
-//! placeholder starts at the cursor). So the helper observes the terminal as a client would see it: `herdr terminal
-//! session observe <terminal>` (read-only, at the pane's own size, never resizing it) streams the same frames a
-//! controller gets, a full frame first and then changes, each ending with the cursor. They are drawn into a cell
-//! grid (dispatch_helper_core::cells, which renders text and the faint tail as the app's renderer does) and every
-//! frame publishes the screen to the terminal's readers, as a client's publication does. The observer runs while
-//! the terminal is read (a reader waiting, or a read within `HOLD`), and ends when a client attaches or publishes.
+//! A client renders herdr's terminal frames and may publish its screen (TerminalBackend.swift publishScreen; the
+//! iPhone does). herdr's socket API reads a pane's text (`pane.read`) but not its cursor, which the faint tail needs
+//! (Claude's placeholder starts at the cursor). So the helper observes the terminal as a client would see it: `herdr
+//! terminal session observe <terminal>` (read-only, at the pane's own size, never resizing it) streams the same
+//! frames a controller gets, a full frame first and then changes, each ending with the cursor. They are drawn into a
+//! cell grid (dispatch_helper_core::cells, which renders text and the faint tail as the app's renderer does) as they
+//! come; the screen goes to the terminal's readers, as a client's publication does, once the frames settled for
+//! `SETTLE` or `FLOOR` after the first of a run that never pauses (tmux host.rs paces its captures alike), so the
+//! prompt watcher does not run per frame. The first frame, and a read asking for the screen now, take the latest
+//! drawn at once. The observer runs while the terminal is read (a reader waiting, or a read within `HOLD`), and
+//! ends when a client publishes (published wins while that client keeps the terminal attached) or host reads stop.
 //! Its client socket connection goes through a verified relay, as a controller's does (relay.rs).
 use super::*;
 use dispatch_helper_core::cells::Cells;
@@ -16,6 +20,10 @@ use std::os::fd::RawFd;
 
 /// An observer stays this long after the last read of its terminal with no reader waiting.
 const HOLD: Duration = Duration::from_secs(2);
+/// Frames this long apart have settled: the last drawn goes to the readers (tmux host.rs SETTLE).
+pub(super) const SETTLE: Duration = Duration::from_millis(100);
+/// Frames that never settle go to the readers this long after the first of the run (tmux host.rs FLOOR).
+pub(super) const FLOOR: Duration = Duration::from_millis(500);
 /// After an observer failed, reads wait this long before starting another, twice as long after each failure in a
 /// row (up to `LONGEST`) until one draws a change.
 const RETRY: Duration = Duration::from_secs(1);
@@ -36,11 +44,45 @@ pub(super) struct Observer {
     armed: Instant,
     /// A frame after the full one drew: the observer works.
     changed: bool,
+    /// The screen drawn last, not yet given to the readers; the first and the latest frame since the last one was.
+    pending: Option<Screen>,
+    burst: Option<(Instant, Instant)>,
+    /// The settle timer asked for (a later one asks again when it fires).
+    settle: Option<Instant>,
 }
 
 impl Observer {
     fn new(until: Instant) -> Self {
-        Self { relay: None, pid: None, stream: None, stderr: None, grid: None, until, armed: until, changed: false }
+        Self {
+            relay: None,
+            pid: None,
+            stream: None,
+            stderr: None,
+            grid: None,
+            until,
+            armed: until,
+            changed: false,
+            pending: None,
+            burst: None,
+            settle: None,
+        }
+    }
+    /// `screen` drawn at `now`: the one for the readers now when none is `shown` yet or the run reached the
+    /// floor; otherwise it waits for `due`.
+    pub(super) fn drawn(&mut self, now: Instant, screen: Screen, shown: bool) -> Option<Screen> {
+        let first = self.burst.map_or(now, |(first, _)| first);
+        self.burst = Some((first, now));
+        self.pending = Some(screen);
+        (!shown || first + FLOOR <= now).then(|| self.flush()).flatten()
+    }
+    /// When the pending screen goes to the readers: the frames settled, or the floor.
+    pub(super) fn due(&self) -> Option<Instant> {
+        self.burst.filter(|_| self.pending.is_some()).map(|(first, last)| (last + SETTLE).min(first + FLOOR))
+    }
+    /// The pending screen, for the readers now.
+    pub(super) fn flush(&mut self) -> Option<Screen> {
+        self.burst = None;
+        self.pending.take()
     }
     /// One line of the observed stream; the screen when it drew one. Frames out of order or from before a
     /// resize are skipped; a change without the full frame it applies to fails, so the observer starts again.
@@ -117,9 +159,37 @@ fn optional(v: Value<'_>, key: &str) -> Result<Option<String>, Error> {
 }
 
 impl Herdr {
-    /// `screen` reads `terminal` from herdr: host screens are on and no client renders it.
+    /// `screen` reads `terminal` from herdr: host screens are on (for every terminal, or a screens.host client
+    /// attached it) and no client publishes for it. A controller (a client's attachment) does not count: the
+    /// observer reads alongside it.
     pub(super) fn hosted(&self, terminal: Id) -> bool {
-        self.host_screens && !self.controllers.contains_key(&terminal) && !self.clients.contains(&terminal)
+        (self.host_screens || self.hosting.contains(&terminal)) && !self.published.contains(&terminal)
+    }
+    /// Who supplies `terminal`'s screens (Multiplexer::screen_clients): host reads that stop end the observer, ones
+    /// that resume start it for a reader that waits.
+    pub(super) fn set_screen_clients(&mut self, io: &mut dyn Io, terminal: Id, hosting: bool, published: bool) {
+        let was = self.hosted(terminal);
+        if hosting {
+            self.hosting.insert(terminal);
+        } else {
+            self.hosting.remove(&terminal);
+        }
+        if published {
+            self.published.insert(terminal);
+        } else {
+            self.published.remove(&terminal);
+        }
+        match (was, self.hosted(terminal)) {
+            (true, false) => self.unobserve(io, terminal, None),
+            (false, true) if self.screens.waiting(terminal) => self.observe_screen(io, terminal),
+            _ => {}
+        }
+    }
+    /// A read of the screen now: the frame drawn last goes to the readers without waiting to settle.
+    pub(super) fn flush_screen(&mut self, io: &mut dyn Io, terminal: Id) {
+        if let Some(screen) = self.observers.get_mut(&terminal).and_then(Observer::flush) {
+            self.observed(io, terminal, screen);
+        }
     }
     /// Turned off, running observers end at their next timer.
     pub(super) fn set_host_screens(&mut self, enabled: bool) {
@@ -208,6 +278,18 @@ impl Herdr {
                 observer.armed = observer.until;
                 io.timer(observer.until);
             }
+            if observer.settle.is_some_and(|settle| settle <= at) {
+                observer.settle = None;
+            }
+            match observer.due() {
+                Some(due) if due <= at => {
+                    if let Some(screen) = observer.flush() {
+                        self.observed(io, id, screen);
+                    }
+                }
+                Some(due) => self.settle_timer(io, id, due),
+                None => {}
+            }
         }
         let retries: Vec<Id> = self
             .unobserved
@@ -278,12 +360,29 @@ impl Herdr {
                 }
             }
         }
-        // A read holding several frames publishes the last: a client publishes what it shows after drawing them.
+        // A read holding several frames publishes the last: a client publishes what it shows after drawing them. It
+        // waits for the frames to settle unless nothing was shown yet.
         if let Some(screen) = drawn {
-            self.observed(io, id, screen);
+            let (now, shown) = (io.now(), self.screens.shown(id));
+            let observer = self.observers.get_mut(&id).unwrap();
+            if let Some(screen) = observer.drawn(now, screen, shown) {
+                self.observed(io, id, screen);
+            } else if let Some(due) = observer.due() {
+                self.settle_timer(io, id, due);
+            }
         }
         if eof {
             self.unobserve(io, id, Some(error("Herdr observer ended.")));
+        }
+    }
+    /// A Timer at `due` (observe_timer) unless one comes sooner.
+    fn settle_timer(&mut self, io: &mut dyn Io, id: Id, due: Instant) {
+        let Some(observer) = self.observers.get_mut(&id) else {
+            return;
+        };
+        if observer.settle.is_none_or(|settle| settle > due) {
+            observer.settle = Some(due);
+            io.timer(due);
         }
     }
     fn observed(&mut self, io: &mut dyn Io, id: Id, screen: Screen) {

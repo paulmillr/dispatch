@@ -17,7 +17,7 @@ struct ChatBubble<Content: View>: View {
             if side == .user { Spacer(minLength: 0) }
             content
                 .font(typography.body)
-                .lineSpacing(2)
+                .lineSpacing(typography.bodySpacing)
                 .foregroundStyle(side == .user ? Color.bubbleUserText : Color.primary)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 9)

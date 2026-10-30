@@ -75,6 +75,13 @@ final class AttentionCoordinator: NSObject, UNUserNotificationCenterDelegate {
     @ObservationIgnored private var started = false
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var notificationTasks: [UUID: Task<Void, Never>] = [:]
+    /// The Dock badge this coordinator last set (`.none`: not yet), so an unchanged pass leaves AppKit alone.
+    @ObservationIgnored private var badge: String?? = .none
+    /// Delivered alerts were cleared since notifications were last turned off; clearing again would only cost an XPC.
+    @ObservationIgnored private var deliveredCleared = false
+    /// What the passes did, for tests: a burst of session changes is one pass, an unchanged pass touches no system API.
+    struct Effects: Equatable { var passes = 0, badges = 0, removals = 0 }
+    @ObservationIgnored private(set) var effects = Effects()
     var notificationError: String?
 
     init(controller: AppDelegate) { self.controller = controller }
@@ -104,6 +111,7 @@ final class AttentionCoordinator: NSObject, UNUserNotificationCenterDelegate {
         guard !started else { return }
         started = true
         generation += 1
+        badge = .none; deliveredCleared = false
         let center = UNUserNotificationCenter.current()
         center.delegate = self
         center.setNotificationCategories([Self.category])
@@ -116,18 +124,28 @@ final class AttentionCoordinator: NSObject, UNUserNotificationCenterDelegate {
         generation += 1
         notificationTasks.values.forEach { $0.cancel() }
         notificationTasks.removeAll()
-        NSApp.dockTile.badgeLabel = nil
+        setBadge(nil)
+    }
+
+    private func setBadge(_ label: String?) {
+        guard badge != .some(label) else { return }
+        badge = .some(label)
+        effects.badges += 1
+        NSApp.dockTile.badgeLabel = label
     }
 
     private func observe() {
         guard started else { return }
         let generation = generation
+        effects.passes += 1
         withObservationTracking {
             guard let controller else { return }
             let preferences = controller.settings.values
+            // One evaluation per pass: the badge and the alerts both come from these rows.
             let rows = entries
             let events = transitions(rows)
-            NSApp.dockTile.badgeLabel = preferences.attentionDockBadge && waitingCount > 0 ? String(waitingCount) : nil
+            let waiting = rows.count(where: { $0.urgency == .waiting })
+            setBadge(preferences.attentionDockBadge && waiting > 0 ? String(waiting) : nil)
             if preferences.attentionNotifications && !notificationsEnabled {
                 Task { [weak self] in
                     do {
@@ -137,7 +155,12 @@ final class AttentionCoordinator: NSObject, UNUserNotificationCenterDelegate {
                 }
             }
             notificationsEnabled = preferences.attentionNotifications
-            if !notificationsEnabled { UNUserNotificationCenter.current().removeAllDeliveredNotifications() }
+            // Off, nothing new is delivered (a request finishing late removes itself), so clearing once is enough.
+            if notificationsEnabled { deliveredCleared = false } else if !deliveredCleared {
+                deliveredCleared = true
+                effects.removals += 1
+                UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+            }
             for entry in events where !(NSApp.isActive && controller.workspace.isSurfacePresented(entry.id)) {
                 // Nautical's bell marks a finished reply in place of the attention sound.
                 if preferences.shipsBell && entry.urgency == .unread && SidebarThemeStore.shared.current == .nautical {
@@ -185,8 +208,9 @@ final class AttentionCoordinator: NSObject, UNUserNotificationCenterDelegate {
         }
         let retired = previous.keys.filter { previous[$0] != current[$0] }
         for id in retired { notificationTasks[id]?.cancel() }
-        if started {
+        if started, !retired.isEmpty {
             let identifiers = retired.map { "attention-\($0)" }
+            effects.removals += 1
             UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: identifiers)
             UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: identifiers)
         }

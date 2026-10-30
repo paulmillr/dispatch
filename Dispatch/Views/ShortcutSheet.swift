@@ -11,7 +11,7 @@ struct ShortcutRow: Identifiable {
     /// What each digit group does; Settings › Keyboard describes its recorders the same way.
     static let tabDigits = "switch to tab (or pane when split)"
     static let spaceDigits = "switch to space"
-    static let splitDigits = "set layout: single / 2 columns / 2 above / 2 × 2 grid"
+    static let splitDigits = "single · 2 columns · 2 above · 2×2"
 
     /// The digit chords lead, in Settings › Keyboard' order and following it; then stepping through tabs and spaces, and
     /// the prefix keys last.
@@ -35,11 +35,11 @@ struct ShortcutRow: Identifiable {
         return rows.compactMap { $0 }
     }
 
-    /// Settings › Dictation › Navigate by voice, while dictation and its right ⌘ shortcut are on.
+    /// Settings › Dictation › Navigate by voice, while dictation and its voice key are on.
     @MainActor static var voiceNavigation: ShortcutRow? {
         let store = DictationStore.shared
-        guard store.enabled, store.rightCommand, store.navigation else { return nil }
-        return .init("right ⌘ “\(store.wakeWord), …”", "say a space or tab, or the sidebar: “billing tab 2”, “next space”, “back”, “hide sidebar”")
+        guard let key = store.shortcut, store.navigation else { return nil }
+        return .init("\(key.name) “\(store.wakeWord), …”", "say a space or tab, or the sidebar: “billing tab 2”, “next space”, “back”, “hide sidebar”")
     }
 
     @MainActor static var window: [ShortcutRow] { windowRows(KeyGroupsStore.shared.current) }
@@ -154,6 +154,8 @@ struct ShortcutSheetButton<Sheet: View>: View {
     let identifier: String
     /// An SF Symbol in place of the ⌘/ chip (which moves to the help); on glass, shown as a GlassPanelControl.
     var symbol: String? = nil
+    /// The chip's minimum square: the chat composer matches its paperclip and microphone.
+    var side: CGFloat = 24
     @ViewBuilder let sheet: () -> Sheet
     @State private var hovering = false
     @State private var hoverFocus: (window: NSWindow, responder: NSResponder)?
@@ -166,7 +168,7 @@ struct ShortcutSheetButton<Sheet: View>: View {
                 Group {
                     if let symbol { Image(systemName: symbol) } else { Text("⌘/") }
                 }.font(keyFont)
-                    .frame(minWidth: 24, minHeight: 24)
+                    .frame(minWidth: side, minHeight: side)
                     .foregroundStyle(presented || hovering ? ink : muted)
                     .background(presented || hovering ? ink.opacity(0.07) : .clear, in: RoundedRectangle(cornerRadius: 4))
                     .contentShape(Rectangle())

@@ -35,24 +35,27 @@ private struct MobileAppearanceModifier: ViewModifier {
     @AppStorage private var stored: String
     /// Settings' theme (`MobileTheme`): a Mac theme fixes the scheme, Automatic leaves it to the appearance.
     @AppStorage private var theme: String
-    /// Chat's font and size and the terminal's font (`ChatTypography`), read where Settings saves them.
+    /// Chat's font, size and line spacing and the terminal's font (`ChatTypography`), read where Settings saves them.
     @AppStorage private var chatFont: String
     @AppStorage private var chatSize: String
     @AppStorage private var terminalFont: String
+    @AppStorage private var lineSpacing: String
 
     init(defaults: UserDefaults) {
         _stored = AppStorage(wrappedValue: MobileAppearance.fallback.rawValue, MobileAppearance.key, store: defaults)
         _theme = AppStorage(wrappedValue: MobileTheme.automatic.rawValue, MobileSettings.themeKey, store: defaults)
         _chatFont = AppStorage(wrappedValue: MobileChatFont.system.rawValue, MobileSettings.chatFontKey, store: defaults)
         _chatSize = AppStorage(wrappedValue: ChatTextSize.standard.rawValue, MobileSettings.chatTextSizeKey, store: defaults)
-        _terminalFont = AppStorage(wrappedValue: TerminalFont.jetBrainsMono.name, MobileSettings.terminalFontKey, store: defaults)
+        _terminalFont = AppStorage(wrappedValue: TerminalFont.sourceCodePro.name, MobileSettings.terminalFontKey, store: defaults)
+        _lineSpacing = AppStorage(wrappedValue: LineSpacing.normal.rawValue, MobileSettings.lineSpacingKey, store: defaults)
     }
 
     func body(content: Content) -> some View {
         let appearance = MobileAppearance(stored: stored)
         let theme = MobileTheme(stored: theme)
         let typography = ChatTypography(font: MobileChatFont(rawValue: chatFont) ?? .system, size: ChatTextSize(rawValue: chatSize) ?? .standard,
-                                        terminalFont: TerminalFont.named(terminalFont))
+                                        terminalFont: TerminalFont.named(terminalFont),
+                                        lineSpacing: LineSpacing(rawValue: lineSpacing) ?? .normal)
         content
             .environment(\.mobileTheme, theme)
             .environment(\.chatTypography, typography)

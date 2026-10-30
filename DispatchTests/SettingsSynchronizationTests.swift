@@ -34,7 +34,7 @@ final class SettingsSynchronizationTests: XCTestCase {
         XCTAssertEqual(NSColor(tint.color).usingColorSpace(.sRGB), automatic)
     }
 
-    /// Settings › Appearance › Color-code remote hosts: on by default; off keeps remote chrome but draws it without hue.
+    /// Settings › General › Window › Color-code remote hosts: on by default; off keeps remote chrome but draws it without hue.
     func testHostColorsSettingDefaultsOnAndDrawsNeutralWhenOff() throws {
         XCTAssertTrue(try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8)).showHostColors)
         var preferences = Preferences(); preferences.showHostColors = false
@@ -319,12 +319,13 @@ final class SettingsSynchronizationTests: XCTestCase {
         XCTAssertTrue(json.contains(#""sidebarStyle":"icons""#))
         XCTAssertFalse(json.contains("largeSidebarItems"), "One stored choice, not two")
         XCTAssertEqual(try decode(json), preferences)
-        // The host picker's rows: the sidebar font, a 22-point icon disc in a 30-point row, rows 2 points apart.
+        // The host picker's rows at the 14-point default: the sidebar font, a 25-point icon disc in a 33-point row
+        // (22 and 30 at the 12.5 design base), rows 2 points apart.
         let metrics = preferences.sidebarMetrics
         XCTAssertTrue(metrics.icons)
-        XCTAssertEqual(metrics.nameSize, 12)
-        XCTAssertEqual(metrics.discSize, 22)
-        XCTAssertEqual(metrics.rowHeight, 30)
+        XCTAssertEqual(metrics.nameSize, 13.5)
+        XCTAssertEqual(metrics.discSize, 25)
+        XCTAssertEqual(metrics.rowHeight, 33)
         XCTAssertEqual(metrics.rowSpacing, 2)
         preferences.fontSize = 20
         XCTAssertEqual(preferences.sidebarMetrics.discSize, 35, "The disc grows with the font like the large tiles")
@@ -385,8 +386,8 @@ final class SettingsSynchronizationTests: XCTestCase {
         return (try brightness(x: bitmap.pixelsWide / 2), try brightness(x: Int(SpaceSidebar.glassInset / 2 * scale)))
     }
 
-    /// The icons style draws spaces as the host picker does, in both orders, flat and glass alike: 30-point rows 2 points
-    /// apart, each led by its host's icon, and tree groups without the indent and rule of the other styles.
+    /// The icons style draws spaces as the host picker does, in both orders, flat and glass alike: its rows (30 points at
+    /// the 12.5 design base) 2 points apart, each led by its host's icon, and tree groups without the indent and rule of the other styles.
     func testIconsSidebarMatchesHostPickerRows() async throws {
         try DesktopTestSupport.requireUnlocked()
         AppFont.register()
@@ -433,7 +434,8 @@ final class SettingsSynchronizationTests: XCTestCase {
                     root.layoutSubtreeIfNeeded()
                     let frames = rows()
                     diagnostic = "glass=\(glass), order=\(order), rows=\(frames)"
-                    return frames.count == 3 && frames.allSatisfy { abs($0.height - 30) < 1 }
+                    let height = controller.settings.values.sidebarMetrics.rowHeight
+                    return frames.count == 3 && frames.allSatisfy { abs($0.height - height) < 1 }
                 }
                 let frames = rows()
                 // The two local spaces are neighbours in either order: one row apart, 2 points between them.
@@ -452,7 +454,7 @@ final class SettingsSynchronizationTests: XCTestCase {
         }
         // Host icons grow with the font in every style: captured at a large size for review.
         controller.settings.values.fontSize = 20
-        defer { controller.settings.values.fontSize = 12.5 }
+        defer { controller.settings.values.fontSize = Preferences().fontSize }
         for style in SidebarStyle.allCases {
             controller.settings.values.sidebarStyle = style
             for order: SpaceOrder in [.flat, .tree] {
@@ -500,14 +502,18 @@ final class SettingsSynchronizationTests: XCTestCase {
         defer { window.orderOut(nil); window.contentView = nil; window.close() }
         let originalGlass = LiquidGlassStore.shared.enabled
         defer { LiquidGlassStore.shared.enabled = originalGlass }
+        // Flat's "+ local" and "+ space" are as tall as the glass track (28 points at the 12.5 design base).
+        let trackHeight = StripTab.glassTrackHeight(AppTypography(contentSize: controller.settings.values.fontSize))
         for glass in [false] + (LiquidGlassStore.supported ? [true] : []) {
             LiquidGlassStore.shared.enabled = glass
             for order: SpaceOrder in [.flat, .tree] {
                 controller.settings.values.spaceOrder = order
                 for large in [false, true, false] {
                     controller.settings.values.largeSidebarItems = large
-                    // Large's cards are one height in either order: the host sits in their details line.
-                    let heights: [CGFloat] = !large ? [21, 21] : [58, 58]
+                    // Large's cards are one height in either order: the host sits in their details line. Heights follow
+                    // the content size (21 and 58 points at the 12.5 design base).
+                    let metrics = controller.settings.values.sidebarMetrics(glass: glass)
+                    let heights = [metrics.rowHeight, metrics.rowHeight]
                     var layoutDiagnostic = ""
                     try await TestSupport.eventually(diagnostic: layoutDiagnostic) {
                         let rows = PresentationTestSupport.views(of: ReorderTrackingView.self, in: root)
@@ -518,13 +524,13 @@ final class SettingsSynchronizationTests: XCTestCase {
                         if large {
                             let buttons = PresentationTestSupport.views(of: NewSpaceNativeButton.self, in: root)
                                 .filter { !$0.isHiddenOrHasHiddenAncestor }
-                            // Tree: the plus at the end of each 26-point host chip. Flat: "+ local" and "+ space" as tall
+                            // Tree: the plus at the end of each host chip. Flat: "+ local" and "+ space" as tall
                             // as the glass track.
-                            let buttonHeight: CGFloat = order == .tree ? 20 : 28
+                            let buttonHeight = order == .tree ? metrics.headerHeight - 6 : trackHeight
                             guard buttons.count == 2 && buttons.allSatisfy({ abs($0.bounds.height - buttonHeight) < 1 }) else { return false }
                             if order == .tree {
                                 let hosts = PresentationTestSupport.views(of: HostSecondaryClickView.self, in: root)
-                                    .filter { !$0.isHiddenOrHasHiddenAncestor && abs($0.bounds.height - 26) < 1 }
+                                    .filter { !$0.isHiddenOrHasHiddenAncestor && abs($0.bounds.height - metrics.headerHeight) < 1 }
                                 guard hosts.count == 2 else { return false }
                                 let headers = hosts.map { $0.convert($0.bounds, to: root) }
                                 guard buttons.allSatisfy({ button in
@@ -568,7 +574,7 @@ final class SettingsSynchronizationTests: XCTestCase {
                                         .map { $0.convert($0.bounds, to: root) }
                                     guard buttons.count == 2, let card = cards.first else { return false }
                                     // "+ local" and "+ space" on one row, splitting the cards' width between them.
-                                    return frames.allSatisfy { abs($0.height - 28) < 1 } && abs(frames[0].midY - frames[1].midY) < 1
+                                    return frames.allSatisfy { abs($0.height - trackHeight) < 1 } && abs(frames[0].midY - frames[1].midY) < 1
                                         && abs(frames[0].width - frames[1].width) < 1
                                         && abs(frames[0].minX - card.minX) < 1 && abs(frames[1].maxX - card.maxX) < 1
                                 }
@@ -586,6 +592,20 @@ final class SettingsSynchronizationTests: XCTestCase {
                 }
             }
         }
+    }
+
+    func testOutputWindowDefaultOffAndPersistExplicitChoice() throws {
+        XCTAssertFalse(Preferences().outputWindow)
+        XCTAssertFalse(try JSONDecoder().decode(Preferences.self, from: Data("{}".utf8)).outputWindow)
+        let root = System.temporary.appendingPathComponent(System.uuid().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("settings.json"), store = SettingsStore(file: file)
+        var preferences = Preferences()
+        preferences.outputWindow = true
+        try store.save(preferences)
+        XCTAssertTrue(SettingsStore(file: file).values.outputWindow)
+        try store.save(Preferences())
+        XCTAssertFalse(SettingsStore(file: file).values.outputWindow)
     }
 
     func testDiagnosticsDefaultOffAndPersistExplicitChoice() throws {
@@ -968,7 +988,7 @@ final class SettingsSynchronizationTests: XCTestCase {
         defer { window.orderOut(nil); window.contentView = nil; window.close() }
         let host = NSHostingView(rootView: SettingsView(store: store, workspace: workspace))
         window.contentView = host; window.makeKeyAndOrderFront(nil)
-        try await PresentationTestSupport.selectSettingsTab("Appearance", in: window)
+        try await PresentationTestSupport.selectSettingsTab("Theme", in: window)
         var picker: NSPopUpButton?
         func themePicker(_ titles: [String]) async throws -> NSPopUpButton {
             try await TestSupport.eventually(diagnostic: picker?.itemTitles.description ?? "no picker") {
@@ -1055,7 +1075,7 @@ final class SettingsSynchronizationTests: XCTestCase {
         let directory = System.temporary.appendingPathComponent(System.uuid().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = SettingsStore(file: directory.appendingPathComponent("settings.json"))
-        // Tall enough to show Style's Color schemes row.
+        // Tall enough to show Style's Theme row.
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 760),
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -1063,68 +1083,68 @@ final class SettingsSynchronizationTests: XCTestCase {
         window.contentView = content
         window.makeKeyAndOrderFront(nil)
         defer { window.close(); window.contentView = nil }
-        try await PresentationTestSupport.selectSettingsTab("Appearance", in: window)
-        try await Task.sleep(for: .milliseconds(250))
-        XCTAssertFalse(PresentationTestSupport.views(of: NSPopUpButton.self, in: content).contains {
-            $0.accessibilityIdentifier() == "settings-dropdown-Light color scheme" && !$0.isHiddenOrHasHiddenAncestor
-        })
-        let snapshot = try await PresentationTestSupport.capture(window)
-        let disclosure = try XCTUnwrap(try snapshot.recognizedText().first {
-            $0.topCandidates(1).first?.string.contains("Color schemes") == true
-        }).boundingBox
-        try PresentationTestSupport.click(window, at: content.convert(NSPoint(x: disclosure.midX * content.bounds.width,
-            y: (content.isFlipped ? 1 - disclosure.midY : disclosure.midY) * content.bounds.height), to: nil))
+        // The color schemes are on Theme's own page, unfolded.
+        try await PresentationTestSupport.selectSettingsTab("Theme", in: window)
         try await Task.sleep(for: .milliseconds(250))
         _ = try await PresentationTestSupport.capture(window, named: "settings-custom-color-schemes")
-        // The opened card runs past the window: scroll through it, reading each view.
+        // The page may run past the window: scroll through it, reading each view.
         let scroll = try XCTUnwrap(PresentationTestSupport.views(of: NSScrollView.self, in: content).first { !$0.isHiddenOrHasHiddenAncestor })
         let document = try XCTUnwrap(scroll.documentView)
         let bottom = max(0, document.bounds.height - scroll.contentView.bounds.height)
         var expanded = "", offset: CGFloat = 0
         while true {
             expanded += "\n" + (try await PresentationTestSupport.capture(window).text())
-            if expanded.contains("Improve text contrast") || offset >= bottom { break }
+            if expanded.contains("Colorblind-friendly") || offset >= bottom { break }
             offset = min(bottom, offset + scroll.contentView.bounds.height * 0.6)
             scroll.contentView.scroll(to: NSPoint(x: 0, y: offset))
             scroll.reflectScrolledClipView(scroll.contentView)
         }
-        XCTAssertTrue(expanded.contains("Improve text contrast"), expanded)
+        XCTAssertTrue(expanded.contains("Colorblind-friendly"), expanded)
+        // Each side's first bundled scheme, as the gallery lists it.
+        let listed = ColorSchemes(directory: System.resources.appendingPathComponent("ghostty/themes")).filtered(for: .typical)
+        func firstScheme(light: Bool) -> String? {
+            let side = light ? listed.light : listed.dark
+            return (light ? SchemeGroup.light : SchemeGroup.dark).lazy.compactMap { group in side.first { listed.groups[$0] == group } }.first
+        }
+        func inUse(_ side: String) -> [String] { PresentationTestSupport.accessibilityLabels("settings-scheme-in-use-\(side)", in: window) }
+        func label(_ value: String) -> String { value == "Default" ? "Dispatch" : value }
         for appearance: AppTheme in [.automatic, .light, .dark, .graphite, .lavender, .nautical, .automatic] {
             var values = store.values
             values.appTheme = appearance
             let darkAppearance = appearance.isDark(systemIsDark: SidebarThemeStore.systemIsDark)
             try store.save(values)
-            try await TestSupport.eventually(diagnostic: PresentationTestSupport.views(of: NSPopUpButton.self, in: content).map {
-                "\($0.accessibilityIdentifier() ?? ""): \($0.titleOfSelectedItem ?? "") enabled=\($0.isEnabled)"
-            }.joined(separator: "\n")) {
-                let controls = PresentationTestSupport.views(of: NSPopUpButton.self, in: content)
-                guard controls.first(where: { $0.accessibilityIdentifier() == "settings-dropdown-Theme" })?.titleOfSelectedItem == appearance.label else { return false }
-                let light = controls.first { $0.accessibilityIdentifier() == "settings-dropdown-Light color scheme" }
-                let dark = controls.first { $0.accessibilityIdentifier() == "settings-dropdown-Dark color scheme" }
-                let single = controls.first { $0.accessibilityIdentifier() == "settings-dropdown-Color scheme" }
-                func label(_ value: String) -> String { value == "Default" ? "Match app theme" : value }
-                if appearance == .automatic {
-                    return single == nil && light?.isEnabled == true && dark?.isEnabled == true
-                        && light?.titleOfSelectedItem == label(values.lightTheme)
-                        && dark?.titleOfSelectedItem == label(values.theme)
-                }
-                return light == nil && dark == nil && single?.isEnabled == true
-                    && single?.titleOfSelectedItem == label(darkAppearance ? values.theme : values.lightTheme)
+            // Automatic shows both sides, dark first; a fixed theme only its own.
+            try await TestSupport.eventually(diagnostic: "dark=\(inUse("dark")) light=\(inUse("light"))") {
+                if appearance == .automatic { return inUse("dark") == [label(values.theme)] && inUse("light") == [label(values.lightTheme)] }
+                return darkAppearance ? inUse("dark") == [label(values.theme)] && inUse("light").isEmpty
+                    : inUse("light") == [label(values.lightTheme)] && inUse("dark").isEmpty
             }
             XCTAssertEqual(store.values.lightTheme, values.lightTheme)
             XCTAssertEqual(store.values.theme, values.theme)
             if appearance != .automatic {
-                let single = try XCTUnwrap(PresentationTestSupport.views(of: NSPopUpButton.self, in: content).first {
-                    $0.accessibilityIdentifier() == "settings-dropdown-Color scheme"
-                })
-                // The menu's separators have empty titles; pick a scheme.
-                let choice = try XCTUnwrap(single.itemArray.first { !$0.isSeparatorItem && $0.title != single.titleOfSelectedItem }?.title)
-                single.selectItem(withTitle: choice)
-                single.sendAction(single.action, to: single.target)
-                let saved = choice == "Match app theme" ? "Default" : choice
+                // A click on another scheme's tile chooses it for the side showing.
+                let side = darkAppearance ? "dark" : "light"
+                let current = darkAppearance ? values.theme : values.lightTheme
+                let first = try XCTUnwrap(firstScheme(light: !darkAppearance))
+                let choice = current == first ? "Default" : first
+                scroll.contentView.scroll(to: .zero)
+                scroll.reflectScrolledClipView(scroll.contentView)
+                var tile: NSRect?
+                try await TestSupport.eventually(diagnostic: "No tile for \(choice) on the \(side) side") {
+                    tile = PresentationTestSupport.accessibilityFrames("settings-scheme-\(side)-\(choice)", in: window).first
+                    if tile == nil {
+                        let next = min(max(0, document.bounds.height - scroll.contentView.bounds.height),
+                                       scroll.contentView.bounds.minY + scroll.contentView.bounds.height * 0.5)
+                        scroll.contentView.scroll(to: NSPoint(x: 0, y: next))
+                        scroll.reflectScrolledClipView(scroll.contentView)
+                    }
+                    return tile != nil
+                }
+                let frame = try XCTUnwrap(tile)
+                try PresentationTestSupport.click(window, at: NSPoint(x: frame.midX, y: frame.midY))
                 try await TestSupport.eventually {
-                    store.values.theme == (darkAppearance ? saved : values.theme)
-                        && store.values.lightTheme == (darkAppearance ? values.lightTheme : saved)
+                    store.values.theme == (darkAppearance ? choice : values.theme)
+                        && store.values.lightTheme == (darkAppearance ? values.lightTheme : choice)
                 }
                 _ = try await PresentationTestSupport.capture(window, named: "settings-color-scheme-\(appearance.rawValue)")
             }
@@ -1167,11 +1187,13 @@ final class SettingsSynchronizationTests: XCTestCase {
             XCTAssertEqual(runtime.preferences, expected)
             XCTAssertEqual(try JSONDecoder().decode(Preferences.self, from: Data(contentsOf: file)), expected)
         }
-        try shortcut("+", keyCode: 24, modifiers: [.command, .shift], size: 13.5)
-        try shortcut("=", keyCode: 24, size: 14.5)
-        try shortcut("+", keyCode: 69, size: 15.5)
-        try shortcut("-", keyCode: 27, size: 14.5)
-        try shortcut("0", keyCode: 29, size: Preferences().fontSize)
+        // 1 pt steps from the default.
+        let base = Preferences().fontSize
+        try shortcut("+", keyCode: 24, modifiers: [.command, .shift], size: base + 1)
+        try shortcut("=", keyCode: 24, size: base + 2)
+        try shortcut("+", keyCode: 69, size: base + 3)
+        try shortcut("-", keyCode: 27, size: base + 2)
+        try shortcut("0", keyCode: 29, size: base)
         for (start, key, code, limit) in [(31.5, "+", UInt16(69), 32.0), (8.5, "-", UInt16(27), 8.0)] {
             expected.fontSize = start
             try runtime.apply(expected)
@@ -1209,7 +1231,7 @@ final class SettingsSynchronizationTests: XCTestCase {
         defer { window.close(); window.contentView = nil }
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
-        try await PresentationTestSupport.selectSettingsTab("Appearance", in: window)
+        try await PresentationTestSupport.selectSettingsTab("General", in: window)
         func fontSizeIsVisible(_ value: Double) async throws -> Bool {
             let text = try await PresentationTestSupport.capture(content).text()
             return text.contains(String(format: "%.1f", value))
@@ -1237,8 +1259,10 @@ final class SettingsSynchronizationTests: XCTestCase {
         XCTAssertEqual(slider.maxValue, 22)
         XCTAssertEqual(slider.doubleValue, external.fontSize)
         let dropdowns = PresentationTestSupport.views(of: NSPopUpButton.self, in: content)
+        // Settings' controls keep their own typography, not the content size being edited.
+        let controlSize = SettingsView.typography.size(offset: -0.5)
         XCTAssertFalse(dropdowns.isEmpty)
-        XCTAssertTrue(dropdowns.allSatisfy { $0.font?.pointSize == 12 })
+        XCTAssertTrue(dropdowns.allSatisfy { $0.font?.pointSize == controlSize }, dropdowns.map { "\($0.font?.pointSize ?? 0)" }.description)
         XCTAssertTrue(window.makeFirstResponder(slider))
         var expected = external
         expected.fontSize += 0.5
@@ -1252,7 +1276,7 @@ final class SettingsSynchronizationTests: XCTestCase {
         XCTAssertEqual(store.values, expected, "Editing font size must preserve the external sidebar order")
         XCTAssertEqual(runtime.preferences, expected)
         try await TestSupport.eventually {
-            dropdowns.allSatisfy { $0.font?.pointSize == 12 }
+            dropdowns.allSatisfy { $0.font?.pointSize == controlSize }
         }
         let saved = try JSONDecoder().decode(Preferences.self, from: Data(contentsOf: file))
         XCTAssertEqual(saved, expected, "The complete settings file must preserve externally updated fields")

@@ -18,12 +18,13 @@ final class SettingsStyleTests: XCTestCase {
     func testDefaultsAreTheMockupsAndTheMacs() {
         let settings = MobileSettings(defaults: defaults())
         XCTAssertEqual(settings.theme, .automatic)
-        XCTAssertEqual(settings.terminalFont, "JetBrains Mono")
+        XCTAssertEqual(settings.terminalFont, "Source Code Pro")
         XCTAssertEqual(settings.terminalScheme, "dispatch-black")
-        XCTAssertFalse(settings.improveTextContrast, "off, as the Mac's")
+        XCTAssertEqual(settings.textContrast, .lightThemes, "light schemes only, as the Mac's")
         XCTAssertFalse(settings.boldIsBright)
         XCTAssertEqual(settings.cursor, .block)
         XCTAssertTrue(settings.cursorBlink)
+        XCTAssertEqual(settings.lineSpacing, .normal, "the font's own lines, as the Mac's")
         XCTAssertEqual(settings.chatFont, .system)
         XCTAssertEqual(settings.chatTextSize, .standard)
         XCTAssertTrue(settings.notifyNeedsYou && settings.notifyFinished && settings.notifyFailed)
@@ -38,10 +39,11 @@ final class SettingsStyleTests: XCTestCase {
         settings.theme = .nautical
         settings.terminalFont = "Fira Code"
         settings.terminalScheme = "Nord"
-        settings.improveTextContrast = true
+        settings.textContrast = .always
         settings.boldIsBright = true
         settings.cursor = .underline
         settings.cursorBlink = false
+        settings.lineSpacing = .relaxed
         settings.chatFont = .comicSans
         settings.chatTextSize = .larger
         settings.notifyNeedsYou = false
@@ -57,9 +59,12 @@ final class SettingsStyleTests: XCTestCase {
         XCTAssertEqual(read.theme, .nautical)
         XCTAssertEqual(read.terminalFont, "Fira Code")
         XCTAssertEqual(read.terminalScheme, "Nord")
-        XCTAssertTrue(read.improveTextContrast && read.boldIsBright)
+        XCTAssertEqual(read.textContrast, .always)
+        XCTAssertTrue(read.boldIsBright)
         XCTAssertEqual(read.cursor, .underline)
         XCTAssertFalse(read.cursorBlink)
+        XCTAssertEqual(read.lineSpacing, .relaxed)
+        XCTAssertEqual(store.string(forKey: "text.lineSpacing"), "relaxed", "the Mac's names")
         XCTAssertEqual(read.chatFont, .comicSans)
         XCTAssertEqual(read.chatTextSize, .larger)
         XCTAssertFalse(read.notifyNeedsYou || read.notifyFinished || read.notifyFailed || read.notificationText || read.notificationBadge)
@@ -78,16 +83,28 @@ final class SettingsStyleTests: XCTestCase {
         store.set("no-such-scheme", forKey: MobileSettings.terminalSchemeKey)
         store.set("../ghostty/dispatch", forKey: MobileSettings.terminalSchemeKey)
         store.set("blinking", forKey: MobileSettings.cursorKey)
+        store.set("airy", forKey: MobileSettings.lineSpacingKey)
         store.set("sepia", forKey: MobileSettings.themeKey)
         store.set("Papyrus", forKey: MobileSettings.chatFontKey)
         store.set(true, forKey: MobileSettings.boldIsBrightKey)
         let settings = MobileSettings(defaults: store)
-        XCTAssertEqual(settings.terminalFont, "JetBrains Mono")
+        XCTAssertEqual(settings.terminalFont, "Source Code Pro")
         XCTAssertEqual(settings.terminalScheme, "dispatch-black", "only a bundled scheme's file name, never a path")
+        XCTAssertEqual(settings.textContrast, .lightThemes)
         XCTAssertEqual(settings.cursor, .block)
+        XCTAssertEqual(settings.lineSpacing, .normal)
         XCTAssertEqual(settings.theme, .automatic)
         XCTAssertEqual(settings.chatFont, .system)
         XCTAssertTrue(settings.boldIsBright, "the rest stays")
+    }
+
+    /// The old contrast switch was saved only when changed: on stays on, off stays off.
+    func testTheOldContrastSwitchIsKept() {
+        for (stored, expected) in [(true, TextContrast.always), (false, .never)] {
+            let store = defaults()
+            store.set(stored, forKey: MobileSettings.terminalContrastKey)
+            XCTAssertEqual(MobileSettings(defaults: store).textContrast, expected)
+        }
     }
 
     // MARK: Terminal
@@ -97,33 +114,46 @@ final class SettingsStyleTests: XCTestCase {
         let settings = MobileSettings(defaults: store)
         settings.terminalFont = "Fira Code"
         settings.terminalScheme = "Nord"
-        settings.improveTextContrast = true
+        settings.textContrast = .always
         settings.boldIsBright = true
         settings.cursor = .bar
         settings.cursorBlink = false
+        settings.lineSpacing = .tight
         store.set(15.5, forKey: TerminalController.fontSizeKey)
         let configuration = TerminalController.storedConfiguration(store)
         XCTAssertEqual(configuration.fontSize, 15.5)
         XCTAssertEqual(configuration.fontFamily, "Fira Code")
         XCTAssertTrue(configuration.boldIsBright)
         let text = configuration.text
+        // Fira Code draws at Source Code Pro's apparent size: smaller than the 15.5 points Settings shows.
+        let drawn = TerminalFontScale.size(15.5, family: "Fira Code")
+        XCTAssertLessThan(drawn, 15)
+        XCTAssertTrue(text.contains("font-size = \(drawn)"), text)
+        XCTAssertTrue(TerminalStyle().applied(to: TerminalConfiguration()).text.contains("font-size = 12.0"), "the default, Source Code Pro, unscaled")
         XCTAssertTrue(text.contains("font-family = Fira Code"))
         XCTAssertTrue(text.contains("cursor-style = bar"))
         XCTAssertTrue(text.contains("cursor-style-blink = false"))
+        XCTAssertTrue(text.contains("adjust-cell-height = -6%"))
         XCTAssertTrue(text.contains("minimum-contrast = 4.5"))
         XCTAssertTrue(text.contains("/themes/Nord"), "Ghostty's themes folder: \(text)")
         let config = configuration.config()
         XCTAssertEqual(config.fontFamily, ["Fira Code"])
         XCTAssertEqual(config.cursorStyle, .bar)
         XCTAssertEqual(config.cursorBlink, false)
+        XCTAssertEqual(config.adjustCellHeight, .percent(0.94))
         XCTAssertEqual(config.minimumContrast, 4.5)
 
-        // JetBrains Mono is TermApple's own face: no family, and blinking leaves the program's choice.
+        // The default names Source Code Pro, as the Mac's; blinking leaves the program's choice.
         let plain = TerminalStyle().applied(to: TerminalConfiguration()).text
-        XCTAssertFalse(plain.contains("font-family"))
+        XCTAssertTrue(plain.contains("font-family = Source Code Pro"))
         XCTAssertFalse(plain.contains("cursor-style-blink"))
+        XCTAssertFalse(plain.contains("adjust-cell-height"), "Normal keeps the font's own rows")
         XCTAssertTrue(plain.contains("ghostty/dispatch-black"))
         XCTAssertNil(TerminalConfiguration().config().cursorBlink)
+        // JetBrains Mono is TermApple's own face: no family.
+        var jetBrains = TerminalStyle()
+        jetBrains.font = .jetBrainsMono
+        XCTAssertFalse(jetBrains.applied(to: TerminalConfiguration()).text.contains("font-family"))
     }
 
     /// Settings' change reaches an open terminal at once; its own (pinched) size and pasteboard access stay.
@@ -168,18 +198,18 @@ final class SettingsStyleTests: XCTestCase {
 
     func testTheOfferedFontsAreBundledAndRegistered() {
         MobileFonts.register()
-        XCTAssertEqual(TerminalFont.all.first?.name, "JetBrains Mono", "the default first")
+        XCTAssertEqual(TerminalFont.all.first?.name, "Source Code Pro", "the default first")
         XCTAssertEqual(TerminalFont.all.filter(\.system).map(\.name), ["Menlo"])
         XCTAssertEqual(TerminalFont.all.filter(\.ligatures).map(\.name), ["JetBrains Mono", "Fira Code", "0xProto"])
         for font in TerminalFont.all {
             XCTAssertFalse(UIFont.fontNames(forFamilyName: font.name).isEmpty, "\(font.name) is registered")
         }
-        XCTAssertEqual(TerminalFont.named("Comic Mono"), .jetBrainsMono)
+        XCTAssertEqual(TerminalFont.named("Comic Mono"), .sourceCodePro)
     }
 
     func testSchemesAreDispatchsThenGhosttysWithSwatches() throws {
         let schemes = TerminalSchemes.all()
-        XCTAssertEqual(schemes.prefix(2).map(\.title), ["Dispatch Black", "Dispatch"])
+        XCTAssertEqual(schemes.prefix(2).map(\.title), ["Dispatch", "Dispatch Gray"])
         XCTAssertGreaterThan(schemes.count, 100, "Ghostty's bundled themes")
         let nord = try XCTUnwrap(schemes.first { $0.file == "Nord" })
         XCTAssertTrue(nord.isDark)
@@ -246,14 +276,33 @@ final class SettingsStyleTests: XCTestCase {
         store.set("Same as code", forKey: MobileSettings.chatFontKey)
         store.set("smaller", forKey: MobileSettings.chatTextSizeKey)
         store.set("Fira Code", forKey: MobileSettings.terminalFontKey)
+        store.set("relaxed", forKey: MobileSettings.lineSpacingKey)
         let typography = ChatTypography(store)
+        XCTAssertEqual(typography.lineSpacing, .relaxed)
+        XCTAssertEqual(ChatTypography().bodySpacing, 2, "the bubbles' spacing at Normal")
+        XCTAssertGreaterThan(typography.bodySpacing, 2)
+        XCTAssertLessThan(ChatTypography(lineSpacing: .tight).bodySpacing, 2)
         XCTAssertEqual(typography.font, .sameAsCode)
         XCTAssertEqual(typography.size, .smaller)
         XCTAssertEqual(typography.family(.sameAsCode), "Fira Code", "the terminal's font")
         XCTAssertNil(typography.family(.system))
         XCTAssertEqual(typography.family(.comicSans), "Chalkboard SE", "iOS's stand-in")
+        // New York and SF Rounded: the system font's designs, at the chosen style.
+        XCTAssertNil(typography.family(.newYork))
+        XCTAssertEqual(ChatTypography(font: .newYork).body, Font.system(.callout, design: .serif))
+        XCTAssertEqual(ChatTypography(font: .sfRounded).body, Font.system(.callout, design: .rounded))
         XCTAssertEqual(ChatTextSize.allCases.map(\.points), [15, 16, 17])
         XCTAssertEqual(MobileChatFont.sameAsCode.sample(terminalFont: "Fira Code", size: 15), "Fira Code 15, as the terminal.")
+    }
+
+    /// Latin Modern Roman is bundled, drawn by PostScript name at the Mac's size, bolding in its own family.
+    func testLatinModernRomanIsBundled() {
+        MobileFonts.register()
+        for name in ["LMRoman10-Regular", "LMRoman10-Bold", "LMRoman10-Italic", "LMRoman10-BoldItalic"] {
+            XCTAssertNotNil(UIFont(name: name, size: 12), name)
+        }
+        XCTAssertEqual(ChatTypography().family(.latinModernRoman), "LMRoman10-Regular")
+        XCTAssertEqual(ChatTypography(font: .latinModernRoman).body, Font.custom("LMRoman10-Regular", size: 16 * 1.126, relativeTo: .callout))
     }
 
     /// A bubble draws in the environment's size: Larger is taller than Default, Default than Smaller.
@@ -273,9 +322,9 @@ final class SettingsStyleTests: XCTestCase {
     /// Code follows the chat's text size: three points under it in blocks, a little under it inline.
     func testCodeScalesWithTheChatTextSize() {
         let standard = ChatTypography(size: .standard), larger = ChatTypography(size: .larger)
-        XCTAssertEqual(standard.code, Font.custom("JetBrains Mono", size: 13, relativeTo: .callout))
-        XCTAssertEqual(larger.code, Font.custom("JetBrains Mono", size: 14, relativeTo: .body))
-        XCTAssertEqual(standard.inlineCode, Font.custom("JetBrains Mono", size: 15, relativeTo: .callout))
+        XCTAssertEqual(standard.code, Font.custom("Source Code Pro", size: 13, relativeTo: .callout))
+        XCTAssertEqual(larger.code, Font.custom("Source Code Pro", size: 14, relativeTo: .body))
+        XCTAssertEqual(standard.inlineCode, Font.custom("Source Code Pro", size: 15, relativeTo: .callout))
         XCTAssertNotEqual(ChatTypography(size: .smaller).inlineCode, standard.inlineCode)
     }
 
@@ -312,7 +361,7 @@ final class SettingsStyleTests: XCTestCase {
         let composition = ResilienceFixture.composition(ResilienceFixture.sessions([ResilienceFixture.host("studio")]))
         composition.settings.terminalFont = "Fira Code"
         composition.settings.chatFont = .comicSans
-        let expected = ["Theme, Automatic", "Font, Fira Code", "Color scheme, Dispatch Black", "Improve text contrast",
+        let expected = ["Theme, Automatic", "Line spacing, Normal", "Font, Fira Code", "Color scheme, Dispatch", "Improve text contrast",
                         "Font, Comic Sans", "Dictation, Apple", "Notifications, Sound, text", "Background refresh", "studio, Chat on",
                         "Remove all data"]
         _ = try await labels(SettingsView(composition: composition).environment(composition.hosts), height: 2400, expected: expected)

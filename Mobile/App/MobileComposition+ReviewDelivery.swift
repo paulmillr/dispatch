@@ -17,7 +17,9 @@ extension MobileComposition {
         let sample = { (_: UUID) in false }
         #endif
         review.targets = { tab in
+            #if DEBUG
             if sample(tab.host) { return Self.reviewTargets(for: tab, tabs: tabs, describe: Self.sampleAgent) }
+            #endif
             return Self.reviewTargets(for: tab, tabs: tabs) { key, pane in
                 let session = conversations.sessions[key]
                 return (session?.agentKey ?? Self.agentName(executable: pane.agent?.executable), session?.modelLabel)

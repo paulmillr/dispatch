@@ -144,9 +144,10 @@ extension TerminalView {
 
     /// Output batches arrive hundreds of times a second under load, and a helper needs only the latest screen.
     /// At most one read waits on the main queue per terminal, about 30 a second, and the last batch is always read.
+    /// None while nobody reads this terminal's screen from here (`ScreenPublication.silent`).
     nonisolated func screenChanged() {
         let delay: TimeInterval? = screenPublication.withLock { state in
-            guard !state.pending else { return nil }
+            guard !state.pending, !state.silent else { return nil }
             state.pending = true
             return max(0, state.last + ScreenPublication.interval - ProcessInfo.processInfo.systemUptime)
         }
@@ -162,20 +163,38 @@ extension TerminalView {
         screenPublication.withLock { $0.pending = false; $0.last = ProcessInfo.processInfo.systemUptime }
         let runtime = TerminalRuntime.shared
         guard runtime.views[self.id] === self, let surface = self.surface else { return }
+        let targets = ScreenPublication.targets(of: id, workspace: runtime.workspace, helpers: runtime.helpers.values)
+        // Nobody reads it from here (a tmux or herdr tab of a screens.host helper, no SSH login observed in it): its
+        // output schedules no read until that changes (`wakeScreens`).
+        guard !targets.isEmpty else {
+            screenPublication.withLock { $0.silent = true }
+            return
+        }
         let cursor = surface.cursorFaintTail()
         func screen(_ terminal: UInt64, _ text: String) -> HelperClient.Screen {
             .init(terminal: terminal, text: text, cursor: .init(column: cursor.column, row: cursor.row), faint_tail: cursor.faint)
         }
-        // The helper running this tab, and the remote helper observing an SSH login in it: each acts
-        // on the screen under its own terminal id (a remote send waits for that screen). The observer
-        // gets only what its session wrote, never the tab's earlier local text (observedText).
-        if let terminal = runtime.workspace?.spaces.flatMap(\.tabs).first(where: { $0.id == self.id })?.terminal {
-            runtime.workspace?.helper(containing: self.id)?.publish(screen(terminal, surface.readText(.active)))
-        }
-        for helper in runtime.helpers.values {
-            if let terminal = helper.observedTerminal(self.id), let text = helper.observedText(terminal, surface: surface) {
-                helper.publish(screen(terminal, text))
+        // The observer gets only what its session wrote, never the tab's earlier local text (observedText).
+        for target in targets {
+            if target.observed {
+                if let text = target.helper.observedText(target.terminal, surface: surface) {
+                    target.helper.publish(screen(target.terminal, text))
+                }
+            } else {
+                target.helper.publish(screen(target.terminal, surface.readText(.active)))
             }
+        }
+    }
+
+    /// Who reads screens may have changed (a helper's hello and multiplexer kinds, a topology, an SSH login observed):
+    /// terminals that published to nobody look again.
+    static func wakeScreens() {
+        for view in TerminalRuntime.shared.views.values {
+            let silent = view.screenPublication.withLock { state in
+                defer { state.silent = false }
+                return state.silent
+            }
+            if silent { view.screenChanged() }
         }
     }
 }
@@ -219,4 +238,28 @@ struct ScreenPublication {
     static let interval: TimeInterval = 1.0 / 30
     var pending = false
     var last: TimeInterval = 0
+    /// The last read found nobody to publish to: output schedules nothing until `TerminalView.wakeScreens`.
+    var silent = false
+
+    /// A helper acting on a terminal's screen under its own terminal id; `observed`: an SSH login it observes in the tab.
+    struct Target {
+        let helper: HelperWorkspace
+        let terminal: UInt64
+        let observed: Bool
+    }
+
+    /// Where `tab`'s screen goes: the helper running it unless that helper reads it from its multiplexer itself
+    /// (`HelperWorkspace.publishes`: tmux and herdr terminals of a screens.host helper), and every helper observing an
+    /// SSH login in it (a remote send waits for that screen).
+    @MainActor static func targets(of tab: UUID, workspace: Workspace?, helpers: some Sequence<HelperWorkspace>) -> [Target] {
+        var targets: [Target] = []
+        if let workspace, let terminal = workspace.spaces.flatMap(\.tabs).first(where: { $0.id == tab })?.terminal,
+           let helper = workspace.helper(containing: tab), helper.publishes(tab) {
+            targets.append(.init(helper: helper, terminal: terminal, observed: false))
+        }
+        for helper in helpers {
+            if let terminal = helper.observedTerminal(tab) { targets.append(.init(helper: helper, terminal: terminal, observed: true)) }
+        }
+        return targets
+    }
 }

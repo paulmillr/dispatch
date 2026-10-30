@@ -1,17 +1,11 @@
 import AppKit
 import Observation
 
-/// Which multiplexer's prefix table a native space answers: ⌃B, then a key. tmux control mode and
-/// herdr's input API deliver keys to panes raw, so neither tool's own prefix table runs in Dispatch.
+/// A multiplexer's prefix table: ⌃B, then a key. tmux control mode and herdr's input API deliver keys to
+/// panes raw, so neither tool's own prefix table runs in Dispatch. Off is what settings before PrefixSpaces
+/// saved for native spaces.
 enum PrefixStyle: String, Codable, CaseIterable {
     case off, tmux, herdr
-    var label: String {
-        switch self {
-        case .off: "Off"
-        case .tmux: "tmux"
-        case .herdr: "herdr"
-        }
-    }
 
     /// The tool's default table; nil when prefix keys are off.
     var table: PrefixTable? {
@@ -19,6 +13,19 @@ enum PrefixStyle: String, Codable, CaseIterable {
         case .off: nil
         case .tmux: PrefixTable.tmuxDefaults
         case .herdr: PrefixTable.herdrDefaults
+        }
+    }
+}
+
+/// Which spaces answer ⌃B prefix keys (Settings › Keyboard): tmux and herdr spaces their tool's table, native
+/// spaces tmux's.
+enum PrefixSpaces: String, Codable, CaseIterable {
+    case off, multiplexers, all
+    var label: String {
+        switch self {
+        case .off: "Off"
+        case .multiplexers: "tmux & herdr spaces"
+        case .all: "All spaces"
         }
     }
 }

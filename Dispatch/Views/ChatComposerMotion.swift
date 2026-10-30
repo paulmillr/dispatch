@@ -198,6 +198,9 @@ struct ChatComposerAnimatedBorder: NSViewRepresentable {
         @objc private func updateAnimations() {
             stop()
             guard moving, let window, window.occlusionState.contains(.visible), perimeter > 0 else { return }
+            #if DISPATCH_BENCHMARK
+            guard !HostScalingAnimationProbe.paused else { return }
+            #endif
             let rate = MotionRate.range(for: window)
             let now = CACurrentMediaTime()
             let start = now - now.truncatingRemainder(dividingBy: 4)
@@ -222,27 +225,34 @@ struct ChatComposerAnimatedBorder: NSViewRepresentable {
 /// The ◆ pulses while a dot circles it; still, the ◆ rests at full strength.
 struct ChatComposerOrbit: NSViewRepresentable {
     let moving: Bool
+    /// The Thinking row's ◆ is its text's size and its dot smaller, in a wider slot.
+    var glyph: Font = .system(size: 11.5)
+    var dot: CGFloat = 4
+    var width: CGFloat = 16
 
     func makeNSView(context: Context) -> OrbitView { OrbitView(accent: context.environment.chatTheme.accent) }
 
     func updateNSView(_ view: OrbitView, context: Context) {
-        view.accent = context.environment.chatTheme.accent
+        view.style = .init(accent: context.environment.chatTheme.accent, glyph: glyph, dot: dot)
         view.moving = moving
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: OrbitView, context: Context) -> CGSize? {
-        CGSize(width: 16, height: 20)
+        CGSize(width: width, height: 20)
     }
 
     static func dismantleNSView(_ view: OrbitView, coordinator: ()) { view.stop() }
 
     final class OrbitView: CompositorView {
-        var accent: Color { didSet { if accent != oldValue { redraw() } } }
+        struct Style: Equatable {
+            var accent: Color, glyph: Font = .system(size: 11.5), dot: CGFloat = 4
+        }
+        var style: Style { didSet { if style != oldValue { redraw() } } }
         let diamond = CALayer(), orbit = CALayer()
         private let dot = CALayer()
 
         init(accent: Color) {
-            self.accent = accent
+            style = Style(accent: accent)
             super.init()
             orbit.addSublayer(dot)
             orbit.isHidden = true
@@ -259,28 +269,31 @@ struct ChatComposerOrbit: NSViewRepresentable {
         }
 
         override func redraw() {
-            draw(Text("◆").font(.system(size: 11.5)).foregroundStyle(accent), into: diamond)
-            draw(Circle().fill(accent).frame(width: 4, height: 4).shadow(color: accent.opacity(0.7), radius: 3).padding(6), into: dot)
+            draw(Text("◆").font(style.glyph).foregroundStyle(style.accent), into: diamond)
+            draw(Circle().fill(style.accent).frame(width: style.dot, height: style.dot).shadow(color: style.accent.opacity(0.7), radius: 3)
+                    .padding(6), into: dot)
         }
 
-        override func start(_ rate: CAFrameRateRange) {
-            orbit.isHidden = false
-            // (1 - cos) / 2 sampled at 33 points: linear steps stay within 0.3% of the curve.
+        /// One 1.6 s breath of `keyPath` from `low` to `high` and back, eased; the ◆ and the label it names breathe
+        /// together. (1 - cos) / 2 sampled at 33 points: linear steps stay within 0.3% of the curve.
+        static func breath(_ keyPath: String, from low: Double, to high: Double) -> CAKeyframeAnimation {
             let times = (0...32).map { Double($0) / 32 }
-            func pulse(_ keyPath: String, from low: Double, to high: Double) -> CAKeyframeAnimation {
-                let animation = CAKeyframeAnimation(keyPath: keyPath)
-                animation.values = times.map { low + (high - low) * (1 - cos($0 * 2 * .pi)) / 2 }
-                animation.keyTimes = times.map { NSNumber(value: $0) }
-                animation.duration = 1.6
-                return animation
-            }
+            let animation = CAKeyframeAnimation(keyPath: keyPath)
+            animation.values = times.map { low + (high - low) * (1 - cos($0 * 2 * .pi)) / 2 }
+            animation.keyTimes = times.map { NSNumber(value: $0) }
+            animation.duration = 1.6
+            return animation
+        }
+
+        override func start() {
+            orbit.isHidden = false
             let breathe = CAAnimationGroup()
-            breathe.animations = [pulse("opacity", from: 0.55, to: 1), pulse("transform.scale", from: 0.92, to: 1.08)]
+            breathe.animations = [Self.breath("opacity", from: 0.55, to: 1), Self.breath("transform.scale", from: 0.92, to: 1.08)]
             breathe.duration = 1.6
-            loop(breathe, on: diamond, rate: rate)
+            loop(breathe, on: diamond, upTo: MotionRate.glow)
             let circle = CABasicAnimation(keyPath: "transform.rotation.z")
             circle.fromValue = 0; circle.toValue = 2 * Double.pi; circle.duration = 1.4
-            loop(circle, on: orbit, rate: rate)
+            loop(circle, on: orbit, upTo: MotionRate.orbit)
         }
 
         override func stop() {
@@ -306,12 +319,15 @@ struct ChatComposerStatus: View {
 
 struct ChatComposerShimmer: NSViewRepresentable {
     let label: String
+    /// The label itself in this color, breathing with the ◆, for a label whose own text is hidden meanwhile (the
+    /// Thinking row's); nil draws only the shimmer over it.
+    var breathing: Color?
 
     func makeNSView(context: Context) -> ShimmerView { ShimmerView() }
 
     func updateNSView(_ view: ShimmerView, context: Context) {
         view.style = .init(label: label, font: context.environment.font, truncation: context.environment.truncationMode,
-                           ink: context.environment.chatTheme.ink)
+                           ink: context.environment.chatTheme.ink, breathing: breathing)
         view.moving = true
     }
 
@@ -319,10 +335,10 @@ struct ChatComposerShimmer: NSViewRepresentable {
 
     final class ShimmerView: CompositorView {
         struct Style: Equatable {
-            var label = "", font: Font?, truncation = Text.TruncationMode.tail, ink = Color.clear
+            var label = "", font: Font?, truncation = Text.TruncationMode.tail, ink = Color.clear, breathing: Color?
         }
-        var style = Style() { didSet { if style != oldValue { redraw() } } }
-        let ink = CALayer(), band = CAGradientLayer()
+        var style = Style() { didSet { if style != oldValue { redraw(); if style.breathing != oldValue.breathing { updateAnimations() } } } }
+        let base = CALayer(), ink = CALayer(), band = CAGradientLayer()
         private var drawnSize: CGSize?
         private static let width: CGFloat = 35
 
@@ -333,7 +349,7 @@ struct ChatComposerShimmer: NSViewRepresentable {
             ink.mask = band
             // Still captures (CALayer.render(in:)) ignore masks: the copy shows only while its loop runs.
             ink.opacity = 0
-            layer?.addSublayer(ink)
+            layer?.addSublayer(base); layer?.addSublayer(ink)
         }
 
         override func layout() {
@@ -346,22 +362,27 @@ struct ChatComposerShimmer: NSViewRepresentable {
         override func redraw() {
             guard bounds.width > 0 else { return }
             drawnSize = bounds.size
-            draw(Text(style.label).font(style.font).fontWeight(.medium).lineLimit(1).truncationMode(style.truncation)
-                    .foregroundStyle(style.ink), into: ink, proposal: ProposedViewSize(bounds.size))
+            let text = Text(style.label).font(style.font).fontWeight(.medium).lineLimit(1).truncationMode(style.truncation)
+            draw(text.foregroundStyle(style.ink), into: ink, proposal: ProposedViewSize(bounds.size))
+            if let color = style.breathing { draw(text.foregroundStyle(color), into: base, proposal: ProposedViewSize(bounds.size)) }
             CATransaction.begin(); CATransaction.setDisableActions(true)
+            // Drawn at once, at full opacity until its loop runs: it stands in for the hidden label from the first frame.
+            base.isHidden = style.breathing == nil
+            base.position = CGPoint(x: base.bounds.midX, y: base.bounds.midY)
             ink.position = CGPoint(x: ink.bounds.midX, y: ink.bounds.midY)
             band.frame = CGRect(x: -Self.width, y: 0, width: Self.width, height: bounds.height)
             CATransaction.commit()
         }
 
-        override func start(_ rate: CAFrameRateRange) {
+        override func start() {
             guard bounds.width > 0 else { return }
             let show = CABasicAnimation(keyPath: "opacity")
             show.fromValue = 1; show.toValue = 1; show.duration = 2.4
-            loop(show, on: ink, rate: rate)
+            loop(show, on: ink, upTo: MotionRate.shimmer)
             let sweep = CABasicAnimation(keyPath: "position.x")
             sweep.fromValue = -Self.width / 2; sweep.toValue = bounds.width + Self.width / 2; sweep.duration = 2.4
-            loop(sweep, on: band, rate: rate)
+            loop(sweep, on: band, upTo: MotionRate.shimmer)
+            if style.breathing != nil { loop(ChatComposerOrbit.OrbitView.breath("opacity", from: 0.65, to: 1), on: base, upTo: MotionRate.glow) }
         }
     }
 }
@@ -408,17 +429,22 @@ class CompositorView: NSView {
     @objc func updateAnimations() {
         stop()
         guard moving, let window, window.occlusionState.contains(.visible) else { return }
-        start(MotionRate.range(for: window))
+        #if DISPATCH_BENCHMARK
+        guard !HostScalingAnimationProbe.paused else { return }
+        #endif
+        start()
     }
 
-    /// Adds the loops; called whenever motion (re)starts.
-    func start(_ rate: CAFrameRateRange) {}
+    /// Adds the loops; called whenever motion (re)starts, in a visible window.
+    func start() {}
     /// Redraws still artwork for the current inputs and backing scale.
     func redraw() {}
 
-    /// Repeats `animation` at `rate` (MotionRate), phase-aligned to the media clock so
+    /// Repeats `animation` at MotionRate's rate, at most `cap` frames a second, phase-aligned to the media clock so
     /// every indicator with the same period moves together.
-    func loop(_ animation: CAAnimation, on layer: CALayer, rate: CAFrameRateRange) {
+    func loop(_ animation: CAAnimation, on layer: CALayer, upTo cap: Int = .max) {
+        guard let window else { return }
+        let rate = MotionRate.range(for: window, upTo: cap)
         let now = CACurrentMediaTime()
         animation.repeatCount = .infinity
         animation.timingFunction = CAMediaTimingFunction(name: .linear)

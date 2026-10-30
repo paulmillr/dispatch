@@ -12,6 +12,7 @@ mod listing;
 pub mod launch;
 pub mod login;
 mod native;
+pub(crate) mod release;
 mod observe;
 mod process;
 pub mod search;
@@ -37,6 +38,9 @@ mod write_tests;
 #[cfg(test)]
 #[path = "system/retire.test.rs"]
 mod retire_tests;
+#[cfg(test)]
+#[path = "system/pty.test.rs"]
+mod pty_tests;
 pub(crate) mod zstd;
 // The files plugin's transfer jobs and their archive layout.
 mod archive;
@@ -136,6 +140,8 @@ pub struct System {
     hooks: Option<hooks::Hooks>,
     routes: BTreeMap<String, PathBuf>,
     paused: Option<Instant>,
+    /// Client read sides that output backpressure does not pause (feature requests.backlog).
+    steady: BTreeSet<RawFd>,
 }
 
 impl Drop for System {
@@ -597,6 +603,7 @@ impl System {
             hooks,
             routes: BTreeMap::new(),
             paused: None,
+            steady: BTreeSet::new(),
             unconsumed: None,
             parent: None,
         })
@@ -729,8 +736,19 @@ impl System {
         }
         for (&fd, section) in &self.sections {
             if section != "ui" {
-                self.reactor.pause(self.source(fd), paused)?;
+                self.reactor.pause(self.source(fd), paused && !self.steady.contains(&fd))?;
             }
+        }
+        Ok(())
+    }
+
+    /// Whether output backpressure (`pressure`) leaves `fd` readable: a client whose requests
+    /// are read while its output is backed up (requests.backlog). Its own read interest still
+    /// applies. Not an effect: nothing is recorded, and replay has no reactor.
+    pub(crate) fn steady(&mut self, fd: RawFd, steady: bool) -> io::Result<()> {
+        let changed = if steady { self.steady.insert(fd) } else { self.steady.remove(&fd) };
+        if changed && self.paused.is_some() && self.sections.get(&fd).is_some_and(|section| section != "ui") {
+            self.reactor.pause(self.source(fd), !steady)?;
         }
         Ok(())
     }
@@ -803,6 +821,7 @@ impl System {
     fn dispose(&mut self, fd: RawFd) -> io::Result<()> {
         let result = self.reactor.interest(self.source(fd), false, false);
         self.sections.remove(&fd);
+        self.steady.remove(&fd);
         self.descriptors.remove(&fd);
         self.listeners.remove(&fd);
         for child in self.children.values_mut() {
@@ -960,7 +979,8 @@ impl System {
             if let Some(mut event) = self.ready.pop_front() {
                 if self.paused.is_some()
                     && event.0 != "ui"
-                    && let Event::Ready { read, write, .. } = &mut event.1
+                    && let Event::Ready { fd, read, write } = &mut event.1
+                    && !self.steady.contains(fd)
                 {
                     *read = false;
                     if !*write {
@@ -1158,7 +1178,8 @@ impl System {
             }
             if let Some(section) = self.sections.get(&ready.fd).cloned() {
                 let read =
-                    (ready.read || ready.closed) && (self.paused.is_none() || section == "ui");
+                    (ready.read || ready.closed)
+                        && (self.paused.is_none() || section == "ui" || self.steady.contains(&ready.fd));
                 if !read && !ready.write {
                     continue;
                 }
@@ -1254,6 +1275,10 @@ pub fn isolated() -> Option<i32> {
 pub fn native(name: &str, input: &[u8]) -> io::Result<Vec<u8>> {
     if name == "hook.endpoint" {
         hooks::endpoint(input)
+    } else if name == "login.release" {
+        release::job(input)
+    } else if name == "clock" {
+        attachment::native("attachment.clock", input)
     } else if name.starts_with("attachment.") {
         attachment::native(name, input)
     } else {

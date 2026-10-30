@@ -191,11 +191,18 @@ struct ChatToolCard: View {
         return ZStack {
             Image(systemName: symbol)
                 .foregroundStyle(failed ? theme.yellow : completed ? theme.green : theme.muted)
-                .id(symbol).transition(.opacity)
+                .id(symbol).transition(statusTransition(settled: failed || completed))
         }
         .frame(width: 14)
-        .animation(.easeOut(duration: 0.12), value: symbol)
+        .animation(.easeOut(duration: settledSymbolDuration(failed || completed)), value: symbol)
         .accessibilityLabel(failed ? "Failed" : completed ? "Completed" : "Running")
         .accessibilityIdentifier("tool-status-\(item.id)")
     }
+
+    /// A step that finishes draws its check (or its failure mark) on as its spinner fades; anything else crossfades.
+    private func statusTransition(settled: Bool) -> AnyTransition {
+        guard settled, !reduceMotion, #available(macOS 26, iOS 26, *) else { return .opacity }
+        return .asymmetric(insertion: AnyTransition(.symbolEffect(.drawOn.byLayer)), removal: .opacity)
+    }
+    private func settledSymbolDuration(_ settled: Bool) -> Double { settled && !reduceMotion ? 0.3 : 0.12 }
 }

@@ -44,7 +44,8 @@ import Foundation
 
     // Preview.
     var preview: FilePreviewState?
-    var previewWrap = false
+    /// Nil follows Settings › Files › Wrap lines; the preview's wrap button sets it for this tab.
+    var previewWrap: Bool?
     /// The preview's width as the divider left it on this tab; nil takes the last width chosen on any tab, else the
     /// default (`FilesCoordinator.previewPreference`, `FilesView.layout`). Kept while the view is too narrow for it,
     /// so the pane comes back at the width the user chose.
@@ -55,8 +56,12 @@ import Foundation
     /// Files shows no preview until one is asked for on this tab: a double click or ⏎ on a file, or ⌥⌘P. The Changes and
     /// Commits tabs' diffs, in the same place, are what those tabs are for and show from the start.
     var previewRequested = false
-    /// The pane is off for the tab shown: hidden, or on Files not yet asked for.
-    var previewOff: Bool { previewHidden || (tab == .files && !previewRequested) }
+    /// The pane is off for the tab shown: hidden, or on Files not yet asked for or with previews off in Settings.
+    var previewOff: Bool { previewHidden || (tab == .files && (!previewRequested || !Self.previews)) }
+    /// Settings › Features › Files › Disable file previews, inverted: off, the Files tab never mounts its preview.
+    static var previews: Bool { TerminalRuntime.shared.preferences.filesPreviews }
+    /// The tab shown has a pane to show: the git tabs always, Files unless its previews are off.
+    var hasPane: Bool { tab != .files || Self.previews }
     /// Under `FilesView.collapseWidth` the split has room for one column (`splitNarrow`, as `FilesSplit` last laid it
     /// out): a row chosen there (a git row's click or ⏎, a file's ⏎ or double click) shows its detail or preview in the
     /// list's place, under a bar back to the list (or esc). Kept while the view is wide.

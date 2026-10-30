@@ -14,12 +14,15 @@ import Synchronization
 /// `.plain(reason)`); login, host key and network failures stay refusals and reconnects. Each connection decides again.
 /// Cancelling the run (`HostSession.disconnect()`) closes the connection; nothing on the host stops.
 struct SSHHostSessionDriver: HostSessionDriver {
-    /// The hello features the phone asks for (docs/ios.md, Helper contract). With
-    /// `stdio.liveness` the helper ends after 45 s without a frame from the phone: the latency ping (`pingInterval`)
-    /// keeps it alive while connected, so it must stay at most `livenessPing`.
+    /// The hello features the phone asks for (docs/ios.md, Helper contract); what the reply accepted is
+    /// `HostSession.features`. With `stdio.liveness` the helper ends after 45 s without a frame from the phone: the
+    /// latency ping (`pingInterval`) keeps it alive while connected, so it must stay at most `livenessPing`. With
+    /// `screens.host` the helper reads the screens of the terminals the phone attaches from tmux or herdr itself, so the
+    /// phone publishes none (`TerminalFeed.hostsScreens`); with `terminals.follow` too a terminal only a conversation
+    /// uses holds its output (`TerminalPresence`).
     static let features = ["interaction.options", "chat.list", "projects.recent", "multiplexers.versions", "terminals.coalesce",
                            "launch.names", "stdio.liveness", "terminals.activity", ChatAttachment.feature,
-                           "memberships.append"]
+                           "memberships.append", HelperSession.screensHost, HelperSession.terminalsFollow]
     /// The longest gap between pings `stdio.liveness` allows (helper/PROTOCOL.md: at least every 15 s).
     static let livenessPing: Duration = .seconds(15)
 

@@ -26,7 +26,7 @@ struct GitGraph: Hashable, Sendable {
         var kind: Kind
         var from: Int
         var to: Int
-        /// On the current branch's first-parent chain: drawn green, the rest amber.
+        /// On the current branch's first-parent chain: drawn green, the rest slate.
         var current: Bool
     }
 

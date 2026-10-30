@@ -1,10 +1,11 @@
 import Dictation
 import Foundation
 
-/// The Mac app's chat dictation (Packages/Dictation): one model store in Dispatch's support folder, and one
-/// dictation at a time for every composer.
-extension WhisperModelStore {
-    static let shared = WhisperModelStore(directory: Home.support.appendingPathComponent("Whisper"))
+/// The Mac app's chat dictation (Packages/Dictation): one model store in Dispatch's support folder (Whisper/ and
+/// Parakeet/), and one dictation at a time for every composer.
+extension DictationModelStore {
+    static let shared = DictationModelStore(whisper: Home.support.appendingPathComponent("Whisper"),
+                                            parakeet: Home.support.appendingPathComponent("Parakeet"))
 }
 
 extension Dictation {
@@ -13,9 +14,9 @@ extension Dictation {
 
 /// A chat's dictation into its draft. What it hears takes the selection's place as it comes (the composer shows it
 /// muted and takes no typing meanwhile); cancelling or failing puts the draft back as it was. The microphone button and
-/// the right ⌘ shortcut both use it:
-/// - one message (right ⌘ held): stopping keeps the transcript, stopping with ↩ sends the draft;
-/// - conversation mode (right ⌘ tapped, or the button): it listens until stopped, and each utterance goes into the
+/// the voice key shortcut both use it:
+/// - one message (voice key held): stopping keeps the transcript, stopping with ↩ sends the draft;
+/// - conversation mode (voice key tapped, or the button): it listens until stopped, and each utterance goes into the
 ///   draft as the speaker pauses. "Dispatch, send", "steer", "new line", "scratch that", "clear", "stop", "deny" and
 ///   "option 2" act on the chat, "Dispatch, billing" and the rest of VoiceNavigation move the window and the listening
 ///   with it (to the chat there, or commands only where there is none), and VoiceConversation reads replies aloud.
@@ -221,7 +222,7 @@ final class ChatDictation {
 
     // MARK: Commands
 
-    /// A chat command said where there is no chat (right ⌘ held on a terminal): "Dispatch, listen" starts conversation
+    /// A chat command said where there is no chat (voice key held on a terminal): "Dispatch, listen" starts conversation
     /// mode, "Dispatch, quiet" stops reading; the rest need a chat. False when `transcript` is no chat command.
     func takeCommand(_ transcript: String) -> Bool {
         guard case .command(let command) = VoiceCommand.read(transcript, wakeWords: DictationStore.shared.wakeWords),

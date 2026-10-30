@@ -19,6 +19,8 @@ final class TerminalHostView: UIView {
     /// The latched capsule modifiers for the next key (the key capsule's model), and the notice that a key used them.
     var pendingMods: () -> Mods = { [] }
     var onKeySent: (() -> Void)?
+    /// Only one pending clipboard confirmation per terminal.
+    weak var pasteConfirmation: UIAlertController?
     /// The keyboard's frame in the window changed (nil: no window).
     var onKeyboardFrame: ((CGRect?) -> Void)?
     /// Pinned to `keyboardLayoutGuide`, which follows a floating or split keyboard too: the keyboard's real frame.

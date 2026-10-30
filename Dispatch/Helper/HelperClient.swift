@@ -304,6 +304,16 @@ final class HelperClient: Sendable {
     let _: Empty = try await connection.request("terminals.scroll", params: params)
   }
 
+  /// terminals.follow (feature terminals.follow) on this client's only attach subscription of `terminal`.
+  struct Follow: Encodable, Sendable {
+    let terminal: UInt64
+    let following: Bool
+  }
+
+  nonisolated(nonsending) func follow(_ params: Follow) async throws {
+    let _: Empty = try await connection.request("terminals.follow", params: params)
+  }
+
   nonisolated(nonsending) func publish(_ params: Screen) async throws {
     let _: Empty = try await connection.request("terminals.publish", params: params)
   }

@@ -463,7 +463,13 @@ final class NewSpacePresentationTests: XCTestCase {
                 == ["host-new-space-local", "sidebar-new-space"]
         }
         _ = try await PresentationTestSupport.capture(window, named: "shared-flat-two-line", in: "new-space-validation")
-        let flatText = try await PresentationTestSupport.capture(root).text()
+        let flat = try await PresentationTestSupport.capture(root)
+        // Read in the button's own box: across the whole sidebar Vision drops "local" beside "+ space".
+        let localButton = try XCTUnwrap(PresentationTestSupport.views(of: NewSpaceNativeButton.self, in: root).first { $0.host == .local })
+        var box = root.convert(localButton.bounds, from: localButton)
+        if root.isFlipped { box.origin.y = root.bounds.height - box.maxY }
+        let flatText = try flat.text(in: CGRect(x: box.minX / root.bounds.width, y: box.minY / root.bounds.height,
+                                                width: box.width / root.bounds.width, height: box.height / root.bounds.height))
         XCTAssertTrue(flatText.contains("local"), flatText)
         // Every style puts them on one row, "+ space" first, beside "+ local".
         for style in SidebarStyle.bySize {

@@ -585,7 +585,8 @@ public final class Terminal {
         let mode = !modes.get(.wraparound) ? 0 : modes.get(.reverseWrapExtended) ? 2 : modes.get(.reverseWrap) ? 1 : 0
         var count = max(n, 1)
         if mode == 0 {
-            s.cursorLeft(min(count, s.cursor.x))
+            let left = s.cursor.x < region.left ? 0 : region.left
+            s.cursorLeft(min(count, s.cursor.x - left))
             s.cursor.pendingWrap = false
             return
         }
@@ -1086,6 +1087,33 @@ public final class Terminal {
         scrollingRegion = ScrollingRegion(top: 0, bottom: rows - 1, left: 0, right: cols - 1)
         setCursorStyle(.default)
         dirty = Dirty(clear: true)
+        resetPalette()
+    }
+
+    /// DECSTR resets the pen and selected modes, preserving contents and cursor position.
+    public func softReset() {
+        for name in ["cursor_visible", "insert", "origin", "wraparound", "reverse_wrap", "reverse_wrap_extended",
+                     "disable_keyboard", "cursor_keys", "keypad_keys", "enable_left_and_right_margin"] {
+            let mode = Mode(name)
+            modes.set(mode, modes.default >> UInt64(mode.index) & 1 != 0)
+        }
+        scrollingRegion = ScrollingRegion(top: 0, bottom: rows - 1, left: 0, right: cols - 1)
+        active.cursor.style = Style()
+        try? active.manualStyleUpdate()
+        active.cursor.protected = false
+        active.protectedMode = .off
+        active.charset = CharsetState()
+        active.saved = nil
+        statusDisplay = .main
+        flags.modifyOtherKeys2 = false
+        setCursorStyle(.default)
+        resetPalette()
+    }
+
+    private func resetPalette() {
+        guard colors.palette.mask.contains(true) else { return }
+        for i in 0..<256 { colors.palette.reset(i) }
+        dirty.palette = true
     }
 }
 

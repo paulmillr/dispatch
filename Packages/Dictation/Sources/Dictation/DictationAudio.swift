@@ -76,7 +76,7 @@ final class DictationMicrophone: DictationInput, @unchecked Sendable {
     }
 }
 
-/// Converts the microphone's buffers to the format a recognizer wants (Whisper: 16 kHz mono float).
+/// Converts the microphone's buffers to the format a recognizer wants (Whisper and Parakeet: 16 kHz mono float).
 final class DictationConverter: @unchecked Sendable {
     let output: AVAudioFormat
     private let converter: AVAudioConverter?
@@ -110,8 +110,9 @@ public enum DictationError: LocalizedError {
     case speechDenied
     case appleUnavailable
     case languageUnsupported
-    case modelMissing(WhisperModel)
+    case modelMissing(DictationModel)
     case whisperFailed
+    case parakeetFailed
 
     public var errorDescription: String? {
         switch self {
@@ -126,8 +127,9 @@ public enum DictationError: LocalizedError {
             "Speech recognition isn’t allowed. Allow it in System Settings › Privacy & Security › Speech Recognition."
         case .appleUnavailable: "Apple’s on-device dictation isn’t available here. Try Whisper in Settings."
         case .languageUnsupported: "Apple’s on-device dictation doesn’t support your language. Try Whisper in Settings."
-        case .modelMissing(let model): "Download the Whisper \(model.title) model in Settings to dictate with it."
+        case .modelMissing(let model): "Download the \(model.name) model in Settings to dictate with it."
         case .whisperFailed: "Whisper couldn’t transcribe the recording."
+        case .parakeetFailed: "Parakeet couldn’t transcribe the recording."
         }
     }
 }

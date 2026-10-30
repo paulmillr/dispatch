@@ -49,19 +49,50 @@ final class TerminalIPadTests: XCTestCase {
 
     // MARK: rules
 
-    /// The phone keeps 12 points; an iPad starts at 13 (the Mac's 12.5 at a laptop's distance). A stored size, from
-    /// a pinch or Settings, wins on either.
+    /// The phone keeps 12 points; an iPad starts at 14.5 (the Mac's 14 at a laptop's distance). A stored size, from
+    /// a pinch or Settings, wins on either. At the standard text size, so the simulator's setting doesn't matter.
     func testDefaultFontSizeIsPerDeviceClass() {
         XCTAssertEqual(TerminalAdaptation.defaultFontSize(idiom: .phone), 12)
-        XCTAssertEqual(TerminalAdaptation.defaultFontSize(idiom: .pad), 13)
+        XCTAssertEqual(TerminalAdaptation.defaultFontSize(idiom: .pad), 14.5)
         XCTAssertEqual(TerminalConfiguration().fontSize, 12, "the struct's own default stays the phone's")
         let device = TerminalAdaptation.defaultFontSize(idiom: UIDevice.current.userInterfaceIdiom)
         XCTAssertEqual(TerminalController.defaultFontSize, device)
-        XCTAssertEqual(TerminalController.storedConfiguration().fontSize, device, "no stored size: the device's default")
+        XCTAssertEqual(TerminalController.storedConfiguration(category: .large).fontSize, device, "no stored size: the device's default")
         UserDefaults.standard.set(15.5, forKey: TerminalController.fontSizeKey)
-        XCTAssertEqual(TerminalController.storedConfiguration().fontSize, 15.5, "a pinch's size is remembered")
+        XCTAssertEqual(TerminalController.storedConfiguration(category: .large).fontSize, 15.5, "a pinch's size is remembered")
         UserDefaults.standard.set(99, forKey: TerminalController.fontSizeKey)
-        XCTAssertEqual(TerminalController.storedConfiguration().fontSize, device, "an out-of-range size is not used")
+        XCTAssertEqual(TerminalController.storedConfiguration(category: .large).fontSize, device, "an out-of-range size is not used")
+    }
+
+    /// The terminal follows the system text size as body text does: unchanged at the standard Large, larger up to
+    /// XXXL's factor (the accessibility sizes take no more), smaller below; a pinch is kept at the standard size, and
+    /// an open terminal moves by the change.
+    func testTerminalSizeFollowsTheSystemTextSize() async throws {
+        XCTAssertEqual(TerminalAdaptation.textScale(.large), 1)
+        XCTAssertEqual(TerminalAdaptation.textScale(.unspecified), 1)
+        XCTAssertLessThan(TerminalAdaptation.textScale(.extraSmall), 0.9)
+        let largest = TerminalAdaptation.textScale(.extraExtraExtraLarge)
+        XCTAssertEqual(largest, 1.32, accuracy: 0.03, "UIFontMetrics' body curve at XXXL")
+        XCTAssertEqual(TerminalAdaptation.textScale(.accessibilityExtraExtraExtraLarge), largest, "capped at XXXL")
+        XCTAssertEqual(TerminalAdaptation.fontSize(base: 12, category: .large), 12)
+        XCTAssertEqual(TerminalAdaptation.fontSize(base: 12, category: .extraLarge), 12 * TerminalAdaptation.textScale(.extraLarge), accuracy: 0.01)
+        XCTAssertGreaterThan(TerminalAdaptation.textScale(.extraLarge), 1.05)
+        XCTAssertEqual(TerminalAdaptation.fontSize(base: 27, category: .extraExtraExtraLarge), 28, "within the terminal's sizes")
+        let drawn = TerminalAdaptation.fontSize(base: 14, category: .extraLarge)
+        XCTAssertEqual(TerminalAdaptation.baseSize(drawn: drawn, category: .extraLarge), 14, accuracy: 0.01)
+
+        let suite = "text-size-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        addTeardownBlock { UserDefaults.standard.removePersistentDomain(forName: suite) }
+        defaults.set(12, forKey: TerminalController.fontSizeKey)
+        XCTAssertEqual(TerminalController.storedConfiguration(defaults, category: .extraExtraExtraLarge).fontSize, 12 * largest, accuracy: 0.01)
+
+        var start = TerminalConfiguration()
+        start.fontSize = 13
+        let presence = TerminalPresence(feed: ScriptedTerminalFeed(output: Data("$ ".utf8)), configuration: start)
+        let current = TerminalAdaptation.textScale(TerminalAdaptation.category)
+        presence.textSizeChanged(.extraExtraExtraLarge)
+        XCTAssertEqual(presence.configuration.fontSize, 13 * largest / current, accuracy: 0.02, "an open terminal moves by the change")
     }
 
     /// The capsule collapses only on an iPad with a hardware keyboard, and comes back when the user asks or the

@@ -18,7 +18,7 @@ enum ColorVision: String, Codable, CaseIterable, Identifiable, Sendable {
     var detail: String {
         switch self {
         case .typical: "all colors"
-        case .redGreen: "protanopia and deuteranopia, the most common"
+        case .redGreen: "protanopia, deuteranopia · most common"
         case .blueYellow: "tritanopia"
         }
     }

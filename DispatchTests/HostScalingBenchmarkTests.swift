@@ -31,7 +31,7 @@ final class HostScalingBenchmarkTests: XCTestCase {
         app.runtime.chat.setEnabled(true)
         #if DISPATCH_BENCHMARK
         HostScalingAnimationProbe.paused = config.variant == "animation-off"
-        defer { HostScalingAnimationProbe.tick = nil; HostScalingAnimationProbe.paused = false }
+        defer { HostScalingAnimationProbe.paused = false }
         #endif
         app.controller.settings.values = Preferences()
         app.controller.settings.values.spaceOrder = .tree
@@ -175,17 +175,11 @@ final class HostScalingBenchmarkTests: XCTestCase {
         }
         let frames = ScrollFrames(scroll: scroll, window: app.window, position: session.scrollPosition,
             measureContinuity: false, pauseBetweenGestures: false, speed: 1200)
-        var animationTicks: [UUID: [Double]] = [:]
-        #if DISPATCH_BENCHMARK
-        HostScalingAnimationProbe.tick = { id in animationTicks[id, default: []].append(CACurrentMediaTime()) }
-        #endif
         let scrolling = await frames.run(seconds: config.duration)
-        #if DISPATCH_BENCHMARK
-        HostScalingAnimationProbe.tick = nil
-        if config.thinking && config.variant != "animation-off" {
-            XCTAssertGreaterThan(animationTicks[surfaces[0], default: []].count, 2, "Thinking must animate during scrolling")
-        }
-        #endif
+        // The working animation runs in the compositor, so it has no app-side frames to count: its loops must be on.
+        let animating = PresentationTestSupport.views(of: CompositorView.self, in: try XCTUnwrap(app.window.contentView))
+            .contains { $0.layer?.sublayers?.contains { $0.animation(forKey: CompositorView.animationKey) != nil } == true }
+        if config.thinking && config.variant != "animation-off" { XCTAssertTrue(animating, "Thinking must animate during scrolling") }
         XCTAssertTrue(surfaces.allSatisfy { app.runtime.chat.sessions[$0]?.active == true && app.runtime.chat.sessions[$0]?.busy == config.thinking })
         XCTAssertGreaterThan(frames.distance, 1000, "Must scroll real chat content")
         if config.profile && config.profilePhase == "switching" {
@@ -230,7 +224,7 @@ final class HostScalingBenchmarkTests: XCTestCase {
             "chatSessions": app.runtime.chat.sessions.count, "scrolling": scrolling,
             "chatViewportWidth": scroll.contentView.bounds.width,
             "thinking": config.thinking, "backend": config.backend, "tmuxConnections": Set(app.workspace.spaces.filter { $0.shows("tmux") }.compactMap(\.backend)).count,
-            "animationTicks": surfaces.map { animationTicks[$0, default: []] },
+            "animating": animating,
             "switchMs": switches, "typingMs": typing, "idleHeartbeatMs": heartbeat,
             "idleCPUSeconds": cpuTime() - idleCPU, "idleSeconds": CACurrentMediaTime() - idleStart,
             "thermalState": ProcessInfo.processInfo.thermalState.rawValue,

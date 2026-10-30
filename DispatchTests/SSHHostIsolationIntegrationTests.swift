@@ -59,9 +59,11 @@ final class SSHHostIsolationIntegrationTests: XCTestCase {
             !macSession.busy && macSession.sessionID != nil && macSession.turns.flatMap(\.items).contains { $0.text == "Local fixture reply: common seed on both hosts" }
         }
         let conversation = try XCTUnwrap(macSession.sessionID), transcript = try XCTUnwrap(macSession.transcriptPath)
+        // Through the app, which waits for Codex to take input: an Enter typed 100 ms after the text could land in
+        // Codex's paste burst over SSH and herdr and leave "/quit" in its composer.
+        macSession.draft = "/quit"; runtime.chat.sendFromComposer(macSession)
+        try await TestSupport.eventually(timeout: .seconds(10), diagnostic: "Codex still active after /quit:\n" + TerminalTestSupport.screen(terminal: macTerminal)) { !macSession.active }
         runtime.chat.chooseChat(false, session: macSession)
-        try await SSHChatTestSupport.sendToAgent("/quit", terminal: macTerminal)
-        try await TestSupport.eventually { !macSession.active }
 
         let linux = try await connect(profile.destination, options: profile.options)
         XCTAssertNotEqual(mac.greeting.hostID, linux.greeting.hostID, "The identities must come from genuinely different authenticated hosts")

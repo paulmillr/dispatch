@@ -92,6 +92,11 @@ final class MobileColorTests: XCTestCase {
         }
     }
 
+    /// H3: the commit graph's lanes are graphics, 3:1 on the canvas.
+    func testCommitGraphLanesShow() {
+        for name in ["GraphCurrent", "GraphMerged"] { check(Self.named(name), on: Self.named("Canvas"), atLeast: 3, name) }
+    }
+
     /// M5d, M5e: the syntax colours on the canvas and in the composer's panel (comments are quieter: 3:1).
     func testCodePaletteReads() {
         let roles: [(String, UIColor, Double)] = [("ink", CodePalette.ink, 4.5), ("keyword", CodePalette.keyword, 4.5),

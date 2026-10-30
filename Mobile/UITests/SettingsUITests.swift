@@ -21,8 +21,9 @@ final class SettingsUITests: XCTestCase {
         element.tap()
     }
 
-    private func back(_ app: XCUIApplication) {
-        tap(app.navigationBars.buttons.element(boundBy: 0))
+    /// The back button of the pushed screen titled `title`: Spaces' bar behind the sheet holds buttons too (Done).
+    private func back(_ app: XCUIApplication, from title: String) {
+        tap(app.navigationBars[title].buttons.element(boundBy: 0))
     }
 
     private func openSettings(_ app: XCUIApplication) {
@@ -36,12 +37,12 @@ final class SettingsUITests: XCTestCase {
         if app.buttons["Theme, Nautical"].waitForExistence(timeout: 2) {
             tap(app.buttons["Theme, Nautical"])
             tap(app.buttons["Automatic"])
-            back(app)
+            back(app, from: "Theme")
         }
         if app.buttons["Font, Fira Code"].exists {
             tap(app.buttons["Font, Fira Code"])
-            tap(app.buttons["JetBrains Mono"])
-            back(app)
+            tap(app.buttons["Source Code Pro"])
+            back(app, from: "Terminal font")
         }
     }
 
@@ -55,16 +56,16 @@ final class SettingsUITests: XCTestCase {
         openSettings(app)
         reset(app)
 
-        tap(app.buttons["Font, JetBrains Mono"])
+        tap(app.buttons["Font, Source Code Pro"])
         XCTAssertTrue(app.navigationBars["Terminal font"].waitForExistence(timeout: 5))
         tap(app.buttons["Fira Code"])
         XCTAssertTrue(app.buttons["Fira Code"].isSelected)
-        back(app)
+        back(app, from: "Terminal font")
         XCTAssertTrue(app.buttons["Font, Fira Code"].waitForExistence(timeout: 5))
 
         tap(app.buttons["Theme, Automatic"])
         tap(app.buttons["Nautical"])
-        back(app)
+        back(app, from: "Theme")
         XCTAssertTrue(app.buttons["Theme, Nautical"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["Light"].isEnabled, "Nautical brings its scheme: Appearance waits for Automatic")
         // The live switch, for a look at the recoloured sheet (the trait reaches SwiftUI's catalog colours).
@@ -81,24 +82,24 @@ final class SettingsUITests: XCTestCase {
         let text = app.switches["Show message text"]
         XCTAssertTrue(text.waitForExistence(timeout: 5))
         text.switches.firstMatch.tap()
-        back(app)
+        back(app, from: "Notifications")
         XCTAssertTrue(app.buttons["Notifications, Sound"].waitForExistence(timeout: 5))
 
         // Put everything back for the next run.
         reveal(app.buttons["Notifications, Sound"], in: app)
         tap(app.buttons["Notifications, Sound"])
         app.switches["Show message text"].switches.firstMatch.tap()
-        back(app)
+        back(app, from: "Notifications")
         app.swipeDown()
         app.swipeDown()
         tap(app.buttons["Theme, Nautical"])
         tap(app.buttons["Automatic"])
-        back(app)
+        back(app, from: "Theme")
         tap(app.buttons["Font, Fira Code"])
-        tap(app.buttons["JetBrains Mono"])
-        back(app)
+        tap(app.buttons["Source Code Pro"])
+        back(app, from: "Terminal font")
         XCTAssertTrue(app.buttons["Theme, Automatic"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["Font, JetBrains Mono"].exists)
+        XCTAssertTrue(app.buttons["Font, Source Code Pro"].exists)
         tap(app.navigationBars["Settings"].buttons["Done"])
     }
 }

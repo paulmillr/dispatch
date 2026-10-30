@@ -568,7 +568,7 @@ final class FilesListTests: XCTestCase {
         func update() {
             let rows = builder.rows(for: session, root: root, hidden: true).rows
             controller.update(.init(session: session, rows: rows, root: root, settingHidden: true, focusRequest: nil, drag: nil,
-                                    style: FilesOutlineStyle(typography: AppTypography()),
+                                    style: FilesOutlineStyle(typography: AppTypography(contentSize: 12.5)),
                                     rebuild: { builder.rows(for: session, root: self.root, hidden: true).rows }))
         }
         func shown() -> [String] {
@@ -576,7 +576,7 @@ final class FilesListTests: XCTestCase {
         }
         update()
         XCTAssertEqual(shown(), titles(session.rows(root: root, settingHidden: true)))
-        XCTAssertEqual(outline.rowHeight, 24)
+        XCTAssertEqual(outline.rowHeight, 24, "at the 12.5 design base")
 
         // Opened by the session: the loading row, then the folder's rows in place.
         session.expanded.insert(root + "/src")
@@ -725,7 +725,8 @@ final class FilesListTests: XCTestCase {
     /// A narrow list keeps the names readable: Size goes first, then Modified (the outline and the column header share
     /// the rule).
     func testNarrowListsGiveUpSizeThenModified() {
-        let typography = AppTypography()
+        // The widths at the 12.5 design base; larger text gives up columns sooner (below).
+        let typography = AppTypography(contentSize: 12.5)
         XCTAssertTrue(FilesColumns.shown(width: 600, typography: typography) == (true, true))
         XCTAssertTrue(FilesColumns.shown(width: 382, typography: typography) == (true, true))
         XCTAssertTrue(FilesColumns.shown(width: 360, typography: typography) == (true, false))
@@ -792,5 +793,31 @@ final class FilesListTests: XCTestCase {
         XCTAssertEqual(FilesFormatting.staleness(since: now.addingTimeInterval(-125), at: now), "list is 2 min old")
         XCTAssertEqual(FilesFormatting.staleness(since: now.addingTimeInterval(-3_700), at: now), "list is 1 hour old")
         XCTAssertEqual(FilesFormatting.staleness(since: now.addingTimeInterval(-3 * 86_400), at: now), "list is 3 days old")
+    }
+}
+
+extension FilesListTests {
+    /// Settings › Files › Disable file previews: the Files tab keeps no pane (so nothing is read for one) whatever asks
+    /// for it, ⌥⌘P included; the git tabs' details still show.
+    func testDisabledPreviewsKeepTheFilesTabToItsList() async throws {
+        let runtime = TerminalRuntime.shared, preferences = runtime.preferences
+        defer { runtime.preferences = preferences }
+        runtime.preferences.filesPreviews = false
+        let session = await session(FakeFilesSource.mockupAPI())
+        let readme = try row("README.md", in: session.rows(root: root, settingHidden: true))
+        session.togglePreview()
+        XCTAssertTrue(session.previewOff, "⌥⌘P brings no preview")
+        XCTAssertFalse(session.hasPane)
+        session.open(readme)
+        XCTAssertTrue(session.previewOff, "nor does opening a file")
+        session.splitNarrow = true
+        session.open(readme)
+        XCTAssertFalse(session.narrowDetail, "on one column the list stays")
+        session.splitNarrow = false
+        session.tab = .changes
+        XCTAssertFalse(session.previewOff, "Review's diffs still show")
+        runtime.preferences.filesPreviews = true
+        session.tab = .files
+        XCTAssertFalse(session.previewOff, "the preview asked for comes back with the setting")
     }
 }

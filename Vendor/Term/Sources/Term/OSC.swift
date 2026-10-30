@@ -67,7 +67,7 @@ struct OSCParser {
     }
 
     mutating func end(_ c: UInt8) -> Action? {
-        if invalid || number.isEmpty { return nil }
+        if invalid || number.isEmpty || c == 0x18 || c == 0x1A { return nil }
         let t: Terminator = c == 0x07 ? .bel : .st
         let k = key
         if let op = ColorOp(rawValue: "osc_" + k) { return .colorOperation(ColorOperation(op: op, requests: colors(op, payload ?? []), terminator: t)) }

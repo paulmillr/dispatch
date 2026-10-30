@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 extension View {
@@ -57,6 +58,60 @@ struct FittingPopoverContent<Content: View>: View {
     }
 }
 
+/// Whether the view's window is on screen. A closed SwiftUI popover keeps its content in a hidden window, and with it
+/// the content's `.task`s: a subscription a popover's view holds (2 s stats, 2 s latency) must also end when this
+/// turns false, or it outlives the popover for as long as its anchor (a sidebar host row) stays.
+struct WindowShownReader: NSViewRepresentable {
+    let changed: @MainActor (Bool) -> Void
+    func makeNSView(context: Context) -> WindowShownView { WindowShownView() }
+    func updateNSView(_ view: WindowShownView, context: Context) { view.changed = changed }
+}
+
+final class WindowShownView: NSView {
+    var changed: (@MainActor (Bool) -> Void)? { didSet { if oldValue == nil { report() } } }
+    private var shown: Bool?
+    private var observers: [NSObjectProtocol] = []
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        observers.forEach(NotificationCenter.default.removeObserver); observers = []
+        if let window {
+            // Ordering a window in or out changes its occlusion; a popover also says when it shows and closes.
+            let own: [Notification.Name] = [NSWindow.didChangeOcclusionStateNotification, NSWindow.didBecomeKeyNotification,
+                                            NSWindow.willCloseNotification]
+            for name in own {
+                let closing = name == NSWindow.willCloseNotification
+                observers.append(NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.report(closing: closing) }
+                })
+            }
+            for name in [NSPopover.didShowNotification, NSPopover.didCloseNotification] {
+                observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.report() }
+                })
+            }
+        }
+        report()
+    }
+
+    // A window ordered in lays its views out, whether or not its occlusion changed.
+    override func layout() {
+        super.layout()
+        report()
+    }
+
+    private func report(closing: Bool = false) {
+        guard let changed else { return }
+        let now = !closing && window?.isVisible == true
+        guard now != shown else { return }
+        shown = now
+        // Never inside SwiftUI's update of this view.
+        Task { @MainActor in changed(now) }
+    }
+}
+
 /// Local and authorized SSH statistics share the same presentation and sampler.
 struct HostStatsView: View {
     var host: HostRecord = .local
@@ -66,6 +121,8 @@ struct HostStatsView: View {
     var samplesAutomatically = true
     var showsIdentity = true
     var sourceChanged: ((HostStatisticsStore.Source) -> Void)? = nil
+    @State private var onScreen = false
+    private struct Sampling: Hashable { let source: HostStatisticsStore.Source; let onScreen: Bool }
 
     private var store: HostStatisticsStore { HostStatisticsStore(local: stats) }
     private var source: HostStatisticsStore.Source { store.source(host: host.id, preferred: preferred, selected: selected) }
@@ -80,11 +137,13 @@ struct HostStatsView: View {
                 return (key, "\(scope.account) · \(scope.destination)")
             }), selected: $selected, showsIdentity: showsIdentity)
         .onChange(of: source, initial: true) { _, source in sourceChanged?(source) }
-        .task(id: source) {
+        .background(WindowShownReader { onScreen = $0 })
+        .task(id: Sampling(source: source, onScreen: onScreen)) {
             // Keep the chosen account after its terminal disconnects. A new
             // account is selected only by the user, never as failover.
             if case .ssh(let key) = source { selected = key }
-            guard samplesAutomatically, let subscription = store.subscribe(source, preferred: preferred) else { return }
+            // Samples every 2 s only while on screen: a closed popover's view lives on hidden.
+            guard samplesAutomatically, onScreen, let subscription = store.subscribe(source, preferred: preferred) else { return }
             let latencyKey: SSHStatisticsStore.Key? = if showsIdentity, case .ssh(let key) = source { key } else { nil }
             let latencyToken = latencyKey.flatMap { store.remote.subscribeLatency($0, preferred: preferred) }
             defer {

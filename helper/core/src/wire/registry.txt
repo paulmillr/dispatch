@@ -416,3 +416,6 @@ r	terminal	bytes
 r	backend	key	nodes	layouts	focus
 s	integration
 s	attachments
+s	started_ms
+s	tokens
+r	id	kind	name	tokens	started_ms

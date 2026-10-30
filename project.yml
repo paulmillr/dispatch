@@ -20,6 +20,9 @@ settings:
     # `./run.sh --prod` sets YES: the shipped app is stripped (its symbols stay in the dSYM). Off for
     # other Release builds, whose app hosts the tests (BUNDLE_LOADER needs its symbols).
     DISPATCH_STRIP_APP: NO
+    # Every app's bundle id starts with this: the Pilot account's apps. `./run.sh --stable` sets yachts.dispatch, the
+    # stable account's (docs/ios.md, Pilot and stable); both are named Dispatch and install side by side.
+    DISPATCH_BUNDLE_ID_PREFIX: yachts.dispatch.pilot
   configs:
     # Xcode otherwise injects get-task-allow, which notarization rejects.
     Release:
@@ -54,7 +57,7 @@ settingGroups:
     CODE_SIGN_INJECT_BASE_ENTITLEMENTS: YES
     # The watch app and its widget extension share the complications' entry (docs/watch.md, Complications). A device
     # build needs this group on the team (automatic signing registers it); the simulator signs ad hoc with it.
-    DISPATCH_APP_GROUP: group.yachts.dispatch.mobile$(DISPATCH_BUNDLE_ID_SUFFIX)
+    DISPATCH_APP_GROUP: group.$(DISPATCH_BUNDLE_ID_PREFIX).mobile$(DISPATCH_BUNDLE_ID_SUFFIX)
   # The Swift terminal (Vendor/Term) is optimized with whole-module optimization in every
   # configuration: built like the app's Debug code (unoptimized, or file by file) it consumes
   # output 3-80x slower and blocks the programs writing to it.
@@ -149,7 +152,7 @@ targets:
         # Built by the SSHHelpers target, in parallel with the terminal frameworks.
         script: python3 "$SRCROOT/scripts/build-ssh-helper.py" --install-only
         inputFiles: ["$(SRCROOT)/build/helper-rust/bin/darwin-arm64", "$(SRCROOT)/build/helper-rust/bin/linux-aarch64", "$(SRCROOT)/build/helper-rust/bin/linux-x86_64", "$(SRCROOT)/build/helper-rust/bin/version", "$(SRCROOT)/build/helper-rust/bin/protocol-version"]
-        outputFiles: ["$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/linux-aarch64", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/linux-x86_64", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/version", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/protocol-version"]
+        outputFiles: ["$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/linux-aarch64.gz", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/linux-x86_64.gz", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/version", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/protocol-version"]
     postBuildScripts:
       - name: Bundle unified helper
         script: bash "$SRCROOT/scripts/bundle-helper.sh"
@@ -181,7 +184,7 @@ targets:
         buildPhase: resources
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: yachts.dispatch.app
+        PRODUCT_BUNDLE_IDENTIFIER: $(DISPATCH_BUNDLE_ID_PREFIX).app
         CODE_SIGN_ENTITLEMENTS: Dispatch/Dispatch.entitlements
         PRODUCT_MODULE_NAME: DispatchApp
         INFOPLIST_FILE: Dispatch/Info.plist
@@ -226,7 +229,7 @@ targets:
         embed: false
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: yachts.dispatch.app.tests
+        PRODUCT_BUNDLE_IDENTIFIER: $(DISPATCH_BUNDLE_ID_PREFIX).app.tests
         INFOPLIST_KEY_NSPrincipalClass: DispatchTestObserver
         GENERATE_INFOPLIST_FILE: YES
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Dispatch.app/Contents/MacOS/Dispatch"
@@ -258,10 +261,11 @@ targets:
           destination="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/TermFonts"
           mkdir -p "$destination"
           cp "$SRCROOT"/Vendor/Term/Sources/TermApple/Resources/*.ttf "$SRCROOT"/Vendor/Term/Sources/TermApple/Resources/*.txt "$destination/"
-          # The Mac's terminal fonts Settings offers (TerminalFont.all; not Ioskeley Mono, 6 MB).
-          for font in SourceCodePro-Regular.ttf SourceCodePro-Bold.ttf SourceCodePro-Italic.ttf SourceCodePro-BoldItalic.ttf FiraCode-Regular.ttf FiraCode-Bold.ttf 0xProto-Regular.otf 0xProto-Bold.otf 0xProto-Italic.otf DepartureMono-Regular.otf; do cp "$SRCROOT/Dispatch/Resources/Fonts/$font" "$destination/"; done
-        inputFiles: ["$(SRCROOT)/Vendor/Term/Sources/TermApple/Resources/JetBrainsMono-Variable.ttf", "$(SRCROOT)/Vendor/Term/Sources/TermApple/Resources/JetBrainsMono-Italic-Variable.ttf", "$(SRCROOT)/Vendor/Term/Sources/TermApple/Resources/SymbolsNerdFont-Regular.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/SourceCodePro-Regular.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/SourceCodePro-Bold.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/SourceCodePro-Italic.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/SourceCodePro-BoldItalic.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/FiraCode-Regular.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/FiraCode-Bold.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/0xProto-Regular.otf", "$(SRCROOT)/Dispatch/Resources/Fonts/0xProto-Bold.otf", "$(SRCROOT)/Dispatch/Resources/Fonts/0xProto-Italic.otf", "$(SRCROOT)/Dispatch/Resources/Fonts/DepartureMono-Regular.otf"]
-        outputFiles: ["$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/JetBrainsMono-Variable.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/JetBrainsMono-Italic-Variable.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/SymbolsNerdFont-Regular.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/SourceCodePro-Regular.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/SourceCodePro-Bold.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/SourceCodePro-Italic.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/SourceCodePro-BoldItalic.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/FiraCode-Regular.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/FiraCode-Bold.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/0xProto-Regular.otf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/0xProto-Bold.otf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/0xProto-Italic.otf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/DepartureMono-Regular.otf"]
+          # The Mac's terminal fonts Settings offers (TerminalFont.all; not Ioskeley Mono, 0.9 MB), and chat's Latin Modern
+          # Roman (MobileChatFont).
+          for font in SourceCodePro-Regular.ttf SourceCodePro-Bold.ttf SourceCodePro-Italic.ttf SourceCodePro-BoldItalic.ttf FiraCode-Regular.ttf FiraCode-Bold.ttf 0xProto-Regular.otf 0xProto-Bold.otf 0xProto-Italic.otf DepartureMono-Regular.otf lmroman10-regular.otf lmroman10-italic.otf lmroman10-bold.otf lmroman10-bolditalic.otf; do cp "$SRCROOT/Dispatch/Resources/Fonts/$font" "$destination/"; done
+        inputFiles: ["$(SRCROOT)/Vendor/Term/Sources/TermApple/Resources/JetBrainsMono-Variable.ttf", "$(SRCROOT)/Vendor/Term/Sources/TermApple/Resources/JetBrainsMono-Italic-Variable.ttf", "$(SRCROOT)/Vendor/Term/Sources/TermApple/Resources/SymbolsNerdFont-Regular.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/SourceCodePro-Regular.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/SourceCodePro-Bold.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/SourceCodePro-Italic.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/SourceCodePro-BoldItalic.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/FiraCode-Regular.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/FiraCode-Bold.ttf", "$(SRCROOT)/Dispatch/Resources/Fonts/0xProto-Regular.otf", "$(SRCROOT)/Dispatch/Resources/Fonts/0xProto-Bold.otf", "$(SRCROOT)/Dispatch/Resources/Fonts/0xProto-Italic.otf", "$(SRCROOT)/Dispatch/Resources/Fonts/DepartureMono-Regular.otf", "$(SRCROOT)/Dispatch/Resources/Fonts/lmroman10-regular.otf", "$(SRCROOT)/Dispatch/Resources/Fonts/lmroman10-italic.otf", "$(SRCROOT)/Dispatch/Resources/Fonts/lmroman10-bold.otf", "$(SRCROOT)/Dispatch/Resources/Fonts/lmroman10-bolditalic.otf"]
+        outputFiles: ["$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/JetBrainsMono-Variable.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/JetBrainsMono-Italic-Variable.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/SymbolsNerdFont-Regular.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/SourceCodePro-Regular.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/SourceCodePro-Bold.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/SourceCodePro-Italic.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/SourceCodePro-BoldItalic.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/FiraCode-Regular.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/FiraCode-Bold.ttf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/0xProto-Regular.otf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/0xProto-Bold.otf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/0xProto-Italic.otf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/DepartureMono-Regular.otf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/lmroman10-regular.otf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/lmroman10-italic.otf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/lmroman10-bold.otf", "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/TermFonts/lmroman10-bolditalic.otf"]
     preBuildScripts:
       - name: Build SSH engine
         script: python3 "$SRCROOT/scripts/build-mobile-ssh.py" --platform "$PLATFORM_NAME"
@@ -334,6 +338,9 @@ targets:
       - Dispatch/Hosts/HostRegistry.swift
       - Dispatch/Hosts/TerminalHistoryStore.swift
       - Dispatch/SSH/SSHInvocation.swift
+      - Dispatch/Terminal/LineSpacing.swift
+      - Dispatch/Terminal/TerminalFontScale.swift
+      - Dispatch/Terminal/TextContrast.swift
       - Dispatch/Terminal/ProgramStatusStore.swift
       - Dispatch/Terminal/TerminalMachine.swift
       - Dispatch/Terminal/TerminalScrollState.swift
@@ -342,6 +349,8 @@ targets:
       - Dispatch/Views/HostGlyph.swift
       - Dispatch/Views/HostTint.swift
       - Dispatch/Themes/ColorVision.swift
+      - Dispatch/Themes/SchemeGroup.swift
+      - Dispatch/Themes/SchemeAudit.swift
       - Dispatch/WorkspaceModels.swift
       # The watch protocol (docs/watch.md): the phone's side of WatchConnectivity is in Mobile/Watch.
       - path: Watch/Shared
@@ -352,7 +361,7 @@ targets:
         PRODUCT_MODULE_NAME: DispatchMobile
         # No CZstd: only the Mac's Debug journals (AppReplay) compress captures (docs/ios.md).
         SWIFT_INCLUDE_PATHS: ""
-        PRODUCT_BUNDLE_IDENTIFIER: yachts.dispatch.mobile$(DISPATCH_BUNDLE_ID_SUFFIX)
+        PRODUCT_BUNDLE_IDENTIFIER: $(DISPATCH_BUNDLE_ID_PREFIX).mobile$(DISPATCH_BUNDLE_ID_SUFFIX)
         INFOPLIST_FILE: Mobile/App/Info.plist
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
@@ -395,6 +404,7 @@ targets:
       # The Mac's Foundation-only tests, shared by path (docs/ios.md). HelperClient's fixtures load from the checkout.
       - DispatchTests/HelperClient/HelperClientTests.swift
       - DispatchTests/ProgramStatusTests.swift
+      - DispatchTests/TerminalCoreTests.swift
       - DispatchTests/ChatDraftTests.swift
       - DispatchTests/ChatSideQuestionTests.swift
       - DispatchTests/ChatOperationsTests.swift
@@ -412,7 +422,7 @@ targets:
     settings:
       groups: [ios, mobileApp]
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: yachts.dispatch.mobile.tests$(DISPATCH_BUNDLE_ID_SUFFIX)
+        PRODUCT_BUNDLE_IDENTIFIER: $(DISPATCH_BUNDLE_ID_PREFIX).mobile.tests$(DISPATCH_BUNDLE_ID_SUFFIX)
         GENERATE_INFOPLIST_FILE: YES
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/DispatchMobile.app/DispatchMobile"
         BUNDLE_LOADER: "$(TEST_HOST)"
@@ -430,7 +440,7 @@ targets:
     settings:
       groups: [ios, mobileApp]
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: yachts.dispatch.mobile.uitests$(DISPATCH_BUNDLE_ID_SUFFIX)
+        PRODUCT_BUNDLE_IDENTIFIER: $(DISPATCH_BUNDLE_ID_PREFIX).mobile.uitests$(DISPATCH_BUNDLE_ID_SUFFIX)
         GENERATE_INFOPLIST_FILE: YES
         TEST_TARGET_NAME: DispatchMobile
   # Dispatch for Apple Watch (docs/watch.md): a single-target SwiftUI app, a WatchConnectivity companion of the
@@ -458,7 +468,7 @@ targets:
         PRODUCT_MODULE_NAME: DispatchWatch
         SWIFT_INCLUDE_PATHS: ""
         # Must extend the phone app's id, suffix included, as WKCompanionAppBundleIdentifier names it.
-        PRODUCT_BUNDLE_IDENTIFIER: yachts.dispatch.mobile$(DISPATCH_BUNDLE_ID_SUFFIX).watchkitapp
+        PRODUCT_BUNDLE_IDENTIFIER: $(DISPATCH_BUNDLE_ID_PREFIX).mobile$(DISPATCH_BUNDLE_ID_SUFFIX).watchkitapp
         INFOPLIST_FILE: Watch/App/Info.plist
         CODE_SIGN_ENTITLEMENTS: Watch/App/DispatchWatch.entitlements
         MARKETING_VERSION: "0.1.0"
@@ -483,7 +493,7 @@ targets:
       groups: [watchApp]
       base:
         PRODUCT_NAME: DispatchWatchWidgets
-        PRODUCT_BUNDLE_IDENTIFIER: yachts.dispatch.mobile$(DISPATCH_BUNDLE_ID_SUFFIX).watchkitapp.widgets
+        PRODUCT_BUNDLE_IDENTIFIER: $(DISPATCH_BUNDLE_ID_PREFIX).mobile$(DISPATCH_BUNDLE_ID_SUFFIX).watchkitapp.widgets
         INFOPLIST_FILE: Watch/Widgets/Info.plist
         CODE_SIGN_ENTITLEMENTS: Watch/Widgets/DispatchWatchWidgets.entitlements
         MARKETING_VERSION: "0.1.0"
@@ -503,7 +513,7 @@ targets:
     settings:
       groups: [watchApp]
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: yachts.dispatch.mobile$(DISPATCH_BUNDLE_ID_SUFFIX).watchkitapp.tests
+        PRODUCT_BUNDLE_IDENTIFIER: $(DISPATCH_BUNDLE_ID_PREFIX).mobile$(DISPATCH_BUNDLE_ID_SUFFIX).watchkitapp.tests
         GENERATE_INFOPLIST_FILE: YES
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/DispatchWatch.app/DispatchWatch"
         BUNDLE_LOADER: "$(TEST_HOST)"
@@ -521,7 +531,7 @@ targets:
     settings:
       groups: [watchApp]
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: yachts.dispatch.mobile$(DISPATCH_BUNDLE_ID_SUFFIX).watchkitapp.uitests
+        PRODUCT_BUNDLE_IDENTIFIER: $(DISPATCH_BUNDLE_ID_PREFIX).mobile$(DISPATCH_BUNDLE_ID_SUFFIX).watchkitapp.uitests
         GENERATE_INFOPLIST_FILE: YES
         TEST_TARGET_NAME: DispatchWatch
 aggregateTargets:

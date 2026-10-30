@@ -23,9 +23,16 @@ struct ChatCommandControls: View {
                     }
                 }
                 .id(result)
-                .transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(y: 6)))
+                // A result arrives from the helper, outside any animation: the transition carries its own.
+                .transition(Self.entrance(reduceMotion))
             }
         }
+    }
+
+    /// Rising in and fading, with its own animation (the controls and their result come and go from model changes).
+    static func entrance(_ reduceMotion: Bool) -> AnyTransition {
+        let transition: AnyTransition = reduceMotion ? .opacity : .opacity.combined(with: .offset(y: 6))
+        return transition.animation(InterfaceMotion.animation(reduce: reduceMotion))
     }
 }
 

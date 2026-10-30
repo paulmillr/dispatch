@@ -15,7 +15,8 @@ where ["ttf", "otf"].contains(url.pathExtension) {
 }
 let families = [
     ("Source Code Pro", "SourceCodePro-Regular"),
-    ("Comic Sans", "ComicSansMS")
+    ("Comic Sans", "ComicSansMS"),
+    ("Latin Modern Roman", "LMRoman10-Regular")
 ]
 func font(_ name: String, _ size: CGFloat) -> NSFont {
     guard let font = NSFont(name: name, size: size) else { fatalError("Missing font: \(name)") }

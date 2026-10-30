@@ -42,7 +42,7 @@ SOURCES = ["Dispatch", "DispatchTests", "Mobile", "Watch", "Packages", "helper",
 # The iPhone app's prebuilt SSH engine (scripts/setup_mobile.py): Xcode resolves its package for every scheme of the
 # project, the Mac's included, so the guest needs the binary target even though it never builds the iPhone app.
 MOBILE_ENGINE = "build/mobile-ssh/DispatchMobileSSHCore.xcframework"
-# The replay corpus (a git submodule, docs/replay.md): the guest's tests replay from it, and its Debug build
+# The replay corpus (its own repository at replays/, docs/replay.md): the guest's tests replay from it, and its Debug build
 # replays the helper captures. Synchronized whenever the host has it.
 CORPUS = "replays"
 # The desktop the recordings were made on (a 1920 × 1080 pt Retina host): windows and terminal grids follow the
@@ -479,7 +479,29 @@ def sync_helper(vm):
             synchronize(vm, [str(helper / "replay-verified.json")], destination)
 
 
-def prepare_test_inputs(vm, profile, needs_codex=True):
+def host_build(recheck=False):
+    """Build for testing on this Mac (test/xcode.py's fingerprinted build, reused when unchanged); each guest runs these
+    products instead of building with its own Xcode."""
+    import xcode
+    # As xcode.py and vm-guest.sh: the loopback SSH fixture's sshd mode is an input of the helper build.
+    os.environ.setdefault("DISPATCH_UNPRIVILEGED_SSHD", "1")
+    manifest = xcode.prebuilt(ROOT, Profile(ROOT / "build/test-tools/host-build-profile.json"), force=recheck)
+    print("Host test build: " + manifest["xcode"] + " (" + manifest["plan"] + ")", flush=True)
+
+
+def sync_products(vm):
+    """The host's test build into the guest's build/Build/Products, without a test plan or bundle of its own."""
+    import xcode
+    manifest = json.loads((ROOT / xcode.PREBUILT).read_text())
+    shell(vm, 'cd "$1/workspace" && mkdir -p build/Build/Products/Debug build/test-tools && '
+              'rm -rf build/Build/Products/*.xctestrun build/Build/Products/Debug/DispatchTests.xctest', GUEST)
+    paths = [path for path in xcode.PREBUILT_PRODUCTS if (ROOT / path).exists()] + [manifest["plan"], xcode.PREBUILT]
+    # Each into its own parent: a --relative sync of these would --delete the rest of the guest's build/ (as for
+    # MOBILE_ENGINE above: Rust, XcodeGen, the helper).
+    return "".join(synchronize(vm, [str(ROOT / path)], GUEST + "/workspace/" + str(Path(path).parent) + "/") for path in paths)
+
+
+def prepare_test_inputs(vm, profile, needs_codex=True, prebuilt=True):
     def sync_sources():
         with profile.stage("source_sync") as stage:
             corpus = (ROOT / CORPUS).is_dir()
@@ -492,6 +514,9 @@ def prepare_test_inputs(vm, profile, needs_codex=True):
                 # A corpus left from an earlier run would replay recordings this checkout does not have.
                 shell(vm, 'rm -rf "$1/workspace/' + CORPUS + '"', GUEST)
             sync_helper(vm)
+        if prebuilt:
+            with profile.stage("product_sync") as stage:
+                stage["statistics"] = sync_products(vm)
 
     def sync_cli():
         with profile.stage("codex_sync"):
@@ -545,7 +570,7 @@ def run_stamp():
 
 
 def test_guest(vm, tests, linux=False, recheck=False, benchmarks=False, selection=None, host_run=None,
-               stamp=None, shard_classes=None, primary=True, host_ready=False, live=False):
+               stamp=None, shard_classes=None, primary=True, host_ready=False, live=False, guest_build=False):
     fast = selection is not None and selection['suite'] == 'fast'
     selected = selection['selected'] if selection else tests
     if not fast and not CODEX.is_file():
@@ -564,6 +589,9 @@ def test_guest(vm, tests, linux=False, recheck=False, benchmarks=False, selectio
         with profile.stage("host_dependencies"):
             run("/bin/bash", "scripts/setup.sh", cwd=ROOT,
                 env={**os.environ, "DISPATCH_SETUP_OFFLINE": "1"})
+        if not guest_build:
+            with profile.stage("host_build"):
+                host_build(recheck)
     with profile.stage("guest_start"):
         start(vm, testing=True)
     # One desktop can only run one UI suite. Keep this lock on interruption, since
@@ -577,7 +605,7 @@ def test_guest(vm, tests, linux=False, recheck=False, benchmarks=False, selectio
     completed = False
     result = None
     try:
-        version = prepare_test_inputs(vm, profile, needs_codex=not fast)
+        version = prepare_test_inputs(vm, profile, needs_codex=not fast, prebuilt=not guest_build)
         profile.data['tool_versions'] = {} if fast else {'codex': version.strip()}
         if not fast and (not selected or 'DispatchTests' in selected or any('Claude' in test for test in selected)):
             with profile.stage('claude_sync'):
@@ -621,14 +649,16 @@ export DISPATCH_TEST_BENCHMARKS="$3"
 export DISPATCH_TEST_SKIP_PREFLIGHT="$4"
 export DISPATCH_TEST_SHARD="$5"
 export DISPATCH_TEST_SHARD_PRIMARY="$6"
-shift 6
+export DISPATCH_TEST_PREBUILT="$7"
+shift 7
 cd /Users/admin/dispatch-tests/workspace
 exec caffeinate -di /bin/bash test/vm-guest.sh "$@"
 ''', "1" if linux else "0", "1" if recheck else "0",
                           "1" if benchmarks else "0",
                           # The primary shard runs the shared portable checks once.
                           os.environ.get("DISPATCH_TEST_SKIP_PREFLIGHT", "0") if primary else "1",
-                          ",".join(shard_classes or []), "1" if primary else "0", *arguments, stdout=log, stderr=subprocess.STDOUT)
+                          ",".join(shard_classes or []), "1" if primary else "0", "0" if guest_build else "1",
+                          *arguments, stdout=log, stderr=subprocess.STDOUT)
                 result = 0
             except subprocess.CalledProcessError as error:
                 result = error.returncode
@@ -961,6 +991,8 @@ def test_sharded(vm, shard_vm, args, groups, loads):
     describe_plan(names, groups, loads, selection)
     started = time.perf_counter()
     run("/bin/bash", "scripts/setup.sh", cwd=ROOT, env={**os.environ, "DISPATCH_SETUP_OFFLINE": "1"})
+    if not getattr(args, "guest_build", False):
+        host_build(args.recheck)
     stamp = run_stamp()
     runs = [stamp + "-shard" + str(index + 1) for index in range(len(names))]
     processes = []
@@ -972,6 +1004,7 @@ def test_sharded(vm, shard_vm, args, groups, loads):
         command += ["--recheck"] if args.recheck else []
         command += ["--benchmarks"] if args.benchmarks else []
         command += ["--live"] if args.live else []
+        command += ["--guest-build"] if getattr(args, "guest_build", False) else []
         command += ["--shard-classes", ",".join(group), "--shard-role", "primary" if index == 0 else "secondary",
                     "--run-id", run_id, "--host-ready"]
         # Same process group: Ctrl-C reaches each runner exactly as it would unsharded.
@@ -1044,6 +1077,8 @@ def main():
     add_arguments(tests)
     tests.add_argument("--failed", help="Rerun only failures from a run ID, directory, or TestSummary.json")
     tests.add_argument("--live", action="store_true", help="Run every test live, ignoring the replay corpus (xcode.py --live)")
+    tests.add_argument("--guest-build", action="store_true",
+                       help="Build in each guest with its own Xcode instead of testing this Mac's build (the default)")
     tests.add_argument("--shards", choices=["auto", "1", "2"],
                        help="Split XCTest classes across this VM and --shard-vm (macOS allows two macOS guests). "
                             "Default auto: only when the shard VM exists, host memory and CPUs allow it, and it saves time")
@@ -1127,7 +1162,7 @@ def main():
                 if args.shard_classes:
                     shard.update(shard_classes=args.shard_classes.split(","), primary=args.shard_role == "primary")
                 return test(args.vm, args.tests, recheck=args.recheck, benchmarks=args.benchmarks,
-                            selection=args.selection, live=args.live, **shard)
+                            selection=args.selection, live=args.live, guest_build=args.guest_build, **shard)
     except (RuntimeError, OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
         print("VM runner: " + str(error), file=sys.stderr)
         return 1

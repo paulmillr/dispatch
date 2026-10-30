@@ -4,23 +4,28 @@ import SwiftUI
 /// every step. The children are rendered as separate lazy transcript rows, not in this view.
 struct ChatToolGroupHeader: View {
     @Environment(\.chatTheme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let group: ChatToolGroup
     var replyTime: Date? = nil
     let disclosure: ChatToolGroupDisclosure
     /// The live turn's newest group: its steps animate in, and its time waits for the turn to end.
     var live = false
+    @State private var settling = false
     let toggle: () -> Void
     var body: some View {
         Button(action: toggle) {
             HStack(spacing: 10) {
-                if live {
+                // A group that stops being live keeps the live chart while its color fades, then takes the static one
+                // that draws the same bars.
+                if live || settling {
                     ChatLiveStepChart(steps: group.steps, disclosure: disclosure, width: theme.typography.characterWidth * 16)
                 } else {
                     ChatStepChart(steps: group.steps, disclosure: disclosure, width: theme.typography.characterWidth * 16)
                 }
-                // A live group's time waits for the turn to end. (Its count doesn't roll: a numeric text transition
-                // kept a live turn's CPU twice as high while the agent waited.)
+                // A live group's time waits for the turn to end, then fades in. (Its count doesn't roll: a numeric text
+                // transition kept a live turn's CPU twice as high while the agent waited.)
                 Text(Self.caption(count: group.children.count, elapsed: live ? nil : group.elapsed, radio: theme.radioLog)).fixedSize()
+                    .animation(reduceMotion ? nil : .easeOut(duration: 0.35), value: live)
                 if let replyTime {
                     Spacer(minLength: 8)
                     ChatReplyTime(date: replyTime)
@@ -29,6 +34,12 @@ struct ChatToolGroupHeader: View {
             .font(theme.typography.detail).foregroundStyle(theme.muted)
             .frame(maxWidth: .infinity, minHeight: theme.typography.detailLineHeight, alignment: .leading)
             .contentShape(Rectangle())
+        }
+        .onChange(of: live) { old, new in settling = old && !new && !reduceMotion }
+        .task(id: settling) {
+            guard settling else { return }
+            try? await Task.sleep(for: .milliseconds(400))
+            settling = false
         }
         .buttonStyle(.plain)
         .accessibilityLabel("\(group.children.count) tool runs")
@@ -200,36 +211,58 @@ struct ChatLiveStepChart: View {
     /// The step count the bars grow from, and how far they have grown (0 → 1).
     @State private var from: Int?
     @State private var progress: Double = 1
+    /// The bars last in color, which fade out over the gray when the chart stops coloring them (a turn ending).
+    @State private var lit: ChatStepChart.Colored = .last
 
     var body: some View {
         let colored = ChatStepChart.Colored(disclosure)
         let target = ChatStepChart.bars(steps, width: width)
         let start = from.map { ChatStepChart.bars(Array(steps.prefix($0)), width: width) } ?? target
-        var shades: [ChatStepChart.Shade] = []
-        for (index, bar) in target.enumerated() {
-            let shade = ChatStepChart.Shade(bar.step, colored: colored.colors(index, of: target.count))
-            if !shades.contains(shade) { shades.append(shade) }
-        }
+        // Every bar in gray, then the colored ones over it: a bar's color then fades rather than switching.
         return ZStack(alignment: .topLeading) {
-            ForEach(shades, id: \.self) { shade in
-                Growing(start: start, target: target, colored: colored, shade: shade, height: height, progress: progress)
-                    .fill(ChatStepChart.color(shade, theme: theme))
-            }
+            layer(start: start, target: target, colored: .none, only: false)
+            layer(start: start, target: target, colored: colored == .none ? lit : colored, only: true)
+                .opacity(colored == .none ? 0 : 1)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.35), value: colored)
         }
         .frame(width: width, height: height, alignment: .topLeading)
+        .onChange(of: colored, initial: true) { _, new in if new != .none { lit = new } }
         .onChange(of: steps.count) { old, new in
             guard new > old, !reduceMotion else { from = nil; progress = 1; return }
             from = old; progress = 0
-            withAnimation(.timingCurve(0.33, 1, 0.68, 1, duration: 0.45)) { progress = 1 }
+            // Linear in time: each new bar eases on its own clock, a burst's one after another.
+            withAnimation(.linear(duration: Growing.duration(adding: new - old))) { progress = 1 }
         }
         .accessibilityHidden(true)
     }
 
+    /// One filled shape per shade present: every bar, or only those `colored` colors.
+    private func layer(start: [ChatStepChart.Bar], target: [ChatStepChart.Bar], colored: ChatStepChart.Colored, only: Bool) -> some View {
+        var shades: [ChatStepChart.Shade] = []
+        for (index, bar) in target.enumerated() where !only || colored.colors(index, of: target.count) {
+            let shade = ChatStepChart.Shade(bar.step, colored: colored.colors(index, of: target.count))
+            if !shades.contains(shade) { shades.append(shade) }
+        }
+        return ForEach(shades, id: \.self) { shade in
+            Growing(start: start, target: target, colored: colored, shade: shade, only: only, height: height, progress: progress)
+                .fill(ChatStepChart.color(shade, theme: theme))
+        }
+    }
+
     /// The bars of one shade between the layout before the new steps and the layout with them: bars that stay move and
-    /// resize, new ones grow from nothing at the end. A regrouping of crowded bars just shows the new layout.
+    /// resize, new ones grow from nothing at the end, each a beat after the one before, so a burst of steps reads as
+    /// that many. A regrouping of crowded bars just shows the new layout.
     private struct Growing: Shape {
+        /// One bar's growth, and the beat between a burst's bars (shortened so a long burst stays brief).
+        nonisolated static let growth = 0.45, beat = 0.07
+        nonisolated static func stagger(_ added: Int) -> Double { added > 1 ? min(beat, 0.3 / Double(added - 1)) : 0 }
+        nonisolated static func duration(adding added: Int) -> Double { growth + stagger(added) * Double(max(0, added - 1)) }
+        nonisolated static func easeOut(_ t: CGFloat) -> CGFloat { 1 - pow(1 - min(1, max(0, t)), 3) }
+
         let start: [ChatStepChart.Bar], target: [ChatStepChart.Bar]
         let colored: ChatStepChart.Colored, shade: ChatStepChart.Shade
+        /// Only the bars `colored` colors.
+        let only: Bool
         let height: CGFloat
         var progress: Double
         nonisolated var animatableData: Double {
@@ -239,18 +272,21 @@ struct ChatLiveStepChart: View {
 
         nonisolated func path(in rect: CGRect) -> Path {
             var path = Path()
-            let t = CGFloat(progress), regrouped = start.count > target.count
+            let regrouped = start.count > target.count, added = target.count - start.count
+            let duration = Self.duration(adding: added), beat = Self.stagger(added) / duration
+            let clock = CGFloat(progress), t = Self.easeOut(clock)
             let end = start.last.map { $0.x + $0.width } ?? 0
-            for (index, bar) in target.enumerated()
-            where ChatStepChart.Shade(bar.step, colored: colored.colors(index, of: target.count)) == shade {
+            for (index, bar) in target.enumerated() where !only || colored.colors(index, of: target.count) {
+                guard ChatStepChart.Shade(bar.step, colored: colored.colors(index, of: target.count)) == shade else { continue }
                 var x = bar.x, width = bar.width
-                if !regrouped, t < 1 {
+                if !regrouped, clock < 1 {
                     if index < start.count {
                         x = start[index].x + (bar.x - start[index].x) * t
                         width = start[index].width + (bar.width - start[index].width) * t
                     } else {
+                        let grown = Self.easeOut((clock - CGFloat(index - start.count) * beat) * duration / Self.growth)
                         x = end + (bar.x - end) * t
-                        width = bar.width * t
+                        width = bar.width * grown
                     }
                 }
                 guard width > 0.01 else { continue }

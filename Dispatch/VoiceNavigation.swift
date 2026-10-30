@@ -3,7 +3,7 @@ import Foundation
 
 /// "Dispatch, …" spoken commands that switch spaces and tabs, and show or hide the sidebar (Settings › Dictation › Navigate by voice; the grammar is
 /// `VoiceCommand`, in the Dictation package). A chat's dictation hands its transcript here first and keeps it as text
-/// unless it was a command; on a terminal or files pane the right ⌘ shortcut listens for commands only. Every switch
+/// unless it was a command; on a terminal or files pane the voice key shortcut listens for commands only. Every switch
 /// shows what it did, or why it did nothing, in a short note over the window. "Dispatch, back" returns to where the
 /// window was before its last switch, by voice or not.
 @MainActor @Observable

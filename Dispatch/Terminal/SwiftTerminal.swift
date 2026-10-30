@@ -49,6 +49,8 @@ final class SwiftEngine: TerminalEngine {
         config.finalize(dark: dark) {
             Config.theme($0, resources: environment["GHOSTTY_RESOURCES_DIR"].flatMap { $0.isEmpty ? nil : $0 }, environment: environment, diagnostics: &$1)
         }
+        // A bundled scheme by its name (a custom one is a path, never glowing).
+        if let theme = config.theme { config.glow = SchemeGroup.glowing.contains(dark ? theme.dark : theme.light) }
         return config
     }
 
@@ -216,7 +218,7 @@ private final class SwiftHost: SurfaceHost {
     }
 
     /// The first text/plain content to the pasteboard; a program's write (OSC 52, which
-    /// clipboard-write = ask marks for confirming) follows Settings › General › Programs can copy instead.
+    /// clipboard-write = ask marks for confirming) follows Settings › General › Security › Programs can copy instead.
     /// A kitty write completes through here unconfirmed, as a copy does; `kittyWriting` tells them apart.
     func setClipboard(_ location: SurfaceMessage.Clipboard, _ contents: [ClipboardContent], confirm: Bool) {
         guard let content = contents.first(where: { $0.mime == Array("text/plain".utf8) }) else { return }
@@ -225,7 +227,7 @@ private final class SwiftHost: SurfaceHost {
     }
 
     /// The standard clipboard's text and/or its listing, completed at once (kitty writes read
-    /// nothing); a completion that needs confirming is approved for pastes, denied otherwise.
+    /// nothing); unsafe pastes follow the app's approval setting, program reads remain denied.
     func clipboardRequest(_ location: SurfaceMessage.Clipboard, _ request: ClipboardRequest, mimes: [[UInt8]], list: Bool) -> ClipboardReadResult {
         let plain = Array("text/plain".utf8), wantsText = mimes.contains(plain)
         let write = if case .kittyWrite = request { true } else { false }
@@ -237,9 +239,30 @@ private final class SwiftHost: SurfaceHost {
         kittyWriting = write
         defer { kittyWriting = false }
         do { try surface.completeClipboard(request, completion) } catch {
-            guard case .paste = request else { surface.denyClipboard(request); return .started }
-            completion.confirmed = true
-            try? surface.completeClipboard(request, completion)
+            guard case .paste = request, case ClipboardError.unsafePaste = error else { surface.denyClipboard(request); return .started }
+            if MainActor.assumeIsolated({ TerminalRuntime.shared.autoApprovesUnsafePastes }) {
+                completion.confirmed = true
+                try? surface.completeClipboard(request, completion)
+                return .started
+            }
+            let targetView = view, surfaceID = ObjectIdentifier(surface), bytes = completion.contents.first?.data ?? []
+            MainActor.assumeIsolated {
+                guard let view = targetView, let window = view.window, window.attachedSheet == nil else { return }
+                let alert = NSAlert()
+                alert.messageText = "Paste text that could run commands?"
+                alert.informativeText = "This paste contains line breaks or terminal control sequences that could execute commands immediately."
+                alert.addButton(withTitle: "Cancel")
+                alert.addButton(withTitle: "Paste")
+                // Return to the session immediately: a prompt must not hold its parser/render lock.
+                alert.beginSheetModal(for: window) { [weak view, weak window] response in
+                    guard response == .alertSecondButtonReturn, let view, let window, view.window === window,
+                          let backend = view.surface as? SwiftBackend,
+                          ObjectIdentifier(backend.session.surface) == surfaceID else { return }
+                    let approved = ClipboardCompletion(contents: [ClipboardContent(mime: Array("text/plain".utf8), data: bytes)], confirmed: true)
+                    try? backend.session.locked { try backend.session.surface.completeClipboard(.paste(.standard), approved) }
+                    backend.session.pump()
+                }
+            }
         }
         return .started
     }

@@ -326,6 +326,63 @@ final class SwiftTerminalSessionTests: XCTestCase {
                        ["cursor-style", "cursor-style-blink"])
     }
 
+    /// adjust-cell-height (Settings' line spacing): Ghostty's modifier syntax, its centring of a taller or shorter cell
+    /// (Metrics.zig's own cases), a reconfigured session's rows, and box drawing that still joins across them.
+    func testAdjustCellHeightCentresTextAndJoinsBoxDrawing() throws {
+        XCTAssertEqual(SwiftEngine.parse("adjust-cell-height = 2", dark: true).adjustCellHeight, .absolute(2))
+        XCTAssertEqual(SwiftEngine.parse("adjust-cell-height = -150%", dark: true).adjustCellHeight, .percent(0))
+        XCTAssertEqual(SwiftEngine.parse("adjust-cell-height = 50%", dark: true).adjustCellHeight, .percent(1.5))
+        XCTAssertNil(SwiftEngine.parse("adjust-cell-height = 20%\nadjust-cell-height =", dark: true).adjustCellHeight)
+        XCTAssertEqual(SwiftEngine.parse("adjust-cell-height = tall", dark: true).diagnostics.map(\.key), ["adjust-cell-height"])
+
+        // A face 0.33 px above centre: an odd difference puts the extra pixel at the top when growing, the bottom when
+        // shrinking. The cursor keeps its height.
+        func metrics(_ modifier: MetricModifier) -> CellMetrics {
+            var m = CellMetrics(FaceMetrics(FontTables(head: nil, hhea: nil, os2: nil, post: nil), pixels: 100,
+                                            FontMeasurements(unitsPerEm: 1000, ascent: 80, descent: 20, leading: 0, capHeight: 70,
+                                                             xHeight: 50, maxAdvance: 60, asciiHeight: 90, icWidth: nil)))
+            (m.cellHeight, m.cellBaseline, m.underlinePosition, m.strikethroughPosition, m.overlinePosition) = (100, 50, 55, 30, 0)
+            (m.faceHeight, m.faceY, m.cursorHeight) = (99.67, 0.33, 100)
+            m.adjustCellHeight(modifier)
+            return m
+        }
+        let shorter = metrics(.percent(0.75)), taller = metrics(.percent(1.75))
+        XCTAssertEqual([shorter.cellHeight, shorter.cellBaseline, shorter.underlinePosition, shorter.strikethroughPosition, shorter.cursorHeight],
+                       [75, 37, 43, 18, 100])
+        XCTAssertEqual(shorter.overlinePosition, -12)
+        XCTAssertEqual(shorter.faceY, -12.67, accuracy: 1e-9)
+        XCTAssertEqual([taller.cellHeight, taller.cellBaseline, taller.underlinePosition, taller.strikethroughPosition, taller.cursorHeight],
+                       [175, 87, 93, 68, 100])
+        XCTAssertEqual(taller.overlinePosition, 38)
+        XCTAssertEqual(taller.faceY, 37.33, accuracy: 1e-9)
+
+        let session = try Session(config: SwiftEngine.parse("font-size = 13", dark: true), scale: 1, machine: System.machine.launch)
+        session.setSize(width: 200, height: 120)
+        let normal = session.locked { session.surface.size.cell.height }
+        session.configure(SwiftEngine.parse("font-size = 13\nadjust-cell-height = 18%", dark: true))
+        let (cell, padding) = session.locked { (session.surface.size.cell, session.surface.size.padding) }
+        XCTAssertEqual(cell.height, Int((Double(normal) * 1.18).rounded()))
+        session.configure(SwiftEngine.parse("font-size = 13\nadjust-cell-height = -6%", dark: true))
+        XCTAssertEqual(session.locked { session.surface.size.cell.height }, Int((Double(normal) * 0.94).rounded()))
+
+        // Three relaxed rows of │: the line runs unbroken from the first row's top to the third's bottom.
+        session.configure(SwiftEngine.parse("font-size = 13\nadjust-cell-height = 18%", dark: true))
+        session.locked { Array("\u{2502}\r\n\u{2502}\r\n\u{2502}".utf8).withUnsafeBufferPointer { session.surface.feed($0) } }
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: 200, height: 120, mipmapped: false)
+        (descriptor.usage, descriptor.storageMode) = ([.renderTarget, .shaderRead], .shared)
+        let target = try XCTUnwrap(session.device.makeTexture(descriptor: descriptor))
+        let commands = try XCTUnwrap(session.render(into: target), "Metal frame was not submitted")
+        commands.waitUntilCompleted()
+        var bytes = [UInt8](repeating: 0, count: 200 * 120 * 4)
+        target.getBytes(&bytes, bytesPerRow: 200 * 4, from: MTLRegionMake2D(0, 0, 200, 120), mipmapLevel: 0)
+        func green(_ x: Int, _ y: Int) -> Int { Int(bytes[(y * 200 + x) * 4 + 1]) }
+        let middle = padding.top + cell.height / 2
+        let x = try XCTUnwrap((padding.left..<(padding.left + cell.width)).max { green($0, middle) < green($1, middle) })
+        let background = green(padding.left + cell.width * 2, middle)
+        let gaps = (padding.top..<(padding.top + 3 * cell.height)).filter { green(x, $0) < background + 100 }
+        XCTAssertEqual(gaps, [], "│ breaks at rows \(gaps) (cell \(cell), line at x \(x))")
+    }
+
     /// Once the child is reaped its PID can belong to another process: the pty must forget it, so
     /// closing never signals or waits for a process group that is no longer ours.
     func testReapedChildIsForgotten() async throws {

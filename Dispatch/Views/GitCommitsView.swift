@@ -286,6 +286,13 @@ private struct GitCommitsList: View {
     @Environment(\.appTypography) private var typography
     /// One column: a chosen row's detail takes the list's place (`FilesSplit`).
     @Environment(\.filesSplitNarrow) private var narrow
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// The first commit the list last showed, and the commits that arrived above it still drawing their graph in.
+    @State private var shownTop: String?
+    @State private var arriving: Set<String> = []
+    @State private var joiningHash: String?
+    /// The most commits that arrive at once with motion (a commit, a pull of a few); more just show.
+    private static let arrivalLimit = 5
 
     var body: some View {
         // The list's width caps the graph's lanes and the rows' refs, so neither crowds out the subjects.
@@ -301,7 +308,15 @@ private struct GitCommitsList: View {
         let rowHeight = typography.expanded(28)
         let graphWidth = GitGraphCell.width(lanes: layout.lanes, scale: scale)
         let refsWidth = GitRefChips.maxWidth(list: width)
+        let author = GitAuthorColumn.style(width: width, typography: typography)
         let uncommitted = session.status?.changedFiles ?? 0
+        // Commits that arrived above the one shown first (a commit made, a pull): they slide in and draw their graph.
+        // Anything else that changes the first row (another scope, a filter) just shows.
+        let previousTop = shownTop.flatMap { top in commits.prefix(Self.arrivalLimit + 1).firstIndex { $0.hash == top } }
+        let arrived: Set<String> = !reduceMotion && previousTop.map { $0 > 0 } == true
+            ? Set(commits.prefix(previousTop ?? 0).map(\.hash)) : []
+        let growing = arrived.union(arriving), drawing = !growing.isEmpty
+        let joining = !arrived.isEmpty ? shownTop : joiningHash
         return VStack(spacing: 0) {
             ScrollViewReader { proxy in
                 ScrollView(.vertical) {
@@ -319,11 +334,30 @@ private struct GitCommitsList: View {
                                              row: index < layout.rows.count ? layout.rows[index] : nil, lanes: layout.lanes,
                                              selected: session.tab == .commits && commit.hash == session.selectedCommit,
                                              graphWidth: graphWidth,
-                                             refsWidth: refsWidth, height: rowHeight)
+                                             refsWidth: refsWidth, author: author, height: rowHeight,
+                                             grown: drawing && (growing.contains(commit.hash) || joining == commit.hash) ? 0 : 1,
+                                             joining: joining == commit.hash)
                             }
                             .buttonStyle(.plain)
                             .id(commit.hash)
+                            // A commit arriving on top fades in once the row it pushes down has moved out of its place.
+                            .transition(arrived.contains(commit.hash)
+                                        ? .opacity.animation(.easeOut(duration: 0.18).delay(0.12)) : .opacity)
                             .onAppear { askForMore(seen: index, count: commits.count) }
+                        }
+                    }
+                    // Only an arrival on top moves the rows down; the arrival's own rows fade in.
+                    .animation(arrived.isEmpty ? nil : .timingCurve(0.33, 1, 0.68, 1, duration: 0.3), value: commits.first?.hash)
+                    .onAppear { shownTop = commits.first?.hash }
+                    .onChange(of: commits.first?.hash) { _, first in
+                        defer { shownTop = first }
+                        guard !arrived.isEmpty else { return }
+                        // The rows that just arrived hold their graph back for the frame they mount, then draw it in.
+                        arriving = arrived; joiningHash = shownTop
+                        Task { @MainActor in
+                            withAnimation(.easeOut(duration: 0.5).delay(0.08)) { arriving = [] }
+                            try? await Task.sleep(for: .milliseconds(650))
+                            if arriving.isEmpty { joiningHash = nil }
                         }
                     }
                 }
@@ -455,13 +489,20 @@ private struct GitCommitRow: View {
     let graphWidth: CGFloat
     /// The most the refs take: past it they fold into a count (`GitRefChips`).
     let refsWidth: CGFloat
+    /// How much of the author the list's width has room for.
+    var author = GitAuthorColumn.Style.hidden
     let height: CGFloat
+    /// A commit that just arrived draws its graph in (`GitGraphCell.grown`); the row it arrived above joins it.
+    var grown: Double = 1
+    var joining = false
     @Environment(\.appTypography) private var typography
 
     var body: some View {
         let palette = Chrome.palette
         HStack(spacing: 0) {
-            GitGraphCell(row: row, lanes: lanes, hollow: false, width: graphWidth, height: height)
+            GitGraphCell(row: row, lanes: lanes, hollow: false, width: graphWidth, height: height, grown: grown, joining: joining)
+                // Held back at once (the arrival's slide must not draw it out and back); only the drawing-in animates.
+                .transaction(value: grown) { if grown == 0 { $0.animation = nil } }
             HStack(spacing: 8) {
                 // The subject gives way first: the chips (up to their share of the row) and the age keep their width.
                 Text(verbatim: commit.subject)
@@ -475,12 +516,22 @@ private struct GitCommitRow: View {
                     GitSignatureSeal(kind: kind, check: check)
                 }
                 Spacer(minLength: 8)
+                if author != .hidden {
+                    // A column, like Files' Modified: the same width on every row, and the ages after it line up too.
+                    Text(verbatim: author == .name ? GitAuthorColumn.name(commit.author) : GitAuthorColumn.initials(commit.author))
+                        .font(AppFont.ui(size: typography.size(offset: -2)))
+                        .foregroundStyle(selected ? palette.muted : palette.detail)
+                        .frame(width: GitAuthorColumn.width(author, typography: typography), alignment: .leading)
+                        .help(commit.email.isEmpty ? commit.author : "\(commit.author) <\(commit.email)>")
+                        .accessibilityIdentifier("git-commit-author")
+                }
                 // The age moves on by the minute with nothing reloaded.
                 TimelineView(.periodic(from: .now, by: 60)) { _ in
                     Text(verbatim: FilesFormatting.age(commit.date, at: System.date()))
                         .font(AppFont.ui(size: typography.size(offset: -2)))
                         .foregroundStyle(selected ? palette.muted : palette.detail)
                         .fixedSize()
+                        .frame(minWidth: author == .hidden ? nil : GitAuthorColumn.ageWidth(typography), alignment: .trailing)
                 }
             }
             .lineLimit(1)
@@ -496,15 +547,59 @@ private struct GitCommitRow: View {
     }
 }
 
+/// The commits list's author column, shown as Files shows Modified and Size: the initials once the list has room for
+/// them beside the subjects, the name (at most `nameLimit` characters) when it is wide.
+enum GitAuthorColumn {
+    enum Style: Equatable, Sendable { case hidden, initials, name }
+
+    static let nameLimit = 20
+
+    static func style(width: CGFloat, typography: AppTypography) -> Style {
+        width >= typography.expanded(760) ? .name : width >= typography.expanded(460) ? .initials : .hidden
+    }
+
+    /// "Sam Example" → "SE": the first letters of the first and last words; one word gives one letter.
+    static func initials(_ name: String) -> String {
+        let words = name.split(whereSeparator: { $0.isWhitespace }).compactMap { $0.first(where: \.isLetter) }
+        guard let first = words.first else { return name.first.map { String($0).uppercased() } ?? "" }
+        return (words.count > 1 ? String(first) + String(words[words.count - 1]) : String(first)).uppercased()
+    }
+
+    /// The name, cut to `nameLimit` characters with an ellipsis as the last.
+    static func name(_ name: String) -> String {
+        name.count <= nameLimit ? name : String(name.prefix(nameLimit - 1)) + "…"
+    }
+
+    /// The column's width in the list's monospaced detail text (0.6 em a character): three characters for initials,
+    /// `nameLimit` for names.
+    static func width(_ style: Style, typography: AppTypography) -> CGFloat {
+        let character = typography.size(offset: -2) * 0.6
+        return (character * CGFloat(style == .name ? nameLimit : 3)).rounded(.up)
+    }
+
+    /// The age after it, right-aligned in room for the longest (`FilesFormatting.age`: "364d"), so the author column
+    /// lines up.
+    static func ageWidth(_ typography: AppTypography) -> CGFloat { (typography.size(offset: -2) * 0.6 * 4).rounded(.up) }
+}
+
 /// The lanes of one row on a 14 pt grid with the first lane 22 pt in (F4a's svg): the lines, the dot over them, and
 /// a count of deeper lanes at the left edge.
-struct GitGraphCell: View {
+struct GitGraphCell: View, Animatable {
     let row: GitGraph.Row?
     /// The lanes drawn (`GitGraph.lanes`): a dot in a deeper one is counted at the left edge instead.
     let lanes: Int
     let hollow: Bool
     let width: CGFloat
     let height: CGFloat
+    /// How far a commit that just arrived has drawn itself in (0 → 1): its dot pops, then its lines run out of it; a
+    /// `joining` row (the one it arrived above) then draws the lines coming in from the top, so one stroke runs from the
+    /// new commit into the graph.
+    var grown: Double = 1
+    var joining = false
+    nonisolated var animatableData: Double {
+        get { grown }
+        set { grown = newValue }
+    }
     @Environment(\.appTypography) private var typography
     @Environment(\.chatTheme) private var theme
 
@@ -525,13 +620,19 @@ struct GitGraphCell: View {
 
     var body: some View {
         let palette = Chrome.palette
-        let green = palette.green, amber = palette.warning, background = theme.terminal, faint = palette.detail
+        let green = palette.graphCurrent, slate = palette.graphMerged, background = theme.terminal, faint = palette.detail
         let scale = typography.expanded(1)
         let countFont = AppFont.ui(size: max(8, typography.size(offset: -4)))
+        let grown = min(1, max(0, grown)), joining = joining
+        // An arriving row: the dot in the first fifth, its lines in the first half; a joining row's lines from the top
+        // in the second half. Grown, everything is whole.
+        let dot = joining ? 1 : min(1, grown * 5), out = joining ? 1 : min(1, grown * 2), into = joining ? max(0, grown * 2 - 1) : out
         Canvas { context, size in
             guard let row else { return }
             let middle = size.height / 2
             for line in row.lines {
+                // Lines from the top edge come in from the row above; the rest leave this row's dot.
+                let reveal = line.kind == .out ? out : into
                 let from = Self.x(line.from, scale: scale), to = Self.x(line.to, scale: scale)
                 var path = Path()
                 switch line.kind {
@@ -557,11 +658,13 @@ struct GitGraphCell: View {
                         path.addCurve(to: end, control1: CGPoint(x: to, y: middle), control2: CGPoint(x: to, y: middle))
                     }
                 }
-                context.stroke(path, with: .color(line.current ? green : amber), lineWidth: 2 * scale)
+                guard reveal > 0 else { continue }
+                context.stroke(reveal < 1 ? path.trimmedPath(from: 0, to: reveal) : path,
+                               with: .color(line.current ? green : slate), lineWidth: 2 * scale)
             }
-            let color = row.current ? green : amber
-            if row.lane < lanes {
-                let radius = 4.5 * scale
+            let color = row.current ? green : slate
+            if row.lane < lanes, dot > 0 {
+                let radius = 4.5 * scale * (1 - pow(1 - dot, 3))
                 let dot = Path(ellipseIn: CGRect(x: Self.x(row.lane, scale: scale) - radius, y: middle - radius,
                                                  width: radius * 2, height: radius * 2))
                 if hollow {
@@ -755,7 +858,17 @@ private struct GitCommitDetailPane: View {
     @Bindable var session: FilesSession
     var focus: FocusState<GitCommitsFocus?>.Binding
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
+        // Another commit's detail crossfades with the last one's rather than replacing it in a frame.
+        ZStack {
+            detail
+        }
+        .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: 0.12), value: GitCommitsText.selected(session)?.hash)
+    }
+
+    @ViewBuilder private var detail: some View {
         if let commit = GitCommitsText.selected(session) {
             GitCommitDetailStack {
                 ScrollView(.vertical) {
@@ -769,8 +882,11 @@ private struct GitCommitDetailPane: View {
             }
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("git-commit-detail")
+            .id(commit.hash)
+            .transition(.opacity)
         } else {
             GitCentredNote(text: "Select a commit to see its files", identifier: "git-commit-detail-empty")
+                .transition(.opacity)
         }
     }
 }

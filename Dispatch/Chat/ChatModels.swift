@@ -298,6 +298,66 @@ struct ChatToolGroup: Identifiable {
     }
 }
 
+/// A sent message's trip from the composer (or its queue row) to where it shows next: its bubble in the transcript or
+/// its queue row. The Mac draws it over the chat (ChatSendFlightLayer) and hides the destination until it lands.
+/// A running subagent as the chat shows it: what the helper reports, and when it started on this device's clock.
+struct ChatSubagent: Identifiable, Equatable, Sendable {
+    let id: String
+    let kind: String
+    var name: String? = nil
+    var tokens: UInt64? = nil
+    /// The host's start time; else when this app first saw it (a helper that sends no time).
+    var started: Date
+
+    /// The reported agents, each keeping the start it had in `previous` when the helper sends none, so an
+    /// unchanged report compares equal.
+    static func merge(_ agents: [HelperChat.Agent], previous: [ChatSubagent], now: Date = .now) -> [ChatSubagent] {
+        agents.map { agent in
+            let started = agent.started_ms.map { Date(timeIntervalSince1970: Double($0) / 1000) }
+                ?? previous.first { $0.id == agent.id }?.started ?? now
+            return ChatSubagent(id: agent.id, kind: agent.kind, name: agent.name, tokens: agent.tokens, started: started)
+        }
+    }
+}
+
+struct ChatSendFlight: Equatable {
+    enum Place: Hashable { case composer, queued(UUID), prompt(String) }
+    let id: UUID
+    let text: String
+    let from: Place
+    let to: Place
+    /// Where the text sat when it left, in the chat's flight space; the destination is followed as it moves.
+    let source: CGRect
+    let started: TimeInterval
+}
+
+/// Where the places a message flies between are laid out, in the chat's flight space. Written from layout, read by the
+/// flight each frame; nothing observes it.
+@MainActor final class ChatFlightFrames {
+    static let space = "chat-send-flight"
+    private var frames: [ChatSendFlight.Place: CGRect] = [:]
+    /// Places laid out only as the folded queue's count, not as the message's own row: a flight there sinks into the
+    /// count and fades instead of landing as text.
+    private var absorbing: Set<ChatSendFlight.Place> = []
+    /// When each flight set off: the first frame its destination was laid out.
+    var departures: [UUID: TimeInterval] = [:]
+    subscript(place: ChatSendFlight.Place) -> CGRect? {
+        get { frames[place] }
+        set { frames[place] = newValue; if newValue == nil { absorbing.remove(place) } }
+    }
+    func absorbs(_ place: ChatSendFlight.Place) -> Bool { absorbing.contains(place) }
+    func report(_ place: ChatSendFlight.Place, at frame: CGRect, absorbing: Bool) {
+        frames[place] = frame
+        if absorbing { self.absorbing.insert(place) } else { self.absorbing.remove(place) }
+    }
+    /// A place's anchor left: forgotten unless another anchor has reported it since (the queue opening swaps the
+    /// count's anchor for the row's, in either order).
+    func withdraw(_ place: ChatSendFlight.Place, at frame: CGRect) {
+        guard frames[place] == frame else { return }
+        self[place] = nil
+    }
+}
+
 /// How much of a tool group the transcript shows: nothing but its header, the step the live turn is on, or all of it.
 enum ChatToolGroupDisclosure { case collapsed, current, all }
 
@@ -327,6 +387,13 @@ struct ChatTranscriptRow: Identifiable {
         let current: Bool
         /// The live group's last step, still running: it shows no time yet.
         var running = false
+        /// The step the current one replaced under its header, which it hands off from as it arrives.
+        var replaced: Replaced? = nil
+    }
+
+    struct Replaced {
+        let item: ChatItem
+        let step: ChatToolStep
     }
 }
 
@@ -430,12 +497,20 @@ struct ChatInputNotSent: LocalizedError {
         if receipts[id] == nil { receipts[id] = Receipt(time: now) }
     }
     func receipt(for id: String) -> Receipt? { receipts[id] }
+    /// A live step takes over its group's one shown step in place. That moves no other row, so it isn't held to the
+    /// burst interval: every step hands off, however quickly the next follows.
+    private var handoffs: [String: Receipt] = [:]
+    func recordHandoff(_ id: String, now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        handoffs = handoffs.filter { now - $0.value.time < 0.5 }
+        if handoffs[id] == nil { handoffs[id] = Receipt(time: now) }
+    }
+    func handoff(for id: String) -> Receipt? { handoffs[id] }
     /// A group header that a live row just created enters with it instead of popping in above it.
     func recordGroup(_ id: String, forming children: [String], now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
         guard children.contains(where: { receipts[$0].map { !$0.consumed && now - $0.time < 0.5 } == true }) else { return }
         record(id, now: now)
     }
-    func reset() { receipts.removeAll(); lastMotion = -Double.infinity }
+    func reset() { receipts.removeAll(); handoffs.removeAll(); lastMotion = -Double.infinity }
 }
 
 actor ChatSearch {
@@ -585,7 +660,15 @@ final class ChatSession: Identifiable {
     @ObservationIgnored var optimisticPromptBoundary: ChatPromptBoundary?
     @ObservationIgnored var optimisticPromptRetained = false
     @ObservationIgnored var optimisticPromptDelivered = false
-    var turns: [ChatTurn] = [] { didSet { cachedRows = nil; cachedVisibleRows = nil } }
+    var turns: [ChatTurn] = [] {
+        didSet {
+            cachedRows = nil; cachedVisibleRows = nil
+            // A page filling an emptied transcript (a new conversation, a reset) arrives in a fresh lazy stack.
+            if turnsWereEmpty, turns.count > 1 { scrollPosition.rebuildForMassChange() }
+            turnsWereEmpty = turns.isEmpty
+        }
+    }
+    @ObservationIgnored private var turnsWereEmpty = true
     var approvals: [PendingApproval] = [] { didSet { cachedRows = nil; cachedVisibleRows = nil } }
     private struct PatchPair: Hashable { let wrapper: UUID; let patch: UUID }
     @ObservationIgnored private var patchPairs: [PatchPair: (collapse: Bool, hidden: Set<String>)] = [:]
@@ -650,14 +733,43 @@ final class ChatSession: Identifiable {
     @ObservationIgnored private var cachedVisibleRows: [ChatTranscriptRow]?
     @ObservationIgnored let toolLayouts = ChatToolLayoutCache()
     @ObservationIgnored let transcriptArrivals = ChatTranscriptArrivals()
-    var expandedToolGroups: Set<String> = [] { didSet { cachedVisibleRows = nil } }
+    /// The message flying to its bubble or queue row now, if any.
+    var sendFlight: ChatSendFlight?
+    @ObservationIgnored let flightFrames = ChatFlightFrames()
+    /// Queue rows a flight carried their message out of: they stay hidden while it sends.
+    @ObservationIgnored var flownQueuedIDs: Set<UUID> = []
+    var expandedToolGroups: Set<String> = [] {
+        didSet {
+            cachedVisibleRows = nil
+            closed(oldValue.subtracting(expandedToolGroups))
+        }
+    }
+    /// Closing a long group at the bottom took its steps out of the lazy stack in the pass that shrank the
+    /// document, and with AppKit's offset clamped the stack kept only hidden rows: a blank transcript until the
+    /// reader scrolled (macOS 27). Rebuilding the stack in that same pass lays the rows out afresh.
+    private func closed(_ groups: Set<String>) {
+        guard !groups.isEmpty, !turns.isEmpty else { return }
+        let leaving = transcriptRows.reduce(0) { $0 + ($1.group.map { groups.contains($0.id) ? $0.children.count : 0 } ?? 0) }
+        if leaving >= Self.massChange { scrollPosition.rebuildForMassChange() }
+    }
+    /// How many rows leaving at once rebuild the transcript's lazy stack.
+    static let massChange = 10
+
     var collapsedToolGroups: Set<String> = [] { didSet { cachedVisibleRows = nil } }
     var collapsedLiveTools: Set<String> = []
 
+    /// The turn the agent is working on. A prompt shows the agent busy before its turn starts, while `activeTurnID`
+    /// is still the ended turn before it: that one is not running, so its newest group doesn't reopen until then.
+    var liveTurnID: String? {
+        guard busy, let activeTurnID, turns.last(where: { $0.id == activeTurnID })?.ended == nil else { return nil }
+        return activeTurnID
+    }
+
     func toolIsExpanded(_ row: ChatTranscriptRow) -> Bool {
         guard let item = row.item, item.kind == .tool else { return false }
-        let newestPatch = busy && row.turnID == activeTurnID &&
-            turns.last(where: { $0.id == activeTurnID })?.items.last(where: {
+        let live = liveTurnID
+        let newestPatch = live != nil && row.turnID == live &&
+            turns.last(where: { $0.id == live })?.items.last(where: {
                 $0.kind == .tool && ChatToolGroupHeader.category($0) == "Patch"
             })?.id == item.id
         return expanded.contains(row.id) || (newestPatch && !collapsedLiveTools.contains(row.id))
@@ -672,8 +784,8 @@ final class ChatSession: Identifiable {
 
     /// The live turn's newest group: the agent is on its last step, so neither shows a time yet.
     func groupIsLive(_ group: ChatToolGroup, turnID: String?) -> Bool {
-        busy && turnID == activeTurnID
-            && transcriptRows.last(where: { $0.group != nil && $0.turnID == activeTurnID })?.group?.id == group.id
+        guard let live = liveTurnID, turnID == live else { return false }
+        return transcriptRows.last(where: { $0.group != nil && $0.turnID == live })?.group?.id == group.id
     }
 
     func groupIsExpanded(_ group: ChatToolGroup, turnID: String?) -> Bool {
@@ -692,6 +804,7 @@ final class ChatSession: Identifiable {
         _ = busy; _ = activeTurnID; _ = expandedToolGroups; _ = collapsedToolGroups
         if let cachedVisibleRows { return cachedVisibleRows }
         var visible: [ChatTranscriptRow] = []
+        var shownNow: [String: ShownStep] = [:]
         for row in rows {
             if let group = row.group, case let disclosure = groupDisclosure(group, turnID: row.turnID), disclosure != .collapsed {
                 var head = row; head.bubbleEnd = false
@@ -705,14 +818,61 @@ final class ChatSession: Identifiable {
                     if group.steps.indices.contains(index) {
                         child.timeline = .init(step: group.steps[index], first: index == shown.first, last: index == shown.last,
                                                current: disclosure == .current, running: live && index == group.children.count - 1)
+                        if disclosure == .current, let item = child.item {
+                            // The step it replaced is the one these rows last showed, which in a burst isn't the one
+                            // before it. It stays the same while this step is the current one.
+                            let before = shownSteps[group.id]
+                            let replaced = before.flatMap { $0.current.item.id == item.id ? $0.replaced : $0.current }
+                            child.timeline?.replaced = replaced
+                            shownNow[group.id] = ShownStep(current: .init(item: item, step: group.steps[index]), replaced: replaced)
+                        }
                     }
                     visible.append(child)
                 }
             } else { visible.append(row) }
         }
         cachedVisibleRows = visible
+        shownSteps = shownNow
         return visible
     }
+    /// The rows and revision the transcript view shows. While its window is off screen (`holdTranscript`), the ones it
+    /// showed when it left: records, unread state and notifications go on in the model, and no row is laid out or
+    /// mounted for them until `releaseTranscript`, just before the window is back on screen.
+    var presentedTranscriptRows: [ChatTranscriptRow] { transcriptHeld ? heldTranscript.rows : visibleTranscriptRows }
+    var presentedRevision: Int { transcriptHeld ? heldTranscript.revision : revision }
+    /// Reading only this while held, the transcript's views depend on nothing that records change.
+    private(set) var transcriptHeld = false
+    @ObservationIgnored private var heldTranscript: (rows: [ChatTranscriptRow], revision: Int) = ([], 0)
+    func holdTranscript() {
+        guard !transcriptHeld else { return }
+        heldTranscript = (visibleTranscriptRows, revision)
+        transcriptHeld = true
+    }
+    /// Shows what arrived while held, in one update. Many rows leaving at once, or a page filling a transcript that
+    /// was empty, rebuild the lazy stack in that same pass, as they do when they happen on screen.
+    func releaseTranscript() {
+        guard transcriptHeld else { return }
+        let held = heldTranscript.rows
+        heldTranscript = ([], 0)
+        transcriptHeld = false
+        let live = visibleTranscriptRows
+        let remaining = Set(live.map(\.id))
+        if held.lazy.filter({ !remaining.contains($0.id) }).count >= Self.massChange || (held.isEmpty && live.count > 1) {
+            scrollPosition.rebuildForMassChange(offScreen: true)
+        }
+    }
+    /// The shown row nearest one that may have left the visible rows: itself, or for a step of a group that no
+    /// longer shows it, the group's header; nil when the transcript no longer has it.
+    func nearestVisibleRow(to id: String) -> String? {
+        if visibleTranscriptRows.contains(where: { $0.id == id }) { return id }
+        return transcriptRows.first { $0.group?.children.contains { $0.id == id } == true }?.id
+    }
+    /// The step each live group shows alone, and the one it replaced there.
+    private struct ShownStep {
+        let current: ChatTranscriptRow.Replaced
+        let replaced: ChatTranscriptRow.Replaced?
+    }
+    @ObservationIgnored private var shownSteps: [String: ShownStep] = [:]
     var transcriptRows: [ChatTranscriptRow] {
         // Register dependencies, but flatten only when the conversation changes.
         let turns = turns, approvals = approvals, optimisticPrompt = optimisticPrompt
@@ -866,7 +1026,7 @@ final class ChatSession: Identifiable {
         let chat: Bool
         let reason: String
     }
-    private static let viewLog = Logger(subsystem: "yachts.dispatch.app", category: "ChatPresentation")
+    static let viewLog = Logger(subsystem: "yachts.dispatch.app", category: "ChatPresentation")
     private(set) var viewTransitions: [ViewTransition] = []
     private(set) var hasOpenedChat = false
     /// The tab's terminal just ran a line that starts an agent Chat follows (`ChatCoordinator.terminalSubmitted`), by
@@ -901,8 +1061,8 @@ final class ChatSession: Identifiable {
     } }
     // Keep a locally submitted turn on one clock across remote acknowledgement.
     var submittedThinkingAt: Date?
-    /// Subagent types the agent reports running (`State.agents`); background agents keep running while it is idle.
-    var subagents: [String] = [] { didSet { updateWorkingSince() } }
+    /// Subagents the agent reports running (`State.agents`); background agents keep running while it is idle.
+    var subagents: [ChatSubagent] = [] { didSet { updateWorkingSince() } }
     /// When the agent last became busy or started running subagents: the activity clock when no live turn has a
     /// start (e.g. a turn that ended while its agents run). Lives here, not in a view, so rebuilding a view
     /// (switching tabs) doesn't restart it.
@@ -926,6 +1086,9 @@ final class ChatSession: Identifiable {
     /// A Claude or Pi slash command awaiting its turn, output, or menu.
     /// A native command sent to the agent whose printed output has not arrived yet (its result's title).
     @ObservationIgnored var observedCommand: (title: String, output: String?)?
+    /// Command output records Chat has taken (record id and text): a page that reads them again (a re-read transcript, as
+    /// compaction causes) must not make an earlier command's output the pending command's result.
+    @ObservationIgnored var receivedCommandOutputs: Set<String> = []
     var lastInputAt: Date?
     private let draftCollection: ChatDraftCollection
     private var draftHost = "local"
@@ -1115,7 +1278,7 @@ final class ChatSession: Identifiable {
     }
 
     private func acknowledgeVisibleOutput() {
-        if latestOutputIsVisible { hasNewMessages = false }
+        if hasNewMessages, latestOutputIsVisible { hasNewMessages = false }
     }
 
     func revealLatestMessages() {
@@ -1134,8 +1297,10 @@ final class ChatSession: Identifiable {
     }
     /// A conversation replaced inside the same agent process (/clear, /new) keeps
     /// that process's model and effort; the agent does not report them again
-    /// until its next reply.
-    func resetConversation(keepingConfiguration: Bool = false) {
+    /// until its next reply. `keepingTranscript`: the same conversation under a new
+    /// id (continued in a new file, resumed); its rows, their disclosure and the
+    /// reader's place stay, and the new id's records merge into them.
+    func resetConversation(keepingConfiguration: Bool = false, keepingTranscript: Bool = false) {
         search.close(); search.query = ""; searchMatches = []; searchIndex = ChatSearch()
         transcriptArrivals.reset()
         sideConversation?.close(); sideConversation = nil
@@ -1154,19 +1319,24 @@ final class ChatSession: Identifiable {
         relinquish()
         retiredInteraction = false
         optimisticPrompt = nil
-        approvals = []; turns = []; transcriptIndex = ChatTranscript.Index(); toolLayouts.removeAll()
+        approvals = []
+        if !keepingTranscript {
+            turns = []; transcriptIndex = ChatTranscript.Index(); toolLayouts.removeAll()
+            hasEarlier = false; loadingEarlier = false; earlierError = nil; historyGeneration = nil
+            hasNewMessages = false; scrollPosition.clear(); toolGroupIdentities = [:]; patchPairs = [:]; displayedTurns = [:]
+        }
         transcriptPath = nil; transcriptAvailable = false; version = nil
         loadingHistory = false; promptBoundary = nil
-        hasEarlier = false; loadingEarlier = false; earlierError = nil; historyGeneration = nil
-        hasNewMessages = false; scrollPosition.clear(); toolGroupIdentities = [:]; patchPairs = [:]; displayedTurns = [:]
         busy = false; subagents = []; nativeActivity = nil; submissionID = nil; interruptionID = nil; activityCheck = nil; activeTurnID = nil; awaitingPromptAck = false; starting = false; observedCommand = nil; stoppedTurnID = nil
         activityNeedsRefresh = false; activityRetryAfter = nil
         submissionFailure = nil; status = nil; title = nil; transcriptTitle = nil; configurationRequest = nil
         if !keepingConfiguration { reportedModel = nil; effort = nil }
         configurationRevision = System.uuid()
         terminalAttention = nil; agentAttention = nil
-        expanded = []; expandedToolGroups = []; collapsedToolGroups = []; collapsedLiveTools = []; scrollAnchor = nil; atBottom = true
-        followRevision = nil
+        if !keepingTranscript {
+            expanded = []; expandedToolGroups = []; collapsedToolGroups = []; collapsedLiveTools = []; scrollAnchor = nil; atBottom = true
+            followRevision = nil
+        }
         revision += 1
     }
 
@@ -1178,7 +1348,9 @@ final class ChatSession: Identifiable {
     func applyConfiguration(model: String, effort: String?, revision: UUID? = nil) {
         guard revision == nil || revision == configurationRevision else { return }
         configurationRequest = nil
-        self.model = model; self.effort = effort
+        // Every chat.state carries these: an unchanged one writes nothing (the footer reads them).
+        if reportedModel != model { reportedModel = model }
+        if self.effort != effort { self.effort = effort }
     }
 
     /// A Pi tree switch replaces visible history while retaining the terminal
@@ -1200,6 +1372,46 @@ final class ChatSession: Identifiable {
         revision += 1
     }
 
+    /// Every shown record's turn and id, as a replacement page names them.
+    var shownRecordIdentities: Set<ItemIdentity> {
+        var identities: Set<ItemIdentity> = []
+        for turn in turns {
+            for item in turn.items {
+                identities.insert(.init(turn: turn.id, item: item.source?.id ?? item.id))
+            }
+        }
+        return identities
+    }
+
+    /// Turns and recorded items a replacement page proved gone (`items` by turn and record id), and what
+    /// indexes them; a turn left without items goes too. The rest of the transcript and every presentation
+    /// choice stay, so rows that remain keep their identity and place.
+    func drop(turns ids: Set<String>, items: Set<ItemIdentity> = []) {
+        func gone(_ turn: ChatTurn, _ item: ChatItem) -> Bool {
+            ids.contains(turn.id) || item.source.map { items.contains(.init(turn: turn.id, item: $0.id)) } == true
+        }
+        var records: Set<String> = [], identities: Set<ItemIdentity> = [], emptied = ids
+        for turn in turns where ids.contains(turn.id) || items.contains(where: { $0.turn == turn.id }) {
+            let leaving = turn.items.filter { gone(turn, $0) }
+            for item in leaving {
+                records.insert(item.id); if let id = item.source?.id { records.insert(id) }
+                identities.insert(.init(turn: turn.id, item: item.id))
+            }
+            if leaving.count == turn.items.count { emptied.insert(turn.id) }
+        }
+        guard !records.isEmpty || !emptied.isEmpty else { return }
+        // As for a closing group: many rows leaving at once rebuild the lazy stack in the same pass.
+        if records.count >= Self.massChange { scrollPosition.rebuildForMassChange() }
+        for index in turns.indices where !emptied.contains(turns[index].id) && items.contains(where: { $0.turn == turns[index].id }) {
+            let turn = turns[index]
+            turns[index].items.removeAll { gone(turn, $0) }
+        }
+        turns.removeAll { emptied.contains($0.id) }
+        transcriptIndex.forget(turns: emptied, items: identities, records: records)
+        if let active = activeTurnID, emptied.contains(active) { activeTurnID = nil }
+        revision += 1
+    }
+
     func turn(_ id: String, at date: Date = Date(), fileOffset: UInt64? = nil) -> Int {
         ChatTranscript.turn(id, at: date, fileOffset: fileOffset, in: &turns)
     }
@@ -1211,6 +1423,7 @@ final class ChatSession: Identifiable {
                                            turns: &turns, index: &transcriptIndex)
         // An acknowledged optimistic prompt already animated under its rowID.
         if result.added, !historical, showChat, atBottom, !loadingHistory, item.rowID == nil {
+            if item.kind == .tool { transcriptArrivals.recordHandoff("\(turnID.utf8.count):\(turnID):\(item.id)") }
             if transcriptArrivals.admitsMotion() {
                 transcriptArrivals.record("\(turnID.utf8.count):\(turnID):\(item.id)")
                 scrollPosition.expectArrival()
@@ -1221,7 +1434,8 @@ final class ChatSession: Identifiable {
         // A record published again unchanged (the helper repeats a turn's records with its state) moves nothing:
         // no revision, so no transcript pass and no follow scroll for it.
         if !historical, result.added || result.changed {
-            if result.changed && !latestOutputIsVisible { hasNewMessages = true }
+            // Once unread, a hidden tab's further output writes nothing: attention and every glyph read this flag.
+            if result.changed, !hasNewMessages, !latestOutputIsVisible { hasNewMessages = true }
             followRevision = atBottom ? revision + 1 : nil
             revision += 1
         }

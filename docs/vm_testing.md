@@ -33,6 +33,10 @@ tart exec dispatch-tests /usr/bin/sudo -n /usr/bin/true      # exits 0
 
 Custom images need the Tart guest agent as a LaunchAgent in admin's GUI session (`--run-agent`); a root LaunchDaemon doesn't work. Display settings apply only while the VM is stopped.
 
+### Host build
+
+`vm.py test` builds for testing on this Mac (test/xcode.py's fingerprinted build, skipped when inputs are unchanged) and copies the products (`Dispatch.app`, the Term frameworks, the `.xctestrun`) with a digest manifest (`build/test-tools/xcode-prebuilt.json`) into each guest. The guest's `xcode.py` (`DISPATCH_TEST_PREBUILT=1`) checks the digest and runs `test-without-building`; it never compiles. A host Xcode newer than the guest's is fine (Xcode 27.2 products run under the guest's Xcode 26.2), but such a run no longer exercises the guest's compiler: `--guest-build` restores the old per-guest build.
+
 ### Parallel VM shards
 
 `python3 test/vm.py clone-shard` creates `dispatch-tests-2`. `--shards auto` (the default) uses both VMs only if the lighter half has at least 180 s of recorded work and every VM's full allocation fits in RAM, after reserving the larger of RAM/4 and 8 GB for macOS. Whole classes are split by recorded duration, and Linux-paired classes stay on the primary VM. Merged results go to `build/vm-tests/<run>/`. Guest tool changes (`setup`, `rust`, `linux`) must be applied to both VMs, or the shard re-cloned.

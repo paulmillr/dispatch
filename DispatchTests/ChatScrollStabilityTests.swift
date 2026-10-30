@@ -1189,7 +1189,7 @@ final class ChatScrollStabilityTests: XCTestCase {
         fixture.document.frame.size.height += 600
         for marker in fixture.markers { marker.frame.origin.y += 600 }
         fixture.position.geometryChanged()
-        try await Task.sleep(for: .milliseconds(50))
+        try await TestSupport.poll { !fixture.position.isRestoring && !fixture.position.adjustmentScheduled }
         XCTAssertEqual(fixture.position.visibleAnchor(), .init(id: "row-3", offset: 150))
         XCTAssertFalse(fixture.position.isRestoring)
     }
@@ -1223,4 +1223,129 @@ final class ChatScrollStabilityTests: XCTestCase {
     }
     private final class NavigationResponderView: NSView { override var acceptsFirstResponder: Bool { true } }
     private final class FlippedView: NSView { override var isFlipped: Bool { true } }
+}
+
+/// Recovery ends any blank in about two seconds: a rebuild is verified like a mount, the next one waits seconds
+/// (not 30), and stale callbacks or restorations cannot keep a viewport blank.
+extension ChatScrollStabilityTests {
+    func testBlankAfterAMountRebuildIsRebuiltAgainWithinSecondsUntilRowsShow() async throws {
+        let position = ChatScrollPosition()
+        var attempts: [(rebuild: Bool, at: TimeInterval)] = []
+        position.hasContent = { true }
+        let fixture = try NativeScrollFixture(rows: 8, position: position)
+        defer { fixture.close() }
+        // The second rebuild realizes rows, as a fresh lazy stack does.
+        position.recoverViewport = { _, rebuild in
+            attempts.append((rebuild, ProcessInfo.processInfo.systemUptime))
+            if rebuild, attempts.filter(\.rebuild).count == 2 { fixture.markers.forEach { $0.isHidden = false } }
+        }
+        fixture.markers.forEach { $0.isHidden = true }
+        try await TestSupport.eventually(timeout: .seconds(6)) { attempts.filter(\.rebuild).count == 2 }
+        let rebuilds = attempts.filter(\.rebuild)
+        XCTAssertLessThan(rebuilds[1].at - rebuilds[0].at, 4, "A failed rebuild is retried in seconds, not after 30")
+        XCTAssertGreaterThanOrEqual(rebuilds[1].at - rebuilds[0].at, 1.9, "but not at once")
+        try await TestSupport.eventually { position.showsRows() }
+        XCTAssertEqual(position.interactionRevision, 0, "Recovery is not user scrolling")
+    }
+
+    func testOutgoingViewsDisconnectKeepsTheIncomingViewsCallbacks() async throws {
+        let fixture = try NativeScrollFixture(rows: 8)
+        defer { fixture.close() }
+        let position = fixture.position
+        let outgoing = position.connect()
+        position.hasContent = { false }
+        let incoming = position.connect()
+        position.hasContent = { true }
+        position.recoverViewport = { _, _ in }
+        // A moved tab's new view connects first; the old one's onDisappear comes last.
+        position.disconnect(outgoing)
+        XCTAssertNotNil(position.hasContent)
+        XCTAssertNotNil(position.recoverViewport)
+        XCTAssertNotNil(position.visibleAnchor(), "The marker registry stays")
+        position.disconnect(incoming)
+        XCTAssertNil(position.hasContent)
+        XCTAssertNil(position.recoverViewport)
+    }
+
+    func testTheViewStillShowingGetsTheCallbacksBackWhenTheLaterOneLeaves() async throws {
+        let fixture = try NativeScrollFixture(rows: 8)
+        defer { fixture.close() }
+        let position = fixture.position
+        var reconnected: [UUID] = []
+        // The view showing the chat; then a second view of it appears and leaves again first.
+        let showing = position.connect { token in
+            reconnected.append(token)
+            _ = position.connect(reusing: token) { _ in }
+            position.hasContent = { true }
+        }
+        position.hasContent = { true }
+        let transient = position.connect()
+        position.hasContent = { false }
+        position.disconnect(transient)
+        XCTAssertEqual(reconnected, [showing], "The view still showing wires its callbacks again")
+        XCTAssertEqual(position.hasContent?(), true)
+        // Its own disconnect, under the same token, detaches the session.
+        position.disconnect(showing)
+        XCTAssertNil(position.hasContent)
+        XCTAssertEqual(reconnected, [showing])
+    }
+
+    func testRestorationOfAVanishedRowIsDroppedSoItBlocksNothing() async throws {
+        let fixture = try NativeScrollFixture(rows: 8)
+        defer { fixture.close() }
+        let position = fixture.position
+        position.hasContent = { true }
+        position.rowExists = { $0 != "collapsed-step" }
+        var reported: [ChatScrollPosition.Anchor] = []
+        position.positionChanged = { reported.append($0) }
+        // A collapsed group's step, saved before the collapse: no marker can ever realize it.
+        position.restore(.init(id: "collapsed-step", offset: 0))
+        try await TestSupport.eventually { !position.isRestoring }
+        XCTAssertNotEqual(position.saved?.id, "collapsed-step")
+        XCTAssertFalse(reported.contains { $0.id == "collapsed-step" })
+    }
+
+    func testUnresolvedRestorationReportsNoPositionFromTheSettleHop() async throws {
+        let fixture = try NativeScrollFixture(rows: 8)
+        defer { fixture.close() }
+        let position = fixture.position
+        position.hasContent = { true }
+        var realized: [String] = []
+        position.realizeAnchor = { realized.append($0) }
+        var reported: [ChatScrollPosition.Anchor] = []
+        position.positionChanged = { reported.append($0) }
+        // A find's match: its row exists but is not realized yet.
+        fixture.markers[6].removeFromSuperview()
+        position.restore(.init(id: "row-6", offset: 0))
+        try await TestSupport.eventually { realized.contains("row-6") }
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertTrue(position.isRestoring)
+        XCTAssertTrue(reported.isEmpty, "A measurement before the match is revealed re-armed following")
+        fixture.document.addSubview(fixture.markers[6])
+        position.geometryChanged()
+        try await TestSupport.eventually { !position.isRestoring }
+        XCTAssertEqual(reported.last?.id, "row-6")
+    }
+
+    func testAVisibleSliverOfOneRowStillCountsAsBlank() async throws {
+        let fixture = try NativeScrollFixture(rows: 8)
+        defer { fixture.close() }
+        let position = fixture.position
+        var attempts: [Bool] = []
+        position.hasContent = { true }
+        position.recoverViewport = { _, rebuild in attempts.append(rebuild) }
+        fixture.move(to: 597)
+        // The checks below skip an occluded window and a pending scroll adjustment: wait for both, not a fixed time.
+        try await TestSupport.poll { fixture.window.occlusionState.contains(.visible) && !position.adjustmentScheduled }
+        // row-1 shows 3 points; every other row is hidden.
+        fixture.markers.forEach { $0.isHidden = $0.id != "row-1" }
+        XCTAssertEqual(position.visibleAnchor()?.id, "row-1")
+        XCTAssertFalse(position.showsRows())
+        let start = ProcessInfo.processInfo.systemUptime + 1
+        for tick in 0..<4 { position.checkViewport(now: start + Double(tick)) }
+        XCTAssertEqual(attempts.first, false)
+        XCTAssertEqual(attempts.last, true)
+        fixture.markers.forEach { $0.isHidden = false }
+        XCTAssertTrue(position.showsRows())
+    }
 }

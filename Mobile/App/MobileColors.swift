@@ -14,7 +14,8 @@ extension Color {
     /// The green status dot of a connected host (M1f).
     static let stateConnected = Color("StateFinished")
     /// Chat bubbles: a deeper pink with white text in light (L2a), the desktop pink with dark text in dark (M4a);
-    /// the agent's in the Messages grey with the primary label.
+    /// the agent's in the Messages grey with the primary label. The light pink is #BF3BBF, not the mockup's #C94FC9,
+    /// which fails 4.5:1 against white text.
     static let bubbleUser = Color(uiColor: .themed("BubbleUser", \.accent))
     static let bubbleUserText = Color(uiColor: .themed("BubbleUserText", \.onAccent))
     static let bubbleAgent = Color(uiColor: .themed("BubbleAgent", \.bubbleAgent))
@@ -45,6 +46,9 @@ extension Color {
     static let destructive = Color("Destructive")
     /// Added lines and patch steps.
     static let added = Color("Added")
+    /// The commit graph's lanes: the current branch a vivid green, merged branches slate.
+    static let graphCurrent = Color("GraphCurrent")
+    static let graphMerged = Color("GraphMerged")
     /// The thinking word's shimmer: its grey and the sweeping light.
     static let shimmerBase = Color("ShimmerBase")
     static let shimmerHighlight = Color("ShimmerHighlight")

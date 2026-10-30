@@ -20,6 +20,16 @@ struct ChatTranscript {
         /// everything shown and the rest after; equal times then order by position, as file offsets did.
         var positions: ClosedRange<UInt64>?
 
+        /// Forget dropped turns: their ordering keys, and their records as seen, so a record that returns applies.
+        mutating func forget(turns: Set<String>, items: Set<ItemIdentity> = [], records: Set<String>) {
+            itemDates = itemDates.filter { !turns.contains($0.key.turn) && !items.contains($0.key) }
+            itemOffsets = itemOffsets.filter { !turns.contains($0.key.turn) && !items.contains($0.key) }
+            seen = seen.filter { key in
+                guard let separator = key.firstIndex(of: ":") else { return true }
+                return !records.contains(String(key[key.index(after: separator)...]))
+            }
+        }
+
         /// Helper records as positioned chat records (`HelperChat.Record.display`); a page's records read without
         /// times (`historical`) date to the epoch.
         mutating func decode(_ records: [HelperChat.Record], historical: Bool, earlier: Bool, now: Date) -> [ChatRecord] {

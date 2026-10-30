@@ -317,8 +317,38 @@ final class HelperChat {
     /// The agent's service tier ("priority" is Codex's /fast), when it reports one.
     let service_tier: String?
     var mode: String? = nil
-    /// Running subagents' types, oldest first; they can outlive their turn (absent from older helpers).
-    var agents: [String]? = nil
+    /// Running subagents, oldest first; they can outlive their turn (absent from older helpers).
+    var agents: [Agent]? = nil
+  }
+
+  /// One running subagent. An older helper sends only its type, which stands for its id too.
+  struct Agent: Decodable, Sendable, Equatable {
+    let id: String
+    let kind: String
+    /// The task its parent gave it; nil until the helper read it, and for agents that keep none.
+    var name: String? = nil
+    /// Input, output and cache-creation tokens so far; nil when the helper cannot count them.
+    var tokens: UInt64? = nil
+    /// When it started, in the host's Unix milliseconds; nil when the helper has no time for it.
+    var started_ms: UInt64? = nil
+
+    enum CodingKeys: String, CodingKey { case id, kind, name, tokens, started_ms }
+
+    init(id: String, kind: String, name: String? = nil, tokens: UInt64? = nil, started_ms: UInt64? = nil) {
+      self.id = id; self.kind = kind; self.name = name; self.tokens = tokens; self.started_ms = started_ms
+    }
+
+    init(from decoder: any Decoder) throws {
+      if let kind = try? decoder.singleValueContainer().decode(String.self) {
+        self.init(id: kind, kind: kind)
+        return
+      }
+      let fields = try decoder.container(keyedBy: CodingKeys.self)
+      self.init(id: try fields.decode(String.self, forKey: .id), kind: try fields.decode(String.self, forKey: .kind),
+                name: try? fields.decodeIfPresent(String.self, forKey: .name),
+                tokens: try? fields.decodeIfPresent(UInt64.self, forKey: .tokens),
+                started_ms: try? fields.decodeIfPresent(UInt64.self, forKey: .started_ms))
+    }
   }
 
   struct Choice: Decodable, Sendable {

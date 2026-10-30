@@ -27,6 +27,7 @@ struct GitDiffView: View {
 
     @Environment(\.chatTheme) private var theme
     @Environment(\.appTypography) private var typography
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var model = GitDiffLines()
     @State private var opened: Set<Int> = []
     /// The `Gap.hunk` of every gap between hunks the user opened; its lines show once the file is read.
@@ -189,6 +190,7 @@ struct GitDiffView: View {
                         }
                         notice(text, identifier: identifier).frame(minHeight: 160)
                     }
+                    .animation(reviewMotion, value: Self.reviewRows(layout.rows))
                     .padding(.vertical, 8)
                 }
             }
@@ -235,6 +237,9 @@ struct GitDiffView: View {
                                 .background(focused && cursorRow(rows) == row ? theme.ink.opacity(0.06) : .clear)
                         }
                     }
+                    // A comment or the composer coming or going opens or closes its place: the lines below slide
+                    // rather than jump. Only those rows key it, so a diff's own updates stay instant.
+                    .animation(reviewMotion, value: Self.reviewRows(rows))
                     .padding(.top, 4)
                     .padding(.bottom, 10)
                     // At least the pane's height, from the top: a two-axis scroll view centres smaller content.
@@ -334,6 +339,12 @@ struct GitDiffView: View {
         }
         review.begin(start: target.line, end: target.line, quote: [target.quote])
     }
+
+    /// The review's rows among a diff's, in order: what the rows' motion follows.
+    static func reviewRows(_ rows: [GitDiffDisplayRow]) -> [GitDiffDisplayRow] {
+        rows.filter { if case .comment = $0 { return true }; return $0 == .composer }
+    }
+    private var reviewMotion: Animation? { InterfaceMotion.animation(reduce: reduceMotion, duration: 0.22) }
 
     /// A saved comment, or the composer, at its place among the rows: in line with the code, no wider than the pane.
     @ViewBuilder private func reviewRow(_ row: GitDiffDisplayRow, review: GitDiffReview, layout: GitDiffReviewLayout,

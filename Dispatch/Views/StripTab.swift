@@ -293,6 +293,9 @@ struct HostMarkEffects: View {
             if !reduceMotion { HostSwitchRipple(trigger: trigger, color: color) }
             if connecting { HostConnectingPulse(color: color, reduceMotion: reduceMotion).transition(.opacity) }
         }
+        // Here, not only on the tab: a capsule on glass draws these effects in the strip's overlay, outside the tab's
+        // animation.
+        .animation(InterfaceMotion.animation(reduce: reduceMotion), value: connecting)
         .allowsHitTesting(false).accessibilityHidden(true)
     }
 }

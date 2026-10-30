@@ -138,7 +138,10 @@ struct TerminalContentView: View {
                     // Up at once; Chat fades in over it on the same ground, so no frame shows the terminal between.
                     AgentLaunchCover(title: chat.launchTitle(launching))
                         .padding(.top, glassInset)
-                        .transition(reduceMotion ? .identity : .asymmetric(insertion: .identity, removal: .opacity))
+                        // Its fade carries its own animation: a launch that times out leaves it while the mode
+                        // stays Terminal, which no mode animation covers.
+                        .transition(reduceMotion ? .identity : .asymmetric(insertion: .identity, removal: .opacity.animation(
+                            InterfaceMotion.animation(reduce: false, duration: InterfaceMotion.modeSwitchDuration))))
                         .zIndex(1)
                 }
                 if mode == .chat {

@@ -1934,12 +1934,12 @@ private struct HarbourSweep: NSViewRepresentable {
             CATransaction.commit()
         }
 
-        override func start(_ rate: CAFrameRateRange) {
+        override func start() {
             guard drawnDiameter > 0 else { return }
             beam.transform = CATransform3DIdentity
             let turn = CABasicAnimation(keyPath: "transform.rotation.z")
             turn.fromValue = 0; turn.toValue = 2 * Double.pi; turn.duration = HarbourRadar.period
-            loop(turn, on: beam, rate: rate)
+            loop(turn, on: beam)
         }
 
         override func stop() {
@@ -2086,8 +2086,8 @@ private struct HarbourEchoes: NSViewRepresentable {
             }
         }
 
-        override func start(_ rate: CAFrameRateRange) {
-            for (blip, echo) in zip(blips, echoes) { loop(Self.afterglow(at: echo.bearing / 360), on: blip, rate: rate) }
+        override func start() {
+            for (blip, echo) in zip(blips, echoes) { loop(Self.afterglow(at: echo.bearing / 360), on: blip) }
         }
 
         /// One turn of a glow whose bearing the beam crosses at `phase` of the turn: off until then, full as it

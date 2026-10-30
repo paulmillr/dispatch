@@ -39,6 +39,18 @@ struct TerminalHistoryPosition: Equatable, Sendable {
     var viewport: UInt32
 }
 
+/// How a `terminals.follow` call went (`TerminalFeed.follow`).
+enum TerminalFollowResult: Equatable, Sendable {
+    /// The helper took it: `false` holds the attachment's output, `true` queued one whole repaint as its next output.
+    case done
+    /// The terminal's multiplexer cannot repaint (native), or the feed holds nothing: it keeps following.
+    case unsupported
+    /// The call failed. A failed `true` leaves the output held: only a new attachment brings a fresh screen.
+    case failed
+    /// The attachment ended before the call went out: nothing was sent.
+    case stale
+}
+
 /// What an attachment delivers, in order.
 enum TerminalFeedEvent: Equatable, Sendable {
     /// Program output for the emulator.
@@ -74,8 +86,19 @@ protocol TerminalFeed: AnyObject, Sendable {
     func send(_ input: Data)
     func resize(_ size: TerminalFeedSize)
     func scroll(_ request: TerminalScrollRequest) async -> TerminalScrollResult
-    /// The screen the helper verifies chat input against (`terminals.publish`); only the latest matters.
+    /// The screen the helper verifies chat input against (`terminals.publish`); only the latest matters. A feed whose
+    /// helper reads the screen itself (`hostsScreens`) sends nothing.
     func publish(_ screen: TerminalScreen)
+    /// `terminals.follow` on the current attachment, after the calls made before it: `false` holds its output (dropped
+    /// on the host, nothing buffered), `true` asks for one whole repaint, which arrives as the next output.
+    func follow(_ following: Bool) async -> TerminalFollowResult
+
+    /// The helper reads this terminal's screens from tmux or herdr itself (its hello accepted `screens.host`): the
+    /// presence publishes nothing, since one publication turns those reads off until the attachment ends.
+    var hostsScreens: Bool { get }
+    /// The attachment's output can be held while no view shows the terminal (the hello accepted `terminals.follow`
+    /// and `screens.host`: sends are verified against the helper's own reads, which need nothing from the phone).
+    var holdsOutput: Bool { get }
 
     /// Which side keeps the history, when the feed knows it regardless of the multiplexer (`.unknown`: ask the
     /// topology, or learn it from the first scroll answer).
@@ -88,6 +111,9 @@ protocol TerminalFeed: AnyObject, Sendable {
 }
 
 extension TerminalFeed {
+    func follow(_ following: Bool) async -> TerminalFollowResult { .unsupported }
+    var hostsScreens: Bool { false }
+    var holdsOutput: Bool { false }
     var scrollback: TerminalScrollback { .unknown }
     var clipboardWrite: Bool { false }
     var endsOnDetach: Bool { false }

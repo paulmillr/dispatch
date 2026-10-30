@@ -93,7 +93,13 @@ struct ChatComposer: NSViewRepresentable {
             text.selectedTextAttributes = [.backgroundColor: NSColor(theme.selection), .foregroundColor: NSColor(theme.selectedText)]
             text.appliedTheme = theme
         }
-        let placeholder = TerminalRuntime.shared.chat.placeholder(session)
+        // A message leaving the composer starts as its exact copy here: no placeholder under it until it lands.
+        let placeholder = session.sendFlight?.from == .composer ? "" : TerminalRuntime.shared.chat.placeholder(session)
+        // Back after the flight: it fades in rather than appearing the frame the message lands.
+        if text.placeholder.isEmpty, !placeholder.isEmpty, text.string.isEmpty,
+           !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            text.fadeInPlaceholder()
+        }
         text.placeholder = placeholder
         let provisional = ChatDictation.shared.provisional(session.id)
         text.provisional = provisional

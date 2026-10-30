@@ -124,6 +124,64 @@ public struct CellMetrics: Equatable {
     }
 }
 
+/// A metric's adjustment as the config writes it (Ghostty's Metrics.Modifier): `N%` scales by 1 + N/100 (-100% and
+/// below scale to 0), `N` adds whole pixels.
+public enum MetricModifier: Equatable, Sendable {
+    case percent(Double), absolute(Int32)
+
+    /// Modifier.parse: a float before `%`, else a decimal i32.
+    init?(_ bytes: [UInt8]) {
+        guard let last = bytes.last else { return nil }
+        if last == 0x25 {
+            guard let percent = Config.float(Array(bytes.dropLast())).map({ $0 / 100 }) else { return nil }
+            self = .percent(percent <= -1 ? 0 : 1 + percent)
+            return
+        }
+        let negative = bytes.first == 0x2D
+        let digits = bytes.first == 0x2B || negative ? bytes.dropFirst() : bytes[...]
+        guard let n = zigInt(digits, base: 10, max: negative ? UInt64(Int32.max) + 1 : UInt64(Int32.max)) else { return nil }
+        self = .absolute(Int32(truncatingIfNeeded: negative ? -Int64(n) : Int64(n)))
+    }
+
+    /// Modifier.apply on an unsigned pixel metric: rounded, never below 0.
+    func apply(_ value: UInt32) -> UInt32 {
+        switch self {
+        case .percent(let p):
+            let v = (Double(value) * max(0, p)).rounded()
+            return v >= Double(UInt32.max) ? .max : UInt32(v)
+        case .absolute(let a):
+            return UInt32(clamping: max(0, Int64(value) + Int64(a)))
+        }
+    }
+}
+
+extension CellMetrics {
+    /// The cell metrics with `adjust-cell-height` applied.
+    public init(_ f: FaceMetrics, cellHeight: MetricModifier?) {
+        self.init(f)
+        if let cellHeight { adjustCellHeight(cellHeight) }
+    }
+
+    /// adjust-cell-height (Ghostty's Metrics.apply for cell_height): the new height, at least 1, with the baseline and
+    /// the line positions moved by half the difference each so text stays centred. An odd pixel goes to the edge the face
+    /// leans away from. The cursor keeps its height.
+    public mutating func adjustCellHeight(_ modifier: MetricModifier) {
+        let original = cellHeight, new = max(modifier.apply(original), 1)
+        guard new != original else { return }
+        cellHeight = new
+        let diff = Double(new) - Double(original), half = diff / 2
+        let aboveCenter = faceY - (Double(original) - faceHeight) / 2 > 0
+        let (top, bottom) = aboveCenter ? (half.rounded(.up), half.rounded(.down)) : (half.rounded(.down), half.rounded(.up))
+        // Ghostty's addFloatToInt: saturating at the unsigned range.
+        let add = { (value: UInt32, delta: Double) in UInt32(clamping: max(0, Int64(value) + Int64(delta))) }
+        cellBaseline = add(cellBaseline, bottom)
+        faceY += bottom
+        underlinePosition = add(underlinePosition, top)
+        strikethroughPosition = add(strikethroughPosition, top)
+        overlinePosition = Int32(clamping: Int64(overlinePosition) + Int64(top))
+    }
+}
+
 /// A rendered glyph (font glyph or sprite): its pixels (rows top down; 1 byte per pixel, 4 for
 /// color) and where they go relative to the cell's baseline origin.
 public struct RasterGlyph: Sendable {

@@ -50,11 +50,16 @@ pub struct Sink {
     pub updates: Rc<RefCell<Vec<Update>>>,
     pub states: Rc<RefCell<BTreeMap<String, State>>>,
     pub forms: Rc<RefCell<BTreeMap<String, crate::questions::Pending>>>,
-    /// Bindings whose follow ended on a replaced, shortened or unreadable rollout: read again.
-    pub reloads: Rc<RefCell<Vec<Binding>>>,
+    /// Bindings whose follow ended on a replaced, shortened or unreadable rollout: read again,
+    /// with the file and offset the follow had reached (None: another rollout).
+    pub reloads: Rc<RefCell<Vec<(Binding, Option<(Metadata, u64)>)>>>,
 }
 
 impl Follows {
+    /// The rollout revision a session's follow reads.
+    pub(crate) fn file(&self, session: &str) -> Option<Metadata> {
+        self.0.borrow().get(session).map(|follow| follow.file)
+    }
     pub(crate) fn turn(&self, binding: &Binding) -> Option<String> {
         self.0.borrow().values().find(|follow| {
             follow.binding.session == binding.session
@@ -208,7 +213,7 @@ impl Follows {
                 // next poll read the file again): the harness reads the recent page again.
                 let follow = follows.remove(session).unwrap();
                 io.unwatch(follow.watch);
-                sink.reloads.borrow_mut().push(follow.binding);
+                sink.reloads.borrow_mut().push((follow.binding, Some((follow.file, follow.offset))));
                 let now = io.now();
                 io.timer(now);
                 return false;
@@ -298,3 +303,18 @@ impl Follows {
         full || std::mem::take(&mut follow.again)
     }
 }
+
+/// Whether a reload read the rollout its follow had reached (file, offset): the same file, not
+/// shorter, from a page reaching back to that offset. Then its records merge into the chat;
+/// another, replaced or shortened rollout replaces the history.
+pub(crate) fn continues(reached: Option<(Metadata, u64)>, now: Option<Metadata>, earlier: Option<&str>) -> bool {
+    let Some(((file, offset), now)) = reached.zip(now) else { return false };
+    let start = earlier.map(|earlier| earlier.rsplit(':').next().and_then(|start| start.parse::<u64>().ok()));
+    (now.device, now.inode) == (file.device, file.inode)
+        && now.size >= offset
+        && start.is_none_or(|start| start.is_some_and(|start| start <= offset))
+}
+
+#[cfg(test)]
+#[path = "follow.test.rs"]
+mod tests;

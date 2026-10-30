@@ -271,18 +271,32 @@ def find_iphone(ui, args, env):
     return phone
 
 
-def signing_problem(path=None):
-    """Why a device build cannot sign (build/signing.xcconfig, scripts/ios-signing.py), or None."""
+def signing_module():
     import importlib.util
     spec = importlib.util.spec_from_file_location('ios_signing', ROOT / 'scripts/ios-signing.py')
     signing = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(signing)
-    path = path or signing.CONFIG
+    return signing
+
+
+def signing_problem(path=None, stable=False):
+    """Why a device build cannot sign (build/signing.xcconfig, or build/signing-stable.xcconfig for --stable;
+    scripts/ios-signing.py), or None."""
+    signing = signing_module()
+    path = path or (signing.STABLE_CONFIG if stable else signing.CONFIG)
+    name = os.path.relpath(path, ROOT)
     if not path.is_file():
-        return ('no build/signing.xcconfig: write it once with python3 scripts/ios-signing.py <TEAM ID> '
-                '[--suffix .yourname] (docs/ios.md, Signing and a device)')
+        return (f'no {name}: write it once with python3 scripts/ios-signing.py <TEAM ID> '
+                f'[--suffix .yourname]{" --stable" if stable else ""} (docs/ios.md, Signing and a device)')
     found = signing.problems(*signing.parse(path.read_text()))
-    return 'build/signing.xcconfig: ' + '; '.join(found) if found else None
+    return f'{name}: ' + '; '.join(found) if found else None
+
+
+def stable_settings(device):
+    """--stable's command-line build settings: the stable bundle id prefix, and for a device the stable account's team
+    and suffix from build/signing-stable.xcconfig (docs/ios.md, Pilot and stable)."""
+    signing = signing_module()
+    return signing.stable_overrides(signing.parse(signing.STABLE_CONFIG.read_text())[0] if device else None)
 
 
 def bundle_identifier(app):
@@ -380,7 +394,24 @@ def main():
                         help='build Dispatch for a device and install it there with devicectl '
                              '(default: the first paired iPhone or iPad; needs a team in build/signing.xcconfig: '
                              'scripts/ios-signing.py; add --prod for the build to keep on the phone)')
+    parser.add_argument('--stable', action='store_true',
+                        help="build the stable account's apps, bundle ids yachts.dispatch.* (without it: the Pilot "
+                             "account's yachts.dispatch.pilot.*, also named Dispatch); a device build signs with "
+                             'build/signing-stable.xcconfig (scripts/ios-signing.py --stable; docs/ios.md, Pilot and stable)')
+    parser.add_argument('--archive', type=Path, metavar='PATH',
+                        help='build Dispatch for iPhone (Release, any device) into an .xcarchive at PATH, signed ad hoc: '
+                             'no team or certificate here; the signing machine re-signs it for App Store Connect '
+                             '(docs/releasing.md)')
+    parser.add_argument('--build-number', metavar='N',
+                        help='CFBundleVersion of every app (CURRENT_PROJECT_VERSION), e.g. 20261030.1345: App Store '
+                             'Connect takes each number once per version')
     args = parser.parse_args()
+    if args.build_number is not None and not re.fullmatch(r'[0-9]+(\.[0-9]+){0,2}', args.build_number):
+        parser.error('--build-number is one to three dot-separated integers')
+    if args.archive:
+        if args.ios_device is not None or args.watch or args.demo or args.debug:
+            parser.error('--archive builds Release for any iPhone: no device, simulator, watch or demo')
+        args.ios = args.prod = args.just_build = True
     if args.demo:
         if args.ios_device is not None or args.prod:
             parser.error('--demo runs in the simulator, in Debug (the demo is compiled out of Release)')
@@ -391,7 +422,7 @@ def main():
         args.ios = True
     if args.ios_device is not None:
         args.ios = True
-        problem = signing_problem()
+        problem = signing_problem(stable=args.stable)
         if problem:
             print(f'Cannot sign for a device: {problem}', file=sys.stderr)
             return 1
@@ -423,6 +454,7 @@ def main():
         link.replace(directory / 'latest.log')
         ui = BuildUI(log)
         title = 'Dispatch for Apple Watch' if args.watch else 'Dispatch for iPhone' if args.ios else 'Dispatch'
+        title += ' (stable)' if args.stable else ''
         print(f'\n  {ui.style(title, "1")}  {ui.style(configuration, "36")}')
         hint = ('./run.sh  # to get debug build' if configuration == 'Release' else
                 './run.sh --production  # to get faster release build')
@@ -434,29 +466,41 @@ def main():
             ui.step('Generating Xcode project',
                     ['python3', 'scripts/generate-project.py'], env)
             if args.ios:
-                # SwiftPM resolves the SSH engine's binary target before any build script: prepare it first.
-                ui.step('Preparing the iPhone SSH engine', ['python3', 'scripts/setup_mobile.py'], env)
                 phone = find_iphone(ui, args, env) if args.ios_device is not None else None
-                watch = None
-                if args.watch:
+                watch = simulator = None
+                if args.archive:
+                    pass
+                elif args.watch:
                     simulator, watch = find_pair(args.watch_simulator)
                     ui.line(ui.style('✓', '32'), f'Paired simulators: {simulator[1]} and {watch[1]}')
                 else:
                     simulator = find_simulator(args.simulator) if args.ios_device is None else None
-                destination, platform = ios_target(args, phone, simulator)
+                destination, platform = (('generic/platform=iOS', 'iphoneos') if args.archive else
+                                         ios_target(args, phone, simulator))
                 command = ['xcodebuild', '-project', 'Dispatch.xcodeproj', '-scheme', 'DispatchMobile',
                            '-configuration', configuration, '-destination', destination,
                            '-derivedDataPath', IOS_DERIVED_DATA, 'build']
+                if args.archive:
+                    # Ad hoc, with each target's entitlements (the watch's App Group): export on the signing machine
+                    # replaces the signature with Apple Distribution and the App Store profiles (docs/releasing.md).
+                    command[-1:] = ['-archivePath', str(args.archive.resolve()), 'archive', 'CODE_SIGNING_ALLOWED=NO',
+                                    'DEVELOPMENT_TEAM=']
                 if args.ios_device is not None:
                     # Automatic signing from the command line: Xcode's account makes or renews the certificate and
                     # the profile (7 days for a free Apple ID) and registers the phone with the team.
                     command[-1:-1] = ['-allowProvisioningUpdates', '-allowProvisioningDeviceRegistration']
+                if args.stable:
+                    command += stable_settings(device=args.ios_device is not None)
+                if args.build_number:
+                    command.append(f'CURRENT_PROJECT_VERSION={args.build_number}')
                 if env.get('DISPATCH_BUILD_JOBS'):
                     command += ['-jobs', env['DISPATCH_BUILD_JOBS']]
                     env['CARGO_BUILD_JOBS'] = env['DISPATCH_BUILD_JOBS']
                 device = 'iPad' if simulator and is_ipad(simulator[1]) else 'iPhone'
                 ui.step(f'Building Dispatch for {device}', command, env)
                 app = ROOT / IOS_DERIVED_DATA / 'Build/Products' / f'{configuration}-{platform}' / 'DispatchMobile.app'
+                if args.archive:
+                    app = args.archive / 'Products/Applications/DispatchMobile.app'
                 if not args.just_build and args.watch:
                     launch_watch(ui, app, env, simulator, watch)
                 elif not args.just_build:
@@ -476,6 +520,10 @@ def main():
                 env['DISPATCH_HELPER_BUILD_COMPLETE'] = str(helper_complete)
                 if production:
                     command.append('DISPATCH_STRIP_APP=YES')
+                if args.stable:
+                    command += stable_settings(device=False)
+                if args.build_number:
+                    command.append(f'CURRENT_PROJECT_VERSION={args.build_number}')
                 if env.get('DISPATCH_BUILD_JOBS'):
                     command += ['-jobs', env['DISPATCH_BUILD_JOBS']]
                     env['CARGO_BUILD_JOBS'] = env['DISPATCH_BUILD_JOBS']

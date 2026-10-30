@@ -54,17 +54,21 @@ actor SpaceBranchReader {
         self.read = read
     }
 
-    func branch(_ source: SpaceBranchSource) async -> String? {
+    /// `fresh`: something may have changed the branch since the last read (a command finished): neither the cache nor
+    /// a read already under way answers.
+    func branch(_ source: SpaceBranchSource, fresh: Bool = false) async -> String? {
         guard !Task.isCancelled else { return nil }
+        if fresh, let task = pending[source.key] { _ = await task.value }
         let asked = System.date()
-        if let cached = recent(source.key, at: asked) { return cached.branch }
-        if let task = pending[source.key] { return await task.value }
+        if !fresh, let cached = recent(source.key, at: asked) { return cached.branch }
+        if !fresh, let task = pending[source.key] { return await task.value }
         if free > 0 { free -= 1 } else {
             await withCheckedContinuation { waiting.append($0) }
             // Meanwhile another space read this directory, or this one was cancelled: the slot goes on to the next.
-            if Task.isCancelled || recent(source.key, at: System.date()) != nil || pending[source.key] != nil {
+            // A fresh read takes no other read's answer: it waits for one under way, then reads itself.
+            if Task.isCancelled || (!fresh && recent(source.key, at: System.date()) != nil) || pending[source.key] != nil {
                 release()
-                return await branch(source)
+                return await branch(source, fresh: fresh)
             }
         }
         let task = Task {
@@ -97,6 +101,35 @@ actor SpaceBranchReader {
             let branch: String? = try? await HelperApp.shared.connection(endpoint)
                 .request("files.branch", params: ["path": source.key.directory])
             return branch
+        }
+    }
+}
+
+/// Finished commands, for the sidebar's branch reads: a row's wait between reads ends at once when one of its terminals
+/// finishes a command (FilesCoordinator.shellPrompted), so a `git checkout` there shows without waiting for the poll.
+@MainActor
+final class SpaceBranchPrompts {
+    static let shared = SpaceBranchPrompts()
+    private struct Sleeper { let terminals: Set<UUID>; let nap: Task<Void, Never> }
+    private var sleepers: [Int: Sleeper] = [:]
+    private var woken: Set<Int> = []
+    private var next = 0
+
+    /// Waits `duration`, or until one of `terminals` finishes a command: true then.
+    func nap(for terminals: Set<UUID>, _ duration: Duration) async throws -> Bool {
+        let token = next, nap = Task { _ = try? await Task.sleep(for: duration) }
+        next += 1
+        sleepers[token] = Sleeper(terminals: terminals, nap: nap)
+        defer { sleepers[token] = nil }
+        await withTaskCancellationHandler { await nap.value } onCancel: { nap.cancel() }
+        try Task.checkCancellation()
+        return woken.remove(token) != nil
+    }
+
+    func prompted(_ terminal: UUID) {
+        for (token, sleeper) in sleepers where sleeper.terminals.contains(terminal) {
+            woken.insert(token)
+            sleeper.nap.cancel()
         }
     }
 }

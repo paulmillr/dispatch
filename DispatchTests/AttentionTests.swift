@@ -50,6 +50,7 @@ final class AttentionTests: XCTestCase {
         XCTAssertFalse(old.shipsBell, "Nautical's bell is off until chosen")
         XCTAssertTrue(old.enableHostDetection)
         XCTAssertTrue(old.allowClipboardWrites, "Programs can set the clipboard by default")
+        XCTAssertTrue(old.autoApproveUnsafePastes, "Existing settings retain automatic paste approval")
         XCTAssertFalse(old.showGitBranches)
         let large = try JSONDecoder().decode(Preferences.self, from: Data(#"{"largeSidebarItems":true}"#.utf8))
         XCTAssertTrue(large.showGitBranches, "Large sidebar items used to show branches")
@@ -69,6 +70,7 @@ final class AttentionTests: XCTestCase {
         updated.shipsBell = true
         updated.enableHostDetection = false
         updated.allowClipboardWrites = false
+        updated.autoApproveUnsafePastes = false
         XCTAssertEqual(try JSONDecoder().decode(Preferences.self, from: JSONEncoder().encode(updated)), updated)
     }
 
@@ -312,8 +314,8 @@ final class AttentionTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(150))
         let root = try XCTUnwrap(window.contentView)
         let tabs = try await PresentationTestSupport.capture(window)
-        // Notifications is a group on the General page.
-        let extra = try XCTUnwrap(tabs.recognizedText().first { $0.topCandidates(1).first?.string == "General" })
+        // Notifications is a card on the Features page.
+        let extra = try XCTUnwrap(tabs.recognizedText().first { $0.topCandidates(1).first?.string == "Features" })
         let point = NSPoint(x: extra.boundingBox.midX * root.bounds.width,
                             y: (root.isFlipped ? 1 - extra.boundingBox.midY : extra.boundingBox.midY) * root.bounds.height)
         try PresentationTestSupport.click(window, at: root.convert(point, to: nil))
@@ -321,8 +323,102 @@ final class AttentionTests: XCTestCase {
         _ = try await PresentationTestSupport.capture(window, named: "settings-1o", in: "attention-validation")
         // AppKit fits the window to the desktop, which clips the page, and with the Files group the page outgrows a
         // 1080 pt display, so a capture of the whole scroll document cannot read it: the text drawn there can.
-        for title in ["Notifications", "banner and Dock badge when a pane needs input or finishes a response"] {
+        for title in ["Notifications", "dock badge and banner below tabs"] {
             try PresentationTestSupport.assertRendered(title, in: root)
         }
+    }
+}
+
+/// A hidden chat's live output: unread is written once, attention runs one pass per main-actor turn however many
+/// records arrived in it, and a pass that changes nothing calls neither the Dock nor Notification Centre.
+extension AttentionTests {
+    final class Notified: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = false
+        var marked: Bool { lock.withLock { value } }
+        func mark() { lock.withLock { value = true } }
+    }
+
+    /// The pass a change scheduled runs before the test's continuation (both are main-queue jobs, in order).
+    private func settle() async { for _ in 0..<8 { await Task.yield() } }
+
+    private func reply(_ index: Int, turn: String) -> HelperChat.Record {
+        .init(id: "reply-\(index)", turn: turn, kind: "assistant", text: "Fixture step \(index).", title: "", output: "",
+              blocks: [], completed: true, exit_code: nil, patch: nil, time_ms: 1_750_000_000_000 + Int64(index) * 1000,
+              documents: [], tool: nil, inline_reasoning: false)
+    }
+
+    func testHiddenChatOutputMarksUnreadOnceAndAttentionPassesOncePerBatch() async throws {
+        let controller = AppDelegate(), runtime = TerminalRuntime.shared
+        let previousWorkspace = runtime.workspace
+        controller.settings.values = Preferences()
+        // The Dock badge and Notification Centre only: no macOS notification permission prompt.
+        controller.settings.values.attentionNotifications = false
+        controller.settings.values.attentionSound = false
+        runtime.workspace = controller.workspace
+        controller.workspace.newLocalSpace()
+        let hidden = try XCTUnwrap(controller.workspace.activeSurfaceID)
+        controller.workspace.newTab()
+        XCTAssertNotEqual(controller.workspace.activeSurfaceID, hidden)
+        let chat = runtime.chat, session = chat.session(for: hidden)
+        session.active = true; session.busy = true
+        let attention = controller.attention
+        defer {
+            attention.stop()
+            chat.close(hidden)
+            runtime.workspace = previousWorkspace
+        }
+        attention.start()
+        await settle()
+        var expected = attention.effects
+        XCTAssertEqual(expected.passes, 1)
+
+        // A busy hidden chat, 50 records in 50 turns: the first marks it unread (one attention pass), the rest write nothing.
+        var unreadWrites = 0
+        for index in 0..<50 {
+            let notified = Notified()
+            withObservationTracking { _ = session.hasNewMessages } onChange: { notified.mark() }
+            chat.receiveHelper(.records([reply(index, turn: "busy")]), session: session)
+            if notified.marked { unreadWrites += 1 }
+            await settle()
+        }
+        XCTAssertTrue(session.hasNewMessages)
+        XCTAssertEqual(session.turns.flatMap(\.items).count, 50)
+        XCTAssertEqual(unreadWrites, 1, "Only the first record of a hidden chat changes its unread flag")
+        expected.passes += 1
+        XCTAssertEqual(attention.effects, expected, "One pass for the unread change, and the badge (none) and alerts stay as they were")
+
+        // Idle and unread, its transcript is what attention reads: five batches of ten records are five passes.
+        session.busy = false
+        await settle()
+        expected.passes += 1
+        XCTAssertEqual(attention.effects, expected)
+        for batch in 0..<5 {
+            chat.receiveHelper(.records((0..<10).map { reply(100 + batch * 10 + $0, turn: "idle") }), session: session)
+            await settle()
+        }
+        expected.passes += 5
+        XCTAssertEqual(attention.effects, expected, "A batch is one pass however many records it carries")
+
+        // Waiting: the badge is set when its count changes, and unchanged passes leave it alone.
+        session.approvals = [PendingApproval(key: "fixture-approval", operation: "Run tests?") { _ in }]
+        await settle()
+        expected.passes += 1; expected.badges += 1
+        XCTAssertEqual(attention.effects, expected)
+        XCTAssertEqual(NSApp.dockTile.badgeLabel, "1")
+        for batch in 0..<3 {
+            chat.receiveHelper(.records((0..<10).map { reply(200 + batch * 10 + $0, turn: "idle") }), session: session)
+            await settle()
+        }
+        XCTAssertEqual(attention.effects.badges, expected.badges, "More output while waiting leaves the badge alone")
+        XCTAssertEqual(attention.effects.removals, expected.removals)
+        expected.passes = attention.effects.passes
+
+        // The approval answered: its alert is retired once and the badge cleared once.
+        session.approvals = []
+        await settle()
+        expected.passes += 1; expected.badges += 1; expected.removals += 1
+        XCTAssertEqual(attention.effects, expected)
+        XCTAssertNil(NSApp.dockTile.badgeLabel)
     }
 }

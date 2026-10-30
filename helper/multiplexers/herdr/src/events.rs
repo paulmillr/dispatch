@@ -201,19 +201,42 @@ impl Herdr {
                         Ok((lines, eof)) => {
                             for line in lines {
                                 let result = Json::parse(&line).and_then(|json| {
+                                    let full = json.root().get("full").and_then(|v| v.boolean()) == Some(true);
                                     self.controllers
                                         .get_mut(&id)
                                         .unwrap()
                                         .decoder
                                         .frame(json.root())
+                                        .map(|bytes| bytes.map(|bytes| (bytes, full)))
                                 });
                                 match result {
-                                    Ok(Some(bytes)) => {
+                                    Ok(Some((bytes, full))) => {
                                         self.rediscover(io, id);
+                                        // A full frame repaints for the observers that held their output too
+                                        // (follow_restore), in herdr's render mode (attach) whatever they missed;
+                                        // after the frame itself, which they do not get while held.
+                                        let restores = if full {
+                                            std::mem::take(&mut self.controllers.get_mut(&id).unwrap().restores)
+                                        } else {
+                                            Vec::new()
+                                        };
+                                        let repaint = (!restores.is_empty()).then(|| {
+                                            let mut repaint = b"\x1b[?1049h\x1b[?7l".to_vec();
+                                            repaint.extend_from_slice(&bytes);
+                                            repaint
+                                        });
                                         self.notifications.push_back(Update::Output {
                                             terminal: id,
                                             bytes,
                                         });
+                                        for (token, done) in restores {
+                                            self.notifications.push_back(Update::Restore {
+                                                terminal: id,
+                                                token,
+                                                bytes: repaint.clone().unwrap_or_default(),
+                                            });
+                                            self.defer(io, done, Ok(()));
+                                        }
                                         let c = self.controllers.get_mut(&id).unwrap();
                                         let waiters = std::mem::take(&mut c.waiters);
                                         let pending = std::mem::take(&mut c.pending);

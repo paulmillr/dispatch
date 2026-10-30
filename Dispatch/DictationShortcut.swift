@@ -1,22 +1,20 @@
 import AppKit
 import Dictation
 
-/// Dictation from the keyboard (Settings › Dictation › Hold right ⌘), into the active chat, or on a terminal or files
-/// pane as "Dispatch, …" commands only (VoiceNavigation, with Navigate by voice on):
-/// - hold right ⌘ alone: listen while it is down; releasing it inserts the transcript (or runs the command), ↩ before
+/// Dictation from the keyboard (Settings › Keyboard › Voice: right ⌘ unless another key is chosen), into the active
+/// chat, or on a terminal or files pane as "Dispatch, …" commands only (VoiceNavigation, with Navigate by voice on):
+/// - hold the key alone: listen while it is down; releasing it inserts the transcript (or runs the command), ↩ before
 ///   releasing sends the draft;
 /// - tap it: conversation mode (ChatDictation) until the next tap: each utterance goes into the draft, ↩ sends and it
 ///   goes on listening;
 /// - esc stops reading aloud, else cancels, putting the draft back (what conversation mode already added stays).
-/// Right ⌘ with another key or a click is an ordinary chord: listening starts only once the key has been held alone for
+/// The key with another key or a click is an ordinary chord: listening starts only once the key has been held alone for
 /// a moment, so a chord never turns the microphone on.
 @MainActor
 final class DictationShortcut {
-    /// kVK_RightCommand, and its device bit in the event's flags (NX_DEVICERCMDKEYMASK).
-    static let rightCommand: UInt16 = 54
-    static let rightCommandBit: UInt = 0x10
-    /// Held this long alone, right ⌘ starts listening.
-    static let hold: TimeInterval = 0.15
+    /// Held this long alone, the key starts listening. Longer than a chord takes to reach its key (⌘/ came in at
+    /// 0.15 s and turned the microphone on before the / cancelled it).
+    static let hold: TimeInterval = 0.3
     /// Released sooner than this, it was a tap: listening goes on hands-free.
     static let tap: TimeInterval = 0.4
 
@@ -64,6 +62,8 @@ final class DictationShortcut {
 
     private struct Press {
         let at: TimeInterval
+        /// The voice key pressed: a release still ends it if Settings chose another meanwhile.
+        let key: VoiceKey
         let target: Target
         /// It started this dictation (rather than stopping one already listening).
         var started = false
@@ -101,7 +101,7 @@ final class DictationShortcut {
         case .keyDown:
             return keyDown(event)
         default:
-            // A click with right ⌘ down (⌘-click) is a chord.
+            // A click with the key down (⌘-click) is a chord.
             if let press, !press.started { abandon() }
             return event
         }
@@ -109,20 +109,16 @@ final class DictationShortcut {
 
     private func flagsChanged(_ event: NSEvent) {
         let flags = event.modifierFlags
-        let rightDown = flags.rawValue & Self.rightCommandBit != 0
-        guard event.keyCode == Self.rightCommand else {
+        guard let key = press?.key ?? DictationStore.shared.shortcut, event.keyCode == key.keyCode else {
             // Another modifier joined in before listening started: a chord.
             if let press, !press.started { abandon() }
             return
         }
-        if rightDown {
-            guard DictationStore.shared.enabled, DictationStore.shared.rightCommand,
-                  flags.intersection([.shift, .control, .option, .function]).isEmpty,
-                  // Left ⌘ is down too (NX_DEVICELCMDKEYMASK).
-                  flags.rawValue & 0x08 == 0 else { return }
+        if key.isDown(flags) {
+            guard key.alone(flags) else { return }
             let live = self.live
             guard let target = live ?? target() else { return }
-            press = Press(at: event.timestamp, target: target, wasListening: live != nil)
+            press = Press(at: event.timestamp, key: key, target: target, wasListening: live != nil)
             guard live == nil else { return }
             let preferences = TerminalRuntime.shared.preferences
             Dictation.shared.prepare(engine: preferences.dictationEngine, model: preferences.whisperModel)
@@ -197,5 +193,40 @@ final class DictationShortcut {
         holdTimer?.cancel()
         holdTimer = nil
         press = nil
+    }
+}
+
+/// The voice key in modifier events: its key code, whether it is down, and whether it is the only modifier down.
+extension VoiceKey {
+    /// kVK_RightCommand, kVK_RightOption, kVK_Function.
+    var keyCode: UInt16? {
+        switch self {
+        case .rightCommand: 54
+        case .rightOption: 61
+        case .function: 63
+        case .off: nil
+        }
+    }
+
+    /// The right-hand keys by their device bits (NX_DEVICERCMDKEYMASK, NX_DEVICERALTKEYMASK): the other side's
+    /// key sets the same modifier.
+    func isDown(_ flags: NSEvent.ModifierFlags) -> Bool {
+        switch self {
+        case .rightCommand: flags.rawValue & 0x10 != 0
+        case .rightOption: flags.rawValue & 0x40 != 0
+        case .function: flags.contains(.function)
+        case .off: false
+        }
+    }
+
+    /// No other modifier is down, the same one on the other side included (NX_DEVICELCMDKEYMASK, NX_DEVICELALTKEYMASK).
+    func alone(_ flags: NSEvent.ModifierFlags) -> Bool {
+        let all: NSEvent.ModifierFlags = [.shift, .control, .option, .command, .function]
+        switch self {
+        case .rightCommand: return flags.intersection(all.subtracting(.command)).isEmpty && flags.rawValue & 0x08 == 0
+        case .rightOption: return flags.intersection(all.subtracting(.option)).isEmpty && flags.rawValue & 0x20 == 0
+        case .function: return flags.intersection(all.subtracting(.function)).isEmpty
+        case .off: return false
+        }
     }
 }

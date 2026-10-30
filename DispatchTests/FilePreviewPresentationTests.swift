@@ -18,14 +18,14 @@ final class FilePreviewPresentationTests: XCTestCase {
         try await TestSupport.eventually { line(2, in: window) != nil }
         let snapshot = try await PresentationTestSupport.capture(window, named: "file-preview-text", in: "files-audit")
         try PresentationTestSupport.assertText("billing.ts", in: snapshot)
-        try PresentationTestSupport.assertText("src/routes", in: snapshot)
-        try PresentationTestSupport.assertText("TypeScript", in: snapshot)
-        try PresentationTestSupport.assertText("Open in editor", in: snapshot)
+        try PresentationTestSupport.assertText("3.8 KB", in: snapshot)
         try PresentationTestSupport.assertText("export const billing", in: snapshot)
         XCTAssertEqual(try headerHeight(snapshot, in: window), 40, accuracy: 0.5, "The 40 pt header over its 1 pt rule")
         let first = try XCTUnwrap(line(1, in: window)), second = try XCTUnwrap(line(2, in: window))
-        XCTAssertEqual(first.maxY - second.maxY, 20, accuracy: 0.5, "12.5 pt code on 20 pt rows")
-        XCTAssertLessThan(first.height, 20.5, "One line of text in the row")
+        // 12.5 pt code on 20 pt rows at the design base; both grow with the text.
+        let row = FilePreviewMetrics.metrics(ChatTypography()).rowHeight
+        XCTAssertEqual(first.maxY - second.maxY, row, accuracy: 0.5, "Code rows as tall as the preview's metrics")
+        XCTAssertLessThan(first.height, row + 0.5, "One line of text in the row")
         XCTAssertFalse(PresentationTestSupport.accessibilityFrames("file-preview-line-150", in: window)
             .contains { window.contentView!.bounds.intersects($0) }, "Rows below the fold are not drawn")
     }
@@ -76,6 +76,68 @@ final class FilePreviewPresentationTests: XCTestCase {
         }
     }
 
+    /// The zoom: + and − step through Preview's stops, a pinch (the scroll view's magnification) is reported back,
+    /// fit returns at the fit scale, ⌘0's button shows actual size, and the full-screen button opens the image in a
+    /// window of its own that esc closes.
+    func testImageZoomsByStepsAndPinchAndOpensFullScreen() async throws {
+        let source = FakeFilesSource.mockupAPI()
+        source.file(base + "/assets/hero.png", try Self.gradient(width: 1_024, height: 768))
+        let (window, session) = try host(source, preview: base + "/assets/hero.png")
+        try await TestSupport.eventually { if case .image = session.preview?.kind { return true }; return false }
+        let root = try XCTUnwrap(window.contentView)
+        var scroll: NSScrollView?
+        try await TestSupport.eventually(diagnostic: "no image scroll view") {
+            root.layoutSubtreeIfNeeded()
+            scroll = PresentationTestSupport.views(of: NSScrollView.self, in: root).first { $0.allowsMagnification }
+            return scroll != nil
+        }
+        let magnified = try XCTUnwrap(scroll)
+        func scale() -> String { PresentationTestSupport.accessibilityLabels("file-preview-image-scale", in: window).first ?? "" }
+        func expect(_ label: String, magnification: CGFloat? = nil, line: UInt = #line) async throws {
+            try await TestSupport.eventually(line: line, diagnostic: "scale \(scale()), magnification \(magnified.magnification)") {
+                scale() == label && magnification.map { abs(magnified.magnification - $0) < 0.001 } ?? true
+            }
+        }
+        // 1,024 × 768 in a 560 × 420 window: fit between the 25 % and 50 % stops.
+        try await TestSupport.eventually(diagnostic: "scale \(scale())") { scale().hasPrefix("fit · ") }
+        let fit = magnified.magnification
+        XCTAssert((0.25...0.5).contains(fit), "fit at \(fit)")
+        try await expect("fit · \(FileImagePreview.percent(fit))", magnification: fit)
+
+        try click("file-preview-zoom-in", in: window)
+        try await expect("zoom · 50%", magnification: 0.5)
+        try click("file-preview-zoom-in", in: window)
+        try await expect("zoom · 75%", magnification: 0.75)
+        // A pinch sets the magnification under the fingers; the footer follows it.
+        magnified.setMagnification(2, centeredAt: NSPoint(x: 512, y: 384))
+        try await expect("zoom · 200%", magnification: 2)
+        _ = try await PresentationTestSupport.capture(window, named: "file-preview-image-zoomed", in: "files-audit")
+        // Pinched back to the fit scale, it fits again.
+        magnified.setMagnification(fit / 2, centeredAt: NSPoint(x: 512, y: 384))
+        try await expect("fit · \(FileImagePreview.percent(fit))", magnification: fit)
+        try click("file-preview-actual-size", in: window)
+        try await expect("actual size · 100%", magnification: 1)
+        try click("file-preview-zoom-out", in: window)
+        try await expect("zoom · 75%", magnification: 0.75)
+        try click("file-preview-zoom-out", in: window)
+        try await expect("zoom · 50%", magnification: 0.5)
+        try click("file-preview-zoom-out", in: window)
+        try await expect("fit · \(FileImagePreview.percent(fit))", magnification: fit)
+
+        try click("file-preview-full-screen", in: window)
+        var viewer: NSWindow?
+        try await TestSupport.eventually(timeout: .seconds(10), diagnostic: "no full-screen viewer") {
+            viewer = NSApp.windows.first { $0 !== window && $0.isVisible && $0.title == "hero.png" }
+            return viewer.map { $0.styleMask.contains(.fullScreen) } ?? false
+        }
+        let shown = try XCTUnwrap(viewer)
+        addTeardownBlock { @MainActor in shown.close() }
+        XCTAssertFalse(PresentationTestSupport.accessibilityFrames("file-image-full-screen", in: shown).isEmpty)
+        _ = try await PresentationTestSupport.capture(shown, named: "file-image-full-screen", in: "files-audit")
+        shown.cancelOperation(nil)
+        try await TestSupport.eventually(timeout: .seconds(10), diagnostic: "esc left the viewer up, full screen: \(shown.styleMask.contains(.fullScreen))") { !shown.isVisible }
+    }
+
     func testFolderPreviewShowsSummaryAndActions() async throws {
         let (window, session) = try host(FakeFilesSource.mockupAPI(), preview: base + "/src")
         try await TestSupport.eventually { if case .folder(.some) = session.preview?.kind { return true }; return false }
@@ -109,7 +171,7 @@ final class FilePreviewPresentationTests: XCTestCase {
         try PresentationTestSupport.assertText("Too large to preview here", in: snapshot)
         try PresentationTestSupport.assertText("Show first 64 KB", in: snapshot)
         try PresentationTestSupport.assertText("Open in terminal", in: snapshot)
-        try PresentationTestSupport.assertText("JSON", in: snapshot)
+        try PresentationTestSupport.assertText("3.3 MB", in: snapshot)
 
         try click("file-preview-show-head", in: window)
         try await TestSupport.eventually { if case .tooLarge(_, .some) = session.preview?.kind { return true }; return false }
@@ -141,7 +203,8 @@ final class FilePreviewPresentationTests: XCTestCase {
         let width = try XCTUnwrap(window.contentView).bounds.width
 
         let unwrapped = try XCTUnwrap(line(1, in: window)), short = try XCTUnwrap(line(2, in: window))
-        XCTAssertEqual(unwrapped.maxY - short.maxY, 20, accuracy: 0.5, "One row while wrap is off")
+        XCTAssertEqual(unwrapped.maxY - short.maxY, FilePreviewMetrics.metrics(ChatTypography()).rowHeight, accuracy: 0.5,
+                       "One row while wrap is off")
         XCTAssertGreaterThan(unwrapped.width, width, "A long line scrolls sideways")
         _ = try await PresentationTestSupport.capture(window, named: "file-preview-wrap-off", in: "files-audit")
 
@@ -152,7 +215,7 @@ final class FilePreviewPresentationTests: XCTestCase {
         let wrapped = try XCTUnwrap(line(1, in: window))
         XCTAssertLessThanOrEqual(wrapped.maxX, width + 0.5, "Wrapped rows fit the pane")
         let next = try XCTUnwrap(line(2, in: window))
-        XCTAssertLessThan(next.height, 20.5, "Short lines keep one row")
+        XCTAssertLessThan(next.height, FilePreviewMetrics.metrics(ChatTypography()).rowHeight + 0.5, "Short lines keep one row")
         let snapshot = try await PresentationTestSupport.capture(window, named: "file-preview-wrap-on", in: "files-audit")
         try PresentationTestSupport.assertText("const short", in: snapshot)
     }

@@ -46,51 +46,87 @@ extension ThemeColor {
                 -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s)
     }
 
-    static func inGamut(_ lch: OKLCH) -> Bool {
-        let (r, g, b) = linearRGB(oklab: lch.lab)
+    /// Whether `lch` is inside sRGB, or inside Display P3 when `displayP3`.
+    static func inGamut(_ lch: OKLCH, displayP3: Bool = false) -> Bool {
+        var (r, g, b) = linearRGB(oklab: lch.lab)
+        if displayP3 { (r, g, b) = linearDisplayP3(linearSRGB: (r, g, b)) }
         let e = 1e-7
         return r >= -e && r <= 1 + e && g >= -e && g <= 1 + e && b >= -e && b <= 1 + e
     }
 
-    var oklab: (l: Double, a: Double, b: Double) {
+    /// Linear sRGB to linear Display P3, and back (both D65; sRGB values outside 0...1 are colors beyond sRGB).
+    static func linearDisplayP3(linearSRGB c: (Double, Double, Double)) -> (Double, Double, Double) {
+        (0.8224621 * c.0 + 0.1775380 * c.1, 0.0331941 * c.0 + 0.9668058 * c.1, 0.0170827 * c.0 + 0.0723974 * c.1 + 0.9105199 * c.2)
+    }
+    static func linearSRGB(displayP3 c: (Double, Double, Double)) -> (Double, Double, Double) {
+        (1.2249401 * c.0 - 0.2249404 * c.1, -0.0420569 * c.0 + 1.0420571 * c.1, -0.0196376 * c.0 - 0.0786361 * c.1 + 1.0982735 * c.2)
+    }
+
+    /// The color itself in linear sRGB: a Display P3 color's own (components outside 0...1), not its sRGB stand-in's.
+    var linearSRGB: (Double, Double, Double) {
+        if let p3 = displayP3 {
+            return Self.linearSRGB(displayP3: (Self.linear(Double(p3.r) / 255), Self.linear(Double(p3.g) / 255), Self.linear(Double(p3.b) / 255)))
+        }
         let (r, g, b) = components
-        return Self.oklab(linear: Self.linear(r), Self.linear(g), Self.linear(b))
+        return (Self.linear(r), Self.linear(g), Self.linear(b))
+    }
+
+    /// What every other reader of a theme file sees: the sRGB color, a Display P3 one's stand-in.
+    var sRGBStandIn: ThemeColor { ThemeColor(r: r, g: g, b: b) }
+
+    var oklab: (l: Double, a: Double, b: Double) {
+        let (r, g, b) = linearSRGB
+        return Self.oklab(linear: r, g, b)
     }
 
     var oklch: OKLCH { OKLCH(lab: oklab) }
 
     /// The sRGB color for `lch`, gamut-mapped the way CSS Color 4 recommends in spirit: lightness and hue stay, chroma
     /// shrinks (binary search) until the color fits, so an out-of-gamut request turns grayer rather than shifting hue
-    /// or lightness the way per-channel clipping would.
-    init(oklch: OKLCH) {
+    /// or lightness the way per-channel clipping would. `displayP3`: mapped into Display P3 instead, a color beyond
+    /// sRGB keeping its P3 value beside its sRGB stand-in.
+    init(oklch: OKLCH, displayP3: Bool = false) {
         var lch = OKLCH(l: min(1, max(0, oklch.l)), c: max(0, oklch.c), h: oklch.h)
-        if !Self.inGamut(lch) {
+        if !Self.inGamut(lch, displayP3: displayP3) {
             var (low, high) = (0.0, lch.c)
             for _ in 0..<24 {
                 let mid = (low + high) / 2
-                if Self.inGamut(OKLCH(l: lch.l, c: mid, h: lch.h)) { low = mid } else { high = mid }
+                if Self.inGamut(OKLCH(l: lch.l, c: mid, h: lch.h), displayP3: displayP3) { low = mid } else { high = mid }
             }
             lch.c = low
         }
-        let (r, g, b) = Self.linearRGB(oklab: lch.lab)
+        let srgb = Self.linearRGB(oklab: lch.lab)
+        if displayP3 {
+            let (r, g, b) = Self.linearDisplayP3(linearSRGB: srgb)
+            self.init(displayP3Red: Self.gamma(min(1, max(0, r))), green: Self.gamma(min(1, max(0, g))), blue: Self.gamma(min(1, max(0, b))))
+            return
+        }
+        let (r, g, b) = srgb
         self.init(red: Self.gamma(min(1, max(0, r))), green: Self.gamma(min(1, max(0, g))), blue: Self.gamma(min(1, max(0, b))))
     }
 }
 
-/// Stored as `#rrggbb`, so a recipe reads like a theme file.
+/// Stored as `#rrggbb`, so a recipe reads like a theme file; a Display P3 color as `#rrggbb display-p3 #rrggbb`.
 extension ThemeColor: Codable {
     init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
-        let hex = try container.decode(String.self)
-        guard let color = ThemeColor(hex: hex) else {
-            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Not a #rrggbb color: \(hex)")
+        let text = try container.decode(String.self)
+        let parts = text.components(separatedBy: " display-p3 ")
+        guard var color = ThemeColor(hex: parts[0]), parts.count <= 2 else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Not a #rrggbb color: \(text)")
+        }
+        if parts.count == 2 {
+            guard let p3 = ThemeColor(hex: parts[1]) else {
+                throw DecodingError.dataCorruptedError(in: container, debugDescription: "Not a #rrggbb color: \(text)")
+            }
+            color.displayP3 = P3(r: p3.r, g: p3.g, b: p3.b)
         }
         self = color
     }
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
-        try container.encode(hex)
+        try container.encode(displayP3.map { "\(hex) display-p3 \($0.hex)" } ?? hex)
     }
 }
 
@@ -109,8 +145,8 @@ extension ColorVision {
 extension ThemeColor {
     /// This color as someone with `deficiency` sees it.
     func simulated(_ deficiency: ColorVision.Deficiency) -> ThemeColor {
-        let (r, g, b) = components
-        let rgb = [Self.linear(r), Self.linear(g), Self.linear(b)]
+        let (r, g, b) = linearSRGB
+        let rgb = [r, g, b]
         let seen = deficiency.matrix.map { row in min(1, max(0, zip(row, rgb).map(*).reduce(0, +))) }
         return ThemeColor(red: Self.gamma(seen[0]), green: Self.gamma(seen[1]), blue: Self.gamma(seen[2]))
     }
@@ -127,7 +163,7 @@ struct ThemeRecipe: Equatable, Codable, Sendable {
     var seed: ThemeColor
     var light: Bool
     var harmony: Harmony
-    /// 0 muted, pastel accents … 1 as saturated as sRGB allows.
+    /// 0 muted, pastel accents … 1 as saturated as sRGB (or Display P3) allows.
     var vibrancy: Double
     /// 0 soft (lifted background, gentler text) … 1 crisp (deep background, bright text).
     var contrast: Double
@@ -135,21 +171,25 @@ struct ThemeRecipe: Equatable, Codable, Sendable {
     var tint: Double
     /// Colorblind recipes fix the accent hues for that vision; the harmony then shapes only the seed's tint.
     var vision: ColorVision
+    /// Colors as vivid as Display P3 allows rather than sRGB, for wide-color displays; each keeps an sRGB stand-in
+    /// that Ghostty and other apps draw.
+    var displayP3: Bool
 
     init(seed: ThemeColor, light: Bool = false, harmony: Harmony = .analogous,
-         vibrancy: Double = 0.6, contrast: Double = 0.55, tint: Double = 0.45, vision: ColorVision = .typical) {
+         vibrancy: Double = 0.6, contrast: Double = 0.55, tint: Double = 0.45, vision: ColorVision = .typical,
+         displayP3: Bool = false) {
         (self.seed, self.light, self.harmony) = (seed, light, harmony)
-        (self.vibrancy, self.contrast, self.tint, self.vision) = (vibrancy, contrast, tint, vision)
+        (self.vibrancy, self.contrast, self.tint, self.vision, self.displayP3) = (vibrancy, contrast, tint, vision, displayP3)
     }
 
-    /// The same recipe for another vision (presets keep their look and change who they are for).
+    /// The same recipe for another vision (it keeps its look and changes who it is for).
     func with(vision: ColorVision) -> ThemeRecipe {
         var recipe = self
         recipe.vision = vision
         return recipe
     }
 
-    private enum CodingKeys: String, CodingKey { case seed, light, harmony, vibrancy, contrast, tint, vision }
+    private enum CodingKeys: String, CodingKey { case seed, light, harmony, vibrancy, contrast, tint, vision, displayP3 }
 
     // Recipes saved before colorblind schemes have no vision; a typical one is still written without it.
     init(from decoder: Decoder) throws {
@@ -161,6 +201,7 @@ struct ThemeRecipe: Equatable, Codable, Sendable {
         contrast = try fields.decode(Double.self, forKey: .contrast)
         tint = try fields.decode(Double.self, forKey: .tint)
         vision = try fields.decodeIfPresent(ColorVision.self, forKey: .vision) ?? .typical
+        displayP3 = try fields.decodeIfPresent(Bool.self, forKey: .displayP3) ?? false
     }
 
     func encode(to encoder: Encoder) throws {
@@ -172,6 +213,7 @@ struct ThemeRecipe: Equatable, Codable, Sendable {
         try fields.encode(contrast, forKey: .contrast)
         try fields.encode(tint, forKey: .tint)
         if vision != .typical { try fields.encode(vision, forKey: .vision) }
+        if displayP3 { try fields.encode(displayP3, forKey: .displayP3) }
     }
 
     /// Which hues the accents lean toward, relative to the seed's: the color wheel's classic harmonies.
@@ -217,42 +259,126 @@ struct ThemeRecipe: Equatable, Codable, Sendable {
         }
     }
 
-    /// A named starting point.
-    struct Preset: Identifiable, Sendable {
-        let name: String
-        let recipe: ThemeRecipe
-        var id: String { name }
+    /// The maker's starting recipe: a violet seed, analogous accents.
+    static let standard = ThemeRecipe(seed: ThemeColor(r: 0x8B, g: 0x6C, b: 0xF0), harmony: .analogous,
+                                      vibrancy: 0.55, contrast: 0.5, tint: 0.6)
+
+    /// A kind of scheme the maker's Random draws inside: ranges for the seed (lightness, chroma, hue) and the knobs,
+    /// and the harmonies that suit it. The terminal's accents keep their meaning in every one (errors stay red), so a
+    /// style shows mostly in the colorfulness, contrast and tint.
+    enum Style: String, CaseIterable, Identifiable, Sendable {
+        case muted, pastel, earthy, cool, vivid, neon, mono
+
+        var id: String { rawValue }
+
+        var title: String { rawValue.capitalized }
+
+        var detail: String {
+            switch self {
+            case .muted: "quiet, low chroma"
+            case .pastel: "soft and light"
+            case .earthy: "warm ochres and greens"
+            case .cool: "sea and sky"
+            case .vivid: "bright, balanced"
+            case .neon: "loud, high contrast"
+            case .mono: "near-gray, crisp"
+            }
+        }
+
+        var lightness: ClosedRange<Double> {
+            switch self {
+            case .pastel: 0.72...0.84
+            case .cool: 0.55...0.72
+            case .vivid: 0.6...0.75
+            case .neon: 0.65...0.78
+            case .muted, .earthy, .mono: 0.55...0.7
+            }
+        }
+
+        var chroma: ClosedRange<Double> {
+            switch self {
+            case .muted: 0.03...0.07
+            case .pastel: 0.07...0.11
+            case .earthy: 0.06...0.11
+            case .cool: 0.07...0.13
+            case .vivid: 0.14...0.2
+            case .neon: 0.2...0.28
+            case .mono: 0...0.03
+            }
+        }
+
+        /// The seed's hues; nil is any.
+        var hues: ClosedRange<Double>? {
+            switch self {
+            case .earthy: 35...125
+            case .cool: 180...275
+            default: nil
+            }
+        }
+
+        var harmonies: [Harmony] {
+            switch self {
+            case .muted: [.analogous, .classic]
+            case .pastel: [.analogous, .triadic, .splitComplementary]
+            case .earthy: [.analogous, .triadic]
+            case .cool: [.analogous, .complementary]
+            case .vivid: [.complementary, .splitComplementary, .triadic]
+            case .neon: [.square, .complementary, .triadic]
+            case .mono: [.classic]
+            }
+        }
+
+        var vibrancy: ClosedRange<Double> {
+            switch self {
+            case .muted: 0.15...0.35
+            case .pastel: 0.35...0.55
+            case .earthy: 0.3...0.55
+            case .cool: 0.4...0.65
+            case .vivid: 0.7...0.85
+            case .neon: 0.95...1
+            case .mono: 0.3...0.5
+            }
+        }
+
+        var contrast: ClosedRange<Double> {
+            switch self {
+            case .muted, .pastel: 0.3...0.5
+            case .earthy: 0.35...0.6
+            case .cool: 0.4...0.65
+            case .vivid: 0.55...0.8
+            case .neon: 0.8...1
+            case .mono: 0.6...0.85
+            }
+        }
+
+        var tint: ClosedRange<Double> {
+            switch self {
+            case .muted: 0.35...0.6
+            case .pastel: 0.4...0.7
+            case .earthy: 0.5...0.8
+            case .cool: 0.45...0.7
+            case .vivid: 0.25...0.5
+            case .neon: 0.15...0.35
+            case .mono: 0...0.1
+            }
+        }
     }
 
-    static let presets: [Preset] = [
-        Preset(name: "Dusk", recipe: ThemeRecipe(seed: ThemeColor(r: 0x8B, g: 0x6C, b: 0xF0), harmony: .analogous,
-                                                 vibrancy: 0.55, contrast: 0.5, tint: 0.6)),
-        Preset(name: "Harbor", recipe: ThemeRecipe(seed: ThemeColor(r: 0x2F, g: 0xA3, b: 0xB5), harmony: .complementary,
-                                                   vibrancy: 0.6, contrast: 0.6, tint: 0.5)),
-        Preset(name: "Ember", recipe: ThemeRecipe(seed: ThemeColor(r: 0xE8, g: 0x74, b: 0x3B), harmony: .analogous,
-                                                  vibrancy: 0.7, contrast: 0.45, tint: 0.45)),
-        Preset(name: "Moss", recipe: ThemeRecipe(seed: ThemeColor(r: 0x7A, g: 0xA3, b: 0x52), harmony: .triadic,
-                                                 vibrancy: 0.4, contrast: 0.35, tint: 0.55)),
-        Preset(name: "Neon", recipe: ThemeRecipe(seed: ThemeColor(r: 0xFF, g: 0x3F, b: 0xB4), harmony: .square,
-                                                 vibrancy: 1, contrast: 0.85, tint: 0.35)),
-        Preset(name: "Graphite", recipe: ThemeRecipe(seed: ThemeColor(r: 0x8A, g: 0x8F, b: 0x98), harmony: .classic,
-                                                     vibrancy: 0.45, contrast: 0.7, tint: 0)),
-        Preset(name: "Paper", recipe: ThemeRecipe(seed: ThemeColor(r: 0xC8, g: 0xA2, b: 0x6A), light: true, harmony: .classic,
-                                                  vibrancy: 0.55, contrast: 0.4, tint: 0.55)),
-        Preset(name: "Glacier", recipe: ThemeRecipe(seed: ThemeColor(r: 0x5B, g: 0x8F, b: 0xD9), light: true,
-                                                    harmony: .splitComplementary, vibrancy: 0.6, contrast: 0.6, tint: 0.4)),
-        Preset(name: "Sakura", recipe: ThemeRecipe(seed: ThemeColor(r: 0xE2, g: 0x7A, b: 0xA6), light: true, harmony: .analogous,
-                                                   vibrancy: 0.5, contrast: 0.45, tint: 0.5)),
-    ]
+    /// Random inside `style`, on the `light` side: the same recipe for the same `seed`.
+    static func random(seed: UInt64, style: Style, light: Bool) -> ThemeRecipe {
+        let next = Self.generator(seed)
+        func draw(_ range: ClosedRange<Double>) -> Double { range.lowerBound + next() * (range.upperBound - range.lowerBound) }
+        let hue = style.hues.map(draw) ?? next() * 360
+        let color = ThemeColor(oklch: OKLCH(l: draw(style.lightness), c: draw(style.chroma), h: hue))
+        let harmony = style.harmonies[min(style.harmonies.count - 1, Int(next() * Double(style.harmonies.count)))]
+        return ThemeRecipe(seed: color, light: light, harmony: harmony, vibrancy: round2(draw(style.vibrancy)),
+                           contrast: round2(draw(style.contrast)), tint: round2(draw(style.tint)))
+    }
 
-    static let standard = presets[0].recipe
-
-    /// "Surprise me": a pleasing recipe picked from `seed` alone. Seeds are vivid enough to matter, light schemes come
-    /// up about a third of the time, and the knobs stay in the range where schemes look designed rather than random.
-    static func random(seed: UInt64) -> ThemeRecipe {
+    /// SplitMix64 from `seed`: tiny, well mixed, and the same on every machine.
+    private static func generator(_ seed: UInt64) -> () -> Double {
         var state = seed
-        func next() -> Double {
-            // SplitMix64: tiny, well mixed, and the same on every machine.
+        return {
             state &+= 0x9E37_79B9_7F4A_7C15
             var z = state
             z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
@@ -260,6 +386,12 @@ struct ThemeRecipe: Equatable, Codable, Sendable {
             z ^= z >> 31
             return Double(z >> 11) / Double(1 << 53)
         }
+    }
+
+    /// Random: a pleasing recipe picked from `seed` alone. Seeds are vivid enough to matter, light schemes come
+    /// up about a third of the time, and the knobs stay in the range where schemes look designed rather than random.
+    static func random(seed: UInt64) -> ThemeRecipe {
+        let next = generator(seed)
         let hue = next() * 360
         let color = ThemeColor(oklch: OKLCH(l: 0.62 + next() * 0.14, c: 0.09 + next() * 0.11, h: hue))
         let light = next() < 0.33
@@ -409,20 +541,23 @@ enum ThemeGenerator {
         let seed = recipe.seed.oklch
         let hued = presence(seed)
         let hue = seed.h
+        let wide = recipe.displayP3
 
         // Neutrals: the seed's hue at low chroma.
         let neutralC = k * (light ? 0.032 : 0.045) * hued
         let bgL = light ? 0.945 + 0.045 * t : 0.25 - 0.10 * t
-        let background = ThemeColor(oklch: OKLCH(l: bgL, c: neutralC, h: hue))
+        let background = ThemeColor(oklch: OKLCH(l: bgL, c: neutralC, h: hue), displayP3: wide)
         let fgL = light ? 0.40 - 0.16 * t : 0.85 + 0.11 * t
-        let foreground = readable(OKLCH(l: fgL, c: neutralC * 0.45, h: hue), on: background, light: light, floor: textFloor)
+        let foreground = readable(OKLCH(l: fgL, c: neutralC * 0.45, h: hue), on: background, light: light, wide: wide, floor: textFloor)
 
         // Accents.
         let accentHues = hues(for: recipe)
         let attractors = recipe.harmony.attractors(seed: hue)
         let baseL = light ? 0.56 - 0.08 * t : 0.70 + 0.08 * t
         let colorblind = colorblindAccents[recipe.vision]
-        let baseC = colorblind == nil ? 0.06 + 0.14 * v : max(colorblindChroma, 0.06 + 0.14 * v)
+        // Display P3 has room for more chroma before gamut mapping takes it back.
+        let range = wide ? 0.19 : 0.14
+        let baseC = colorblind == nil ? 0.06 + range * v : max(colorblindChroma, 0.06 + range * v)
         var planned: [(lch: OKLCH, emphasis: Double)] = []
         for (index, h) in accentHues.enumerated() {
             let distance = attractors.map { abs(turn(from: h, to: $0)) }.min() ?? 0
@@ -431,25 +566,25 @@ enum ThemeGenerator {
                 ?? (light ? lightnessOffsets[index].light : lightnessOffsets[index].dark)
             planned.append((OKLCH(l: baseL + offset, c: baseC * emphasis, h: h), emphasis))
         }
-        let normals = separated(planned.map(\.lch), vision: recipe.vision, on: background, light: light)
+        let normals = separated(planned.map(\.lch), vision: recipe.vision, on: background, light: light, wide: wide)
         let brights = separated(normals.indices.map { index in
             OKLCH(l: normals[index].oklch.l + (light ? -0.07 : 0.08), c: baseC * planned[index].emphasis * 1.05,
                   h: accentHues[index])
-        }, vision: recipe.vision, on: background, light: light)
+        }, vision: recipe.vision, on: background, light: light, wide: wide)
 
         // Black and white: one is text, the other a surface, by side.
         let dim = readable(OKLCH(l: bgL + (fgL - bgL) * 0.45, c: neutralC * 0.8, h: hue), on: background, light: light,
-                           floor: dimFloor)
+                           wide: wide, floor: dimFloor)
         let black: ThemeColor, white: ThemeColor, brightWhite: ThemeColor
         if light {
-            black = readable(OKLCH(l: fgL + 0.03, c: neutralC * 0.6, h: hue), on: background, light: true, floor: accentFloor)
-            white = ThemeColor(oklch: OKLCH(l: bgL - 0.075, c: neutralC * 1.2, h: hue))
-            brightWhite = ThemeColor(oklch: OKLCH(l: bgL - 0.025, c: neutralC, h: hue))
+            black = readable(OKLCH(l: fgL + 0.03, c: neutralC * 0.6, h: hue), on: background, light: true, wide: wide, floor: accentFloor)
+            white = ThemeColor(oklch: OKLCH(l: bgL - 0.075, c: neutralC * 1.2, h: hue), displayP3: wide)
+            brightWhite = ThemeColor(oklch: OKLCH(l: bgL - 0.025, c: neutralC, h: hue), displayP3: wide)
         } else {
-            black = ThemeColor(oklch: OKLCH(l: bgL + 0.075, c: neutralC * 1.15, h: hue))
-            white = readable(OKLCH(l: fgL - 0.07, c: neutralC * 0.6, h: hue), on: background, light: false, floor: accentFloor)
+            black = ThemeColor(oklch: OKLCH(l: bgL + 0.075, c: neutralC * 1.15, h: hue), displayP3: wide)
+            white = readable(OKLCH(l: fgL - 0.07, c: neutralC * 0.6, h: hue), on: background, light: false, wide: wide, floor: accentFloor)
             brightWhite = readable(OKLCH(l: min(0.99, fgL + 0.03), c: neutralC * 0.3, h: hue), on: background, light: false,
-                                   floor: textFloor)
+                                   wide: wide, floor: textFloor)
         }
 
         var theme = TerminalTheme()
@@ -459,16 +594,16 @@ enum ThemeGenerator {
 
         // The cursor is the seed itself when it reads on the background, else the seed moved to where it does.
         theme.cursor = readable(OKLCH(l: seed.l, c: max(seed.c, 0.02 * hued), h: hue), on: background, light: light,
-                                floor: accentFloor)
+                                wide: wide, floor: accentFloor)
         theme.cursorText = background
 
         // Selection: a seed-tinted band the text stays readable on.
         let selectionC = max(neutralC * 1.6, (0.03 + 0.04 * v) * hued)
         var selectionL = light ? bgL - 0.11 - 0.03 * t : bgL + 0.12 + 0.03 * t
-        var selection = ThemeColor(oklch: OKLCH(l: selectionL, c: selectionC, h: hue))
-        while selection.contrast(with: foreground) < accentFloor, light ? selectionL < bgL : selectionL > bgL {
+        var selection = ThemeColor(oklch: OKLCH(l: selectionL, c: selectionC, h: hue), displayP3: wide)
+        while minContrast(selection, foreground) < accentFloor, light ? selectionL < bgL : selectionL > bgL {
             selectionL += light ? 0.005 : -0.005
-            selection = ThemeColor(oklch: OKLCH(l: selectionL, c: selectionC, h: hue))
+            selection = ThemeColor(oklch: OKLCH(l: selectionL, c: selectionC, h: hue), displayP3: wide)
         }
         theme.selectionBackground = selection
         theme.selectionForeground = foreground
@@ -479,9 +614,10 @@ enum ThemeGenerator {
     /// Accents made readable; for a colorblind vision, the pair that looks closest moves apart in lightness (the lighter
     /// one lighter, the darker one darker) a step at a time until every pair is `distinctFloor` apart or the steps run
     /// out. The contrast floor still holds: a color pushed toward the background is lifted back by `readable`.
-    static func separated(_ planned: [OKLCH], vision: ColorVision, on background: ThemeColor, light: Bool) -> [ThemeColor] {
+    static func separated(_ planned: [OKLCH], vision: ColorVision, on background: ThemeColor, light: Bool,
+                          wide: Bool = false) -> [ThemeColor] {
         var planned = planned
-        var colors = planned.map { readable($0, on: background, light: light, floor: accentFloor) }
+        var colors = planned.map { readable($0, on: background, light: light, wide: wide, floor: accentFloor) }
         guard vision != .typical else { return colors }
         for _ in 0..<60 {
             var closest = (distance: Double.infinity, first: 0, second: 0)
@@ -496,23 +632,31 @@ enum ThemeGenerator {
             let (up, down) = lighterFirst ? (closest.first, closest.second) : (closest.second, closest.first)
             planned[up].l = min(0.98, planned[up].l + 0.01)
             planned[down].l = max(0.02, planned[down].l - 0.01)
-            colors[up] = readable(planned[up], on: background, light: light, floor: accentFloor)
-            colors[down] = readable(planned[down], on: background, light: light, floor: accentFloor)
+            colors[up] = readable(planned[up], on: background, light: light, wide: wide, floor: accentFloor)
+            colors[down] = readable(planned[down], on: background, light: light, wide: wide, floor: accentFloor)
         }
         return colors
     }
 
     /// `lch`, moved away from the background's lightness (never turned) until it meets `floor` as `#rrggbb`. Pure white
-    /// and black clear every floor here against the backgrounds this makes, so the search always ends.
-    static func readable(_ lch: OKLCH, on background: ThemeColor, light: Bool, floor: Double) -> ThemeColor {
+    /// and black clear every floor here against the backgrounds this makes, so the search always ends. `wide`: in
+    /// Display P3, the floor met both by the P3 colors and by their sRGB stand-ins.
+    static func readable(_ lch: OKLCH, on background: ThemeColor, light: Bool, wide: Bool = false, floor: Double) -> ThemeColor {
         var lch = lch
-        var color = ThemeColor(oklch: lch)
-        while color.contrast(with: background) < floor, light ? lch.l > 0 : lch.l < 1 {
+        var color = ThemeColor(oklch: lch, displayP3: wide)
+        while minContrast(color, background) < floor, light ? lch.l > 0 : lch.l < 1 {
             lch.l = light ? max(0, lch.l - 0.005) : min(1, lch.l + 0.005)
-            color = ThemeColor(oklch: lch)
+            color = ThemeColor(oklch: lch, displayP3: wide)
         }
         return color
     }
+
+    /// The lower of two colors' contrast as drawn here and as their sRGB stand-ins (the same for sRGB colors).
+    static func minContrast(_ a: ThemeColor, _ b: ThemeColor) -> Double {
+        min(a.contrast(with: b), a.sRGBStandIn.contrast(with: b.sRGBStandIn))
+    }
+
+
 
     /// A name for a made scheme that says what it looks like: an adjective when one knob stands out (Vivid or Muted,
     /// Crisp or Soft, Deep or Gray), then a noun for the seed's hue family, dark or light flavored; grays are Graphite

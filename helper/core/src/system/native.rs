@@ -792,6 +792,39 @@ pub(super) fn resize(fd: i32, grid: Grid) -> io::Result<()> {
     }
 }
 
+/// Bytes written to a PTY that its reader has not taken yet: the slave side's input queue (FIONREAD on the slave;
+/// in canonical mode only complete lines count, as for a read).
+pub(super) fn unread(slave: i32) -> io::Result<usize> {
+    #[cfg(target_os = "linux")]
+    const UNREAD: usize = 0x541b;
+    #[cfg(target_os = "macos")]
+    const UNREAD: usize = 0x4004667f;
+    let mut count: i32 = 0;
+    if unsafe { ioctl(slave, UNREAD, &mut count) } < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(count.max(0) as usize)
+    }
+}
+
+/// `unread` for a master whose slave is not held (Linux: a slave closing drops nothing, so none is kept): the slave
+/// is opened by its number for the question and closed again, never made the controlling terminal.
+#[cfg(target_os = "linux")]
+pub(super) fn slave_unread(master: i32) -> io::Result<usize> {
+    const NUMBER: usize = 0x80045430;
+    let mut number: u32 = 0;
+    if unsafe { ioctl(master, NUMBER, &mut number) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    use std::os::{fd::AsRawFd, unix::fs::OpenOptionsExt};
+    let slave = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(O_NOCTTY | O_CLOEXEC)
+        .open(format!("/dev/pts/{number}"))?;
+    unread(slave.as_raw_fd())
+}
+
 /// Old herdr_start.rs:87-107 lock retry on the fixed disk workers, never the reactor.
 pub(super) fn advisory(path: &Path, deadline: std::time::Instant) -> io::Result<File> {
     let file = lock(path, true, unsafe { getuid() })?;

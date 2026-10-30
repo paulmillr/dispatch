@@ -22,7 +22,7 @@ impl Codex {
                     .is_some_and(|known| known.transcript != next.transcript))
             {
                 self.bindings.insert(next.session.clone(), next.clone());
-                self.reloads.borrow_mut().push(next);
+                self.reloads.borrow_mut().push((next, None));
                 let now = io.now();
                 io.timer(now);
             }

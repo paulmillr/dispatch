@@ -127,7 +127,11 @@ final class SSHLinuxClaudeIntegrationTests: XCTestCase {
                 + (runtime.chat.error ?? "no setup error") + "; " + lastRead + "; "
                 + String(decoding: metadata.output, as: UTF8.self))
         }
-        TerminalTestSupport.send("/exit", to: terminal)
+        // Typed, then Return once it shows: over the link the command and its Return can arrive as one burst, which
+        // Claude reads as a paste and keeps as a new line.
+        terminal.insertText("/exit", replacementRange: NSRange(location: NSNotFound, length: 0))
+        try await TestSupport.eventually { terminal.agentMenuScreen.contains("❯ /exit") }
+        TerminalTestSupport.key(36, "\r", terminal)
         try await TestSupport.eventually(timeout: .seconds(15)) { !session.active }
         TerminalTestSupport.send(launch + " --hooks", to: terminal)
         try await TestSupport.eventually(timeout: .seconds(25)) {

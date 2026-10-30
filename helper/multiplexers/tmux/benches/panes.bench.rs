@@ -132,7 +132,7 @@ impl Bench {
         };
         for &id in &terminals {
             bench
-                .call(|mux, io, done| mux.attach(io, id, grid, false, done))
+                .call(|mux, io, done| mux.attach(io, id, grid, false, true, done))
                 .unwrap();
         }
         bench.ui.output.clear();

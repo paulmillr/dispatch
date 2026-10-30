@@ -267,7 +267,7 @@ extension ChatModelPickerTests {
         XCTAssertEqual(session.commandResult?.title, "Working directory")
         XCTAssertTrue(session.commandResult?.text.hasSuffix("/" + state.lastPathComponent + "/work") == true)
         try await command("/mcp")
-        XCTAssertEqual(session.commandResult?.text, "• No MCP servers configured.\nSee the MCP docs to configure them.")
+        let mcp = session.commandResult?.text ?? ""; XCTAssertTrue(mcp == "• No MCP servers configured.\nSee the MCP docs to configure them." || (mcp.hasPrefix("• ") && mcp.hasSuffix("Use /mcp verbose for tools and resources.")), mcp) // a Codex not started by Dispatch's launcher (a tmux or herdr pane over SSH) lists its built-in tools
         try await command("/recap")
         XCTAssertEqual(session.commandResult?.text, "Fixture recap: the conversation is ready for its next turn.\n\nNext: Send the next fixture prompt.")
         phase = "background tool prompt"
@@ -380,5 +380,27 @@ extension ChatModelPickerTests {
         coordinator.closeModelPicker(session)
         try await wait { session.modelPicker == nil }
         XCTAssertTrue(session.showChat)
+    }
+}
+
+extension ChatCommandTests {
+    /// Compaction makes the helper read the transcript again: the earlier /mcp output it re-sends is not /compact's result.
+    func testRereadCommandOutputDoesNotAnswerTheNextCommand() throws {
+        let chat = ChatCoordinator(enabled: true)
+        let session = chat.session(for: System.uuid())
+        defer { chat.close(session.id) }
+        func output(_ id: String, _ text: String) -> HelperChat.Event {
+            .records([.init(id: id, turn: "command", kind: "output", text: text, title: "", output: "", blocks: [], completed: true,
+                            exit_code: nil, patch: nil, time_ms: nil, documents: [], tool: nil, inline_reasoning: false)])
+        }
+        session.observedCommand = (title: "/mcp", output: nil)
+        chat.receiveHelper(output("mcp", "No MCP servers configured."), session: session)
+        XCTAssertEqual(session.commandResult, .init(title: "/mcp", text: "No MCP servers configured."))
+        session.commandResult = nil; session.observedCommand = (title: "/compact", output: nil)
+        chat.receiveHelper(output("mcp", "No MCP servers configured."), session: session)
+        XCTAssertNil(session.commandResult)
+        XCTAssertEqual(session.observedCommand?.title, "/compact")
+        chat.receiveHelper(output("compact", "Compacted (ctrl+o to see full summary)"), session: session)
+        XCTAssertEqual(session.commandResult, .init(title: "/compact", text: "Compacted (ctrl+o to see full summary)"))
     }
 }

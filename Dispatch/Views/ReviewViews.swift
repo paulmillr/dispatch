@@ -255,6 +255,7 @@ struct ReviewHeaderButton: View {
     let focused: Bool
     @Environment(\.appTypography) private var typography
     @Environment(\.chatTheme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var finishing = false
 
     /// How long the note after Create review stays.
@@ -286,6 +287,9 @@ struct ReviewHeaderButton: View {
                 }
             }
             .font(AppFont.ui(size: typography.size(offset: -1)))
+            // The button and the note crossfade: copying, Undo and the note's timeout change the repository outside
+            // any animation.
+            .animation(InterfaceMotion.animation(reduce: reduceMotion), value: reviews.copied[scope] != nil)
         }
     }
 

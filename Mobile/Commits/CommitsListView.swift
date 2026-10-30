@@ -52,7 +52,7 @@ enum CommitsText {
 
 /// H3: the log under the capsule. A hollow "Uncommitted changes" row on top (it opens Review), then one line per
 /// commit, its subject and its age in mono, over a continuous graph in the gutter: the current branch green, merged
-/// branches amber, rows inside a merged span indented past its lane. No separators. Pages load as the end comes into
+/// branches slate, rows inside a merged span indented past its lane. No separators. Pages load as the end comes into
 /// sight; pull to refresh reads the refs again.
 struct CommitsListView: View {
     let log: CommitsLog
@@ -425,7 +425,7 @@ struct CommitsUncommittedRow: View {
 }
 
 /// One row's lanes (H3's graph): the first lane 26 points in and 20 between lanes, lines 2.5 wide, a 6.5-point dot
-/// (a ring for the uncommitted changes) on the current branch's green or a merged branch's amber; the row's text starts
+/// (a ring for the uncommitted changes) on the current branch's green or a merged branch's slate; the row's text starts
 /// 22 points past the last lane it uses, so a merged span indents. Deeper lanes than drawn are a count at the left edge.
 struct CommitGraphCell: View {
     let row: GitGraph.Row?
@@ -457,7 +457,7 @@ struct CommitGraphCell: View {
     static func width(_ row: GitGraph.Row?, lanes: Int) -> CGFloat { x(used(row, lanes: lanes)) + gap }
 
     var body: some View {
-        let green = Color.added, amber = Color.caution, canvas = Color.canvas
+        let green = Color.graphCurrent, slate = Color.graphMerged, canvas = Color.canvas
         Canvas { context, size in
             guard let row else { return }
             let middle = size.height / 2
@@ -480,9 +480,9 @@ struct CommitGraphCell: View {
                         path.addQuadCurve(to: CGPoint(x: to, y: size.height), control: CGPoint(x: to, y: middle))
                     }
                 }
-                context.stroke(path, with: .color(line.current ? green : amber), style: stroke)
+                context.stroke(path, with: .color(line.current ? green : slate), style: stroke)
             }
-            let color = row.current ? green : amber
+            let color = row.current ? green : slate
             if row.lane < lanes {
                 let radius: CGFloat = hollow ? 6 : 6.5
                 let dot = Path(ellipseIn: CGRect(x: Self.x(row.lane) - radius, y: middle - radius, width: radius * 2, height: radius * 2))

@@ -1,4 +1,5 @@
 use super::*;
+use std::{cell::RefCell, path::Path, rc::Rc};
 
 fn frame(seq: u64, width: u64, height: u64, full: bool, bytes: &[u8]) -> Vec<u8> {
     json::write(&D::Object(vec![
@@ -85,20 +86,125 @@ fn a_closed_terminal_expires() {
     assert_eq!((error.code, error.message.as_str()), ("expired", "terminal term_1 exited"));
 }
 
-#[test]
-fn host_screens_are_off_until_enabled_and_never_for_a_client_terminal() {
-    let mut herdr = Herdr::new(Config {
+fn herdr() -> Herdr {
+    Herdr::new(Config {
         executable: "/opt/herdr".into(),
         socket: "/tmp/hs/hd.sock".into(),
         session: "main".into(),
         directory: "/tmp".into(),
         environment: BTreeMap::new(),
         uid: 501,
-    });
+    })
+}
+
+/// A clock and the timers asked; nothing else is asked of an Io here.
+struct Clock(Instant, Vec<Instant>);
+#[rustfmt::skip]
+impl Io for Clock {
+    fn now(&self) -> Instant { self.0 }
+    fn timer(&mut self, at: Instant) { self.1.push(at) }
+    fn defer(&mut self, callback: Box<dyn FnOnce(&mut dyn Io)>) { callback(self) }
+    fn interest(&mut self, _: RawFd, _: bool, _: bool) -> io::Result<()> { unreachable!() }
+    fn read(&mut self, _: RawFd, _: &mut [u8]) -> io::Result<usize> { unreachable!() }
+    fn write(&mut self, _: RawFd, _: &[u8]) -> io::Result<usize> { unreachable!() }
+    fn close(&mut self, _: RawFd) { unreachable!() }
+    fn accept(&mut self, _: RawFd) -> io::Result<RawFd> { unreachable!() }
+    fn child(&mut self, _: u32) -> io::Result<()> { unreachable!() }
+    fn submit(&mut self, _: Job) -> io::Result<Work> { unreachable!() }
+    fn cancel(&mut self, _: Work) -> bool { unreachable!() }
+    fn watch(&mut self, _: &Path, _: bool) -> io::Result<u64> { unreachable!() }
+    fn unwatch(&mut self, _: u64) { unreachable!() }
+    fn spawn(&mut self, _: Command, _: Option<Grid>) -> io::Result<Spawned> { unreachable!() }
+    fn resize(&mut self, _: RawFd, _: Grid) -> io::Result<()> { unreachable!() }
+    fn hangup(&mut self, _: RawFd) -> io::Result<()> { unreachable!() }
+    fn connect(&mut self, _: &Address) -> io::Result<RawFd> { unreachable!() }
+    fn route(&mut self) -> io::Result<(u64, PathBuf)> { unreachable!() }
+    fn reply(&mut self, _: u64, _: &[u8]) -> io::Result<()> { unreachable!() }
+}
+
+#[test]
+fn host_screens_are_off_until_enabled_and_never_for_a_published_terminal() {
+    let mut herdr = herdr();
     assert!(!herdr.hosted(7));
     Multiplexer::host_screens(&mut herdr, true);
     assert!(herdr.hosted(7));
-    herdr.clients.insert(7);
+    herdr.published.insert(7);
     assert!(!herdr.hosted(7));
     assert!(herdr.hosted(8));
+    // A client's attachment (a controller) does not stop host reads; only a publication does.
+    herdr.controllers.insert(8, Controller::new(Grid { rows: 3, columns: 20, pixels: None }, true));
+    assert!(herdr.hosted(8));
+}
+
+#[test]
+fn a_screens_host_attach_hosts_until_a_client_publishes_and_again_once_it_left() {
+    let mut io = Clock(Instant::now(), Vec::new());
+    let mut herdr = herdr();
+    // A client helper reads only published screens.
+    assert!(!herdr.hosted(7));
+    Multiplexer::screen_clients(&mut herdr, &mut io, 7, true, false);
+    assert!(herdr.hosted(7));
+    assert!(!herdr.hosted(8), "only the terminal attached");
+    let screen = Screen { text: "published".into(), cursor: (0, 0), faint_tail: false };
+    Multiplexer::publish(&mut herdr, &mut io, 7, screen);
+    assert!(!herdr.hosted(7), "a publication wins");
+    // The publisher's attach ended (core tells it): host reads resume.
+    Multiplexer::screen_clients(&mut herdr, &mut io, 7, true, false);
+    assert!(herdr.hosted(7));
+    Multiplexer::screen_clients(&mut herdr, &mut io, 7, false, false);
+    assert!(!herdr.hosted(7));
+}
+
+fn screen(text: &str) -> Screen {
+    Screen { text: text.into(), cursor: (0, 0), faint_tail: false }
+}
+
+/// When drawn screens reach the readers (ms) for frames at `frames` (ms), with Timer events where asked; the first
+/// frame finds nothing shown.
+fn settled(frames: &[u64], end: u64) -> Vec<u64> {
+    let start = Instant::now();
+    let mut observer = Observer::new(start);
+    let (mut shown, mut published) = (false, Vec::new());
+    for ms in 0..=end {
+        let now = start + Duration::from_millis(ms);
+        if frames.contains(&ms) && observer.drawn(now, screen(&ms.to_string()), shown).is_some() {
+            published.push(ms);
+            shown = true;
+        }
+        if observer.due().is_some_and(|due| due <= now) && observer.flush().is_some() {
+            published.push(ms);
+        }
+    }
+    published
+}
+
+#[test]
+fn frames_reach_the_readers_once_settled_or_at_the_floor() {
+    // The first frame at once; then frames every 50 ms for three seconds: one every 500 ms; then one a settle later.
+    let frames: Vec<u64> = (0..3000).step_by(50).collect();
+    let published = settled(&frames, 4000);
+    assert_eq!(published, [0, 550, 1100, 1650, 2200, 2750, 3050]);
+    for second in 0..3 {
+        assert!(published.iter().filter(|ms| (second * 1000..(second + 1) * 1000).contains(*ms)).count() <= 3);
+    }
+    // A frame then quiet: once, a settle later.
+    assert_eq!(settled(&[0, 300], 1000), [0, 400]);
+}
+
+#[test]
+fn a_read_of_the_screen_now_takes_the_frame_drawn_last() {
+    let mut io = Clock(Instant::now(), Vec::new());
+    let mut herdr = herdr();
+    Multiplexer::host_screens(&mut herdr, true);
+    let mut observer = Observer::new(io.0 + Duration::from_secs(2));
+    assert_eq!(observer.drawn(io.0, screen("first"), false), Some(screen("first")));
+    assert_eq!(observer.drawn(io.0, screen("second"), true), None);
+    assert_eq!(observer.due(), Some(io.0 + SETTLE));
+    herdr.observers.insert(7, observer);
+    herdr.flush_screen(&mut io, 7);
+    assert_eq!(herdr.observers[&7].due(), None);
+    let read = Rc::new(RefCell::new(None));
+    let into = read.clone();
+    herdr.screens.read(&mut io, 7, false, Box::new(move |_, screen| *into.borrow_mut() = Some(screen.unwrap())));
+    assert_eq!(*read.borrow(), Some(screen("second")));
 }

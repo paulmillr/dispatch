@@ -105,7 +105,8 @@ final class FilesPresentationTests: XCTestCase {
         // .github, node_modules, src, lib, db.ts, stripe.ts, routes, billing.ts…
         XCTAssertEqual(outline.selectedRowIndexes, IndexSet(integer: 7))
         XCTAssertEqual(outline.level(forRow: 7), 2)
-        XCTAssertEqual(outline.rowHeight, 24)
+        // 24 points at the 12.5 design base, growing with the text.
+        XCTAssertEqual(outline.rowHeight, FilesColumns.rowHeight(AppTypography()), accuracy: 0.5)
         try await read(["Files", "src", "api", "Name", "Modified", "Size"], in: window, named: "files-header")
         XCTAssertFalse(PresentationTestSupport.accessibilityFrames("files-search", in: window).isEmpty, "search shows as its glyph")
         XCTAssertTrue(PresentationTestSupport.accessibilityFrames("files-hidden-toggle", in: window).isEmpty,

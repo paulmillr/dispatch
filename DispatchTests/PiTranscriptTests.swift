@@ -145,7 +145,9 @@ final class PiTranscriptTests: XCTestCase {
                 ["type": "toolCall", "id": "call", "name": "bash", "arguments": ["command": "printf fixture"]]]], parent: "u")
             + message("r", ["role": "toolResult", "toolCallId": "call", "toolName": "bash", "content": [["type": "text", "text": "fixture"]], "isError": false], parent: "a")
             + message("f", ["role": "assistant", "provider": "dispatch-local", "model": "dispatch-fixture", "stopReason": "stop", "content": [["type": "text", "text": "Completed"]]], parent: "r"))
-        XCTAssertEqual(items(state).filter { $0.kind == .user }.map(\.text), ["tool check\n[Image]"])
+        // The image is an attachment beside the text, not an "[Image]" line in it.
+        XCTAssertEqual(items(state).filter { $0.kind == .user }.map(\.text), ["tool check"])
+        XCTAssertEqual(items(state).filter { $0.kind == .user }.flatMap(\.attachments).map(\.kind), [.image])
         XCTAssertEqual(items(state).filter { $0.kind == .reasoning }.map(\.text), ["Synthetic fixture trace"])
         let tools = items(state).filter { $0.kind == .tool }
         XCTAssertEqual(tools.count, 1, "The call and its result are one tool card")

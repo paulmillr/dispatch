@@ -6,6 +6,13 @@ import Observation
 /// record instead (`HostRecord.chat`, `HostRecord.multiplexer`).
 @MainActor @Observable
 final class MobileSettings {
+    static let autoApproveUnsafePastesKey = "autoApproveUnsafePastes"
+    var autoApproveUnsafePastes: Bool {
+        didSet { defaults.set(autoApproveUnsafePastes, forKey: Self.autoApproveUnsafePastesKey) }
+    }
+    static func autoApprovesUnsafePastes(_ defaults: UserDefaults = .standard) -> Bool {
+        defaults.object(forKey: autoApproveUnsafePastesKey) as? Bool ?? true
+    }
     /// Light, dark or the system's (L1a, L2a). The app is dark by default.
     enum Appearance: String, CaseIterable, Identifiable, Sendable {
         case system, dark, light
@@ -23,10 +30,14 @@ final class MobileSettings {
     nonisolated static let themeKey = "theme"
     nonisolated static let terminalFontKey = "terminal.font"
     nonisolated static let terminalSchemeKey = "terminal.scheme"
+    /// The old Improve text contrast switch, read once by `TerminalStyle` when there is no `textContrastKey`.
     nonisolated static let terminalContrastKey = "terminal.contrast"
+    nonisolated static let textContrastKey = "terminal.textContrast"
     nonisolated static let boldIsBrightKey = "terminal.boldIsBright"
     nonisolated static let cursorKey = "terminal.cursor"
     nonisolated static let cursorBlinkKey = "terminal.cursorBlink"
+    /// The terminal's rows and chat's lines together, as the Mac's Settings › Appearance › Size › Line spacing.
+    nonisolated static let lineSpacingKey = "text.lineSpacing"
     nonisolated static let chatFontKey = "chat.font"
     nonisolated static let chatTextSizeKey = "chat.textSize"
     nonisolated static let notifyNeedsYouKey = "notify.needsYou"
@@ -80,7 +91,7 @@ final class MobileSettings {
     // The terminal (G1, G2): each change reaches the open terminals at once (`TerminalStyle.changed`); the font size
     // is the one setting that does not, it is what new terminals open at.
 
-    /// The terminal font's name as the list shows it (`TerminalFont.all`); JetBrains Mono by default.
+    /// The terminal font's name as the list shows it (`TerminalFont.all`); Source Code Pro by default.
     var terminalFont: String {
         didSet { if terminalFont != oldValue { save(terminalFont, Self.terminalFontKey) } }
     }
@@ -90,9 +101,10 @@ final class MobileSettings {
         didSet { if terminalScheme != oldValue { save(terminalScheme, Self.terminalSchemeKey) } }
     }
 
-    /// The Mac's "Improve text contrast": the contrast shader raises text to 4.5:1 against its background.
-    var improveTextContrast: Bool {
-        didSet { if improveTextContrast != oldValue { save(improveTextContrast, Self.terminalContrastKey) } }
+    /// The Mac's "Improve text contrast": the contrast shader raises text to 4.5:1 against its background, by default on
+    /// light schemes only.
+    var textContrast: TextContrast {
+        didSet { if textContrast != oldValue { save(textContrast.rawValue, Self.textContrastKey) } }
     }
 
     /// Bold text in the first eight colours draws in their bright variants (Ghostty's `bold-color = bright`).
@@ -107,6 +119,12 @@ final class MobileSettings {
 
     var cursorBlink: Bool {
         didSet { if cursorBlink != oldValue { save(cursorBlink, Self.cursorBlinkKey) } }
+    }
+
+    /// Tight, normal or relaxed lines in the terminal and chat (`LineSpacing`); chat reads the same key
+    /// (`mobileAppearance()`).
+    var lineSpacing: LineSpacing {
+        didSet { if lineSpacing != oldValue { save(lineSpacing.rawValue, Self.lineSpacingKey) } }
     }
 
     /// Chat's text (G3): the Mac's three fonts, and the size relative to Dynamic Type. The root reads the same keys
@@ -149,6 +167,7 @@ final class MobileSettings {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        autoApproveUnsafePastes = Self.autoApprovesUnsafePastes(defaults)
         appearance = defaults.string(forKey: Self.appearanceKey).flatMap(Appearance.init(rawValue:)) ?? .dark
         backgroundRefresh = defaults.bool(forKey: Self.backgroundRefreshKey)
         (dictationEngine, whisperModel) = Self.dictation(defaults)
@@ -156,10 +175,11 @@ final class MobileSettings {
         let style = TerminalStyle(defaults)
         terminalFont = style.font.name
         terminalScheme = style.scheme
-        improveTextContrast = style.improveTextContrast
+        textContrast = style.textContrast
         boldIsBright = style.boldIsBright
         cursor = style.cursor
         cursorBlink = style.cursorBlink
+        lineSpacing = style.lineSpacing
         chatFont = defaults.string(forKey: Self.chatFontKey).flatMap(MobileChatFont.init(rawValue:)) ?? .system
         chatTextSize = defaults.string(forKey: Self.chatTextSizeKey).flatMap(ChatTextSize.init(rawValue:)) ?? .standard
         notifyNeedsYou = defaults.object(forKey: Self.notifyNeedsYouKey) as? Bool ?? true

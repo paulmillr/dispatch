@@ -94,12 +94,7 @@ impl Request<'_> {
             let ops: Vec<String> = ops
                 .iter()
                 .cloned()
-                .chain(
-                    features::OPERATIONS
-                        .iter()
-                        .filter(|(op, feature)| accepted.iter().any(|f| f == feature) && self.helper.allowed(op))
-                        .map(|(op, _)| op.to_string()),
-                )
+                .chain(features::offered(&accepted, |op| self.helper.allowed(op)))
                 .collect();
             crate::encode::object(
                 &mut out,

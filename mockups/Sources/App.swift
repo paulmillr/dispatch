@@ -26,17 +26,6 @@ enum Screens {
         case "H1-files": HybridFilesScreen()
         case "H2-review": HybridReviewScreen()
         case "H3-commits": HybridCommitsScreen()
-        // Graph colour candidates over a log with two merged branches; H3x is today's green and amber on it.
-        case "H3x-commits-status": HybridCommitsScreen(rows: MockLog.twoBranches, palette: .status)
-        case "H3d-commits-vivid": HybridCommitsScreen(rows: MockLog.twoBranches, palette: .vivid)
-        case "H3f-commits-vivid-blue": HybridCommitsScreen(rows: MockLog.twoBranches, palette: .vividBlue)
-        case "H3g-commits-vivid-rose": HybridCommitsScreen(rows: MockLog.twoBranches, palette: .vividRose)
-        case "H3i-commits-vivid-gray": HybridCommitsScreen(rows: MockLog.twoBranches, palette: .vividGray)
-        case "H3h-commits-vivid-cyan": HybridCommitsScreen(rows: MockLog.twoBranches, palette: .vividCyan)
-        case "H3e-commits-saturated": HybridCommitsScreen(rows: MockLog.twoBranches, palette: .saturated)
-        case "H3a-commits-tint": HybridCommitsScreen(rows: MockLog.twoBranches, palette: .tint)
-        case "H3b-commits-hues": HybridCommitsScreen(rows: MockLog.twoBranches, palette: .hues)
-        case "H3c-commits-ink": HybridCommitsScreen(rows: MockLog.twoBranches, palette: .ink)
         // Pushed from them.
         case "F2-file": FilePreviewScreen()
         case "R2-diff-comments": GlassDiffScreen(mode: .comments)

@@ -134,7 +134,7 @@ operations! {
         ("cell_height", Unsigned),
         ("takeover", Boolean),
     ]),
-        mux attach(local(number(p, "terminal")?), size(p)?, flag(p, "takeover")) output;
+        mux attach(local(number(p, "terminal")?), size(p)?, flag(p, "takeover"), features::publishes(&self.helper.features, self.fd)) output;
     "terminals.observe" => Object(&[
         ("terminal", Unsigned),
     ]),

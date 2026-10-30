@@ -23,7 +23,7 @@ enum GhosttyImport {
     @MainActor static func plan() -> ImportPlan? {
         let files = configURLs()
         guard !files.isEmpty else { return nil }
-        return plan(files: files, fonts: SettingsView.monospacedFontFamilies)
+        return plan(files: files, fonts: SettingsView.terminalFontFamilies)
     }
 
     /// The settings of these config files, in Ghostty's order, and of the files they include.
@@ -129,7 +129,7 @@ enum GhosttyImport {
 
     /// Keys Dispatch maps; every other key that's set is either listed as unsupported below or ignored.
     static let mappedKeys: Set<String> = colorKeys.union(["theme", "font-family", "font-size", "cursor-style", "cursor-style-blink",
-        "macos-option-as-alt", "scrollback-limit", "scrollback-limit-bytes", "scrollback-limit-lines", "command", "working-directory",
+        "adjust-cell-height", "macos-option-as-alt", "scrollback-limit", "scrollback-limit-bytes", "scrollback-limit-lines", "command", "working-directory",
         "minimum-contrast", "clipboard-write", "clipboard-read", "image-storage-limit", "background-opacity"])
 
     /// What a user might expect to come along but can't, by why. Ghostty's many other keys aren't mentioned.
@@ -179,6 +179,15 @@ enum GhosttyImport {
         case "false": plan.setCursorBlink(false)
         case "true": plan.setCursorBlink(true)
         default: break
+        }
+        // The nearest of Settings' line spacings to a percentage; pixels depend on the font, so they stay behind.
+        if let height = value("adjust-cell-height") {
+            if height.hasSuffix("%"), let percent = Double(height.dropLast()), percent.isFinite {
+                let scale = 1 + percent / 100
+                plan.setLineSpacing(LineSpacing.allCases.min { abs($0.scale - scale) < abs($1.scale - scale) } ?? .normal)
+            } else {
+                plan.skipped.append("adjust-cell-height \(height) (Dispatch takes a percentage)")
+            }
         }
         switch value("macos-option-as-alt") {
         case "true": plan.setOptionAsAlt(.both)

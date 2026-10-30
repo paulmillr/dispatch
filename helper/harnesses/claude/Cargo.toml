@@ -8,5 +8,3 @@ autotests = false
 [dependencies]
 dispatch-helper-core = { path = "../../core" }
 
-[lib]
-test = false

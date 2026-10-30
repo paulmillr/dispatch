@@ -106,7 +106,8 @@ struct FilesHeader: View {
             // The search and the pane's toggle: one glass pill with Liquid Glass.
             HStack(spacing: glass ? 2 : 12) {
                 searchSlot
-                paneToggle
+                // Nothing to toggle on Files with its previews off in Settings.
+                if session.hasPane { paneToggle }
             }
             .glassControlGroup()
             .layoutPriority(1)
@@ -500,7 +501,8 @@ struct FilesColumnHeader: View {
             .padding(.trailing, FilesColumns.trailing)
             .frame(maxHeight: .infinity)
         }
-        .frame(height: typography.expanded(24))
+        // As tall as the preview's header beside it, its rule included.
+        .frame(height: FilesColumns.headerHeight(typography) + 1)
         .font(AppFont.ui(size: typography.size(offset: -2)))
         .foregroundStyle(palette.detail)
         .overlay(alignment: .bottom) { palette.separator.frame(height: 1) }

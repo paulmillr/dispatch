@@ -47,6 +47,10 @@ impl Screens {
         self.values.remove(&terminal);
         self.unseen.remove(&terminal);
     }
+    /// A screen of this terminal is shown (a read that does not ask for a change gets it at once).
+    pub(super) fn shown(&self, terminal: Id) -> bool {
+        self.values.contains_key(&terminal)
+    }
     /// A reader waits for this terminal's next screen.
     pub(super) fn waiting(&self, terminal: Id) -> bool {
         self.waiting.get(&terminal).is_some_and(|waiting| !waiting.is_empty())

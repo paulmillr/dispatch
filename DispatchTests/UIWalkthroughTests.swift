@@ -212,7 +212,8 @@ final class UIWalkthroughTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(300))
         let crowded = try widths()
         let sizes = workspace.currentTabs.compactMap { crowded.tabs[$0.id] }
-        XCTAssertEqual(Set(sizes.map { $0.rounded() }).count, 1, "Tabs stay equal: \(sizes)")
+        // Equal up to the half point each tab snaps to.
+        XCTAssertLessThanOrEqual((sizes.max() ?? 0) - (sizes.min() ?? 0), 0.5, "Tabs stay equal: \(sizes)")
         // Twelve tabs would be under 70 points each in this strip; they stop well above that and scroll.
         XCTAssertGreaterThan(try XCTUnwrap(sizes.first), 100, "Tabs keep a usable minimum")
         XCTAssertGreaterThan(sizes.reduce(0, +), crowded.viewport, "Past the minimum the strip scrolls")

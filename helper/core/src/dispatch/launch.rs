@@ -52,6 +52,7 @@ impl Request<'_> {
                 let replies = self.replies.clone();
                 let (adoptions, fd, request, mux) =
                     (self.helper.adoptions.clone(), self.fd, self.id, mux.clone());
+                let publishes = super::features::publishes(&self.helper.features, fd);
                 Box::new(move |io: &mut dyn Io, result: Result<Id, Error>| {
                     adoptions.borrow_mut().push((
                         fd,
@@ -69,7 +70,7 @@ impl Request<'_> {
                                 reference(index, id),
                                 attached,
                             );
-                            mux.borrow_mut().attach(io, id, grid, false, attached);
+                            mux.borrow_mut().attach(io, id, grid, false, publishes, attached);
                         }
                         Err(error) => created(io, Err(error)),
                     }

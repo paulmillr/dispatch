@@ -183,16 +183,16 @@ final class FilePreviewTests: XCTestCase {
         let pixels = await FilePreviewLoader.imagePixelSize(data)
         XCTAssertEqual(pixels, CGSize(width: 1_200, height: 300))
         let bound = try XCTUnwrap(FileImagePreview.decodeBound(CGSize(width: 1_200, height: 300),
-                                                               area: CGSize(width: 200, height: 150), actualSize: false))
+                                                               area: CGSize(width: 200, height: 150), zoomed: false))
         XCTAssertEqual(bound, 512, "about twice the pane, in 512-pixel steps")
         let bounded = await FilePreviewLoader.decodeImage(data, maxPixels: bound)
         let thumbnail = try XCTUnwrap(bounded)
         XCTAssertEqual(thumbnail.width, 512)
         XCTAssertEqual(thumbnail.height, 128)
         XCTAssertNil(FileImagePreview.decodeBound(CGSize(width: 1_200, height: 300), area: CGSize(width: 200, height: 150),
-                                                  actualSize: true), "actual size decodes whole")
+                                                  zoomed: true), "a zoomed image decodes whole")
         XCTAssertNil(FileImagePreview.decodeBound(CGSize(width: 400, height: 300), area: CGSize(width: 560, height: 700),
-                                                  actualSize: false), "an image smaller than the bound decodes whole")
+                                                  zoomed: false), "an image smaller than the bound decodes whole")
         let whole = await FilePreviewLoader.decodeImage(data, maxPixels: nil)
         XCTAssertEqual(whole?.width, 1_200)
         let notImage = await FilePreviewLoader.imagePixelSize(Data("not an image".utf8))
@@ -282,31 +282,27 @@ final class FilePreviewTests: XCTestCase {
         XCTAssertEqual(tokens.map(\.1), expected.map(\.1))
     }
 
-    func testHeaderMetaNamesFolderSizeAgeAndLanguage() async throws {
+    func testHeaderMetaNamesSizeAndAge() async throws {
         let source = FakeFilesSource.mockupAPI()
         let billing = try await loaded(base + "/src/routes/billing.ts", in: source)
-        XCTAssertEqual(FilesFormatting.meta(billing, root: base, home: home, now: now),
-                       "src/routes · 3.8 KB · modified 6m ago · TypeScript")
+        XCTAssertEqual(FilesFormatting.meta(billing, now: now), "3.8 KB · modified 6m ago", "no folder, no language")
         let package = try await loaded(base + "/package.json", in: source)
-        XCTAssertEqual(FilesFormatting.meta(package, root: base, home: home, now: now),
-                       "api · 20 B · modified 5h ago · JSON")
-        XCTAssertEqual(FilesFormatting.meta(package, root: "/srv", home: home, now: now),
-                       "~/src/api · 20 B · modified 5h ago · JSON")
+        XCTAssertEqual(FilesFormatting.meta(package, now: now), "20 B · modified 5h ago")
 
         source.file(base + "/assets/logo@2x.png", try Self.png(width: 512, height: 512))
         let logo = try await loaded(base + "/assets/logo@2x.png", in: source)
-        XCTAssertTrue(FilesFormatting.meta(logo, root: base, home: home, now: now).hasPrefix("assets · "))
-        XCTAssertTrue(FilesFormatting.meta(logo, root: base, home: home, now: now).hasSuffix(" · PNG · 512 × 512"))
+        XCTAssertTrue(FilesFormatting.meta(logo, now: now).hasSuffix(" · PNG · 512 × 512"))
+        XCTAssertFalse(FilesFormatting.meta(logo, now: now).contains("assets"))
 
         let folder = FilePreviewState(path: base + "/fixtures", entry: FileEntry(name: "fixtures", kind: .directory, size: 0))
-        XCTAssertEqual(FilesFormatting.meta(folder, root: base, home: home, now: now), "folder")
+        XCTAssertEqual(FilesFormatting.meta(folder, now: now), "folder")
         folder.kind = .folder(FolderSummary(files: 5_096, folders: 24, bytes: 48_200_000, truncated: false))
-        XCTAssertEqual(FilesFormatting.meta(folder, root: base, home: home, now: now), "folder · 5,120 items · 48 MB")
-        // F2d: text too large to show names its folder, size and kind, not when it changed.
+        XCTAssertEqual(FilesFormatting.meta(folder, now: now), "folder · 5,120 items · 48 MB")
+        // F2d: text too large to show names its size, not when it changed.
         let bench = FilePreviewState(path: base + "/scheduler/bench.json",
                                      entry: FileEntry(name: "bench.json", kind: .file, size: 9_600_000, modified: now.addingTimeInterval(-60)))
         bench.kind = .tooLarge(size: 9_600_000, head: nil)
-        XCTAssertEqual(FilesFormatting.meta(bench, root: base, home: home, now: now), "scheduler · 9.6 MB · JSON")
+        XCTAssertEqual(FilesFormatting.meta(bench, now: now), "9.6 MB")
         XCTAssertFalse(bench.findable, "⌘F on the notice goes to the filter")
         bench.kind = .tooLarge(size: 9_600_000, head: "{}")
         XCTAssertTrue(bench.findable)
@@ -389,6 +385,20 @@ final class FilePreviewTests: XCTestCase {
             "safe\u{202E}txt\u{200D}\u{1B}"
         }
         XCTAssertEqual(lines.lines, ["safe⟦RLO⟧txt⟦ZWJ⟧⟦ESC⟧"])
+    }
+
+    func testImageZoomStepsThroughStopsAndFitsAtTheFitScale() {
+        // A large image fits at 30 %: + goes to the next stop, − back to fit once it reaches the fit scale.
+        XCTAssertEqual(FileImageZoom.fit.stepped(in: true, fit: 0.3), .scale(0.5))
+        XCTAssertEqual(FileImageZoom.scale(0.5).stepped(in: false, fit: 0.3), .fit)
+        XCTAssertEqual(FileImageZoom.scale(1).stepped(in: false, fit: 0.3), .scale(0.75))
+        XCTAssertEqual(FileImageZoom.scale(1.2).stepped(in: true, fit: 0.3), .scale(1.5), "a pinched scale steps to the next stop")
+        XCTAssertEqual(FileImageZoom.scale(8).stepped(in: true, fit: 0.3), .scale(8), "8× is the most")
+        // A small image fits at 100 %: it zooms in, and never out past fit.
+        XCTAssertEqual(FileImageZoom.fit.stepped(in: true, fit: 1), .scale(1.5))
+        XCTAssertEqual(FileImageZoom.fit.stepped(in: false, fit: 1), .fit)
+        XCTAssertEqual(FileImageZoom.settled(0.3, fit: 0.3), .fit)
+        XCTAssertEqual(FileImageZoom.settled(0.31, fit: 0.3), .scale(0.31))
     }
 
     func testFindStepsWrapAround() {

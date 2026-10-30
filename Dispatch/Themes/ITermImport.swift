@@ -23,7 +23,7 @@ enum ITermImport {
 
     /// This Mac's iTerm2 profile (`profile`: a `Profile.id`, else the default), for the fonts Settings offers.
     @MainActor static func plan(profile: String? = nil) -> ImportPlan? {
-        load().map { plan(preferences: $0, profile: profile, fonts: SettingsView.monospacedFontFamilies) }
+        load().map { plan(preferences: $0, profile: profile, fonts: SettingsView.terminalFontFamilies) }
     }
 
     /// A profile's settings (`profile`: a `Profile.id`, else the default profile).

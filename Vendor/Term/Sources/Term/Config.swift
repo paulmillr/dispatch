@@ -22,6 +22,8 @@ public struct Config {
     public var selectionBackground: DrawConfig.Source?, selectionForeground: DrawConfig.Source?
     public var palette = Palette.standard
     public var fontFamily: [String] = []
+    /// font-feature: OpenType features over the shaper's default (liga on), in order; a later setting of a tag wins.
+    public var fontFeatures: [FontFeature] = []
     #if os(macOS)
     public var fontSize: Float = 13
     #else
@@ -37,6 +39,8 @@ public struct Config {
     /// cursor-style and cursor-style-blink: the cursor a program has not chosen (nil blink: the program's
     /// DEC mode 12 decides, blinking at first).
     public var cursorStyle = CursorShape.block, cursorBlink: Bool?
+    /// adjust-cell-height: taller or shorter rows than the font's line, text centred in them (nil: the font's).
+    public var adjustCellHeight: MetricModifier?
     public var clipboardRead = Clipboard.ask, clipboardWrite = Clipboard.allow
     public var term = "xterm-ghostty"
     /// Each new terminal's scrollback, in bytes of pages; nil: `unlimited`.
@@ -47,6 +51,11 @@ public struct Config {
     /// keybind lines in order after the last `clear` (Bindings parses them).
     public var keybinds: [String] = []
     public var theme: (light: String, dark: String)?
+    /// Dispatch's phosphor look (TermApple's Glow), not a Ghostty key: the app sets it for the schemes made for it.
+    public var glow = false
+    /// Dispatch's Display P3 theme colors, from `# display-p3: key = color` lines (comments to Ghostty), each right
+    /// after its key's sRGB line: the P3 color by the sRGB one it stands for (RGB.packed). Empty: an sRGB theme.
+    public var displayP3: [UInt32: RGB] = [:]
     /// (key, message) like Ghostty's diagnostics.
     public var diagnostics: [(key: String, message: String)] = []
     /// The lines applied, to replay over a theme.
@@ -58,7 +67,10 @@ public struct Config {
     public mutating func load(_ text: [UInt8]) {
         for raw in text.split(separator: 0x0A, omittingEmptySubsequences: false) {
             let line = trim(raw, " \t\r")
-            guard let first = line.first, first != 0x23 else { continue }
+            guard let first = line.first, first != 0x23 else {
+                if line.starts(with: Self.displayP3Prefix) { wide(line.dropFirst(Self.displayP3Prefix.count)) }
+                continue
+            }
             let step: (key: String, value: String?)
             if let eq = line.firstIndex(of: 0x3D) {
                 var value = trim(line[(eq + 1)...], " \t")
@@ -70,6 +82,29 @@ public struct Config {
             steps.append(step)
             set(step.key, step.value)
         }
+    }
+
+    static let displayP3Prefix = Array("# display-p3:".utf8)
+
+    /// A `# display-p3:` line's `key = color` (palette: `N=color`): the color, in Display P3, for what `key` is now.
+    mutating func wide(_ line: ArraySlice<UInt8>) {
+        guard let eq = line.firstIndex(of: 0x3D) else { return }
+        var value = trim(line[(eq + 1)...], " \t")
+        let srgb: RGB?
+        switch String(decoding: trim(line[..<eq], " \t"), as: UTF8.self) {
+        case "background": srgb = background
+        case "foreground": srgb = foreground
+        case "cursor-color": if case .color(let c)? = cursorColor { srgb = c } else { srgb = nil }
+        case "cursor-text": if case .color(let c)? = cursorText { srgb = c } else { srgb = nil }
+        case "selection-background": if case .color(let c)? = selectionBackground { srgb = c } else { srgb = nil }
+        case "selection-foreground": if case .color(let c)? = selectionForeground { srgb = c } else { srgb = nil }
+        case "palette":
+            guard let at = value.firstIndex(of: 0x3D), case let i?? = Self.int(trim(value[..<at], " \t"), max: 255) else { return }
+            (srgb, value) = (palette[Int(i)], value[(at + 1)...])
+        default: srgb = nil
+        }
+        guard let srgb, let p3 = parseRGB(value) else { return }
+        displayP3[srgb.packed] = p3
     }
 
     /// Ghostty's finalize: the theme text loaded first (nil: not loaded, the loader's messages are
@@ -104,6 +139,7 @@ public struct Config {
             case "selection-foreground": selectionForeground = nil
             case "palette": palette = d.palette
             case "font-family": fontFamily = []
+            case "font-feature": fontFeatures = []
             case "font-size": fontSize = d.fontSize
             case "minimum-contrast": minimumContrast = d.minimumContrast
             case "background-opacity": backgroundOpacity = d.backgroundOpacity
@@ -112,6 +148,7 @@ public struct Config {
             case "macos-option-as-alt": optionAsAlt = nil
             case "cursor-style": cursorStyle = d.cursorStyle
             case "cursor-style-blink": cursorBlink = nil
+            case "adjust-cell-height": adjustCellHeight = nil
             case "clipboard-read": clipboardRead = d.clipboardRead
             case "clipboard-write": clipboardWrite = d.clipboardWrite
             case "term": term = d.term
@@ -126,8 +163,8 @@ public struct Config {
         }
         guard ghosttyConfigKeys.contains(key) else { diagnostics.append((key, "unknown field")); return }
         let modeled = ["background", "foreground", "cursor-color", "cursor-text", "selection-background", "selection-foreground", "palette",
-                       "font-family", "font-size", "minimum-contrast", "background-opacity", "window-padding-x", "window-padding-y", "macos-option-as-alt",
-                       "cursor-style", "cursor-style-blink", "clipboard-read", "clipboard-write", "term", "scrollback-limit-bytes", "image-storage-limit", "shell-integration-features", "keybind", "theme"]
+                       "font-family", "font-feature", "font-size", "minimum-contrast", "background-opacity", "window-padding-x", "window-padding-y", "macos-option-as-alt",
+                       "cursor-style", "cursor-style-blink", "adjust-cell-height", "clipboard-read", "clipboard-write", "term", "scrollback-limit-bytes", "image-storage-limit", "shell-integration-features", "keybind", "theme"]
         guard modeled.contains(key) else { return }
         guard let v = value else { return required(&self) }
         let bytes = Array(v.utf8)
@@ -153,6 +190,7 @@ public struct Config {
             case .some(let i?): if let c = parseRGB(bytes[(eq + 1)...]) { palette[Int(i)] = c } else { bad(&self) }
             }
         case "font-family": fontFamily.append(v)
+        case "font-feature": if let f = FontFeature.list(v) { fontFeatures += f } else { bad(&self) }
         case "font-size": if let f = Self.float(bytes).map(Float.init) { fontSize = f } else { bad(&self) }
         case "minimum-contrast": if let f = Self.float(bytes) { minimumContrast = f } else { bad(&self) }
         // Ghostty clamps it to 0...1.
@@ -176,6 +214,7 @@ public struct Config {
             }
         case "cursor-style-blink":
             switch v { case "true": cursorBlink = true; case "false": cursorBlink = false; default: bad(&self) }
+        case "adjust-cell-height": if let m = MetricModifier(bytes) { adjustCellHeight = m } else { bad(&self) }
         case "clipboard-read", "clipboard-write":
             guard let c = Clipboard(rawValue: v) else {
                 return diagnostics.append((key, "invalid value \"\(v)\", valid values are: allow, deny, ask"))
@@ -275,5 +314,40 @@ public struct Config {
         }
         guard let light, let dark else { return nil }
         return (light, dark)
+    }
+}
+
+/// One `font-feature` setting: an OpenType feature tag and its value (0 off, 1 on, more for alternates).
+public struct FontFeature: Equatable, Sendable {
+    public var tag: String, value: Int
+    public init(_ tag: String, _ value: Int) { (self.tag, self.value) = (tag, value) }
+
+    /// Ghostty's font-feature syntax, CSS font-feature-settings compatible: a comma-separated list of `feat`, `+feat`,
+    /// `feat on`, `feat=1` (on), `-feat`, `feat off`, `feat=0` (off), `feat=2` or `feat 2` (a value), the tag
+    /// optionally quoted. nil: a part isn't one of these.
+    static func list(_ value: String) -> [FontFeature]? {
+        var result: [FontFeature] = []
+        for part in Array(value.utf8).split(separator: 0x2C, omittingEmptySubsequences: false) {
+            var text = trim(part, " \t")
+            var on: Int?
+            if text.first == 0x2B { (on, text) = (1, text.dropFirst()) } else if text.first == 0x2D { (on, text) = (0, text.dropFirst()) }
+            // The tag, then `=`, spaces or tabs, then the setting.
+            let gap: (UInt8) -> Bool = { $0 == 0x3D || $0 == 0x20 || $0 == 0x09 }
+            let end = text.firstIndex(where: gap) ?? text.endIndex
+            var tag = text[..<end]
+            let setting = String(decoding: text[end...].drop(while: gap), as: UTF8.self)
+            if tag.count == 6, tag.first == tag.last, tag.first == 0x22 || tag.first == 0x27 { tag = tag.dropFirst().dropLast() }
+            guard tag.count == 4, tag.allSatisfy({ (0x20...0x7E).contains($0) }) else { return nil }
+            let name = String(decoding: tag, as: UTF8.self)
+            switch setting {
+            case "": result.append(FontFeature(name, on ?? 1))
+            case "on" where on == nil: result.append(FontFeature(name, 1))
+            case "off" where on == nil: result.append(FontFeature(name, 0))
+            default:
+                guard on == nil, let n = Int(setting), n >= 0 else { return nil }
+                result.append(FontFeature(name, n))
+            }
+        }
+        return result
     }
 }

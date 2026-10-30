@@ -108,6 +108,22 @@ final class ProgramStatusTests: XCTestCase {
         XCTAssertEqual(records(s).first?.state, .idle)
     }
 
+    func testMalformedIDsNeverBecomeRootClearsOrHideBehindDuplicates() {
+        let s = surface()
+        report(s, "state=working:id=keep")
+        let before = records(s)
+        for id in ["a@b", "a b", "a%20b", "a//b", "a@b:id=a", "a//b:id=a"] {
+            report(s, "state=clear:id=\(id)")
+            XCTAssertEqual(records(s), before, id)
+        }
+        for field in ["app=" + String(repeating: "a", count: 33) + ":app=a",
+                      "app=@" + String(repeating: "a", count: 33),
+                      "title=" + String(repeating: "a", count: 257) + ":title=YQ=="] {
+            report(s, "state=clear:\(field)")
+            XCTAssertEqual(records(s), before, field)
+        }
+    }
+
     func testDiscardedReportsChangeNothing() {
         let s = surface()
         report(s, "state=working:app=keep")

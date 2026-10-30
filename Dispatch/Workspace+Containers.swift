@@ -82,11 +82,7 @@ extension Workspace {
   var currentTabs: [TerminalTab] {
     guard let current else { return [] }
     if !current.containers.isEmpty {
-      let members =
-        current.presentation?.groups.first {
-          $0.windows.contains { $0 == current.selectedContainer }
-        }?.windows ?? current.containers.map(\.id)
-      return members.compactMap { id in
+      return current.focusedWindowIDs.compactMap { id in
         let arrangement = current.containers.first { $0.id == id }?.arrangement
         return arrangement?.panes.first { $0.id == arrangement?.focusedPane }?.activeTab
       }
@@ -184,10 +180,13 @@ extension Space {
     windows.first { $0.id == selectedContainer }
   }
 
-  /// The windows ⌘[ / ⌘] cycle through: the selected window's presentation group, else every window.
+  /// The windows ⌘[ / ⌘] cycle through, in their strip's order: the selected window's group when the windows are
+  /// split into groups, else every window in the server's order (the one strip WindowTabBar shows without a group).
   var focusedWindowIDs: [UUID] {
-    guard let selected = selectedContainer else { return [] }
-    return presentation?.groups.first { $0.windows.contains(selected) }?.windows ?? containers.map(\.id)
+    guard let groups = presentation?.groups, groups.count > 1,
+      let group = groups.first(where: { $0.windows.contains { $0 == selectedContainer } })
+    else { return containers.map(\.id) }
+    return group.windows
   }
 }
 

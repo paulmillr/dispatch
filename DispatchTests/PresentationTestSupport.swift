@@ -108,7 +108,7 @@ enum PresentationTestSupport {
             print("Vision input \(input) size=\(bitmap.pixelsWide)x\(bitmap.pixelsHigh) region=\(request.regionOfInterest) corrected=\(corrected) revision=\(request.revision)")
             do {
                 try measured("ocr", file: file, line: line) {
-                    try VNImageRequestHandler(cgImage: XCTUnwrap(bitmap.cgImage, file: file, line: line)).perform([request])
+                    try PresentationTestSupport.recognize(request, in: XCTUnwrap(bitmap.cgImage, file: file, line: line))
                 }
             } catch {
                 let name = "ocr-failure-\(System.uuid().uuidString)"
@@ -486,3 +486,30 @@ enum PresentationTestSupport {
 /// NSHostingView is generic; this gives the view-debug walk one type for every hosting view.
 @MainActor protocol ViewDebugging { func _viewDebugData() -> [_ViewDebug.Data] }
 extension NSHostingView: ViewDebugging {}
+
+/// Vision's text recognition with a deadline. On macOS 27.2 a request once waited forever on a Neural Engine task
+/// (2026-10-29), which stalled the whole suite in one case; now that case fails and the rest run.
+extension PresentationTestSupport {
+    nonisolated static let ocrTimeout: TimeInterval = 30
+
+    struct OCRTimeout: LocalizedError {
+        var errorDescription: String? { "Vision text recognition gave no answer in \(Int(PresentationTestSupport.ocrTimeout)) s" }
+    }
+
+    /// Runs `request` on `image` off the calling thread and waits at most `ocrTimeout`; a request that doesn't
+    /// answer by then is cancelled and throws.
+    nonisolated static func recognize(_ request: VNRecognizeTextRequest, in image: CGImage) throws {
+        final class Outcome: @unchecked Sendable { var error: Error? }
+        nonisolated(unsafe) let request = request
+        let outcome = Outcome(), done = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .userInitiated).async {
+            do { try VNImageRequestHandler(cgImage: image).perform([request]) } catch { outcome.error = error }
+            done.signal()
+        }
+        guard done.wait(timeout: .now() + ocrTimeout) == .success else {
+            request.cancel()
+            throw OCRTimeout()
+        }
+        if let error = outcome.error { throw error }
+    }
+}

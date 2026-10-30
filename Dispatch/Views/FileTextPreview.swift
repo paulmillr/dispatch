@@ -214,6 +214,8 @@ struct FileTextPreview: View {
     let owner: ObjectIdentifier
     let content: Content
     let wrap: Bool
+    /// Text's line numbers (Settings › Files); prepared lines never have them.
+    var lineNumbers = true
     var find: FilePreviewFind?
     /// Whether the query highlights (the find field is open).
     var highlightsQuery = true
@@ -225,7 +227,7 @@ struct FileTextPreview: View {
         switch content {
         case .text(let text, let language):
             model.prepare(.init(owner: owner, count: text.utf8.count, language: language, theme: theme)) { text }
-            numbered = true
+            numbered = lineNumbers
         case .lines(let lines):
             model.prepare(.init(owner: owner, count: lines.count, language: "text", theme: theme)) { lines }
             numbered = false

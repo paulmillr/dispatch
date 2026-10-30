@@ -262,7 +262,8 @@ final class TerminalSession: @unchecked Sendable {
                               opacity: look.backgroundOpacity, block: c.block)
         u.minContrast = Float(config.minimumContrast)
         let built = CACurrentMediaTime()
-        let committed = metal.draw(c, u, gray: cells.gray, color: cells.color, into: drawable.texture) { [weak self] in
+        let committed = metal.draw(c, u, gray: cells.gray, color: cells.color, into: drawable.texture,
+                                   glow: config.glow ? Glow() : nil) { [weak self] in
             drawable.present()
             let done = CACurrentMediaTime()
             self?.statsLock.withLock {
@@ -384,7 +385,7 @@ final class TerminalSession: @unchecked Sendable {
         exclusive {
             boldIsBright = configuration.boldIsBright
             let fonts = next.fontFamily != config.fontFamily || next.fontSize != config.fontSize || next.paddingX != config.paddingX
-                || next.paddingY != config.paddingY
+                || next.paddingY != config.paddingY || next.adjustCellHeight != config.adjustCellHeight
             config = next
             if fonts { rebuild() }
             apply()
@@ -457,7 +458,7 @@ final class TerminalSession: @unchecked Sendable {
     static func cells(_ config: Config, _ scale: Double) throws -> CellRenderer {
         let fonts = try FontCollection(families: config.fontFamily, points: config.fontSize, dpi: Int(72 * scale))
         let primary = fonts.face(fonts.faces[0][0].entry)
-        return CellRenderer(fonts, metrics: CellMetrics(Face(primary, pixels: CTFontGetSize(primary)).metrics))
+        return CellRenderer(fonts, metrics: CellMetrics(Face(primary, pixels: CTFontGetSize(primary)).metrics, cellHeight: config.adjustCellHeight))
     }
 
     static func cell(_ cells: CellRenderer) -> (width: Int, height: Int) { (Int(cells.metrics.cellWidth), Int(cells.metrics.cellHeight)) }

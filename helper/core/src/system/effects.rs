@@ -626,6 +626,23 @@ impl Io for System {
         self.record("resize", args(), &result, Data::Null)?;
         result
     }
+    fn unread(&mut self, master: RawFd) -> io::Result<usize> {
+        let args = || Data::Signed(master.into());
+        if let Some(result) = self.replay("unread", args(), |v| v.unsigned().map(|v| v as usize)) {
+            return result;
+        }
+        let child = self.children.values().find(|child| child.pty && child.channels.contains(&Some(master)));
+        let result = match child {
+            None => Err(io::ErrorKind::NotFound.into()),
+            #[cfg(target_os = "macos")]
+            Some(child) => child.slave.as_ref().map_or(Ok(0), |slave| native::unread(std::os::fd::AsRawFd::as_raw_fd(slave))),
+            #[cfg(not(target_os = "macos"))]
+            Some(_) => native::slave_unread(master),
+        };
+        let output = result.as_ref().map_or(Data::Null, |&count| Data::Unsigned(count as u64));
+        self.record("unread", args(), &result, output)?;
+        result
+    }
     fn hangup(&mut self, master: RawFd) -> io::Result<()> {
         if let Some(result) = self.replay("hangup", Data::Signed(master.into()), |_| Some(())) {
             return result;

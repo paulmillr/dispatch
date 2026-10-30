@@ -2,7 +2,7 @@
 // shaders (Shaders.swift), the same uniform/cell/instance bytes and atlas textures, one pass:
 // background color, kitty images below the backgrounds, cell backgrounds, images below the text,
 // glyphs as instanced quads, images above the text. Background images and custom shaders are not
-// drawn.
+// drawn; Dispatch's own Glow (GlowShaders.swift) is a second pass over the frame.
 #if canImport(Metal)
 import Dispatch
 import Foundation
@@ -84,17 +84,18 @@ extension Contents {
 
     /// The CellText records at `to` (32 bytes each: atlas position, size, bearings, grid position,
     /// color, atlas, flags).
-    public func write(_ to: UnsafeMutableRawPointer) {
+    public func write(_ to: UnsafeMutableRawPointer, wide: WideColors? = nil) {
         var at = to
         for list in lists {
             for e in list {
+                let color = wide?.map(e.color) ?? e.color
                 at.storeBytes(of: SIMD4<UInt32>(UInt32(clamping: e.glyph.x), UInt32(clamping: e.glyph.y),
                                                 UInt32(clamping: e.glyph.width), UInt32(clamping: e.glyph.height)), as: SIMD4<UInt32>.self)
                 at.storeBytes(of: Int16(clamping: e.bearings.x), toByteOffset: 16, as: Int16.self)
                 at.storeBytes(of: Int16(clamping: e.bearings.y), toByteOffset: 18, as: Int16.self)
                 at.storeBytes(of: UInt16(clamping: e.x), toByteOffset: 20, as: UInt16.self)
                 at.storeBytes(of: UInt16(clamping: e.y), toByteOffset: 22, as: UInt16.self)
-                at.storeBytes(of: SIMD8<UInt8>(e.color.r, e.color.g, e.color.b, e.alpha, e.glyph.color ? 1 : 0, (e.noMinContrast ? 1 : 0) | (e.cursor ? 2 : 0), 0, 0),
+                at.storeBytes(of: SIMD8<UInt8>(color.r, color.g, color.b, e.alpha, e.glyph.color ? 1 : 0, (e.noMinContrast ? 1 : 0) | (e.cursor ? 2 : 0), 0, 0),
                               toByteOffset: 24, as: SIMD8<UInt8>.self)
                 at += 32
             }
@@ -109,10 +110,21 @@ extension Contents {
     }
 }
 
+/// Dispatch's phosphor look: a halo around what is brighter than the background, and scanlines (0: none, 1: black
+/// between them).
+public struct Glow: Equatable, Sendable {
+    public var strength: Float, scanlines: Float
+    public init(strength: Float = 2.5, scanlines: Float = 0.3) { (self.strength, self.scanlines) = (strength, scanlines) }
+}
+
 public final class MetalRenderer {
     public enum Failure: Error { case commandQueueUnavailable }
     public let device: MTLDevice, pixelFormat: MTLPixelFormat
     let queue: MTLCommandQueue, bgColor: MTLRenderPipelineState, cellBg: MTLRenderPipelineState, cellText: MTLRenderPipelineState, image: MTLRenderPipelineState
+    let glow: MTLRenderPipelineState
+    /// The frame a Glow draws from, with its mipmaps (the halo's blur), at the target's size. The frames in flight
+    /// share it: the queue runs their command buffers in order and Metal tracks the texture between them.
+    var glowFrame: MTLTexture?
     /// Serializes the public renderer boundary. Sessions already have a draw lock, but keeping the
     /// swap-chain index, caches, and image snapshot safe here prevents another embedder from racing
     /// `draw`, invalidation, and `Images.update` into the same shared Metal resources.
@@ -126,7 +138,7 @@ public final class MetalRenderer {
         images = Images(lock: stateLock)
         guard let queue = device.makeCommandQueue() else { throw Failure.commandQueueUnavailable }
         self.queue = queue
-        let library = try device.makeLibrary(source: ghosttyShaders, options: nil)
+        let library = try device.makeLibrary(source: ghosttyShaders + glowShaders, options: nil)
         func pipeline(_ vertex: String, _ fragment: String, blend: Bool, instances: MTLVertexDescriptor? = nil) throws -> MTLRenderPipelineState {
             let d = MTLRenderPipelineDescriptor()
             (d.vertexFunction, d.fragmentFunction, d.vertexDescriptor) = (library.makeFunction(name: vertex), library.makeFunction(name: fragment), instances)
@@ -152,6 +164,16 @@ public final class MetalRenderer {
         }
         (quad.layouts[0].stride, quad.layouts[0].stepFunction) = (40, .perInstance)
         image = try pipeline("image_vertex", "image_fragment", blend: true, instances: quad)
+        glow = try pipeline("full_screen_vertex", "glow_fragment", blend: false)
+    }
+
+    /// The offscreen frame for a Glow at the target's size, made again when that changes.
+    func glowTexture(like target: MTLTexture) -> MTLTexture? {
+        if let t = glowFrame, t.width == target.width, t.height == target.height { return t }
+        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: pixelFormat, width: target.width, height: target.height, mipmapped: true)
+        (d.usage, d.storageMode) = ([.renderTarget, .shaderRead], .private)
+        glowFrame = device.makeTexture(descriptor: d)
+        return glowFrame
     }
 
     /// Per in-flight frame (Ghostty's SwapChain: 3): the uniform, cell and instance buffers and the
@@ -270,9 +292,11 @@ public final class MetalRenderer {
 
     /// Encodes one frame into `target` (cleared to transparent) and commits it; returns the command
     /// buffer; `completed` runs when the GPU is done with it. Waits while 3 frames are in flight.
+    /// With a `glow` the frame is drawn offscreen and the glow pass draws it into `target`.
     @discardableResult
+    /// `wide`: a theme with Display P3 colors (every color goes to the shader as P3).
     public func draw(_ c: Contents, _ u: FrameUniforms, gray: Atlas, color: Atlas, into target: MTLTexture,
-                     completed: (() -> Void)? = nil) -> MTLCommandBuffer? {
+                     glow: Glow? = nil, wide: WideColors? = nil, completed: (() -> Void)? = nil) -> MTLCommandBuffer? {
         guard let n = validatedCount(c, u, gray: gray, color: color, target: target) else { return nil }
         guard inflight.wait(timeout: .now() + .milliseconds(250)) == .success else { return nil }
         var committed = false
@@ -286,16 +310,36 @@ public final class MetalRenderer {
         let (textBytes, overflow) = n.multipliedReportingOverflow(by: 32)
         guard !overflow, let uniforms = buffer(&frames[f].uniforms, FrameUniforms.size),
               let cells = buffer(&frames[f].cells, c.bg.count), let text = buffer(&frames[f].text, textBytes) else { return nil }
-        u.write(uniforms.contents())
+        if let wide {
+            var u = u
+            u.displayP3 = true
+            for keyPath in [\FrameUniforms.bgColor, \FrameUniforms.cursorColor] {
+                let v = u[keyPath: keyPath], p3 = wide.map(RGB(r: v[0], g: v[1], b: v[2]))
+                u[keyPath: keyPath] = SIMD4(p3.r, p3.g, p3.b, v[3])
+            }
+            u.write(uniforms.contents())
+        } else {
+            u.write(uniforms.contents())
+        }
         c.bg.withUnsafeBytes { if let p = $0.baseAddress { cells.contents().copyMemory(from: p, byteCount: $0.count) } }
-        c.write(text.contents())
+        if let wide {
+            // rgba per cell: the colors mapped in place, alpha kept.
+            let p = cells.contents().bindMemory(to: UInt8.self, capacity: c.bg.count)
+            for i in stride(from: 0, to: c.bg.count - 3, by: 4) {
+                let p3 = wide.map(RGB(r: p[i], g: p[i + 1], b: p[i + 2]))
+                (p[i], p[i + 1], p[i + 2]) = (p3.r, p3.g, p3.b)
+            }
+        }
+        c.write(text.contents(), wide: wide)
         // This frame's previous GPU use has completed (the semaphore): its cache may be cleared.
         guard let contrast = buffer(&frames[f].contrast, 1024 * 64) else { return nil }
         frames[f].epoch &+= 1
         if frames[f].epoch <= 1 { memset(contrast.contents(), 0, contrast.length); frames[f].epoch = 1 }
         var epoch = frames[f].epoch
+        let offscreen = glow == nil ? nil : glowTexture(like: target)
+        if glow != nil, offscreen == nil { return nil }
         let pass = MTLRenderPassDescriptor()
-        (pass.colorAttachments[0].texture, pass.colorAttachments[0].loadAction, pass.colorAttachments[0].storeAction) = (target, .clear, .store)
+        (pass.colorAttachments[0].texture, pass.colorAttachments[0].loadAction, pass.colorAttachments[0].storeAction) = (offscreen ?? target, .clear, .store)
         pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
         images.upload(device)
         var atlasTextures: [MTLTexture] = []
@@ -329,6 +373,21 @@ public final class MetalRenderer {
         }
         images.draw(.aboveText, encoder, image, uniforms)
         encoder.endEncoding()
+        if let glow, let offscreen {
+            guard let blit = commands.makeBlitCommandEncoder() else { return nil }
+            blit.generateMipmaps(for: offscreen)
+            blit.endEncoding()
+            let post = MTLRenderPassDescriptor()
+            (post.colorAttachments[0].texture, post.colorAttachments[0].loadAction, post.colorAttachments[0].storeAction) = (target, .dontCare, .store)
+            guard let encoder = commands.makeRenderCommandEncoder(descriptor: post) else { return nil }
+            var params = SIMD2<Float>(glow.strength, glow.scanlines)
+            encoder.setRenderPipelineState(self.glow)
+            encoder.setFragmentBuffer(uniforms, offset: 0, index: 1)
+            encoder.setFragmentBytes(&params, length: MemoryLayout<SIMD2<Float>>.size, index: 2)
+            encoder.setFragmentTexture(offscreen, index: 0)
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+            encoder.endEncoding()
+        }
         commands.addCompletedHandler { [inflight] _ in
             inflight.signal()
             completed?()

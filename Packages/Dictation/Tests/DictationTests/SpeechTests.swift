@@ -4,7 +4,7 @@ import Speech
 import XCTest
 @testable import Dictation
 
-/// Both engines transcribe a recording of `say` reading a sentence, fed to their recognizers in microphone-sized
+/// Every engine transcribes a recording of `say` reading a sentence, fed to their recognizers in microphone-sized
 /// buffers as dictation does. Each skips where its engine can't run without a download or a permission prompt.
 @MainActor
 final class SpeechTests: XCTestCase {
@@ -44,20 +44,37 @@ final class SpeechTests: XCTestCase {
     func testWhisperTranscribesSpeech() async throws {
         let model = try whisperModel()
         let audio = try recording()
-        let recognizer = WhisperRecognizer(input: audio.format, model: model)
+        let recognizer = StretchRecognizer(input: audio.format, transcriber: WhisperTranscriber.shared, model: model)
         let transcript = try await transcribe(audio, with: recognizer, timeout: 180)
         print("Whisper transcript: \(transcript)")
+        assertHeard(transcript)
+    }
+
+    func testParakeetTranscribesSpeech() async throws {
+        let model = try parakeetModel()
+        let audio = try recording()
+        let recognizer = StretchRecognizer(input: audio.format, transcriber: ParakeetTranscriber.shared, model: model)
+        // The first load compiles the models for the Neural Engine.
+        let transcript = try await transcribe(audio, with: recognizer, timeout: 180)
+        print("Parakeet transcript: \(transcript)")
         assertHeard(transcript)
     }
 
     /// Whisper settles a stretch the speaker paused after while the recording goes on: the text is there before the
     /// user stops, and the transcript keeps it.
     func testWhisperSettlesWhatWasSaidBeforeAPause() async throws {
-        let model = try whisperModel()
+        try await settlesBeforeAPause(WhisperTranscriber.shared, model: try whisperModel())
+    }
+
+    func testParakeetSettlesWhatWasSaidBeforeAPause() async throws {
+        try await settlesBeforeAPause(ParakeetTranscriber.shared, model: try parakeetModel())
+    }
+
+    private func settlesBeforeAPause(_ transcriber: any StretchTranscriber, model: URL) async throws {
         let audio = try recording("Please ask the purple giraffe to carry the lanterns. [[slnc 1500]] Then paddle the canoe home.")
         let heard = Outcome()
         let settled = expectation(description: "the first sentence before stopping")
-        let recognizer = WhisperRecognizer(input: audio.format, model: model) { text in
+        let recognizer = StretchRecognizer(input: audio.format, transcriber: transcriber, model: model) { text in
             heard.set(.success(text))
             if text.lowercased().contains("giraffe") { settled.fulfill() }
         }
@@ -65,7 +82,7 @@ final class SpeechTests: XCTestCase {
         for buffer in audio.buffers { recognizer.append(buffer) }
         await fulfillment(of: [settled], timeout: 120)
         let transcript = try await recognizer.finish()
-        print("Whisper streamed: \(transcript)")
+        print("\(type(of: transcriber)) streamed: \(transcript)")
         assertHeard(transcript)
     }
 
@@ -73,8 +90,14 @@ final class SpeechTests: XCTestCase {
     /// once stopped, the last one; in order, none lost.
     func testConversationWithWhisper() async throws {
         let model = try whisperModel()
-        let store = WhisperModelStore(directory: model.deletingLastPathComponent())
+        let store = DictationModelStore(whisper: model.deletingLastPathComponent(), parakeet: Self.noModels)
         try await converse(engine: .whisper, store: store)
+    }
+
+    func testConversationWithParakeet() async throws {
+        let model = try parakeetModel()
+        let store = DictationModelStore(whisper: Self.noModels, parakeet: model.deletingLastPathComponent())
+        try await converse(engine: .parakeet, store: store)
     }
 
     func testConversationWithApple() async throws {
@@ -84,11 +107,11 @@ final class SpeechTests: XCTestCase {
         } else {
             throw XCTSkip("conversation mode is checked with SpeechAnalyzer")
         }
-        let store = WhisperModelStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent("no-models"))
+        let store = DictationModelStore(whisper: Self.noModels, parakeet: Self.noModels)
         try await converse(engine: .apple, store: store)
     }
 
-    private func converse(engine: DictationEngine, store: WhisperModelStore) async throws {
+    private func converse(engine: DictationEngine, store: DictationModelStore) async throws {
         let audio = try recording("Please ask the purple giraffe to carry the lanterns. [[slnc 1500]] Dispatch, send. "
                                   + "[[slnc 1500]] Then paddle the canoe home. [[slnc 400]]")
         let dictation = Dictation(models: store)
@@ -112,6 +135,24 @@ final class SpeechTests: XCTestCase {
     }
 
     // MARK: - Helpers
+
+    private static let noModels = FileManager.default.temporaryDirectory.appendingPathComponent("no-models")
+
+    /// Parakeet's folder, from $DISPATCH_PARAKEET_MODELS (the directory holding it) or the app's folder; its files
+    /// as published (sizes checked here; hashing 630 MB is the store's job).
+    private func parakeetModel() throws -> URL {
+        let directory = ProcessInfo.processInfo.environment["DISPATCH_PARAKEET_MODELS"].map { URL(fileURLWithPath: $0) }
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Dispatch/Parakeet")
+        let folder = directory.appendingPathComponent(ParakeetModel.folder)
+        guard FileManager.default.fileExists(atPath: folder.path) else {
+            throw XCTSkip("No \(ParakeetModel.folder) in \(directory.path) (set DISPATCH_PARAKEET_MODELS)")
+        }
+        for file in ParakeetModel.files {
+            let size = try FileManager.default.attributesOfItem(atPath: folder.appendingPathComponent(file.path).path)[.size] as? Int64
+            XCTAssertEqual(size, file.bytes, "\(file.path) isn't the published file")
+        }
+        return folder
+    }
 
     /// Whisper Small, from $DISPATCH_WHISPER_MODELS or the app's folder.
     private func whisperModel() throws -> URL {

@@ -1,0 +1,24 @@
+{
+  "kind": "rewrite",
+  "why": "A slow link no longer runs out the SSH login's wait while the helper uploads: the waiting login (which polls for its ready file every 0.2 s and gave up after 325 polls) now counts only polls more than 30 s after the received file last grew (`waited`, the spinner keeps `attempt`; `seen` and `grown` by the host's date +%s), and the app paces the upload by how much of it ssh takes rather than by the setup's 60 s. Text only: what the login answers is unchanged (no recorded login waited with an upload running past its limit), so the recorded login commands are rewritten. Recorded observations of a running ssh's arguments (results, and the ssh -G reads made from them) keep the old text, and the app only reads them.",
+  "ops": [
+    "open.command"
+  ],
+  "replace": [
+    {
+      "old": "    now=$(date +%s)\n    case \"$now\" in \"\"|*[!0-9]*) now=0;; esac\n    if test -z \"$since\"; then mark=$got since=$now\n",
+      "new": "    now=$(date +%s)\n    case \"$now\" in \"\"|*[!0-9]*) now=0;; esac\n    test \"$got\" = \"$seen\" || seen=$got grown=$now\n    test \"$now\" -gt 0 && test $((now - grown)) -lt 30 && waited=$((waited - 1))\n    if test -z \"$since\"; then mark=$got since=$now\n"
+    },
+    {
+      "old": "  uploading=0 mark= since= speed=\n",
+      "new": "  uploading=0 mark= since= speed= seen=\n"
+    },
+    {
+      "old": "  attempt=0 uploading=0 drawn=\n  while test ! -e ready && test ! -L ready && test \"$attempt\" -lt 325; do\n    sleep 0.2\n    attempt=$((attempt + 1))\n    progress\n  done\n",
+      "new": "  attempt=0 waited=0 uploading=0 drawn=\n  while test ! -e ready && test ! -L ready && test \"$waited\" -lt 325; do\n    sleep 0.2\n    attempt=$((attempt + 1)) waited=$((waited + 1))\n    progress\n  done\n"
+    }
+  ],
+  "fingerprints": {
+    "ssh-setup": "e018c53fdaf5b7a75fc15faf1790aaa83171f67ad045f227e20f3af4d6e98620"
+  }
+}

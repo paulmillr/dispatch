@@ -69,7 +69,10 @@ final class TerminalController {
         // A collapsed capsule's latches are not on screen: they modify nothing.
         hostView.pendingMods = { [weak self] in self.map { $0.capsuleForm == .full ? $0.capsule.mods : [] } ?? [] }
         hostView.onKeySent = { [weak self] in _ = self?.capsule.consume() }
-        hostView.onFontSize = { size in UserDefaults.standard.set(size, forKey: Self.fontSizeKey) }
+        // A pinch's size is kept as the size at the standard text size, so it follows a later change of text size.
+        hostView.onFontSize = { size in
+            UserDefaults.standard.set(TerminalAdaptation.baseSize(drawn: size, category: TerminalAdaptation.category), forKey: Self.fontSizeKey)
+        }
         hostView.onKeyboardFrame = { [weak self] frame in self?.keyboardChanged(frame) }
         let search = search, hostView = hostView
         search.perform = { [weak hostView] action in hostView?.bindingAction(action) }
@@ -90,14 +93,17 @@ final class TerminalController {
         timer?.cancel()
     }
 
-    /// The configuration with the font size a pinch (or Settings) last chose, else the device class's default, in
-    /// Settings' style (`TerminalStyle`: font, scheme, contrast, cursor, bold).
-    static func storedConfiguration(_ defaults: UserDefaults = .standard) -> TerminalConfiguration {
+    /// The configuration with the font size a pinch (or Settings) last chose, else the device class's default, scaled
+    /// with the system text size (`TerminalAdaptation.fontSize`), in Settings' style (`TerminalStyle`: font, scheme,
+    /// contrast, cursor, bold).
+    static func storedConfiguration(_ defaults: UserDefaults = .standard,
+                                    category: UIContentSizeCategory = TerminalAdaptation.category) -> TerminalConfiguration {
         // A bundled family must be registered before the session looks it up.
         MobileFonts.register()
         var configuration = TerminalStyle(defaults).applied(to: TerminalConfiguration())
         let stored = defaults.double(forKey: fontSizeKey)
-        configuration.fontSize = TerminalConfiguration.fontSizes.contains(stored) ? stored : defaultFontSize
+        let base = TerminalConfiguration.fontSizes.contains(stored) ? stored : defaultFontSize
+        configuration.fontSize = TerminalAdaptation.fontSize(base: base, category: category)
         return configuration
     }
 

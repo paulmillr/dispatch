@@ -28,7 +28,7 @@ Dispatch is a normal terminal. The goal is to improve user's workflow, not to ch
     - All sent messages are queued - not steered
     - There is a separate key combo to steer; also it's possible to steer queued message
     - Multi-line editor is enabled with shift+enter. It highlights markdown code brackets
-    - Requires codex-cli 0.163.0, claude 2.1.302, pi 1.3.0 or nanocode
+    - Requires codex-cli 0.164.0, claude 2.1.311, pi 1.4.0 or nanocode
     - Try [Nanocodex](https://github.com/gakonst/nanocodex): Codex rebuilt so that it's faster and can be embedded in third party applications via an ergonomic library API
 4. Try splits: open 4 tabs, use ctrl+1, ctrl+2, ctrl+3, ctrl+4
 
@@ -36,7 +36,7 @@ Extra features:
 
 - Spaces: tree view, reopen on launch, restore history, git branch titles, compact space list
 - Review tab (files mode, ⇧⌘U): comment on any line of the uncommitted changes, then Create review sends the comments as one review to an agent chat (this tab's or another's), or copies it to paste anywhere; ⌥↓/⌥↑ step through the comments, ⇧⌘⏎ creates the review
-- Disable spaces (Settings › Appearance): no tab strips; the sidebar lists every tab and "+ tab" replaces "+ space"
+- Disable spaces (Settings › General › Window): no tab strips; the sidebar lists every tab and "+ tab" replaces "+ space"
 - Check out sidebar footer: clicking on a host brings up stats widget
 - Auto-improve text contrast on light themes
 - Single window for *everything*: no multiple windows
@@ -89,13 +89,20 @@ The Apple Watch companion: `./run.sh --watch` (paired iPhone and watch simulator
 
 ## Releasing
 
+The maintainer's Mac builds the Mac app and the iPhone app without any signing key; a separate signing machine
+re-signs, notarizes and uploads them. They exchange release folders through the private `dispatch-release`
+repository, and the maintainer verifies the signed Mac app byte for byte against the reference copy (only signatures
+differ). The DMG goes to a GitHub release tagged `X.Y.Z` and the cask in `homebrew-tap`, the iPhone app to TestFlight;
+both are the Pilot account's (`yachts.dispatch.pilot.*`; `--stable` builds the stable account's, published nowhere yet).
+Full procedure: [docs/releasing.md](docs/releasing.md).
+
 ```sh
-scripts/release-prepare.sh                     # maintainer: build, keep reference in tmp/dispatch-release
-scripts/release-notarize.sh Dispatch-unsigned.zip --identity 'Developer ID Application: NAME (TEAMID)'  # signer
-scripts/release-prepare.sh --verify Dispatch-X.Y.Z.dmg --team TEAMID  # maintainer: check signer's DMG
+scripts/release-prepare.sh [--stable]          # maintainer: build, keep a reference copy, push to ../dispatch-release
+git pull && bin/release-publish.sh             # signing machine, in dispatch-release: notarized DMG, TestFlight upload
+scripts/release-prepare.sh --verify --team TEAMID  # maintainer, after pulling: check the DMG, print publish steps
 ```
 
-See [distribution](docs/distribution.md).
+Apple silicon only. Test the download on a disposable Mac before publishing.
 
 ## License
 

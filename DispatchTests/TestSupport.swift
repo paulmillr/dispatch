@@ -615,14 +615,14 @@ extension AgentModelMenu {
         timer = Timer(timeInterval: 0.05, repeats: true) { _ in
             MainActor.assumeIsolated {
                 guard let window = NSApp.modalWindow, Self.shows("Close running processes?", in: window.contentView) else { return }
-                NSApp.stopModal(withCode: .alertSecondButtonReturn)
+                NSApp.stopModal(withCode: .alertSecondButtonReturn); Self.wake() // from a timer, stopModal ends the loop only at its next event
             }
         }
         RunLoop.main.add(timer, forMode: .common)
     }
 
     func stop() { timer.invalidate() }
-
+    private static func wake() { NSEvent.otherEvent(with: .applicationDefined, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil, subtype: 0, data1: 0, data2: 0).map { NSApp.postEvent($0, atStart: true) } }
     private static func shows(_ text: String, in view: NSView?) -> Bool {
         guard let view else { return false }
         if (view as? NSTextField)?.stringValue == text { return true }
@@ -831,5 +831,20 @@ extension ClaudeQuestions {
         ClaudeQuestions(questions.map { text, labels in
             Question(text: text, header: "Question", options: labels.map { Option(label: $0, description: "", preview: nil) }, multiple: false)
         })
+    }
+}
+
+/// A bounded wait that records no replay step, for fixtures that read nothing and whose recordings hold no waits: a
+/// fixed sleep before an assertion about deferred main-queue or SwiftUI layout work fails on a loaded machine, and an
+/// `eventually` there would add a step the recording lacks. Returns whether `condition` held; the caller asserts.
+extension TestSupport {
+    @discardableResult
+    static func poll(timeout: Duration = .seconds(5), _ condition: () throws -> Bool) async throws -> Bool {
+        let clock = ContinuousClock(), deadline = clock.now.advanced(by: timeout)
+        while try !condition() {
+            guard clock.now < deadline else { return false }
+            try await clock.sleep(for: .milliseconds(10))
+        }
+        return true
     }
 }

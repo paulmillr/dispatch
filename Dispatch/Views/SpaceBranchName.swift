@@ -55,13 +55,19 @@ struct SpaceBranchName: View {
 }
 
 /// Keep discovery mounted while the row switches between compact and tile layouts.
-/// Polls only while branches are shown and the app is active; activation refreshes at once.
+/// Reads only while branches are shown: at once when it appears, the app activates or one of its terminals finishes a
+/// command (a `git checkout` there), else every `interval` (each read of a remote space is a helper request on its link).
 struct SpaceBranchObserver: View {
+    /// One rule for local and remote spaces: 10 s while Dispatch is shown (AppPresence), 60 s otherwise.
+    static func interval(shown: Bool) -> Duration { shown ? .seconds(10) : .seconds(60) }
+
     let space: Space
     /// One of the space's tabs, for a tabs-only row, keyed by that tab; the space's first tab otherwise.
     var tab: TerminalTab? = nil
     var enabled = true
     private var id: UUID { tab?.id ?? space.id }
+    /// The terminals whose finished commands read again: the row's tab, or every tab of the space.
+    private var prompting: Set<UUID> { tab.map { [$0.id] } ?? Set(space.tabs.map(\.id)) }
     @State private var value: String?
     @State private var resolved: SpaceBranchSource.Key?
     @State private var appActive = NSApp?.isActive ?? true
@@ -88,13 +94,17 @@ struct SpaceBranchObserver: View {
                 if resolved == nil, let last = await SpaceBranchReader.shared.last(source.key), !Task.isCancelled {
                     value = last; resolved = source.key
                 }
+                var prompted = false
                 while !Task.isCancelled {
-                    let next = await SpaceBranchReader.shared.branch(source)
+                    // After a finished command the 2 s cache may hold the branch from before it.
+                    let next = await SpaceBranchReader.shared.branch(source, fresh: prompted)
                     guard !Task.isCancelled else { return }
                     resolved = source.key
                     if value != next { value = next }
-                    guard appActive else { return }
-                    do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                    do {
+                        prompted = try await SpaceBranchPrompts.shared.nap(for: prompting,
+                                                                           Self.interval(shown: AppPresence.shown))
+                    } catch { return }
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in appActive = true }

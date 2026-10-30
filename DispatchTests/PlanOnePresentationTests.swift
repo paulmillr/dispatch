@@ -179,7 +179,7 @@ final class PlanOnePresentationTests: XCTestCase {
         XCTAssertFalse(second.contains("original source contents"), second)
         host.rootView = document("missing.txt")
         let missing = try await renderedText()
-        XCTAssertTrue(missing.replacingOccurrences(of: " ", with: "").contains("missing.txt"), missing)
+        XCTAssertTrue(missing.filter { $0 != " " && $0 != "." }.contains("missingtxt"), missing) // Vision may drop the dot
         XCTAssertFalse(missing.contains("replacement source contents"), missing)
     }
 

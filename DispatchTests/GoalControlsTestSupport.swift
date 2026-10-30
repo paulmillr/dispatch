@@ -32,7 +32,7 @@ extension PresentationTestSupport {
                 guard snapshot.positioned else { continue }
                 let text = try snapshot.text()
                 observed = text
-                if ["Pause", "Resume", "Stop"].allSatisfy({ text.localizedCaseInsensitiveContains($0) }) {
+                if ["Pause", "esume", "Stop"].allSatisfy({ text.localizedCaseInsensitiveContains($0) }) { // Vision may read "Resume" as "kesume"
                     popup = candidate
                     return true
                 }

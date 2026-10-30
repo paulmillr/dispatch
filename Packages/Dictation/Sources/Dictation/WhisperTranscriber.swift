@@ -5,11 +5,14 @@ import WhisperEngine
 /// Runs Whisper (WhisperEngine, Packages/WhisperEngine: whisper.cpp in Swift) on its own queue: loading a model and
 /// transcribing block for up to seconds. The last model stays loaded for a few minutes after a transcript, so
 /// dictating again starts at once, and is freed after that (a model takes 0.3 to 1 GB).
-final class WhisperTranscriber: @unchecked Sendable {
+final class WhisperTranscriber: StretchTranscriber, @unchecked Sendable {
     static let shared = WhisperTranscriber()
 
     /// Whisper's input: 16 kHz mono float samples.
     static let sampleRate = 16_000.0
+
+    /// Whisper hears 30 s at a time; a stretch is cut before.
+    let longest = Int(sampleRate) * 28
 
     private let queue = DispatchQueue(label: "yachts.dispatch.whisper", qos: .userInitiated)
     // Only touched on the queue: the session, its model and the Metal or CPU backend behind it are not thread-safe,

@@ -62,8 +62,8 @@ struct TerminalFontSettingsView: View {
     }
 }
 
-/// Settings › Terminal › Color scheme: Dispatch's two, then Ghostty's bundled themes by dark and light, each with a
-/// swatch of its background, text and colours. The terminal's scheme alone: the app's theme does not change it.
+/// Settings › Terminal › Color scheme: Dispatch's two, then Ghostty's bundled themes, dark then light, each side by
+/// `SchemeGroup`, each with a swatch of its background, text and colours. The terminal's scheme alone: the app's theme does not change it.
 struct TerminalSchemeSettingsView: View {
     @Bindable var settings: MobileSettings
     @State private var schemes: [TerminalSchemes.Scheme] = []
@@ -76,8 +76,8 @@ struct TerminalSchemeSettingsView: View {
         List {
             Group {
                 if !own.isEmpty { Section("Dispatch") { rows(own) } }
-                if others.contains(where: \.isDark) { Section("Dark") { rows(others.filter(\.isDark)) } }
-                if others.contains(where: { !$0.isDark }) { Section("Light") { rows(others.filter { !$0.isDark }) } }
+                sections(others.filter { $0.isDark || SchemeGroup.bothSides.contains($0.file) }, groups: SchemeGroup.dark, side: "Dark")
+                sections(others.filter { !$0.isDark || SchemeGroup.bothSides.contains($0.file) }, groups: SchemeGroup.light, side: "Light")
             }
             // The theme's cards (`Color.groupedRow`), also in a sheet, whose own rows are a shade lighter.
             .listRowBackground(Color.groupedRow)
@@ -90,6 +90,14 @@ struct TerminalSchemeSettingsView: View {
         .task { if schemes.isEmpty { schemes = TerminalSchemes.all() } }
     }
 
+    /// One side's schemes, a section per group: "Dark · OLED", "Light · Cream".
+    private func sections(_ schemes: [TerminalSchemes.Scheme], groups: [SchemeGroup], side: String) -> some View {
+        ForEach(groups, id: \.self) { group in
+            let shown = group.ordered(schemes.filter { $0.group == group }, name: \.file)
+            if !shown.isEmpty { Section("\(side) · \(group.title)") { rows(shown) } }
+        }
+    }
+
     private func rows(_ schemes: [TerminalSchemes.Scheme]) -> some View {
         ForEach(schemes) { scheme in
             Button {
@@ -98,6 +106,12 @@ struct TerminalSchemeSettingsView: View {
                 HStack(spacing: 12) {
                     TerminalSchemeSwatch(scheme: scheme)
                     Text(scheme.title).foregroundStyle(.primary)
+                    if SchemeGroup.classics[scheme.file] != nil {
+                        Image(systemName: "star").font(.footnote).foregroundStyle(.secondary)
+                    }
+                    if !scheme.problems.isEmpty {
+                        Image(systemName: "exclamationmark.triangle").font(.footnote).foregroundStyle(.secondary)
+                    }
                     Spacer(minLength: 0)
                     if settings.terminalScheme == scheme.file {
                         Image(systemName: "checkmark").font(.body.weight(.semibold)).foregroundStyle(Color.dispatchPink)
@@ -108,6 +122,8 @@ struct TerminalSchemeSettingsView: View {
             .buttonStyle(.plain)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(scheme.title)
+            .accessibilityValue(((SchemeGroup.classics[scheme.file] != nil ? ["classic"] : []) + scheme.problems)
+                .joined(separator: "; "))
             .accessibilityAddTraits(settings.terminalScheme == scheme.file ? [.isButton, .isSelected] : .isButton)
         }
     }

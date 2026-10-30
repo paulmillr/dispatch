@@ -57,8 +57,34 @@ extension TerminalHostView {
     /// A paste: bracketed when the program asked for it.
     func paste(text: String) {
         guard !text.isEmpty else { return }
-        session.locked { session.surface.text(Array(text.utf8)) }
-        session.pump()
+        var completion = ClipboardCompletion(contents: [ClipboardContent(mime: Array("text/plain".utf8), data: Array(text.utf8))],
+                                             confirmed: MobileSettings.autoApprovesUnsafePastes())
+        do {
+            try session.locked { try session.surface.completeClipboard(.paste(.standard), completion) }
+            session.pump()
+        } catch ClipboardError.unsafePaste {
+            guard pasteConfirmation == nil, let window, let originalFeed = feed,
+                  var presenter = window.rootViewController else { return }
+            while let next = presenter.presentedViewController { presenter = next }
+            guard !presenter.isBeingDismissed else { return }
+            let attachment = presence.attachments
+            let alert = UIAlertController(title: "Paste text that could run commands?",
+                message: "This paste contains line breaks or terminal control sequences that could execute commands immediately.", preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { [weak self] _ in self?.pasteConfirmation = nil })
+            completion.confirmed = true
+            let approved = completion
+            alert.addAction(UIAlertAction(title: "Paste", style: .default) { [weak self, weak originalFeed, weak window] _ in
+                guard let self else { return }
+                self.pasteConfirmation = nil
+                guard let originalFeed, let window, self.window === window, self.feed === originalFeed,
+                      self.presence.attachments == attachment else { return }
+                try? self.session.locked { try self.session.surface.completeClipboard(.paste(.standard), approved) }
+                self.session.pump()
+            })
+            alert.preferredAction = alert.actions.first
+            pasteConfirmation = alert
+            presenter.present(alert, animated: true)
+        } catch { return }
     }
 
     static func controlByte(_ text: String) -> UInt8? {

@@ -34,16 +34,17 @@ private struct ResizingHostInformationPopoverFixture: View {
 
 @MainActor
 final class SettingsStatsPresentationTests: XCTestCase {
-    func testMonospacedFontDiscoveryPreservesAvailableFamilies() {
+    func testMonospacedFontDiscoveryPreservesAvailableFamilies() throws {
         AppFont.register()
         let expected = NSFontManager.shared.availableFontFamilies.filter { family in
-            guard !["Andale Mono", "Courier New"].contains(family) else { return false }
+            guard !SettingsView.hiddenFontFamilies.contains(family), !SettingsView.moreBundledFontFamilies.contains(family) else { return false }
             guard let font = NSFontManager.shared.font(withFamily: family, traits: [], weight: 5, size: 13) else { return false }
             return font.isFixedPitch || font.fontDescriptor.symbolicTraits.contains(.monoSpace)
         }.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
         XCTAssertFalse(expected.isEmpty)
-        // The default font leads the menu.
+        // The default font leads the menu, then this Mac's fonts; Dispatch's own follow below a separator.
         XCTAssertEqual(SettingsView.monospacedFontFamilies, ["Source Code Pro"] + expected.filter { $0 != "Source Code Pro" })
+        try assertFontMenuOrder()
     }
 
     func testStatsPopoverKeepsTheRightInformationVisible() async throws {
@@ -658,6 +659,18 @@ final class SettingsStatsPresentationTests: XCTestCase {
         func slider(_ identifier: String) throws -> NSSlider {
             try XCTUnwrap(find(identifier), "\(identifier) among \(PresentationTestSupport.views(of: NSSlider.self, in: root).map { $0.accessibilityIdentifier() })")
         }
+        // The space list's options start folded under Window: scrolled into view, its button opens them.
+        try await TestSupport.eventually {
+            root.layoutSubtreeIfNeeded()
+            guard let scroll = PresentationTestSupport.views(of: NSScrollView.self, in: root).first(where: { !$0.isHiddenOrHasHiddenAncestor })
+            else { return false }
+            let document = scroll.documentView?.bounds.height ?? 0
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, document - scroll.contentView.bounds.height)))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            return !PresentationTestSupport.accessibilityFrames("settings-options-Window", in: window).isEmpty
+        }
+        let fold = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("settings-options-Window", in: window).first)
+        try PresentationTestSupport.click(window, at: NSPoint(x: fold.midX, y: fold.midY))
         try await TestSupport.eventually { root.layoutSubtreeIfNeeded(); return find("space-list-style") != nil }
         let styles = try slider("space-list-style")
         XCTAssertEqual(SidebarStyle.bySize, [.compact, .icons, .large])
@@ -689,6 +702,71 @@ final class SettingsStatsPresentationTests: XCTestCase {
         try await TestSupport.eventually { store.values.fontSize == 13.5 }
     }
 
+    /// Line spacing, folded under Text's Size, steps through three stops; the Cursor menu lists the shapes, then
+    /// Blinking as a checked switch that leaves the shape selected.
+    func testLineSpacingAndBlinkingCursorSaveFromText() async throws {
+        try DesktopTestSupport.requireUnlocked()
+        AppFont.register()
+        let applied = TerminalRuntime.shared.preferences
+        let glass = LiquidGlassStore.shared.enabled, chatTheme = ChatThemeStore.shared.current
+        defer {
+            try? TerminalRuntime.shared.apply(applied)
+            LiquidGlassStore.shared.enabled = glass
+            ChatThemeStore.shared.current = chatTheme
+        }
+        let directory = System.temporary.appendingPathComponent(System.uuid().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SettingsStore(file: directory.appendingPathComponent("settings.json"))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 550), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: SettingsView(store: store, workspace: Workspace(),
+            sshPermissions: SSHIntegrationPermissions(defaults: nil)))
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        defer { window.close(); window.contentView = nil }
+        let root = try XCTUnwrap(window.contentView)
+        // Line spacing is folded under Size's options button.
+        try await TestSupport.eventually { !PresentationTestSupport.accessibilityFrames("settings-options-Size", in: window).isEmpty }
+        let fold = try XCTUnwrap(PresentationTestSupport.accessibilityFrames("settings-options-Size", in: window).first)
+        try PresentationTestSupport.click(window, at: NSPoint(x: fold.midX, y: fold.midY))
+        var spacing: NSSlider?, cursor: NSPopUpButton?
+        try await TestSupport.eventually {
+            root.layoutSubtreeIfNeeded()
+            spacing = PresentationTestSupport.views(of: NSSlider.self, in: root).first { $0.accessibilityIdentifier() == "settings-line-spacing" }
+            cursor = PresentationTestSupport.views(of: NSPopUpButton.self, in: root).first { $0.accessibilityIdentifier() == "settings-dropdown-Cursor" }
+            return spacing != nil && cursor != nil
+        }
+        let slider = try XCTUnwrap(spacing), menu = try XCTUnwrap(cursor)
+        XCTAssertEqual(slider.doubleValue, 1, "Starts on Normal")
+        XCTAssertEqual(slider.accessibilityValueDescription(), "Normal")
+        slider.doubleValue = 1.8
+        slider.sendAction(slider.action, to: slider.target)
+        try await TestSupport.eventually { store.values.lineSpacing == .relaxed }
+        XCTAssertEqual(slider.doubleValue, 2, "a drag lands on the nearest stop")
+        slider.doubleValue = 0
+        slider.sendAction(slider.action, to: slider.target)
+        try await TestSupport.eventually { store.values.lineSpacing == .tight }
+
+        XCTAssertEqual(menu.itemTitles, ["Block", "Bar", "Underline", "", "Blinking"])
+        XCTAssertEqual(menu.titleOfSelectedItem, "Block")
+        XCTAssertEqual(menu.item(withTitle: "Blinking")?.state, .on)
+        func choose(_ title: String) {
+            menu.selectItem(withTitle: title)
+            menu.sendAction(menu.action, to: menu.target)
+        }
+        choose("Blinking")
+        try await TestSupport.eventually { !store.values.cursorBlink }
+        try await TestSupport.eventually { menu.titleOfSelectedItem == "Block" && menu.item(withTitle: "Blinking")?.state == .off }
+        choose("Bar")
+        try await TestSupport.eventually { store.values.cursor == .bar }
+        XCTAssertFalse(store.values.cursorBlink, "choosing a shape keeps the blinking choice")
+        XCTAssertEqual(menu.item(withTitle: "Blinking")?.state, .off)
+        choose("Blinking")
+        try await TestSupport.eventually { store.values.cursorBlink && menu.titleOfSelectedItem == "Bar" }
+        XCTAssertEqual(menu.item(withTitle: "Blinking")?.state, .on)
+        _ = try await PresentationTestSupport.capture(window, named: "settings-text-line-spacing", in: "settings-validation")
+    }
+
     func testSettingsNativeControlsRemainVisibleWithImplementedOptions() async throws {
         try DesktopTestSupport.requireUnlocked()
         AppFont.register()
@@ -704,13 +782,16 @@ final class SettingsStatsPresentationTests: XCTestCase {
         defer { window.close(); window.contentView = nil }
         let root = try XCTUnwrap(window.contentView)
         for (tab, labels) in [
-            ("Appearance", ["Terminal font", "Chat font", "Size", "Theme", "Color schemes", "Interface", "Sidebar", "Space size", "Show git branch", "Show with one space"]),
-            ("Keyboard", ["Number keys", "Spaces", "Tabs", "Splits", "Option key", "Option as Alt"]),
-            ("General", ["Startup", "Starting folder", "Shell", "Reopen spaces on launch", "Restore tab history", "Terminal", "Programs can copy", "Scrollback", "Kitty graphics", "Automatic tab names", "Notifications"]),
-            ("Features", ["Chat mode", "coding agent CLIs as chat", "Tmux & herdr", "open sessions as native spaces", "Files", "Git", "review mode and commit log", "Remote helper", "uploads to ~/.dispatch", "Dictation", "always local & on-device"]),
+            ("General", ["Text", "Font", "Size", "line spacing", "Cursor", "Terminal", "Window", "tab names, git branches, host colors and glass",
+                         "On launch", "Reopen spaces", "Scrollback", "New tabs", "login shell",
+                         "Security", "programs can copy"]),
+            ("Theme", ["Colors", "App theme", "app, terminal and chat", "Terminal opacity", "Colorblind-friendly",
+                       "Dark color scheme", "Dispatch", "Light color scheme", "Your color schemes"]),
+            ("Keyboard", ["Number keys", "Spaces", "Tabs", "Splits", "Key bindings", "Prefix keys", "Dictate", "Option as Alt"]),
+            ("Features", ["Chat mode", "coding agent CLIs as chat", "Tmux & herdr", "open sessions as native spaces", "Files", "git with review mode", "Remote helper", "uploads to ~/.dispatch", "Dictation", "always local & on-device", "Notifications"]),
             ("Hosts", ["Hosts", "This Mac"])
         ] {
-            if tab != "Appearance" { try await PresentationTestSupport.selectSettingsTab(tab, in: window) }
+            if tab != "General" { try await PresentationTestSupport.selectSettingsTab(tab, in: window) }
             var snapshots = [try await capture(window, "settings-\(tab)")]
             var text = try snapshots[0].text()
             let scroll = try XCTUnwrap(PresentationTestSupport.views(of: NSScrollView.self, in: root).first { !$0.isHiddenOrHasHiddenAncestor })
@@ -728,15 +809,22 @@ final class SettingsStatsPresentationTests: XCTestCase {
             for label in labels {
                 XCTAssertTrue(try snapshots.contains { try $0.reads([label]) }, "Missing \(label) in \(tab):\n\(text)")
             }
-            if tab == "Appearance" {
+            if tab == "General" {
                 XCTAssertFalse(text.contains("Option as Alt"), "Keyboard behaviour lives under Keyboard")
                 XCTAssertFalse(text.contains("Remote hosts"), "Hosts have their own page")
-                XCTAssertFalse(text.contains("Improve text contrast"), "Custom colors start collapsed")
-                XCTAssertFalse(text.contains("Blinking cursor"), "Interface starts collapsed")
-            }
-            if tab == "General" {
+                XCTAssertFalse(text.contains("Colorblind-friendly"), "Colors live under Theme")
+                XCTAssertFalse(text.contains("Improve text contrast"), "Text contrast starts folded under Font")
+                XCTAssertFalse(text.contains("Liquid Glass"), "Window starts collapsed")
+                XCTAssertFalse(text.contains("a program's own"), "Tab names start folded under Window")
+                XCTAssertFalse(text.contains("Same as code follows"), "Chat font starts folded under Font")
+                XCTAssertFalse(text.contains("terminal rows and chat lines"), "Line spacing starts folded under Size")
+                XCTAssertFalse(text.contains("Space size"), "Window starts collapsed")
                 XCTAssertFalse(text.contains("Open tmux sessions"), "Whole features live under Features")
                 XCTAssertFalse(text.contains("Drag and drop"), "Files settings live under Features")
+                XCTAssertFalse(text.contains("Startup"), "Startup rows are in Terminal and New spaces")
+                XCTAssertFalse(text.contains("dock badge and banner"), "Notifications live under Features")
+                XCTAssertFalse(text.contains("via OSC 52"), "Security starts collapsed")
+                XCTAssertFalse(text.contains("Kitty graphics"), "Security starts collapsed")
             }
             if tab == "Features" {
                 XCTAssertFalse(text.contains("Auto-confirm"), "Card options start folded")
@@ -841,7 +929,7 @@ final class SettingsStatsPresentationTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent("settings.json").path))
     }
 
-    func testSettingsFitsAppearancePageAndPreservesVerticalResizing() async throws {
+    func testSettingsFitsGeneralPageAndPreservesVerticalResizing() async throws {
         try DesktopTestSupport.requireUnlocked()
         let directory = System.temporary.appendingPathComponent(System.uuid().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -862,10 +950,10 @@ final class SettingsStatsPresentationTests: XCTestCase {
             let fitsPage = document.bounds.height <= scroll.contentView.bounds.height + 1
             let fillsScreen = window.frame.height >= screen.visibleFrame.height - 2
             return (fitsPage || fillsScreen)
-                // Settings opens on Appearance.
-                && text.contains("Terminal font") && text.contains("Theme")
+                // Settings opens on General.
+                && text.contains("Font") && text.contains("New tabs")
                 // The last row is below the fold when a short screen caps the window.
-                && (!fitsPage || text.contains("Disable spaces"))
+                && (!fitsPage || text.contains("programs can copy"))
                 && !text.contains("Improve text contrast")
                 && window.frame.height <= screen.visibleFrame.height + 2
         }
@@ -903,6 +991,8 @@ final class SettingsStatsPresentationTests: XCTestCase {
         let window = try XCTUnwrap(NSApp.windows.first { !existing.contains($0.windowNumber) && $0.title == "Settings" })
         defer { window.close(); window.contentView = nil }
         let root = try XCTUnwrap(window.contentView)
+        // The app theme is on Theme's page.
+        try await PresentationTestSupport.selectSettingsTab("Theme", in: window)
         func themeTitles() -> [String]? {
             PresentationTestSupport.views(of: NSPopUpButton.self, in: root)
                 .first { $0.accessibilityIdentifier() == "settings-dropdown-Theme" }?.itemTitles
@@ -1067,4 +1157,98 @@ extension SettingsStatsPresentationTests {
         let visible = try await PresentationTestSupport.capture(window).text()
         XCTAssertTrue(visible.contains("Process data unavailable"))
     }
+}
+
+// At the end of the file: replays mark test steps by source line, so lines added above a recorded step stall it.
+extension SettingsStatsPresentationTests {
+    /// Source Code Pro, this Mac's monospaced fonts, a separator, then the rest of Dispatch's own.
+    func assertFontMenuOrder() throws {
+        let menu = SettingsView.fontMenuChoices
+        let separator = try XCTUnwrap(menu.firstIndex(of: SettingsDropdown.separator))
+        XCTAssertEqual(menu.first, "Source Code Pro")
+        XCTAssertEqual(menu.filter { $0 == "Source Code Pro" }.count, 1)
+        XCTAssertTrue(menu[1..<separator].allSatisfy { !AppFont.bundledFamilies.contains($0) }, "installed fonts before the separator")
+        XCTAssertTrue(menu[(separator + 1)...].allSatisfy(AppFont.bundledFamilies.contains), "Dispatch's fonts after it")
+        XCTAssertTrue(menu.contains("Hasklig") && menu.contains("JetBrains Mono"))
+        XCTAssertEqual(Set(menu).subtracting([SettingsDropdown.separator]), Set(SettingsView.terminalFontFamilies))
+    }
+}
+
+// At the end of the file: replays mark test steps by source line, so lines added above a recorded step stall it.
+extension SettingsStatsPresentationTests {
+    /// A sidebar host glyph shows the connection only: its host's latency stays on the background cadence until the
+    /// popover, whose header shows the number, is on screen, and returns to it when the popover closes.
+    func testHostGlyphLeavesLatencyInTheBackgroundUntilItsPopoverShows() async throws {
+        try DesktopTestSupport.requireUnlocked()
+        AppFont.register()
+        let provider = GlyphLatencyProvider(), store = SSHStatisticsStore.shared
+        let host = HostRecord(id: .authenticated(System.uuid().uuidString), name: "glyph-fixture", hostname: "glyph-fixture",
+                              system: .init(os: "Linux", distribution: "debian", name: "Debian 13"),
+                              destinations: ["ops@glyph-fixture.test"], order: 0)
+        let key = try XCTUnwrap(store.register(provider, grant: .init(profile: .statistics), hostID: host.id))
+        let entry = try XCTUnwrap(store.series[key])
+        let toggle = GlyphPopoverToggle()
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 60), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: GlyphPopoverFixture(host: host, preferred: provider.id, toggle: toggle))
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        defer {
+            toggle.presented = false
+            window.close(); window.contentView = nil
+            store.remove(provider.id); store.reset(host.id)
+        }
+        // Connecting measures once; the glyph on screen subscribes nothing, so no 2 s probe follows.
+        try await TestSupport.eventually { provider.pings == 1 && entry.latency.state == .ready }
+        try await TestSupport.pause(for: .milliseconds(300))
+        XCTAssertTrue(entry.latencySubscriptions.isEmpty, "A host glyph must not subscribe latency")
+        XCTAssertEqual(provider.pings, 1)
+        toggle.presented = true
+        try await TestSupport.eventually { !entry.latencySubscriptions.isEmpty }
+        try await TestSupport.eventually { provider.pings >= 2 }
+        try await TestSupport.eventually { !entry.subscriptions.isEmpty }
+        // A closed popover keeps its view in a hidden window: its 2 s latency and stats must still end.
+        toggle.presented = false
+        try await TestSupport.eventually(diagnostic: "latency \(entry.latencySubscriptions.count), stats \(entry.subscriptions.count), "
+                                         + "windows \(NSApp.windows.map { "\(type(of: $0)) visible=\($0.isVisible)" })") {
+            entry.latencySubscriptions.isEmpty && entry.subscriptions.isEmpty
+        }
+        let closed = provider.pings
+        try await TestSupport.pause(for: .milliseconds(2500))
+        XCTAssertEqual(provider.pings, closed, "No 2 s probe after the popover closed")
+        // Shown again, it measures again.
+        toggle.presented = true
+        try await TestSupport.eventually { !entry.latencySubscriptions.isEmpty && provider.pings > closed }
+    }
+}
+
+@MainActor @Observable private final class GlyphPopoverToggle { var presented = false }
+
+private struct GlyphPopoverFixture: View {
+    let host: HostRecord
+    let preferred: SSHConnectionID
+    @Bindable var toggle: GlyphPopoverToggle
+
+    var body: some View {
+        HostGlyph(host: host)
+            .frame(width: 160, height: 40)
+            .popover(isPresented: $toggle.presented, arrowEdge: .bottom) {
+                HostInformationView(host: host, state: .connected, preferred: preferred).fittedPopoverPresentation()
+            }
+    }
+}
+
+@MainActor private final class GlyphLatencyProvider: SSHStatisticsSampling {
+    let id = SSHConnectionID()
+    let scope = SSHIntegrationScope(executable: "/usr/bin/ssh", destination: "glyph-fixture", configuration: "hostname glyph-fixture\nuser ops\n")!
+    let host = "glyph-latency-fixture"
+    let uid: UInt32 = 1000
+    let supportsStatistics = true
+    let supportsLatency = true
+    var pings = 0
+    func ping() async throws { pings += 1 }
+    func sample() async throws -> SSHStatisticsCounters {
+        .init(boot: "boot", monotonic: 1, memoryTotal: 8_589_934_592, memoryUsed: 4_294_967_296, load: [1.25])
+    }
+    func disks() async throws -> [SSHStatisticsDisk] { [] }
 }

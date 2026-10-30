@@ -1,12 +1,15 @@
 import Dictation
 import SwiftUI
 
-/// Settings › Features › Dictation in effect, for the composers and the right ⌘ shortcut; TerminalRuntime applies it.
+/// Settings › Features › Dictation and Keyboard › Voice in effect, for the composers and the voice key; TerminalRuntime
+/// applies it.
 @MainActor @Observable
 final class DictationStore {
     static let shared = DictationStore()
     var enabled = true
-    var rightCommand = true
+    var key = VoiceKey.rightCommand
+    /// The voice key while dictation is on and a key is chosen, for the shortcut and its hints.
+    var shortcut: VoiceKey? { enabled && key != .off ? key : nil }
     var navigation = true
     var readReplies = true
     var wakeWords = VoiceCommand.defaultWakeWords
@@ -53,7 +56,8 @@ struct ChatDictationButton: View {
         switch dictation.phase {
         case .idle: ""
         case .starting: "Starting…"
-        case .listening: ChatDictation.shared.conversation ? "Conversation · “\(DictationStore.shared.wakeWord), send” · tap right ⌘ to stop"
+        case .listening: ChatDictation.shared.conversation
+            ? "Conversation · “\(DictationStore.shared.wakeWord), send” · " + (DictationStore.shared.shortcut.map { "tap \($0.name) to stop" } ?? "click to stop")
             : "Listening · ↩ sends · esc cancels"
         case .transcribing: "Transcribing…"
         }
@@ -85,8 +89,8 @@ struct ChatDictationButton: View {
             return dictation.phase == .listening ? "Stop and insert" : "Cancel dictation"
         }
         let preferences = TerminalRuntime.shared.preferences
-        let engine = preferences.dictationEngine == .whisper ? "Whisper \(preferences.whisperModel.title)" : "Apple"
-        return "Conversation mode · \(engine)" + (DictationStore.shared.rightCommand ? " · or tap right ⌘; hold it for one message" : "")
+        let engine = preferences.dictationEngine.label(whisper: preferences.whisperModel)
+        return "Conversation mode · \(engine)" + (DictationStore.shared.shortcut.map { " · or tap \($0.name); hold it for one message" } ?? "")
     }
 
     private func toggle() {

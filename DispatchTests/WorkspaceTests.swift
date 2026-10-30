@@ -421,6 +421,31 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertEqual(workspace.activeTab?.id, second)
     }
 
+    /// Layouts regroup a tmux or herdr space's windows; back in one strip, ⌘] still steps in the strip's (and the ⌘
+    /// digits') server order, and a split strip lists its windows in that order too.
+    func testWindowCyclingKeepsServerOrderAcrossLayouts() throws {
+        let workspace = Workspace()
+        var space = Space(name: "session", tab: TerminalTab(directory: "/tmp"))
+        space.structure((0..<6).map { _ in TerminalTab(directory: "/tmp") }, selected: 5)
+        workspace.spaces = [space]
+        workspace.selectedSpace = space.id
+        let windows = space.containers.map(\.id)
+        for preset in [LayoutPreset.single, .grid, .twoAbove, .grid, .single] {
+            XCTAssertTrue(workspace.applyLayout(preset))
+            for group in try XCTUnwrap(workspace.current?.presentation).groups {
+                XCTAssertEqual(group.windows, windows.filter(group.windows.contains), "\(preset) keeps the server order")
+            }
+        }
+        XCTAssertEqual(workspace.current?.presentation?.groups.count, 1)
+        var visited: [UUID] = []
+        for _ in windows {
+            workspace.cycleTab(1)
+            visited.append(try XCTUnwrap(workspace.current?.selectedContainer))
+        }
+        XCTAssertEqual(visited, windows)
+        XCTAssertEqual(workspace.currentTabs.map(\.id), workspace.current?.containers.compactMap(\.focusedTerminal?.id))
+    }
+
     func testNumberedNavigationFocusesPanesWhileTabCyclingStaysInFocusedPane() {
         let workspace = Workspace()
         workspace.newSpace()
@@ -638,6 +663,11 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(Preferences.self, from: JSONEncoder().encode(explicitDefault)), explicitDefault)
         let explicitTheme = try JSONDecoder().decode(Preferences.self, from: Data(#"{"theme":"Example Theme"}"#.utf8))
         XCTAssertEqual(explicitTheme.resolvedTheme(systemIsDark: true), "Example Theme")
+        // Prefix keys were a switch for tmux and herdr spaces plus a style for the other spaces.
+        let prefixes = try [#"{}"#, #"{"backendPrefixKeys":false}"#, #"{"prefixKeys":"herdr","backendPrefixKeys":false}"#].map {
+            try JSONDecoder().decode(Preferences.self, from: Data($0.utf8)).prefixKeys
+        }
+        XCTAssertEqual(prefixes, [.multiplexers, .off, .all])
     }
 
     func testHostNewSpacePrefersCurrentThenExistingBackendOtherwiseNative() throws {

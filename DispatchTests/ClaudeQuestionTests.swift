@@ -192,7 +192,7 @@ final class ClaudeQuestionTests: XCTestCase {
             func bounds(_ text: String) throws -> [CGRect] {
                 let exact = try observations.compactMap { observation -> CGRect? in
                     guard let candidate = observation.topCandidates(1).first,
-                          let range = candidate.string.range(of: text),
+                          let range = candidate.string.range(of: text, options: .caseInsensitive), // Vision may read "swift"
                           let box = try candidate.boundingBox(for: range) else { return nil }
                     return box.boundingBox
                 }

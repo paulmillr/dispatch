@@ -114,8 +114,9 @@ def test(executable, state):
     started = time.monotonic()
     version = subprocess.check_output([executable, '--version'], text=True, timeout=5).strip()
     with FixtureServer(state, delay=0.001) as server:
-        state = configure(state, server.server_port)
-        env = environment(state, server.server_port)
+        home = state / 'pi-home'
+        state = configure(state, server.server_port, home)
+        env = environment(state, server.server_port, home)
         thread = threading.Thread(target=lambda: server.serve_forever(poll_interval=0.02), daemon=True)
         thread.start()
 

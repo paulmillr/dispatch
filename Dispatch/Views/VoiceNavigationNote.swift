@@ -5,6 +5,7 @@ import SwiftUI
 /// (or why it went nowhere) for a moment. Click to dismiss.
 struct VoiceNavigationNote: View {
     @Environment(\.appTypography) private var typography
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var navigation: VoiceNavigation { .shared }
     private var dictation: Dictation { .shared }
 
@@ -27,7 +28,10 @@ struct VoiceNavigationNote: View {
             .buttonStyle(.plain)
             .help(navigation.listening ? "Cancel" : "Dismiss")
             .padding(.top, 10)
-            .transition(.opacity)
+            // The note comes and goes from model changes (listening, a command's result), never in an animated
+            // transaction: its fade carries its own animation. Not an .animation on `content`, which would animate
+            // every partial transcript.
+            .transition(.opacity.animation(InterfaceMotion.animation(reduce: reduceMotion)))
             .accessibilityIdentifier("voice-navigation-note")
         }
     }

@@ -9,8 +9,8 @@ import Observation
 ///
 /// The root is read once per key, folder and connection (`resolve`): again when the folder changes, when the host's
 /// connection or grant changes (`invalidate`, a new `generation`), or when the last read failed. The branch is polled
-/// every `interval` (the Mac's cadence for its branch names) only while something shows it (`watch`: the Files
-/// segment, a visible space's branch chip); nothing polls otherwise. One read per key at a time; a read asked meanwhile
+/// every `interval` (10 s, the Mac's cadence for the branch names it shows) only while something shows it (`watch`: the
+/// Files segment, a visible space's branch chip); nothing polls otherwise. One read per key at a time; a read asked meanwhile
 /// runs after it with the latest folder, and the previous facts stay until it answers.
 @MainActor @Observable
 final class SpaceGitFacts {
@@ -51,7 +51,10 @@ final class SpaceGitFacts {
     /// A root read asked while another read of the key ran: the latest folder asked.
     @ObservationIgnored private var again: [Key: String] = [:]
 
-    init(interval: Duration = .seconds(2), reader: Reader = SpaceGitFacts.helper,
+    /// The branch poll while something shows it (`watch`).
+    nonisolated static let branchInterval = Duration.seconds(10)
+
+    init(interval: Duration = SpaceGitFacts.branchInterval, reader: Reader = SpaceGitFacts.helper,
          sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) {
         self.interval = interval
         self.reader = reader

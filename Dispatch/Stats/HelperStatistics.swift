@@ -130,9 +130,11 @@ final class HelperStatisticsProvider: SSHStatisticsSampling {
     supportsProcesses = greeting.capabilities.contains("stats.processes")
   }
 
-  private func request<Value: Decodable & Sendable>(_ method: String, seconds: Int = 3) async throws -> Value {
+  /// Waits `floor` seconds plus ten of the host's round trips (`SSHLinkTimeout.reply`): a timeout only marks the reading
+  /// stale and never disconnects.
+  private func request<Value: Decodable & Sendable>(_ method: String, floor: Double = 3) async throws -> Value {
     let endpoint = HelperWorkspace.Endpoint.remote(id)
-    return try await SSHTimeout.run(.seconds(seconds), "request") {
+    return try await SSHTimeout.run(SSHLinkTimeout.reply(for: id, floor: floor), "request") {
       try await HelperApp.shared.connection(endpoint).request(method, params: [String: String]())
     }
   }
@@ -160,7 +162,7 @@ final class HelperStatisticsProvider: SSHStatisticsSampling {
   }
 
   func disks() async throws -> [SSHStatisticsDisk] {
-    let disks: [HelperStatistics.Disk] = try await request("stats.disks", seconds: 6)
+    let disks: [HelperStatistics.Disk] = try await request("stats.disks", floor: 6)
     return disks.map {
       SSHStatisticsDisk(paths: $0.paths, identity: String($0.identity), total: $0.total, free: $0.available)
     }

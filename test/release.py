@@ -13,6 +13,9 @@ import AppKit
 
 let app = Process()
 app.executableURL = URL(fileURLWithPath: CommandLine.arguments[1])
+// The isolated HOME does not isolate the account's defaults: where nobody answered the first launch's agents
+// question (a fresh VM), its sheet stays up and blocks the quit. Answer No for this launch only (argument domain).
+app.arguments = ["-localAgentsChoice", "no"]
 app.environment = ProcessInfo.processInfo.environment
 app.currentDirectoryURL = URL(fileURLWithPath: CommandLine.arguments[2])
 let receipt = URL(fileURLWithPath: CommandLine.arguments[3])

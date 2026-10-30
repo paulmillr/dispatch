@@ -137,15 +137,15 @@ public struct KeyEvent {
             if !ime { return seq }
             if key == .backspace { return [] }
         }
-        if let c = ctrlSequence() { return binding.contains(.alt) ? [0x1B, c] : [c] }
-        let prefix = altPrefix(binding, o)
-        if utf8.isEmpty { return prefix.map { [0x1B, $0] } ?? [] }
         if o.modifyOtherKeys2, let cps = Decoder.decode(utf8), cps.count == 1 {
             let m = o.optionAsAlt.applies(mods) ? mods.intersection(.binding) : mods.intersection([.shift, .ctrl, .super])
             if (0x40...0x7F).contains(cps[0]) || !m.subtracting(.shift).isEmpty || cps[0] == 0x20, let i = modifyOtherKeysMods.firstIndex(of: m) {
                 return ascii("\u{1B}[27;\(i + 2);\(cps[0])~")
             }
         }
+        if let c = ctrlSequence() { return binding.contains(.alt) ? [0x1B, c] : [c] }
+        let prefix = altPrefix(binding, o)
+        if utf8.isEmpty { return prefix ?? [] }
         // fixterms CSI u for ctrl+character; shift counts only when the text isn't shifted.
         if mods.contains(.ctrl), let cps = Decoder.decode(utf8), cps.count == 1 {
             var (m, c) = (mods.bits & 7, cps[0])
@@ -153,15 +153,20 @@ public struct KeyEvent {
             if unshiftedCodepoint != c { m &= ~1 }
             return ascii("\u{1B}[\(c);\(m + 1)u")
         }
-        if let p = prefix { return [0x1B, p] }
+        if let p = prefix { return p }
         return mods.contains(.super) ? [] : utf8   // macOS: command+key sends no text
     }
 
-    /// The byte to send after ESC for alt+key (mode 1036), when option acts as alt.
-    func altPrefix(_ binding: Mods, _ o: KeyOptions) -> UInt8? {
+    /// ESC followed by the complete UTF-8 scalar/text, when option acts as alt.
+    func altPrefix(_ binding: Mods, _ o: KeyOptions) -> [UInt8]? {
         guard binding.contains(.alt), o.altEscPrefix, o.optionAsAlt.applies(mods) else { return nil }
-        if utf8.count == 1 { return utf8[0] }
-        return unshiftedCodepoint > 0 && unshiftedCodepoint < 256 ? UInt8(unshiftedCodepoint) : nil
+        if utf8.count == 1 { return [0x1B] + utf8 }
+        // Option may have translated the text. Preserve the physical key when supplied.
+        if unshiftedCodepoint > 0 {
+            guard let scalar = UnicodeScalar(unshiftedCodepoint) else { return nil }
+            return [0x1B] + Array(String(scalar).utf8)
+        }
+        return utf8.isEmpty ? nil : [0x1B] + utf8
     }
 
     /// The xterm PC-style function key sequence for this key under the modes (function_keys.zig).
@@ -289,7 +294,8 @@ public struct MouseEvent {
         switch o.format {
         case .x10: return cell.x > 222 || cell.y > 222 ? [] : [0x1B, 0x5B, 0x4D, UInt8(32 + code), UInt8(33 + cell.x), UInt8(33 + cell.y)]
         case .utf8:
-            var out: [UInt8] = [0x1B, 0x5B, 0x4D, UInt8(32 + code)]
+            var out: [UInt8] = [0x1B, 0x5B, 0x4D]
+            utf8(UInt32(32 + code), &out)
             utf8(UInt32(cell.x + 33), &out)
             utf8(UInt32(cell.y + 33), &out)
             return out
@@ -317,5 +323,5 @@ public enum Paste {
     }
 
     /// No newline and no end-of-paste sequence: nothing that could run a command by itself.
-    public static func isSafe(_ data: [UInt8]) -> Bool { !data.contains(0x0A) && data.firstRange(of: ascii("\u{1B}[201~")) == nil }
+    public static func isSafe(_ data: [UInt8]) -> Bool { !data.contains(where: { $0 == 0x0A || $0 == 0x0D }) && data.firstRange(of: ascii("\u{1B}[201~")) == nil }
 }

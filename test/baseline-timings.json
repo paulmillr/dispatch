@@ -3576,7 +3576,7 @@
       "outcome": "Passed"
     },
     {
-      "identifier": "DispatchTests/SettingsStatsPresentationTests/testSettingsFitsAppearancePageAndPreservesVerticalResizing",
+      "identifier": "DispatchTests/SettingsStatsPresentationTests/testSettingsFitsGeneralPageAndPreservesVerticalResizing",
       "seconds": 2.032892942428589,
       "outcome": "Passed"
     },

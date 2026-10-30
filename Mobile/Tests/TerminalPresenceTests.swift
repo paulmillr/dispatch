@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+@preconcurrency import Term
 @testable import DispatchMobile
 
 /// A terminal attached without a view (the Chat segment's case): output parsed in coalesced batches, the screen
@@ -472,5 +473,208 @@ final class TerminalPresenceTests: XCTestCase {
         XCTAssertTrue(latest.faint_tail)
         try await Task.sleep(for: .milliseconds(50))
         XCTAssertEqual(peer.requests("terminals.publish").count, 2, "Publications made during a call collapse to the latest")
+    }
+
+    // MARK: Host screens and held output (screens.host, terminals.follow)
+
+    private struct FollowParams: Decodable {
+        struct Follow: Decodable { let terminal: UInt64; let following: Bool; let subscription: UInt64? }
+        let params: Follow
+    }
+
+    private func follow(_ request: ScriptedHelper.Request) throws -> FollowParams.Follow {
+        try HelperClientTests.decode(FollowParams.self, request.body).params
+    }
+
+    private static let hostFeatures: Set<String> = [HelperSession.screensHost, HelperSession.terminalsFollow]
+
+    private func text(_ presence: TerminalPresence, _ tag: PointTag = .screen) -> String {
+        presence.session.locked { String(decoding: presence.session.surface.readText(tag), as: UTF8.self) }
+    }
+
+    /// A helper that reads tmux and herdr screens itself (`screens.host`) gets no `terminals.publish` from the phone, not
+    /// even a stray one, and the parse path reads no screen text for it; an older helper (no feature) is published to
+    /// as before.
+    func testAHelperReadingScreensItselfGetsNoPublicationAndNoScreenRead() async throws {
+        let peer = ScriptedHelper.terminal()
+        defer { peer.close() }
+        let presences = TerminalPresences()
+        let key = TerminalPresences.Key(host: UUID(), node: "tmux:fixture:5")
+        let presence = presences.open(key, feed: HelperTerminalFeed(client: peer.client, terminal: 7, features: [HelperSession.screensHost]),
+                                      terminal: 7, client: peer.client, scrollback: .client)
+        presences.retain(key, showing: true)
+        let attach = try await peer.wait(for: "terminals.attach")[0]
+        peer.notify(attach.id, .output(.init(terminal: 7, bytes: Data("$ claude\r\n> ".utf8))), method: "terminal.output")
+        try await TestSupport.eventually { presence.session.frameStats().bytesFed == 12 }
+        presence.schedulePublication()
+        presence.feed.publish(TerminalScreen(text: "stray", column: 0, row: 0, faintTail: false))
+        try await Task.sleep(for: TerminalPresence.publishInterval * 4)
+        XCTAssertTrue(peer.requests("terminals.publish").isEmpty, "one publication would turn the host's reads off")
+        XCTAssertEqual(presence.screensRead, 0, "nothing reads the screen's text")
+        XCTAssertTrue(presence.attached, "the helper's reads need the attach")
+        presences.close(key)
+
+        let older = ScriptedHelper.terminal()
+        defer { older.close() }
+        let olderKey = TerminalPresences.Key(host: UUID(), node: "tmux:fixture:5")
+        let published = presences.open(olderKey, feed: HelperTerminalFeed(client: older.client, terminal: 7), terminal: 7,
+                                       client: older.client, scrollback: .client)
+        presences.retain(olderKey)
+        let olderAttach = try await older.wait(for: "terminals.attach")[0]
+        older.notify(olderAttach.id, .output(.init(terminal: 7, bytes: Data("$ ".utf8))), method: "terminal.output")
+        _ = try await older.wait(for: "terminals.publish")
+        XCTAssertGreaterThan(published.screensRead, 0)
+        XCTAssertTrue(older.requests("terminals.follow").isEmpty, "an older helper's output is never held")
+        presences.close(olderKey)
+    }
+
+    /// A conversation's terminal no view shows (the Chat segment, another tab) holds its output after the grace
+    /// (`terminals.follow` false on its only attach subscription: no `subscription`); Chat still counts it attached and
+    /// nothing is published or read meanwhile. A view showing it asks for the repaint at once, and the repaint (tmux: `\ec`
+    /// and the whole history) is parsed as ordinary output: the grid and its scrollback are the repaint's alone. Hidden
+    /// again, it holds again after the grace.
+    func testAChatOnlyTerminalHoldsItsOutputAndRepaintsWhenShown() async throws {
+        let peer = ScriptedHelper.terminal()
+        defer { peer.close() }
+        let presences = TerminalPresences()
+        let chat = TerminalChatPresence(presences: presences)
+        let conversation = ChatConversationKey(host: UUID(), node: "tmux:fixture:5")
+        let key = TerminalPresences.Key(host: conversation.host, node: conversation.node)
+        let presence = presences.open(key, feed: HelperTerminalFeed(client: peer.client, terminal: 7, features: Self.hostFeatures),
+                                      terminal: 7, client: peer.client, scrollback: .client)
+        presence.followGrace = .milliseconds(300)
+        chat.retain(conversation, terminal: 7, client: peer.client, features: Self.hostFeatures)
+        let started = ContinuousClock.now
+        let attach = try await peer.wait(for: "terminals.attach")[0]
+        XCTAssertEqual(peer.requests("terminals.attach").count, 1, "one attach subscription per terminal")
+        let history = Data((1...200).map { "line \($0)" }.joined(separator: "\r\n").utf8)
+        peer.notify(attach.id, .output(.init(terminal: 7, bytes: history)), method: "terminal.output")
+        try await TestSupport.eventually { presence.session.frameStats().bytesFed == history.count }
+        XCTAssertTrue(text(presence).contains("line 1\n"), "the attach's history is the scrollback")
+
+        let hold = try await peer.wait(for: "terminals.follow")[0]
+        XCTAssertGreaterThanOrEqual(ContinuousClock.now - started, .milliseconds(300), "only after the grace")
+        let held = try follow(hold)
+        XCTAssertEqual(held.terminal, 7)
+        XCTAssertFalse(held.following)
+        XCTAssertNil(held.subscription, "the phone's only attach of the terminal")
+        try await TestSupport.eventually { presence.holding }
+        XCTAssertTrue(chat.attached(conversation), "held, still attached: sends are verified through the attach")
+        XCTAssertTrue(peer.requests("terminals.publish").isEmpty)
+        XCTAssertEqual(presence.screensRead, 0)
+        XCTAssertFalse(peer.cancellations.contains(attach.id))
+
+        presences.retain(key, showing: true)
+        XCTAssertFalse(presence.holding, "a view shows it: following again at once")
+        let resumed = try await peer.wait(for: "terminals.follow", count: 2)
+        XCTAssertTrue(try follow(resumed[1]).following)
+        let fed = presence.session.frameStats().bytesFed
+        peer.notify(attach.id, .output(.init(terminal: 7, bytes: Data("\u{1B}crepainted 1\r\nrepainted 2".utf8))), method: "terminal.output")
+        try await TestSupport.eventually(diagnostic: text(presence)) { text(presence) == "repainted 1\nrepainted 2" }
+        XCTAssertGreaterThan(presence.session.frameStats().bytesFed, fed, "parsed as ordinary output")
+        XCTAssertEqual(peer.requests("terminals.attach").count, 1, "no re-attach")
+
+        // A glance at the terminal and back to Chat holds nothing before the grace.
+        presences.release(key, showing: true)
+        presences.retain(key, showing: true)
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(peer.requests("terminals.follow").count, 2)
+        presences.release(key, showing: true)
+        let again = try await peer.wait(for: "terminals.follow", count: 3)
+        XCTAssertFalse(try follow(again[2]).following, "hidden again: held again after the grace")
+        try await TestSupport.eventually { presence.holding }
+
+        chat.release(conversation)
+        XCTAssertFalse(presence.attached, "the last user let go: the attach (and its hold) ends")
+        XCTAssertFalse(presence.holding)
+        presences.close(key)
+    }
+
+    /// A multiplexer that cannot repaint answers `unsupported`: the terminal keeps following and is never asked again,
+    /// however often it is shown and hidden.
+    func testAnUnsupportedHoldIsNeverAskedAgain() async throws {
+        let peer = ScriptedHelper { request in
+            switch request.method {
+            case "terminals.attach": .attachedNow
+            case "terminals.follow": .error(code: "unsupported", message: "This multiplexer cannot repaint.")
+            default: .empty
+            }
+        }
+        defer { peer.close() }
+        let presences = TerminalPresences()
+        let key = TerminalPresences.Key(host: UUID(), node: "tmux:fixture:5")
+        let presence = presences.open(key, feed: HelperTerminalFeed(client: peer.client, terminal: 7, features: Self.hostFeatures),
+                                      terminal: 7, client: peer.client)
+        presence.followGrace = .milliseconds(50)
+        presences.retain(key)
+        _ = try await peer.wait(for: "terminals.follow")
+        try await TestSupport.eventually { presence.unfollowable }
+        XCTAssertFalse(presence.holding)
+        for _ in 0..<3 {
+            presences.retain(key, showing: true)
+            presences.release(key, showing: true)
+        }
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(peer.requests("terminals.follow").count, 1, "sticky")
+        XCTAssertTrue(presence.attached)
+        presences.close(key)
+    }
+
+    /// A resume the helper could not repaint leaves the output held there: the terminal attaches again, whose replay
+    /// repaints it, and the new attachment follows.
+    func testAFailedResumeAttachesAgain() async throws {
+        let peer = ScriptedHelper { request in
+            switch request.method {
+            case "terminals.attach": .attachedNow
+            case "terminals.follow":
+                (request.params["following"] as? Bool) == true ? .error(code: "tmux", message: "capture failed") : .empty
+            default: .empty
+            }
+        }
+        defer { peer.close() }
+        let presences = TerminalPresences()
+        let key = TerminalPresences.Key(host: UUID(), node: "tmux:fixture:5")
+        let presence = presences.open(key, feed: HelperTerminalFeed(client: peer.client, terminal: 7, features: Self.hostFeatures),
+                                      terminal: 7, client: peer.client, scrollback: .client)
+        presence.followGrace = .milliseconds(50)
+        presences.retain(key)
+        let attach = try await peer.wait(for: "terminals.attach")[0]
+        try await TestSupport.eventually { presence.holding }
+        presences.retain(key, showing: true)
+        let attaches = try await peer.wait(for: "terminals.attach", count: 2)
+        try await TestSupport.eventually { peer.cancellations.contains(attach.id) }
+        XCTAssertEqual(peer.requests("terminals.follow").count, 2)
+        XCTAssertTrue(presence.attached)
+        XCTAssertFalse(presence.holding)
+        peer.notify(attaches[1].id, .output(.init(terminal: 7, bytes: Data("fresh".utf8))), method: "terminal.output")
+        try await TestSupport.eventually { text(presence, .viewport) == "fresh" }
+        presences.close(key)
+    }
+
+    /// After a reconnect the new attachment follows by default: the old connection's hold went with it, so showing the
+    /// terminal asks the new helper for nothing.
+    func testANewAttachmentAfterAReconnectFollows() async throws {
+        let first = ScriptedHelper.terminal(), second = ScriptedHelper.terminal()
+        defer { first.close(); second.close() }
+        let presences = TerminalPresences()
+        let key = TerminalPresences.Key(host: UUID(), node: "tmux:fixture:5")
+        let presence = presences.open(key, feed: HelperTerminalFeed(client: first.client, terminal: 7, features: Self.hostFeatures),
+                                      terminal: 7, client: first.client, scrollback: .client)
+        presence.followGrace = .milliseconds(50)
+        presences.retain(key)
+        _ = try await first.wait(for: "terminals.follow")
+        try await TestSupport.eventually { presence.holding }
+        presences.stopAll(host: key.host)
+        XCTAssertFalse(presence.holding, "the attach ended, and its hold with it")
+        presence.followGrace = .seconds(60)
+        presences.reopen(host: key.host, client: second.client, topology: HostFixture.topology(), features: Self.hostFeatures)
+        _ = try await second.wait(for: "terminals.attach")
+        XCTAssertTrue((presence.feed as? HelperTerminalFeed)?.holdsOutput == true, "the new feed knows the new hello's features")
+        XCTAssertFalse(presence.holding)
+        presences.retain(key, showing: true)
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertTrue(second.requests("terminals.follow").isEmpty, "nothing to resume")
+        XCTAssertEqual(first.requests("terminals.follow").count, 1, "nothing more on the old connection")
+        presences.close(key)
     }
 }

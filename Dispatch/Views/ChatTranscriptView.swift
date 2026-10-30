@@ -13,6 +13,7 @@ struct ChatTranscriptView: View {
     var fadeTopInset: CGFloat = 0
     @State private var openedAt = ProcessInfo.processInfo.systemUptime
     @State private var viewportGeneration = System.uuid()
+    @State private var scrollConnection: UUID?
     private struct SearchRequest: Equatable {
         let query: String
         let revision: Int
@@ -49,12 +50,14 @@ struct ChatTranscriptView: View {
             // accessibility prefetch alternate their visibility forever.
             VStack(alignment: .leading, spacing: 0) {
                 if theme.radioLog { ChatRadioLogHeader(surface: session.id) }
-                let watches = theme.radioLog ? ChatRadioLog.watches(session.visibleTranscriptRows) : [:]
+                // While its window is off screen, the rows it showed then (`presentedTranscriptRows`).
+                let rows = session.presentedTranscriptRows
+                let watches = theme.radioLog ? ChatRadioLog.watches(rows) : [:]
                 LazyVStack(alignment: .leading, spacing: 0) {
                     if session.hasEarlier || session.loadingEarlier {
                         earlierMessages
                     }
-                    ForEach(session.visibleTranscriptRows) { row in
+                    ForEach(rows) { row in
                         // One layout child per ID, regardless of row kind or
                         // disclosure state, keeps the outer stack lazy.
                         VStack(alignment: .leading, spacing: 0) {
@@ -69,10 +72,12 @@ struct ChatTranscriptView: View {
                                     .overlay { RoundedRectangle(cornerRadius: 6).stroke(theme.yellow, lineWidth: 1) }
                                     .padding(.bottom, 8).accessibilityIdentifier("chat-find-match")
                             }
+                            // A step taking over its group's shown step hands off in place instead of entering.
+                            let handoff = row.timeline?.replaced == nil ? nil : session.transcriptArrivals.handoff(for: row.id)
                             ChatTranscriptRowView(row: row, session: session, coordinator: coordinator, directory: directory,
-                                contentWidth: max(0, geometry.size.width - 44))
-                                .modifier(ChatArrivalMotion(receipt: session.transcriptArrivals.receipt(for: row.id),
-                                                            since: openedAt, reduceMotion: reduceMotion))
+                                contentWidth: max(0, geometry.size.width - 44), handoff: handoff, openedAt: openedAt)
+                                .modifier(ChatArrivalMotion(receipt: handoff == nil ? session.transcriptArrivals.receipt(for: row.id) : nil,
+                                                            since: openedAt, reduceMotion: reduceMotion, grouped: true))
                         }.background(ChatScrollMarker(id: row.id, position: session.scrollPosition)).id(row.id)
                     }
                 }
@@ -132,7 +137,11 @@ struct ChatTranscriptView: View {
     private func searchAndLifecycle(_ content: some View, query: String, request: SearchRequest,
                                     scroll: ScrollViewProxy) -> some View {
         content
-            .onAppear { openedAt = ProcessInfo.processInfo.systemUptime; connectScrollPosition(scroll); updateScrollbarTheme() }
+            .onAppear {
+                openedAt = ProcessInfo.processInfo.systemUptime
+                scrollConnection = connectScrollPosition(scroll)
+                updateScrollbarTheme()
+            }
             .task(id: request) {
                 do {
                     let matches = try await session.searchIndex.matches(query.isEmpty ? [] : session.searchDocuments, query: query)
@@ -185,7 +194,12 @@ struct ChatTranscriptView: View {
             .onChange(of: session.scrollToLatestRequest) { _, _ in
                 scroll.scrollTo("bottom", anchor: .bottom)
             }
-            .onDisappear { openedAt = .infinity; session.scrollPosition.disconnect() }
+            .onDisappear {
+                openedAt = .infinity
+                // A view of this chat that appeared since (a moved tab mounts it first) keeps the connection.
+                if let scrollConnection { session.scrollPosition.disconnect(scrollConnection) }
+                scrollConnection = nil
+            }
     }
 
     private func followingLatest(_ content: some View, scroll: ScrollViewProxy) -> some View {
@@ -207,7 +221,7 @@ struct ChatTranscriptView: View {
                 // A floating input that grows on focus would otherwise cover the latest message.
                 if session.atBottom { scroll.scrollTo("bottom", anchor: .bottom) }
             }
-            .onChange(of: session.revision) { _, revision in
+            .onChange(of: session.presentedRevision) { _, revision in
                 session.scrollPosition.recordDiagnostic(.transcript)
                 // Capture intent when the item arrives. New row geometry can
                 // move the bottom outside the viewport before this callback.
@@ -253,19 +267,22 @@ struct ChatTranscriptView: View {
     /// The transcript's padding, around its rows and below the "bottom" marker.
     static let padding: CGFloat = 22
 
-    private func connectScrollPosition(_ scroll: ScrollViewProxy) {
+    private func connectScrollPosition(_ scroll: ScrollViewProxy, reusing token: UUID? = nil) -> UUID {
+        let connection = session.scrollPosition.connect(reusing: token) { token in
+            _ = connectScrollPosition(scroll, reusing: token)
+        }
         session.scrollPosition.bottomPadding = Self.padding
         session.scrollPosition.diagnosticState = { [weak session] in
             guard let session else { return nil }
             return .init(revision: session.revision, historyRevision: session.historyRevision,
-                rows: session.visibleTranscriptRows.count, turns: session.turns.count, busy: session.busy,
+                rows: session.presentedTranscriptRows.count, turns: session.turns.count, busy: session.busy,
                 atBottom: session.atBottom, following: session.followRevision != nil,
                 loadingHistory: session.loadingHistory, loadingEarlier: session.loadingEarlier)
         }
         session.scrollPosition.diagnosticRows = { [weak session] ids in
             guard let session else { return [:] }
             var rows: [String: ChatViewportTrace.RowInfo] = [:]
-            for (index, row) in session.visibleTranscriptRows.enumerated() where ids.contains(row.id) {
+            for (index, row) in session.presentedTranscriptRows.enumerated() where ids.contains(row.id) {
                 rows[row.id] = .init(index: index, kind: Self.diagnosticKind(row, session: session))
             }
             return rows
@@ -275,24 +292,35 @@ struct ChatTranscriptView: View {
         // Actual user scrolling clears this through userScrolled below.
         if session.atBottom { session.followRevision = session.revision }
         session.scrollPosition.realizeAnchor = { id in scroll.scrollTo(id, anchor: .top) }
-        session.scrollPosition.hasContent = { [weak session] in session?.visibleTranscriptRows.isEmpty == false }
+        session.scrollPosition.hasContent = { [weak session] in session?.presentedTranscriptRows.isEmpty == false }
+        session.scrollPosition.holdChanged = { [weak session] hold in
+            if hold { session?.holdTranscript() } else { session?.releaseTranscript() }
+        }
+        // Gone for good, not just not loaded yet: a restored anchor waits for the transcript it names.
+        session.scrollPosition.rowExists = { [weak session] id in
+            guard let session, !session.loadingHistory, !session.presentedTranscriptRows.isEmpty else { return true }
+            return session.presentedTranscriptRows.contains { $0.id == id }
+        }
         session.scrollPosition.recoverViewport = { [weak session] anchor, rebuild in
             guard let session, session.showChat, !session.visibleTranscriptRows.isEmpty else { return }
             let interaction = session.scrollPosition.interactionRevision
             let following = session.atBottom
-            let target = anchor.flatMap { saved in session.visibleTranscriptRows.contains(where: { $0.id == saved.id }) ? saved : nil }
-                ?? session.visibleTranscriptRows.first.map { ChatScrollPosition.Anchor(id: $0.id, offset: 0) }
+            // A row that left (a collapsed group's step) gives way to the nearest one shown; with none, the latest
+            // messages, never the first loaded row.
+            let target = anchor.flatMap { saved in
+                session.nearestVisibleRow(to: saved.id).map { $0 == saved.id ? saved : .init(id: $0, offset: 0) }
+            }
             if rebuild { openedAt = ProcessInfo.processInfo.systemUptime; viewportGeneration = System.uuid() }
             let generation = viewportGeneration
             DispatchQueue.main.async {
                 guard viewportGeneration == generation, session.showChat,
                       session.scrollPosition.interactionRevision == interaction else { return }
-                if following {
-                    scroll.scrollTo("bottom", anchor: .bottom)
-                    session.scrollPosition.jumpToLatest()
-                } else if let target {
+                if let target, !following {
                     scroll.scrollTo(target.id, anchor: .top)
                     session.scrollPosition.restore(target)
+                } else {
+                    scroll.scrollTo("bottom", anchor: .bottom)
+                    session.scrollPosition.jumpToLatest()
                 }
             }
         }
@@ -332,6 +360,7 @@ struct ChatTranscriptView: View {
             session.scrollPosition.restoreOnAppearance()
         }
         session.scrollPosition.beginOpeningHistoryPreload()
+        return connection
     }
 
     /// A content-free category: what kind of row, and whether it is expanded.
@@ -359,20 +388,25 @@ struct ChatArrivalMotion: ViewModifier {
     let openedAt: TimeInterval
     let distance: CGFloat
     let duration: Double
+    /// Moves the content as one view (`ChatArrivalEffect`): for content with native views (a transcript row's text).
+    let grouped: Bool
     @State private var visible: Bool
 
     init(receipt: ChatTranscriptArrivals.Receipt?, since openedAt: TimeInterval, reduceMotion: Bool,
-         distance: CGFloat? = nil, duration: Double? = nil) {
+         distance: CGFloat? = nil, duration: Double? = nil, grouped: Bool = false) {
         self.receipt = receipt; self.openedAt = openedAt; self.reduceMotion = reduceMotion
+        self.grouped = grouped
         self.distance = distance ?? 6
         self.duration = duration ?? ChatScrollPosition.arrivalGlide
         _visible = State(initialValue: receipt?.eligible(since: openedAt) != true)
     }
 
     func body(content: Content) -> some View {
-        content.transaction { $0.animation = nil }
+        // Only the entrance's own transaction: a blanket override would also stop the row's own animations (its live
+        // step chart, a step's status).
+        content.transaction(value: visible) { $0.animation = nil }
             .modifier(ChatArrivalEffect(progress: visible ? 1 : 0,
-                                        distance: reduceMotion ? 0 : distance))
+                                        distance: reduceMotion ? 0 : distance, grouped: grouped))
             .task {
                 guard receipt?.consume(since: openedAt) == true else { visible = true; return }
                 // Cubic ease-out, the curve the followed bottom glides on.
@@ -384,15 +418,139 @@ struct ChatArrivalMotion: ViewModifier {
     }
 }
 
-private struct ChatArrivalEffect: AnimatableModifier {
+/// A live step taking over its group's one shown step, like an odometer: the step it replaced rolls up and out of the
+/// slot as the new one rolls in from below, the two a line apart. Pixels only, as an entrance: the row is laid out at its final size
+/// from the first frame, and the replaced step is drawn over it only while it leaves.
+struct ChatStepHandoff<Replaced: View>: ViewModifier {
+    let receipt: ChatTranscriptArrivals.Receipt?
+    let openedAt: TimeInterval
+    let reduceMotion: Bool
+    let distance: CGFloat
+    let replaced: () -> Replaced?
+    @State private var progress: Double
+
+    init(receipt: ChatTranscriptArrivals.Receipt?, since openedAt: TimeInterval, reduceMotion: Bool, distance: CGFloat,
+         replaced: @escaping () -> Replaced?) {
+        self.receipt = receipt; self.openedAt = openedAt; self.reduceMotion = reduceMotion
+        self.distance = distance; self.replaced = replaced
+        _progress = State(initialValue: receipt?.eligible(since: openedAt) == true ? 0 : 1)
+    }
+
+    func body(content: Content) -> some View {
+        // The replaced step goes to the effect even once the state reaches 1: the effect draws it while its own,
+        // interpolated progress is short of that.
+        content.transaction(value: progress) { $0.animation = nil }
+            .modifier(ChatStepHandoffEffect(progress: progress, distance: reduceMotion ? 0 : distance,
+                                            replaced: replaced()))
+            .onAppear {
+                guard receipt?.consume(since: openedAt) == true else { progress = 1; return }
+                // Linear in time: the effect eases each part on its own clock.
+                withAnimation(.linear(duration: reduceMotion ? 0.15 : ChatStepHandoffEffect<Replaced>.duration)) { progress = 1 }
+            }
+            .onDisappear { progress = 1 }
+    }
+}
+
+private struct ChatStepHandoffEffect<Replaced: View>: AnimatableModifier {
+    static var duration: Double { 0.34 }
     nonisolated var progress: Double
     let distance: CGFloat
+    let replaced: Replaced?
     nonisolated var animatableData: Double {
         get { progress }
         set { progress = newValue }
     }
+
     func body(content: Content) -> some View {
-        content.opacity(progress).offset(y: distance * (1 - progress))
+        // One roll, so the slot is never empty; each line fades as it crosses the slot's edge.
+        let roll = Self.easeOut(progress)
+        content
+            .opacity(min(1, 0.15 + 1.4 * roll))
+            .offset(y: distance * (1 - roll))
+            .overlay(alignment: .topLeading) {
+                if let replaced, progress < 1 {
+                    replaced.opacity(max(0, 1 - 1.4 * roll)).offset(y: -distance * roll)
+                        .allowsHitTesting(false).accessibilityHidden(true)
+                }
+            }
+            .clipShape(ChatStepHandoffClip(active: progress < 1 && distance > 0))
+    }
+
+    nonisolated static func easeOut(_ t: Double) -> Double { 1 - pow(1 - t, 3) }
+}
+
+/// A live group's shown step as the group closes (its turn ends, or a newer group takes over). The step's own row goes
+/// at once, so this draws the step again under the header, a row's height in all (the spacing above it included), and
+/// folds it away: the bubble shrinks instead of jumping, and the rows below follow it.
+struct ChatClosingStep<Step: View>: View {
+    let group: ChatToolGroup
+    let disclosure: ChatToolGroupDisclosure
+    let reduceMotion: Bool
+    @ViewBuilder let step: (ChatTranscriptRow.Replaced) -> Step
+    @State private var closing: ChatTranscriptRow.Replaced?
+    @State private var shown: Double = 1
+
+    var body: some View {
+        ChatFoldLayout(shown: shown) {
+            if let closing { step(closing).opacity(shown).allowsHitTesting(false).accessibilityHidden(true) }
+        }
+        .clipped()
+        .onChange(of: disclosure) { old, new in
+            guard old == .current, new == .collapsed, !reduceMotion,
+                  let item = group.children.last?.item, let last = group.steps.last else { return }
+            closing = .init(item: item, step: last); shown = 1
+            // The step's full height for the frame that removes its row, then the fold.
+            Task { @MainActor in
+                withAnimation(.timingCurve(0.33, 1, 0.68, 1, duration: 0.32)) { shown = 0 } completion: { closing = nil }
+            }
+        }
+    }
+}
+
+/// Its content's height times `shown`, the content pinned to the top (clip it).
+struct ChatFoldLayout: Layout {
+    var shown: Double
+    var animatableData: Double {
+        get { shown }
+        set { shown = newValue }
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let subview = subviews.first else { return .zero }
+        let size = subview.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil))
+        return CGSize(width: size.width, height: size.height * shown)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(width: bounds.width, height: nil))
+    }
+}
+
+/// The slot's edges while steps roll through it; no clip otherwise, so a timeline rail can reach its neighbours.
+private struct ChatStepHandoffClip: Shape {
+    let active: Bool
+    nonisolated func path(in rect: CGRect) -> Path {
+        Path(active ? rect : rect.insetBy(dx: -10_000, dy: -10_000))
+    }
+}
+
+private struct ChatArrivalEffect: AnimatableModifier {
+    nonisolated var progress: Double
+    let distance: CGFloat
+    let grouped: Bool
+    nonisolated var animatableData: Double {
+        get { progress }
+        set { progress = newValue }
+    }
+    @ViewBuilder func body(content: Content) -> some View {
+        if grouped {
+            // The geometry group moves the row as one view: without it each frame of the entrance moved every one of
+            // the row's text views on its own (a long reply's eighty, each with its layer, cursor rect and frame
+            // change). Its opacity stays inside, per view, as before.
+            content.opacity(progress).geometryGroup().offset(y: distance * (1 - progress))
+        } else {
+            content.opacity(progress).offset(y: distance * (1 - progress))
+        }
     }
 }
 
@@ -409,6 +567,9 @@ private struct ChatTranscriptRowView: View {
     let coordinator: ChatCoordinator
     let directory: String
     let contentWidth: CGFloat
+    var handoff: ChatTranscriptArrivals.Receipt? = nil
+    var openedAt: TimeInterval = .infinity
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var bubbleWidth: CGFloat {
         theme.radioLog ? ChatRadioLog.messageWidth(contentWidth, theme: theme) + 32 - (row.item?.kind == .tool ? 10 : 0)
             : min(contentWidth, theme.typography.characterWidth * 80)
@@ -480,10 +641,19 @@ private struct ChatTranscriptRowView: View {
                     if let item = row.item, let timeline = row.timeline {
                         itemView(item).padding(.leading, ChatStepRail.width + Self.railSpacing)
                             .overlay(alignment: .leading) { ChatStepRail(timeline: timeline) }
+                            .modifier(ChatStepHandoff(receipt: handoff, since: openedAt, reduceMotion: reduceMotion,
+                                                      distance: theme.typography.detailLineHeight + 8) {
+                                timeline.replaced.map(replacedStep)
+                            })
                     } else if let item = row.item { itemView(item) }
                     if let group = row.group {
-                        groupHeader(group, replyTime: row.replyTime)
-                            .padding(.top, row.item == nil ? 0 : 4)
+                        VStack(alignment: .leading, spacing: 0) {
+                            groupHeader(group, replyTime: row.replyTime)
+                            // Its live step's row goes as the group closes; this folds the step away under the header.
+                            ChatClosingStep(group: group, disclosure: session.groupDisclosure(group, turnID: row.turnID),
+                                            reduceMotion: reduceMotion) { replacedStep($0).padding(.top, 6) }
+                        }
+                        .padding(.top, row.item == nil ? 0 : 4)
                     } else if let replyTime = row.replyTime {
                         ChatReplyTime(date: replyTime)
                             .frame(maxWidth: .infinity, alignment: .trailing)
@@ -522,12 +692,26 @@ private struct ChatTranscriptRowView: View {
         }
     }
 
+    /// The step the current one replaced, as it was shown: its header line on its own dot, and as the live step, no
+    /// time.
+    private func replacedStep(_ replaced: ChatTranscriptRow.Replaced) -> some View {
+        ChatToolCard(item: replaced.item, expanded: .constant(false), directory: directory, embedded: true,
+                     titleColumn: theme.typography.stepTitleWidth)
+            .padding(.leading, ChatStepRail.width + Self.railSpacing)
+            .overlay(alignment: .leading) {
+                ChatStepRail(timeline: .init(step: replaced.step, first: true, last: true, current: true))
+            }
+    }
+
     @ViewBuilder private func itemView(_ item: ChatItem) -> some View {
         switch item.kind {
         case .user where theme.radioLog:
             radioUserMessage(item)
         case .user:
-            ChatUserMessage(text: item.text, contentWidth: contentWidth, attachments: item.attachments, endpoint: session.helper?.endpoint)
+            // The pending prompt's bubble is where a sent message flies to.
+            ChatUserMessage(text: item.text, contentWidth: contentWidth, attachments: item.attachments, endpoint: session.helper?.endpoint,
+                            flight: row.id == session.optimisticPrompt?.id ? (session.flightFrames, .prompt(row.id)) : nil,
+                            hidden: session.sendFlight?.to == .prompt(row.id))
         case .assistant:
             ChatMarkdown(text: item.text).foregroundStyle(theme.ink)
         case .notice:
@@ -551,7 +735,7 @@ private struct ChatTranscriptRowView: View {
         case .tool:
             ChatToolCard(item: item, expanded: toolExpansion(item), directory: directory, embedded: true,
                          layouts: session.toolLayouts, layoutWidth: max(0, bubbleWidth - 32 - railWidth),
-                         live: session.busy && row.turnID == session.activeTurnID,
+                         live: row.turnID != nil && row.turnID == session.liveTurnID,
                          elapsed: theme.radioLog || row.timeline?.running == true ? nil : row.timeline?.step.seconds,
                          titleColumn: row.timeline == nil || theme.radioLog ? nil : theme.typography.stepTitleWidth)
         }
@@ -591,6 +775,9 @@ struct ChatUserMessage: View {
     /// Shown above the text, on the bubble's side; a message of attachments alone has no text bubble.
     var attachments: [ChatAttachment] = []
     var endpoint: HelperWorkspace.Endpoint?
+    /// A message a flight lands on: where its bubble is laid out goes to `flight`, and it stays hidden until it lands.
+    var flight: (frames: ChatFlightFrames, place: ChatSendFlight.Place)? = nil
+    var hidden = false
 
     /// A user bubble keeps to 60 percent of a wide pane and 80 characters, but a narrow pane's gives it room for 40
     /// characters (up to 85 percent) rather than stacking a short message word by word.
@@ -615,11 +802,9 @@ struct ChatUserMessage: View {
     }
 
     private var bubble: some View {
-        ChatMarkdown(text: text, fillWidth: false)
-            .font(theme.typography.body)
-            .padding(.horizontal, 12).padding(.vertical, 8)
-            .background(theme.ink.opacity(0.08), in: UnevenRoundedRectangle(
-                topLeadingRadius: 10, bottomLeadingRadius: 10, bottomTrailingRadius: 3, topTrailingRadius: 10))
+        ChatUserBubble(text: text)
+            .background { if let flight { ChatFlightAnchor(place: flight.place, frames: flight.frames) } }
+            .opacity(hidden ? 0 : 1)
     }
 }
 

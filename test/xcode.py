@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 from profile import Profile
 from timings import cases_from_result, report, compare
@@ -26,6 +27,11 @@ INPUTS = ("Dispatch", "DispatchTests", "helper", "Vendor", "ThirdPartyLicenses",
 IGNORED = {"target", "__pycache__", "LocalToolAudit", ".git", "xcuserdata", ".DS_Store"}
 # The tests' private root: short (macOS sun_path), and fixed, since journals record its paths.
 JOURNAL = '/tmp/dt-journal'
+# What test/vm.py copies into a guest that tests the host's build (DISPATCH_TEST_PREBUILT=1), and the manifest naming
+# those products' digest: the guest runs them as built, never building itself.
+PREBUILT = 'build/test-tools/xcode-prebuilt.json'
+PREBUILT_PRODUCTS = ('build/Build/Products/Debug/Dispatch.app', 'build/Build/Products/Debug/Term.framework',
+                     'build/Build/Products/Debug/TermApple.framework', 'build/Build/Products/Debug/PackageFrameworks')
 
 # Machine facts (home, temp dir, the bundle and checkout, the account, the machine's name and memory, variables) come
 # from System: read anywhere else they name this Mac in recorded requests, or meet recorded values with live ones, which
@@ -141,7 +147,25 @@ def load_receipt(path):
         return {}
 
 
+def prebuilt(root, profile, force=False):
+    """The host's build-for-testing products and their manifest (test/vm.py), built here when inputs changed."""
+    plan = ensure_build(root, profile, force=force)
+    xcode = subprocess.check_output(["xcodebuild", "-version"], text=True).split("\n")[0]
+    manifest = {"products": products(root), "xcode": xcode, "plan": str(plan.relative_to(root))}
+    (root / PREBUILT).write_text(json.dumps(manifest, indent=2) + "\n")
+    return manifest
+
+
 def ensure_build(root, profile, force=False):
+    if os.environ.get("DISPATCH_TEST_PREBUILT") == "1":
+        # A VM testing the host's build: its products exactly as the host made them, or nothing.
+        expected = load_receipt(root / PREBUILT)
+        with profile.stage("test_build_fingerprint"):
+            current = products(root)
+        if not current or current != expected.get("products"):
+            raise RuntimeError("The host's test build is missing or differs from " + PREBUILT + "; rerun test/vm.py")
+        print("Test build: the host's (" + expected.get("xcode", "unknown Xcode") + "); not building here.", flush=True)
+        return root / current["plan"]
     receipt = root / "build/test-tools/xcode-build.json"
     with profile.stage("test_build_fingerprint"):
         key = build_key(root)
@@ -151,10 +175,17 @@ def ensure_build(root, profile, force=False):
         print("Test build: verified unchanged inputs and products; reusing build.", flush=True)
         return root / current["plan"]
     receipt.unlink(missing_ok=True)
+    started = time.time()
     with profile.stage("test_build"):
         subprocess.run(["xcodebuild", "-project", "Dispatch.xcodeproj", "-scheme", "Dispatch",
                         "-configuration", "Debug", "-derivedDataPath", "build",
                         "-destination", "platform=macOS", "build-for-testing"], cwd=root, check=True)
+    # A plan an earlier Xcode/SDK wrote (Dispatch_macosx27.0-…) beside this build's would make two.
+    plans = sorted((root / "build/Build/Products").glob("Dispatch_*.xctestrun"))
+    if any(plan.stat().st_mtime >= started for plan in plans):
+        for plan in plans:
+            if plan.stat().st_mtime < started:
+                plan.unlink()
     current = products(root)
     if current is None:
         raise RuntimeError("Build did not produce exactly one Dispatch test plan and test bundle")
@@ -215,12 +246,12 @@ def migrate(root, helper):
 
 
 def corpus_missing(root):
-    """None, or why the corpus in replays/ (a git submodule) is absent: without it every test would run live, unnoticed."""
+    """None, or why the corpus in replays/ (its own repository) is absent: without it every test would run live, unnoticed."""
     replays = root / 'replays'
     if next(replays.rglob('*.rpl.zst'), None):
         return None
-    return ('The replay corpus is not checked out (' + str(replays) + ' has no recordings): run '
-            '`git submodule update --init replays`, or pass --live to run every test live')
+    return ('The replay corpus is not checked out (' + str(replays) + ' has no recordings): put the corpus repository there, '
+            'or pass --live to run every test live')
 
 
 def execute(root, tests, skips=(), recheck=False, benchmarks=False, selection=None, capture=False,

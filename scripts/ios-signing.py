@@ -7,6 +7,10 @@ Signing and a device). Mobile/Config/Signing.xcconfig includes it; simulator bui
   python3 scripts/ios-signing.py --teams                            teams this Mac knows (Xcode accounts, certificates)
   python3 scripts/ios-signing.py --remove                           delete it
 
+build/signing.xcconfig signs the default Pilot apps (yachts.dispatch.pilot.mobile). --stable does the same for
+build/signing-stable.xcconfig: the stable account's team (yachts.dispatch.mobile, docs/ios.md, Pilot and stable), which
+`./run.sh --ios-device --stable` passes to xcodebuild in place of build/signing.xcconfig.
+
 The team id is the ten characters Xcode shows under Settings, Accounts (a free Apple ID's is its "Personal Team").
 Nothing here talks to Apple: xcodebuild does, with -allowProvisioningUpdates (`./run.sh --ios-device`)."""
 import argparse
@@ -19,13 +23,18 @@ import sys
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG = ROOT / 'build/signing.xcconfig'
-BUNDLE_ID = 'yachts.dispatch.mobile'
+STABLE_CONFIG = ROOT / 'build/signing-stable.xcconfig'
+# project.yml's DISPATCH_BUNDLE_ID_PREFIX, and what `./run.sh --stable` sets it to.
+PREFIX = 'yachts.dispatch.pilot'
+STABLE_PREFIX = 'yachts.dispatch'
 KNOWN = ('DEVELOPMENT_TEAM', 'DISPATCH_BUNDLE_ID_SUFFIX')
 TEAM = re.compile(r'[A-Z0-9]{10}')
 # One or more bundle id components, each led by a dot: letters, digits and hyphens (CFBundleIdentifier's alphabet).
 SUFFIX = re.compile(r'(\.[A-Za-z0-9-]+)+')
 HEADER = ('// Signing for Dispatch for iPhone, written by scripts/ios-signing.py (docs/ios.md). Git-ignored;\n'
           '// Mobile/Config/Signing.xcconfig includes it.\n')
+STABLE_HEADER = ('// Signing for the stable account\'s Dispatch for iPhone, written by scripts/ios-signing.py --stable\n'
+                 '// (docs/ios.md, Pilot and stable). Git-ignored; `./run.sh --stable` passes these to xcodebuild.\n')
 
 
 def parse(text):
@@ -59,18 +68,28 @@ def problems(settings, other=()):
     return found
 
 
-def render(team, suffix=''):
-    text = HEADER + f'DEVELOPMENT_TEAM = {team}\n'
+def render(team, suffix='', stable=False):
+    text = (STABLE_HEADER if stable else HEADER) + f'DEVELOPMENT_TEAM = {team}\n'
     if suffix:
         text += f'DISPATCH_BUNDLE_ID_SUFFIX = {suffix}\n'
     return text
 
 
-def bundle_id(settings):
-    return BUNDLE_ID + settings.get('DISPATCH_BUNDLE_ID_SUFFIX', '')
+def bundle_id(settings, stable=False):
+    return (STABLE_PREFIX if stable else PREFIX) + '.mobile' + settings.get('DISPATCH_BUNDLE_ID_SUFFIX', '')
 
 
-def write(team, suffix='', path=CONFIG):
+def stable_overrides(settings=None):
+    """xcodebuild's command-line settings for a stable build: the prefix, and with `settings` (build/signing-stable.xcconfig)
+    its team and suffix, which win over build/signing.xcconfig's (an empty suffix included)."""
+    overrides = [f'DISPATCH_BUNDLE_ID_PREFIX={STABLE_PREFIX}']
+    if settings is not None:
+        overrides += [f'DEVELOPMENT_TEAM={settings["DEVELOPMENT_TEAM"]}',
+                      f'DISPATCH_BUNDLE_ID_SUFFIX={settings.get("DISPATCH_BUNDLE_ID_SUFFIX", "")}']
+    return overrides
+
+
+def write(team, suffix='', path=CONFIG, stable=False):
     settings = {'DEVELOPMENT_TEAM': team, **({'DISPATCH_BUNDLE_ID_SUFFIX': suffix} if suffix else {})}
     found = problems(settings)
     if found:
@@ -78,7 +97,7 @@ def write(team, suffix='', path=CONFIG):
     previous = parse(path.read_text())[0] if path.is_file() else None
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + '.tmp')
-    temporary.write_text(render(team, suffix))
+    temporary.write_text(render(team, suffix, stable))
     temporary.replace(path)
     return previous
 
@@ -126,10 +145,11 @@ def known_teams():
     return teams
 
 
-def resolved(sdk='iphoneos'):
-    """The signing settings xcodebuild resolves for the app with this file in place."""
+def resolved(sdk='iphoneos', overrides=()):
+    """The signing settings xcodebuild resolves for the app with this file in place (and `overrides`)."""
     output = subprocess.run(['xcodebuild', '-project', 'Dispatch.xcodeproj', '-target', 'DispatchMobile', '-configuration',
-                             'Release', '-sdk', sdk, '-showBuildSettings'], cwd=ROOT, capture_output=True, text=True)
+                             'Release', '-sdk', sdk, '-showBuildSettings', *overrides], cwd=ROOT, capture_output=True,
+                            text=True)
     wanted = ('DEVELOPMENT_TEAM', 'PRODUCT_BUNDLE_IDENTIFIER', 'CODE_SIGN_STYLE', 'CODE_SIGN_IDENTITY')
     values = {}
     for line in output.stdout.splitlines():
@@ -139,10 +159,10 @@ def resolved(sdk='iphoneos'):
     return values
 
 
-def check(path=CONFIG, xcode=False):
+def check(path=CONFIG, xcode=False, stable=False):
     if not path.is_file():
         print(f'{os.path.relpath(path, ROOT)} does not exist: device builds cannot sign. '
-              'Write it with: python3 scripts/ios-signing.py <TEAM ID> [--suffix .yourname]')
+              f'Write it with: python3 scripts/ios-signing.py <TEAM ID> [--suffix .yourname]{" --stable" if stable else ""}')
         return 1
     settings, other = parse(path.read_text())
     found = problems(settings, other)
@@ -150,7 +170,7 @@ def check(path=CONFIG, xcode=False):
         print('error: ' + problem)
     if found:
         return 1
-    print(f'Team {settings["DEVELOPMENT_TEAM"]}, bundle id {bundle_id(settings)}')
+    print(f'Team {settings["DEVELOPMENT_TEAM"]}, bundle id {bundle_id(settings, stable)}')
     teams = known_teams()
     team = settings['DEVELOPMENT_TEAM']
     if team in teams:
@@ -159,9 +179,9 @@ def check(path=CONFIG, xcode=False):
         print('note: no Xcode account or Apple Development certificate on this Mac names this team yet; sign in under '
               'Xcode, Settings, Accounts (xcodebuild -allowProvisioningUpdates then makes the certificate and profile)')
     if xcode:
-        values = resolved()
+        values = resolved(overrides=stable_overrides(settings) if stable else ())
         print('xcodebuild resolves: ' + ', '.join(f'{key} = {value}' for key, value in sorted(values.items())))
-        if values.get('DEVELOPMENT_TEAM') != team or values.get('PRODUCT_BUNDLE_IDENTIFIER') != bundle_id(settings):
+        if values.get('DEVELOPMENT_TEAM') != team or values.get('PRODUCT_BUNDLE_IDENTIFIER') != bundle_id(settings, stable):
             print('error: xcodebuild does not see these settings (is Mobile/Config/Signing.xcconfig the target\'s '
                   'configuration file? run python3 scripts/generate-project.py)')
             return 1
@@ -172,13 +192,16 @@ def main(arguments=None):
     parser = argparse.ArgumentParser(prog='scripts/ios-signing.py', description=__doc__.split('\n\n')[0],
                                      epilog=__doc__.split('\n\n', 1)[1], formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('team', nargs='?', help='the team id to sign with (ten characters)')
-    parser.add_argument('--suffix', default='', help='appended to yachts.dispatch.mobile, e.g. .yourname')
+    parser.add_argument('--suffix', default='', help='appended to yachts.dispatch.pilot.mobile, e.g. .yourname')
+    parser.add_argument('--stable', action='store_true',
+                        help="the stable account's build/signing-stable.xcconfig (yachts.dispatch.mobile)")
     parser.add_argument('--check', action='store_true', help='validate build/signing.xcconfig')
     parser.add_argument('--xcode', action='store_true', help='with --check: confirm what xcodebuild resolves')
     parser.add_argument('--teams', action='store_true', help='list the teams this Mac knows')
     parser.add_argument('--remove', action='store_true', help='delete build/signing.xcconfig')
-    parser.add_argument('--path', type=Path, default=CONFIG, help=argparse.SUPPRESS)
+    parser.add_argument('--path', type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args(arguments)
+    args.path = args.path or (STABLE_CONFIG if args.stable else CONFIG)
     if sum(map(bool, (args.team, args.check, args.teams, args.remove))) != 1:
         parser.error('give a team id, or one of --check, --teams, --remove')
     if args.teams:
@@ -194,15 +217,16 @@ def main(arguments=None):
             print(f'Removed {os.path.relpath(args.path, ROOT)}')
         return 0
     if args.check:
-        return check(args.path, args.xcode)
+        return check(args.path, args.xcode, args.stable)
     try:
-        previous = write(args.team, args.suffix, args.path)
+        previous = write(args.team, args.suffix, args.path, args.stable)
     except ValueError as error:
         parser.error(str(error))
     if previous:
         print('Replaced ' + ', '.join(f'{key} = {value}' for key, value in sorted(previous.items())))
-    print(f'Wrote {os.path.relpath(args.path, ROOT)}: team {args.team}, bundle id {BUNDLE_ID + args.suffix}')
-    return check(args.path)
+    print(f'Wrote {os.path.relpath(args.path, ROOT)}: team {args.team}, '
+          f'bundle id {bundle_id({"DISPATCH_BUNDLE_ID_SUFFIX": args.suffix}, args.stable)}')
+    return check(args.path, stable=args.stable)
 
 
 if __name__ == '__main__':

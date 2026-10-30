@@ -59,14 +59,32 @@ final class HostStatisticsTests: XCTestCase {
     }
 
     func testCadence() {
-        XCTAssertEqual(HostStatistics.cadence(viewing: false, lowPower: false), .seconds(5))
+        XCTAssertEqual(HostStatistics.cadence(viewing: false, lowPower: false), .seconds(15), "one sample per 15 s bar")
         XCTAssertEqual(HostStatistics.cadence(viewing: true, lowPower: false), .seconds(2), "a sheet or popover shows it")
-        XCTAssertEqual(HostStatistics.cadence(viewing: true, lowPower: true), .seconds(15), "Low Power Mode wins")
-        XCTAssertEqual(HostStatistics.cadence(viewing: false, lowPower: true), .seconds(15))
+        XCTAssertEqual(HostStatistics.cadence(viewing: true, lowPower: true), .seconds(30), "Low Power Mode wins")
+        XCTAssertEqual(HostStatistics.cadence(viewing: false, lowPower: true), .seconds(30))
+        XCTAssertGreaterThan(HostStatistics.barHold, 30, "Low Power Mode's bars between samples take the later one")
+        XCTAssertLessThan(HostStatistics.barHold, 45, "a missed sample is still a gap")
+    }
+
+    /// Low Power Mode samples every 30 s, so every other bar has no sample of its own: it takes the later one (as the Mac's
+    /// 15 s cadence drifting past a bar does), and the chart has no holes; a minute of nothing is still a gap.
+    func testLowPowerCadenceFillsEveryBar() {
+        let now = Date(timeIntervalSinceReferenceDate: 15 * 1000 + 14)
+        let start = HostStatistics.barStart(0, at: now)
+        // Every 30 s, each landing a little later than the last (the requests' own time).
+        let history = (0..<20).map { index in
+            HostStatistics.Point(date: start.addingTimeInterval(Double(index) * 30 + 1 + Double(index) * 0.2), cpu: Double(index), memory: 50)
+        }
+        let bars = HostStatistics.bars(history, metric: .cpu, at: now)
+        XCTAssertEqual(bars.prefix(39).filter { $0 == nil }.count, 0, "\(bars)")
+        XCTAssertEqual(bars[1], 1, "the bar between two samples takes the later one")
+        let gapped = history.filter { $0.cpu != 10 && $0.cpu != 11 }
+        XCTAssertNil(HostStatistics.bars(gapped, metric: .cpu, at: now)[21], "90 s without a sample is a gap")
     }
 
     /// No sample before anything shows the stats: the first one a cadence after the connection came up; a viewer
-    /// samples now and every 2 s; Low Power Mode every 15 s; the disks every 15 s.
+    /// samples now and every 2 s; Low Power Mode every 30 s; the disks at most every 15 s.
     func testCadenceSwitchesWithViewersAndLowPowerMode() async throws {
         let sleeper = SteppedSleeper()
         let (stats, helper) = store(sleeper)
@@ -74,15 +92,15 @@ final class HostStatisticsTests: XCTestCase {
         stats.attach(helper.client)
         XCTAssertFalse(stats.live, "no sample of this connection yet")
         try await TestSupport.eventually { sleeper.pending == 1 }
-        XCTAssertEqual(sleeper.durations, [.seconds(5)], "nothing shows it yet")
+        XCTAssertEqual(sleeper.durations, [.seconds(15)], "nothing shows it yet")
         XCTAssertTrue(helper.requests.isEmpty)
 
-        clock += 5
+        clock += 15
         sleeper.step()
         try await TestSupport.eventually { stats.sample != nil && sleeper.pending == 1 }
         XCTAssertEqual(helper.methods, ["stats.sample", "stats.processes", "stats.disks"])
         XCTAssertTrue(stats.live)
-        XCTAssertEqual(sleeper.durations.last, .seconds(5))
+        XCTAssertEqual(sleeper.durations.last, .seconds(15))
         XCTAssertEqual(stats.sample?.cpu, 34)
         XCTAssertEqual(stats.sample?.load, 2.71)
         XCTAssertEqual(stats.sample?.memoryTotal, UInt64(32 * HostStatsDemo.gib))
@@ -104,8 +122,8 @@ final class HostStatisticsTests: XCTestCase {
         lowPower = true
         stats.powerStateChanged()
         XCTAssertTrue(stats.lowPower)
-        try await TestSupport.eventually { sleeper.durations.last == .seconds(15) && sleeper.pending == 1 }
-        clock += 15
+        try await TestSupport.eventually { sleeper.durations.last == .seconds(30) && sleeper.pending == 1 }
+        clock += 30
         sleeper.step()
         try await TestSupport.eventually { helper.requests("stats.sample").count == 3 && sleeper.pending == 1 }
         XCTAssertEqual(helper.requests("stats.disks").count, 2, "15 s since the last disks")
@@ -113,7 +131,7 @@ final class HostStatisticsTests: XCTestCase {
         lowPower = false
         stats.powerStateChanged()
         stats.endViewing(token)
-        try await TestSupport.eventually { sleeper.durations.last == .seconds(5) && sleeper.pending == 1 }
+        try await TestSupport.eventually { sleeper.durations.last == .seconds(15) && sleeper.pending == 1 }
         XCTAssertEqual(stats.history.count, 3)
     }
 
@@ -218,8 +236,8 @@ final class HostStatisticsTests: XCTestCase {
         try await TestSupport.eventually { helper.requests("stats.sample").count == 2 }
     }
 
-    /// 60 bars of 15 s on a wall-clock grid: a bar is the peak of its samples, a bar between two samples at most 20 s
-    /// apart takes the later one, and a longer silence is a gap.
+    /// 60 bars of 15 s on a wall-clock grid: a bar is the peak of its samples, a bar between two samples at most
+    /// `barHold` apart takes the later one, and a longer silence is a gap.
     func testBarsBucketsAndGaps() {
         let now = Date(timeIntervalSinceReferenceDate: 15 * 1000 + 14)
         let start = HostStatistics.barStart(0, at: now)

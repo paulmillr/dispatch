@@ -1,11 +1,10 @@
 import Dictation
 import SwiftUI
 
-/// Chat dictation's engine: Apple's on-device recognizer, or Whisper with a model downloaded from here (the composer's
-/// microphone uses the one checked).
+/// Chat dictation's engine: Apple's on-device recognizer, Whisper with a model downloaded from here (the composer's
+/// microphone uses the one checked), or Parakeet with its models downloaded from here.
 struct DictationSettingsView: View {
     @Bindable var settings: MobileSettings
-    private var store: WhisperModelStore { .shared }
 
     var body: some View {
         Form {
@@ -16,13 +15,17 @@ struct DictationSettingsView: View {
                 .pickerStyle(.inline)
                 .labelsHidden()
             } footer: {
-                Text(settings.dictationEngine == .apple ? AppleTranscriber.summary + "."
-                     : "Whisper runs on this \(MobileDevice.name) with a model you download.")
+                switch settings.dictationEngine {
+                case .apple: Text(AppleTranscriber.summary + ".")
+                case .whisper: Text("Whisper runs on this \(MobileDevice.name) with a model you download.")
+                case .parakeet:
+                    Text("Parakeet runs on this \(MobileDevice.name)’s Neural Engine with models you download: English and 24 more European languages.")
+                }
             }
             if settings.dictationEngine == .whisper {
                 Section {
                     ForEach(WhisperModel.allCases) { model in
-                        MobileWhisperModelRow(model: model, selected: settings.whisperModel == model) {
+                        MobileDictationModelRow(model: .whisper(model), selected: settings.whisperModel == model) {
                             settings.whisperModel = model
                         }
                     }
@@ -31,6 +34,14 @@ struct DictationSettingsView: View {
                 } footer: {
                     Text("Models download from huggingface.co and stay on this \(MobileDevice.name), out of its backups. Tap one to use it; a large model needs Wi-Fi and a few seconds more per message.")
                 }
+            } else if settings.dictationEngine == .parakeet {
+                Section {
+                    MobileDictationModelRow(model: .parakeet, selected: true) {}
+                } header: {
+                    Text("Parakeet model")
+                } footer: {
+                    Text("NVIDIA’s Parakeet TDT 0.6B v3 (CC BY 4.0) as Core ML models converted by FluidInference. They download from huggingface.co (Wi-Fi recommended) and stay on this \(MobileDevice.name), out of its backups.")
+                }
             }
         }
         .navigationTitle("Dictation")
@@ -38,13 +49,13 @@ struct DictationSettingsView: View {
     }
 }
 
-/// A Whisper model: a checkmark when dictation uses it, its size and what it suits, and its download (the progress,
-/// Cancel, or Delete by swiping).
-private struct MobileWhisperModelRow: View {
-    let model: WhisperModel
+/// A dictation model (a Whisper model, or Parakeet's): a checkmark when dictation uses it, its size and what it suits,
+/// and its download (the progress, Cancel, or Delete by swiping).
+private struct MobileDictationModelRow: View {
+    let model: DictationModel
     let selected: Bool
     let choose: () -> Void
-    private var store: WhisperModelStore { .shared }
+    private var store: DictationModelStore { .shared }
 
     var body: some View {
         let state = store.state(model)
@@ -81,7 +92,7 @@ private struct MobileWhisperModelRow: View {
         }
     }
 
-    @ViewBuilder private func trailing(_ state: WhisperModelStore.State) -> some View {
+    @ViewBuilder private func trailing(_ state: DictationModelStore.State) -> some View {
         switch state {
         case .downloading:
             Button("Cancel") { store.cancel(model) }.buttonStyle(.borderless)
@@ -96,7 +107,7 @@ private struct MobileWhisperModelRow: View {
     }
 }
 
-private extension WhisperModelStore.State {
+private extension DictationModelStore.State {
     var failed: String? {
         if case .failed(let message) = self { return message }
         return nil

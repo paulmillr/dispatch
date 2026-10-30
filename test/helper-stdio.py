@@ -185,20 +185,25 @@ class Session:
         self.changed = asyncio.Event()
         self.topology = {}
         self.pinger = None
+        # Cleared: the client stops reading the helper's stdout (a slow link, a busy phone).
+        self.reading = asyncio.Event()
+        self.reading.set()
         self.reader = asyncio.ensure_future(self.read())
 
     @classmethod
-    async def start(cls, codec, argv, env, log=None, cwd=None):
+    async def start(cls, codec, argv, env, log=None, cwd=None, limit=1 << 24):
+        # asyncio reads ahead up to twice `limit` while `reading` is clear; frames of any size still read.
         process = await asyncio.create_subprocess_exec(
             *map(str, argv), stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
             stderr=log or asyncio.subprocess.DEVNULL, env=env, cwd=cwd, start_new_session=True,
-            limit=1 << 24)
+            limit=limit)
         return cls(codec, process, log)
 
     async def read(self):
         stream = self.process.stdout
         try:
             while True:
+                await self.reading.wait()
                 header = await stream.readexactly(13)
                 length, kind, ident = struct.unpack('<IBQ', header)
                 body = await stream.readexactly(length - 9)
@@ -771,7 +776,7 @@ LogLevel ERROR
             return f'exec env {extra} "$HOME/{self.relative}" --remote --capabilities {CAPABILITIES} --stdio'
         return f'exec "$HOME/{self.relative}" --remote --capabilities {CAPABILITIES} --stdio'
 
-    async def connect(self, transport, name='helper', extra=None):
+    async def connect(self, transport, name='helper', extra=None, limit=1 << 24):
         log = open(self.local / f'{name}.log', 'ab')
         if transport == 'pipes':
             argv = [self.installed, '--remote', '--capabilities', CAPABILITIES, '--stdio']
@@ -780,7 +785,7 @@ LogLevel ERROR
             argv = self.ssh(self.command(extra))
             env = {k: v for k, v in os.environ.items() if k not in ('SSH_AUTH_SOCK', 'TMUX', 'TMUX_PANE')}
             cwd = '/tmp'
-        session = await Session.start(self.codec, argv, env, log=log, cwd=cwd)
+        session = await Session.start(self.codec, argv, env, log=log, cwd=cwd, limit=limit)
         self.sessions.append(session.process.pid)
         return session
 
@@ -892,12 +897,18 @@ class Live(unittest.TestCase):
 
     # -- shared steps -------------------------------------------------------------------------
     async def closing(self, coroutine):
-        """Run a case; whatever happens, end the helper sessions it left open."""
+        """Run a case; whatever happens, end the helper sessions it left open (and the tmux servers of its
+        own keys, which `flooded` started: their floods would run on)."""
         try:
             return await coroutine
         finally:
             for pid in self.fixture.helpers():
                 self.fixture.host.kill(pid)
+            for key in self.__dict__.pop('servers', []):
+                for line in self.fixture.host.processes():
+                    pid, _, args = line.strip().partition(' ')
+                    if f'tmux -u -S {key} new-session' in args:
+                        self.fixture.host.kill(int(pid))
 
     async def hello(self, session, features=True):
         """hello as the phone sends it: `{features: FEATURES}` (features=False: as the Mac does)."""
@@ -1771,6 +1782,63 @@ print(json.dumps(pi_fixture.environment(state, {port}, home)))
                 await quiet.close()
         run(self.closing(case()))
 
+    # -- 13. login.release: the Mac's greeting probe releases the waiting SSH login ----------------
+    def test_13_login_release(self):
+        """The Mac's probe (`--remote --capabilities '' --stdio`, no grant) names `login.release` in hello and, once
+        the app verified the greeting, writes the ready file the login script waits for: the same checks and
+        reasons as SSHBootstrap.publish's script. A helper that is not such a probe never offers it."""
+        async def case():
+            fixture = self.fixture
+            for index, transport in enumerate(fixture.transports):
+                session_id = f'{index:024x}'
+                folder = fixture.home / '.dispatch/sessions' / session_id
+                if transport == 'pipes':
+                    argv, env, cwd = [fixture.installed, '--remote', '--capabilities', '', '--stdio'], fixture.environment(), fixture.home
+                else:
+                    argv = fixture.ssh(f'exec "$HOME/{fixture.relative}" --remote --capabilities \'\' --stdio')
+                    env = {k: v for k, v in os.environ.items() if k not in ('SSH_AUTH_SOCK', 'TMUX', 'TMUX_PANE')}
+                    cwd = '/tmp'
+                probe = await Session.start(fixture.codec, argv, env, log=open(fixture.local / f'release-{transport}.log', 'ab'),
+                                            cwd=cwd)
+                fixture.sessions.append(probe.process.pid)
+                hello, _ = await self.hello(probe, ['login.release'])
+                self.assertEqual(hello['features'], ['login.release'])
+                self.assertIn('login.release', hello['ops'])
+                for params in ({'session': 'x', 'path': fixture.relative}, {'session': session_id, 'path': '/etc/passwd'},
+                               {'session': session_id, 'path': fixture.relative, 'other': 1}):
+                    with self.assertRaises(HelperError) as refused:
+                        await probe.request('login.release', params)
+                    self.assertEqual(refused.exception.code, 'invalid_input', params)
+                started = time.monotonic()
+                self.assertIsNone(await probe.request('login.release', {'session': session_id, 'path': fixture.relative}))
+                metric(f'release.{transport}.round_trip', (time.monotonic() - started) * 1000, 'ms')
+                ready = fixture.host.sh('cat "$1"; stat -c "%a %h" "$1" 2>/dev/null || stat -f "%Lp %l" "$1"', folder / 'ready').stdout
+                self.assertEqual(ready.splitlines(), [fixture.relative, '600 1'])
+                with self.assertRaises(HelperError) as again:
+                    await probe.request('login.release', {'session': session_id, 'path': fixture.relative})
+                self.assertEqual((again.exception.code, again.exception.error.get('message')),
+                                 ('unavailable', 'session already released'))
+                await probe.close()
+                # The phone's helper (a grant, no feature asked) and a hello without it: not offered, refused.
+                phone = await fixture.connect(transport, 'release-phone-' + transport)
+                hello, _ = await self.hello(phone, FEATURES + ['login.release'])
+                self.assertIn('login.release', hello['features'], 'any --remote --stdio helper without the login wrapper')
+                plain, _ = await self.hello(phone, features=False)
+                self.assertNotIn('login.release', plain['ops'])
+                await phone.close()
+            # A local stdio helper (the Mac's own) never accepts it.
+            if not fixture.host.remote:
+                local = await Session.start(fixture.codec, [fixture.installed, '--stdio'], fixture.environment(),
+                                            log=open(fixture.local / 'release-local.log', 'ab'), cwd=fixture.home)
+                fixture.sessions.append(local.process.pid)
+                hello, _ = await self.hello(local, ['login.release'])
+                self.assertEqual(hello['features'], [])
+                self.assertNotIn('login.release', hello['ops'])
+                with self.assertRaises(HelperError):
+                    await local.request('login.release', {'session': '0' * 24, 'path': fixture.relative})
+                await local.close()
+        run(self.closing(case()))
+
     # -- 12. terminals.activity: tmux's own window activity times --------------------------------
     def test_12_terminals_activity(self):
         async def case():
@@ -1839,6 +1907,194 @@ print(json.dumps(pi_fixture.environment(state, {port}, home)))
                 self.assertFalse(fixture.host.alive(pid), 'the tmux server this case started ended')
                 fixture.host.sh('rm -f "$1"', fixture.tmux_socket)
         run(self.closing(case()))
+
+
+    # -- backpressure: requests during a flood, liveness, the output window ----------------------
+    async def flooded(self, session, key, command='yes'):
+        """A new tmux window in a server of its own key running `command`, attached; (backend, terminal, attach)."""
+        self.__dict__.setdefault('servers', []).append(key)
+        backend, _ = await self.opened(session, TMUX, key, create=True)
+        work = self.fixture.root / f'work-{key}'
+        self.fixture.host.mkdir(work)
+        terminal, attach = await self.window(session, TMUX, backend, work)
+        await self.typed(session, TMUX, terminal, 'stty -echo; clear\r')
+        await asyncio.sleep(0.5)
+        await self.typed(session, TMUX, terminal, command + '\r')
+        return backend, terminal, attach
+
+    async def interrupted(self, session, terminal):
+        """Ctrl-C the flood and let its output drain."""
+        session.reading.set()
+        await self.typed(session, TMUX, terminal, '\x03')
+        await self.typed(session, TMUX, terminal, "printf 'HS_%s\\n' STOPPED\r")
+        await session.until(lambda: b'HS_STOPPED' in session.output.get(terminal, b'')[-4096:], timeout=120,
+                            what='end of the flood')
+
+    def test_flood_requests_are_read(self):
+        """With requests.backlog the helper reads requests while its output is backed up: input reaches tmux
+        while the client reads nothing. Without it (the Mac's recorded clients) input waits for the client."""
+        async def case():
+            fixture = self.fixture
+            for transport in fixture.transports:
+                for backlog in (True, False):
+                    name = f'flood-{transport}-{"backlog" if backlog else "plain"}'
+                    session = await fixture.connect(transport, name, limit=1 << 16)
+                    names = ['terminals.coalesce'] + (['requests.backlog'] if backlog else [])
+                    hello, _ = await self.hello(session, names)
+                    self.assertEqual(sorted(hello['features']), sorted(names))
+                    backend, terminal, _ = await self.flooded(session, name)
+                    work = fixture.root / f'work-{name}'
+                    other, _ = await self.window(session, TMUX, backend, work)
+                    await session.until(lambda: len(session.output.get(terminal, b'')) > 1 << 20, what='flood')
+                    session.reading.clear()
+                    await asyncio.sleep(3)  # every buffer between the helper and this client fills
+                    marker = work / 'marker'
+                    started = time.monotonic()
+                    session.submit('terminals.input', {'mux': TMUX, 'terminal': other, 'bytes': f'touch {marker}\r'.encode()})
+                    echo, answered = session.submit('echo', {'during': 'flood'})
+                    await session.process.stdin.drain()
+                    deadline = time.monotonic() + 8
+                    while not fixture.host.exists(marker) and time.monotonic() < deadline:
+                        await asyncio.sleep(0.1)
+                    reached = fixture.host.exists(marker)
+                    if backlog:
+                        self.assertTrue(reached, 'input reached tmux while the client read nothing')
+                        metric(f'flood.{transport}.input_while_unread', (time.monotonic() - started) * 1000, 'ms')
+                    else:
+                        self.assertFalse(reached, 'a recorded client: no requests read while its output is backed up')
+                    self.assertFalse(answered.done(), 'replies wait behind output already sent')
+                    await self.interrupted(session, terminal)
+                    self.assertEqual(await asyncio.wait_for(answered, 60), {'during': 'flood'})
+                    if not backlog:
+                        deadline = time.monotonic() + 10
+                        while not fixture.host.exists(marker) and time.monotonic() < deadline:
+                            await asyncio.sleep(0.1)
+                        self.assertTrue(fixture.host.exists(marker), 'read once the client caught up')
+                    await session.close()
+        run(self.closing(case()), timeout=600)
+
+    def test_flood_liveness_does_not_count_unread_time(self):
+        """stdio.liveness (which implies requests.backlog): pings are read during a flood the client does not
+        read, and time the helper stops reading the client (too many replies waiting) is not silence."""
+        async def case():
+            fixture = self.fixture
+            extra = {'DISPATCH_STDIO_LIVENESS_SECONDS': '3'}
+            for transport in fixture.transports:
+                session = await fixture.connect(transport, f'liveness-flood-{transport}', extra, limit=1 << 16)
+                await self.hello(session, ['stdio.liveness', 'terminals.coalesce'])
+                session.pinger.cancel()
+                _, terminal, _ = await self.flooded(session, f'liveness-flood-{transport}')
+                await session.until(lambda: len(session.output.get(terminal, b'')) > 1 << 20, what='flood')
+                session.reading.clear()
+                # Pings every second, unanswered while the client reads nothing: the helper reads them and lives.
+                pings = []
+                for _ in range(8):
+                    pings.append(session.submit('echo', {'ping': 1})[1])
+                    await session.process.stdin.drain()
+                    await asyncio.sleep(1)
+                self.assertTrue(fixture.helpers(), 'pings read during the flood keep the helper')
+                # More reply bytes waiting than the helper keeps (helper/client.rs BACKLOG_BYTES): it stops reading
+                # this client. Then silence for twice the limit, which does not count while it is not listening.
+                for _ in range(400):
+                    pings.append(session.submit('echo', {'ping': 2, 'pad': 'x' * 4096})[1])
+                # No drain: the helper stops reading these requests too, so they stay in this side's buffer.
+                await asyncio.sleep(7)
+                self.assertTrue(fixture.helpers(), 'silence while the helper did not read is not the client\'s')
+                # Pinging again while the flood drains, which can take longer than the limit.
+                session.reading.set()
+                session.pinger = asyncio.ensure_future(session.ping(1))
+                await self.interrupted(session, terminal)
+                await asyncio.wait_for(asyncio.gather(*pings), 60)
+                session.pinger.cancel()
+                # Reading again: real silence ends it within the limit.
+                silent = time.monotonic()
+                await asyncio.wait_for(asyncio.shield(session.closed), 15)
+                metric(f'liveness.{transport}.flood_silence_to_exit', time.monotonic() - silent, 's')
+                await session.close()
+        run(self.closing(case()), timeout=600)
+
+    def test_output_window(self):
+        """terminals.window: at most the window of terminal.output unacknowledged; the multiplexer is paused, not
+        dropped, so acknowledged output continues in order; replies and follow pass a closed window."""
+        window = 256 * 1024
+        async def case():
+            fixture = self.fixture
+            for transport in fixture.transports:
+                session = await fixture.connect(transport, f'window-{transport}')
+                names = ['terminals.coalesce', 'terminals.follow', 'terminals.window']
+                hello, _ = await self.hello(session, names)
+                self.assertEqual(sorted(hello['features']), sorted(names))
+                self.assertIn('terminals.ack', hello['ops'])
+                count = 400_000
+                _, terminal, attach = await self.flooded(
+                    session, f'window-{transport}', f"seq 1 {count}; printf 'HS_%s\\n' DONE")
+                # No acknowledgements: output stops at the window (one coalesced frame past it at most).
+                await session.until(lambda: session.output_bytes >= window, what='a window of output')
+                await asyncio.sleep(2)
+                held = session.output_bytes
+                self.assertLessEqual(held, window + 60_000)
+                await asyncio.sleep(1)
+                self.assertEqual(session.output_bytes, held, 'nothing more without acknowledgements')
+                started = time.monotonic()
+                self.assertEqual(await session.request('echo', {'window': 'closed'}), {'window': 'closed'})
+                metric(f'window.{transport}.echo_while_closed', (time.monotonic() - started) * 1000, 'ms')
+                # Acknowledge as received: everything arrives, in order, nothing dropped.
+                acked = 0
+                async def acknowledge():
+                    nonlocal acked
+                    while not session.closed.done():
+                        if session.output_bytes > acked:
+                            bytes_ = session.output_bytes - acked
+                            acked += bytes_
+                            await session.request('terminals.ack', {'terminal': terminal, 'bytes': bytes_, 'subscription': attach})
+                        await asyncio.sleep(0.01)
+                acks = asyncio.ensure_future(acknowledge())
+                await session.until(lambda: b'HS_DONE' in session.output.get(terminal, b'')[-4096:], timeout=300,
+                                    what='the whole sequence')
+                text = bytes(session.output[terminal]).decode(errors='replace').replace('\r', '')
+                numbers = [line for line in text.split('\n') if line.isdigit()]
+                # The first number shares its line with the prompt (the command is not echoed).
+                start = numbers.index('2')
+                self.assertEqual(numbers[start:start + count - 1], [str(n) for n in range(2, count + 1)],
+                                 'in order, none lost')
+                # A held subscription: output stops (none counted), a repaint arrives on following again.
+                await session.request('terminals.follow', {'terminal': terminal, 'following': False})
+                before = session.output_bytes
+                await self.typed(session, TMUX, terminal, "printf 'HS_%s\\n' HIDDEN\r")
+                await asyncio.sleep(1)
+                self.assertEqual(session.output_bytes, before, 'held output is dropped, not sent')
+                await session.request('terminals.follow', {'terminal': terminal, 'following': True})
+                await session.until(lambda: b'HS_HIDDEN' in session.output.get(terminal, b'')[-65536:], what='repaint')
+                await session.until(lambda: acked == session.output_bytes, what='the repaint acknowledged')
+                acks.cancel()
+                # Unacknowledged output of a subscription that ends goes with it: a new attach gets a whole window.
+                await self.typed(session, TMUX, terminal, 'yes\r')
+                await session.until(lambda: session.output_bytes - acked >= window, what='the window closed again')
+                session.cancel(attach)
+                attach, _ = await session.observe('terminals.attach', {'mux': TMUX, 'terminal': terminal, 'size': GRID,
+                                                                       'takeover': False}, wait=False)
+                before = session.output_bytes
+                await session.until(lambda: session.output_bytes - before >= window // 2, what='a new window of output')
+                acked = session.output_bytes
+                acks = asyncio.ensure_future(acknowledge())
+                await self.interrupted(session, terminal)
+                acks.cancel()
+                with self.assertRaises(HelperError) as refused:
+                    await session.request('terminals.ack', {'bytes': 1, 'terminal': terminal, 'other': 1})
+                self.assertEqual(refused.exception.code, 'invalid_input')
+                await session.close()
+                # A client without the feature has no such operation and no window.
+                plain = await fixture.connect(transport, f'window-plain-{transport}')
+                plain_hello, _ = await self.hello(plain, ['terminals.coalesce'])
+                self.assertNotIn('terminals.ack', plain_hello['ops'])
+                with self.assertRaises(HelperError) as refused:
+                    await plain.request('terminals.ack', {'terminal': 1, 'bytes': 1})
+                self.assertEqual(refused.exception.code, 'unsupported')
+                _, terminal, _ = await self.flooded(plain, f'window-plain-{transport}', f"seq 1 {count}; printf 'HS_%s\\n' DONE")
+                await plain.until(lambda: b'HS_DONE' in plain.output.get(terminal, b'')[-4096:], timeout=300,
+                                  what='the whole sequence without acknowledgements')
+                await plain.close()
+        run(self.closing(case()), timeout=900)
 
 
 def main():

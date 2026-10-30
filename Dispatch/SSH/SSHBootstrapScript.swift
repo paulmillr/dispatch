@@ -79,7 +79,12 @@ enum SSHBootstrapScript {
 
     /// Run after `cachePreamble`: succeeds when the cached helper is the expected file.
     static func verify(size: Int, digest: String) -> String {
-        "safe_file dispatch-helper && test -x dispatch-helper && test \"$(wc -c < dispatch-helper | tr -d ' ')\" = '\(size)' && test \"$(checksum dispatch-helper)\" = '\(digest)'"
+        verify(sizeWord: "'\(size)'", digestWord: "'\(digest)'")
+    }
+
+    /// `verify` with the size and digest as shell words (quoted literals, or the folded launch's variables).
+    private static func verify(sizeWord size: String, digestWord digest: String) -> String {
+        "safe_file dispatch-helper && test -x dispatch-helper && test \"$(wc -c < dispatch-helper | tr -d ' ')\" = \(size) && test \"$(checksum dispatch-helper)\" = \(digest)"
     }
 
     /// Run after `cachePreamble` when `verify` failed: prints `DISPATCH_NOEXEC` when the cached helper is the expected file,
@@ -89,7 +94,11 @@ enum SSHBootstrapScript {
     /// (`touch -c`): no helper runs from this folder to mark the version used, and the helper's cleanup removes a version
     /// folder nothing changed for a day, which would cost an upload to learn the same again.
     static func blocked(size: Int, digest: String) -> String {
-        "safe_file dispatch-helper && set -- $(metadata dispatch-helper) && test \"$2\" = 700 && test \"$(wc -c < dispatch-helper | tr -d ' ')\" = '\(size)' && test \"$(checksum dispatch-helper)\" = '\(digest)' && ! test -x dispatch-helper && touch -c dispatch-helper && printf 'DISPATCH_NOEXEC\\n'"
+        blocked(sizeWord: "'\(size)'", digestWord: "'\(digest)'")
+    }
+
+    private static func blocked(sizeWord size: String, digestWord digest: String) -> String {
+        "safe_file dispatch-helper && set -- $(metadata dispatch-helper) && test \"$2\" = 700 && test \"$(wc -c < dispatch-helper | tr -d ' ')\" = \(size) && test \"$(checksum dispatch-helper)\" = \(digest) && ! test -x dispatch-helper && touch -c dispatch-helper && printf 'DISPATCH_NOEXEC\\n'"
     }
 
     /// The cache check both apps send: succeeds when the cached helper under `root` is the expected file; otherwise
@@ -106,17 +115,28 @@ enum SSHBootstrapScript {
     }
 
     /// Reads the helper from stdin into an exclusive private staging directory, checks its size and
-    /// SHA-256 on the host, then renames it into place. The exclusive private staging directory prevents
+    /// SHA-256 on the host, then renames it into place. Beside it, `size` names the size expected, so the waiting login
+    /// can show the upload's progress (`SSHLauncherCommand.uploadProgress`). The exclusive private staging directory prevents
     /// following a planted temporary link. Concurrent uploads publish whole files. Existing cache
     /// permissions are verified, never repaired by chmod.
-    static func upload(digest: String, size: Int, staging: String, root: Root = .home) -> String {
+    ///
+    /// `compressed`: stdin is the helper gzipped, which the host's `gzip -dc` expands; `size` and `digest` are still the
+    /// expanded helper's, checked as before. A host without `gzip` fails first, before it reads anything, with
+    /// `noGzip`; one whose `gzip` cannot expand what arrived fails with `gzipFailed`. Either way the app sends the
+    /// helper again uncompressed.
+    static func upload(digest: String, size: Int, staging: String, root: Root = .home, compressed: Bool = false) -> String {
         precondition(staging.utf8.allSatisfy { (48...57).contains($0) || (97...122).contains($0) || $0 == 45 })
+        let receive = compressed
+            ? "(set -C; gzip -dc > '\(staging)/dispatch-helper') || fail \"\(gzipFailed)\""
+            : "(set -C; cat > '\(staging)/dispatch-helper') || fail \"upload interrupted\""
         return """
         \(cachePreamble(digest: digest, root: root))
+        \(compressed ? "command -v gzip >/dev/null 2>&1 || fail \"\(noGzip)\"\n" : "")\
         test ! -e dispatch-helper && test ! -L dispatch-helper || safe_file dispatch-helper || fail "unsafe cached helper"
         mkdir '\(staging)' || fail "cannot create the upload folder"
-        trap 'rm -f \(staging)/dispatch-helper; rmdir \(staging) 2>/dev/null' EXIT HUP INT TERM
-        (set -C; cat > '\(staging)/dispatch-helper') || fail "upload interrupted"
+        trap 'rm -f \(staging)/dispatch-helper \(staging)/size; rmdir \(staging) 2>/dev/null' EXIT HUP INT TERM
+        printf '%s\\n' '\(size)' > '\(staging)/size' 2>/dev/null || :
+        \(receive)
         test "$(wc -c < '\(staging)/dispatch-helper' | tr -d ' ')" = '\(size)' || fail "upload incomplete"
         test "$(checksum '\(staging)/dispatch-helper')" = '\(digest)' || fail "upload checksum mismatch"
         chmod 700 '\(staging)/dispatch-helper' || fail "cannot make the helper executable"
@@ -203,11 +223,73 @@ enum SSHBootstrapScript {
         }
     }
 
+    // MARK: The Mac's folded launch
+
+    /// A bundled helper the Mac's folded launch may start: its name (`platform(_:)`'s), size and SHA-256.
+    struct Candidate: Equatable, Sendable {
+        let name: String
+        let size: Int
+        let digest: String
+    }
+
+    /// The `uname -s`:`uname -m` values `platform(_:)` maps to each bundled helper, as a `case` pattern.
+    static func pattern(_ name: String) -> String? {
+        switch name {
+        case "darwin-arm64": "Darwin:arm64"
+        case "linux-aarch64": "Linux:aarch64|Linux:arm64"
+        case "linux-x86_64": "Linux:x86_64"
+        default: nil
+        }
+    }
+
+    /// The Mac's helper command, the platform probe and the cache check folded in (each was an exec channel of its
+    /// own): picks the bundled helper for the host's `uname` among `candidates`, enters its digest's folder under `root`
+    /// through the private-folder checks, and `exec`s `./dispatch-helper <arguments>` there once the cached file
+    /// verifies (`verify`), with `export` (`SSHBootstrap.captureExport`) before it. Until that exec, stdout (the helper
+    /// protocol's stream) is moved to stderr, so the client never reads a frame from the script. When it starts no
+    /// helper it says why on stderr and exits: `DISPATCH_PLATFORM=<uname -s>:<uname -m>` and status 3 for a platform no
+    /// candidate serves (`platform(_:)` tells an unsupported one from one whose helper is not bundled) and for a cache
+    /// that lacks the helper (missing, another version, damaged: upload it, then launch again), after
+    /// `DISPATCH_NOEXEC` when the file is right but its folder cannot run programs (`blocked`); a cache that is unsafe or
+    /// cannot be made gives its `dispatch-setup:` reason (status 1). A helper that ran never prints these lines.
+    static func launch(_ candidates: [Candidate], root: Root, arguments: String, export: String) -> String {
+        let cases = candidates.compactMap { candidate -> String? in
+            precondition(candidate.digest.utf8.count == 64
+                && candidate.digest.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) })
+            return pattern(candidate.name).map { "  \($0)) size='\(candidate.size)' digest='\(candidate.digest)';;\n" }
+        }.joined()
+        return """
+        exec 3>&1 1>&2
+        platform="$(uname -s):$(uname -m)"
+        case "$platform" in
+        \(cases)  *) printf 'DISPATCH_PLATFORM=%s\\n' "$platform"; exit 3;;
+        esac
+        \(cachePreamble(digestWord: "\"$digest\"", root: root))
+        if \(verify(sizeWord: "\"$size\"", digestWord: "\"$digest\""))
+        then
+        \(export)exec ./dispatch-helper \(arguments) 1>&3 3>&-
+        fi
+        \(blocked(sizeWord: "\"$size\"", digestWord: "\"$digest\""))
+        printf 'DISPATCH_PLATFORM=%s\\n' "$platform"
+        exit 3
+        """
+    }
+
+    /// What a folded launch that started no helper said on stderr: the host's platform, nil when it printed none (the
+    /// helper ran, or the script failed first with a `dispatch-setup:` reason).
+    static func launchPlatform(_ stderr: String) -> Platform? {
+        stderr.split(whereSeparator: \.isNewline).contains { $0.hasPrefix("DISPATCH_PLATFORM=") } ? platform(stderr) : nil
+    }
+
     /// The reason a setup command gave (`dispatch-setup: <reason>`, its last such line), if it gave one.
     static func reason(_ output: String) -> String? {
         output.split(whereSeparator: \.isNewline).last { $0.hasPrefix("dispatch-setup: ") }
             .map { String($0.dropFirst("dispatch-setup: ".count)) }
     }
+
+    /// A compressed upload's reasons for sending the helper again uncompressed (`upload(compressed:)`).
+    static let noGzip = "no gzip"
+    static let gzipFailed = "compressed upload did not expand"
 
     /// Reasons another attempt can fix: the upload broke off or the file changed under it. Everything else (an unsafe
     /// or uncreatable folder, no checksum tool) fails the same way again. A failure that gave no reason (the SSH
@@ -227,9 +309,14 @@ enum SSHBootstrapScript {
 
     static func cachePreamble(digest: String, root: Root = .home) -> String {
         precondition(digest.utf8.count == 64 && digest.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) })
-        return privateDirectoryScript(root: root) + """
+        return cachePreamble(digestWord: "'" + digest + "'", root: root)
+    }
 
-        enter_private bin && enter_private versions && enter_private '\(digest)'
+    /// `cachePreamble` with the digest as a shell word.
+    private static func cachePreamble(digestWord digest: String, root: Root) -> String {
+        privateDirectoryScript(root: root) + """
+
+        enter_private bin && enter_private versions && enter_private \(digest)
         command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 || fail "no sha256sum or shasum"
         checksum() {
           if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d ' ' -f 1

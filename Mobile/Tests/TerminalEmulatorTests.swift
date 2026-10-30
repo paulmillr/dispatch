@@ -151,10 +151,17 @@ final class TerminalEmulatorTests: XCTestCase {
         XCTAssertEqual(config.background, RGB(r: 0, g: 0, b: 0))
         XCTAssertEqual(config.foreground, RGB(r: 0xC9, g: 0xC9, b: 0xCE))
         XCTAssertEqual(config.palette[5], RGB(r: 0xE0, g: 0x7B, b: 0xE0))
-        XCTAssertEqual(config.fontSize, 12)
-        XCTAssertEqual(config.minimumContrast, 1)
+        // No family is JetBrains Mono, drawn at Source Code Pro's apparent size (`TerminalFontScale`).
+        XCTAssertEqual(Double(config.fontSize), TerminalFontScale.size(12, family: "JetBrains Mono"), accuracy: 0.001)
+        XCTAssertLessThan(config.fontSize, 11)
+        XCTAssertEqual(config.minimumContrast, 1, "dark: Light themes, the default, leaves it")
+        var light = TerminalConfiguration()
+        light.theme = try XCTUnwrap(TerminalSchemes.all().first { !$0.isDark }).file
+        XCTAssertEqual(light.config().minimumContrast, 4.5, "a light scheme improves by default")
+        light.textContrast = .never
+        XCTAssertEqual(light.config().minimumContrast, 1)
         var contrast = TerminalConfiguration()
-        contrast.improveTextContrast = true
+        contrast.textContrast = .always
         contrast.theme = "dispatch"
         let other = contrast.config()
         XCTAssertEqual(other.minimumContrast, 4.5)

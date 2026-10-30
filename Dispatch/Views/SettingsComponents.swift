@@ -26,6 +26,8 @@ struct SettingsRow<Control: View>: View {
     var indented = false
     /// What the setting means for privacy, shown on hovering a hand beside the title.
     var privacy: String?
+    /// How the setting works, when the detail line cannot say it: shown on hovering an info mark beside the title.
+    var info: String?
     @ViewBuilder let control: Control
 
     var body: some View {
@@ -33,7 +35,7 @@ struct SettingsRow<Control: View>: View {
             SettingsSeparator()
             HStack(spacing: 16) {
                 VStack(alignment: .leading, spacing: 2) {
-                    SettingsTitle(title: title, privacy: privacy)
+                    SettingsTitle(title: title, privacy: privacy, info: info)
                     // Wraps rather than truncates beside a wide control.
                     if let detail {
                         Text(detail).font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
@@ -52,13 +54,21 @@ struct SettingsRow<Control: View>: View {
 struct SettingsTitle: View {
     let title: String
     var privacy: String?
+    /// An explanation (not a privacy note): an info mark whose tooltip holds it.
+    var info: String?
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 5) {
             Text(title)
+            if let info {
+                Image(systemName: "info.circle").imageScale(.small).foregroundStyle(SettingsControlStyle.detail)
+                    .contentShape(Rectangle()).help(info)
+                    .accessibilityLabel("About").accessibilityHint(info)
+            }
             if let privacy {
                 Image(systemName: "hand.raised.fill").imageScale(.small).foregroundStyle(SettingsControlStyle.detail)
-                    .contentShape(Rectangle()).help(privacy)
+                    // Named in the tooltip: the hand alone doesn't say what it's about.
+                    .contentShape(Rectangle()).help("Privacy: " + privacy)
                     .accessibilityLabel("Privacy").accessibilityHint(privacy)
             }
         }

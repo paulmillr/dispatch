@@ -88,7 +88,7 @@ enum SSHLauncherCommand {
         defer { if !announced { try? FileManager.default.removeItem(at: folder) } }
         let master = SSHMaster(executable: executable, controlPath: folder.appendingPathComponent("master").path, destination: invocation.destination)
         let remote = remoteCommand(sessionID: sessionID, grant: grant, command: invocation.command)
-        let arguments = invocation.masterArguments(controlPath: master.controlPath, remoteCommand: remote)
+        let arguments = invocation.masterArguments(controlPath: master.controlPath, remoteCommand: remote, configuration: current)
         var pointers = ([executable] + arguments).map { strdup($0) }; pointers.append(nil)
         var env = environment.map { strdup($0.key + "=" + $0.value) }; env.append(nil)
         defer { pointers.forEach { free($0) }; env.forEach { free($0) } }
@@ -258,6 +258,66 @@ enum SSHLauncherCommand {
         return nil
     }
 
+    /// The waiting login's view of a helper upload to this host (`SSHBootstrapScript.upload` writes the size it expects
+    /// beside the file it receives): once one has run for 10 s, one line on the terminal (fd 3), redrawn every 0.2 s, with
+    /// a spinner, a bar, the share and megabytes received, the speed over the last 2 s or so (by the host's clock: each
+    /// poll takes longer than its sleep) and the time left at that speed; erased when the upload ends or the login goes
+    /// on. A shorter upload shows nothing. Bytes received, not sent: ssh buffers megabytes ahead. A poll within 30 s of the
+    /// received file growing does not count toward the login's wait (`waited`, 325 polls): an upload is paced by the link
+    /// (`SSHBootstrap.uploadStall`), not by the setup's time. A gzipped upload counts
+    /// the helper as it expands, so its speed is the helper's, about twice the link's. About 70 columns, each frame drawn with autowrap off (DECAWM), so a narrower terminal clips it instead of wrapping
+    /// it onto lines a carriage return cannot redraw. `${full}━`: bash in a UTF-8 locale would read `$full━` as one name.
+    /// No single quotes: the login runs inside `'…'`, and the replay migrations that rewrite it tell plain from quoted
+    /// text by its quotes.
+    static let uploadProgress = #"""
+    progress() {
+      for staged in "$HOME"/.dispatch/bin/versions/*/upload-*/size "${XDG_RUNTIME_DIR:-/nonexistent}"/dispatch/bin/versions/*/upload-*/size; do
+        test -f "$staged" || continue
+        total=$(cat "$staged" 2>/dev/null)
+        case "$total" in ""|*[!0-9]*) continue;; esac
+        test "$total" -gt 0 || continue
+        got=$(wc -c < "${staged%/size}/dispatch-helper" 2>/dev/null | tr -d " ")
+        case "$got" in ""|*[!0-9]*) got=0;; esac
+        uploading=$((uploading + 1))
+        now=$(date +%s)
+        case "$now" in ""|*[!0-9]*) now=0;; esac
+        test "$got" = "$seen" || seen=$got grown=$now
+        test "$now" -gt 0 && test $((now - grown)) -lt 30 && waited=$((waited - 1))
+        if test -z "$since"; then mark=$got since=$now
+        elif test $((now - since)) -ge 2; then speed=$(((got - mark) / (now - since))) mark=$got since=$now
+        fi
+        test "$uploading" -ge 50 || return 0
+        test "$got" -le "$total" || got=$total
+        filled=$((got * 16 / total)) full= empty= i=0
+        while test "$i" -lt 16; do
+          if test "$i" -lt "$filled"; then full="${full}━"; else empty="${empty}─"; fi
+          i=$((i + 1))
+        done
+        case $((attempt % 10)) in
+          0) spin=⠋;; 1) spin=⠙;; 2) spin=⠹;; 3) spin=⠸;; 4) spin=⠼;; 5) spin=⠴;; 6) spin=⠦;; 7) spin=⠧;; 8) spin=⠇;; *) spin=⠏;;
+        esac
+        rate= left=
+        if test -n "$speed"; then
+          if test "$speed" -ge 1048576; then rate=" · $((speed / 1048576)).$((speed % 1048576 * 10 / 1048576)) MB/s"
+          else rate=" · $((speed / 1024)) KB/s"; fi
+          if test "$speed" -gt 0; then
+            left=$(((total - got) / speed))
+            if test "$left" -ge 60; then left=" · $((left / 60)) min $((left % 60)) s"; else left=" · $left s"; fi
+          fi
+        fi
+        printf "\033[?7l\r\033[K\033[36m%s\033[0m Installing Dispatch \033[36m%s\033[0m\033[2m%s\033[0m %3s%%  \033[2m%s.%s of %s.%s MB%s%s\033[0m\033[?7h" \
+          "$spin" "$full" "$empty" \
+          $((got * 100 / total)) $((got / 1048576)) $((got % 1048576 * 10 / 1048576)) \
+          $((total / 1048576)) $((total % 1048576 * 10 / 1048576)) "$rate" "$left" >&3
+        drawn=1
+        return 0
+      done
+      uploading=0 mark= since= speed= seen=
+      test -z "$drawn" || printf "\r\033[K" >&3
+      drawn=
+    }
+    """#
+
     static func remoteCommand(sessionID: String, grant: SSHIntegrationGrant, command: String?) -> String {
         precondition(SSHBootstrap.validSessionID(sessionID) && grant.profile != .ordinary)
         let capabilities = grant.capabilities == SSHIntegrationGrant.capabilities(grant.profile, hooks: grant.hooks)
@@ -267,15 +327,18 @@ enum SSHLauncherCommand {
         // No `|| fallback` follows helper exec: an already-started command's
         // status is final, even when its helper channel subsequently fails.
         let script = """
+        \(uploadProgress)
         prepare() {
           \(SSHBootstrap.privateDirectoryScript)
           enter_private sessions
           enter_private '\(sessionID)'
-          attempt=0
-          while test ! -e ready && test ! -L ready && test "$attempt" -lt 325; do
+          attempt=0 waited=0 uploading=0 drawn=
+          while test ! -e ready && test ! -L ready && test "$waited" -lt 325; do
             sleep 0.2
-            attempt=$((attempt + 1))
+            attempt=$((attempt + 1)) waited=$((waited + 1))
+            progress
           done
+          test -z "$drawn" || printf "\\r\\033[K" >&3
           test -e ready || test -L ready || fail "Dispatch did not finish setting up in time"
           safe_file ready || fail "unsafe ready file"
           IFS= read -r helper < ready || fail "unreadable ready file"
@@ -312,7 +375,7 @@ enum SSHLauncherCommand {
             *) fail "setup did not finish";;
           esac
         }
-        helper=$(prepare 2>/dev/null)
+        helper=$(prepare 3>&2 2>/dev/null)
         if test "$?" = 0; then
           cd "$HOME" || exit 1
           case "$helper" in /*) ;; *) helper="$HOME/$helper";; esac

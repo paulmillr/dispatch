@@ -77,13 +77,19 @@ struct HostInformationView: View {
     var attachedBackends: Set<SpaceBackend> = []
     @State private var footerHovered: String?
     @State private var selectedStatistics: SSHStatisticsStore.Key?
+    /// A closed popover keeps this view alive in a hidden window: its probes run only while it is on screen.
+    @State private var onScreen = false
 
     private struct BackendRequest: Equatable {
         let host: HostID
         let machine: TerminalMachine?
     }
     private var backendRequest: BackendRequest {
-        .init(host: host.id, machine: state == .connected ? machine : nil)
+        .init(host: host.id, machine: state == .connected && onScreen ? machine : nil)
+    }
+    private struct LatencyRequest: Hashable {
+        let source: HostStatisticsStore.Source
+        let onScreen: Bool
     }
     private var backends: Set<SpaceBackend>? {
         var detected = HostBackendCache.shared.cached(for: host.id)
@@ -113,8 +119,12 @@ struct HostInformationView: View {
         TimelineView(.periodic(from: .now, by: 1)) { timeline in
             content(at: timeline.date)
         }
-        .task(id: statisticsSource) {
-            guard case .ssh(let key) = statisticsSource,
+        .background(WindowShownReader { onScreen = $0 })
+        .task(id: LatencyRequest(source: statisticsSource, onScreen: onScreen)) {
+            // The header shows the latency: measured every 2 s only while this view (a host popover) is on screen.
+            // Nothing else subscribes (sidebar glyphs and rows show the connection state only), so otherwise a host's
+            // latency runs at its 60 s background cadence.
+            guard onScreen, case .ssh(let key) = statisticsSource,
                   let token = SSHStatisticsStore.shared.subscribeLatency(key, preferred: preferred) else { return }
             defer { SSHStatisticsStore.shared.unsubscribeLatency(token, from: key) }
             do { while !Task.isCancelled { try await Task.sleep(for: .seconds(3600)) } } catch {}

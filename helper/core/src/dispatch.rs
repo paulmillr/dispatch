@@ -10,6 +10,7 @@ use std::{cell::{Cell, RefCell}, collections::BTreeMap, path::{Path, PathBuf}, r
 mod chat;
 pub(crate) use chat::follow;
 pub(crate) mod features;
+pub(crate) mod following;
 mod list;
 mod hello;
 mod launch;
@@ -18,6 +19,7 @@ mod params;
 pub(crate) mod attachments;
 pub(crate) mod queue;
 mod read;
+mod release;
 pub(crate) mod store;
 
 fn checked<T: 'static>(
@@ -968,7 +970,7 @@ impl Request<'_> {
                 .prompts
                 .borrow()
                 .get(&terminal)
-                .is_some_and(|(_, _, published, _)| {
+                .is_some_and(|(_, _, published, _, _)| {
                     published
                         .as_ref()
                         .is_some_and(|prompt| prompt.id == interaction)
@@ -1567,7 +1569,7 @@ impl Request<'_> {
     }
     /// Protocol result: null
     fn publish(&mut self, p: &Data<'_>) -> Result<(), Error> {
-        let (_, mux) = self.mux(p)?;
+        let (index, mux) = self.mux(p)?;
         let cursor = p.get("cursor").ok_or_else(|| invalid("cursor"))?;
         let cursor = (
             number(cursor, "column")? as u32,
@@ -1582,6 +1584,9 @@ impl Request<'_> {
                 faint_tail: flag(p, "faint_tail"),
             },
         );
+        // Its screens win over the multiplexer's own while this client keeps the terminal attached (helper/screens.rs).
+        let terminal = reference(index, local(number(p, "terminal")?));
+        self.helper.publishers.borrow_mut().entry((self.fd, terminal)).or_insert(false);
         self.done(None)(self.io, Ok(()));
         Ok(())
     }

@@ -88,6 +88,9 @@ struct Controller {
     pending: Vec<u8>,
     waiters: Vec<Done<()>>,
     retry: Option<Instant>,
+    /// Repaints asked for one observer each (terminals.follow, `Herdr::follow_restore`): the next full frame serves
+    /// them, a reconnect's first one too.
+    restores: Vec<(u64, Done<()>)>,
 }
 struct Launch {
     workspace: String,
@@ -123,13 +126,17 @@ pub struct Herdr {
     preparing: bool,
     subscription: Option<Stream>,
     controllers: BTreeMap<Id, Controller>,
-    /// `screen` reads terminals no client renders from herdr (observe.rs); off in a client helper.
+    /// `screen` reads every terminal no client publishes for from herdr (observe.rs): the queue drainer; off in a client
+    /// helper, whose screens.host clients turn it on per terminal instead.
     host_screens: bool,
     /// Host screen observers by terminal, and when a failed one may start again.
     observers: BTreeMap<Id, observe::Observer>,
     unobserved: BTreeMap<Id, (Instant, u32)>,
-    /// Terminals a client published screens for: only its screens are read.
-    clients: std::collections::BTreeSet<Id>,
+    /// Terminals a screens.host client attached: `screen` reads them from herdr (observe.rs) unless published.
+    hosting: std::collections::BTreeSet<Id>,
+    /// Terminals a client published screens for and keeps attached: only its screens are read
+    /// (Multiplexer::screen_clients).
+    published: std::collections::BTreeSet<Id>,
     detached: std::collections::BTreeSet<Id>,
     waiting: BTreeMap<Id, readiness::Waiting>,
     changes: u64,
@@ -194,7 +201,8 @@ impl Herdr {
             host_screens: false,
             observers: BTreeMap::new(),
             unobserved: BTreeMap::new(),
-            clients: Default::default(),
+            hosting: Default::default(),
+            published: Default::default(),
             detached: Default::default(),
             waiting: BTreeMap::new(),
             changes: 0,

@@ -35,6 +35,8 @@ def describe(component):
                     '      Generates the Xcode project · build/tools',
         'rust': f'Rust       {LOCK["rust"]["version"]}\n'
                 '      SSH helper compiler and tools; macOS + Linux targets · build/rust',
+        'ssh-engine': 'iPhone SSH engine crates  Mobile/Transport/Core/Cargo.lock\n'
+                      '      Xcode resolves the iPhone package for the Mac app too · build/cargo, build/mobile-ssh',
     }[component]
 
 
@@ -100,6 +102,8 @@ def plan():
         missing.append('xcodegen')
     if not rust.available():
         missing.append('rust')
+    if load_script('setup_mobile').downloads():
+        missing.append('ssh-engine')
     return missing
 
 
@@ -122,6 +126,11 @@ def main():
             tools.resolve('xcodegen')
         with progress(f'Rust {LOCK["rust"]["version"]} · preparing SSH helper toolchain'):
             subprocess.run([sys.executable, str(ROOT / 'scripts/setup-ssh-rust.py')], check=True)
+        mobile = load_script('setup_mobile')
+        if not mobile.current():
+            # SwiftPM resolves the iPhone package's binary target for every scheme, the Mac app's included.
+            with progress('iPhone SSH engine · building build/mobile-ssh'):
+                mobile.ensure()
         return
     if len(sys.argv) > 1:
         # Shell download sites must be covered by the original approval, even if

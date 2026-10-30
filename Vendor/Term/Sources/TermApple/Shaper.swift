@@ -26,14 +26,18 @@ public struct ShapedCell: Equatable { public var x: Int, glyph: Int, xOffset: In
 
 public struct Shaper {
     let collection: FontCollection
-    /// liga on (Ghostty's default feature), then the configured ones.
+    /// liga on (Ghostty's default feature), then the configured ones; one setting per tag, the last given.
     let features: [(tag: String, value: Int)]
     var fonts: [String: CTFont] = [:]
     /// The code points of the last runs call's runs.
     var codepoints: [(cp: UInt32, cluster: Int)] = []
 
     public init(_ collection: FontCollection, features: [(tag: String, value: Int)] = []) {
-        (self.collection, self.features) = (collection, [("liga", 1)] + features)
+        var merged: [(tag: String, value: Int)] = []
+        for feature in [("liga", 1)] + features {
+            if let i = merged.firstIndex(where: { $0.tag == feature.tag }) { merged[i].value = feature.value } else { merged.append(feature) }
+        }
+        (self.collection, self.features) = (collection, merged)
     }
 
     /// RunIterator.next for every run of a row: its cells (graphemes and styles read from the

@@ -1,4 +1,5 @@
 import Foundation
+import os
 import SwiftUI
 
 /// User actions and UI state on the common chat interface.
@@ -127,10 +128,14 @@ extension ChatCoordinator {
             if conversation == nil, session.sessionID != nil, sameProcess { return }
             let shown = session.sessionID
             if let previous = shown, previous != conversation {
+                // The same conversation under a new id (Claude continuing in a new file, a Codex resume) shares its
+                // records with the shown turns: they stay and merge, rather than clearing and refilling the transcript.
+                let continued = shares(page.records, with: session)
+                ChatSession.viewLog.info("Chat conversation changed: pid=\(session.binding?.pid.map(String.init) ?? "none", privacy: .public)->\(page.binding.pid.map(String.init) ?? "none", privacy: .public) sameProcess=\(sameProcess) continued=\(continued) records=\(page.records.count) pending=\(page.history_pending) surface=\(session.id.uuidString, privacy: .public)")
                 rememberRemotePresentation(session)
                 session.helperTask?.cancel()
                 let result = session.command?.command?.replacementResult
-                session.resetConversation(keepingConfiguration: sameProcess)
+                session.resetConversation(keepingConfiguration: sameProcess, keepingTranscript: continued)
                 session.commandResult = result
             }
             session.sessionID = conversation
@@ -171,8 +176,11 @@ extension ChatCoordinator {
                 drainQueue(session)
             }
         case .replacement(let page):
-            session.clearBranchHistory()
-            receiveHelper(.page(page), session: session)
+            if !mergeReplacement(page, session: session) {
+                ChatSession.viewLog.info("Chat transcript replaced: records=\(page.records.count) rows=\(session.visibleTranscriptRows.count) surface=\(session.id.uuidString, privacy: .public)")
+                session.clearBranchHistory()
+                receiveHelper(.page(page), session: session)
+            }
         case .page(let page):
             session.loadingHistory = page.snapshot?.awaiting_creation == true && session.turns.isEmpty
             session.transcriptAvailable = !session.loadingHistory
@@ -217,7 +225,8 @@ extension ChatCoordinator {
                 adoptTerminalTypeahead(session)
             }
             // Before busy, so a turn ending while its agents run keeps one working clock.
-            if session.subagents != state.agents ?? [] { session.subagents = state.agents ?? [] }
+            let subagents = ChatSubagent.merge(state.agents ?? [], previous: session.subagents)
+            if session.subagents != subagents { session.subagents = subagents }
             let busy = state.busy && !(session.agentID == "claude" && session.modelPicker != nil && state.activity == "waiting")
             if session.busy != busy { session.busy = busy }
             if session.starting { session.starting = false }
@@ -354,6 +363,57 @@ extension ChatCoordinator {
         }
     }
 
+    /// Whether helper records include one the transcript already shows (by turn and record id).
+    private func shares(_ records: [HelperChat.Record], with session: ChatSession) -> Bool {
+        guard !records.isEmpty, !session.turns.isEmpty else { return false }
+        let shown = session.shownRecordIdentities
+        return records.contains { shown.contains(.init(turn: $0.turn ?? "history", item: $0.id)) }
+    }
+
+    /// A replacement is usually the shown conversation read again (a harness re-reading its file without a
+    /// cache). Clearing it collapsed the reader's expanded groups, lost their place and preloaded history, and the
+    /// mass row removal blanked the transcript. A page sharing a record with the shown turns merges: only turns it
+    /// proves gone leave (shown from its first turn on but missing from it, or any it lacks when it reaches the
+    /// transcript's start). An empty page changes nothing but a cursor it brings. False: the page shares nothing,
+    /// another branch (Pi's tree), which replaces the history.
+    private func mergeReplacement(_ page: HelperChat.Page, session: ChatSession) -> Bool {
+        if !page.records.isEmpty {
+            guard shares(page.records, with: session) else { return false }
+            let pageTurns = Set(page.records.map { $0.turn ?? "history" })
+            let pageItems = Set(page.records.map { ChatSession.ItemIdentity(turn: $0.turn ?? "history", item: $0.id) })
+            let shownTurns = session.turns.map(\.id)
+            let first = shownTurns.firstIndex { pageTurns.contains($0) }
+            let start = page.earlier == nil ? 0 : (first ?? shownTurns.count)
+            // A running turn's records can reach Chat before its file has them: a page cannot prove it gone. An
+            // ended turn is not running, whatever the busy state says while it catches up.
+            let running = session.busy ? session.turns.last { $0.id == session.activeTurnID && $0.ended == nil }?.id : nil
+            let proved = session.turns[start...].filter { $0.id != running }
+            let gone = Set(proved.map(\.id).filter { !pageTurns.contains($0) })
+            // Inside the page's range, a recorded item it lacks is gone too: another branch (Pi's tree) shares its
+            // ancestors' turns. A page that starts within a turn proves nothing about that turn's earlier items.
+            var goneItems: Set<ChatSession.ItemIdentity> = []
+            for turn in proved where pageTurns.contains(turn.id) && (page.earlier == nil || turn.id != first.map({ shownTurns[$0] })) {
+                for item in turn.items {
+                    if let record = item.source?.id, !pageItems.contains(.init(turn: turn.id, item: record)) {
+                        goneItems.insert(.init(turn: turn.id, item: record))
+                    }
+                }
+            }
+            let before = session.visibleTranscriptRows.count
+            // As any page with records: the transcript is readable.
+            session.loadingHistory = false; session.transcriptAvailable = true; session.status = nil
+            session.drop(turns: gone, items: goneItems)
+            receiveHelper(page.records, session: session, historical: true)
+            ChatSession.viewLog.info("Chat transcript replacement merged: records=\(page.records.count) gone=\(gone.count)+\(goneItems.count) rows=\(before)->\(session.visibleTranscriptRows.count) surface=\(session.id.uuidString, privacy: .public)")
+        } else if page.earlier == nil, !session.turns.isEmpty {
+            // An empty read without a cursor (one that raced a write) proves nothing about earlier history.
+            return true
+        }
+        session.helperEarlier = page.earlier
+        session.hasEarlier = page.earlier != nil
+        return true
+    }
+
     /// Records come in transcript order: an earlier page goes before everything shown, the rest after.
     /// Their positions order records with equal times, as file offsets did (legacy transcript reader).
     private func receiveHelper(_ records: [HelperChat.Record], session: ChatSession, historical: Bool, earlier: Bool = false) {
@@ -372,7 +432,12 @@ extension ChatCoordinator {
         }
         var rows: [ChatRecord] = []
         for record in decoded {
-            if case .commandOutput(let text) = record.action { if !earlier { output(text) } } else { rows.append(record) }
+            if case .commandOutput(let text) = record.action {
+                // By record id (the key after its content hash) and text: a re-read can differ in fields that don't
+                // matter here, while a record that grew is new output.
+                let id = record.key.split(separator: ":", maxSplits: 1).last.map(String.init) ?? record.key
+                if !earlier, session.receivedCommandOutputs.insert(id + "\n" + text).inserted { output(text) }
+            } else { rows.append(record) }
         }
         // A first transcript snapshot can acknowledge the prompt that created it.
         // Only earlier pages are excluded from live delivery state changes.
@@ -528,6 +593,10 @@ extension ChatCoordinator {
             session.observedCommand = (title: text.trimmingCharacters(in: .whitespacesAndNewlines), output: nil)
         } else {
             session.showOptimisticPrompt(text, attachments: attachments)
+            if let prompt = session.optimisticPrompt {
+                launchFlight(session, text: text, hasAttachments: !attachments.isEmpty,
+                             from: queued.map { .queued($0.id) } ?? .composer, to: .prompt(prompt.id))
+            }
         }
         var input = HelperChat.Input(helper.route)
         input.text = text
@@ -723,6 +792,8 @@ extension ChatCoordinator {
             session.questions.removeAll { $0.id == interaction.id }
             // Decided cards stay as receipts; only an undecided one expires.
             session.approvals.filter { $0.interaction == interaction.id && $0.decision == nil }.forEach { $0.retire() }
+            // A closed question no longer holds back what was queued meanwhile (waitingForAnswer).
+            drainQueue(session)
             return
         }
         // A native question confirms delivery even when the command opens no turn.
@@ -787,9 +858,9 @@ extension ChatCoordinator {
         let installation = method == "interactions.dismiss" ? integrationChanges : nil
         let id = System.uuid()
         session.nativeInputs.insert(id)
-        operations.run(for: session.id) { [weak session] in
+        operations.run(for: session.id) { [weak self, weak session] in
             guard let session else { return }
-            defer { session.nativeInputs.remove(id) }
+            defer { self?.finishNativeInput(id, session: session) }
             do {
                 await installation?.value
                 try Task.checkCancellation()
@@ -803,6 +874,13 @@ extension ChatCoordinator {
         }
     }
 
+    /// An answer or decision reached the helper (or failed): a message queued while it was in flight
+    /// (nativeInputInFlight holds input back) goes now if nothing else does, as after a turn ends.
+    func finishNativeInput(_ id: UUID, session: ChatSession) {
+        session.nativeInputs.remove(id)
+        drainQueue(session)
+    }
+
     func answerHelper(_ question: ChatSideQuestion, skip: Bool, session: ChatSession) {
         guard enabled, let helper = session.helper, session.active, session.showChat,
               session.sessionID == question.threadID, session.questions.contains(where: { $0 === question }),
@@ -813,9 +891,9 @@ extension ChatCoordinator {
         question.submitted = true
         let id = System.uuid()
         session.nativeInputs.insert(id)
-        operations.run(for: session.id) { [weak session] in
+        operations.run(for: session.id) { [weak self, weak session] in
             guard let session else { return }
-            defer { session.nativeInputs.remove(id) }
+            defer { self?.finishNativeInput(id, session: session) }
             do {
                 try Task.checkCancellation()
                 guard session.helper === helper else { return }

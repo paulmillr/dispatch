@@ -1,17 +1,28 @@
 import AppKit
 import SwiftUI
 
-/// Makes a terminal color scheme from a `ThemeRecipe`: a harmony wheel for the seed color, a few knobs, presets and
-/// "Surprise me", with the result live as a terminal session. Shown as a sheet from Settings (about 620×560); Save
-/// hands back the name typed (not yet made unique) and the theme, which carries its recipe so it can be reopened here.
+/// Makes a terminal color scheme from a `ThemeRecipe`: a harmony wheel and a lightness for the seed color, a few
+/// knobs, and Random inside a style (muted, neon…) or any, with the result live as a terminal session. Shown as a sheet
+/// from Settings, 620 wide and as tall as its content at the user's text size; Save hands back the name typed (not yet
+/// made unique) and the theme, which carries its recipe so it can be reopened here.
 struct ThemeMakerView: View {
     let save: (String, TerminalTheme) -> Void
     let cancel: () -> Void
+    /// The header's title: a new scheme, a copy, or one being changed.
+    private let title: String
+    /// Changing a scheme in place keeps its name.
+    private let nameFixed: Bool
     private let typography = AppTypography()
     private let fonts: PreviewFonts
     @State private var recipe: ThemeRecipe
-    /// What the user typed; nil follows the preset or the seed's hue family.
+    /// What the user typed; nil follows the seed's hue family.
     @State private var typedName: String?
+    /// The style Random draws inside, once one is chosen; nil draws any recipe.
+    @State private var style: ThemeRecipe.Style?
+    /// The seed as the wheel and Lightness last set it: the stored seed is that color in the gamut, which can lose
+    /// the hue (a gray) or chroma (a lightness that can't hold it). Nil follows the stored seed (Random, the color
+    /// picker).
+    @State private var target: OKLCH?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// Who the scheme is for: Settings' colorblind mode, or the vision of the scheme being changed.
@@ -19,35 +30,49 @@ struct ThemeMakerView: View {
     /// Scheme names in use, which a suggested name steps around.
     private let taken = SurpriseScheme.takenNames()
 
-    init(initial: ThemeRecipe? = nil, vision: ColorVision = .typical, save: @escaping (String, TerminalTheme) -> Void,
-         cancel: @escaping () -> Void) {
+    /// `name`: the name to start from, a copy's or the scheme's own (`nameFixed` while changing it in place).
+    init(initial: ThemeRecipe? = nil, vision: ColorVision = .typical, title: String = "New color scheme", name: String? = nil,
+         nameFixed: Bool = false, save: @escaping (String, TerminalTheme) -> Void, cancel: @escaping () -> Void) {
         self.save = save
         self.cancel = cancel
+        self.title = title
+        self.nameFixed = nameFixed
         self.vision = initial?.vision ?? vision
         _recipe = State(initialValue: initial ?? ThemeRecipe.standard.with(vision: vision))
+        _typedName = State(initialValue: name)
         fonts = PreviewFonts(preferences: TerminalRuntime.shared.preferences)
     }
 
-    private var preset: ThemeRecipe.Preset? { ThemeRecipe.presets.first { $0.recipe.with(vision: vision) == recipe } }
-    private var automaticName: String { preset?.name ?? ThemeGenerator.suggestedName(for: recipe, taken: taken) }
+    private var automaticName: String { ThemeGenerator.suggestedName(for: recipe, taken: taken) }
     private var name: String { typedName ?? automaticName }
 
     var body: some View {
         let theme = ThemeGenerator.make(recipe)
         VStack(spacing: 0) {
             header
-            presetStrip.padding(.bottom, 12)
+            styleStrip.padding(.bottom, 12)
             HStack(alignment: .top, spacing: 16) {
                 VStack(spacing: 10) {
                     TerminalPreview(theme: theme, fonts: fonts)
                     SwatchGrid(theme: theme)
                 }.frame(width: 356)
                 controls(theme)
-            }.padding(.horizontal, 18)
-            Spacer(minLength: 12)
+            }.padding(.horizontal, 18).padding(.bottom, 16)
             footer(theme)
         }
-        .frame(width: 620, height: 560)
+        // As tall as the controls at the user's text size, so the footer never falls off the bottom.
+        .frame(width: 620)
+        .fixedSize(horizontal: false, vertical: true)
+        .onChange(of: recipe.seed) { _, seed in
+            // Something other than the wheel and Lightness chose the seed: they follow it.
+            if let target, ThemeColor(oklch: target, displayP3: recipe.displayP3) != seed { self.target = nil }
+        }
+        .onChange(of: recipe.displayP3) { _, wide in
+            // The seed the controls hold, in the new gamut: P3 off brings a seed beyond sRGB back inside it.
+            let held = seed
+            recipe.seed = ThemeColor(oklch: held, displayP3: wide)
+            target = held
+        }
         .background(Chrome.window)
         .foregroundStyle(Chrome.ink)
         .font(typography.font(offset: 0))
@@ -63,55 +88,76 @@ struct ThemeMakerView: View {
     private var header: some View {
         HStack(alignment: .center, spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("New color scheme").fontWeight(.semibold).foregroundStyle(SettingsControlStyle.selectedText)
+                Text(title).fontWeight(.semibold).foregroundStyle(SettingsControlStyle.selectedText).lineLimit(1)
                 Text(vision == .typical ? "Grow a readable scheme from one color."
                      : "Grow a readable scheme from one color, for \(vision.title.lowercased()) color blindness.")
                     .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
             }
             Spacer()
             ModeSwitch(light: $recipe.light)
+            // "P3" fits beside Dark and Light; the help and VoiceOver say Display P3 in full.
+            Toggle(isOn: $recipe.displayP3) { Text("P3").font(typography.font(offset: -1)) }
+                .toggleStyle(.checkbox)
+                .help("Display P3: colors beyond sRGB for wide-color displays. Ghostty and other apps get the nearest sRGB colors.")
+                .accessibilityLabel("Display P3")
+                .accessibilityIdentifier("theme-maker-display-p3")
             Button(action: surprise) {
-                Label("Surprise me", systemImage: "dice")
+                Label("Random", systemImage: "dice")
                     .font(typography.font(offset: -1))
                     .padding(.horizontal, 10).padding(.vertical, 5)
                     .background(SettingsControlStyle.fill, in: RoundedRectangle(cornerRadius: 6))
                     .overlay { RoundedRectangle(cornerRadius: 6).strokeBorder(SettingsControlStyle.border) }
                     .contentShape(RoundedRectangle(cornerRadius: 6))
             }.buttonStyle(.plain)
-                .help("A new random recipe")
+                .help(style.map { "Another random \($0.title.lowercased()) scheme" } ?? "A new random recipe")
                 .accessibilityIdentifier("theme-maker-surprise")
         }.padding(.horizontal, 18).padding(.top, 16).padding(.bottom, 12)
     }
 
-    private var presetStrip: some View {
+    /// The styles: each chip shows one of its schemes on the side the switch shows, and a click makes a random one.
+    private var styleStrip: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                ForEach(ThemeRecipe.presets) { preset in
-                    let made = preset.recipe.with(vision: vision)
-                    PresetChip(name: preset.name, theme: ThemeGenerator.make(made), selected: made == recipe) {
-                        change { recipe = made; typedName = nil }
+                ForEach(ThemeRecipe.Style.allCases) { style in
+                    StyleChip(style: style, theme: ThemeGenerator.make(sample(style)), selected: self.style == style) {
+                        self.style = style
+                        surprise()
                     }
                 }
             }.padding(.horizontal, 18)
         }
     }
 
+    /// A style's chip colors: always the same draw, one whose hue suits the style (Neon on a green that can be
+    /// that colorful), on the side and for the vision the maker shows.
+    private func sample(_ style: ThemeRecipe.Style) -> ThemeRecipe {
+        let seeds: [ThemeRecipe.Style: UInt64] = [.muted: 9, .pastel: 10, .earthy: 3, .cool: 1, .vivid: 3, .neon: 5, .mono: 6]
+        var sample = ThemeRecipe.random(seed: seeds[style] ?? 1, style: style, light: recipe.light).with(vision: vision)
+        sample.displayP3 = recipe.displayP3
+        return sample
+    }
+
     private func controls(_ theme: TerminalTheme) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            HarmonyWheel(recipe: $recipe, theme: theme)
-                .frame(width: 148, height: 148)
+            HarmonyWheel(recipe: recipe, seed: seed, theme: theme, pick: setSeed)
+                .frame(width: HarmonyWheel.size, height: HarmonyWheel.size)
                 .frame(maxWidth: .infinity)
+            GradientSlider(title: "Lightness", value: Binding(get: { seed.l }, set: { setSeed(OKLCH(l: $0, c: seed.c, h: seed.h)) }),
+                           colors: lightnessRamp)
+                .help("The seed's lightness: the cursor is the seed, moved only as far as it must to read")
             HStack(spacing: 8) {
                 ColorPicker("Seed", selection: seedColor, supportsOpacity: false).labelsHidden()
                     .help("The color the scheme grows from")
-                Text(recipe.seed.hex).font(typography.font(offset: -1)).foregroundStyle(Chrome.muted)
-                    .textSelection(.enabled)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(recipe.seed.displayP3.map { "P3 \($0.hex)" } ?? recipe.seed.hex)
+                    Text(recipe.seed.oklchText).accessibilityIdentifier("theme-maker-oklch")
+                }.font(typography.font(offset: -1.5, design: .monospaced)).foregroundStyle(Chrome.muted)
+                    .lineLimit(1).minimumScaleFactor(0.8).textSelection(.enabled)
                 Spacer(minLength: 0)
             }
             if vision == .typical {
-                harmonyMenu
-                Text(recipe.harmony.detail).font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
-                    .fixedSize(horizontal: false, vertical: true)
+                // What the harmony does is the menu's tooltip.
+                harmonyMenu.help(recipe.harmony.detail)
             } else {
                 Text("accent hues stay fixed so \(vision.title.lowercased()) color blindness can tell them apart")
                     .font(typography.font(offset: -1.5)).foregroundStyle(SettingsControlStyle.detail)
@@ -153,6 +199,7 @@ struct ThemeMakerView: View {
                 TextField(automaticName, text: Binding(get: { name }, set: { typedName = $0.isEmpty ? nil : $0 }))
                     .textFieldStyle(.roundedBorder).font(typography.font(offset: -0.5, design: .monospaced))
                     .frame(width: 200)
+                    .disabled(nameFixed)
                     .onSubmit(commit)
                     .accessibilityIdentifier("theme-maker-name")
                 Spacer()
@@ -170,33 +217,54 @@ struct ThemeMakerView: View {
         save(CustomThemes.sanitized(name), ThemeGenerator.make(recipe))
     }
 
+    /// Random: a new recipe inside the chosen style, else any.
     private func surprise() {
         // Seeded from System so a replayed test sees the same surprise.
         let bytes = System.uuid().uuid
         let seed = [bytes.0, bytes.1, bytes.2, bytes.3, bytes.4, bytes.5, bytes.6, bytes.7]
             .reduce(UInt64(0)) { $0 << 8 | UInt64($1) }
         // A surprise stays on the side the switch shows.
-        var next = ThemeRecipe.random(seed: seed).with(vision: vision)
-        next.light = recipe.light
+        var next = (style.map { ThemeRecipe.random(seed: seed, style: $0, light: recipe.light) } ?? ThemeRecipe.random(seed: seed))
+            .with(vision: vision)
+        (next.light, next.displayP3) = (recipe.light, recipe.displayP3)
         change { recipe = next; typedName = nil }
     }
 
-    /// Whole-recipe jumps (presets, surprises) cross-fade; knobs follow the pointer directly.
+    /// Whole-recipe jumps (styles, surprises) cross-fade; knobs follow the pointer directly.
     private func change(_ body: () -> Void) {
         if reduceMotion { body() } else { withAnimation(.easeInOut(duration: 0.22), body) }
     }
 
+    /// The seed as the controls hold it.
+    private var seed: OKLCH { target ?? recipe.seed.oklch }
+
+    /// The wheel or Lightness chose `lch`: the seed becomes it, in the gamut, and the controls keep it as chosen.
+    private func setSeed(_ lch: OKLCH) {
+        target = lch
+        recipe.seed = ThemeColor(oklch: lch, displayP3: recipe.displayP3)
+    }
+
+    /// The seed's hue and chroma from dark to light, each step as colorful as it can be.
+    private var lightnessRamp: [Color] {
+        stride(from: 0.0, through: 1, by: 0.1).map {
+            ThemeColor(oklch: OKLCH(l: $0, c: seed.c, h: seed.h), displayP3: recipe.displayP3).swiftUI
+        }
+    }
+
     private var seedColor: Binding<Color> {
         Binding(get: { recipe.seed.swiftUI }, set: { color in
-            guard let srgb = NSColor(color).usingColorSpace(.sRGB) else { return }
-            recipe.seed = ThemeColor(red: srgb.redComponent, green: srgb.greenComponent, blue: srgb.blueComponent)
+            // Display P3 picks outside sRGB stay P3, and make the scheme Display P3 too.
+            guard let seed = ThemeColor(NSColor(color)) else { return }
+            recipe.seed = seed
+            if seed.displayP3 != nil { recipe.displayP3 = true }
         })
     }
 
     private var vibrancyRamp: [Color] {
         let hue = recipe.seed.oklch.h
         return stride(from: 0.0, through: 1, by: 0.25).map {
-            ThemeColor(oklch: OKLCH(l: 0.68, c: 0.06 + 0.14 * $0, h: hue)).swiftUI
+            ThemeColor(oklch: OKLCH(l: 0.68, c: 0.06 + (recipe.displayP3 ? 0.19 : 0.14) * $0, h: hue),
+                       displayP3: recipe.displayP3).swiftUI
         }
     }
 
@@ -215,13 +283,16 @@ struct ThemeMakerView: View {
 }
 
 extension ThemeColor {
-    var swiftUI: Color { Color(.sRGB, red: Double(r) / 255, green: Double(g) / 255, blue: Double(b) / 255) }
+    var swiftUI: Color {
+        if let p3 = displayP3 { return Color(.displayP3, red: Double(p3.r) / 255, green: Double(p3.g) / 255, blue: Double(p3.b) / 255) }
+        return Color(.sRGB, red: Double(r) / 255, green: Double(g) / 255, blue: Double(b) / 255)
+    }
 }
 
 // MARK: - Preview
 
 /// The terminal's font family at a size that fits the preview.
-private struct PreviewFonts {
+struct PreviewFonts {
     let regular: Font
     let bold: Font
 
@@ -238,7 +309,7 @@ private struct PreviewFonts {
 
 /// A short, typical session drawn with the theme: prompt, `ls`, a diff, compiler output, a link, a selection and a
 /// block cursor with a dim autosuggestion.
-private struct TerminalPreview: View {
+struct TerminalPreview: View {
     let theme: TerminalTheme
     let fonts: PreviewFonts
 
@@ -352,67 +423,78 @@ private struct SwatchGrid: View {
 
 // MARK: - Controls
 
-/// The seed on an OKLCH hue/chroma disc: drag to choose hue (angle) and colorfulness (distance from the middle).
-/// The ring shows the six accents where the harmony turned them (an arc from each one's standard hue) and the
-/// harmony's shape joins its attractor hues.
+/// The seed on an OKLCH hue/chroma disc at the seed's lightness (`OKLCHDisc`): drag to choose hue (angle) and
+/// colorfulness (distance from the middle); the lightness is the Lightness slider's. The ring shows the six accents where
+/// the harmony turned them (an arc from each one's standard hue) and the harmony's shape joins its attractor hues.
 private struct HarmonyWheel: View {
-    @Binding var recipe: ThemeRecipe
+    let recipe: ThemeRecipe
+    /// The seed as the controls hold it, so its hue outlives a gray and its chroma a lightness that can't reach it.
+    let seed: OKLCH
     let theme: TerminalTheme
-    /// The disc's edge stands for this chroma; sRGB's most colorful colors sit near it.
-    private static let maxChroma = 0.26
+    let pick: (OKLCH) -> Void
+    static let size: CGFloat = 148
+    @State private var cache = OKLCHDiscCache()
+    @Environment(\.displayScale) private var scale
+
+    /// The ring and the disc inside it.
+    private static let outer = size / 2 - 1, ringWidth: CGFloat = 12
+    private static let disc = outer - ringWidth - 5
 
     var body: some View {
-        let seed = recipe.seed.oklch
-        let fieldL = min(0.85, max(0.5, seed.l))
-        let stops = stride(from: 0.0, through: 360, by: 15).map { hue in
-            Gradient.Stop(color: ThemeColor(oklch: OKLCH(l: fieldL, c: 0.3, h: hue)).swiftUI, location: hue / 360)
-        }
+        let p3 = recipe.displayP3
         let ringStops = stride(from: 0.0, through: 360, by: 15).map { hue in
             Gradient.Stop(color: ThemeColor(oklch: OKLCH(l: 0.74, c: 0.13, h: hue)).swiftUI, location: hue / 360)
         }
-        let gray = ThemeColor(oklch: OKLCH(l: fieldL, c: 0, h: 0)).swiftUI
         let accents = ThemeGenerator.hues(for: recipe).enumerated().map { index, hue in
             (anchor: ThemeGenerator.anchors(for: recipe.vision)[index], hue: hue, color: (theme.palette[index + 1] ?? theme.foreground).swiftUI)
         }
         // Colorblind accents don't follow a harmony, so it has no shape to show.
         let attractors = recipe.vision == .typical ? recipe.harmony.attractors(seed: seed.h) : []
         let seedColor = recipe.seed.swiftUI
-        let chroma = min(1, seed.c / Self.maxChroma)
+        let fraction = OKLCHDisc.radius(chroma: seed.c, hue: seed.h, l: seed.l, displayP3: p3)
+        let image = cache.image(l: seed.l, displayP3: p3, pixels: Int((Self.disc * 2 * scale).rounded()))
         let background = theme.background.swiftUI
         return Canvas { context, size in
             let center = CGPoint(x: size.width / 2, y: size.height / 2)
-            let outer = min(size.width, size.height) / 2 - 1
-            let ringWidth: CGFloat = 12, disc = outer - ringWidth - 5
-            func point(_ hue: Double, _ radius: CGFloat) -> CGPoint {
-                let angle = (hue - 90) * .pi / 180
-                return CGPoint(x: center.x + radius * cos(angle), y: center.y + radius * sin(angle))
+            let disc = Self.disc
+            func point(_ hue: Double, _ fraction: Double, _ radius: CGFloat = disc) -> CGPoint {
+                OKLCHDisc.point(center: center, radius: radius, hue: hue, fraction: fraction)
             }
             func circle(_ at: CGPoint, _ radius: CGFloat) -> Path {
                 Path(ellipseIn: CGRect(x: at.x - radius, y: at.y - radius, width: radius * 2, height: radius * 2))
             }
             // Hue ring.
             var ring = Path()
-            ring.addArc(center: center, radius: outer - ringWidth / 2, startAngle: .zero, endAngle: .degrees(360), clockwise: false)
+            ring.addArc(center: center, radius: Self.outer - Self.ringWidth / 2, startAngle: .zero, endAngle: .degrees(360), clockwise: false)
             context.stroke(ring, with: .conicGradient(Gradient(stops: ringStops), center: center, angle: .degrees(-90)),
-                           lineWidth: ringWidth)
-            // Hue and chroma field: hues around, gray in the middle.
-            let field = circle(center, disc)
-            context.fill(field, with: .conicGradient(Gradient(stops: stops), center: center, angle: .degrees(-90)))
-            context.fill(field, with: .radialGradient(Gradient(colors: [gray, gray.opacity(0)]), center: center,
-                                                      startRadius: 0, endRadius: disc))
+                           lineWidth: Self.ringWidth)
+            // The disc: the sRGB core, and with P3 the band around it.
+            let field = circle(center, disc * (p3 ? 1 : OKLCHDisc.core))
+            if let image {
+                var clipped = context
+                clipped.clip(to: field)
+                clipped.draw(Image(decorative: image, scale: scale), in: CGRect(x: center.x - disc, y: center.y - disc,
+                                                                                width: disc * 2, height: disc * 2))
+            }
             context.stroke(field, with: .color(background.opacity(0.35)), lineWidth: 1)
-            // The harmony's shape.
+            if p3 {
+                // sRGB's edge: beyond it other apps get the nearest sRGB color.
+                context.stroke(circle(center, disc * OKLCHDisc.core), with: .color(.black.opacity(0.45)),
+                               style: StrokeStyle(lineWidth: 1, dash: [1, 2.5]))
+            }
+            // The harmony's shape, inside the core so turning P3 on doesn't move it.
+            let shapeAt = OKLCHDisc.core * 0.9
             if attractors.count > 1 {
                 var shape = Path()
-                shape.addLines(attractors.map { point($0, disc * 0.82) })
+                shape.addLines(attractors.map { point($0, shapeAt) })
                 if attractors.count > 2 { shape.closeSubpath() }
                 context.stroke(shape, with: .color(.white.opacity(0.75)), style: StrokeStyle(lineWidth: 1.25, dash: [3, 3]))
             }
             for hue in attractors {
-                context.fill(circle(point(hue, disc * 0.82), 2.5), with: .color(.white.opacity(0.9)))
+                context.fill(circle(point(hue, shapeAt), 2.5), with: .color(.white.opacity(0.9)))
             }
             // Accents on the ring, each with an arc back to its standard hue.
-            let mid = outer - ringWidth / 2
+            let mid = Self.outer - Self.ringWidth / 2
             for accent in accents {
                 let turn = ThemeGenerator.turn(from: accent.anchor, to: accent.hue)
                 if abs(turn) > 0.5 {
@@ -421,35 +503,28 @@ private struct HarmonyWheel: View {
                                endAngle: .degrees(accent.anchor + turn - 90), clockwise: turn < 0)
                     context.stroke(arc, with: .color(.white.opacity(0.8)), style: StrokeStyle(lineWidth: 2, lineCap: .round))
                 }
-                let at = point(accent.hue, mid)
+                let at = point(accent.hue, 1, mid)
                 context.fill(circle(at, 6.5), with: .color(background))
                 context.fill(circle(at, 5), with: .color(accent.color))
             }
             // The seed.
-            let knob = point(seed.h, disc * chroma)
+            let knob = point(seed.h, fraction)
             var shadow = context
             shadow.addFilter(.shadow(color: .black.opacity(0.5), radius: 3, y: 1))
             shadow.fill(circle(knob, 8), with: .color(.white))
             context.fill(circle(knob, 6), with: .color(seedColor))
         }
         .contentShape(Circle())
-        .gesture(DragGesture(minimumDistance: 0).onChanged { drag in pick(drag.location, fieldL: fieldL) })
+        .gesture(DragGesture(minimumDistance: 0).onChanged { drag in
+            let at = OKLCHDisc.pick(drag.location, center: CGPoint(x: Self.size / 2, y: Self.size / 2), radius: Self.disc)
+            pick(OKLCH(l: seed.l, c: OKLCHDisc.chroma(radius: at.fraction, hue: at.hue, l: seed.l, displayP3: p3), h: at.hue))
+        })
         .accessibilityElement()
         .accessibilityLabel("Seed color")
-        .accessibilityValue("\(recipe.seed.hex), hue \(Int(seed.h.rounded())) degrees")
+        .accessibilityValue("\(recipe.seed.hex), \(recipe.seed.oklchText)")
         .accessibilityAdjustableAction { direction in
-            let step: Double = direction == .increment ? 10 : -10
-            recipe.seed = ThemeColor(oklch: OKLCH(l: seed.l, c: seed.c, h: ThemeGenerator.wrap(seed.h + step)))
+            pick(OKLCH(l: seed.l, c: seed.c, h: ThemeGenerator.wrap(seed.h + (direction == .increment ? 10 : -10))))
         }
-    }
-
-    private func pick(_ location: CGPoint, fieldL: Double) {
-        // The frame is 148 square; the disc's radius matches the Canvas's layout above.
-        let size: CGFloat = 148, disc = size / 2 - 1 - 12 - 5
-        let dx = location.x - size / 2, dy = location.y - size / 2
-        let hue = ThemeGenerator.wrap(atan2(dy, dx) * 180 / .pi + 90)
-        let chroma = min(1, (dx * dx + dy * dy).squareRoot() / disc) * Self.maxChroma
-        recipe.seed = ThemeColor(oklch: OKLCH(l: fieldL, c: chroma, h: hue))
     }
 }
 
@@ -480,7 +555,7 @@ private struct ModeSwitch: View {
 }
 
 /// A 0…1 knob whose track shows what it does, with Settings' slider knob.
-private struct GradientSlider: View {
+struct GradientSlider: View {
     let title: String
     @Binding var value: Double
     let colors: [Color]
@@ -522,13 +597,14 @@ private struct GradientSlider: View {
     }
 }
 
-/// A preset: its background with four accents, and its name.
-private struct PresetChip: View {
-    let name: String
+/// A style: one of its schemes' background with four accents, and its name; the tooltip says what it is.
+private struct StyleChip: View {
+    let style: ThemeRecipe.Style
     let theme: TerminalTheme
     let selected: Bool
     let action: () -> Void
     @Environment(\.appTypography) private var typography
+    private var name: String { style.title }
 
     var body: some View {
         Button(action: action) {
@@ -547,7 +623,9 @@ private struct PresetChip: View {
                 .overlay { RoundedRectangle(cornerRadius: 6).strokeBorder(selected ? Chrome.accent : SettingsControlStyle.border) }
                 .contentShape(RoundedRectangle(cornerRadius: 6))
         }.buttonStyle(.plain)
+            .help("\(name): \(style.detail) · a click makes a random one, and Random makes another")
             .accessibilityLabel(name)
             .accessibilityAddTraits(selected ? .isSelected : [])
+            .accessibilityIdentifier("theme-maker-style-\(style.rawValue)")
     }
 }

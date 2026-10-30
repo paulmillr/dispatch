@@ -163,7 +163,7 @@ final class GitCommitsPresentationTests: XCTestCase {
         // The commit opens on its first file, as the mockup shows it.
         XCTAssertEqual(session.commitFile, "src/routes/billing.ts")
 
-        // The files header's 34 pt row as on every tab: the repository and its branch, the search and the details'
+        // The files header's row (34 pt at the 12.5 design base) as on every tab: the repository and its branch, the search and the details'
         // toggle, then the tabs at the trailing end; the list starts right under it, and the scope menu sits in its footer.
         let header = try await frame("files-header", in: window)
         let segment = try await frame("files-segment-commits", in: window)
@@ -173,7 +173,7 @@ final class GitCommitsPresentationTests: XCTestCase {
         let search = try await frame("files-search", in: window)
         let toggle = try await frame("files-preview-toggle", in: window)
         let list = try await frame("git-commits-list", in: window)
-        XCTAssertEqual(header.height, 34, accuracy: 0.5)
+        XCTAssertEqual(header.height, AppTypography().expanded(34), accuracy: 0.5)
         XCTAssertLessThan(crumbs.maxX, search.minX)
         XCTAssertLessThanOrEqual(search.maxX, toggle.minX)
         XCTAssertEqual(scope.midY, footer.midY, accuracy: 1)

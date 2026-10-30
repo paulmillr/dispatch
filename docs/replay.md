@@ -7,14 +7,14 @@ Tests replay recorded I/O by default: a test with a recording in `replays/` runs
 - The **app journal**: everything the app exchanges with the outside world in one test: helper connections (bytes both ways), terminal ptys, commands it runs, files it reads and writes, what it observes (process state, file existence, the time), its own waits (`System.sleep`) and the test's steps.
 - One **helper capture** per helper process the test started: its startup facts, every I/O request and its result, its end (return status, handoff or signal). Helpers on SSH hosts (the Mac's own test sshd, the Linux test host) write theirs there; each test collects them when it ends.
 - Both use one format: zstd around length-prefixed frames of binary values (`helper/core/src/system/capture/trace.rs`). Bytes stay bytes. Live captures are zstd level 1; the corpus keeps them at level 9 with `--long=27` (`.rpl.zst` either way: `Vendor/Zstd/PROVENANCE.md`), whose 128 MiB window stores a payload recorded again and again (the helper binary the bootstrap tests upload) once. `zstd -dc --long=27` expands either.
-- Captures hold unredacted I/O, and the corpus is public: `--capture` stores only scrubbed copies, and the corpus's pre-push hook refuses a capture holding this Mac's private values ([scrubbing](#scrub-captures-before-sharing-them)).
+- Captures hold unredacted I/O: `--capture` stores only scrubbed copies, and the corpus's pre-push hook refuses a capture holding this Mac's private values ([scrubbing](#scrub-captures-before-sharing-them)).
 
 **The corpus**: `replays/<TestFile>/<testName>/<key>.rpl.zst`.
 
 - `<TestFile>` is the Swift file declaring the test class, `<testName>` the test method. A test's directory holds its app journal and all its helper captures (local and remote).
 - `<key>` is a hash of what replay sees (records without the bookkeeping clock or wire version), so the same content is one file. A scrubbed corpus has random names instead; nothing reads a key from a name.
 - One app journal per test: a recording names its run's pids, seeds and temp paths, so without deduplication every live re-run would look like a new variant. `store` skips a test that already has one.
-- The corpus is a git submodule at `replays/` (`scripts/split-replays.py` made it one) whose path never changes: recordings name `/tmp/dt-journal/checkout/replays`. Get it with `git clone --recurse-submodules` or `git submodule update --init replays`; without it `test/xcode.py` runs only `--live` and the Debug build skips its corpus check with a warning. Changed recordings (`--capture`, `capture prune`, a deleted test directory) are changes in the submodule: commit and push there first, then stage the new `replays` commit here with the change that made them. Never push a checkout's commit before the corpus commit it names.
+- The corpus is a separate git repository kept at `replays/` (ignored here, not a submodule) whose path never changes: recordings name `/tmp/dt-journal/checkout/replays`. Without it `test/xcode.py` runs only `--live` and the Debug build skips its corpus check with a warning. Changed recordings (`--capture`, `capture prune`, a deleted test directory) are commits in that repository.
 
 ## Common tasks
 

@@ -5,15 +5,46 @@ import UIKit
 /// simulator: the default font size, the key capsule's form with and without a hardware keyboard, its width, and
 /// where the software keyboard is (docked, floating or split, or only the shortcut bar a hardware keyboard leaves).
 enum TerminalAdaptation {
-    /// The Mac's default is 12.5 points (`Preferences.fontSize`) at a laptop's distance; an iPad on a stand or a
-    /// Magic Keyboard sits at about that distance with points some 15 % smaller than a MacBook's, so 13 reads the
-    /// same. The phone keeps its 12 (held closer, and every M6a screenshot is at 12). A pinch or Settings replaces
-    /// either; the choice is kept per device (`TerminalController.fontSizeKey`), which is one device class.
-    static let padFontSize = 13.0
+    /// The Mac's default is 14 points (`Preferences.fontSize`) at a laptop's distance; an iPad on a stand or a
+    /// Magic Keyboard sits at about that distance, and 14.5 reads the same (13 matched the Mac's earlier 12.5). The
+    /// phone keeps its 12 (held closer, every M6a screenshot is at 12, and each point costs four of its ~51 columns).
+    /// A pinch or Settings replaces either; the choice is kept per device (`TerminalController.fontSizeKey`), which is
+    /// one device class.
+    static let padFontSize = 14.5
 
     static func defaultFontSize(idiom: UIUserInterfaceIdiom) -> Double {
         idiom == .pad ? padFontSize : TerminalConfiguration.defaultFontSize
     }
+
+    // MARK: Dynamic Type
+
+    /// The text size whose factor is the largest the terminal takes: the accessibility sizes enlarge body text up to
+    /// 3.1 times, which would leave a phone's terminal a dozen columns. A pinch still goes past it.
+    static let largestScaledCategory = UIContentSizeCategory.extraExtraExtraLarge
+
+    /// How much the system text size enlarges body text (`UIFontMetrics`): 1 at the standard Large, about 1.32 at XXXL
+    /// and above, below 1 at the smaller sizes.
+    static func textScale(_ category: UIContentSizeCategory) -> Double {
+        let category = category == .unspecified ? .large : min(category, largestScaledCategory)
+        let traits = UITraitCollection(preferredContentSizeCategory: category)
+        return Double(UIFontMetrics(forTextStyle: .body).scaledValue(for: 1000, compatibleWith: traits)) / 1000
+    }
+
+    /// The size a terminal draws `base` at, `base` being the size at the standard text size (what Settings shows and
+    /// `TerminalController.fontSizeKey` keeps), within the terminal's sizes.
+    static func fontSize(base: Double, category: UIContentSizeCategory) -> Double {
+        let size = (base * textScale(category) * 100).rounded() / 100
+        return min(max(size, TerminalConfiguration.fontSizes.lowerBound), TerminalConfiguration.fontSizes.upperBound)
+    }
+
+    /// The size at the standard text size that draws at `size` (a pinch's), kept so the choice follows a later change
+    /// of text size.
+    static func baseSize(drawn size: Double, category: UIContentSizeCategory) -> Double {
+        (size / textScale(category) * 100).rounded() / 100
+    }
+
+    /// The text size the user chose in iOS's Settings.
+    @MainActor static var category: UIContentSizeCategory { UIApplication.shared.preferredContentSizeCategory }
 
     /// The key capsule: the phone's six keys (`full`), or on an iPad with a hardware keyboard a small button that
     /// brings them back (`collapsed`): the keyboard has Esc, Tab, Ctrl, Option and arrows of its own (one without Esc

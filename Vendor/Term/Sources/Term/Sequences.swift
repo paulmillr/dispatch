@@ -68,7 +68,7 @@ extension Stream {
             if n == 0 || (n == 1 && p0 == 0) { emit(.tabSet) }
             else if n == 1 && p0 == 2 { emit(.tabClearCurrent) } else if n == 1 && p0 == 5 { emit(.tabClearAll) }
         case (0x57, 0x3F): if n == 1 && p0 == 5 { emit(.tabReset) }             // ?W
-        case (0x67, 0): if n == 1 && p0 == 0 { emit(.tabClearCurrent) } else if n == 1 && p0 == 3 { emit(.tabClearAll) } // g
+        case (0x67, 0): if n == 0 || n == 1 && p0 == 0 { emit(.tabClearCurrent) } else if n == 1 && p0 == 3 { emit(.tabClearAll) } // g
         case (0x63, 0): emit(.deviceAttributes(.primary))                       // c
         case (0x63, 0x3E): emit(.deviceAttributes(.secondary))                  // >c
         case (0x63, 0x3D): emit(.deviceAttributes(.tertiary))                   // =c
@@ -89,9 +89,11 @@ extension Stream {
             if let i = deviceStatusTable.firstIndex(where: { $0.value == p0 && $0.question == (k != 0) }) {
                 emit(.deviceStatus(DeviceStatus(request: DeviceStatusRequest(index: i))))
             }
-        case (0x70, 0x3F24):                                                    // ?$p DECRQM
+        case (0x70, 0x21): if n == 0 { emit(.softReset) }                       // !p DECSTR
+        case (0x70, 0x24), (0x70, 0x3F24):                                     // $p, ?$p DECRQM
             guard n == 1 else { return }
-            emit(Mode.from(p0, ansi: false).map { .requestMode(ModeRef(mode: $0)) } ?? .requestModeUnknown(RawMode(mode: p0, ansi: false)))
+            let ansi = k == 0x24
+            emit(Mode.from(p0, ansi: ansi).map { .requestMode(ModeRef(mode: $0)) } ?? .requestModeUnknown(RawMode(mode: p0, ansi: ansi)))
         case (0x71, 0x20):                                                      // SP q DECSCUSR
             if n <= 1, p0 <= 6, let s = CursorStyle(rawValue: p0) { emit(.cursorStyle(s)) }
         case (0x71, 0x22):                                                      // " q DECSCA
@@ -101,7 +103,7 @@ extension Stream {
         case (0x73, 0): margin(Action.leftAndRightMargin, .leftAndRightMarginAmbiguous) // s
         case (0x73, 0x3E): if n == 0 || (n == 1 && p0 <= 1) { emit(.mouseShiftCapture(n == 1 && p0 == 1)) } // >s
         case (0x74, 0) where n > 0:                                             // t
-            let r: SizeReport? = switch p0 { case 14: .csi14t; case 16: .csi16t; case 18: .csi18t; case 21: .csi21t; default: nil }
+            let r: SizeReport? = switch p0 { case 14: .csi14t; case 16: .csi16t; case 18: .csi18t; case 19: .csi19t; case 21: .csi21t; default: nil }
             if n == 1, let r { emit(.sizeReport(r)) }
             else if (p0 == 22 || p0 == 23), n == 2 || n == 3, p1 == 0 || p1 == 2 {
                 let i = n == 3 ? p[p.startIndex + 2] : 0

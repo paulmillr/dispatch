@@ -167,8 +167,8 @@ final class ReviewPresentationTests: XCTestCase {
         try await TestSupport.eventually { window.firstResponder is ReviewTextEditor.EditorView }
         try type("Split this file.", in: window)
         try await TestSupport.eventually { self.repository.review(scope).comments.map(\.text) == ["Split this file."] }
-        let card = try await frame("review-comment", in: window)
-        let hunk = try await frame("git-diff-hunk-0", in: window)
+        var card = NSRect.zero, hunk = NSRect.zero // The comment's row comes in with the next layout: read both once it is placed.
+        try await TestSupport.eventually(diagnostic: "the file's comment sits above the rows: card \(card), hunk \(hunk)") { card = PresentationTestSupport.accessibilityFrames("review-comment", in: window).first ?? .zero; hunk = PresentationTestSupport.accessibilityFrames("git-diff-hunk-0", in: window).first ?? .zero; return card != .zero && hunk != .zero && card.minY > hunk.maxY - 1 }
         XCTAssertGreaterThan(card.minY, hunk.maxY - 1, "the file's comment sits above the rows")
 
         try await click("review-comment-edit", in: window, until: { session.reviewDraft?.editing != nil })

@@ -524,7 +524,7 @@ final class MobileComposition {
     /// The host's terminal presences attach again through the new connection (a new helper may hand out the same ids).
     private func reattach(_ session: HostSession, client: HelperClient) {
         guard let topology = session.topology else { return }
-        presences.reopen(host: session.id, client: client, topology: topology)
+        presences.reopen(host: session.id, client: client, topology: topology, features: session.features)
     }
 
     #if DEBUG
@@ -683,10 +683,11 @@ private struct TerminalSegment: View {
         // One branch online and offline: a link that drops or comes back keeps the same view (its host view, keyboard
         // and capsule state) showing the same presence.
         if let presence = presence(key) {
-            // Attached while on screen (and while a chat needs it); hidden, it keeps its last screen detached.
+            // Attached while on screen (and while a chat needs it: its output held while only the chat uses it);
+            // hidden, it keeps its last screen detached.
             TerminalSegmentView(presence: presence).id(key)
-                .onAppear { presences.retain(key) }
-                .onDisappear { presences.release(key) }
+                .onAppear { presences.retain(key, showing: true) }
+                .onDisappear { presences.release(key, showing: true) }
         } else {
             let session = hosts.session(tab.ref.host)
             VStack(spacing: 6) {
@@ -712,7 +713,8 @@ private struct TerminalSegment: View {
             return presences.presence(key)
         }
         let node = session.topology?.nodes.first { $0.key == pane.key }
-        return presences.open(key, feed: HelperTerminalFeed(client: client, terminal: pane.id), terminal: pane.id, client: client,
+        return presences.open(key, feed: HelperTerminalFeed(client: client, terminal: pane.id, features: session.features),
+                              terminal: pane.id, client: client,
                               scrollback: TerminalScrollback(multiplexer: session.following),
                               grid: node?.size.map { (Int($0.columns), Int($0.rows)) })
     }
@@ -775,8 +777,8 @@ private struct ShellSegment: View {
                                      close: { navigator.actions.close(.tab(ref), .close) })
         if let presence = presences.presence(key) {
             TerminalSegmentView(presence: presence, ended: card).id(key)
-                .onAppear { presences.retain(key) }
-                .onDisappear { presences.release(key) }
+                .onAppear { presences.retain(key, showing: true) }
+                .onDisappear { presences.release(key, showing: true) }
         } else {
             TerminalEndedCardView(card: card, detail: state?.exitDetail)
                 .frame(maxWidth: 404)
@@ -787,9 +789,10 @@ private struct ShellSegment: View {
     }
 }
 
-/// Chat's terminal side over the Terminal area's presences: a verified conversation keeps its terminal attached and
-/// its screen published (docs/ios.md, Helper contract) as one of the presence's users; its release lets the attachment go
-/// unless the Terminal segment shows it.
+/// Chat's terminal side over the Terminal area's presences: a verified conversation keeps its terminal attached (and its
+/// screen published to a helper without `screens.host`, docs/ios.md, Helper contract) as one of the presence's users,
+/// its output held while no terminal view shows it; its release lets the attachment go unless the Terminal segment
+/// shows it.
 @MainActor
 final class TerminalChatPresence: ChatTerminalPresence {
     let presences: TerminalPresences
@@ -797,10 +800,11 @@ final class TerminalChatPresence: ChatTerminalPresence {
     private var holding: Set<ChatConversationKey> = []
     init(presences: TerminalPresences) { self.presences = presences }
 
-    func retain(_ key: ChatConversationKey, terminal: UInt64, client: HelperClient) {
+    func retain(_ key: ChatConversationKey, terminal: UInt64, client: HelperClient, features: Set<String>) {
         let node = TerminalPresences.Key(host: key.host, node: key.node)
         // The feed first, so the use attaches through this client and id, never the previous helper's.
-        _ = presences.open(node, feed: HelperTerminalFeed(client: client, terminal: terminal), terminal: terminal, client: client)
+        _ = presences.open(node, feed: HelperTerminalFeed(client: client, terminal: terminal, features: features), terminal: terminal,
+                           client: client)
         if holding.insert(key).inserted { presences.retain(node) }
     }
 
@@ -823,12 +827,14 @@ extension TerminalPresences {
     static let shared = TerminalPresences()
 
     /// After a reconnect: each of the host's presences in use whose node the new topology names attaches through
-    /// `client` (the others take the new feed when they are used again).
-    func reopen(host: UUID, client: HelperClient, topology: HelperTopology) {
+    /// `client` with the features its hello accepted (the others take the new feed when they are used again). A new
+    /// attachment follows: holds of the last connection are gone with it.
+    func reopen(host: UUID, client: HelperClient, topology: HelperTopology, features: Set<String> = []) {
         for node in topology.nodes where node.kind == .terminal && !node.detached {
             let key = Key(host: host, node: node.key)
             guard presence(key) != nil, inUse(key) else { continue }
-            _ = open(key, feed: HelperTerminalFeed(client: client, terminal: node.id), terminal: node.id, client: client)
+            _ = open(key, feed: HelperTerminalFeed(client: client, terminal: node.id, features: features), terminal: node.id,
+                     client: client)
         }
     }
 

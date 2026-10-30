@@ -6,7 +6,7 @@ final class WatchScaffoldTests: XCTestCase {
     func testTheWatchAppNamesThePhoneAppAsItsCompanion() throws {
         let info = try XCTUnwrap(Bundle.main.infoDictionary)
         let identifier = try XCTUnwrap(Bundle.main.bundleIdentifier)
-        XCTAssertTrue(identifier.hasPrefix("yachts.dispatch.mobile"), identifier)
+        XCTAssertTrue(identifier.hasPrefix("yachts.dispatch.pilot.mobile"), identifier)
         XCTAssertTrue(identifier.hasSuffix(".watchkitapp"), identifier)
         XCTAssertEqual(info["WKCompanionAppBundleIdentifier"] as? String,
                        String(identifier.dropLast(".watchkitapp".count)))

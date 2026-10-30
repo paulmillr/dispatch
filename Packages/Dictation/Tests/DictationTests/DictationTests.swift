@@ -60,9 +60,48 @@ final class DictationTests: XCTestCase {
         }
     }
 
+    /// Parakeet's download: the Core ML models FluidAudio loads for v3, from one revision, every file checked.
+    func testParakeetIsAPinnedFolderOfVerifiedFiles() {
+        let files = ParakeetModel.files
+        XCTAssertEqual(Set(files.map { $0.path.split(separator: "/").first.map(String.init) ?? "" }),
+                       ["Preprocessor.mlmodelc", "Encoder_v2.mlmodelc", "Decoder.mlmodelc", "JointDecisionv3.mlmodelc",
+                        "parakeet_vocab.json"])
+        XCTAssertEqual(Set(files.map(\.path)).count, files.count)
+        for file in files {
+            XCTAssertEqual(file.sha256.count, 64, file.path)
+            XCTAssertGreaterThan(file.bytes, 0, file.path)
+            XCTAssertEqual(file.url.absoluteString,
+                           "https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v3-coreml/resolve/\(ParakeetModel.revision)/\(file.path)")
+        }
+        XCTAssertEqual(DictationModel.parakeet.bytes, 632_169_729)
+        XCTAssertEqual(DictationModel.all, [.whisper(.small), .whisper(.turbo), .parakeet])
+    }
+
+    func testEnginesNameTheirModels() {
+        XCTAssertEqual(DictationEngine.allCases, [.apple, .whisper, .parakeet])
+        XCTAssertNil(DictationEngine.apple.model(whisper: .turbo))
+        XCTAssertEqual(DictationEngine.whisper.model(whisper: .turbo), .whisper(.turbo))
+        XCTAssertEqual(DictationEngine.parakeet.model(whisper: .turbo), .parakeet, "Parakeet has one model")
+        XCTAssertEqual(DictationEngine.whisper.label(whisper: .small), "Whisper Small")
+        XCTAssertEqual(DictationEngine.parakeet.label(whisper: .small), "Parakeet")
+        XCTAssertEqual(DictationError.modelMissing(.parakeet).errorDescription,
+                       "Download the Parakeet model in Settings to dictate with it.")
+    }
+
+    func testParakeetTextJoinsPiecesAndDropsSpecialTokens() throws {
+        var pieces = ["<unk>", "<|nospeech|>", "▁Hel", "lo", ",", "▁wor", "ld", "."]
+        pieces += Array(repeating: "", count: 8192 - pieces.count)
+        let json = Dictionary(uniqueKeysWithValues: pieces.enumerated().map { (String($0.offset), $0.element) })
+        let vocabulary = try ParakeetTranscriber.vocabulary(JSONSerialization.data(withJSONObject: json))
+        XCTAssertEqual(vocabulary.count, 8192, "every id below the blank")
+        XCTAssertEqual(ParakeetTranscriber.text([1, 2, 3, 4, 0, 5, 6, 7], vocabulary: vocabulary), "Hello, world.")
+        XCTAssertEqual(ParakeetTranscriber.text([], vocabulary: vocabulary), "")
+        XCTAssertEqual(ParakeetTranscriber.text([8192, 9000], vocabulary: vocabulary), "", "the blank and beyond are no text")
+    }
+
     func testDictationRestsIdleUntilStarted() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dictation-" + UUID().uuidString)
-        let dictation = Dictation(models: WhisperModelStore(directory: directory))
+        let dictation = Dictation(models: DictationModelStore(whisper: directory, parakeet: directory))
         XCTAssertEqual(dictation.phase, .idle)
         XCTAssertFalse(dictation.active("composer"))
         XCTAssertNil(dictation.error(for: "composer"))

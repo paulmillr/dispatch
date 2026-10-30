@@ -57,8 +57,17 @@ struct ChatAttachButton: View {
 /// the last attach was refused.
 struct ChatComposerAttachments: View {
     @Environment(\.chatTheme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let session: ChatSession
     let coordinator: ChatCoordinator
+
+    /// A chip: an attachment of the draft, or one still uploading (or failed). An upload that lands keeps its id, so
+    /// its chip stays put as it becomes the attachment.
+    private struct Chip: Identifiable {
+        let attachment: ChatAttachment
+        var upload: ChatAttachmentUpload? = nil
+        var id: String { attachment.id }
+    }
 
     /// The row's height in the composer, for the editor's height bound.
     static func height(_ session: ChatSession, theme: ChatTheme) -> CGFloat {
@@ -72,21 +81,31 @@ struct ChatComposerAttachments: View {
         let endpoint = session.helper?.endpoint
         VStack(alignment: .leading, spacing: 4) {
             if session.drafts.shape.hasAttachments || !session.draftUploads.isEmpty {
+                let attachments = session.drafts.current.attachments
+                let chips = attachments.map { Chip(attachment: $0) } + session.draftUploads
+                    .filter { upload in !attachments.contains { $0.id == upload.id } }
+                    .map { Chip(attachment: $0.attachment, upload: $0) }
                 ScrollView(.horizontal) {
                     HStack(spacing: 6) {
-                        ForEach(session.drafts.current.attachments) { attachment in
-                            ChatAttachmentChip(attachment: attachment, endpoint: endpoint,
-                                               open: { ChatAttachmentPreview.shared.open(attachment, endpoint: endpoint) },
-                                               remove: { coordinator.removeAttachment(attachment.id, from: session) })
-                        }
-                        ForEach(session.draftUploads) { upload in
-                            ChatAttachmentChip(attachment: upload.attachment, endpoint: nil, uploading: upload.uploading,
-                                               failure: upload.failure,
-                                               open: { if upload.thumbnail != nil { ChatAttachmentPreview.shared.open(upload.attachment, endpoint: nil) } },
-                                               remove: { coordinator.removeAttachment(upload.id, from: session) },
-                                               retry: { coordinator.retryAttachment(upload.id, in: session) })
+                        ForEach(chips) { chip in
+                            if let upload = chip.upload {
+                                ChatAttachmentChip(attachment: upload.attachment, endpoint: nil, uploading: upload.uploading,
+                                                   failure: upload.failure,
+                                                   open: { if upload.thumbnail != nil { ChatAttachmentPreview.shared.open(upload.attachment, endpoint: nil) } },
+                                                   remove: { coordinator.removeAttachment(upload.id, from: session) },
+                                                   retry: { coordinator.retryAttachment(upload.id, in: session) })
+                                    .transition(chipTransition)
+                            } else {
+                                ChatAttachmentChip(attachment: chip.attachment, endpoint: endpoint,
+                                                   open: { ChatAttachmentPreview.shared.open(chip.attachment, endpoint: endpoint) },
+                                                   remove: { coordinator.removeAttachment(chip.attachment.id, from: session) })
+                                    .transition(chipTransition)
+                            }
                         }
                     }
+                    // Pasted, dropped, removed and landed chips change outside any animation; the row's own does.
+                    .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: 0.2),
+                               value: chips.map { "\($0.id) \($0.upload?.uploading == true) \($0.upload?.failure != nil)" })
                 }
                 // Never, not hidden: with scroll bars shown always (no trackpad) hidden still draws one.
                 .scrollIndicators(.never)
@@ -103,6 +122,10 @@ struct ChatComposerAttachments: View {
             }
         }
         .padding(.horizontal, 12).padding(.top, 6)
+    }
+
+    private var chipTransition: AnyTransition {
+        reduceMotion ? .opacity : .scale(scale: 0.85, anchor: .leading).combined(with: .opacity)
     }
 }
 

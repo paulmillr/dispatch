@@ -485,3 +485,61 @@ private struct ReconnectPresentationFixture: View {
         }
     }
 }
+
+extension SSHReconnectTests {
+    /// What automatic reconnect tries again: an unreachable host, and a login whose later steps ran out of time (a slow
+    /// link). Not a refusal, a cancellation, a permanent setup failure or a changed host.
+    func testAutomaticRetryClassesTellSlowLinksFromRefusals() {
+        XCTAssertTrue(SSHAutomaticFailure.retries(after: SSHAutomaticFailure.unreachable("Connection refused")))
+        XCTAssertTrue(SSHAutomaticFailure.retries(after: SSHAutomaticFailure.interrupted("setup timed out")))
+        XCTAssertFalse(SSHAutomaticFailure.retries(after: SSHAutomaticFailure.refused("Permission denied (publickey).")))
+        XCTAssertFalse(SSHAutomaticFailure.retries(after: CancellationError()))
+        XCTAssertFalse(SSHAutomaticFailure.retries(after: HerdrFailure("The SSH launcher has closed.")))
+
+        for error: any Error in [
+            SSHRecoveryIncomplete("The SSH shell reconnected, but its retained terminal spaces did not restore."),
+            SSHRecoveryIncomplete("The replacement SSH shell did not start. Retry to reconnect."),
+            SSHSetupFailure.permanent("SSH integration setup timed out.", reason: SSHSetupFailure.timedOut),
+            SSHSetupFailure("Could not install the SSH helper in the remote cache.", reason: "the upload failed (255)", given: nil),
+            HerdrFailure(SSHTimeout.message), HerdrFailure(SSHCommand.timedOut),
+            HerdrFailure(SSHCommand.stalled(SSHBootstrap.uploadStall)),
+        ] {
+            XCTAssertTrue(SSHAutomaticFailure.transient(error), "\(error)")
+        }
+        for error: any Error in [
+            CancellationError(),
+            SSHSetupFailure.permanent("Could not identify the SSH host platform.", reason: "unknown host platform"),
+            SSHSetupFailure.hooksNeedHome,
+            HerdrFailure("The authenticated host changed or the retained tabs were closed."),
+            HerdrFailure("The SSH account or configuration changed. Open a new connection for the changed identity."),
+            SSHAutomaticFailure.refused("Its SSH login tab is closed. Reconnect to log in again."),
+        ] {
+            XCTAssertFalse(SSHAutomaticFailure.transient(error), "\(error)")
+        }
+    }
+
+    /// A login that worked but whose later step timed out keeps retrying, with the backoff; a refusal still ends it.
+    func testAutomaticReconnectKeepsRetryingALoginThatDidNotFinishInTime() async throws {
+        let previous = TerminalRuntime.shared.workspace
+        defer { TerminalRuntime.shared.workspace = previous }
+        let (workspace, controller, recipes) = try fixture(1)
+        defer { _ = workspace.spaces }
+        defer { controller.stop() }
+        let id = recipes[0].connection
+        let slow = "The SSH shell reconnected, but its retained terminal spaces did not restore."
+        var outcomes: [SSHAutomaticFailure] = [.interrupted(slow), .interrupted(slow), .refused("Permission denied (publickey).")]
+        controller.attempt = { _ in if !outcomes.isEmpty { throw outcomes.removeFirst() } }
+        controller.automatic = true
+        controller.lost(id)
+        controller.retryNow()
+        try await TestSupport.eventually { outcomes.count == 2 && controller.states[id]?.retryAt != nil }
+        XCTAssertEqual(controller.states[id]?.error, slow)
+        controller.retryNow()
+        try await TestSupport.eventually { outcomes.count == 1 && controller.states[id]?.retryAt != nil }
+        controller.retryNow()
+        try await TestSupport.eventually { outcomes.isEmpty && controller.states[id]?.reconnecting == false }
+        XCTAssertNil(controller.states[id]?.retryAt)
+        XCTAssertEqual(controller.states[id]?.attempts, 3)
+        XCTAssertNotNil(controller.recipes[id], "A refused login keeps its Reconnect bar")
+    }
+}

@@ -122,7 +122,7 @@ final class ChatTests: XCTestCase {
         let defaults = Preferences()
         XCTAssertEqual(defaults.fontFamily, "Source Code Pro")
         XCTAssertEqual(defaults.chatFont, .system)
-        XCTAssertEqual(defaults.fontSize, 12.5)
+        XCTAssertEqual(defaults.fontSize, 14)
         let typography = ChatTypography(preferences: defaults)
         XCTAssertEqual(typography.codeFontName, "SourceCodePro-Regular")
         XCTAssertEqual(typography.sizeScale, 1)
@@ -224,9 +224,10 @@ final class ChatTests: XCTestCase {
         for choice in ChatFont.allCases where choice != .sameAsCode {
             preferences.chatFont = choice
             let chat = ChatTypography(preferences: preferences)
-            if choice == .system {
-                XCTAssertEqual(chat.reply, NSFont.systemFont(ofSize: preferences.fontSize + 1))
-                XCTAssertEqual(chat.body, .system(size: preferences.fontSize, weight: .regular))
+            if let design = choice.systemDesign {
+                XCTAssertEqual(chat.reply, choice.systemFont(ofSize: preferences.fontSize + 1))
+                XCTAssertEqual(chat.body, .system(size: preferences.fontSize, weight: .regular,
+                                                  design: design == .serif ? .serif : design == .rounded ? .rounded : .default))
             } else {
                 XCTAssertEqual(chat.fontName, choice.postScriptName)
                 XCTAssertEqual(chat.reply.fontName, choice.postScriptName)
@@ -234,7 +235,7 @@ final class ChatTests: XCTestCase {
             XCTAssertEqual(chat.codeFontName, code.codeFontName)
             XCTAssertEqual(chat.codeDetailLineHeight, code.codeDetailLineHeight)
             XCTAssertEqual(chat.codeReply.pointSize, code.reply.pointSize)
-            if choice == .system { XCTAssertEqual(chat.reply.pointSize, code.reply.pointSize) }
+            if choice.systemDesign != nil { XCTAssertEqual(chat.reply.pointSize, code.reply.pointSize) }
             else { XCTAssertNotEqual(chat.reply.pointSize, code.reply.pointSize) }
             XCTAssertEqual(chat.size, preferences.fontSize)
             preferences.fontFamily = "Source Code Pro"
@@ -257,7 +258,7 @@ final class ChatTests: XCTestCase {
                 let typography = ChatTypography(preferences: decoded)
                 XCTAssertEqual(typography.codeReply.fontName, NSFont.monospacedSystemFont(ofSize: size + 1, weight: .regular).fontName)
                 XCTAssertEqual(typography.codeReply.pointSize, size + 1)
-                XCTAssertEqual(typography.fontName, choice == .system ? NSFont.systemFont(ofSize: size).fontName : choice.postScriptName ?? typography.codeFontName)
+                XCTAssertEqual(typography.fontName, choice.systemFont(ofSize: size)?.fontName ?? choice.postScriptName ?? typography.codeFontName)
                 for metric in [typography.characterWidth, typography.replyLineHeight, typography.detailLineHeight,
                                typography.codeDetailLineHeight, typography.detailSize] {
                     XCTAssertTrue(metric.isFinite && metric > 0, "Unavailable fonts must not produce unusable text metrics")
@@ -1030,5 +1031,183 @@ extension ChatTests {
                                           attachments: [ChatAttachment(name: "deck.png", kind: .image, size: 0, path: deck)]))
         XCTAssertTrue(AgentInput.records(try XCTUnwrap(prompts(copy).first), prompt: "",
                                          attachments: [ChatAttachment(name: "chart.png", kind: .image, size: 0, path: chart)]))
+    }
+}
+
+/// A helper replacement or a conversation renamed under the reader: the shown transcript stays as it is.
+extension ChatTests {
+    nonisolated private static func record(_ kind: String, _ id: String, turn: String, text: String = "", time: Int64) -> HelperChat.Record {
+        .init(id: id, turn: turn, kind: kind, text: text, title: kind == "tool" ? "exec_command" : "",
+              output: kind == "tool" ? "Sources/Example.swift:1: match" : "", blocks: [], completed: true,
+              exit_code: kind == "tool" ? 0 : nil, patch: nil, time_ms: time, documents: [], tool: nil, inline_reasoning: false)
+    }
+
+    /// Two turns: a question, a reply and six steps, then a question and its answer.
+    nonisolated private static func replacementRecords(_ turns: [String] = ["t1", "t2"], from start: Int = 0) -> [HelperChat.Record] {
+        var records: [HelperChat.Record] = []
+        for (index, turn) in turns.enumerated() {
+            let base = Int64(1_750_000_000_000) + Int64(start + index) * 600_000
+            records.append(record("turn_started", "start-\(turn)", turn: turn, time: base))
+            records.append(record("user", "user-\(turn)", turn: turn, text: "Question for \(turn)", time: base + 1000))
+            records.append(record("assistant", "reply-\(turn)", turn: turn, text: "Looking into \(turn).", time: base + 2000))
+            if start + index == 0 {
+                for step in 0..<6 {
+                    records.append(record("tool", "step-\(turn)-\(step)", turn: turn, text: #"{"cmd":"rg example"}"#,
+                                          time: base + 3000 + Int64(step) * 1000))
+                }
+            }
+            records.append(record("assistant", "answer-\(turn)", turn: turn, text: "Answer for \(turn).", time: base + 20_000))
+            records.append(record("turn_ended", "end-\(turn)", turn: turn, time: base + 21_000))
+        }
+        return records
+    }
+
+    nonisolated private static func history(_ conversation: String, _ records: [HelperChat.Record], earlier: String? = nil) -> HelperChat.History {
+        .init(terminal: 0, binding: .init(session: conversation, transcript: nil, pid: nil, start: nil, executable: nil),
+              session: conversation, key: "codex", label: "Codex", commands: [], native_queue: false,
+              state: nil, state_error: nil, records: records, earlier: earlier, history_error: nil,
+              history_pending: false, capabilities: [])
+    }
+
+    func testOverlappingReplacementKeepsRowsExpansionsAndPosition() throws {
+        let chat = ChatCoordinator(enabled: true)
+        let session = chat.session(for: System.uuid())
+        defer { chat.close(session.id) }
+        let records = Self.replacementRecords()
+        chat.receiveHelper(.history(Self.history("conversation", records, earlier: "cursor")), session: session)
+        let group = try XCTUnwrap(session.transcriptRows.first { $0.group != nil }?.group)
+        session.setGroupExpanded(group, true)
+        let rows = session.visibleTranscriptRows.map(\.id)
+        XCTAssertTrue(rows.contains { $0.hasSuffix("step-t1-5") }, "The expanded group shows every step")
+        let step = try XCTUnwrap(rows.first { $0.hasSuffix("step-t1-2") })
+        session.atBottom = false; session.scrollAnchor = step
+        session.scrollPosition.restore(.init(id: step, offset: -12))
+        let revision = session.historyRevision
+
+        // The same records read again (a harness re-reading its file): nothing on screen changes.
+        chat.receiveHelper(.replacement(.init(records: records, earlier: "cursor", state: nil, snapshot: nil)), session: session)
+        XCTAssertEqual(session.visibleTranscriptRows.map(\.id), rows)
+        XCTAssertEqual(session.expandedToolGroups, [group.id])
+        XCTAssertFalse(session.atBottom)
+        XCTAssertEqual(session.scrollAnchor, step)
+        XCTAssertEqual(session.scrollPosition.saved, .init(id: step, offset: -12))
+        XCTAssertTrue(session.hasEarlier)
+        XCTAssertGreaterThan(session.historyRevision, revision)
+
+        // An empty read (its page budget spent on unshown lines) clears nothing.
+        chat.receiveHelper(.replacement(.init(records: [], earlier: "cursor", state: nil, snapshot: nil)), session: session)
+        XCTAssertEqual(session.visibleTranscriptRows.map(\.id), rows)
+        XCTAssertEqual(session.expandedToolGroups, [group.id])
+
+        // A page from the transcript's start without the second turn proves it gone; the first keeps its rows.
+        let first = Self.replacementRecords(["t1"])
+        chat.receiveHelper(.replacement(.init(records: first, earlier: nil, state: nil, snapshot: nil)), session: session)
+        XCTAssertFalse(session.turns.contains { $0.id == "t2" })
+        XCTAssertEqual(session.visibleTranscriptRows.map(\.id), rows.filter { !$0.hasSuffix("t2") })
+        XCTAssertFalse(session.hasEarlier)
+        // A turn that comes back is shown again: its records no longer count as seen.
+        chat.receiveHelper(.records(Array(records.dropFirst(first.count))), session: session)
+        XCTAssertEqual(session.visibleTranscriptRows.map(\.id), rows)
+
+        // A page sharing no record is another branch: it replaces the history.
+        let branch = Self.replacementRecords(["b1"])
+        chat.receiveHelper(.replacement(.init(records: branch, earlier: nil, state: nil, snapshot: nil)), session: session)
+        XCTAssertEqual(session.turns.map(\.id), ["b1"])
+        XCTAssertTrue(session.expandedToolGroups.isEmpty)
+        XCTAssertTrue(session.atBottom)
+    }
+
+    func testSameConversationUnderANewIDKeepsRowsAndANewOneResets() throws {
+        let chat = ChatCoordinator(enabled: true)
+        let session = chat.session(for: System.uuid())
+        defer { chat.close(session.id) }
+        let records = Self.replacementRecords()
+        chat.receiveHelper(.history(Self.history("first", records)), session: session)
+        let group = try XCTUnwrap(session.transcriptRows.first { $0.group != nil }?.group)
+        session.setGroupExpanded(group, true)
+        session.atBottom = false
+        let rows = session.visibleTranscriptRows.map(\.id)
+        // Continued in a new file: the new id's history repeats the shown records, and adds one.
+        let continued = records + Self.replacementRecords(["t3"], from: 2)
+        chat.receiveHelper(.history(Self.history("continued", continued)), session: session)
+        XCTAssertEqual(session.sessionID, "continued")
+        XCTAssertEqual(Array(session.visibleTranscriptRows.map(\.id).prefix(rows.count)), rows)
+        XCTAssertTrue(session.turns.contains { $0.id == "t3" })
+        XCTAssertEqual(session.expandedToolGroups, [group.id])
+        XCTAssertFalse(session.atBottom)
+        // A new conversation shares nothing: it starts clean.
+        chat.receiveHelper(.history(Self.history("other", Self.replacementRecords(["n1"], from: 3))), session: session)
+        XCTAssertEqual(session.sessionID, "other")
+        XCTAssertEqual(session.turns.map(\.id), ["n1"])
+        XCTAssertTrue(session.expandedToolGroups.isEmpty)
+    }
+
+    func testAnotherBranchSharingAncestorsReplacesOnlyWhatItLacks() throws {
+        let chat = ChatCoordinator(enabled: true)
+        let session = chat.session(for: System.uuid())
+        defer { chat.close(session.id) }
+        // Pi's tree: two prompts on one branch; switching to a leaf after the first leaves the second out, in its
+        // own turn or in a turn the branches share (records without a turn are in one "history" turn).
+        for shared in [false, true] {
+            func record(_ kind: String, _ id: String, _ turn: String, _ text: String, _ time: Int64) -> HelperChat.Record {
+                Self.record(kind, id, turn: shared ? "" : turn, text: text, time: 1_750_000_000_000 + time * 1000)
+            }
+            let ancestors = [record("user", "u1", "t1", "First prompt", 1), record("assistant", "r1", "t1", "First reply", 2)]
+            let left = [record("user", "u2", "t2", "Left prompt", 3), record("assistant", "r2", "t2", "Left reply", 4)]
+            session.resetConversation()
+            chat.receiveHelper(.page(.init(records: ancestors + left, earlier: nil, state: nil, snapshot: nil)), session: session)
+            XCTAssertEqual(session.turns.flatMap(\.items).map(\.text), ["First prompt", "First reply", "Left prompt", "Left reply"])
+            // The switch can arrive before the state that ends the last turn's busy: it is ended all the same.
+            session.busy = true; session.activeTurnID = shared ? "" : "t2"
+            if let last = session.turns.indices.last { session.turns[last].ended = Date() }
+            let rows = session.visibleTranscriptRows.map(\.id).filter { !$0.hasPrefix("worked-for") }
+            chat.receiveHelper(.replacement(.init(records: ancestors, earlier: nil, state: nil, snapshot: nil)), session: session)
+            session.busy = false
+            XCTAssertEqual(session.turns.flatMap(\.items).map(\.text), ["First prompt", "First reply"], "shared turn: \(shared)")
+            XCTAssertEqual(session.visibleTranscriptRows.map(\.id).filter { !$0.hasPrefix("worked-for") }, Array(rows.prefix(2)),
+                           "The ancestors' rows stay put")
+            // The other branch's prompt arrives as the leaf grows again.
+            chat.receiveHelper(.records([record("user", "u3", "t3", "Right prompt", 5)]), session: session)
+            XCTAssertEqual(session.turns.flatMap(\.items).map(\.text), ["First prompt", "First reply", "Right prompt"])
+        }
+    }
+}
+
+/// The helper repeats its state with every transcript read: one that matches the session writes nothing, so neither
+/// the footer (model, effort), the queue view nor a tab's glyph is invalidated by it.
+extension ChatTests {
+    final class Notified: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = false
+        var marked: Bool { lock.withLock { value } }
+        func mark() { lock.withLock { value = true } }
+    }
+
+    func testUnchangedChatStateWritesNothing() throws {
+        let chat = ChatCoordinator(enabled: true, draftRepository: ChatDraftRepository(store: ChatDraftMemoryStore()))
+        let session = chat.session(for: System.uuid())
+        defer { chat.close(session.id) }
+        session.helper = HelperChat(terminal: 0); session.sessionID = "state-fixture"
+        func state(effort: String) -> HelperChat.State {
+            .init(busy: true, activity: "working", model: "fixture-model", model_label: nil, effort: effort, usage: nil, goal: nil,
+                  draft: nil, attention: nil, dialog: nil, title: "Fixture title", compacting: false, service_tier: nil,
+                  agents: [.init(id: "a1", kind: "fixture-agent")])
+        }
+        chat.receiveHelper(.state(state(effort: "high")), session: session)
+        XCTAssertEqual(session.model, "fixture-model"); XCTAssertEqual(session.effort, "high")
+        XCTAssertTrue(session.active && session.busy && session.showChat)
+        let notified = Notified()
+        withObservationTracking {
+            _ = (session.model, session.reportsModel, session.effort, session.queueWaiting, session.queuedMessages.count)
+            _ = (session.active, session.busy, session.starting, session.nativeActivity, session.subagents, session.activityCheck)
+            _ = (session.usage, session.goal, session.goalRevision, session.title, session.threadName, session.serviceTier)
+            _ = (session.collaborationMode, session.settingsRevision, session.status, session.agentAttention, session.version)
+            _ = (session.showChat, session.hasNewMessages, session.retiredInteraction, session.focusRequest)
+        } onChange: { notified.mark() }
+        for _ in 0..<3 { chat.receiveHelper(.state(state(effort: "high")), session: session) }
+        XCTAssertFalse(notified.marked, "An unchanged chat.state invalidates nothing")
+        chat.receiveHelper(.state(state(effort: "low")), session: session)
+        XCTAssertTrue(notified.marked)
+        XCTAssertEqual(session.effort, "low")
     }
 }

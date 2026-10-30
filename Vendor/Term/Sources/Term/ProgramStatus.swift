@@ -51,8 +51,17 @@ public enum ProgramStatusCommand: Equatable {
         for raw in body.split(separator: 0x3A, omittingEmptySubsequences: false) {
             guard let eq = raw.firstIndex(of: 0x3D) else { continue }
             let key = trim(raw[..<eq], " \t"), value = trim(raw[(eq + 1)...], " \t")
-            guard !key.isEmpty, key.allSatisfy({ (0x61...0x7A).contains($0) }), value.allSatisfy(valueBytes.contains) else { continue }
             guard key.count <= 16 else { return nil }
+            // Validate every occurrence before filtering or replacing it. Otherwise a malformed
+            // id disappears and a clear command can fall back to clearing every record.
+            if key.elementsEqual("id".utf8) {
+                let segments = value.split(separator: 0x2F, omittingEmptySubsequences: false)
+                guard value.count <= 128, segments.count <= 8,
+                      segments.allSatisfy({ (1...32).contains($0.count) && $0.allSatisfy(idBytes.contains) }) else { return nil }
+            }
+            let limit = key.elementsEqual("app".utf8) ? 32 : key.elementsEqual("title".utf8) ? 256 : key.elementsEqual("msg".utf8) ? 2732 : nil
+            if let limit, value.count > limit { return nil }
+            guard !key.isEmpty, key.allSatisfy({ (0x61...0x7A).contains($0) }), value.allSatisfy(valueBytes.contains) else { continue }
             pairs[String(decoding: key, as: UTF8.self)] = Array(value)
         }
         guard let rawState = pairs["state"].map({ String(decoding: $0, as: UTF8.self) }) else { return nil }

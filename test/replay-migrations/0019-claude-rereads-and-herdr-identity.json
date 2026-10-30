@@ -1,0 +1,20 @@
+{
+  "kind": "rerecord",
+  "why": "Two helper answers changed on purpose, so Chat stops clearing and refilling its transcript. (1) The Claude harness re-reads its recent page whenever a live read starts without a cache (a reopen, a read racing a write, an attribute change); it published that page as a history replacement, which cleared Chat's presentation each time. It now replaces the history only when the transcript was replaced or shortened, or the page does not reach what was published; otherwise it publishes the page's records (none when the file did not grow). (2) herdr re-identifies an agent on every output frame and announced agent.changed when anything in its binding moved (open files, foreground group, arguments), so Chat reopened; it now announces only a different harness, session, transcript or process, as tmux does. Attributed with helper variants each lacking one change: (1) 7 recordings, (2) 6, plus one whose helper capture replays but whose app journal stalls because the app no longer reopens on a herdr binding that only moved (SSHHostIsolationIntegrationTests); all 14 pass live; the Claude page budget (request-log lines no longer count) and the Codex reload rule change no recording.",
+  "tests": [
+    "ChatModelPickerTests/testRealSSHHerdrChatCommands",
+    "ChatModelPickerTests/testRealSSHHerdrModelAndEffortPicker",
+    "ClaudeChatIntegrationTests/testLocalDiscoveryComposerThinkingToolsAndExit",
+    "ClaudeTransportTests/testHerdrChatStopAndPicker",
+    "ClaudeTransportTests/testLocalStopAndRecovery",
+    "ClaudeTransportTests/testTmuxChatStopAndPicker",
+    "SSHChatIntegrationTests/testRemoteHerdrApprovalHooks",
+    "SSHClaudeIntegrationTests/testRemoteHerdrApprovalAllowDenyAndRevocation",
+    "SSHClaudeIntegrationTests/testRemoteHerdrTransportModelQueueAndExit",
+    "SSHClaudeIntegrationTests/testRemotePlainTransportModelQueueAndExit",
+    "SSHClaudeIntegrationTests/testRemoteTmuxTransportModelQueueAndExit",
+    "SSHHostIsolationIntegrationTests/testDistinctAuthenticatedHostsIsolateCollidingHerdrAndCodexIdentities",
+    "SSHLinuxClaudeIntegrationTests/testLinuxHerdrClaudeApprovalsAndQuestions",
+    "SSHLinuxClaudeIntegrationTests/testLinuxTmuxTransportModelQueueAndExit"
+  ]
+}

@@ -83,7 +83,8 @@ impl Tmux {
                 callback(self, io, result);
             }
             for state in self.terminals.values_mut() {
-                for callback in std::mem::take(&mut state.readers) {
+                let readers = std::mem::take(&mut state.readers).into_iter().chain(state.host.readers());
+                for callback in readers.collect::<Vec<_>>() {
                     crate::mux::finish(io, callback, Err(failure.clone()));
                 }
                 for callback in std::mem::take(&mut state.writers) {

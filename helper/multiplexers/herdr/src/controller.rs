@@ -15,6 +15,7 @@ impl Controller {
             pending: Vec::new(),
             waiters: Vec::new(),
             retry: None,
+            restores: Vec::new(),
         }
     }
     pub(super) fn close(&mut self, io: &mut dyn Io, reason: Error) {
@@ -31,6 +32,10 @@ impl Controller {
             let _ = io.terminate(pid);
         }
         for done in self.waiters.drain(..) {
+            let reason = reason.clone();
+            io.defer(Box::new(move |io| done(io, Err(reason))));
+        }
+        for (_, done) in self.restores.drain(..) {
             let reason = reason.clone();
             io.defer(Box::new(move |io| done(io, Err(reason))));
         }
@@ -207,10 +212,13 @@ impl Herdr {
         let Some(c) = self.controllers.get_mut(&id) else {
             return;
         };
-        // Reconnecting retires the transport, not the pending attachment.
+        // Reconnecting retires the transport, not the pending attachment or repaints: the new session's first frame
+        // is a full one.
         let waiters = std::mem::take(&mut c.waiters);
+        let restores = std::mem::take(&mut c.restores);
         c.close(io, reason.clone());
         c.waiters = waiters;
+        c.restores = restores;
         c.initial = false;
         c.decoder.sequence = None;
         let safe: String = reason.message.chars().filter(|c| !c.is_control()).collect();
@@ -224,6 +232,26 @@ impl Herdr {
         let at = io.now() + Duration::from_secs(1);
         c.retry = Some(at);
         io.timer(at);
+    }
+    /// One observer's repaint (terminals.follow): herdr answers every `terminal.resize`, to the size it has too, with a
+    /// full frame (a reattach relies on it), so the controller asks for its own size again; a controller still starting
+    /// or reconnecting starts with a full frame anyway. Every observer gets that frame (a full frame is how herdr sends
+    /// that change, and repaints what they show alike); the asking one gets it as `Update::Restore`, after which the
+    /// frames that follow apply.
+    pub(super) fn follow_restore(&mut self, io: &mut dyn Io, id: Id, token: u64, done: Done<()>) {
+        let Some(c) = self.controllers.get_mut(&id) else {
+            let result = self.locate(id).and(Err(error("Herdr terminal is not attached.")));
+            self.defer(io, done, result);
+            return;
+        };
+        let result = match (c.stream.is_some(), c.decoder.grid) {
+            (true, Some(grid)) => c.resize(io, grid),
+            _ => Ok(()),
+        };
+        match result {
+            Ok(()) => c.restores.push((token, done)),
+            Err(reason) => self.defer(io, done, Err(reason)),
+        }
     }
     pub(super) fn stream(&mut self, io: &mut dyn Io, id: Id, value: &[u8]) -> Result<(), Error> {
         if value.len() > 262_144 {
@@ -247,3 +275,7 @@ impl Herdr {
             )
     }
 }
+
+#[cfg(test)]
+#[path = "controller.test.rs"]
+mod tests;

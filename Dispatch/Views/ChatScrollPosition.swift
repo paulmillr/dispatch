@@ -41,11 +41,24 @@ final class ChatScrollPosition {
     private var wheelMonitor: Any?
     private var viewportTimer: Timer?
     private var visibilityObservations: [NSObjectProtocol] = []
+    /// Whether the transcript holds what it shows: its window is off screen (`MainWindow.isOffScreen`). Set by the
+    /// view (`ChatSession.holdTranscript` and `releaseTranscript`); released before the window is back on screen.
+    var holdChanged: ((Bool) -> Void)?
+    private(set) var holding = false
+    private var screenObservations: [NSObjectProtocol] = []
     private var wakeObservation: NSObjectProtocol?
     private var emptyViewportChecks = 0
     private var emptyViewportSince: TimeInterval?
     private var lastEmptyViewportCheck = -Double.infinity
     private var lastViewportRebuild = -Double.infinity
+    /// How long after the last rebuild another may run. A rebuild that left the viewport blank doubles it (2 s up to
+    /// 30 s), so a blank that survives a rebuild is retried soon without rebuilding forever; visible rows reset it.
+    private var rebuildBackoff: TimeInterval = 0
+    /// Follow-up checks while the viewport is blank: the 2 s watchdog alone took three intervals to escalate.
+    private var blankFollowUp = false
+    /// A check shortly after layout changes (`settledCheck`), and whether the previous one found a blank.
+    private var settledCheckScheduled = false
+    private var settledBlank = false
     private var lastGeometryChange = ProcessInfo.processInfo.systemUptime
     /// A live row arriving at the followed bottom glides there with its fade instead of jumping.
     static let arrivalGlide: TimeInterval = 0.22
@@ -58,6 +71,12 @@ final class ChatScrollPosition {
     }
     private var rowExpectedAt = -Double.infinity
     var hasContent: (() -> Bool)?
+    /// Whether a row still exists in the transcript: a restoration whose row is gone has nothing to realize.
+    var rowExists: ((String) -> Bool)?
+    /// The views showing this chat, oldest first, each with how it connects again. The last one owns the
+    /// callbacks: an earlier view's disconnect leaves them (a moved tab mounts its new view before the old one
+    /// disappears), and the last one's hands them back to the view still showing.
+    private var connections: [(token: UUID, reconnect: (UUID) -> Void)] = []
     var recoverViewport: ((Anchor?, Bool) -> Void)?
     private var pending: Anchor?
     private var previousDocumentY: CGFloat?
@@ -65,7 +84,7 @@ final class ChatScrollPosition {
     private var prependFallbacks: [(anchor: Anchor, documentY: CGFloat)] = []
     private var restoredPending = false
     private var realizationAttempts = 0
-    private var adjustmentScheduled = false
+    private(set) var adjustmentScheduled = false
     private var settlingRevision = 0
     private var adjusting = false
     private var layingOutPrepend = false
@@ -224,28 +243,81 @@ final class ChatScrollPosition {
         wakeObservation = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
             DispatchQueue.main.async { self?.checkViewport(redraw: true) }
         }
+        observeScreen()
         scheduleMountChecks()
+    }
+
+    /// Hold while the transcript's main window is off screen, and release synchronously when it is about to show
+    /// (`MainWindow.willShow`), so it lays out and draws what arrived before its first frame. Only a `MainWindow` says
+    /// when it is about to show; elsewhere the transcript never holds.
+    private func observeScreen() {
+        screenObservations.forEach(NotificationCenter.default.removeObserver)
+        screenObservations = []
+        setHolding(false)
+        let center = NotificationCenter.default
+        screenObservations = [
+            center.addObserver(forName: MainWindow.willShow, object: nil, queue: nil) { [weak self] note in
+                let sender = note.object.map { ObjectIdentifier($0 as AnyObject) }
+                MainActor.assumeIsolated {
+                    guard let self, let window = self.scroll?.window, sender == ObjectIdentifier(window) else { return }
+                    self.setHolding(false)
+                }
+            },
+            center.addObserver(forName: MainWindow.didLeaveScreen, object: nil, queue: nil) { [weak self] note in
+                let sender = note.object.map { ObjectIdentifier($0 as AnyObject) }
+                MainActor.assumeIsolated {
+                    guard let self, let window = self.scroll?.window as? MainWindow, sender == ObjectIdentifier(window) else { return }
+                    self.setHolding(window.isOffScreen)
+                }
+            },
+            // Back on screen some other way (it should not happen): show what arrived at once.
+            center.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: nil, queue: nil) { [weak self] note in
+                let sender = note.object.map { ObjectIdentifier($0 as AnyObject) }
+                MainActor.assumeIsolated {
+                    guard let self, self.holding, let window = self.scroll?.window, sender == ObjectIdentifier(window),
+                          window.isVisible, !NSApp.isHidden else { return }
+                    self.setHolding(false)
+                }
+            }
+        ]
+    }
+
+    private func setHolding(_ value: Bool) {
+        guard holding != value else { return }
+        holding = value
+        holdChanged?(value)
+        // SwiftUI applies the released rows when its hosting views lay out: have the window's layout before it shows
+        // reach them (MainWindow.prepareToShow).
+        if !value {
+            var view: NSView? = scroll
+            while let current = view { current.needsLayout = true; view = current.superview }
+            (scroll?.window as? MainWindow)?.releasedHeldContent = true
+        }
     }
 
     /// Check whether rows are visible soon after mounting. The watchdog needs
     /// two intervals before it reports a blank; a reader often scrolls sooner.
-    private func scheduleMountChecks() {
-        attachedAt = ProcessInfo.processInfo.systemUptime
-        mountBlank = false; firstScrollPending = true
+    /// After a rebuild (`afterRebuild`) the same checks verify it: a rebuilt stack can come up blank again, and
+    /// nothing else looks until the watchdog's next interval.
+    private func scheduleMountChecks(afterRebuild: Bool = false) {
+        if !afterRebuild {
+            attachedAt = ProcessInfo.processInfo.systemUptime
+            mountBlank = false; firstScrollPending = true
+        }
         let generation = System.uuid()
         mountCheckGeneration = generation
         let interaction = interactionRevision
         for delay in [0.15, 0.4, 0.8] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                 guard let self, self.mountCheckGeneration == generation else { return }
-                self.mountCheck(rebuild: delay == 0.4 && self.interactionRevision == interaction)
+                self.mountCheck(rebuild: !afterRebuild && delay == 0.4 && self.interactionRevision == interaction)
             }
         }
     }
     private func mountCheck(rebuild: Bool) {
         guard let scroll, scroll.window?.isVisible == true, !scroll.isHiddenOrHasHiddenAncestor,
               hasContent?() == true else { return }
-        if visibleAnchor() == nil {
+        if !showsRows() {
             mountBlank = true
             recordDiagnostic(.mountBlank, force: true)
             // A remounted lazy stack can scroll to its destination yet keep only
@@ -253,21 +325,69 @@ final class ChatScrollPosition {
             // item scroll to where it already is changes nothing; rebuilding
             // the stack does. Don't leave the reader on a blank tab meanwhile.
             // A pending restoration first realizes its row through the watchdog.
-            guard rebuild, pending == nil, !isLiveScrolling, !isTrackingScroller, !adjusting else { return }
-            lastViewportRebuild = ProcessInfo.processInfo.systemUptime
-            recordDiagnostic(.rebuildRequested, force: true)
-            recoverViewport?(saved, true)
+            dropVanishedPending()
+            guard rebuild, pending == nil, !isLiveScrolling, !isTrackingScroller, !adjusting,
+                  ProcessInfo.processInfo.systemUptime - lastViewportRebuild >= rebuildBackoff else {
+                followUpBlank()
+                return
+            }
+            rebuildViewport(saved)
         } else {
             noteMountRecovery()
+            rebuildBackoff = 0
             recordDiagnostic(.mountCheck, force: true)
         }
     }
     /// The first visible row after a post-mount blank, whatever restored it;
     /// the sample's wheel age and interaction tell whether it was the reader.
     private func noteMountRecovery() {
-        guard mountBlank, visibleAnchor() != nil else { return }
+        guard mountBlank, showsRows() else { return }
         mountBlank = false
         recordDiagnostic(.mountRecovered, force: true)
+    }
+
+    /// Rebuild the lazy stack, then verify it as a mount: a rebuild is the only cure for a stack with no realized
+    /// rows, and it can need a second one.
+    private func rebuildViewport(_ anchor: Anchor?, now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        lastViewportRebuild = now
+        rebuildBackoff = min(30, max(2, rebuildBackoff * 2))
+        emptyViewportChecks = 0
+        recordDiagnostic(.rebuildRequested, force: true, now: now)
+        recoverViewport?(anchor, true)
+        scheduleMountChecks(afterRebuild: true)
+    }
+
+    /// Many rows are about to leave or arrive at once: rebuild in the same pass instead of letting the lazy stack
+    /// lose them. Not under the reader's scrolling; the settled check looks once it stops.
+    /// `offScreen`: a held transcript applying what arrived while its window was off screen, just before it shows.
+    func rebuildForMassChange(offScreen: Bool = false) {
+        guard let scroll, offScreen || scroll.window?.isVisible == true, hasContent?() == true,
+              !isLiveScrolling, !isTrackingScroller,
+              ProcessInfo.processInfo.systemUptime - lastWheelTime > 0.3 else { return }
+        recordDiagnostic(.rebuildRequested, force: true)
+        recoverViewport?(saved, true)
+        scheduleMountChecks(afterRebuild: true)
+    }
+
+    /// While the viewport stays blank, check again in less than a second instead of the watchdog's 2 s, so the
+    /// escalation (redraw, realize, rebuild) ends a blank in about two.
+    private func followUpBlank() {
+        guard !blankFollowUp, scroll != nil else { return }
+        blankFollowUp = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+            guard let self else { return }
+            self.blankFollowUp = false
+            guard self.scroll != nil, self.emptyViewportSince != nil || self.mountBlank else { return }
+            self.checkViewport()
+        }
+    }
+
+    /// A restoration whose row left the transcript (a collapsed group's step, a replaced page) can never realize;
+    /// keeping it pending blocked rebuilds and earlier pages.
+    private func dropVanishedPending() {
+        guard let id = pending?.id, let rowExists, !rowExists(id) else { return }
+        cancelPreservation()
+        if saved?.id == id { saved = nil }
     }
 
     /// Validate the mounted viewport independently of new messages. A lazy
@@ -287,10 +407,11 @@ final class ChatScrollPosition {
             emptyViewportSince = nil; emptyViewportChecks = 0
             return
         }
-        if let anchor = visibleAnchor() {
+        if showsRows(), let anchor = visibleAnchor() {
             if emptyViewportSince != nil { recordDiagnostic(.recovered, force: true, now: now) }
             noteMountRecovery()
             emptyViewportSince = nil; emptyViewportChecks = 0; lastEmptyViewportCheck = -Double.infinity
+            rebuildBackoff = 0
             saved = anchor
             // Invalidate only the visible pixels, not the full history. This
             // also refreshes stale backing layers after an idle or occluded gap.
@@ -301,6 +422,8 @@ final class ChatScrollPosition {
             emptyViewportSince = now
             recordDiagnostic(.blank, force: true, now: now)
         }
+        dropVanishedPending()
+        followUpBlank()
         // Streaming and marker updates can keep layout busy indefinitely even
         // when no rows are realized. Bound the grace period by blank duration,
         // rather than restarting it on every geometry notification.
@@ -312,16 +435,67 @@ final class ChatScrollPosition {
         emptyViewportChecks += 1
         redrawViewport(scroll, document: document)
         guard emptyViewportChecks >= 2 else { return }
-        let rebuild = emptyViewportChecks >= 3 && now - lastViewportRebuild > 30
-        if rebuild { lastViewportRebuild = now; emptyViewportChecks = 0 }
-        recordDiagnostic(rebuild ? .rebuildRequested : .recoveryRequested, force: true, now: now)
-        recoverViewport?(pending ?? saved, rebuild)
+        // Realizing the saved row first keeps row state; when that changed nothing, the next check rebuilds.
+        if emptyViewportChecks >= 3, now - lastViewportRebuild >= rebuildBackoff {
+            rebuildViewport(pending ?? saved, now: now)
+            return
+        }
+        recordDiagnostic(.recoveryRequested, force: true, now: now)
+        recoverViewport?(pending ?? saved, false)
+    }
+
+    /// Many rows leaving or arriving at once under a clamped offset (a group closing at the bottom, a dropped turn,
+    /// a transcript refilled) can leave the lazy stack with only hidden rows, and nothing short of a rebuild brings
+    /// them back. Look again a moment after layout changes instead of waiting for the watchdog: a viewport still
+    /// blank on two looks 0.1 s apart, with the reader not scrolling, is rebuilt at once.
+    private func scheduleSettledCheck() {
+        guard !settledCheckScheduled, scroll != nil else { return }
+        settledCheckScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            guard let self else { return }
+            self.settledCheckScheduled = false
+            self.settledCheck()
+        }
+    }
+    private func settledCheck(now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        guard let scroll, scroll.window?.isVisible == true, scroll.window?.isMiniaturized == false,
+              scroll.window?.occlusionState.contains(.visible) == true,
+              !scroll.isHiddenOrHasHiddenAncestor, scroll.contentView.bounds.height > 1, hasContent?() == true,
+              // Mount checks own a fresh mount; a restoration realizes its row first.
+              attachedAt.map({ now - $0 > 0.5 }) ?? false, pending == nil,
+              !isLiveScrolling, !isTrackingScroller, now - lastWheelTime > 0.3, !adjusting, glide == nil,
+              !showsRows() else {
+            settledBlank = false
+            return
+        }
+        guard settledBlank else {
+            settledBlank = true
+            scheduleSettledCheck()
+            return
+        }
+        settledBlank = false
+        if emptyViewportSince == nil {
+            emptyViewportSince = now
+            recordDiagnostic(.blank, force: true, now: now)
+        }
+        guard now - lastViewportRebuild >= rebuildBackoff else { followUpBlank(); return }
+        rebuildViewport(saved, now: now)
     }
 
     private func redrawViewport(_ scroll: NSScrollView, document: NSView) {
         recordDiagnostic(.redraw)
         scroll.contentView.needsDisplay = true
-        document.setNeedsDisplay(document.convert(scroll.contentView.bounds, from: scroll.contentView))
+        let clip = document.convert(scroll.contentView.bounds, from: scroll.contentView)
+        document.setNeedsDisplay(clip)
+        // Text views keep their own layers: invalidating the document does not repaint them.
+        func invalidate(_ view: NSView, _ rect: NSRect) {
+            for child in view.subviews where !child.isHidden {
+                let frame = child.convert(child.bounds, to: document)
+                guard frame.intersects(rect) else { continue }
+                if child is NSTextView { child.needsDisplay = true } else { invalidate(child, rect) }
+            }
+        }
+        invalidate(document, clip)
     }
 
     private func stopViewportChecks() {
@@ -421,6 +595,25 @@ final class ChatScrollPosition {
         }
         return first
     }
+    /// Whether the viewport shows rows, not a sliver of one: visible markers cover a tenth of the clip, or one
+    /// row lies wholly inside it (a short transcript). Any 1 pt overlap counted as healthy before.
+    func showsRows() -> Bool {
+        guard let scroll, let document = scroll.documentView else { return false }
+        let viewport = scroll.contentView.bounds
+        var covered: CGFloat = 0
+        for marker in markers.values {
+            guard let view = marker.view, view.window != nil, view.enclosingScrollView === scroll,
+                  !view.isHiddenOrHasHiddenAncestor else { continue }
+            let frame = view.convert(view.bounds, to: document)
+            guard frame.width > 1, frame.height > 1 else { continue }
+            let overlap = min(frame.maxY, viewport.maxY) - max(frame.minY, viewport.minY)
+            guard overlap > 1 else { continue }
+            if frame.minY >= viewport.minY - 0.5 && frame.maxY <= viewport.maxY + 0.5 { return true }
+            covered += overlap
+            if covered >= viewport.height * 0.1 { return true }
+        }
+        return false
+    }
     func preserveForPrepend(retaining ids: Set<String>? = nil) {
         pending = visibleAnchor(retaining: ids)
         prependFallbacks = []
@@ -444,7 +637,10 @@ final class ChatScrollPosition {
             }
         }
     }
-    func restoreOnAppearance() { pending = saved; realizationAttempts = 0; previousDocumentY = nil; prependGeometry = nil; prependFallbacks = []; restoredPending = false; geometryChanged() }
+    func restoreOnAppearance() {
+        pending = saved; realizationAttempts = 0; previousDocumentY = nil; prependGeometry = nil; prependFallbacks = []; restoredPending = false
+        geometryChanged()
+    }
     func restoreAfterPrepend() {
         if #available(macOS 15, *), prependGeometry == nil {
             // The transcript disables SwiftUI's automatic offset adjustment.
@@ -480,6 +676,7 @@ final class ChatScrollPosition {
         // Lazy layout can discard the first item lookup while replacing its
         // indices. Retry only while the retained row is absent, with a fixed
         // limit so a removed row cannot cause an endless layout cycle.
+        dropVanishedPending()
         guard let id = pending?.id, realizationAttempts < 3 else { return }
         realizationAttempts += 1
         recordDiagnostic(.restoreRequested)
@@ -505,12 +702,35 @@ final class ChatScrollPosition {
     func restore(_ anchor: Anchor?) { saved = anchor; restoreOnAppearance() }
     func clear() { saved = nil; automaticHistoryLoadsRemaining = 0; cancelPreservation() }
     func cancelPreservation() { pending = nil; realizationAttempts = 0; previousDocumentY = nil; prependGeometry = nil; prependFallbacks = []; restoredPending = false }
-    func disconnect() {
+    /// A view connecting takes over the session's callbacks; the token is what it disconnects with, and
+    /// `reconnect` wires that view again (with its token) if it outlasts a later one.
+    func connect(reusing token: UUID? = nil, reconnect: @escaping (UUID) -> Void = { _ in }) -> UUID {
+        let token = token ?? System.uuid()
+        connections.removeAll { $0.token == token }
+        connections.append((token, reconnect))
+        return token
+    }
+    /// An earlier view's token only forgets that view; the last view's disconnect detaches the session, then
+    /// connects the view still showing, if any.
+    func disconnect(_ token: UUID? = nil) {
+        if let token {
+            guard connections.last?.token == token else {
+                connections.removeAll { $0.token == token }
+                return
+            }
+            connections.removeLast()
+        } else {
+            connections = []
+        }
+        detach()
+        if let previous = connections.last { previous.reconnect(previous.token) }
+    }
+    private func detach() {
         recordDiagnostic(.disconnected, force: true)
         cancelGlide(); arrivalExpectedAt = -Double.infinity; rowExpectedAt = -Double.infinity
         diagnosticState = nil; diagnosticRows = nil; swiftUIScroll = nil
         mountCheckGeneration = System.uuid(); mountBlank = false; firstScrollPending = false; attachedAt = nil
-        stopViewportChecks(); hasContent = nil; recoverViewport = nil
+        stopViewportChecks(); hasContent = nil; rowExists = nil; recoverViewport = nil
         automaticHistoryLoadsRemaining = 0; loadEarlier = nil
         saved = visibleAnchor() ?? saved
         if let observation { NotificationCenter.default.removeObserver(observation) }
@@ -524,6 +744,10 @@ final class ChatScrollPosition {
         documentObservation = nil; frameObservation = nil; realizeAnchor = nil; followsBottom = nil
         isLiveScrolling = false; lastWheelTime = -Double.infinity
         finishScrollerTracking()
+        // The next view of this chat shows its current rows (callbacks are gone: no rebuild from here).
+        screenObservations.forEach(NotificationCenter.default.removeObserver)
+        screenObservations = []
+        setHolding(false)
     }
     func jumpToLatest() {
         cancelPreservation(); cancelGlide(); saved = nil
@@ -618,6 +842,7 @@ final class ChatScrollPosition {
         recordDiagnostic(.geometry)
         lastGeometryChange = ProcessInfo.processInfo.systemUptime
         updateScrollbar()
+        scheduleSettledCheck()
         // Item scrolling can precede a streamed row's final measured height.
         // Follow the document's actual bottom through subsequent layout passes.
         if pending == nil && followsBottom?() == true { pinToBottom() }
@@ -637,11 +862,14 @@ final class ChatScrollPosition {
                 guard let self else { return }
                 self.adjustmentScheduled = false
                 if self.settlingRevision != revision { self.geometryChanged(); return }
+                self.dropVanishedPending()
                 if self.pending != nil && self.restoredPending {
                     self.saved = self.visibleAnchor() ?? self.saved
                     self.pending = nil
                 } else if self.pending == nil { self.saved = self.visibleAnchor() ?? self.saved }
-                if let saved = self.saved { self.positionChanged?(saved) }
+                // An unresolved restoration measures where the viewport was, not where it is going: reporting
+                // that re-armed following before a find's match was revealed.
+                if self.pending == nil, let saved = self.saved { self.positionChanged?(saved) }
                 // Requests suppressed during restoration need a fresh check,
                 // including when no new wheel event follows the insertion.
                 self.prefetchEarlier()

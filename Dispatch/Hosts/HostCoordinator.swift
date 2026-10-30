@@ -91,10 +91,9 @@ final class HostCoordinator {
     }
 
     /// Twice a second while the user can see a terminal; every 10 s while another app is active or every Dispatch
-    /// window is covered (a terminal's process is only shown, never acted on, from here).
+    /// window is covered (AppPresence: a terminal's process is only shown, never acted on, from here).
     private func wait() async {
-        let shown = NSApp?.windows.contains { $0.isVisible && $0.occlusionState.contains(.visible) } ?? true
-        let interval: Duration = NSApp?.isActive == false || !shown ? .seconds(10) : .milliseconds(500)
+        let interval: Duration = AppPresence.shown ? .milliseconds(500) : .seconds(10)
         let nap = Task { _ = try? await System.sleep(for: interval, "poll", woken: true) }
         self.nap = nap
         await nap.value

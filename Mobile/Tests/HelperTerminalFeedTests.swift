@@ -289,6 +289,85 @@ final class HelperTerminalFeedTests: XCTestCase {
         XCTAssertEqual(feed.record.resizes, [TerminalFeedSize(columns: 20, rows: 5)])
         XCTAssertEqual(feed.record.sent, Data("ab\u{7F}\r".utf8))
     }
+
+    struct Follow: Decodable { let terminal: UInt64; let following: Bool; let subscription: UInt64? }
+
+    /// `terminals.follow` goes out in order with the attachment's other calls, on its only subscription (no
+    /// `subscription`), and says how it went: `done`, `unsupported` (sticky for the presence), `failed`; a follow queued
+    /// when its attachment ends, or asked after, answers `stale` and sends nothing. A feed whose helper accepted no
+    /// `terminals.follow` (or no `screens.host`) never asks, and only a `screens.host` feed refuses to publish.
+    @MainActor
+    func testFollowIsOrderedAndAnswersHowItWent() async throws {
+        let peer = ScriptedHelper { request in
+            switch request.method {
+            case "terminals.attach": .attachedNow
+            case "terminals.input": .open
+            case "terminals.follow": (request.params["following"] as? Bool) == true ? .error(code: "unsupported", message: "") : .empty
+            default: .empty
+            }
+        }
+        defer { peer.close() }
+        let feed = HelperTerminalFeed(client: peer.client, terminal: 7, features: [HelperSession.screensHost, HelperSession.terminalsFollow])
+        XCTAssertTrue(feed.hostsScreens && feed.holdsOutput)
+        _ = feed.attach(TerminalFeedSize(columns: 80, rows: 24))
+        _ = try await peer.wait(for: "terminals.attach")
+        feed.send(Data("x".utf8))
+        let input = try await peer.wait(for: "terminals.input")[0]
+        let answers = Recorder<TerminalFollowResult>()
+        Task { answers.append(await feed.follow(false)) }
+        try await TestSupport.eventually { feed.queuedCount == 1 }
+        XCTAssertTrue(peer.requests("terminals.follow").isEmpty, "behind the input in flight")
+        peer.reply(input.id, .empty)
+        try await TestSupport.eventually { answers.values == [.done] }
+        let sent = try params(Follow.self, peer.requests("terminals.follow")[0])
+        XCTAssertEqual(sent.terminal, 7)
+        XCTAssertFalse(sent.following)
+        XCTAssertNil(sent.subscription)
+        let unsupported = await feed.follow(true)
+        XCTAssertEqual(unsupported, .unsupported)
+        peer.script { request in
+            switch request.method {
+            case "terminals.attach": .attachedNow
+            case "terminals.input": .open
+            case "terminals.follow": .error(code: "tmux", message: "capture failed")
+            default: .empty
+            }
+        }
+        let failed = await feed.follow(true)
+        XCTAssertEqual(failed, .failed)
+
+        // Queued behind an input when the attachment ends: answered, never sent.
+        feed.send(Data("y".utf8))
+        let inputs = try await peer.wait(for: "terminals.input", count: 2)
+        Task { answers.append(await feed.follow(false)) }
+        try await TestSupport.eventually { feed.queuedCount == 1 }
+        feed.detach()
+        try await TestSupport.eventually { answers.values.count == 2 }
+        peer.reply(inputs[1].id, .empty)
+        XCTAssertEqual(answers.values.last, .stale)
+        let after = await feed.follow(false)
+        XCTAssertEqual(after, .stale)
+        XCTAssertEqual(peer.requests("terminals.follow").count, 3)
+
+        _ = feed.attach(TerminalFeedSize(columns: 80, rows: 24))
+        _ = try await peer.wait(for: "terminals.attach", count: 2)
+        feed.publish(TerminalScreen(text: "$ ", column: 2, row: 0, faintTail: false))
+        let older = HelperTerminalFeed(client: peer.client, terminal: 8)
+        let unheld = HelperTerminalFeed(client: peer.client, terminal: 9, features: [HelperSession.terminalsFollow])
+        for other in [older, unheld] {
+            XCTAssertFalse(other.hostsScreens || other.holdsOutput)
+            _ = other.attach(TerminalFeedSize(columns: 80, rows: 24))
+            let none = await other.follow(false)
+            XCTAssertEqual(none, .unsupported)
+            other.publish(TerminalScreen(text: "$ ", column: 2, row: 0, faintTail: false))
+        }
+        _ = try await peer.wait(for: "terminals.publish", count: 2)
+        try await Task.sleep(for: .milliseconds(50))
+        struct Published: Decodable { let terminal: UInt64 }
+        XCTAssertEqual(Set(try peer.requests("terminals.publish").map { try params(Published.self, $0).terminal }), [8, 9],
+                       "the screens.host feed publishes nothing")
+        XCTAssertEqual(peer.requests("terminals.follow").count, 3)
+    }
 }
 
 /// A value shared with `@Sendable` closures in tests.

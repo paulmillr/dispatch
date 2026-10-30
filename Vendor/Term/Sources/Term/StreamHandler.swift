@@ -31,7 +31,7 @@ public enum TermioMessage {
     case resize(RenderSize), scrollViewport(Terminal.ViewportScroll), selectionScroll(Bool)
 }
 
-public enum SizeReportStyle { case mode2048, csi14t, csi16t, csi18t }
+public enum SizeReportStyle { case mode2048, csi14t, csi16t, csi18t, csi19t }
 
 public struct HandlerOptions {
     public enum ColorReportFormat { case none, bits8, bits16 }
@@ -116,6 +116,7 @@ public struct StreamHandler: Handler {
         case .csi14t: return ascii("\u{1B}[4;\(gridRows * h);\(gridCols * w)t")
         case .csi16t: return ascii("\u{1B}[6;\(h);\(w)t")
         case .csi18t: return ascii("\u{1B}[8;\(gridRows);\(gridCols)t")
+        case .csi19t: return ascii("\u{1B}[9;\(gridRows);\(gridCols)t")
         }
     }
 
@@ -175,6 +176,7 @@ public struct StreamHandler: Handler {
         case .index: t.index()
         case .nextLine: t.index(); t.carriageReturn()
         case .reverseIndex: t.reverseIndex()
+        case .softReset: t.softReset()
         case .fullReset:
             t.fullReset()
             setMouseShape("text")
@@ -187,7 +189,7 @@ public struct StreamHandler: Handler {
         case .saveMode(let m): t.modes.save(m.mode)
         case .restoreMode(let m): setMode(m.mode, t.modes.restore(m.mode))
         case .requestMode(let m): modeReport(modeTable[m.mode.index].value, modeTable[m.mode.index].ansi)
-        case .requestModeUnknown(let m): modeReport(m.mode & 0x7FFF, m.ansi)
+        case .requestModeUnknown(let m): modeReport(m.mode, m.ansi)
         case .topAndBottomMargin(let m): t.setTopAndBottomMargin(Int(m.topLeft), Int(m.bottomRight))
         case .leftAndRightMargin(let m): t.setLeftAndRightMargin(Int(m.topLeft), Int(m.bottomRight))
         case .leftAndRightMarginAmbiguous: if t.modes.get(.enableLeftAndRightMargin) { t.setLeftAndRightMargin(0, 0) } else { t.saveCursor() }
@@ -203,6 +205,7 @@ public struct StreamHandler: Handler {
             case .csi14t: termio.append(.sizeReport(.csi14t))
             case .csi16t: termio.append(.sizeReport(.csi16t))
             case .csi18t: termio.append(.sizeReport(.csi18t))
+            case .csi19t: termio.append(.sizeReport(.csi19t))
             case .csi21t: surface.append(.reportTitle(.csi21t))
             }
         case .xtversion: termio.append(.write(ascii("\u{1B}P>|ghostty \(options.version)\u{1B}\\")))
@@ -252,7 +255,8 @@ public struct StreamHandler: Handler {
         case .apcStart: apc.start(kitty: t.kittyGraphicsEnabled)
         case .apcPut(let b): apc.feed(CollectionOfOne(b))
         case .apcPutSlice(let b): apc.feed(b)
-        case .apcEnd: apcEnd()
+        case .apcEnd(let end):
+            if end.terminated { apcEnd() } else { apc = APC() }
         // Ghostty's app handler leaves these unimplemented too.
         case .kittyDnd, .titlePush, .titlePop: break
         }
@@ -260,7 +264,8 @@ public struct StreamHandler: Handler {
 
     private mutating func modeReport(_ value: UInt16, _ ansi: Bool) {
         let state: Int
-        if !ansi, value == 117 { state = 4 } else if let m = Mode.from(value, ansi: ansi) { state = terminal.modes.get(m) ? 1 : 2 } else { state = 0 }
+        if !ansi && value == 117 || ansi && [1, 5, 7, 10, 11, 13, 14, 15, 16, 17, 18, 19].contains(value) { state = 4 }
+        else if let m = Mode.from(value, ansi: ansi) { state = terminal.modes.get(m) ? 1 : 2 } else { state = 0 }
         reply("\u{1B}[\(ansi ? "" : "?")\(value);\(state)$y")
     }
 
@@ -268,10 +273,10 @@ public struct StreamHandler: Handler {
         let t = terminal
         switch name {
         case "operating_status": reply("\u{1B}[0n")
-        case "cursor_position":
+        case "cursor_position", "cursor_position_extended":
             let origin = t.modes.get(.origin)
             let x = origin ? max(0, t.cursor.x - t.scrollingRegion.left) : t.cursor.x, y = origin ? max(0, t.cursor.y - t.scrollingRegion.top) : t.cursor.y
-            reply("\u{1B}[\(y + 1);\(x + 1)R")
+            reply(name == "cursor_position_extended" ? "\u{1B}[?\(y + 1);\(x + 1);1R" : "\u{1B}[\(y + 1);\(x + 1)R")
         case "color_scheme": termio.append(.colorSchemeReport(force: true))
         default: termio.append(.visibilityReport(visible: t.flags.visible, force: true))
         }

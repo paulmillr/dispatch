@@ -63,7 +63,7 @@ pub struct Codex {
     /// Side agents' private directories, removed when the agent exits.
     exits: crate::owned::Exits,
     /// Followed rollouts to read again (follow::Sink::reloads).
-    reloads: Rc<RefCell<Vec<Binding>>>,
+    reloads: Rc<RefCell<Vec<(Binding, Option<(Metadata, u64)>)>>>,
     /// Per menu-walking TUI (pid, start): the selected lines when its last keys went out; the
     /// next key waits for their effect.
     keyed: BTreeMap<(u32, [u64; 2]), Vec<String>>,
@@ -1329,17 +1329,29 @@ impl Harness for Codex {
             for binding in due {
                 self.refresh(io, binding);
             }
-            // The chat's history again (Update::History replaces it), or why it cannot be read.
+            // The chat's history again, or why it cannot be read. Only another, replaced or shortened
+            // rollout replaces it (Update::History); the same one read again (an attribute change, a
+            // failed read) adds its recent page's records, which the chat merges.
             let reloads = std::mem::take(&mut *self.reloads.borrow_mut());
-            for binding in reloads {
-                let (updates, states) = (self.updates.clone(), self.states.clone());
+            for (binding, reached) in reloads {
+                let (updates, states, follows) = (self.updates.clone(), self.states.clone(), self.follows.clone());
                 let owner = binding.clone();
                 let done: Done<Page> = Box::new(move |io, result| {
                     let update = match result {
-                        Ok(page) => Update::History {
-                            binding: owner,
-                            page,
-                        },
+                        Ok(page) => {
+                            let now = follows.file(&owner.session);
+                            if crate::follow::continues(reached, now, page.earlier.as_deref()) {
+                                Update::Records {
+                                    binding: owner,
+                                    records: page.records,
+                                }
+                            } else {
+                                Update::History {
+                                    binding: owner,
+                                    page,
+                                }
+                            }
+                        }
                         Err(error) => {
                             let mut states = states.borrow_mut();
                             let state = states.entry(owner.session.clone()).or_default();

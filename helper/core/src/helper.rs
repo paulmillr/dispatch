@@ -15,6 +15,7 @@ mod client;
 pub(crate) mod installation;
 pub(crate) mod candidate;
 pub(crate) mod login;
+mod screens;
 mod transfers;
 use client::Client;
 /// The largest frame: a chunk (21-byte header + CHUNK) or an inline message (<= CHUNK + 13).
@@ -105,6 +106,12 @@ pub struct DispatchHelper {
     pub(crate) windows: crate::dispatch::Windows,
     /// Opt-in protocol features per client (dispatch/features.rs).
     pub(crate) features: crate::dispatch::features::Features,
+    /// Screens clients published, and what each multiplexer was last told about its terminals' screen sources
+    /// (helper/screens.rs, feature screens.host).
+    pub(crate) publishers: screens::Publishers,
+    sources: BTreeMap<Id, (bool, bool)>,
+    /// Attach subscriptions whose output their client holds (dispatch/following.rs, feature terminals.follow).
+    pub(crate) follows: crate::dispatch::following::Follows,
     /// HOME as the user's login environment sees it (hello.account.login_home for feature
     /// clients when it differs from the passwd home).
     pub login_home: Option<std::path::PathBuf>,
@@ -112,6 +119,8 @@ pub struct DispatchHelper {
     pub(crate) stdio: bool,
     /// The stdio.liveness client's traffic (a `--remote --stdio` helper only).
     pub(crate) liveness: Option<crate::dispatch::features::Liveness>,
+    /// terminals.ack requests not yet applied to their client's window: (client, subscription, bytes).
+    pub(crate) acks: Vec<(RawFd, u64, u64)>,
     pub(crate) transfers: transfers::Transfers,
     /// Starts a helper without clients that sends the stored queues this one leaves behind
     /// (`dispatch-helper queue-drain …`); None for that helper itself, and where nothing may
@@ -140,6 +149,7 @@ struct Updates<'a> {
     candidates: candidate::Shared,
     login: Option<login::SharedLogin>,
     features: crate::dispatch::features::Features,
+    follows: crate::dispatch::following::Follows,
 }
 impl Updates<'_> {
     /// A terminal's agent conversation is over: its questions expire and its interactions and
@@ -205,6 +215,7 @@ impl Ui for Updates<'_> {
         }
         let terminal = match &update {
             Update::Output { terminal, .. }
+            | Update::Restore { terminal, .. }
             | Update::Stderr { terminal, .. }
             | Update::Exit { terminal, .. }
             | Update::Scroll { terminal, .. }
@@ -248,17 +259,20 @@ impl Ui for Updates<'_> {
                 ),
             );
         }
+        let follows = self.follows.clone();
         let recipients: Vec<_> = self
             .observers
             .iter()
-            .filter(|(_, _, scope)| match (&update, scope) {
+            .filter(|(fd, request, scope)| match (&update, scope) {
                 (Update::Topology { .. } | Update::Agent { .. }, Scope::Backend(index)) => {
                     *index == self.module
                 }
+                // A held subscription gets no output, and a repaint only the one that asked (dispatch/following.rs).
                 (
-                    Update::Output { .. } | Update::Stderr { .. } | Update::Scroll { .. },
+                    Update::Output { .. } | Update::Stderr { .. } | Update::Restore { .. },
                     Scope::Terminal(id),
-                ) => Some(*id) == terminal,
+                ) => Some(*id) == terminal && follows.borrow().admits((*fd, *request), &update),
+                (Update::Scroll { .. }, Scope::Terminal(id)) => Some(*id) == terminal,
                 (
                     Update::Records { binding, .. }
                     | Update::History { binding, .. }
@@ -277,6 +291,11 @@ impl Ui for Updates<'_> {
             })
             .map(|(fd, id, _)| (*fd, *id))
             .collect();
+        if let Update::Restore { .. } = &update {
+            for observer in &recipients {
+                follows.borrow_mut().restored(*observer);
+            }
+        }
         if let Update::Exit { terminal, status } = &update {
             self.controls
                 .borrow_mut()
@@ -468,7 +487,9 @@ impl Ui for Updates<'_> {
                     focus.map(|id| crate::dispatch::reference(self.module, id)),
                 )
             }
-            Update::Output { terminal, bytes } | Update::Stderr { terminal, bytes } => {
+            Update::Output { terminal, bytes }
+            | Update::Stderr { terminal, bytes }
+            | Update::Restore { terminal, bytes, .. } => {
                 crate::encode::notify(
                     output,
                     &[
@@ -698,9 +719,13 @@ impl DispatchHelper {
             admitted: BTreeMap::new(),
             windows: Default::default(),
             features: Default::default(),
+            publishers: Default::default(),
+            sources: BTreeMap::new(),
+            follows: Default::default(),
             login_home: None,
             stdio: false,
             liveness: None,
+            acks: Vec::new(),
             shell: std::env::var_os("SHELL").unwrap_or("/bin/sh".into()).into(),
             remote: false,
             default: None,
@@ -789,6 +814,7 @@ impl DispatchHelper {
                 pending: self.updates.clone(),
                 login: self.login.clone(),
                 features: self.features.clone(),
+                follows: self.follows.clone(),
             };
             let backends: BTreeSet<_> = self
                 .backends
@@ -895,7 +921,8 @@ impl DispatchHelper {
         mux
     }
     /// Every multiplexer reads screens no client publishes itself (`Multiplexer::host_screens`): for a helper
-    /// that has no clients, such as the queue drainer.
+    /// that has no clients, such as the queue drainer. A client helper does so only for the terminals its
+    /// screens.host clients attach (screen_sources).
     pub fn host_screens(&mut self, enabled: bool) {
         for mux in &self.multiplexers {
             mux.borrow_mut().host_screens(enabled);
@@ -907,6 +934,32 @@ impl DispatchHelper {
         self.default = index.map(|index| (index, key.to_owned()));
     }
 
+    /// Tell the multiplexers whose screens their attached terminals have, where that changed since (screens.rs):
+    /// an attach that ended, a client that left.
+    fn screen_sources(&mut self, system: &mut System, observers: &[Observer]) {
+        if self.sources.is_empty() && self.publishers.borrow().is_empty()
+            && !observers.iter().any(|(_, _, scope)| matches!(scope, Scope::Terminal(_)))
+        {
+            return;
+        }
+        let attached = observers
+            .iter()
+            .filter_map(|(fd, _, scope)| match scope {
+                Scope::Terminal(terminal) => Some((*fd, *terminal)),
+                _ => None,
+            })
+            .collect();
+        let features = self.features.clone();
+        let hosts = |fd| !crate::dispatch::features::publishes(&features, fd);
+        let now = screens::sources(&attached, hosts, &mut self.publishers.borrow_mut());
+        let changes = screens::changes(&self.sources, &now);
+        self.sources = now;
+        for (terminal, (hosting, published)) in changes {
+            if let Some(mux) = self.multiplexers.get((terminal >> 48) as usize) {
+                mux.borrow_mut().screen_clients(system, crate::dispatch::local(terminal), hosting, published);
+            }
+        }
+    }
     pub(crate) fn route(&self, params: &crate::json::Data<'_>) -> usize {
         params
             .get("mux")
@@ -1384,6 +1437,14 @@ impl DispatchHelper {
                     .iter()
                     .any(|(_, _, scope)| matches!(scope, Scope::Chat(id, _) if id == terminal))
             });
+            self.screen_sources(&mut system, &observers);
+            if !self.follows.borrow().is_empty() {
+                self.follows.borrow_mut().retain(|(fd, request)| {
+                    observers.iter().any(|(peer, id, scope)| {
+                        (*peer, *id) == (fd, request) && matches!(scope, Scope::Terminal(_) | Scope::Created)
+                    })
+                });
+            }
             loop {
                 let update = self.updates.borrow_mut().pop_front();
                 let Some(update) = update else { break };
@@ -1415,6 +1476,7 @@ impl DispatchHelper {
                     pending: self.updates.clone(),
                     login: self.login.clone(),
                 features: self.features.clone(),
+                follows: self.follows.clone(),
                 }
                 .update(update);
             }
@@ -1473,14 +1535,19 @@ impl DispatchHelper {
                         fd,
                         crate::dispatch::features::TERMINALS_COALESCE,
                     );
-                    client.queue(kind, id, body, now.filter(|_| coalesce));
+                    let counted = crate::dispatch::features::enabled(
+                        &self.features,
+                        fd,
+                        crate::dispatch::features::TERMINALS_WINDOW,
+                    );
+                    client.queue(kind, id, body, now.filter(|_| coalesce), counted);
                 }
             }
-            if let Some(liveness) = self.liveness.as_mut().filter(|l| !l.armed) {
-                liveness.armed = true;
-                let section = Io::section(&mut system, LIVENESS);
-                system.timer(liveness.last + liveness.limit);
-                Io::section(&mut system, &section);
+            // Acknowledged output reopens its client's window before more is admitted.
+            for (fd, id, bytes) in self.acks.drain(..) {
+                if let Some(client) = clients.get_mut(&fd) {
+                    client.acknowledge(id, bytes);
+                }
             }
             // Held output goes out after its window; until then a timer wakes this loop.
             if let Some(now) = now {
@@ -1510,29 +1577,10 @@ impl DispatchHelper {
                 }
             }
             for (&fd, client) in &mut clients {
-                loop {
-                    // Replies may pass unrelated bulk bytes, but not semantic notifications:
-                    // a mutation's topology/state must reach the UI before its completion.
-                    let index = wire::Message::select(&client.messages);
-                    let Some(message) = client.messages.get_mut(index) else {
-                        break;
-                    };
-                    if message.size() > client.output.space() {
-                        break;
-                    }
-                    let frame = message.next().expect("pending response frame");
-                    client
-                        .output
-                        .record(Some(message.id), frame)
-                        .map_err(|_| io::Error::other("UI frame admission changed"))?;
-                    if message.size() == 0 {
-                        let message = client.messages.remove(index).unwrap();
-                        if message.kind == wire::Kind::Response {
-                            client.pending.remove(&message.id);
-                            observers
-                                .retain(|(peer, request, _)| *peer != fd || *request != message.id);
-                        }
-                    }
+                // Replies may pass unrelated bulk bytes, but not semantic notifications: a
+                // mutation's topology/state must reach the UI before its completion.
+                for id in client.admit()? {
+                    observers.retain(|(peer, request, _)| *peer != fd || *request != id);
                 }
                 let mut space = client.output.space();
                 let ready: Vec<_> = client
@@ -1558,18 +1606,34 @@ impl DispatchHelper {
                     deferred(client.drains.remove(&id).unwrap())(&mut system, result);
                 }
                 if client.output.front().is_some() {
-                    system.interest(
-                        client.write,
-                        client.write == fd && !client.eof && client.output.space() >= FRAME,
-                        true,
-                    )?;
+                    let reading = client.reading(self.backlog(fd));
+                    if client.write == fd {
+                        client.listening = reading;
+                    }
+                    system.interest(client.write, client.write == fd && reading, true)?;
+                }
+            }
+            // stdio.liveness: silence counts only while the helper reads the client, and its
+            // deadline runs only then.
+            if let Some(liveness) = self.liveness.as_mut() {
+                let listening = clients.get(&liveness.fd).is_some_and(|client| client.listening);
+                liveness.listening(listening, || system.now());
+                if !liveness.armed && liveness.unread.is_none() {
+                    liveness.armed = true;
+                    let section = Io::section(&mut system, LIVENESS);
+                    system.timer(liveness.last + liveness.limit);
+                    Io::section(&mut system, &section);
                 }
             }
             let reserve = if paused { 2 * FRAME } else { FRAME };
             paused = !replies.borrow().is_empty()
                 || clients
                     .values()
-                    .any(|client| !client.messages.is_empty() || client.output.space() < reserve)
+                    .any(|client| {
+                        !client.messages.is_empty()
+                            || client.output.space() < reserve
+                            || client.unacked >= client::OUTPUT_WINDOW
+                    })
                 || self
                     .login
                     .as_ref()
@@ -1612,6 +1676,10 @@ impl DispatchHelper {
                     login.borrow().started && self.identity.is_some(),
                     false,
                 )?;
+            }
+            // requests.backlog clients are read through the pause; others wait with the multiplexers.
+            for &fd in clients.keys() {
+                system.steady(fd, self.backlog(fd))?;
             }
             system.pressure(paused)?;
             // Probes and delivery completions above can defer more work. Publish its effects
@@ -1657,7 +1725,7 @@ impl DispatchHelper {
                 system.section("ui");
                 if let Some(liveness) = self.liveness.as_mut() {
                     liveness.armed = false;
-                    if system.now() >= liveness.last + liveness.limit {
+                    if liveness.expired(system.now()) {
                         // The phone pings every 15 s; this much silence means its connection is
                         // gone even though no close arrived (NAT, port forward).
                         eprintln!(
@@ -1742,6 +1810,7 @@ impl DispatchHelper {
                     pending: self.updates.clone(),
                     login: self.login.clone(),
                 features: self.features.clone(),
+                follows: self.follows.clone(),
                 };
                 self.multiplexers[index]
                     .borrow_mut()
@@ -1776,6 +1845,7 @@ impl DispatchHelper {
                     pending: self.updates.clone(),
                     login: self.login.clone(),
                 features: self.features.clone(),
+                follows: self.follows.clone(),
                 };
                 self.harnesses[index]
                     .borrow_mut()
@@ -1804,6 +1874,7 @@ impl DispatchHelper {
                     pending: self.updates.clone(),
                     login: self.login.clone(),
                 features: self.features.clone(),
+                follows: self.follows.clone(),
                 };
                 self.plugins[index]
                     .borrow_mut()
@@ -1996,6 +2067,8 @@ impl DispatchHelper {
                 let write = client.write;
                 clients.remove(&fd);
                 self.features.borrow_mut().remove(&fd);
+                self.publishers.borrow_mut().retain(|(peer, _), _| *peer != fd);
+                self.follows.borrow_mut().retain(|(peer, _)| peer != fd);
                 if self.liveness.as_ref().is_some_and(|l| l.fd == fd) {
                     self.liveness = None;
                 }
@@ -2022,16 +2095,25 @@ impl DispatchHelper {
                 }
             } else {
                 system.section("ui");
-                system.interest(
-                    fd,
-                    !client.eof && client.output.space() >= FRAME,
-                    client.write == fd && client.output.front().is_some(),
-                )?;
+                let reading = client.reading(self.backlog(fd));
+                client.listening = reading;
+                system.interest(fd, reading, client.write == fd && client.output.front().is_some())?;
                 if client.write != fd {
                     system.interest(client.write, false, client.output.front().is_some())?;
                 }
             }
         }
+    }
+
+    /// Whether client `fd` gets requests.backlog: it named it or terminals.window (whose acks must
+    /// be read while its exhausted window pauses the multiplexers), or it is the stdio.liveness
+    /// client (the iPhone, whose pings must arrive during a flood). None of them is in a recorded
+    /// capture.
+    fn backlog(&self, fd: RawFd) -> bool {
+        use crate::dispatch::features::{REQUESTS_BACKLOG, TERMINALS_WINDOW, enabled};
+        enabled(&self.features, fd, REQUESTS_BACKLOG)
+            || enabled(&self.features, fd, TERMINALS_WINDOW)
+            || self.liveness.as_ref().is_some_and(|liveness| liveness.fd == fd)
     }
 
     /// Followed archives end with their request; a change of one starts its next read. True
@@ -2112,10 +2194,12 @@ impl DispatchHelper {
             let (method, params) =
                 crate::dispatch::parameters(checked, |method| self.allowed(method))?;
             if let Some(mut accepted) = requested {
-                use crate::dispatch::features::STDIO_LIVENESS;
-                // Only a helper that lives for one remote stdio client can end with it.
+                use crate::dispatch::features::{LOGIN_RELEASE, STDIO_LIVENESS};
+                // Only a helper that lives for one remote stdio client can end with it, and only such a helper (the
+                // Mac's greeting probe) releases a waiting login: neither changes any other helper's hello.
                 if !(self.stdio && self.remote && self.login.is_none()) {
                     accepted.remove(STDIO_LIVENESS);
+                    accepted.remove(LOGIN_RELEASE);
                 }
                 if accepted.contains(STDIO_LIVENESS) {
                     self.liveness = Some(crate::dispatch::features::Liveness {
@@ -2125,6 +2209,7 @@ impl DispatchHelper {
                             std::env::var_os("DISPATCH_STDIO_LIVENESS_SECONDS").as_deref(),
                         ),
                         armed: false,
+                        unread: None,
                     });
                 }
                 self.features.borrow_mut().insert(fd, accepted);
@@ -2216,3 +2301,7 @@ fn detached(system: &mut System, at: Instant) {
     system.timer(at);
     Io::section(system, &section);
 }
+
+#[cfg(test)]
+#[path = "helper/following.test.rs"]
+mod following_tests;

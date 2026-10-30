@@ -62,6 +62,9 @@ final class HostSession: Identifiable {
     private(set) var client: HelperClient?
     /// The last `hello` (identity, OS line, schema); kept while offline for the host's labels.
     private(set) var hello: HelperSession.Info?
+    /// The opt-in features the last hello accepted (`SSHHostSessionDriver.features` less what the helper dropped): the
+    /// current client's while connected (`hello` arrives with it), a cached or the last helper's otherwise.
+    var features: Set<String> { Set(hello?.features ?? []) }
     /// The multiplexers installed on the host.
     private(set) var multiplexers: [HelperClient.Multiplexer] = []
     /// Their versions by name, when the driver knows them ("herdr": "0.9.3").

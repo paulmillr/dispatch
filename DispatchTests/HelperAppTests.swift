@@ -1884,3 +1884,392 @@ final class HelperAppTests: XCTestCase {
         XCTAssertEqual(try run(["--force"]).status, 2, "Unknown options are refused")
     }
 }
+
+extension HelperAppTests {
+    /// A helper whose hello accepted `screens.host` reads its tmux and herdr screens from the multiplexer: the Mac
+    /// publishes only its native tabs there (one publication would turn its host reads off), and every tab to a helper
+    /// that names no such feature. An SSH login a helper observes in a tab is published to it either way. A terminal
+    /// that publishes to nobody schedules no screen read for its output.
+    @MainActor
+    func testScreensArePublishedOnlyWhereTheHelperDoesNotReadThemItself() async throws {
+        for accepted in [true, false] {
+            let incoming = Pipe(), outgoing = Pipe(), link = SSHConnectionID()
+            let connection = HelperConnection(read: incoming.fileHandleForReading, write: outgoing.fileHandleForWriting)
+            let peer = HelperTransport(read: outgoing.fileHandleForReading, write: incoming.fileHandleForWriting)
+            await HelperApp.shared.borrow(connection, for: link, features: accepted ? [HelperSession.screensHost] : [])
+            let workspace = Workspace()
+            workspace.spaces = []
+            let helper = HelperWorkspace(workspace: workspace, renderer: nil, endpoint: .remote(link), host: .authenticated("remote"))
+            workspace.helpers[.remote(link)] = helper
+            // Backend 7 is a tmux server with terminal 11, backend 8 the helper's native shells with terminal 21.
+            func node(_ id: UInt64, _ key: String, parent: UInt64?, kind: String) -> HelperBinary.Value {
+                var fields: [String: HelperBinary.Value] = [
+                    "id": .unsigned(id), "key": .string(key), "kind": .string(kind), "name": .string(key), "detached": .bool(false)]
+                if let parent { fields["parent"] = .unsigned(parent) }
+                return .object(fields)
+            }
+            func topology(_ backend: UInt64, root: UInt64, terminal: UInt64) -> HelperBinary.Value {
+                .object(["backend": .unsigned(backend), "layouts": .array([]), "focus": .null, "nodes": .array([
+                    node(root, "space-\(root)", parent: nil, kind: "workspace"),
+                    node(terminal, "pane-\(terminal)", parent: root, kind: "terminal")])])
+            }
+            var decoder = HelperWire.Decoder()
+            peer.start(receive: { bytes in
+                do {
+                    try decoder.feed(bytes) { message in
+                        guard message.kind == .request, case .object(let body) = try HelperBinary.decode(message.body),
+                              case .string(let method)? = body["method"] else { return }
+                        func send(_ kind: HelperWire.Kind, _ value: HelperBinary.Value) throws {
+                            peer.send(try HelperWire.encode(.init(kind: kind, id: message.id, body: HelperBinary.encode(value))))
+                        }
+                        switch method {
+                        case "multiplexers.list":
+                            try send(.response, .object(["result": .array([
+                                .object(["mux": .unsigned(0), "name": .string("native"), "external": .bool(false), "program": .null]),
+                                .object(["mux": .unsigned(1), "name": .string("tmux"), "external": .bool(true), "program": .null])])]))
+                        case "backends.list": try send(.response, .object(["result": .array([])]))
+                        case "backends.open":
+                            guard case .object(let route)? = body["params"], case .unsigned(let mux)? = route["mux"] else { return }
+                            let (backend, root, terminal): (UInt64, UInt64, UInt64) = mux == 1 ? (7, 10, 11) : (8, 20, 21)
+                            try send(.notify, .object(["method": .string("backend.opened"), "params": .unsigned(backend)]))
+                            try send(.notify, .object(["method": .string("topology"), "params": topology(backend, root: root, terminal: terminal)]))
+                        // Subscriptions stay open; publications and anything else are acknowledged.
+                        case "terminals.observe": break
+                        default: try send(.response, .object(["result": .null]))
+                        }
+                    }
+                } catch { XCTFail(String(describing: error)) }
+            }, closed: { _ in })
+            helper.open(HelperBackend(mux: 1, key: "tmux-server", label: "tmux", isDefault: nil))
+            helper.open(HelperBackend(mux: 0, key: "native", label: "Terminal", isDefault: nil))
+            func tab(_ terminal: UInt64) -> UUID? { workspace.spaces.flatMap(\.tabs).first { $0.terminal == terminal }?.id }
+            try await TestSupport.eventually { tab(11) != nil && tab(21) != nil && helper.hostsScreens != nil }
+            let tmux = try XCTUnwrap(tab(11)), native = try XCTUnwrap(tab(21))
+            func targets(_ tab: UUID) -> [String] {
+                ScreenPublication.targets(of: tab, workspace: workspace, helpers: [helper]).map { "\($0.terminal)\($0.observed ? " observed" : "")" }
+            }
+            XCTAssertEqual(helper.hostsScreens, accepted)
+            XCTAssertEqual(targets(native), ["21"], "A native terminal has no host source: always published")
+            XCTAssertEqual(targets(tmux), accepted ? [] : ["11"], "Only a helper without screens.host gets tmux screens")
+            // An SSH login this helper observes in the tmux tab gets that tab's screen under its own id.
+            helper.observe(99, tab: tmux)
+            XCTAssertEqual(targets(tmux), accepted ? ["99 observed"] : ["11", "99 observed"])
+            helper.unobserve(tmux)
+            helper.stop(); connection.close(); peer.close()
+            await HelperApp.shared.forget(link)
+        }
+        // Silent: output schedules no read until who reads it may have changed.
+        let view = TerminalView(id: System.uuid(), directory: "/tmp")
+        view.screenPublication.withLock { $0.silent = true }
+        view.screenChanged()
+        XCTAssertFalse(view.screenPublication.withLock { $0.pending })
+        view.screenPublication.withLock { $0.silent = false }
+        view.screenChanged()
+        XCTAssertTrue(view.screenPublication.withLock { $0.pending })
+    }
+}
+
+extension HelperAppTests {
+    /// A chat tab's tmux terminal off screen for `followGrace` asks its helper to hold its output (`terminals.follow`
+    /// false, no subscription: the app has one attach of it); on screen again it follows at once. A native tab and a
+    /// plain terminal tab never ask, nor does any tab of a helper without the feature.
+    @MainActor
+    func testHiddenChatTerminalsHoldTheirOutputAfterTheGraceAndFollowWhenShown() async throws {
+        let runtime = TerminalRuntime.shared, previous = runtime.chat
+        defer { runtime.chat = previous }
+        for accepted in [true, false] {
+            runtime.chat = ChatCoordinator(enabled: true)
+            let incoming = Pipe(), outgoing = Pipe(), link = SSHConnectionID()
+            let connection = HelperConnection(read: incoming.fileHandleForReading, write: outgoing.fileHandleForWriting)
+            let peer = HelperTransport(read: outgoing.fileHandleForReading, write: incoming.fileHandleForWriting)
+            await HelperApp.shared.borrow(connection, for: link, features: [HelperSession.screensHost]
+                + (accepted ? [HelperSession.terminalsFollow] : []))
+            let workspace = Workspace()
+            workspace.spaces = []
+            let helper = HelperWorkspace(workspace: workspace, renderer: nil, endpoint: .remote(link), host: .authenticated("remote"))
+            workspace.helpers[.remote(link)] = helper
+            var shown: Set<UUID> = []
+            helper.onScreen = { shown.contains($0) }
+            final class Seen: @unchecked Sendable { var attached: [UInt64] = [], follows: [String] = [] }
+            let seen = Seen()
+            func node(_ id: UInt64, _ key: String, parent: UInt64?, kind: String) -> HelperBinary.Value {
+                var fields: [String: HelperBinary.Value] = [
+                    "id": .unsigned(id), "key": .string(key), "kind": .string(kind), "name": .string(key), "detached": .bool(false)]
+                if let parent { fields["parent"] = .unsigned(parent) }
+                return .object(fields)
+            }
+            var decoder = HelperWire.Decoder()
+            peer.start(receive: { bytes in
+                do {
+                    try decoder.feed(bytes) { message in
+                        guard message.kind == .request, case .object(let body) = try HelperBinary.decode(message.body),
+                              case .string(let method)? = body["method"] else { return }
+                        func send(_ kind: HelperWire.Kind, _ value: HelperBinary.Value) throws {
+                            peer.send(try HelperWire.encode(.init(kind: kind, id: message.id, body: HelperBinary.encode(value))))
+                        }
+                        let params: [String: HelperBinary.Value]
+                        if case .object(let value)? = body["params"] { params = value } else { params = [:] }
+                        switch method {
+                        case "multiplexers.list":
+                            try send(.response, .object(["result": .array([
+                                .object(["mux": .unsigned(0), "name": .string("native"), "external": .bool(false), "program": .null]),
+                                .object(["mux": .unsigned(1), "name": .string("tmux"), "external": .bool(true), "program": .null])])]))
+                        case "backends.list": try send(.response, .object(["result": .array([])]))
+                        case "backends.open":
+                            guard case .unsigned(let mux)? = params["mux"] else { return }
+                            let (backend, root, terminal): (UInt64, UInt64, UInt64) = mux == 1 ? (7, 10, 11) : (8, 20, 21)
+                            try send(.notify, .object(["method": .string("backend.opened"), "params": .unsigned(backend)]))
+                            try send(.notify, .object(["method": .string("topology"), "params": .object([
+                                "backend": .unsigned(backend), "layouts": .array([]), "focus": .null, "nodes": .array([
+                                    node(root, "space-\(root)", parent: nil, kind: "workspace"),
+                                    node(terminal, "pane-\(terminal)", parent: root, kind: "terminal")])])]))
+                        case "terminals.attach":
+                            guard case .unsigned(let terminal)? = params["terminal"] else { return }
+                            DispatchQueue.main.async { seen.attached.append(terminal) }
+                            try send(.notify, .object(["method": .string("terminal.attached"), "params": .object([:])]))
+                        case "terminals.follow":
+                            guard case .unsigned(let terminal)? = params["terminal"], case .bool(let following)? = params["following"]
+                            else { return }
+                            let entry = "\(terminal) \(following)" + (params["subscription"] == nil ? "" : " subscription")
+                            DispatchQueue.main.async { seen.follows.append(entry) }
+                            try send(.response, .object(["result": .null]))
+                        default: try send(.response, .object(["result": .null]))
+                        }
+                    }
+                } catch { XCTFail(String(describing: error)) }
+            }, closed: { _ in })
+            helper.open(HelperBackend(mux: 1, key: "tmux-server", label: "tmux", isDefault: nil))
+            helper.open(HelperBackend(mux: 0, key: "native", label: "Terminal", isDefault: nil))
+            func tab(_ terminal: UInt64) -> UUID? { workspace.spaces.flatMap(\.tabs).first { $0.terminal == terminal }?.id }
+            try await TestSupport.eventually { tab(11) != nil && tab(21) != nil && helper.followsOutput != nil }
+            let tmux = try XCTUnwrap(tab(11)), native = try XCTUnwrap(tab(21))
+            // Both are chat tabs; the tmux one shows its transcript, so its terminal is off screen.
+            for id in [tmux, native] { runtime.chat.session(for: id).active = true }
+            var descriptors: [Int32] = [0, 0]
+            XCTAssertEqual(pipe(&descriptors), 0)
+            defer { close(descriptors[1]) }
+            let channels = [tmux, native].map { _ in
+                HelperTerminal(fd: dup(descriptors[0]), validate: { _, _ in true }, ready: { _, _ in }, retired: { _ in })
+            }
+            helper.attach(tmux, channels[0]); helper.attach(native, channels[1])
+            try await TestSupport.eventually { Set(seen.attached) == [11, 21] }
+            if accepted {
+                try await TestSupport.eventually { seen.follows == ["11 false"] }
+                shown.insert(tmux); helper.reconsider(tmux)
+                try await TestSupport.eventually { seen.follows == ["11 false", "11 true"] }
+                // Back to the transcript and out again within the grace: nothing is held.
+                shown.remove(tmux); helper.reconsider(tmux)
+                shown.insert(tmux); helper.reconsider(tmux)
+                // An agent that exits leaves a plain terminal tab, which follows even off screen.
+                shown.remove(tmux); helper.reconsider(tmux)
+                try await TestSupport.eventually { seen.follows == ["11 false", "11 true", "11 false"] }
+                // This app reading the hidden screen itself follows at once, and holds again once reads stop.
+                helper.screenRead(tmux)
+                try await TestSupport.eventually { seen.follows == ["11 false", "11 true", "11 false", "11 true"] }
+                try await TestSupport.eventually(timeout: .seconds(8)) {
+                    seen.follows == ["11 false", "11 true", "11 false", "11 true", "11 false"]
+                }
+                runtime.chat.session(for: tmux).active = false
+                try await TestSupport.eventually { seen.follows == ["11 false", "11 true", "11 false", "11 true", "11 false", "11 true"] }
+            } else {
+                try await TestSupport.pause(for: .seconds(3))
+                XCTAssertEqual(seen.follows, [], "A helper without terminals.follow is never asked")
+            }
+            try await TestSupport.pause(for: .seconds(3))
+            XCTAssertFalse(seen.follows.contains { $0.hasPrefix("21 ") }, "A native terminal always follows")
+            channels.forEach { $0.close() }
+            helper.stop(); connection.close(); peer.close()
+            await HelperApp.shared.forget(link)
+        }
+    }
+}
+
+/// Fewer writes and wakes per unit of helper traffic, same bytes in the same order (HelperTransport).
+extension HelperAppTests {
+    /// Reads `count` bytes from `fd`, waiting at most 5 s (the transport writes on its own queue).
+    private func drain(_ fd: Int32, count: Int) -> Data {
+        var received = Data(), buffer = [UInt8](repeating: 0, count: 65_536)
+        for _ in 0..<50 where received.count < count {
+            var descriptor = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+            guard poll(&descriptor, 1, 100) > 0 else { continue }
+            let got = read(fd, &buffer, buffer.count)
+            guard got > 0 else { break }
+            received.append(contentsOf: buffer.prefix(got))
+        }
+        return received
+    }
+
+    /// A burst of frames queued while the transport is busy leaves in one `write`, byte for byte; a lone frame on an
+    /// idle transport is written as soon as its send has run (no timer holds it).
+    func testQueuedBurstLeavesInOneWriteAndALoneFrameAtOnce() throws {
+        let incoming = Pipe(), outgoing = Pipe()
+        let transport = HelperTransport(read: incoming.fileHandleForReading, write: outgoing.fileHandleForWriting)
+        defer { transport.close() }
+        let frames = try (0..<200).map { index in
+            try HelperWire.encode(.init(kind: .request, id: UInt64(index + 1), body: Data(repeating: UInt8(index % 251), count: 40)))
+        }
+        let busy = DispatchSemaphore(value: 0)
+        transport.queue.async { busy.wait() }
+        for frame in frames { transport.send(frame) }
+        busy.signal()
+        let expected = frames.reduce(Data(), +)
+        let fd = outgoing.fileHandleForReading.fileDescriptor
+        XCTAssertEqual(drain(fd, count: expected.count), expected)
+        XCTAssertEqual(transport.queue.sync { transport.writes }, 1, "200 queued frames, one write")
+
+        let key = try HelperWire.encode(.init(kind: .request, id: 201, body: Data("k".utf8)))
+        transport.send(key)
+        // The send's block, then the flush it queued behind itself: the frame is in the pipe already.
+        transport.queue.sync {}
+        transport.queue.sync {}
+        var descriptor = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+        XCTAssertEqual(poll(&descriptor, 1, 0), 1, "A lone frame waits for nothing")
+        XCTAssertEqual(drain(fd, count: key.count), key)
+        XCTAssertEqual(transport.queue.sync { transport.writes }, 2)
+    }
+
+    /// Frames the helper wrote in many writes while the transport was busy are read in one wake and handed over in one
+    /// `receive`.
+    func testInboundBurstIsReadInOneWakeAndHandedOverOnce() async throws {
+        let incoming = Pipe(), outgoing = Pipe()
+        let transport = HelperTransport(read: incoming.fileHandleForReading, write: outgoing.fileHandleForWriting)
+        defer { transport.close() }
+        final class Received: @unchecked Sendable { var chunks: [Data] = [] }
+        let received = Received()
+        transport.start(receive: { received.chunks.append($0) }, closed: { _ in })
+        transport.queue.sync {}
+        let frames = try (0..<50).map { index in
+            try HelperWire.encode(.init(kind: .notify, id: 1, body: Data(repeating: UInt8(index), count: 64)))
+        }
+        let busy = DispatchSemaphore(value: 0)
+        transport.queue.async { busy.wait() }
+        let fd = incoming.fileHandleForWriting.fileDescriptor
+        for frame in frames {
+            XCTAssertEqual(frame.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }, frame.count)
+        }
+        busy.signal()
+        let expected = frames.reduce(Data(), +)
+        try await TestSupport.eventually {
+            transport.queue.sync { received.chunks.reduce(0) { $0 + $1.count } } >= expected.count
+        }
+        transport.queue.sync {
+            XCTAssertEqual(received.chunks, [expected], "50 writes, one wake, one receive")
+            XCTAssertEqual(transport.deliveries, 1)
+        }
+    }
+}
+
+/// The follow policy's grace under reads and `active` flips (HelperWorkspace.reconsider, screenRead).
+extension HelperAppTests {
+    /// A hidden chat tab whose screen this app reads during its grace keeps following while read, and once the reads stop
+    /// its output is held once (one `terminals.follow` false). A brief `active` flip during the grace keeps the grace's
+    /// end: the hold comes `followGrace` after the terminal went off screen, not a whole grace after the flip.
+    @MainActor
+    func testHiddenChatTerminalReadsAndActiveFlipsDuringTheGraceHoldOnceAtItsEnd() async throws {
+        let runtime = TerminalRuntime.shared, previous = runtime.chat
+        defer { runtime.chat = previous }
+        runtime.chat = ChatCoordinator(enabled: true)
+        let incoming = Pipe(), outgoing = Pipe(), link = SSHConnectionID()
+        let connection = HelperConnection(read: incoming.fileHandleForReading, write: outgoing.fileHandleForWriting)
+        let peer = HelperTransport(read: outgoing.fileHandleForReading, write: incoming.fileHandleForWriting)
+        await HelperApp.shared.borrow(connection, for: link, features: [HelperSession.screensHost, HelperSession.terminalsFollow])
+        let workspace = Workspace()
+        workspace.spaces = []
+        let helper = HelperWorkspace(workspace: workspace, renderer: nil, endpoint: .remote(link), host: .authenticated("remote"))
+        workspace.helpers[.remote(link)] = helper
+        var shown: Set<UUID> = []
+        helper.onScreen = { shown.contains($0) }
+        final class Seen: @unchecked Sendable { var attached: [UInt64] = [], follows: [String] = [] }
+        let seen = Seen()
+        func node(_ id: UInt64, _ key: String, parent: UInt64?, kind: String) -> HelperBinary.Value {
+            var fields: [String: HelperBinary.Value] = [
+                "id": .unsigned(id), "key": .string(key), "kind": .string(kind), "name": .string(key), "detached": .bool(false)]
+            if let parent { fields["parent"] = .unsigned(parent) }
+            return .object(fields)
+        }
+        var decoder = HelperWire.Decoder()
+        peer.start(receive: { bytes in
+            do {
+                try decoder.feed(bytes) { message in
+                    guard message.kind == .request, case .object(let body) = try HelperBinary.decode(message.body),
+                          case .string(let method)? = body["method"] else { return }
+                    func send(_ kind: HelperWire.Kind, _ value: HelperBinary.Value) throws {
+                        peer.send(try HelperWire.encode(.init(kind: kind, id: message.id, body: HelperBinary.encode(value))))
+                    }
+                    let params: [String: HelperBinary.Value]
+                    if case .object(let value)? = body["params"] { params = value } else { params = [:] }
+                    switch method {
+                    case "multiplexers.list":
+                        try send(.response, .object(["result": .array([
+                            .object(["mux": .unsigned(1), "name": .string("tmux"), "external": .bool(true), "program": .null])])]))
+                    case "backends.list": try send(.response, .object(["result": .array([])]))
+                    case "backends.open":
+                        try send(.notify, .object(["method": .string("backend.opened"), "params": .unsigned(7)]))
+                        try send(.notify, .object(["method": .string("topology"), "params": .object([
+                            "backend": .unsigned(7), "layouts": .array([]), "focus": .null, "nodes": .array([
+                                node(10, "space-10", parent: nil, kind: "workspace"),
+                                node(11, "pane-11", parent: 10, kind: "terminal")])])]))
+                    case "terminals.attach":
+                        guard case .unsigned(let terminal)? = params["terminal"] else { return }
+                        DispatchQueue.main.async { seen.attached.append(terminal) }
+                        try send(.notify, .object(["method": .string("terminal.attached"), "params": .object([:])]))
+                    case "terminals.follow":
+                        guard case .unsigned(let terminal)? = params["terminal"], case .bool(let following)? = params["following"]
+                        else { return }
+                        DispatchQueue.main.async { seen.follows.append("\(terminal) \(following)") }
+                        try send(.response, .object(["result": .null]))
+                    default: try send(.response, .object(["result": .null]))
+                    }
+                }
+            } catch { XCTFail(String(describing: error)) }
+        }, closed: { _ in })
+        helper.open(HelperBackend(mux: 1, key: "tmux-server", label: "tmux", isDefault: nil))
+        try await TestSupport.eventually {
+            workspace.spaces.flatMap(\.tabs).contains { $0.terminal == 11 } && helper.followsOutput != nil
+        }
+        let tmux = try XCTUnwrap(workspace.spaces.flatMap(\.tabs).first { $0.terminal == 11 }?.id)
+        let session = runtime.chat.session(for: tmux)
+        session.active = true
+        var descriptors: [Int32] = [0, 0]
+        XCTAssertEqual(pipe(&descriptors), 0)
+        defer { close(descriptors[1]) }
+        let channel = HelperTerminal(fd: dup(descriptors[0]), validate: { _, _ in true }, ready: { _, _ in }, retired: { _ in })
+        helper.attach(tmux, channel)
+        try await TestSupport.eventually { seen.attached == [11] }
+        try await TestSupport.eventually { seen.follows == ["11 false"] }
+        shown.insert(tmux); helper.reconsider(tmux)
+        try await TestSupport.eventually { seen.follows == ["11 false", "11 true"] }
+
+        // Off screen again, and read every half second for longer than the grace: nothing is held meanwhile.
+        shown.remove(tmux); helper.reconsider(tmux)
+        for _ in 0..<6 {
+            try await TestSupport.pause(for: .milliseconds(500))
+            helper.screenRead(tmux)
+        }
+        XCTAssertEqual(seen.follows, ["11 false", "11 true"], "A tab read during its grace keeps following")
+        // Once the reads stop it is held, once.
+        try await TestSupport.eventually(timeout: .seconds(10)) { seen.follows == ["11 false", "11 true", "11 false"] }
+        try await TestSupport.pause(for: .seconds(3))
+        XCTAssertEqual(seen.follows, ["11 false", "11 true", "11 false"], "One hold once the reads stopped")
+
+        // Shown and off screen again; an agent re-binding flips `active` off and on during the grace.
+        shown.insert(tmux); helper.reconsider(tmux)
+        try await TestSupport.eventually { seen.follows == ["11 false", "11 true", "11 false", "11 true"] }
+        shown.remove(tmux); helper.reconsider(tmux)
+        let hid = ContinuousClock.now
+        try await TestSupport.pause(for: .milliseconds(1200))
+        session.active = false
+        // The session's observer reconsiders on the next main turn: the grace's timer is cancelled there.
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in DispatchQueue.main.async { done.resume() } }
+        session.active = true
+        try await TestSupport.eventually(timeout: .seconds(5)) {
+            seen.follows == ["11 false", "11 true", "11 false", "11 true", "11 false"]
+        }
+        let waited = hid.duration(to: .now)
+        XCTAssertGreaterThan(waited, .milliseconds(1800), "Held only once the grace ended")
+        XCTAssertLessThan(waited, .milliseconds(2800), "The flip did not restart the grace (\(waited))")
+        channel.close()
+        helper.stop(); connection.close(); peer.close()
+        await HelperApp.shared.forget(link)
+    }
+}

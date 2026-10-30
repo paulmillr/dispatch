@@ -224,3 +224,55 @@ final class TmuxChatIntegrationTests: XCTestCase {
                                          diagnostic: "tmux chat: \(TerminalRuntime.shared.helpers[.local]?.error ?? "No protocol error")", condition)
     }
 }
+
+extension TmuxChatIntegrationTests {
+    /// A chat tab showing its transcript stops its terminal's stream after the grace (terminals.follow): what the agent
+    /// draws meanwhile reaches tmux, not this app. Showing the terminal again restores it from the server.
+    func testHiddenChatTerminalIsHeldAndRestoredWhenShown() async throws {
+        let endpoint = try CodexEndpointFixture(prefix: "dispatch-tmux-follow-", delay: 0.05, hooks: false)
+        var passed = false
+        defer { endpoint.stop(removeState: passed) }
+        try await endpoint.start(timeout: .seconds(15))
+        let runtime = TerminalRuntime.shared, previousChat = runtime.chat
+        runtime.chat = ChatCoordinator(enabled: true)
+        defer { runtime.chat = previousChat }
+        let app = try TmuxWalkthrough()
+        defer { app.close() }
+        let workspace = app.workspace, chat = runtime.chat
+        _ = try app.server(["send-keys", "-t", "%0", CodexTestSupport.command(state: endpoint.state, binary: endpoint.binary), "Enter"])
+        try await TestSupport.eventually(timeout: .seconds(15), diagnostic: "Fixture CLI did not start") {
+            try app.server(["capture-pane", "-p", "-t", "%0"]).contains("dispatch-fixture default")
+        }
+        try await app.attach()
+        let tab = try XCTUnwrap(workspace.spaces.flatMap(\.tabs).first { app.target($0) == "%0" })
+        let session = chat.session(for: tab.id)
+        try await wait { session.active }
+        workspace.selectTab(tab.id)
+        try await app.ready()
+        let terminal = try XCTUnwrap(runtime.views[tab.id])
+        let helper = try XCTUnwrap(workspace.helper(containing: tab.id))
+        try XCTSkipUnless(helper.followsOutput == true && helper.hostsScreens == true, "The helper holds no output")
+        try await wait { terminal.onScreen && terminal.agentMenuScreen.contains("dispatch-fixture default") }
+        XCTAssertFalse(helper.holding(tab.id), "A terminal on screen follows")
+        chat.chooseChat(true, session: session)
+        try await wait { !terminal.onScreen }
+        try await TestSupport.eventually(timeout: .seconds(8), diagnostic: "The hidden terminal was not held") { helper.holding(tab.id) }
+        session.draft = "drawn while hidden"; chat.submit(session)
+        try await wait { !session.busy && session.turns.flatMap(\.items).contains { $0.text == "Local fixture reply: drawn while hidden" } }
+        try await TestSupport.eventually(timeout: .seconds(10), diagnostic: "tmux never drew the reply") {
+            try app.server(["capture-pane", "-p", "-t", "%0"]).contains("Local fixture reply: drawn while hidden")
+        }
+        // The renderer's text itself: agentMenuScreen would make the hidden tab follow (HelperWorkspace.screenRead).
+        XCTAssertFalse(terminal.surface?.readText(.active).contains("Local fixture reply: drawn while hidden") ?? true,
+                       "Held output never reaches the renderer")
+        chat.chooseChat(false, session: session)
+        try await wait { terminal.onScreen && !helper.holding(tab.id) }
+        try await TestSupport.eventually(timeout: .seconds(10), diagnostic: "Shown again, the terminal was not restored:\n" + terminal.agentMenuScreen) {
+            terminal.agentMenuScreen.contains("Local fixture reply: drawn while hidden")
+        }
+        // The plain terminal again: the repaint left it at the server's screen and it follows new output.
+        XCTAssertTrue(terminal.agentMenuScreen.contains("dispatch-fixture default"))
+        XCTAssertNil(runtime.helpers[.local]?.error)
+        passed = testRun?.failureCount == 0
+    }
+}

@@ -60,6 +60,10 @@ struct SettingsView: View {
                         NavigationLink(value: Route.theme) {
                             LabeledContent("Theme") { Text(settings.theme.title) }
                         }
+                        // The terminal's rows and chat's lines together, as on the Mac.
+                        Picker("Line spacing", selection: $settings.lineSpacing) {
+                            ForEach(LineSpacing.allCases) { Text($0.title).tag($0) }
+                        }
                     } header: {
                         Text("Appearance")
                     } footer: {
@@ -86,11 +90,22 @@ struct SettingsView: View {
                         NavigationLink(value: Route.terminalScheme) {
                             LabeledContent("Color scheme") { Text(TerminalSchemes.title(settings.terminalScheme)) }
                         }
-                        Toggle("Improve text contrast", isOn: $settings.improveTextContrast)
+                        Picker("Improve text contrast", selection: $settings.textContrast) {
+                            ForEach(TextContrast.allCases) { Text($0.title).tag($0) }
+                        }
                     } header: {
                         Text("Terminal")
                     } footer: {
-                        Text("Terminals open at this size. Pinch a terminal to zoom it; the last size becomes the default.")
+                        Text("Terminals open at this size, larger or smaller with the system text size. Pinch a terminal to zoom it; the last size becomes the default.")
+                    }
+
+                    Section {
+                        Toggle("Automatically approve unsafe pastes", isOn: $settings.autoApproveUnsafePastes)
+                            .accessibilityIdentifier("settings-auto-approve-unsafe-pastes")
+                    } header: {
+                        Text("Security")
+                    } footer: {
+                        Text("Turn off to confirm pastes that could run commands immediately. Ordinary bracketed pastes never ask.")
                     }
 
                     Section {
@@ -101,7 +116,7 @@ struct SettingsView: View {
                             DictationSettingsView(settings: settings)
                         } label: {
                             LabeledContent("Dictation") {
-                                Text(settings.dictationEngine == .whisper ? "Whisper \(settings.whisperModel.title)" : settings.dictationEngine.title)
+                                Text(settings.dictationEngine.label(whisper: settings.whisperModel))
                             }
                         }
                     } header: {

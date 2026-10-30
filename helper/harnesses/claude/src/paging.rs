@@ -13,6 +13,8 @@ pub struct Reader {
     limit: usize,
     budget: u64,
     count: u64,
+    /// Bytes of lines no record comes from (request logs, settings), bounded apart from the page's budget.
+    skipped: u64,
     lines: Vec<Vec<u8>>,
     after: Option<u64>,
     selected: Option<String>,
@@ -40,6 +42,7 @@ impl Reader {
                 4_194_304
             },
             count: 0,
+            skipped: 0,
             lines: Vec::new(),
             after: None,
             selected: None,
@@ -183,10 +186,16 @@ impl Reader {
                         finished = start;
                     }
                 }
-            } else {
+            } else if Self::readable(&line.bytes) {
                 self.count += line.end - line.start;
                 self.lines.push(line.bytes);
                 finished = self.lines.len() >= self.limit || self.count >= self.budget;
+            } else {
+                // Claude ≥ 2.1.300 logs every API request beside the conversation (api-request,
+                // -blob, -shape: up to tens of KB each). Counted, a burst of them filled the page's
+                // 400 lines or 4 MiB and the chat opened on a page without a message.
+                self.skipped += line.end - line.start;
+                finished = self.skipped >= self.budget * 16;
             }
             if finished {
                 position = line.start;
@@ -224,6 +233,17 @@ impl Reader {
             return self.result();
         }
         Ok(None)
+    }
+    /// A line the parser can show or name the conversation with: a uuid entry or a title. A line
+    /// that is not JSON stays too, for the parser to judge.
+    fn readable(line: &[u8]) -> bool {
+        let Ok(doc) = Json::parse(line) else { return true };
+        let root = doc.root();
+        root.get("uuid").is_some() || matches!(text(root, "type"), Some("ai-title" | "custom-title"))
+    }
+    /// Where the page read back to: 0 when it reached the start of the file.
+    pub fn start(&self) -> u64 {
+        self.cursor
     }
     fn result(&mut self) -> Result<Option<(Page, Parser)>, Error> {
         self.position = self.metadata.unwrap().size;

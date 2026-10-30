@@ -408,3 +408,66 @@ extension SSHStatisticsStoreTests {
         store.unsubscribe(next, from: key)
     }
 }
+
+// At the end of the file: replays mark test steps by source line, so lines added above a recorded step stall it.
+extension SSHStatisticsStoreTests {
+    @MainActor private final class Cadence { var value: Duration; init(_ value: Duration) { self.value = value } }
+
+    func testBackgroundCadenceIsAChartBarWhileShownAndAMinuteOtherwise() {
+        XCTAssertEqual(StatisticsCadence.background(shown: true, lowPower: false), .seconds(15), "one sample per 15 s chart bar")
+        XCTAssertEqual(StatisticsCadence.background(shown: false, lowPower: false), .seconds(60), "inactive or every window covered")
+        XCTAssertEqual(StatisticsCadence.background(shown: true, lowPower: true), .seconds(60), "Low Power Mode")
+        XCTAssertEqual(StatisticsCadence.background(shown: false, lowPower: true), .seconds(60))
+    }
+
+    func testBackgroundCadenceChangeAppliesFromTheNextSampleAndOpeningSamplesAtOnce() async throws {
+        let cadence = Cadence(.milliseconds(10)), provider = Provider()
+        let store = SSHStatisticsStore(interval: .milliseconds(10), backgroundCadence: { cadence.value })
+        let key = try XCTUnwrap(store.register(provider, grant: .init(profile: .statistics)))
+        defer { store.remove(provider.id) }
+        try await TestSupport.eventually { provider.samples >= 3 }
+        // Hidden: the wait in progress ends as it began, the one after the next sample takes the new cadence.
+        cadence.value = .seconds(3600)
+        try await TestSupport.pause(for: .milliseconds(100))
+        try await TestSupport.eventually { provider.pending == 0 }
+        let napping = provider.samples
+        try await TestSupport.pause(for: .milliseconds(150))
+        XCTAssertEqual(provider.samples, napping, "The hour-long cadence applies from the next sample")
+        // Opening the stats view samples at once, not after the background wait.
+        let viewer = try XCTUnwrap(store.subscribe(key))
+        try await TestSupport.eventually(timeout: .seconds(2)) { provider.samples > napping }
+        try await TestSupport.eventually { provider.samples > napping + 3 }
+        XCTAssertEqual(provider.maximumPending, 1)
+        // Shown again and closed: background sampling resumes at the cadence read for that wait.
+        cadence.value = .milliseconds(10)
+        store.unsubscribe(viewer, from: key)
+        let closed = provider.samples
+        try await TestSupport.eventually { provider.samples > closed + 2 }
+    }
+
+    func testOnlyALatencySubscriberPutsTheProbeOnItsForegroundCadence() async throws {
+        let store = SSHStatisticsStore(backgroundInterval: .seconds(3600), latencyInterval: .milliseconds(10),
+                                       backgroundLatencyInterval: .seconds(3600)), provider = Provider()
+        provider.supportsLatency = true
+        let key = try XCTUnwrap(store.register(provider, grant: .init(profile: .statistics)))
+        defer { store.remove(provider.id) }
+        let latency = try XCTUnwrap(store.series[key]?.latency)
+        // A connection measures once, then waits the background interval: what a sidebar glyph (no subscriber) gets.
+        try await TestSupport.eventually { latency.state == .ready }
+        try await TestSupport.pause(for: .milliseconds(100))
+        XCTAssertEqual(provider.pingCalls, 1)
+        // A stats view without the identity header (metrics only) leaves the probe in the background.
+        let metrics = try XCTUnwrap(store.subscribe(key))
+        try await TestSupport.pause(for: .milliseconds(100))
+        XCTAssertEqual(provider.pingCalls, 1, "Metrics subscribers do not speed up latency")
+        // The popover's header: measured at once, then every latencyInterval, back in the background once it closes.
+        let header = try XCTUnwrap(store.subscribeLatency(key))
+        try await TestSupport.eventually { provider.pingCalls >= 4 }
+        store.unsubscribeLatency(header, from: key)
+        try await TestSupport.eventually { provider.pendingPings == 0 }
+        let closed = provider.pingCalls
+        try await TestSupport.pause(for: .milliseconds(100))
+        XCTAssertEqual(provider.pingCalls, closed)
+        store.unsubscribe(metrics, from: key)
+    }
+}

@@ -36,9 +36,9 @@ struct ChatMarkdown: View {
     @State private var fileLink: ChatFileLink?
     @State private var selection = ChatMessageSelection()
     var body: some View {
-        let rendered = TextRendering.rich(text)
+        let rendered = ChatMarkdownCache.document(text)
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(ChatMarkdownBlock.parse(rendered.text).enumerated()), id: \.offset) { _, block in
+            ForEach(Array(rendered.blocks.enumerated()), id: \.offset) { _, block in
                 switch block.kind {
                 case .code(let language): ChatCodeBlock(code: block.text, language: language)
                 case .heading(let level):
@@ -87,11 +87,11 @@ struct ChatMarkdown: View {
             ChatSelectableText(value: attributed(text, color: color), selection: selection, source: self.text)
                 .modifier(ChatSelectableBaseline())
         } else {
-            Text(attributed(text, color: color)).textSelection(.enabled).lineSpacing(4).tint(theme.blue)
+            Text(attributed(text, color: color)).textSelection(.enabled).lineSpacing(theme.typography.lineSpacing).tint(theme.blue)
         }
     }
     private func attributed(_ text: String, color: Color?) -> AttributedString {
-        var value = Self.safeInlineMarkdown(text)
+        var value = ChatMarkdownCache.inline(text)
         if let color = color ?? self.color { value.foregroundColor = color }
         for run in value.runs where run.link != nil {
             value[run.range].foregroundColor = theme.blue
@@ -122,14 +122,70 @@ struct ChatMarkdown: View {
     }
 }
 
+/// A message's parsed blocks and each block's inline markdown, by text. A message's view parses again whenever it
+/// mounts (a lazy row scrolled back into view, a pane switched back to Chat) and whenever its body runs; Foundation's
+/// markdown parser per block was most of that. Pure functions of the text, so bounded and dropped wholesale when full.
+@MainActor enum ChatMarkdownCache {
+    struct Document {
+        let blocks: [ChatMarkdownBlock]
+        let truncated: Bool
+    }
+    private static var documents: [String: Document] = [:]
+    private static var inlines: [String: AttributedString] = [:]
+    /// Parses done, for tests.
+    private(set) static var documentParses = 0
+    private(set) static var inlineParses = 0
+    /// Longer texts are parsed each time rather than kept: at most about 8 MB of messages and 8 MB of blocks.
+    static let documentLimit = (count: 128, bytes: 64 * 1024)
+    static let inlineLimit = (count: 1024, bytes: 8 * 1024)
+
+    static func document(_ text: String) -> Document {
+        if let cached = documents[text] { return cached }
+        documentParses += 1
+        let rendered = TextRendering.rich(text)
+        let document = Document(blocks: ChatMarkdownBlock.parse(rendered.text), truncated: rendered.truncated)
+        guard text.utf8.count <= documentLimit.bytes else { return document }
+        if documents.count >= documentLimit.count { documents.removeAll(keepingCapacity: true) }
+        documents[text] = document
+        return document
+    }
+
+    static func inline(_ text: String) -> AttributedString {
+        if let cached = inlines[text] { return cached }
+        inlineParses += 1
+        let value = ChatMarkdown.safeInlineMarkdown(text)
+        guard text.utf8.count <= inlineLimit.bytes else { return value }
+        if inlines.count >= inlineLimit.count { inlines.removeAll(keepingCapacity: true) }
+        inlines[text] = value
+        return value
+    }
+}
+
+/// What message text views cost, for tests: views made, texts built, sizes measured.
+@MainActor enum ChatTextMetrics {
+    static var views = 0
+    static var builds = 0
+    static var measures = 0
+}
+
+/// One message text view's own builds and measures, so a test counts its window's views rather than every transcript
+/// alive in the process.
+@MainActor protocol ChatTextCounting: AnyObject {
+    var builds: Int { get }
+    var measures: Int { get }
+}
+
 /// The native text view reports no text baselines, so baseline-aligned stacks (the radio log's columns) would fall back
 /// to its bottom edge. Its first line sits at the top with no inset, so TextKit 1 draws the first baseline at the font's
 /// ascent rounded to a whole point.
 @available(macOS 26, *)
 private struct ChatSelectableBaseline: ViewModifier {
-    @Environment(\.self) private var environment
+    // The keys it reads, not the whole environment: any environment change would run it again for every block.
+    @Environment(\.font) private var font
+    @Environment(\.chatTheme) private var theme
+    @Environment(\.fontResolutionContext) private var fontContext
     func body(content: Content) -> some View {
-        let font = (environment.font ?? environment.chatTheme.typography.body).resolve(in: environment.fontResolutionContext).ctFont
+        let font = (font ?? theme.typography.body).resolve(in: fontContext).ctFont
         let ascent = CTFontGetAscent(font).rounded()
         content.alignmentGuide(.firstTextBaseline) { _ in ascent }
     }
@@ -140,7 +196,12 @@ private struct ChatSelectableBaseline: ViewModifier {
 // without that overlay; Font.resolve preserves the inherited SwiftUI typography.
 @available(macOS 26, *)
 private struct ChatSelectableText: NSViewRepresentable {
-    @Environment(\.self) private var environment
+    // The keys the text is built from, not the whole environment (`\.self`): with that, every environment change
+    // anywhere above a transcript rebuilt and measured every block of every mounted message.
+    @Environment(\.chatTheme) private var theme
+    @Environment(\.font) private var font
+    @Environment(\.fontResolutionContext) private var fontContext
+    @Environment(\.openURL) private var openURL
     let value: AttributedString
     let selection: ChatMessageSelection
     /// The whole message's markdown, copied after Select All.
@@ -150,31 +211,52 @@ private struct ChatSelectableText: NSViewRepresentable {
         // asks the hosting views for another constraint pass. In a long transcript inside the
         // window's nested hosting views, AppKit stopped with "repeated Update Constraints passes".
         let view = SelectableTextView(usingTextLayoutManager: false)
+        ChatTextMetrics.views += 1
         view.isEditable = false; view.isSelectable = true; view.drawsBackground = false
         view.textContainerInset = .zero; view.textContainer?.lineFragmentPadding = 0
         view.isHorizontallyResizable = false; view.isVerticallyResizable = true
         view.linkTextAttributes = [:]
+        // No frame or bounds notifications: a container tracking its view's width observes them, and every text
+        // view's observer made each frame change in the window search a longer list (and each text view's release
+        // remove its own). SwiftUI places the view; its container follows its width in setFrameSize instead.
+        view.textContainer?.widthTracksTextView = false
+        view.postsFrameChangedNotifications = false
+        view.postsBoundsChangedNotifications = false
         view.delegate = context.coordinator
         return view
     }
     func updateNSView(_ view: NSTextView, context: Context) {
-        context.coordinator.open = environment.openURL
+        let coordinator = context.coordinator
+        coordinator.open = openURL
         if let view = view as? SelectableTextView {
             view.source = source
             if view.selection !== selection { view.selection = selection; selection.views.add(view) }
         }
+        let base = font ?? theme.typography.body
+        let key = Coordinator.Key(value: value, lineSpacing: theme.typography.lineSpacing, ink: theme.ink, font: base, context: fontContext)
+        // Built, set and measured again only when what it is built from changed.
+        guard key != coordinator.key else { return }
+        coordinator.key = key
+        coordinator.sizes.removeAll(keepingCapacity: true)
+        ChatTextMetrics.builds += 1
+        (view as? SelectableTextView)?.builds += 1
         let text = NSMutableAttributedString(attributedString: NSAttributedString(value))
-        let paragraph = NSMutableParagraphStyle(); paragraph.lineSpacing = 4
-        text.addAttributes([.paragraphStyle: paragraph, .foregroundColor: NSColor(environment.chatTheme.ink)],
+        let paragraph = NSMutableParagraphStyle(); paragraph.lineSpacing = theme.typography.lineSpacing
+        text.addAttributes([.paragraphStyle: paragraph, .foregroundColor: NSColor(theme.ink)],
                            range: NSRange(location: 0, length: text.length))
         var offset = 0
         for run in value.runs {
             let count = String(value[run.range].characters).utf16.count
             let range = NSRange(location: offset, length: count)
-            var font = run.font ?? environment.font ?? environment.chatTheme.typography.body
+            var font = run.font ?? base
             if run.inlinePresentationIntent?.contains(.stronglyEmphasized) == true { font = font.bold() }
             if run.inlinePresentationIntent?.contains(.emphasized) == true { font = font.italic() }
-            text.addAttribute(.font, value: font.resolve(in: environment.fontResolutionContext).ctFont, range: range)
+            var resolved = font.resolve(in: fontContext).ctFont
+            if run.inlinePresentationIntent?.contains(.stronglyEmphasized) == true,
+               let bold = ChatFont.boldPostScriptName(CTFontCopyPostScriptName(resolved) as String) {
+                resolved = CTFontCreateWithName(bold as CFString, CTFontGetSize(resolved), nil)
+            }
+            text.addAttribute(.font, value: resolved, range: range)
             if let color = run.foregroundColor { text.addAttribute(.foregroundColor, value: NSColor(color), range: range) }
             if let color = run.backgroundColor { text.addAttribute(.backgroundColor, value: NSColor(color), range: range) }
             if run.link != nil { text.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: range) }
@@ -185,15 +267,35 @@ private struct ChatSelectableText: NSViewRepresentable {
     }
     func sizeThatFits(_ proposal: ProposedViewSize, nsView view: NSTextView, context: Context) -> CGSize? {
         let width = proposal.width ?? .greatestFiniteMagnitude
-        let size = view.attributedString().boundingRect(with: CGSize(width: width, height: .greatestFiniteMagnitude),
-                                                      options: [.usesLineFragmentOrigin, .usesFontLeading]).size
-        return CGSize(width: min(width, ceil(size.width)), height: ceil(size.height))
+        // SwiftUI asks several times per layout pass, and again on every pass; the text only changes in updateNSView.
+        if let size = context.coordinator.sizes[width] { return size }
+        ChatTextMetrics.measures += 1
+        (view as? SelectableTextView)?.measures += 1
+        let size = (view.textStorage ?? view.attributedString()).boundingRect(
+            with: CGSize(width: width, height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading]).size
+        let fitted = CGSize(width: min(width, ceil(size.width)), height: ceil(size.height))
+        if context.coordinator.sizes.count >= 8 { context.coordinator.sizes.removeAll(keepingCapacity: true) }
+        context.coordinator.sizes[width] = fitted
+        return fitted
     }
-    func makeCoordinator() -> Coordinator { Coordinator(open: environment.openURL) }
-    final class SelectableTextView: NSTextView {
+    func makeCoordinator() -> Coordinator { Coordinator(open: openURL) }
+    final class SelectableTextView: NSTextView, ChatTextCounting {
         weak var selection: ChatMessageSelection?
         var source = ""
+        var builds = 0, measures = 0
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+        /// SwiftUI's host view around each block moves with every row above it: nothing observes its frame either.
+        override func viewDidMoveToSuperview() {
+            super.viewDidMoveToSuperview()
+            superview?.postsFrameChangedNotifications = false
+        }
+        /// Its container follows its width here, as `widthTracksTextView` would through frame notifications.
+        override func setFrameSize(_ size: NSSize) {
+            super.setFrameSize(size)
+            guard let container = textContainer else { return }
+            let width = max(0, size.width - textContainerInset.width * 2)
+            if container.size.width != width { container.size = NSSize(width: width, height: container.size.height) }
+        }
         /// Select All spans every block of the message, not just this paragraph.
         override func selectAll(_ sender: Any?) {
             guard let selection else { return super.selectAll(sender) }
@@ -211,7 +313,18 @@ private struct ChatSelectableText: NSViewRepresentable {
         }
     }
     final class Coordinator: NSObject, NSTextViewDelegate {
+        /// What the shown text was built from.
+        struct Key: Equatable {
+            let value: AttributedString
+            let lineSpacing: CGFloat
+            let ink: Color
+            let font: Font
+            let context: Font.Context
+        }
         var open: OpenURLAction
+        var key: Key?
+        /// Measured sizes by proposed width, for the shown text.
+        var sizes: [CGFloat: CGSize] = [:]
         init(open: OpenURLAction) { self.open = open }
         func textViewDidChangeSelection(_ notification: Notification) {
             guard let view = notification.object as? SelectableTextView,

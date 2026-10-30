@@ -258,8 +258,8 @@ final class MobileCompositionTests: XCTestCase {
         let chat = TerminalChatPresence(presences: presences)
         let key = ChatConversationKey(host: UUID(), node: "tmux:fixture:9")
         let node = TerminalPresences.Key(host: key.host, node: key.node)
-        chat.retain(key, terminal: 9, client: peer.client)
-        chat.retain(key, terminal: 9, client: peer.client)
+        chat.retain(key, terminal: 9, client: peer.client, features: [])
+        chat.retain(key, terminal: 9, client: peer.client, features: [])
         XCTAssertTrue(chat.attached(key))
         presences.retain(node)  // the Terminal segment shows it too
         chat.release(key)

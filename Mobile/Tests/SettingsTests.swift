@@ -23,6 +23,15 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(MobileSettings.Appearance.allCases.map(\.rawValue), ["system", "dark", "light"])
     }
 
+    func testUnsafePasteApprovalDefaultsOnAndPersistsOptOut() {
+        let store = defaults()
+        let saved = MobileSettings(defaults: store)
+        XCTAssertTrue(saved.autoApproveUnsafePastes)
+        saved.autoApproveUnsafePastes = false
+        XCTAssertFalse(MobileSettings.autoApprovesUnsafePastes(store))
+        XCTAssertFalse(MobileSettings(defaults: store).autoApproveUnsafePastes)
+    }
+
     func testDictationDefaultsToAppleAndRemembersWhisper() {
         let store = defaults()
         let settings = MobileSettings(defaults: store)
@@ -249,5 +258,16 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(vault.accounts, [KeyStore.privateAccount(key.id), KeyStore.passphraseAccount(key.id)],
                        "only the kept key's secrets: the host password and a secret of no key go")
         XCTAssertNotNil(try vault.secret(for: KeyStore.privateAccount(key.id), reason: ""))
+    }
+}
+
+extension SettingsTests {
+    func testDictationRemembersParakeet() {
+        let store = defaults()
+        let settings = MobileSettings(defaults: store)
+        settings.dictationEngine = .parakeet
+        XCTAssertEqual(MobileSettings.dictation(store).engine, .parakeet, "what the composer's mic reads")
+        XCTAssertEqual(MobileSettings(defaults: store).dictationEngine, .parakeet)
+        XCTAssertEqual(MobileSettings(defaults: store).dictationEngine.label(whisper: .small), "Parakeet")
     }
 }

@@ -472,3 +472,27 @@ final class ChatToolGroupingTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(200))
     }
 }
+
+extension ChatToolGroupingTests {
+    /// Sending shows the agent busy before its new turn starts, while the active turn is still the ended one: that
+    /// turn's newest group stays closed instead of showing its last step until the new turn's start hides it again.
+    func testEndedTurnGroupStaysClosedWhileNextPromptStarts() throws {
+        let session = ChatSession(id: System.uuid())
+        session.activeTurnID = "turn"; session.busy = true
+        session.turns = [ChatTurn(id: "turn", items: [
+            ChatItem(id: "message", kind: .assistant, text: "Updating the handler."), tool("one"), tool("two")])]
+        let group = try XCTUnwrap(session.transcriptRows.first?.group)
+        XCTAssertEqual(session.visibleTranscriptRows.map { $0.item?.id }, ["message", "two"])
+        session.turns[0].ended = Date(timeIntervalSince1970: 1_750_000_000)
+        session.busy = false
+        XCTAssertEqual(session.visibleTranscriptRows.map { $0.item?.id }, ["message"])
+        session.busy = true
+        XCTAssertNil(session.liveTurnID)
+        XCTAssertFalse(session.groupIsLive(group, turnID: "turn"))
+        XCTAssertEqual(session.visibleTranscriptRows.map { $0.item?.id }, ["message"], "The ended turn's last step stays hidden")
+        session.activeTurnID = "next"
+        _ = session.turn("next")
+        XCTAssertEqual(session.liveTurnID, "next")
+        XCTAssertEqual(session.visibleTranscriptRows.map { $0.item?.id }, ["message"])
+    }
+}

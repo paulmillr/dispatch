@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import XCTest
 @testable import DispatchApp
 
@@ -228,10 +229,12 @@ final class PlanOneTests: XCTestCase {
         XCTAssertNotNil(NSFont(name: "0xProto-Regular", size: 12))
         for (name, ext, family) in [("DepartureMono-Regular", "otf", "Departure Mono"),
                                     ("IoskeleyMonoTerm-Regular", "ttf", "Ioskeley Mono Term"),
-                                    ("JetBrainsMono-Regular", "ttf", "JetBrains Mono"),
+                                    ("Resources/JetBrainsMono-Variable", "ttf", "JetBrains Mono"),
                                     ("FiraCode-Regular", "ttf", "Fira Code"),
                                     ("FiraCode-Bold", "ttf", "Fira Code"),
-                                    ("0xProto-Regular", "otf", "0xProto")] {
+                                    ("0xProto-Regular", "otf", "0xProto"),
+                                    ("lmroman10-regular", "otf", "Latin Modern Roman"),
+                                    ("lmmono10-regular", "otf", "Latin Modern Mono")] {
             XCTAssertTrue(FileManager.default.fileExists(atPath: System.resources.appendingPathComponent(name + "." + ext).path), name)
             let font = NSFontManager.shared.font(withFamily: family, traits: [], weight: 5, size: 12)
             XCTAssertEqual(font?.familyName, family)
@@ -239,6 +242,48 @@ final class PlanOneTests: XCTestCase {
         XCTAssertTrue(SettingsView.monospacedFontFamilies.contains("Source Code Pro"))
         XCTAssertTrue(SettingsView.monospacedFontFamilies.contains("0xProto"))
         XCTAssertTrue(SettingsView.monospacedFontFamilies.contains("Fira Code"))
+        XCTAssertTrue(SettingsView.monospacedFontFamilies.contains("JetBrains Mono"))
+        // The engine's variable JetBrains Mono has real bold and italic faces (no static files).
+        let members = NSFontManager.shared.availableMembers(ofFontFamily: "JetBrains Mono")?.compactMap { $0[1] as? String } ?? []
+        XCTAssertTrue(Set(["Regular", "Bold", "Italic", "Bold Italic"]).isSubset(of: members), "\(members)")
+        // Latin Modern: Roman (a chat font) bolds itself; Mono (a terminal font, so chat's Same as code) bolds in Latin
+        // Modern Mono Light, which Settings doesn't list.
+        for name in ["LMRoman10-Regular", "LMRoman10-Bold", "LMRoman10-Italic", "LMRoman10-BoldItalic", "LMMono10-Regular",
+                     "LMMono10-Italic", "LMMonoLt10-Bold", "LMMonoLt10-BoldOblique"] {
+            XCTAssertNotNil(NSFont(name: name, size: 12), name)
+        }
+        XCTAssertEqual(ChatFont.boldPostScriptName("LMMono10-Italic"), "LMMonoLt10-BoldOblique")
+        XCTAssertNil(ChatFont.boldPostScriptName("LMRoman10-Regular"))
+        XCTAssertFalse(SettingsView.terminalFontFamilies.contains("Latin Modern Mono Light"))
+        // Dispatch's own fonts (the more bundled ones too) by name, after the installed ones and a separator.
+        let menu = SettingsView.fontMenuChoices
+        let separator = try XCTUnwrap(menu.firstIndex(of: SettingsDropdown.separator))
+        let own = Array(menu[(separator + 1)...]); XCTAssertEqual(own, own.sorted { $0.localizedStandardCompare($1) == .orderedAscending })
+        XCTAssertTrue(menu[..<separator].contains("PT Mono"), "macOS's own fonts stay above the separator"); XCTAssertEqual(Set(own), Set(menu.dropFirst().filter(AppFont.bundledFamilies.contains)).union(SettingsView.moreBundledFontFamilies))
+        XCTAssertTrue(Set(SettingsView.moreBundledFontFamilies).isDisjoint(with: SettingsView.monospacedFontFamilies))
+        for family in SettingsView.moreBundledFontFamilies {
+            XCTAssertNotNil(NSFontManager.shared.font(withFamily: family, traits: [], weight: 5, size: 12), family)
+        }
+        var mono = Preferences(); (mono.chatFont, mono.fontFamily) = (.sameAsCode, "Latin Modern Mono")
+        let typography = ChatTypography(preferences: mono)
+        XCTAssertEqual(typography.fontName, "LMMono10-Regular")
+        XCTAssertEqual(typography.font(weight: .semibold), Font.custom("LMMonoLt10-Bold", fixedSize: typography.pointSize()))
+        // Terminal fonts draw at Source Code Pro's lowercase height: the default exactly, others scaled to it.
+        XCTAssertEqual(TerminalFontScale.size(12.5, family: "Source Code Pro"), 12.5)
+        XCTAssertEqual(TerminalFontScale.factor("No Such Font \(System.uuid())"), 1)
+        let reference = try XCTUnwrap(TerminalFontScale.lowercaseHeight("Source Code Pro"))
+        for family in ["Inconsolata", "Victor Mono", "JetBrains Mono", "Latin Modern Mono", "Menlo"] {
+            let height = try XCTUnwrap(TerminalFontScale.lowercaseHeight(family), family)
+            XCTAssertEqual(height * TerminalFontScale.factor(family), reference, accuracy: reference * 0.002, family)
+        }
+        XCTAssertGreaterThan(TerminalFontScale.factor("Inconsolata"), 1.05)
+        XCTAssertLessThan(TerminalFontScale.factor("Victor Mono"), 0.8)
+        // Chat's New York and SF Rounded: the system font's designs, never looked up by name.
+        for (choice, design) in [(ChatFont.newYork, Font.Design.serif), (.sfRounded, .rounded)] {
+            var chat = Preferences(); chat.chatFont = choice
+            XCTAssertEqual(ChatTypography(preferences: chat).font(), Font.system(size: chat.fontSize, weight: .regular, design: design))
+            XCTAssertNotEqual(choice.systemFont(ofSize: 12)?.familyName, NSFont.systemFont(ofSize: 12).familyName, "\(choice)")
+        }
         var preferences = Preferences(); preferences.spaceOrder = .tree
         XCTAssertEqual(try JSONDecoder().decode(Preferences.self, from: JSONEncoder().encode(preferences)).spaceOrder, .tree)
     }

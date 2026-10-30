@@ -22,7 +22,7 @@ enum TerminalAppImport {
 
     /// This Mac's Terminal profile (`profile`: its name, else the default), for the fonts Settings offers.
     @MainActor static func plan(profile: String? = nil) -> ImportPlan? {
-        load().map { plan(preferences: $0, profile: profile, fonts: SettingsView.monospacedFontFamilies) }
+        load().map { plan(preferences: $0, profile: profile, fonts: SettingsView.terminalFontFamilies) }
     }
 
     /// A profile's settings (`profile`: its name, else the default profile), with Terminal's own Shell setting.

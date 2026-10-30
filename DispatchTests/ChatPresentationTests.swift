@@ -359,7 +359,8 @@ final class ChatPresentationTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(150))
         session.draft = "Queued first"; coordinator.queue(session, drain: false)
         let tip = try await capture("first-queue-tip")
-        XCTAssertTrue(tip.contains("interrupt and redirect"), tip)
+        // The tip may wrap after "interrupt", beside its close button, which OCR reads into the line.
+        XCTAssertTrue(tip.contains("redirect the current turn"), tip)
         XCTAssertTrue(tips.bool(forKey: "chatQueueSteerTipShown"))
         mount()
         try await Task.sleep(for: .milliseconds(150))

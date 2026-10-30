@@ -1365,7 +1365,8 @@ final class AppReplay: @unchecked Sendable {
 
     /// A request without the terminal grid it was sized for: geometry follows the app's layout (drawing), not I/O.
     /// A hello without its features: they only tune how the helper batches what it sends (`terminals.coalesce`), and a
-    /// recording holds the helper's frames as they were, so one made before the Mac named any replays unchanged.
+    /// recording holds the helper's frames as they were, so one made before the Mac named any replays unchanged. The
+    /// recorded reply decides the rest: without `screens.host` in it the app publishes every screen, as it did then.
     private static func drawn(_ value: HelperBinary.Value) -> HelperBinary.Value {
         guard case .object(var request) = value, case .object(var params)? = request["params"] else { return value }
         params["size"] = nil

@@ -6,7 +6,7 @@ import XCTest
 @MainActor
 final class SSHSpaceTests: XCTestCase {
     func testConnectingSpinnerPrecedesAuthenticationAndClearsOnFailure() async throws {
-        for tmux in [false, true] {
+        let pointer = try parkPointer(); defer { if let pointer { CGWarpMouseCursorPosition(pointer) } }; for tmux in [false, true] {
             let app = try TmuxWalkthrough(autoClose: true)
             defer { app.close() }
             app.controller.settings.values.hideSingleSpace = false
@@ -276,5 +276,16 @@ final class SSHSpaceTests: XCTestCase {
         return withUnsafePointer(to: &address) { pointer in
             pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) == 0 }
         }
+    }
+}
+
+extension SSHSpaceTests {
+    /// The physical pointer, wherever an earlier test left it, can rest on the tab header, whose hover shows the close
+    /// button instead of the spinner. Park it right of the walkthrough's 1120-point window (at the screen's origin).
+    func parkPointer() throws -> CGPoint? {
+        let previous = CGEvent(source: nil)?.location
+        let desktop = try XCTUnwrap(NSScreen.screens.first).frame
+        XCTAssertEqual(CGWarpMouseCursorPosition(CGPoint(x: min(desktop.maxX - 20, desktop.minX + 1220), y: desktop.height / 2)), .success)
+        return previous
     }
 }

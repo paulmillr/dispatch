@@ -178,6 +178,17 @@ impl<T: Multiplexer> Multiplexer for Registered<T> {
     fn host_screens(&mut self, enabled: bool) {
         self.part.host_screens(enabled);
     }
+    fn restores(&self) -> bool {
+        self.part.restores()
+    }
+    fn hosted(&self, terminal: Id) -> bool {
+        self.part.hosted(terminal)
+    }
+    fn screen_clients(&mut self, io: &mut dyn Io, terminal: Id, hosting: bool, published: bool) {
+        let previous = io.section(&self.section);
+        self.part.screen_clients(io, terminal, hosting, published);
+        io.section(&previous);
+    }
     calls! {
         fn control(terminal: Id) -> Process;
         fn claim(process: &Process, write: ControlWrite) -> Option<ControlTarget>;
@@ -197,8 +208,9 @@ impl<T: Multiplexer> Multiplexer for Registered<T> {
         fn zoom(terminal: Id, zoomed: bool) -> ();
         fn close(node: Id, how: Close) -> ();
         fn idle(node: Id) -> bool;
-        fn attach(terminal: Id, size: Grid, takeover: bool) -> ();
+        fn attach(terminal: Id, size: Grid, takeover: bool, publishes: bool) -> ();
         fn input(terminal: Id, bytes: &[u8]) -> ();
+        fn restore(terminal: Id, token: u64) -> ();
         fn check(terminal: Id, process: &Process) -> ();
         fn keys(terminal: Id, process: &Process, input: &[Input]) -> ();
         fn resize(terminal: Id, size: Grid) -> ();

@@ -255,17 +255,17 @@ final class HostStatsSheetTests: XCTestCase {
         XCTAssertEqual(presentation.plainAction, "Try again")
     }
 
-    /// W7: Low Power Mode samples every 15 s, and the sheet says so.
+    /// W7: Low Power Mode samples every 30 s, and the sheet says so.
     func testLowPowerBanner() async throws {
         let (sessions, session) = registry()
         try await TestSupport.eventually { session.link.isConnected }
         session.stats.readLowPower = { true }
         session.stats.powerStateChanged()
-        XCTAssertEqual(session.stats.cadence, .seconds(15))
-        XCTAssertEqual(HostStatsPresentation(session: session).lowPowerBanner, "Low Power Mode · sampling every 15 s")
+        XCTAssertEqual(session.stats.cadence, .seconds(30))
+        XCTAssertEqual(HostStatsPresentation(session: session).lowPowerBanner, "Low Power Mode · sampling every 30 s")
         let labels = Self.labels(try await spoken(HostStatsSheet(hostID: session.id, launch: HostStatsLaunch(detent: .large)),
                                                   sessions: sessions) { Self.labels($0).contains("Disconnect") })
-        XCTAssertTrue(labels.contains("Low Power Mode · sampling every 15 s"), "\(labels)")
+        XCTAssertTrue(labels.contains("Low Power Mode · sampling every 30 s"), "\(labels)")
     }
 
     /// The title's line follows the link.

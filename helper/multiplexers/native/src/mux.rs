@@ -230,6 +230,8 @@ impl Native {
         {
             terminal.checking = false;
             let mut finished = match result {
+                // Typed for an agent that has not read the input before it: asked again on the next timer.
+                Ok(()) if terminal.draining(io) => Vec::new(),
                 Ok(()) => terminal.write(io),
                 Err(failure) if !terminal.input.is_empty() => vec![terminal.finish(Err(failure))],
                 Err(_) => Vec::new(),
@@ -371,6 +373,9 @@ impl Multiplexer for Native {
             members: Vec::new(),
             candidates: Vec::new(),
             retry: None,
+            pasted: false,
+            draining: None,
+            settled: false,
             changed: false,
             waiters: Vec::new(),
             input: VecDeque::new(),
@@ -532,12 +537,14 @@ impl Multiplexer for Native {
         );
     }
 
+    /// `_publishes` changes nothing: native screens have no host source, its clients always publish them.
     fn attach(
         &mut self,
         io: &mut dyn Io,
         terminal: Id,
         size: Grid,
         takeover: bool,
+        _publishes: bool,
         done: Done<()>,
     ) {
         let mut mutated = false;
@@ -735,6 +742,17 @@ impl Multiplexer for Native {
                 }
                 for id in ready {
                     self.discover(io, id);
+                }
+                // A key waiting for the child to read earlier input (Terminal::draining): the ownership check runs
+                // again, and its completion asks `unread` again.
+                let waiting: Vec<Id> = self
+                    .terminals
+                    .iter()
+                    .filter(|terminal| terminal.draining.is_some() && !terminal.checking && !terminal.closed && !terminal.exited)
+                    .map(|terminal| terminal.node.id)
+                    .collect();
+                for id in waiting {
+                    self.inspect(io, id);
                 }
             }
             Event::Done { work, result } => {

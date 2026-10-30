@@ -4,13 +4,24 @@ import CoreText
 
 enum AppFont {
     @MainActor private static var registered = false
+    /// The families of the fonts Dispatch brings (`register`), whether or not this Mac has them installed too.
+    @MainActor private(set) static var bundledFamilies: Set<String> = []
     @MainActor static func register() {
         guard !registered else { return }
         registered = true
+        var urls: [URL] = []
         for ext in ["ttf", "otf"] {
-            for url in (try? FileManager.default.contentsOfDirectory(at: System.resources, includingPropertiesForKeys: nil)) ?? []
-            where url.pathExtension == ext {
-                CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
+            urls += ((try? FileManager.default.contentsOfDirectory(at: System.resources, includingPropertiesForKeys: nil)) ?? [])
+                .filter { $0.pathExtension == ext }
+        }
+        // JetBrains Mono is the terminal engine's own variable face (its Resources folder): registered, Settings offers
+        // it, and its wght axis gives the terminal real bold faces.
+        urls += ["JetBrainsMono-Variable", "JetBrainsMono-Italic-Variable"].map { System.resources.appendingPathComponent("Resources/\($0).ttf") }
+        for url in urls {
+            CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
+            let descriptors = CTFontManagerCreateFontDescriptorsFromURL(url as CFURL) as? [CTFontDescriptor] ?? []
+            for descriptor in descriptors {
+                if let family = CTFontDescriptorCopyAttribute(descriptor, kCTFontFamilyNameAttribute) as? String { bundledFamilies.insert(family) }
             }
         }
     }
@@ -29,7 +40,7 @@ enum AppFont {
 
 /// UI sizes are offsets from the content size; compact labels retain an 8 pt floor.
 struct AppTypography: Equatable {
-    var contentSize: CGFloat = 12.5
+    var contentSize: CGFloat = 14
     func size(offset: CGFloat = 0) -> CGFloat { max(8, contentSize + offset) }
     func font(offset: CGFloat = 0, weight: Font.Weight = .regular, design: Font.Design = .monospaced) -> Font {
         AppFont.ui(size: size(offset: offset), weight: weight, design: design)

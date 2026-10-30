@@ -72,7 +72,7 @@ struct AgentWorkingState: Equatable {
         if !loading, !waiting, !session.subagents.isEmpty, agentTool || !session.busy {
             label = "waiting on agents"
             var seen = Set<String>()
-            fragment = session.subagents.filter { seen.insert($0).inserted }.joined(separator: ", ")
+            fragment = session.subagents.map(\.kind).filter { seen.insert($0).inserted }.joined(separator: ", ")
         }
     }
 
@@ -219,70 +219,50 @@ struct AgentWorkingAnimation: View {
         #else
         let benchmarkPaused = false
         #endif
-        TimelineView(.animation(minimumInterval: reduceMotion ? 1 : nil,
-                                paused: !visible || !session.showChat || state.waiting || !state.visible || benchmarkPaused)) { timeline in
-            #if DISPATCH_BENCHMARK
-            let _ = HostScalingAnimationProbe.tick?(session.id)
-            #endif
-            let date = state.visible ? timeline.date : finishedClock
-            let seconds = date.timeIntervalSinceReferenceDate
-            let moving = !reduceMotion && !state.waiting && state.visible && !benchmarkPaused
-            let pulse = (1 - cos(seconds * 2 * .pi / 1.6)) / 2
-            VStack(spacing: 6) {
-                HStack(spacing: 8) {
-                    ZStack {
-                        Text("◆").foregroundStyle(theme.accent)
-                            .opacity(moving ? 0.55 + 0.45 * pulse : 1)
-                            .scaleEffect(moving ? 0.92 + 0.16 * pulse : 1)
-                        if moving {
-                            Circle().fill(theme.accent).frame(width: 3, height: 3)
-                                .shadow(color: theme.accent.opacity(0.7), radius: 3)
-                                .offset(y: -8)
-                                .rotationEffect(.degrees(seconds.truncatingRemainder(dividingBy: 1.4) / 1.4 * 360))
-                        }
-                    }.frame(width: 18, height: 20).accessibilityHidden(true)
-                    Text(state.label)
-                        .fontWeight(.medium)
-                        .foregroundStyle(theme.muted).fixedSize()
-                        .opacity(moving ? 0.65 + 0.35 * pulse : 1)
-                        .overlay {
-                            if thinking && moving {
-                                GeometryReader { geometry in
-                                    LinearGradient(colors: [.clear, theme.ink, .clear], startPoint: .leading, endPoint: .trailing)
-                                        .frame(width: 35)
-                                        .offset(x: (geometry.size.width + 35) * seconds.truncatingRemainder(dividingBy: 2.4) / 2.4 - 35)
-                                }.mask(Text(state.label).fontWeight(.medium))
-                            }
-                        }
-                    if !state.waiting && !state.loading {
-                        Text("· \(Self.timeText(state, now: date, appeared: appeared, reduceMotion: reduceMotion))")
-                            .monospacedDigit().foregroundStyle(theme.muted).fixedSize()
+        // Motion runs in the compositor (ChatComposerMotion.swift), as the composer's does; SwiftUI updates only the
+        // whole seconds.
+        let moving = visible && session.showChat && !reduceMotion && thinking && !benchmarkPaused
+        VStack(spacing: 6) {
+            HStack(spacing: 8) {
+                ChatComposerOrbit(moving: moving, glyph: theme.typography.detail, dot: 3, width: 18)
+                    .accessibilityHidden(true)
+                // While moving the shimmer draws the label too, breathing with the ◆; this copy keeps its place and
+                // its words for accessibility.
+                Text(state.label)
+                    .fontWeight(.medium)
+                    .foregroundStyle(theme.muted).fixedSize()
+                    .opacity(moving ? 0 : 1)
+                    .overlay {
+                        if moving { ChatComposerShimmer(label: state.label, breathing: theme.muted).accessibilityHidden(true) }
                     }
-                    if !state.fragment.isEmpty {
-                        Text("·").foregroundStyle(theme.muted.opacity(0.55))
-                        HStack(spacing: 2) {
-                            Text(state.fragment)
-                                .italic().lineLimit(1)
+                if !state.waiting && !state.loading {
+                    if visible && session.showChat && state.visible {
+                        // A tick a hair after each whole second of the clock, as its text changes (the seconds are
+                        // truncated); the start lies in the past, so the first tick is now.
+                        TimelineView(.periodic(from: (state.started ?? appeared).addingTimeInterval(-0.99), by: 1)) { timeline in
+                            clock(state, now: timeline.date)
                         }
-                        .foregroundStyle(theme.muted.opacity(0.85))
-                        .accessibilityElement(children: .ignore).accessibilityLabel(state.fragment)
+                    } else {
+                        clock(state, now: state.visible ? .now : finishedClock)
                     }
-                    Spacer(minLength: 0)
-                }.frame(minHeight: 20)
-                if thinking {
-                    GeometryReader { geometry in
-                        Rectangle().fill(theme.border)
-                        if moving {
-                            let phase = seconds.truncatingRemainder(dividingBy: 2.2) / 2.2
-                            let progress = (1 - cos(phase * .pi)) / 2
-                            LinearGradient(colors: [.clear, theme.accent.opacity(0.6), .clear], startPoint: .leading, endPoint: .trailing)
-                                .frame(width: geometry.size.width * 0.3)
-                                .offset(x: geometry.size.width * (progress * 1.3 - 0.3))
-                        }
-                    }.frame(height: 1).clipped().accessibilityHidden(true)
-                } else {
-                    Color.clear.frame(height: 1).accessibilityHidden(true)
                 }
+                if !state.fragment.isEmpty {
+                    Text("·").foregroundStyle(theme.muted.opacity(0.55))
+                    HStack(spacing: 2) {
+                        Text(state.fragment)
+                            .italic().lineLimit(1)
+                    }
+                    .foregroundStyle(theme.muted.opacity(0.85))
+                    .accessibilityElement(children: .ignore).accessibilityLabel(state.fragment)
+                }
+                Spacer(minLength: 0)
+            }.frame(minHeight: 20)
+            if thinking {
+                Rectangle().fill(theme.border).frame(height: 1)
+                    .overlay { if moving { AgentWorkingSweep() } }
+                    .accessibilityHidden(true)
+            } else {
+                Color.clear.frame(height: 1).accessibilityHidden(true)
             }
         }.font(theme.typography.detail).padding(.vertical, 8)
             .accessibilityElement(children: .combine).accessibilityIdentifier("chat-working")
@@ -300,14 +280,75 @@ struct AgentWorkingAnimation: View {
             .onChange(of: session.activeTurnID) { _, _ in appeared = .now }
             .onChange(of: session.awaitingPromptAck) { _, waiting in if waiting { appeared = .now } }
     }
+
+    private func clock(_ state: AgentWorkingState, now: Date) -> some View {
+        Text("· \(Self.timeText(state, now: now, appeared: appeared, reduceMotion: reduceMotion))")
+            .monospacedDigit().foregroundStyle(theme.muted).fixedSize()
+    }
+}
+
+/// The Thinking row's rule: a soft accent band eases across it every 2.2 s, in the compositor. It crosses the rule
+/// at up to about 650 pt/s, so it takes every frame MotionRate allows.
+struct AgentWorkingSweep: NSViewRepresentable {
+    func makeNSView(context: Context) -> SweepView { SweepView() }
+
+    func updateNSView(_ view: SweepView, context: Context) {
+        view.accent = context.environment.chatTheme.accent
+        view.moving = true
+    }
+
+    static func dismantleNSView(_ view: SweepView, coordinator: ()) { view.stop() }
+
+    final class SweepView: CompositorView {
+        var accent = Color.clear { didSet { if accent != oldValue { redraw() } } }
+        let band = CAGradientLayer()
+        private var drawnWidth: CGFloat?
+        static let period = 2.2
+
+        override init() {
+            super.init()
+            band.startPoint = CGPoint(x: 0, y: 0.5); band.endPoint = CGPoint(x: 1, y: 0.5)
+            layer?.masksToBounds = true
+            layer?.addSublayer(band)
+        }
+
+        override func layout() {
+            super.layout()
+            guard drawnWidth != bounds.width else { return }
+            redraw()
+            updateAnimations()
+        }
+
+        override func redraw() {
+            drawnWidth = bounds.width
+            let color = NSColor(accent)
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            band.colors = [color.withAlphaComponent(0), color.withAlphaComponent(0.6 * color.alphaComponent),
+                           color.withAlphaComponent(0)].map(\.cgColor)
+            // A third of the rule wide; off the rule until its loop runs.
+            band.bounds = CGRect(x: 0, y: 0, width: bounds.width * 0.3, height: bounds.height)
+            band.position = CGPoint(x: -bounds.width, y: bounds.midY)
+            CATransaction.commit()
+        }
+
+        override func start() {
+            guard bounds.width > 0 else { return }
+            // The band's leading edge eases from 30% before the rule to its end; (1 - cos) / 2 sampled at 33 points.
+            let times = (0...32).map { Double($0) / 32 }
+            let sweep = CAKeyframeAnimation(keyPath: "position.x")
+            sweep.values = times.map { bounds.width * ((1 - cos($0 * .pi)) / 2 * 1.3 - 0.15) }
+            sweep.keyTimes = times.map { NSNumber(value: $0) }
+            sweep.duration = Self.period
+            loop(sweep, on: band)
+        }
+    }
 }
 
 #if DISPATCH_BENCHMARK
-/// Opt-in instrumentation, absent from ordinary app builds. Counts timeline
-/// evaluations rather than claiming physical display frames.
+/// Opt-in instrumentation, absent from ordinary app builds: the benchmark's animation-off variant stops chat's
+/// working animation.
 @MainActor
 enum HostScalingAnimationProbe {
-    static var tick: ((UUID) -> Void)?
     static var paused = false
 }
 #endif

@@ -5,6 +5,7 @@ import concurrent.futures
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -92,8 +93,15 @@ def main():
             daemon_threads = True
         hook_server = HookServer(str(state / 'hook.sock'), HookHandler)
         threading.Thread(target=hook_server.serve_forever, daemon=True).start()
-        env['DISPATCH_CHAT_SOCKET'] = str(state / 'hook.sock')
-        env['DISPATCH_CHAT_TOKEN'] = __import__('uuid').uuid4().hex
+        # The shipping bridge talks only to Dispatch's helper (DISPATCH_HELPER_EXECUTABLE), so this check stands in
+        # for it: the wrapper posts each hook to the receiver above and prints its reply, as the bridge would.
+        wrapper = state / 'capture-hook.sh'
+        wrapper.write_text(f'''#!/bin/sh
+input=$(/bin/cat)
+printf '%s\\n' "$input" >> {shlex.quote(str(state / 'hooks.jsonl'))}
+printf '%s' "$input" | /usr/bin/curl -sf --unix-socket {shlex.quote(str(state / 'hook.sock'))} \\
+    -H 'Content-Type: application/json' --data-binary @- http://localhost/hook || exit 0
+''')
         cli = CodexPTY(args.codex, work, env)
         def wait_hook(name, after=0):
             deadline = time.monotonic() + 15

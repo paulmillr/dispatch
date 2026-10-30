@@ -1,9 +1,10 @@
 import AppKit
 import SwiftUI
 
-/// The right pane: what the selected row is (F2a, F2d). A 40 pt header names it and carries its controls; the body
-/// draws the kind the loader decided. Content and header always come from the same `FilePreviewState`, and each
-/// state gets its own view identity, so a new selection never shows the last file's text, scroll or find.
+/// The right pane: what the selected row is (F2a, F2d). A header as tall as the list's column header names it and
+/// carries its controls; the body draws the kind the loader decided. Content and header always come from the same
+/// `FilePreviewState`, and each state gets its own view identity, so a new selection never shows the last file's
+/// text, scroll or find.
 struct FilePreviewPane: View {
     let session: FilesSession
 
@@ -43,9 +44,10 @@ struct FilePreviewPane: View {
 }
 
 extension FilesFormatting {
-    /// The header's muted line: "src/routes · 4.1 KB · modified 6m ago · TypeScript", "assets · 48 KB · PNG ·
-    /// 512 × 512", "folder · 5,120 items · 48 MB", and for text too large to show "scheduler · 9.6 MB · JSON" (F2d).
-    @MainActor static func meta(_ preview: FilePreviewState, root: String?, home: String?, now: Date) -> String {
+    /// The header's muted line after the name: "4.1 KB · modified 6m ago", "48 KB · PNG · 512 × 512", "folder ·
+    /// 5,120 items · 48 MB", and for text too large to show "9.6 MB" (F2d). The folder and language aren't repeated:
+    /// the name's tooltip and Copy path give the path.
+    @MainActor static func meta(_ preview: FilePreviewState, now: Date) -> String {
         if case .folder(let summary) = preview.kind {
             guard let summary else { return "folder" }
             let total = summary.files + summary.folders
@@ -53,7 +55,7 @@ extension FilesFormatting {
             return "folder · \(items) \(total == 1 ? "item" : "items") · \(size(summary.bytes))"
         }
         if preview.entry?.isDirectory == true { return "folder" }
-        var parts = [location(of: preview.path, root: root, home: home)]
+        var parts: [String] = []
         if let bytes = preview.revision?.size ?? preview.entry?.size { parts.append(size(bytes)) }
         if case .image(_, let pixels) = preview.kind {
             if let kind = kindName(preview.name) { parts.append(kind) }
@@ -64,7 +66,6 @@ extension FilesFormatting {
         if !tooLarge, let modified = preview.revision?.modified ?? preview.entry?.modified {
             parts.append(self.modified(modified, at: now))
         }
-        if let kind = kindName(preview.name) { parts.append(kind) }
         return parts.joined(separator: " · ")
     }
 }
@@ -72,11 +73,12 @@ extension FilesFormatting {
 /// One selection's header and body. Its view state (find, rendered, fit) belongs to this file only.
 private struct FilePreviewContent: View {
     @Environment(\.chatTheme) private var theme
+    @Environment(\.appTypography) private var typography
     let session: FilesSession
     let preview: FilePreviewState
     @State private var find = FilePreviewFind()
     @State private var rendered = false
-    @State private var actualSize = false
+    @State private var zoom = FileImageZoom.fit
     @State private var headRequest: UUID?
     @State private var spinner = false
     @FocusState private var focus: Field?
@@ -118,21 +120,26 @@ private struct FilePreviewContent: View {
     // MARK: Header
 
     private var header: some View {
-        let root = session.root(tabDirectory: TerminalRuntime.shared.workspace?.liveTab(session.id)?.directory)
         let notice = FilesEditorNotices.shared.notice(for: session.id)
         return HStack(spacing: 10) {
-            Image(systemName: icon)
-                .font(.system(size: 12))
-                .foregroundStyle(theme.ink.opacity(0.6))
-                .frame(width: 14)
             Text(verbatim: TextRendering.visible(preview.name))
                 .font(theme.typography.font())
                 .foregroundStyle(theme.ink)
                 .lineLimit(1).truncationMode(.middle)
                 .layoutPriority(1)
+                .help(TextRendering.visible(preview.path))
                 .accessibilityIdentifier("file-preview-name")
-            Text(verbatim: TextRendering.visible(FilesFormatting.meta(
-                preview, root: root, home: session.home ?? session.source?.home, now: System.date())))
+            if !isFolder {
+                Button(action: copyPath) {
+                    Image(systemName: "doc.on.doc").font(.system(size: 11))
+                }
+                .buttonStyle(FilePreviewIconButtonStyle(on: false))
+                .keyboardShortcut(focused ? KeyboardShortcut("c", modifiers: [.command, .option]) : nil)
+                .help("Copy path · ⌥⌘C")
+                .accessibilityLabel("Copy path")
+                .accessibilityIdentifier("file-preview-copy-path")
+            }
+            Text(verbatim: TextRendering.visible(FilesFormatting.meta(preview, now: System.date())))
                 .font(theme.typography.font(offset: -1.5))
                 .foregroundStyle(theme.muted)
                 .lineLimit(1).truncationMode(.tail)
@@ -150,7 +157,8 @@ private struct FilePreviewContent: View {
             controls
         }
         .padding(.horizontal, 14)
-        .frame(height: 40)
+        // The list's column header beside it is as tall (FilesColumns.headerHeight).
+        .frame(height: FilesColumns.headerHeight(typography))
         .background {
             // Edit › Find reaches the preview through `findRequest`; this keeps ⌘F working while the preview has
             // focus even where the menu routes it elsewhere. Opening twice is harmless.
@@ -163,14 +171,6 @@ private struct FilePreviewContent: View {
         .accessibilityIdentifier("file-preview-header")
     }
 
-    private var icon: String {
-        switch preview.kind {
-        case .folder: "folder"
-        case .image: "photo"
-        default: preview.entry?.isDirectory == true ? "folder" : "doc"
-        }
-    }
-
     private var isFolder: Bool {
         if case .folder = preview.kind { return true }
         return preview.entry?.isDirectory == true
@@ -179,39 +179,35 @@ private struct FilePreviewContent: View {
     @ViewBuilder private var controls: some View {
         HStack(spacing: 4) {
             if wrappable {
-                Button { session.previewWrap.toggle() } label: {
+                Button { session.previewWrap = !wrap } label: {
                     FileWrapGlyph().frame(width: 14, height: 14)
                 }
-                .buttonStyle(FilePreviewIconButtonStyle(on: session.previewWrap))
-                .help(session.previewWrap ? "Don’t wrap lines" : "Wrap lines")
+                .buttonStyle(FilePreviewIconButtonStyle(on: wrap))
+                .help(wrap ? "Don’t wrap lines" : "Wrap lines")
                 .accessibilityLabel("Wrap lines")
-                .accessibilityValue(session.previewWrap ? "on" : "off")
+                .accessibilityValue(wrap ? "on" : "off")
                 .accessibilityIdentifier("file-preview-wrap")
             }
             if case .markdown = preview.kind {
-                Button("Rendered") { rendered.toggle() }
-                    .buttonStyle(FilePreviewIconButtonStyle(on: rendered))
-                    .help(rendered ? "Show the Markdown source" : "Show the Markdown rendered")
-                    .accessibilityValue(rendered ? "on" : "off")
-                    .accessibilityIdentifier("file-preview-rendered")
+                Button { rendered.toggle() } label: {
+                    Image(systemName: "eye").font(.system(size: 11))
+                }
+                .buttonStyle(FilePreviewIconButtonStyle(on: rendered))
+                .help(rendered ? "Show the Markdown source" : "Show the Markdown rendered")
+                .accessibilityLabel("Rendered")
+                .accessibilityValue(rendered ? "on" : "off")
+                .accessibilityIdentifier("file-preview-rendered")
             }
-            if !isFolder {
-                Button(action: copyPath) {
-                    Image(systemName: "doc.on.doc").font(.system(size: 11))
+            if editable {
+                Button { files.openInEditor(session.id, path: preview.path) } label: {
+                    Image(systemName: "square.and.pencil").font(.system(size: 11))
                 }
                 .buttonStyle(FilePreviewIconButtonStyle(on: false))
-                .keyboardShortcut(focused ? KeyboardShortcut("c", modifiers: [.command, .option]) : nil)
-                .help("Copy path · ⌥⌘C")
-                .accessibilityLabel("Copy path")
-                .accessibilityIdentifier("file-preview-copy-path")
-            }
-        }
-        if editable {
-            Button("Open in editor") { files.openInEditor(session.id, path: preview.path) }
-                .buttonStyle(FilePreviewButtonStyle())
                 .keyboardShortcut(focused ? KeyboardShortcut("o", modifiers: .command) : nil)
                 .help("Open in editor · ⌘O")
+                .accessibilityLabel("Open in editor")
                 .accessibilityIdentifier("file-preview-open-editor")
+            }
         }
     }
 
@@ -241,6 +237,10 @@ private struct FilePreviewContent: View {
         .background(theme.window, in: RoundedRectangle(cornerRadius: 5))
         .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(theme.border))
     }
+
+    /// This tab's wrap choice, else Settings' (Files › Wrap lines).
+    private var wrap: Bool { session.previewWrap ?? TerminalRuntime.shared.preferences.filesWrapLines }
+    private var lineNumbers: Bool { TerminalRuntime.shared.preferences.filesLineNumbers }
 
     private var wrappable: Bool {
         switch preview.kind {
@@ -276,7 +276,7 @@ private struct FilePreviewContent: View {
                 spinner = true
             }
         case .text(let text, let language):
-            FileTextPreview(owner: owner, content: .text(text, language: language), wrap: session.previewWrap,
+            FileTextPreview(owner: owner, content: .text(text, language: language), wrap: wrap, lineNumbers: lineNumbers,
                             find: find, highlightsQuery: find.open)
         case .markdown(let text):
             if rendered {
@@ -288,12 +288,16 @@ private struct FilePreviewContent: View {
                 .environment(\.chatSearchQuery, find.open ? find.query : "")
                 .accessibilityIdentifier("file-preview-markdown")
             } else {
-                FileTextPreview(owner: owner, content: .text(text, language: "markdown"), wrap: session.previewWrap,
+                FileTextPreview(owner: owner, content: .text(text, language: "markdown"), wrap: wrap, lineNumbers: lineNumbers,
                                 find: find, highlightsQuery: find.open)
             }
         case .image(let data, let pixels):
-            FileImagePreview(data: data, revision: preview.revision, pixelSize: pixels, actualSize: $actualSize,
-                             focused: focused)
+            FileImagePreview(data: data, revision: preview.revision, pixelSize: pixels, zoom: $zoom, focused: focused,
+                             toggleFullScreen: {
+                                 FileImageFullScreen.show(name: preview.name, data: data, revision: preview.revision,
+                                                          pixelSize: pixels, from: NSApp.keyWindow)
+                             },
+                             activate: { if focus != .content { focus = .content } })
         case .folder(let summary):
             FileFolderPreview(path: preview.path, entry: preview.entry, summary: summary,
                               openFolder: { session.pin(preview.path) },
@@ -303,7 +307,7 @@ private struct FilePreviewContent: View {
             if let head {
                 VStack(spacing: 0) {
                     headBar("First 64 KB of \(FilesFormatting.size(size)) · the terminal has the rest")
-                    FileTextPreview(owner: owner, content: .text(head, language: preview.name), wrap: session.previewWrap,
+                    FileTextPreview(owner: owner, content: .text(head, language: preview.name), wrap: wrap, lineNumbers: lineNumbers,
                                     find: find, highlightsQuery: find.open)
                 }
             } else {

@@ -5,8 +5,12 @@
 #
 #   scripts/release-notarize.sh Dispatch-unsigned.zip --identity 'Developer ID Application: NAME (TEAMID)'
 #
+# The Pilot account's zip is Dispatch-Pilot-unsigned.zip, the stable one's Dispatch-unsigned.zip; each signs into its
+# own folder (Dispatch-Pilot-signed/, Dispatch-signed/). A signer for both accounts stores the second account's
+# credentials under another name and adds --profile NAME.
+#
 # First it shows the zip's SHA-256: continue only if it matches the hash the maintainer sent over a
-# separate channel. Everything it makes goes to Dispatch-signed/, next to the zip.
+# separate channel. With --sha256 HASH it compares instead of asking (release-publish.sh, docs/releasing.md). Everything it makes goes to Dispatch-signed/, next to the zip.
 # Re-signs the maintainer's build (never rebuilds it): every Mach-O, deepest first, then the app,
 # with the hardened runtime, a secure timestamp and each binary's own identifier (yachts.dispatch.app,
 # yachts.dispatch.helper); the app alone gets one entitlement, written below (the microphone, for dictation). Notarizes and staples the app,
@@ -19,8 +23,8 @@
 set -euo pipefail
 
 fail() { echo "error: $*" >&2; exit 1; }
-usage() { fail "usage: release-notarize.sh Dispatch-unsigned.zip --identity 'Developer ID Application: NAME (TEAMID)'"; }
-# The credentials stored in the one-time setup above.
+usage() { fail "usage: release-notarize.sh Dispatch-unsigned.zip --identity 'Developer ID Application: NAME (TEAMID)' [--profile NAME] [--sha256 HASH]"; }
+# The credentials stored in the one-time setup above, unless --profile names others.
 PROFILE=dispatch-notary
 
 is_macho() {
@@ -79,17 +83,35 @@ notarize() {
     fail "notarization of $(basename "$file") is $status (submission $id). See: xcrun notarytool log $id --keychain-profile $PROFILE. Rerun this command to resume; do not upload again by hand."
 }
 
-[[ $# == 3 && "$2" == --identity && -f "$1" ]] || usage
-ARCHIVE="$1"
-IDENTITY="$(identity_hash "$3")"
+[[ $# -ge 3 && -f "$1" ]] || usage
+ARCHIVE="$1"; shift
+IDENTITY="" EXPECTED=""
+while [[ $# -gt 0 ]]; do
+  [[ $# -ge 2 && -n "$2" ]] || usage
+  case "$1" in
+    --identity) IDENTITY="$(identity_hash "$2")" ;;
+    --profile) PROFILE="$2" ;;
+    --sha256) EXPECTED="$2" ;;
+    *) usage ;;
+  esac
+  shift 2
+done
+[[ -n "$IDENTITY" ]] || usage
 
-echo "SHA-256 of $(basename "$ARCHIVE"): $(shasum -a 256 "$ARCHIVE" | cut -d' ' -f1)"
-read -r -p "Does it match the hash the maintainer sent separately? Type yes to continue: " answer < /dev/tty
-[[ "$answer" == yes ]] || fail "stopped: sign only the build whose hash the maintainer sent"
+digest="$(shasum -a 256 "$ARCHIVE" | cut -d' ' -f1)"
+echo "SHA-256 of $(basename "$ARCHIVE"): $digest"
+if [[ -n "$EXPECTED" ]]; then
+  [[ "$digest" == "$EXPECTED" ]] || fail "stopped: the zip is not the build whose hash is $EXPECTED"
+else
+  read -r -p "Does it match the hash the maintainer sent separately? Type yes to continue: " answer < /dev/tty
+  [[ "$answer" == yes ]] || fail "stopped: sign only the build whose hash the maintainer sent"
+fi
 # Credentials work before anything is signed; no password or key on the command line.
 xcrun notarytool history --keychain-profile "$PROFILE" --output-format json > /dev/null ||
   fail "no working notarytool credentials named $PROFILE; store them as shown at the top of this script"
-OUTPUT="$(cd "$(dirname "$ARCHIVE")" && pwd)/Dispatch-signed"
+# Dispatch-unsigned.zip signs into Dispatch-signed/, Dispatch-Pilot-unsigned.zip into Dispatch-Pilot-signed/.
+name="$(basename "$ARCHIVE" .zip)"
+OUTPUT="$(cd "$(dirname "$ARCHIVE")" && pwd)/${name%-unsigned}-signed"
 mkdir -p "$OUTPUT"
 app="$OUTPUT/Dispatch.app"
 

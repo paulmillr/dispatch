@@ -106,7 +106,7 @@ struct SidebarSpaceTile: View {
     let connecting: Bool
     let branch: String?
     var showBranch = true
-    var metrics = SidebarMetrics.large(contentSize: 12.5)
+    var metrics = SidebarMetrics.large(contentSize: 14)
     var selection: Namespace.ID?
     @State private var hovered = false
 
@@ -270,6 +270,8 @@ struct SidebarSpaceCard: View {
                     detailsLine(tabs: false, status: activity.label, activity: activity)
                     detailsLine(tabs: false, status: nil, activity: activity)
                 }
+                // The status pill's entrance: agent activity changes outside any animation. This card's line only.
+                .animation(InterfaceMotion.animation(reduce: reduceMotion, duration: 0.15), value: activity.label)
             }
         }
         .padding(.leading, 9).padding(.trailing, 11)

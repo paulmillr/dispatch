@@ -7,6 +7,7 @@ app target only installs the finished binaries (--install-only)."""
 import argparse
 from contextlib import nullcontext
 import fcntl
+import gzip
 import hashlib
 import json
 import re
@@ -20,6 +21,9 @@ import tempfile
 ROOT = Path(os.environ.get("SRCROOT", Path(__file__).resolve().parent.parent))
 NAMES = ("darwin-arm64", "linux-aarch64", "linux-x86_64")
 ARTIFACTS = (*NAMES, "version", "protocol-version")
+# Bundled gzipped in the Mac app (Dispatch/SSH/SSHHelperArchive.swift): only uploaded, and a host with gzip expands
+# them itself. darwin-arm64 is also the app's own helper, kept as is.
+COMPRESSED = ("linux-aarch64", "linux-x86_64")
 # Remote helpers bundled for SSH hosts: protocol marker the app checks (helper: its generated wire schema
 # version).
 HELPERS = {
@@ -87,15 +91,20 @@ def corpus_state(corpus, migrations, version, content):
     return digest.hexdigest()
 
 
-def replace_if_changed(source, destination):
-    """Publish complete files and preserve unchanged output timestamps."""
-    if destination.is_file() and source.read_bytes() == destination.read_bytes():
+def replace_if_changed(source, destination, compress=False):
+    """Publish complete files and preserve unchanged output timestamps. `compress`: gzip it on the way (level 9, no
+    name or time, so the same helper always gives the same bytes)."""
+    content = gzip.compress(source.read_bytes(), compresslevel=9, mtime=0) if compress else None
+    if destination.is_file() and (content if compress else source.read_bytes()) == destination.read_bytes():
         if source.stat().st_mode & 0o777 == destination.stat().st_mode & 0o777:
             return
     with tempfile.NamedTemporaryFile(dir=destination.parent, prefix=".helper-", delete=False) as stream:
         temporary = Path(stream.name)
     try:
-        shutil.copyfile(source, temporary)
+        if compress:
+            temporary.write_bytes(content)
+        else:
+            shutil.copyfile(source, temporary)
         temporary.chmod(source.stat().st_mode & 0o777)
         temporary.replace(destination)
     finally:
@@ -259,6 +268,10 @@ def install(target_dir, helper="helper"):
             # The Mac app's darwin-arm64 links to the one signed dispatch-helper (scripts/bundle-helper.sh).
             if directory == destination and name == "darwin-arm64" and not phone:
                 continue
+            if directory == destination and name in COMPRESSED and not phone:
+                replace_if_changed(output / name, directory / (name + ".gz"), compress=True)
+                (directory / name).unlink(missing_ok=True)
+                continue
             replace_if_changed(output / name, directory / name)
 
 
@@ -267,8 +280,8 @@ def verify(target_dir):
     a capture either replays on the latest helper or is dropped (`capture prune`), never silently."""
     corpus = ROOT / "replays"
     if not any(corpus.rglob("*.rpl.zst")):
-        # The corpus is a git submodule; a checkout without it builds, unchecked.
-        print("warning: no replay corpus in " + str(corpus) + " (git submodule update --init replays); the helper is not checked against it", flush=True)
+        # The corpus is its own repository; a checkout without it builds, unchecked.
+        print("warning: no replay corpus in " + str(corpus) + "; the helper is not checked against it", flush=True)
         return
     output = target_dir / ("replay-results-" + str(os.getpid()))
     helper = target_dir / "bin/darwin-arm64"
@@ -300,8 +313,10 @@ def verify(target_dir):
         if migrated.returncode != 0:
             raise SystemExit("A replay migration did not apply (" + str(migrations) + "): fix it before the corpus replays")
     state = corpus_state(corpus, migrations, version, content=False)
-    result = subprocess.run([str(helper), "capture", "replay", str(corpus), "--completion", "required", "--output", str(output)],
-                            stdout=subprocess.PIPE, text=True)
+    # The per-capture timeout catches a hung replay, not a slow one: the large herdr session
+    # (HerdrTests/testLargeSession…) replays in 20-23 s of CPU here, past the tool's 20 s default.
+    result = subprocess.run([str(helper), "capture", "replay", str(corpus), "--completion", "required", "--timeout", "60",
+                             "--output", str(output)], stdout=subprocess.PIPE, text=True)
     lines = result.stdout.splitlines()
     for line in lines[:-1]:
         if not line.startswith("pass\t"):

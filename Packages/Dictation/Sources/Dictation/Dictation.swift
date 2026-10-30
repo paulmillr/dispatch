@@ -20,7 +20,7 @@ public enum DictationUpdate: Equatable, Sendable {
 /// said while the recognizer still loads waits for it. While it listens, it reports the level and what it has heard
 /// so far. A continuous dictation goes on until stopped, cut into utterances at the speaker's pauses: each gets a
 /// recognizer of its own, and its transcript is reported as soon as that recognizer has it. Each app makes one, with
-/// its Whisper models.
+/// its model store.
 @MainActor @Observable public final class Dictation {
     public enum Phase: Equatable {
         case idle
@@ -49,15 +49,16 @@ public enum DictationUpdate: Equatable, Sendable {
     /// Why the owner's last dictation failed, until it dictates again or dismisses it.
     private(set) var error: String?
 
-    /// Where Whisper's models are.
-    @ObservationIgnored private let models: WhisperModelStore
+    /// Where Whisper's and Parakeet's models are.
+    @ObservationIgnored private let models: DictationModelStore
     @ObservationIgnored private var microphone: DictationInput?
     /// The microphone, and asking for it; tests play recordings instead.
     @ObservationIgnored var input: () -> DictationInput = { DictationMicrophone() }
     @ObservationIgnored var access: () async -> Bool = { await DictationMicrophone.requestAccess() }
     @ObservationIgnored private var tap: DictationTap?
     @ObservationIgnored private var format: AVAudioFormat?
-    @ObservationIgnored private var whisper: URL?
+    /// The downloaded model's engine and location (none for Apple's).
+    @ObservationIgnored private var model: (transcriber: any StretchTranscriber, location: URL)?
     @ObservationIgnored private var update: ((DictationUpdate) -> Void)?
     /// The utterance being spoken, and the transcripts of earlier ones still to report, in order.
     @ObservationIgnored private var current: Utterance?
@@ -81,7 +82,7 @@ public enum DictationUpdate: Equatable, Sendable {
         }
     }
 
-    public init(models: WhisperModelStore) {
+    public init(models: DictationModelStore) {
         self.models = models
     }
 
@@ -91,10 +92,18 @@ public enum DictationUpdate: Equatable, Sendable {
 
     public func dismissError() { error = nil }
 
-    /// Gets ready for a dictation that may follow (a held shortcut): loads Whisper's model if it is the engine.
+    /// Gets ready for a dictation that may follow (a held shortcut): loads the engine's model if it has one.
     public func prepare(engine: DictationEngine, model: WhisperModel) {
-        guard engine == .whisper, let file = models.installed(model) else { return }
-        WhisperTranscriber.shared.preload(file)
+        guard let model = engine.model(whisper: model), let location = models.installed(model) else { return }
+        Self.transcriber(model).preload(location)
+    }
+
+    /// The engine that runs a downloaded model.
+    nonisolated private static func transcriber(_ model: DictationModel) -> any StretchTranscriber {
+        switch model {
+        case .whisper: WhisperTranscriber.shared
+        case .parakeet: ParakeetTranscriber.shared
+        }
     }
 
     /// Starts dictating for `owner`, or stops (and transcribes) its dictation.
@@ -126,9 +135,13 @@ public enum DictationUpdate: Equatable, Sendable {
             do {
                 guard await access() else { throw DictationError.microphoneDenied }
                 guard token == run else { return }
-                // Whisper's model must be there before anything is recorded for it.
-                whisper = engine == .whisper ? models.installed(model) : nil
-                if engine == .whisper, whisper == nil { throw DictationError.modelMissing(model) }
+                // A downloaded model must be there before anything is recorded for it.
+                if let needed = engine.model(whisper: model) {
+                    guard let location = models.installed(needed) else { throw DictationError.modelMissing(needed) }
+                    self.model = (Self.transcriber(needed), location)
+                } else {
+                    self.model = nil
+                }
                 let microphone = input()
                 (microphone as? DictationMicrophone)?.playback = playback
                 let format = try microphone.prepare()
@@ -168,12 +181,12 @@ public enum DictationUpdate: Equatable, Sendable {
         let utterance = Utterance(number: utterances, feed: feed)
         let number = utterance.number
         let heard = reporter(token) { (dictation: Dictation, text: String) in dictation.heard(text, utterance: number) }
-        let whisper = whisper
+        let model = model
         guard let format else { fatalError("the microphone's format comes first") }
         utterance.recognizer = Task {
             let recognizer: DictationRecognizer
-            if let whisper {
-                recognizer = WhisperRecognizer(input: format, model: whisper, heard: heard)
+            if let model {
+                recognizer = StretchRecognizer(input: format, transcriber: model.transcriber, model: model.location, heard: heard)
             } else {
                 recognizer = try await AppleTranscriber.make(input: format, partial: heard)
             }
@@ -266,7 +279,7 @@ public enum DictationUpdate: Equatable, Sendable {
         unreported = 0
         update = nil
         format = nil
-        whisper = nil
+        model = nil
         continuous = false
         muted = false
         phase = .idle

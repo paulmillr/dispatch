@@ -99,6 +99,7 @@ extension Mode {
 let deviceStatusTable: [(name: String, value: UInt16, question: Bool)] = [
     ("operating_status", 5, false),
     ("cursor_position", 6, false),
+    ("cursor_position_extended", 6, true),
     ("color_scheme", 996, true),
     ("visibility", 998, true),
 ]

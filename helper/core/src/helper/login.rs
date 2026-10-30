@@ -32,7 +32,10 @@ pub(crate) fn plugin_required(method: &str) -> &'static str {
 
 pub(crate) fn required(method: &str) -> &'static str {
     let capability = match method {
-        "hello" | "echo" | "permissions.reduce" => "",
+        // terminals.ack only moves the client's own output window. login.release runs before any grant exists, in
+        // the Mac's greeting probe (started with none), like hello: it only names the helper the waiting login checks
+        // and runs itself, which the user's own SSH login could do with any exec channel.
+        "hello" | "echo" | "permissions.reduce" | "terminals.ack" | "login.release" => "",
         "plugins.reset" => "stats.sample",
         "files.text" => plugin_required("text"),
         "files.read" => plugin_required("read"),
@@ -181,6 +184,8 @@ impl Login {
                             terminal,
                             size,
                             false,
+                            // The Mac publishes its login tab's screen (TerminalBackend.swift publishScreen).
+                            true,
                             deferred(Box::new(move |_, result| {
                                 if let Err(error) = result {
                                     owner.borrow_mut().failure = Some(error);

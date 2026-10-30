@@ -97,7 +97,7 @@ struct SpacesTreeMock: View {
                     }
                     .padding(2).glassEffect(.regular.interactive(), in: Capsule())
                 }
-                ToolbarItem(placement: .topBarTrailing) { Text("Edit").padding(.horizontal, 18).frame(height: 44).glassEffect(.regular.interactive(), in: Capsule()) }
+                ToolbarItem(placement: .topBarTrailing) { Text("Edit").fixedSize().padding(.horizontal, 18).frame(height: 44).glassEffect(.regular.interactive(), in: Capsule()) }
             }
         }
     }

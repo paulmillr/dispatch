@@ -310,10 +310,10 @@ final class ChatCoordinator {
             }
         }
         for record in records where session.transcriptIndex.seen.insert(record.key).inserted {
-            if !earlier, let reviewing = record.reviewing { session.reviewing = reviewing }
+            if !earlier, let reviewing = record.reviewing, session.reviewing != reviewing { session.reviewing = reviewing }
             switch record.action {
             case .title(let title):
-                if acceptTitle { session.transcriptTitle = title }
+                if acceptTitle, session.transcriptTitle != title { session.transcriptTitle = title }
             case .settings(let settings):
                 if !earlier {
                     session.configurationRequest = nil
@@ -328,7 +328,7 @@ final class ChatCoordinator {
                     session.goal = goal; session.goalUpdatedAt = record.date.timeIntervalSince1970 > 0 ? record.date : .now; session.goalRevision += 1
                     if session.commandResult?.title == "Goal" { session.commandResult?.text = goal?.summary ?? "Goal cleared." }
                 }
-            case .metadata(_, let version): session.version = version
+            case .metadata(_, let version): if session.version != version { session.version = version }
             case .configuration(let model, let effort):
                 if !earlier { session.applyConfiguration(model: model, effort: effort, revision: configurationRevision) }
             case .started:
@@ -502,7 +502,9 @@ final class ChatCoordinator {
             session.queuedMessages[index].pause = nil
             session.editingQueuedID = nil; session.editingQueuedDraftID = nil
         } else {
-            session.queuedMessages.append(ChatQueuedMessage(text: text, process: session.process, binding: session.binding, host: session.host, delivery: delivery, isCommand: isCommand, conversation: session.sessionID, generation: session.queueGeneration, attachments: attachments))
+            let message = ChatQueuedMessage(text: text, process: session.process, binding: session.binding, host: session.host, delivery: delivery, isCommand: isCommand, conversation: session.sessionID, generation: session.queueGeneration, attachments: attachments)
+            session.queuedMessages.append(message)
+            launchFlight(session, text: text, hasAttachments: !attachments.isEmpty, from: .composer, to: .queued(message.id))
         }
         session.selectedQueuedID = nil
         if drain { drainQueue(session) }
@@ -594,8 +596,10 @@ final class ChatCoordinator {
             session.queuedMessages[index].pause = .destinationChanged
         }
         // Until the helper has bound the agent, held rows stay here and wait for it.
-        session.queueWaiting = session.binding == nil && session.queuedMessages.contains(where: \.held)
+        // Runs with every chat.state: an unchanged wait writes nothing (the queue view reads it).
+        let waiting = session.binding == nil && session.queuedMessages.contains(where: \.held)
             ? "Waiting for the terminal to be ready…" : nil
+        if session.queueWaiting != waiting { session.queueWaiting = waiting }
         // The host keeps what it accepted and sends it even after this Mac disconnects.
         if uploadHeldQueue(session) { return }
         if let row = session.queuedMessages.first, row.held, row.local || !storesQueue(session), row.pause == nil, !row.pending, row.matches(session),

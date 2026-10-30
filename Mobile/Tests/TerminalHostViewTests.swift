@@ -50,9 +50,10 @@ final class TerminalHostViewTests: XCTestCase {
         try await TestSupport.eventually { view.visibleText().contains("~/src/app $ pnpm dev") }
         let size = try XCTUnwrap(feed.record.attachments.first)
         XCTAssertEqual(size, view.session.currentSize)
-        // 402 points less 2 x 14 padding, in cells of the 12 point font: about 50 columns.
-        XCTAssertGreaterThanOrEqual(size.columns, 45)
-        XCTAssertLessThanOrEqual(size.columns, 56)
+        // 402 points less 2 x 14 padding, in cells of 12 point JetBrains Mono drawn at Source Code Pro's apparent size
+        // (10.67 points, `TerminalFontScale`): about 58 columns.
+        XCTAssertGreaterThanOrEqual(size.columns, 52)
+        XCTAssertLessThanOrEqual(size.columns, 63)
         XCTAssertGreaterThan(size.cellHeight, size.cellWidth)
     }
 
@@ -174,6 +175,38 @@ final class TerminalHostViewTests: XCTestCase {
         try await TestSupport.eventually { view.session.locked { true } && feedParsed(view, "\u{1B}[?2004h") }
         view.paste(text: "echo hi")
         try await sent(feed, "\u{1B}[200~echo hi\u{1B}[201~")
+    }
+
+    func testUnsafePasteSettingPromptsButAllowsBracketedMultiline() async throws {
+        let defaults = UserDefaults.standard, key = MobileSettings.autoApproveUnsafePastesKey
+        let previous = defaults.object(forKey: key)
+        defer { defaults.set(previous, forKey: key) }
+        defaults.set(false, forKey: key)
+        let feed = ScriptedTerminalFeed(output: Data())
+        let view = try await host(feed)
+        view.session.locked { Array("\u{1B}[?2004h".utf8).withUnsafeBufferPointer { view.session.surface.feed($0) } }
+        view.paste(text: "echo one\necho two")
+        try await sent(feed, "\u{1B}[200~echo one\necho two\u{1B}[201~")
+        XCTAssertNil(view.pasteConfirmation)
+        view.session.locked { Array("\u{1B}[?2004l".utf8).withUnsafeBufferPointer { view.session.surface.feed($0) } }
+        view.paste(text: "echo three\r")
+        let alert = try XCTUnwrap(view.pasteConfirmation)
+        XCTAssertEqual(alert.title, "Paste text that could run commands?")
+        XCTAssertEqual(alert.preferredAction?.title, "Cancel")
+        XCTAssertEqual(String(decoding: feed.record.sent, as: UTF8.self), "\u{1B}[200~echo one\necho two\u{1B}[201~")
+        alert.dismiss(animated: false)
+    }
+
+    func testAutomaticPasteApprovalKeepsExistingBehavior() async throws {
+        let defaults = UserDefaults.standard, key = MobileSettings.autoApproveUnsafePastesKey
+        let previous = defaults.object(forKey: key)
+        defer { defaults.set(previous, forKey: key) }
+        defaults.set(true, forKey: key)
+        let feed = ScriptedTerminalFeed(output: Data())
+        let view = try await host(feed)
+        view.paste(text: "echo one\necho two\r")
+        try await sent(feed, "echo one\recho two\r")
+        XCTAssertNil(view.pasteConfirmation)
     }
 
     /// Long press selects the word under the finger without a click reaching the program; Copy puts it on the

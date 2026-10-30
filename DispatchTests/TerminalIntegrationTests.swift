@@ -77,7 +77,7 @@ final class TerminalIntegrationTests: XCTestCase {
         }
         // tmux-style prefix keys: ⌃B twice leaves Control chords reaching the program, and ⌃B c
         // runs New Tab instead of typing.
-        controller.settings.values.prefixKeys = .tmux
+        controller.settings.values.prefixKeys = .all
         let prefix = TerminalTestSupport.keyEvent(11, "\u{02}", in: window, modifiers: .control, ignoringModifiers: "b")
         XCTAssertTrue(terminal.performKeyEquivalent(with: prefix))
         XCTAssertEqual(workspace.prefixKeys.armed, id)
@@ -396,8 +396,9 @@ final class TerminalIntegrationTests: XCTestCase {
         func assertWindowControlAlignment() throws {
             for kind in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
                 let button = try XCTUnwrap(window.standardWindowButton(kind))
-                XCTAssertEqual(window.frame.height - button.convert(button.bounds, to: nil).midY, 15, accuracy: 0.5,
-                    "Native controls stay centered in the flat 30-point title row")
+                // The flat title row: 30 points at the 12.5 design base, growing with the text.
+                XCTAssertEqual(window.frame.height - button.convert(button.bounds, to: nil).midY, AppTypography().expanded(30) / 2,
+                               accuracy: 0.5, "Native controls stay centered in the flat title row")
             }
         }
         try assertWindowControlAlignment()

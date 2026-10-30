@@ -118,15 +118,22 @@ public struct Screen {
     @discardableResult func increaseCapacity(_ p: Page, _ g: Grow) throws(OutOfSpace) -> Page {
         guard p === page else { return try pages.increaseCapacity(p, g) }
         let n = try pages.increaseCapacity(p, g)
+        cursorPageReplaced()
+        return n
+    }
+
+    /// The tracked pin moved after its old page was destroyed. Its IDs belong to that old
+    /// allocation: register the value copies on the new page without releasing stale IDs.
+    private func cursorPageReplaced() {
         if cursor.styleID != 0 {
-            do { cursor.styleID = try n.addStyle(cursor.style) } catch { (cursor.style, cursor.styleID) = (Style(), 0) }
+            do { cursor.styleID = try page.addStyle(cursor.style) } catch { (cursor.style, cursor.styleID) = (Style(), 0) }
         }
         if let link = cursor.hyperlink {
             (cursor.hyperlinkID, cursor.hyperlink) = (0, nil)
             try? startHyperlinkOnce(link)
         }
+        pin.garbage = false
         cursorReload()
-        return n
     }
 
     /// Clones a row of another page into `p`, growing `p` (cursor-aware) until it fits.
@@ -199,9 +206,11 @@ public struct Screen {
         } else {
             let old = pin
             pages.grow()
+            let pruned = old.page !== page || pin.garbage
             var new: Pin
-            if old.page === page { new = pin.down(1)! } else { new = pin; new.x = cursor.x }
-            if new.page === page { cursorMarkDirty(); pin = new } else { changePin(new) }
+            if !pruned { new = pin.down(1)! } else { new = pin; new.x = cursor.x }
+            if pruned { pin = new; cursorPageReplaced() }
+            else if new.page === page { cursorMarkDirty(); pin = new } else { changePin(new) }
             cursorMarkDirty()
             if cursor.style.bgColor != .none { clearCells(page, pin.y, 0..<page.cols) }
         }
@@ -296,7 +305,11 @@ public struct Screen {
     // Viewport and erasing.
 
     func scroll(_ s: PageList.Scroll) { pages.scroll(s) }
-    func scrollClear() { pages.scrollClear(); cursorReload() }
+    func scrollClear() {
+        let old = page
+        pages.scrollClear()
+        if old !== page || pin.garbage { cursorPageReplaced() } else { cursorReload() }
+    }
     func eraseHistory() { pages.eraseHistory(); cursorReload() }
 
     /// Clears whole rows from `top` to `bottom` (keeping protected cells when asked).

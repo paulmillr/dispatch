@@ -250,13 +250,14 @@ extension FilesSession {
             // Asking for a file's preview is asking to see it: a hidden pane comes back, on one column in the list's
             // place.
             setPreviewHidden(false)
-            if splitNarrow { narrowDetail = true }
+            if splitNarrow, hasPane { narrowDetail = true }
         case nil: break
         }
     }
 
     /// ⌥⌘P and the header's button: on one column, the detail in the list's place instead.
     func togglePreview() {
+        guard hasPane else { return }
         if splitNarrow {
             narrowDetail.toggle()
             if narrowDetail { setPreviewHidden(false) }

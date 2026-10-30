@@ -37,6 +37,8 @@ public final class Session {
     var cells: CellRenderer
     let metal: MetalRenderer
     var config: Config, scale: Double, look = DrawConfig()
+    /// The theme's Display P3 colors for the renderer, rebuilt when the config's change.
+    var wide: WideColors?
     /// What changed since the last frame (the renderer rebuilds only that).
     var state = RenderState(), grid = (cols: 0, rows: 0)
     /// A main-queue pump is on its way (under the lock); the scrollbar the last frame saw (drawLock).
@@ -324,7 +326,9 @@ public final class Session {
         state.dirty = .false
         var u = FrameUniforms(size: size, cell: Self.cell(cells), cols: c.cols, rows: c.rows, background: c.background, opacity: look.backgroundOpacity, block: c.block)
         u.minContrast = Float(config.minimumContrast)
-        return metal.draw(c, u, gray: cells.gray, color: cells.color, into: target, completed: completed)
+        if config.displayP3 != wide?.theme { wide = config.displayP3.isEmpty ? nil : WideColors(config.displayP3) }
+        return metal.draw(c, u, gray: cells.gray, color: cells.color, into: target, glow: config.glow ? Glow() : nil, wide: wide,
+                          completed: completed)
     }
 
     // MARK: the host's view
@@ -393,7 +397,8 @@ public final class Session {
     public func configure(_ config: Config) {
         exclusive {
             let fonts = config.fontFamily != self.config.fontFamily || config.fontSize != self.config.fontSize || config.paddingX != self.config.paddingX
-                || config.paddingY != self.config.paddingY
+                || config.paddingY != self.config.paddingY || config.adjustCellHeight != self.config.adjustCellHeight
+                || config.fontFeatures != self.config.fontFeatures
             self.config = config
             if fonts { rebuild() }
             apply()
@@ -434,7 +439,8 @@ public final class Session {
     static func cells(_ config: Config, _ scale: Double) throws -> CellRenderer {
         let fonts = try FontCollection(families: config.fontFamily, points: config.fontSize, dpi: Int(72 * scale))
         let primary = fonts.face(fonts.faces[0][0].entry)
-        return CellRenderer(fonts, metrics: CellMetrics(Face(primary, pixels: CTFontGetSize(primary)).metrics))
+        return CellRenderer(fonts, metrics: CellMetrics(Face(primary, pixels: CTFontGetSize(primary)).metrics, cellHeight: config.adjustCellHeight),
+                            features: config.fontFeatures.map { ($0.tag, $0.value) })
     }
 
     static func cell(_ cells: CellRenderer) -> (width: Int, height: Int) { (Int(cells.metrics.cellWidth), Int(cells.metrics.cellHeight)) }

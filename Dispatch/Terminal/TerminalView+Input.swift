@@ -8,6 +8,8 @@ extension TerminalView {
 
     var agentMenuScreen: String {
         guard let surface else { return "" }
+        // Read while hidden: a held chat terminal follows again so the text read is current (HelperWorkspace).
+        if !onScreen { TerminalRuntime.shared.workspace?.helper(containing: id)?.screenRead(id) }
         return String(surface.readText(.active).prefix(65_536))
     }
 

@@ -22,6 +22,7 @@ have no independent help parser. `profile.py` does not support
 python3 test/benchmark.py             # Fast benchmark-runner regression tests
 python3 test/vm-runner.py             # Fast test-runner/cache regression tests
 python3 test/model-fixtures.py        # Local endpoint/shell barrier regressions
+python3 test/terminal-shell.py        # Shell integration directory-name injection regressions
 python3 test/vm.py test ChatTests     # XCTest in the dedicated macOS VM
 bash test/run.sh ChatTests           # XCTest on the current desktop
 ```
@@ -202,7 +203,7 @@ from `DISPATCH_VM`, then local inventory, then `dispatch-tests`.
 
 - `setup`: creates/reuses the VM and prepares its tools; `--image` overrides the image.
 - `rust`: copies and verifies the prepared host Rust toolchain into an existing VM.
-- `test`: defaults to fast checks; accepts `--suite fast|full|exhaustive`, explicit classes/cases, `--list`, `--skip`, `--recheck`, `--failed`, and `--shards auto|1|2` (default `auto`: two VMs only when a shard VM exists, host memory allows it and it saves time; see [parallel VM shards](../docs/vm_testing.md#parallel-vm-shards)).
+- `test`: defaults to fast checks; accepts `--suite fast|full|exhaustive`, explicit classes/cases, `--list`, `--skip`, `--recheck`, `--failed`, and `--shards auto|1|2` (default `auto`: two VMs only when a shard VM exists, host memory allows it and it saves time; see [parallel VM shards](../docs/vm_testing.md#parallel-vm-shards)). Tests run this Mac's Debug build-for-testing (built once per run, reused when unchanged) copied into each guest; `--guest-build` builds in each guest with its Xcode instead.
 - `linux`: pairs an archived Linux SSH server with the macOS client.
 - `clone-shard`: clones the prepared VM as the second VM for sharded tests (briefly stops the VM; refuses hosts without memory for both; `--shard-vm NAME` overrides `NAME-2`).
 - `stop`: stops the VM and releases its resources.
@@ -478,7 +479,7 @@ python3 test/xcode.py --capture --live DispatchTests/ChatTests    # record every
 python3 test/xcode.py --replay DispatchTests/ChatTests            # replay only the journals in build/captures
 ```
 
-The corpus in `replays/` is a git submodule (`git submodule update --init replays`); without it only `--live` runs.
+The corpus in `replays/` is a separate git repository, ignored here; without it only `--live` runs.
 The workflows, the corpus, the build's corpus check and the `capture` tool
 (inspect, grep, check, store, prune) are in [docs/replay.md](../docs/replay.md).
 

@@ -169,7 +169,7 @@ final class SpaceBranchTests: XCTestCase {
             tooltip()?.directory == root.path && tooltip()?.tabCount == "2 tabs"
         }
         _ = try await PresentationTestSupport.capture(window, named: "space-branch-inline-small")
-        try write("ref: refs/heads/switched\n", to: head)
+        try write("ref: refs/heads/switched\n", to: head); TerminalRuntime.shared.files.shellPrompted(second.id) // The branch is read again at a prompt.
         try await TestSupport.eventually {
             guard await hasBranch("switched") else { return false }
             return await !hasBranch("feature/sidebar")
@@ -201,7 +201,7 @@ final class SpaceBranchTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(100))
             positions[large] = try await nameFrame()
         }
-        try write(String(repeating: "a", count: 40), to: head)
+        try write(String(repeating: "a", count: 40), to: head); TerminalRuntime.shared.files.shellPrompted(second.id) // The branch is read again at a prompt.
         try await TestSupport.eventually { await !hasBranch("switched") }
         for large in [false, true] {
             controller.settings.values.largeSidebarItems = large
@@ -225,5 +225,78 @@ final class SpaceBranchTests: XCTestCase {
             try store.save(preferences)
             XCTAssertEqual(SettingsStore(file: file).values.largeSidebarItems, large)
         }
+    }
+}
+
+// At the end of the file: replays mark test steps by source line, so lines added above a recorded step stall it.
+extension SpaceBranchTests {
+    func testBranchPollIsOneRuleForLocalAndRemoteSpaces() {
+        XCTAssertEqual(SpaceBranchObserver.interval(shown: true), .seconds(10), "active, a window in view")
+        XCTAssertEqual(SpaceBranchObserver.interval(shown: false), .seconds(60), "inactive or every window covered")
+    }
+
+    func testFinishedCommandEndsOnlyItsRowsWaitAndReadsPastTheCache() async throws {
+        let prompts = SpaceBranchPrompts(), mine = System.uuid(), other = System.uuid()
+        let elapsed = try await prompts.nap(for: [mine], .milliseconds(10))
+        XCTAssertFalse(elapsed, "A wait that runs out was not woken")
+        let waiting = Task { try await prompts.nap(for: [mine, System.uuid()], .seconds(3600)) }
+        try await TestSupport.pause(for: .milliseconds(50))
+        prompts.prompted(other)
+        try await TestSupport.pause(for: .milliseconds(100))
+        prompts.prompted(mine)
+        let woken = try await waiting.value
+        XCTAssertTrue(woken)
+        // The engine's finished command reaches the shared prompts through the files coordinator.
+        let shared = Task { try await SpaceBranchPrompts.shared.nap(for: [mine], .seconds(3600)) }
+        try await TestSupport.pause(for: .milliseconds(50))
+        TerminalRuntime.shared.files.shellPrompted(mine)
+        let sharedWoken = try await shared.value
+        XCTAssertTrue(sharedWoken)
+        // The read after it asks again even within the 2 s cache; a plain poll keeps using the cache.
+        final class Count: @unchecked Sendable { let lock = NSLock(); var reads = 0 }
+        let count = Count()
+        let reader = SpaceBranchReader(read: { _ in count.lock.withLock { count.reads += 1 }; return "topic" })
+        let source = SpaceBranchSource(key: .init(directory: "/prompted-space", connection: nil))
+        _ = await reader.branch(source)
+        _ = await reader.branch(source)
+        XCTAssertEqual(count.lock.withLock { count.reads }, 1)
+        _ = await reader.branch(source, fresh: true)
+        XCTAssertEqual(count.lock.withLock { count.reads }, 2)
+    }
+
+    /// A `git checkout` in a tab shows at its prompt, long before the 10 s poll; without a prompt it waits for the poll.
+    func testSidebarBranchFollowsAFinishedCommandBetweenPolls() async throws {
+        try DesktopTestSupport.requireUnlocked()
+        let root = try fixture(), head = root.appendingPathComponent(".git/HEAD")
+        try write("ref: refs/heads/before-checkout\n", to: head)
+        let controller = AppDelegate(), workspace = controller.workspace
+        controller.settings.values = Preferences()
+        controller.settings.values.largeSidebarItems = false
+        controller.settings.values.showGitBranches = true
+        workspace.defaultDirectory = root.path
+        workspace.newLocalSpace()
+        workspace.renameSpace(workspace.spaces[0].id, to: "checkout")
+        let tab = try XCTUnwrap(workspace.activeTab)
+        workspace.newTab()
+        workspace.updateTab(try XCTUnwrap(workspace.activeTab).id, directory: "/")
+        let window = MainWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 360),
+                                styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: SpaceSidebar(workspace: workspace,
+            settings: controller.settings, controller: controller))
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil }
+        func hasBranch(_ name: String) async -> Bool {
+            (try? await PresentationTestSupport.capture(window).text().contains(name)) == true
+        }
+        try await TestSupport.eventually(timeout: .seconds(15)) { await hasBranch("before-checkout") } // OCR: seconds per read on a loaded VM
+        try await TestSupport.pause(for: .seconds(1))
+        try write("ref: refs/heads/after-checkout\n", to: head)
+        try await TestSupport.pause(for: .seconds(3))
+        let polled = await hasBranch("after-checkout")
+        XCTAssertFalse(polled, "Branches are read every 10 s, not every 2 s")
+        TerminalRuntime.shared.files.shellPrompted(tab.id)
+        try await TestSupport.eventually(timeout: .seconds(3)) { await hasBranch("after-checkout") }
     }
 }

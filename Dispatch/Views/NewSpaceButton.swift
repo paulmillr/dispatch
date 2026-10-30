@@ -144,7 +144,7 @@ private struct NewSpacePlus: View {
 struct NewSpaceButton: View {
     let workspace: Workspace
     var host: HostRecord?
-    var metrics = SidebarMetrics.large(contentSize: 12.5)
+    var metrics = SidebarMetrics.large(contentSize: 14)
     /// A tree group's header button: the plus alone, shortcut in its tooltip.
     var grouped = false
     /// A header button shows only while its group is hovered, empty or read by VoiceOver.

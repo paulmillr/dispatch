@@ -207,7 +207,7 @@ final class SSHCoordinator {
                     guard let self, let state, !Task.isCancelled, connections[id] === state,
                           state.helper === helper else { return }
                     do {
-                        let _: HelperClient.Empty = try await SSHTimeout.run(.seconds(5), "permissions") {
+                        let _: HelperClient.Empty = try await SSHTimeout.run(SSHLinkTimeout.reply(for: id, floor: 5), "permissions") {
                             try await helper.connection.request(
                                 "permissions.reduce", params: ["capabilities": reduced.capabilities.sorted()])
                         }
@@ -223,9 +223,10 @@ final class SSHCoordinator {
         for (id, request) in requests where request.integrationScope == scope && connections[id]?.helper == nil
             && request.integrationGrant.map({ $0.reduced(to: grant) != $0 }) == true {
             connections[id]?.launchTask?.cancel()
+            let timeout = Self.seconds(SSHLinkTimeout.reply(for: id))
             Task { _ = try? await SSHCommand.run(executable: request.master.executable,
                 arguments: request.master.arguments(command: SSHBootstrap.publish(sessionID: request.sessionID, relativePath: nil,
-                                                                  reason: "integration permission changed")), timeout: 3) }
+                                                                  reason: "integration permission changed")), timeout: timeout) }
         }
     }
 
@@ -308,7 +309,8 @@ final class SSHCoordinator {
                 let reason = SSHSetupFailure.reason(error)
                 SSHSetupLog.shared.fellBack(reason)
                 let release = SSHBootstrap.publish(sessionID: request.sessionID, relativePath: nil, reason: reason)
-                _ = try? await SSHCommand.run(executable: request.master.executable, arguments: request.master.arguments(command: release), timeout: 3)
+                _ = try? await SSHCommand.run(executable: request.master.executable, arguments: request.master.arguments(command: release),
+                                              timeout: Self.seconds(SSHLinkTimeout.reply(for: request.connectionID)))
             }
         }
     }
@@ -334,7 +336,8 @@ final class SSHCoordinator {
                 // A helper-owned receipt distinguishes even `exit 255` from
                 // transport loss. Read it through this authenticated master.
                 let command = "exec " + HerdrLaunch.quote(helper) + " exit-status " + HerdrLaunch.quote(request.sessionID)
-                if let result = try? await SSHCommand.run(executable: request.master.executable, arguments: request.master.arguments(command: command), timeout: 3), result.status == 0 {
+                if let result = try? await SSHCommand.run(executable: request.master.executable, arguments: request.master.arguments(command: command),
+                                                          timeout: Self.seconds(SSHLinkTimeout.reply(for: id))), result.status == 0 {
                     status = Int32(String(decoding: result.output, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines))
                 }
             }
@@ -648,7 +651,7 @@ final class SSHCoordinator {
         if recipe.restored {
             if recipe.backends.isEmpty { runtime.hosts.reconnect.forget(recipe.connection) }
             resumeRestoredShells(recipe)
-            let deadline = ContinuousClock.now.advanced(by: .seconds(30))
+            let deadline = ContinuousClock.now.advanced(by: SSHLinkTimeout.restore(for: recipe.host))
             for _ in 0... {
                 let consumers = runtime.hosts.reconnect.recipes[recipe.connection]?.surfaces ?? []
                 let retained = Set(recipe.backends.flatMap(\.presentation).filter { space in
@@ -670,7 +673,7 @@ final class SSHCoordinator {
                 } ?? [])
                 if retained.isSubset(of: restored) { break }
                 guard ContinuousClock.now < deadline else {
-                    throw HerdrFailure("The SSH shell reconnected, but its retained terminal spaces did not restore.")
+                    throw SSHRecoveryIncomplete("The SSH shell reconnected, but its retained terminal spaces did not restore.")
                 }
                 try await Task.sleep(for: .milliseconds(20))
             }
@@ -732,8 +735,8 @@ final class SSHCoordinator {
                 }
             }
         }
-        if automatic { try await SSHReconnectLogin.authenticateSilently(shell: recipe.shell, master: master) }
-        else { try await SSHReconnectLogin.authenticate(shell: recipe.shell, master: master, window: window) }
+        if automatic { try await SSHReconnectLogin.authenticateSilently(shell: recipe.shell, master: master, configuration: configuration) }
+        else { try await SSHReconnectLogin.authenticate(shell: recipe.shell, master: master, window: window, configuration: configuration) }
         try Task.checkCancellation()
         let request = SSHLaunchRequest(tabID: recipe.origin, token: old?.token ?? "", connectionID: id, credential: System.uuid().uuidString,
             master: master, shell: recipe.shell, integrationScope: scope, integrationGrant: grant, origin: recipe.launcher)
@@ -769,11 +772,11 @@ final class SSHCoordinator {
                   HostID.authenticated(greeting.host) == recipe.host,
                   recipe.accountUID == nil || recipe.accountUID == greeting.uid,
                   permissions.remembered(scope) == grant else {
-                throw HerdrFailure("The replacement SSH shell did not start. Retry to reconnect.")
+                throw SSHRecoveryIncomplete("The replacement SSH shell did not start. Retry to reconnect.")
             }
             // Authentication does not make retained renderers writable: their original
             // spaces must be published and rebound by the replacement helper first.
-            let deadline = ContinuousClock.now.advanced(by: .seconds(30))
+            let deadline = ContinuousClock.now.advanced(by: SSHLinkTimeout.restore(for: recipe.host))
             for _ in 0... {
                 try Task.checkCancellation()
                 let helper = runtime.helpers[.remote(id)]
@@ -784,7 +787,7 @@ final class SSHCoordinator {
                 if spaces.isSubset(of: restored) { break }
                 if let error = helper?.error { throw HerdrFailure(error) }
                 guard ContinuousClock.now < deadline else {
-                    throw HerdrFailure("The SSH shell reconnected, but its retained terminal spaces did not restore.")
+                    throw SSHRecoveryIncomplete("The SSH shell reconnected, but its retained terminal spaces did not restore.")
                 }
                 try await Task.sleep(for: .milliseconds(20))
             }
@@ -796,8 +799,15 @@ final class SSHCoordinator {
                 let failure = HerdrFailure("The replacement SSH shell did not start. " + error.localizedDescription)
                 runtime.hosts.reconnect.shellFailed(id, error: failure)
             }
+            // The login worked; a slow link that did not finish a later step in time is tried again (`SSHReconnectController`).
+            if automatic, SSHAutomaticFailure.transient(error) { throw SSHAutomaticFailure.interrupted(error.localizedDescription) }
             throw error
         }
+    }
+
+    /// An `SSHLinkTimeout` as `SSHCommand.run` takes it.
+    private static func seconds(_ duration: Duration) -> TimeInterval {
+        Double(duration.components.seconds) + Double(duration.components.attoseconds) / 1e18
     }
 
     func hasConnections(in generations: Set<UUID>) -> Bool {

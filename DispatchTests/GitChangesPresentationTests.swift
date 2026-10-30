@@ -171,13 +171,13 @@ final class GitChangesPresentationTests: XCTestCase {
         XCTAssertFalse(try snapshot.reads(["Create review"]), "no Create review before a comment")
         XCTAssertTrue(PresentationTestSupport.accessibilityFrames("git-add-patch", in: window).isEmpty, "no git add -p")
 
-        // The files header's 34 pt row as on every tab: the repository and its branch (no host, no path), the search and
+        // The files header's row (34 pt at the 12.5 design base) as on every tab: the repository and its branch (no host, no path), the search and
         // the diff's toggle, then the tabs at the end; the counts are the groups', the totals on the line over them.
         let header = try await frame("files-header", in: window)
         let place = try await frame("files-location", in: window)
         let files = try await frame("files-segment-files", in: window)
         let list = try await frame("git-changes-list", in: window)
-        XCTAssertEqual(header.height, 34, accuracy: 0.5)
+        XCTAssertEqual(header.height, AppTypography().expanded(34), accuracy: 0.5)
         XCTAssertEqual(place.midY, header.midY, accuracy: 1)
         XCTAssertLessThan(place.maxX, files.minX)
         XCTAssertTrue(PresentationTestSupport.accessibilityFrames("files-crumbs", in: window).isEmpty, "no crumbs on Review")
@@ -206,10 +206,11 @@ final class GitChangesPresentationTests: XCTestCase {
         let red = try color(at: NSPoint(x: removed.maxX - 4, y: removed.midY), in: snapshot, window: window)
         XCTAssertGreaterThan(red.redComponent, red.greenComponent + 0.02, "Removed line tint \(red)")
 
-        // 12.5 pt code on 20 pt rows, two gutters numbering both sides. Two unmodified rows: a combined element's frame
-        // is its children's union, and an added row's empty old number draws no frame of its own.
+        // Code on the file preview's rows (12.5 pt on 20 pt at the design base), two gutters numbering both sides. Two
+        // unmodified rows: a combined element's frame is its children's union, and an added row's empty old number draws
+        // no frame of its own.
         let first = try await frame("git-diff-line-2", in: window), second = try await frame("git-diff-line-3", in: window)
-        XCTAssertEqual(first.minY - second.minY, 20, accuracy: 0.5)
+        XCTAssertEqual(first.minY - second.minY, FilePreviewMetrics.metrics(ChatTypography()).rowHeight, accuracy: 0.5)
         XCTAssertTrue(PresentationTestSupport.accessibilityLabels("git-diff-line-8", in: window)
             .contains { $0.contains("11") && $0.contains("const attempt") }, "The removed line carries its old number")
         XCTAssertFalse(PresentationTestSupport.accessibilityFrames("git-diff-gap-1", in: window).isEmpty)

@@ -1,8 +1,13 @@
 use dispatch_helper_core::api::*;
-use std::{collections::VecDeque, io};
+use std::{collections::VecDeque, io, time::Duration};
 
 // c1654cc ssh-helper relay.rs:8. Retain at most the existing input window.
 const LIMIT: usize = 1_048_576;
+/// How long a key typed for an agent waits for the agent to read the input before it; then it is typed anyway (the
+/// agent is busy, and the PTY keeps the order).
+const DRAIN: Duration = Duration::from_secs(5);
+/// How often the wait asks again (`Io::unread`), each time after the ownership check ran again.
+const POLL: Duration = Duration::from_millis(10);
 
 pub(crate) struct Input {
     pub bytes: Vec<u8>,
@@ -27,6 +32,12 @@ pub(crate) struct Terminal {
     pub members: Vec<Process>,
     pub candidates: Vec<Process>,
     pub retry: Option<(std::time::Instant, u8, std::time::Duration)>,
+    /// The last entry written for an agent ended with a bracketed paste: the key after it waits (`draining`).
+    pub pasted: bool,
+    /// The front entry waits for the child to read the input before it (`draining`): until this deadline.
+    pub draining: Option<std::time::Instant>,
+    /// The child had read the paste at the last poll: one more poll with nothing new before the key goes.
+    pub settled: bool,
     pub changed: bool,
     pub waiters: Vec<Done<Screen>>,
     pub input: VecDeque<Input>,
@@ -82,7 +93,7 @@ impl Terminal {
         if self.closed || self.exited {
             return Ok(());
         }
-        let writing = !self.checking && !self.input.is_empty();
+        let writing = !self.checking && self.draining.is_none() && !self.input.is_empty();
         io.interest(
             self.reader,
             !self.eof && (self.attached || self.output.len() < LIMIT),
@@ -135,6 +146,36 @@ impl Terminal {
         }
     }
 
+    /// Whether the front entry must wait before it is written: it is typed for an agent (`process`) right after a
+    /// bracketed paste typed for one (`pasted`), none of it is written yet, and the child has not read the paste
+    /// (`Io::unread`). The ownership check that brought the writer here only proves the agent is alive when the key
+    /// is written, not when it will read it: an agent that exits at the end of the paste (its Return already queued
+    /// behind it) would leave that Return to the shell that resumes. So the key waits, polled every `POLL` with the
+    /// ownership check run again before each try (`Native::inspect`), and once the paste is read it waits one poll
+    /// more (`settled`: an agent that exits on the paste's last byte does so within it, and the check then finds it
+    /// gone), and goes after `DRAIN` regardless. Any other entry (a user's bytes, a key not after a paste) is
+    /// written at once and asks nothing.
+    pub fn draining(&mut self, io: &mut dyn Io) -> bool {
+        let Some(input) = self.input.front() else { return false };
+        if !self.pasted || input.process.is_none() || input.offset != 0 {
+            self.draining = None;
+            return false;
+        }
+        let unread = io.unread(self.writer).unwrap_or(0) > 0;
+        if unread || !self.settled {
+            let now = io.now();
+            if now < *self.draining.get_or_insert(now + DRAIN) {
+                self.settled = !unread;
+                io.timer(now + POLL);
+                return true;
+            }
+        }
+        self.pasted = false;
+        self.settled = false;
+        self.draining = None;
+        false
+    }
+
     pub fn write(&mut self, io: &mut dyn Io) -> Vec<(Done<()>, Result<(), Error>)> {
         let mut finished = Vec::new();
         if let Some(input) = self.input.front_mut() {
@@ -178,6 +219,8 @@ impl Terminal {
     pub fn finish(&mut self, result: Result<(), Error>) -> (Done<()>, Result<(), Error>) {
         let input = self.input.pop_front().unwrap();
         self.retained -= input.bytes.len();
+        // A paste typed for an agent, written whole: the key after it waits for the agent to read it.
+        self.pasted = result.is_ok() && input.process.is_some() && input.bytes.ends_with(b"\x1b[201~");
         let result = result.map_err(|failure| {
             if input.offset == 0 {
                 failure
@@ -191,6 +234,9 @@ impl Terminal {
     pub fn fail(&mut self, failure: Error) -> Vec<(Done<()>, Result<(), Error>)> {
         self.retained = 0;
         self.checking = false;
+        self.pasted = false;
+        self.settled = false;
+        self.draining = None;
         self.input
             .drain(..)
             .map(|input| {

@@ -1,0 +1,7 @@
+{
+  "kind": "rerecord",
+  "why": "The Mac bundles the Linux helpers gzipped (helper/linux-*.gz) and uploads them that way: SSHBootstrapScript.upload(compressed: true) expands stdin with the host's gzip -dc, and says 'no gzip' (before reading anything) or 'compressed upload did not expand', after which the app sends the helper uncompressed, expanded in the app (SSHHelperArchive). The macOS helper, its upload and every cache check are unchanged, and the payload identity is still observed under the expanded name (helper/linux-*), so the 30 other Linux recordings, which found the helper cached, replay as they are (capture grep: the payload observe is in 31 files, an upload's file read in 1). The one recording that uploaded to Linux sent the old script with the uncompressed bytes, read from helper/linux-aarch64; it now sends the compressed script with the .gz bytes, a new request, so it is recorded again.",
+  "tests": [
+    "HostLinuxIntegrationTests/testLinuxIdentityAndCreationInPlainSSH"
+  ]
+}

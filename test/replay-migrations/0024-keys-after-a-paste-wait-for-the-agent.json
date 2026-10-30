@@ -1,0 +1,28 @@
+{
+  "kind": "rerecord",
+  "why": "The helper's native multiplexer no longer types a key for an agent right after a bracketed paste until the agent has read the paste: it asks the PTY how much typed input the child has not read yet (a new `unread` effect on the master, FIONREAD on the slave), polls every 10 ms for at most 5 s, and runs the ownership check again before each try, so an agent that exits at the end of a paste (its Return already queued behind it) leaves no Return to the shell that resumes; before, the check before the Return only proved the agent alive when the Return was written, and chat.send reported success while the Return reached the shell (SSHSubmissionIntegrationTests/testPlainExitAfterPastePreservesDraftAndDoesNotSendReturnToShell failed live three times in four). Every recording in which the helper typed a paste then a key into one of its own PTYs (Chat sends to local Codex, Claude and Pi in plain terminals) now records that question, which a replay of the old recording cannot answer; a rewrite cannot add an effect. The same change reaches 22 more recordings migration 0023 already retired (SSHClaude/SSHChat/SSHLinux*/SSHPi/ChatModelPicker SSH cases, ChatPatchTests, SSHSubmissionIntegrationTests), which are recorded again with 0023.",
+  "tests": [
+    "ChatDiscoveryTests/testRealCodexAttachesBeforeFirstPromptWithoutHooksAndResumesHistory",
+    "ChatEndToEndTests/testCodexApprovalWithoutHooksPointsToTerminal",
+    "ChatEndToEndTests/testRealCodexLocalEndpointThroughShippingBridgeAndTerminalComposer",
+    "ChatEndToEndTests/testRepeatedCodeModeApprovalsStayInChat",
+    "ChatModelPickerTests/testLocalTransportModelQueueAndExit",
+    "ChatModelPickerTests/testRealLocalModelAndEffortPicker",
+    "ClaudeChatIntegrationTests/testLocalDiscoveryComposerThinkingToolsAndExit",
+    "ClaudeChatIntegrationTests/testQuitReturnsKeyboardFocusToShell",
+    "ClaudeChatIntegrationTests/testTypingBeforeChatOpensMovesToTheChatDraft",
+    "ClaudeHookTests/testRealLocalClaudeAllowsDeniesAndRevokesApproval",
+    "ClaudeQuestionTests/testRealLocalQuestionsChoicesCustomTextSkipAndRevocation",
+    "ClaudeTransportTests/testLocalStopAndRecovery",
+    "CodexMainThreadTests/testAsyncMainQuestionRemainsAfterTurnAndRepliesWithoutConsumingDraft",
+    "CodexMainThreadTests/testFirstMainQuestionAttachesWithoutStatusAndTracksNewConversation",
+    "CodexMainThreadTests/testMainConversationAttachesThroughPackageLauncher",
+    "CodexMainThreadTests/testResumePicksAConversationFromAnEarlierRunInTerminal",
+    "CodexMainThreadTests/testStopThinkingInterruptsOnlyTheCurrentCodexTurnAndKeepsTheCLIUsable",
+    "CodexMainThreadTests/testStopWithoutTurnIdentityUsesTerminalAndKeepsCLIUsable",
+    "CodexQueueTests/testRealCodexNativeQueueSynchronizesEditsDeletesInterruptAndResume",
+    "CodexQueueTests/testRealCodexQueueSynchronizesEditsDeletesInterruptAndResume",
+    "PiChatIntegrationTests/testNativeDiscoveryStreamingQueueStopModelAndSessionLifecycle",
+    "ThinkingAnimationTests/testRealCodexShowsThinkingBeforeAndDuringReportedSummary"
+  ]
+}

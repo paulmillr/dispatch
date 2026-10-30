@@ -243,3 +243,32 @@ final class GitGraphTests: XCTestCase {
     }
     #endif
 }
+
+#if canImport(AppKit)
+extension GitGraphTests {
+    func testCommitAuthorsShowAsInitialsThenNamesAsTheListWidens() {
+        XCTAssertEqual(GitAuthorColumn.initials("Sam Example"), "SE")
+        XCTAssertEqual(GitAuthorColumn.initials("sam q. example"), "SE", "first and last words")
+        XCTAssertEqual(GitAuthorColumn.initials("Robin"), "R")
+        XCTAssertEqual(GitAuthorColumn.initials("dependabot[bot]"), "D")
+        XCTAssertEqual(GitAuthorColumn.initials(""), "")
+        XCTAssertEqual(GitAuthorColumn.name("Sam Example"), "Sam Example")
+        let long = GitAuthorColumn.name("Alexandra Example-Sampleton")
+        XCTAssertEqual(long.count, GitAuthorColumn.nameLimit)
+        XCTAssertEqual(long, "Alexandra Example-S…")
+
+        let typography = AppTypography()
+        let widths = stride(from: 200.0, through: 1_400, by: 20).map { GitAuthorColumn.style(width: $0, typography: typography) }
+        XCTAssertEqual(widths.first, .hidden)
+        XCTAssertEqual(widths.last, .name)
+        XCTAssertTrue(widths.contains(.initials))
+        let ranks = widths.map { [GitAuthorColumn.Style.hidden, .initials, .name].firstIndex(of: $0)! }
+        XCTAssertEqual(ranks, ranks.sorted(), "wider lists show more, never less")
+        XCTAssertGreaterThan(GitAuthorColumn.width(.name, typography: typography), GitAuthorColumn.width(.initials, typography: typography))
+        // The Files list's column header and the preview header are one height, at every text size.
+        for size in [10.0, 14, 20] {
+            XCTAssertGreaterThanOrEqual(FilesColumns.headerHeight(AppTypography(contentSize: size)), 40)
+        }
+    }
+}
+#endif

@@ -36,7 +36,13 @@ struct ChatTheme: Equatable, Sendable {
         self.init()
         typography = ChatTypography(preferences: preferences)
         colorVision = preferences.colorVision
-        let color = { (c: RGB) in NSColor(srgbRed: Double(c.r) / 255, green: Double(c.g) / 255, blue: Double(c.b) / 255, alpha: 1) }
+        // A theme's Display P3 colors as the terminal draws them (Config.displayP3).
+        let color = { (c: RGB) -> NSColor in
+            if let p3 = config.displayP3[c.packed] {
+                return NSColor(displayP3Red: Double(p3.r) / 255, green: Double(p3.g) / 255, blue: Double(p3.b) / 255, alpha: 1)
+            }
+            return NSColor(srgbRed: Double(c.r) / 255, green: Double(c.g) / 255, blue: Double(c.b) / 255, alpha: 1)
+        }
         let background = color(config.background)
         let foreground = color(config.foreground)
         func blend(_ amount: CGFloat) -> Color {
@@ -49,7 +55,7 @@ struct ChatTheme: Equatable, Sendable {
         selectedText = Color(foreground)
         let rgb = background.usingColorSpace(.sRGB) ?? background
         isDark = 0.2126 * rgb.redComponent + 0.7152 * rgb.greenComponent + 0.0722 * rgb.blueComponent < 0.5
-        let colors = config.palette.map { Color(red: Double($0.r) / 255, green: Double($0.g) / 255, blue: Double($0.b) / 255) }
+        let colors = config.palette.map { Color(nsColor: color($0)) }
         red = colors[1]; green = colors[2]; yellow = colors[3]
         blue = colors[4]; accent = colors[5]; cyan = colors[6]
         keyword = colors[5]; string = colors[2]; number = colors[3]; comment = colors[8]
@@ -165,9 +171,22 @@ extension View {
 struct ChatTypography: Equatable, Sendable {
     var fontName = "SourceCodePro-Regular"
     var codeFontName = "SourceCodePro-Regular"
-    var size: CGFloat = 12.5
+    var size: CGFloat = 14
     var sizeScale: CGFloat = 1
-    private var usesSystemFont = false
+    /// The code font's ligatures (Settings › Font); off, code is drawn without the features `noLigatures` turns off.
+    var ligatures = true
+    /// What ligatures off turns off, in Ghostty's font-feature syntax: programming (calt), standard and discretionary.
+    static let noLigatures = "-calt, -liga, -dlig"
+    /// San Francisco, New York or SF Rounded: the system font in its design; nil: a font by name.
+    private var systemChoice: ChatFont?
+    private var systemDesign: Font.Design? {
+        switch systemChoice?.systemDesign {
+        case .serif?: .serif
+        case .rounded?: .rounded
+        case nil: nil
+        default: .default
+        }
+    }
     var codeDetailSize: CGFloat { size - 2 }
     var detailSize: CGFloat { pointSize(offset: -2) }
     var replySize: CGFloat { pointSize(offset: 1) }
@@ -176,20 +195,32 @@ struct ChatTypography: Equatable, Sendable {
     var body: Font { font() }
     var detail: Font { font(offset: -2) }
     func font(offset: CGFloat = 0, weight: Font.Weight = .regular) -> Font {
-        if usesSystemFont { return .system(size: pointSize(offset: offset), weight: weight) }
+        if let systemDesign { return .system(size: pointSize(offset: offset), weight: weight, design: systemDesign) }
+        if [.semibold, .bold, .heavy, .black].contains(weight), let bold = ChatFont.boldPostScriptName(fontName) {
+            return .custom(bold, fixedSize: pointSize(offset: offset))
+        }
+        if weight == .regular, fontName == codeFontName, let plain = unligated(fontName, pointSize(offset: offset)) { return Font(plain) }
         return .custom(fontName, fixedSize: pointSize(offset: offset)).weight(weight)
     }
     func codeFont(offset: CGFloat = 0) -> Font {
-        .custom(codeFontName, fixedSize: size + offset)
+        unligated(codeFontName, size + offset).map { Font($0) } ?? .custom(codeFontName, fixedSize: size + offset)
+    }
+    /// The code font `name` at `size` without ligatures, while they're off; nil otherwise (or for another font).
+    func unligated(_ name: String, _ size: CGFloat) -> NSFont? {
+        guard !ligatures, name == codeFontName, let font = NSFont(name: name, size: size) else { return nil }
+        let off = ["calt", "liga", "dlig"].map { [NSFontDescriptor.FeatureKey(rawValue: kCTFontOpenTypeFeatureTag as String): $0,
+                                                   NSFontDescriptor.FeatureKey(rawValue: kCTFontOpenTypeFeatureValue as String): 0] }
+        return NSFont(descriptor: font.fontDescriptor.addingAttributes([.featureSettings: off]), size: size)
     }
     var codeDetail: Font { codeFont(offset: -2) }
     var codeDetailLineHeight: CGFloat = 14
     @MainActor var reply: NSFont {
-        if usesSystemFont { return .systemFont(ofSize: replySize, weight: .regular) }
-        return NSFont(name: fontName, size: replySize) ?? .monospacedSystemFont(ofSize: replySize, weight: .regular)
+        if let systemChoice { return systemChoice.systemFont(ofSize: replySize) ?? .systemFont(ofSize: replySize) }
+        return unligated(fontName, replySize) ?? NSFont(name: fontName, size: replySize)
+            ?? .monospacedSystemFont(ofSize: replySize, weight: .regular)
     }
     @MainActor var codeReply: NSFont {
-        NSFont(name: codeFontName, size: size + 1) ?? .monospacedSystemFont(ofSize: size + 1, weight: .regular)
+        unligated(codeFontName, size + 1) ?? NSFont(name: codeFontName, size: size + 1) ?? .monospacedSystemFont(ofSize: size + 1, weight: .regular)
     }
     var characterWidth: CGFloat = 7.5
     /// The width of the common step names (Shell, Read, Search, Locate, Web…) in semibold detail text: an
@@ -197,19 +228,23 @@ struct ChatTypography: Equatable, Sendable {
     var stepTitleWidth: CGFloat = 64
     var replyLineHeight: CGFloat = 18
     var detailLineHeight: CGFloat = 14
+    /// Between the lines of chat's prose: 4 points at Settings' Normal line spacing.
+    var lineSpacing: CGFloat = 4
     init() {}
     static let stepNames = ["Shell", "Read", "Search", "Patch", "Edit", "Write", "Web", "Tool", "Locate"]
     @MainActor init(preferences: Preferences) {
         AppFont.register()
         size = preferences.fontSize
-        usesSystemFont = preferences.chatFont == .system
+        ligatures = preferences.fontLigatures
+        systemChoice = preferences.chatFont.systemDesign == nil ? nil : preferences.chatFont
         let code = NSFontManager.shared.font(withFamily: preferences.fontFamily, traits: [], weight: 5, size: size)
             ?? NSFont(name: preferences.fontFamily, size: size)
             ?? .monospacedSystemFont(ofSize: size, weight: .regular)
         codeFontName = code.fontName
-        let chatFont = usesSystemFont ? NSFont.systemFont(ofSize: size)
-            : preferences.chatFont.postScriptName.flatMap { NSFont(name: $0, size: size) }
+        let chatFont = systemChoice?.systemFont(ofSize: size)
+            ?? preferences.chatFont.postScriptName.flatMap { NSFont(name: $0, size: size) }
         sizeScale = chatFont == nil ? 1 : preferences.chatFont.sizeScale
+        lineSpacing = preferences.lineSpacing.chatSpacing(normal: 4, size: pointSize())
         let selected = chatFont.flatMap { sizeScale == 1 ? $0 : NSFont(descriptor: $0.fontDescriptor, size: pointSize()) } ?? code
         fontName = selected.fontName
         characterWidth = ("0" as NSString).size(withAttributes: [.font: selected]).width

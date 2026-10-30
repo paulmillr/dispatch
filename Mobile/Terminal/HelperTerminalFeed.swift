@@ -4,10 +4,12 @@ import Synchronization
 /// A terminal node of a host's helper as a `TerminalFeed`: `terminals.attach` streams the node's output
 /// (`terminal.output`), its history position (`terminal.scroll`) and its exit; keys go out through
 /// `terminals.input`, sizes through `terminals.resize`, history steps through `terminals.scroll`, the screen through
-/// `terminals.publish` (chat input is verified against it).
+/// `terminals.publish` (chat input is verified against it), output holds and repaints through `terminals.follow`.
+/// A helper that accepted `screens.host` reads tmux and herdr screens itself: the feed then publishes nothing
+/// (`hostsScreens`), and with `terminals.follow` too its output can be held while no view shows it (`holdsOutput`).
 ///
-/// Outgoing calls run one at a time in the order they were made, like the Mac's per-tab input chain
-/// (`HelperWorkspace`): input made while a call is in flight is sent as one batch after it, resizes made meanwhile
+/// Outgoing calls run one at a time in the order they were made (the Mac's `HelperInputQueue` sends input without
+/// waiting for each reply): input made while a call is in flight is sent as one batch after it, resizes made meanwhile
 /// collapse into the latest, and so do publications. Scroll steps made meanwhile join into one step (a finger makes
 /// one per line, and each waited a round trip: over a real link a swipe trailed the finger by seconds and held the
 /// keys behind it). A detach drops what its attachment had not sent yet. Nothing is retried.
@@ -21,6 +23,8 @@ final class HelperTerminalFeed: TerminalFeed {
 
     let client: HelperClient
     let terminal: UInt64
+    let hostsScreens: Bool
+    let holdsOutput: Bool
 
     private enum Operation {
         case attach(TerminalFeedSize)
@@ -29,6 +33,8 @@ final class HelperTerminalFeed: TerminalFeed {
         /// One step for the server, answering every scroll call it joined.
         case scroll(TerminalScrollRequest, [CheckedContinuation<TerminalScrollResult, Never>])
         case publish(TerminalScreen)
+        /// `terminals.follow` on the attachment, answering the caller.
+        case follow(Bool, CheckedContinuation<TerminalFollowResult, Never>)
     }
 
     private struct State {
@@ -49,9 +55,12 @@ final class HelperTerminalFeed: TerminalFeed {
     private let wake: AsyncStream<Void>.Continuation
     private let worker: Task<Void, Never>
 
-    init(client: HelperClient, terminal: UInt64) {
+    /// `features`: what the connection's hello accepted (`HostSession.features`); none behaves as before them.
+    init(client: HelperClient, terminal: UInt64, features: Set<String> = []) {
         self.client = client
         self.terminal = terminal
+        hostsScreens = features.contains(HelperSession.screensHost)
+        holdsOutput = hostsScreens && features.contains(HelperSession.terminalsFollow)
         let (signals, wake) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
         self.wake = wake
         let shared = shared
@@ -73,7 +82,7 @@ final class HelperTerminalFeed: TerminalFeed {
     func attach(_ size: TerminalFeedSize) -> AsyncStream<TerminalFeedEvent> {
         let (events, continuation) = AsyncStream<TerminalFeedEvent>.makeStream(
             bufferingPolicy: .bufferingOldest(Self.eventBufferCount))
-        let previous = shared.state.withLock { state -> (UInt64?, AsyncStream<TerminalFeedEvent>.Continuation?, [ScrollReply]) in
+        let previous = shared.state.withLock { state -> (UInt64?, AsyncStream<TerminalFeedEvent>.Continuation?, [Abandoned]) in
             defer {
                 state.generation += 1
                 state.attached = true
@@ -85,13 +94,13 @@ final class HelperTerminalFeed: TerminalFeed {
         }
         if let request = previous.0 { client.connection.cancel(request) }
         previous.1?.finish()
-        for reply in previous.2 { reply.resume(returning: .failed) }
+        for abandoned in previous.2 { abandoned.answer() }
         wake.yield()
         return events
     }
 
     func detach() {
-        let previous = shared.state.withLock { state -> (UInt64?, AsyncStream<TerminalFeedEvent>.Continuation?, [ScrollReply])? in
+        let previous = shared.state.withLock { state -> (UInt64?, AsyncStream<TerminalFeedEvent>.Continuation?, [Abandoned])? in
             guard state.attached else { return nil }
             defer {
                 state.generation += 1
@@ -104,18 +113,35 @@ final class HelperTerminalFeed: TerminalFeed {
         guard let previous else { return }
         if let request = previous.0 { client.connection.cancel(request) }
         previous.1?.finish()
-        // A scroll step waiting in the queue is answered, never left suspended.
-        for reply in previous.2 { reply.resume(returning: .failed) }
+        // A scroll step or follow waiting in the queue is answered, never left suspended.
+        for abandoned in previous.2 { abandoned.answer() }
     }
 
-    private typealias ScrollReply = CheckedContinuation<TerminalScrollResult, Never>
+    /// A call dropped from the queue whose caller waits: a scroll step answers `failed`, a follow `stale`.
+    private enum Abandoned {
+        case scroll([CheckedContinuation<TerminalScrollResult, Never>])
+        case follow(CheckedContinuation<TerminalFollowResult, Never>)
 
-    /// Empties the queue; the scroll steps in it, to be answered `failed` outside the lock.
-    private static func drop(_ queue: inout [(generation: Int, operation: Operation)]) -> [ScrollReply] {
-        defer { queue.removeAll() }
-        return queue.flatMap { item -> [ScrollReply] in
-            if case .scroll(_, let replies) = item.operation { replies } else { [] }
+        init?(_ operation: Operation) {
+            switch operation {
+            case .scroll(_, let replies): self = .scroll(replies)
+            case .follow(_, let reply): self = .follow(reply)
+            default: return nil
+            }
         }
+
+        func answer() {
+            switch self {
+            case .scroll(let replies): for reply in replies { reply.resume(returning: .failed) }
+            case .follow(let reply): reply.resume(returning: .stale)
+            }
+        }
+    }
+
+    /// Empties the queue; the calls in it whose callers wait, to be answered outside the lock.
+    private static func drop(_ queue: inout [(generation: Int, operation: Operation)]) -> [Abandoned] {
+        defer { queue.removeAll() }
+        return queue.compactMap { Abandoned($0.operation) }
     }
 
     /// Calls waiting behind the one in flight (tests).
@@ -128,7 +154,23 @@ final class HelperTerminalFeed: TerminalFeed {
 
     func resize(_ size: TerminalFeedSize) { enqueue(.resize(size)) }
 
-    func publish(_ screen: TerminalScreen) { enqueue(.publish(screen)) }
+    /// Never for a helper that reads the screens itself: one publication would turn its host reads off.
+    func publish(_ screen: TerminalScreen) {
+        guard !hostsScreens else { return }
+        enqueue(.publish(screen))
+    }
+
+    func follow(_ following: Bool) async -> TerminalFollowResult {
+        guard holdsOutput else { return .unsupported }
+        return await withCheckedContinuation { reply in
+            let queued = shared.state.withLock { state -> Bool in
+                guard state.attached else { return false }
+                state.queue.append((state.generation, .follow(following, reply)))
+                return true
+            }
+            if queued { wake.yield() } else { reply.resume(returning: .stale) }
+        }
+    }
 
     func scroll(_ request: TerminalScrollRequest) async -> TerminalScrollResult {
         await withCheckedContinuation { reply in
@@ -152,13 +194,13 @@ final class HelperTerminalFeed: TerminalFeed {
 
     /// The next call to make: consecutive input joins into one batch, consecutive resizes keep the latest, consecutive
     /// scroll steps of the same kind add up (at the latest cell). Work of an older attachment is dropped (its scroll
-    /// steps answer `failed`).
+    /// steps answer `failed`, its follows `stale`).
     private static func next(_ shared: Shared) -> (Int, Operation)? {
-        let (item, dropped) = shared.state.withLock { state -> ((Int, Operation)?, [CheckedContinuation<TerminalScrollResult, Never>]) in
-            var dropped: [CheckedContinuation<TerminalScrollResult, Never>] = []
+        let (item, dropped) = shared.state.withLock { state -> ((Int, Operation)?, [Abandoned]) in
+            var dropped: [Abandoned] = []
             while let first = state.queue.first, first.generation != state.generation {
                 state.queue.removeFirst()
-                if case .scroll(_, let replies) = first.operation { dropped += replies }
+                if let abandoned = Abandoned(first.operation) { dropped.append(abandoned) }
             }
             guard !state.queue.isEmpty else { return (nil, dropped) }
             var (generation, operation) = state.queue.removeFirst()
@@ -177,7 +219,7 @@ final class HelperTerminalFeed: TerminalFeed {
             }
             return ((generation, operation), dropped)
         }
-        for reply in dropped { reply.resume(returning: .failed) }
+        for abandoned in dropped { abandoned.answer() }
         return item
     }
 
@@ -278,6 +320,17 @@ final class HelperTerminalFeed: TerminalFeed {
                                                faint_tail: screen.faintTail))
             } catch {
                 print("Terminal publish failed: terminal=\(terminal), error=\(message(error))")
+            }
+        case .follow(let following, let reply):
+            guard current(shared, generation) else { reply.resume(returning: .stale); return }
+            do {
+                try await client.follow(.init(terminal: terminal, following: following))
+                reply.resume(returning: .done)
+            } catch let failure as HelperFailure where failure.code == "unsupported" {
+                reply.resume(returning: .unsupported)
+            } catch {
+                print("Terminal follow failed: terminal=\(terminal), following=\(following), error=\(message(error))")
+                reply.resume(returning: .failed)
             }
         case .scroll(let request, let replies):
             let answer = { (result: TerminalScrollResult) in for reply in replies { reply.resume(returning: result) } }

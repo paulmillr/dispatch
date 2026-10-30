@@ -100,7 +100,9 @@ struct MainView: View {
         .font(typography.font(offset: -0.5, design: .monospaced))
         .environment(\.appTypography, typography)
         .foregroundStyle(Chrome.ink)
-        .background(Chrome.window)
+        .backgroundPreferenceValue(MainBackdrop.ContentFrame.self) { content in
+            MainBackdrop(hole: settings.values.terminalOpacity < 1 ? content : nil)
+        }
         .preferredColorScheme(Chrome.colorScheme)
         .ignoresSafeArea()
         .overlay { HostMoveCanvas(motion: workspace.hostMoveMotion).allowsHitTesting(false) }
@@ -247,6 +249,7 @@ struct MainView: View {
         // space (or no terminal) there is nothing to see through.
         .background(settings.values.terminalOpacity < 1 && workspace.current != nil && TerminalRuntime.shared.error == nil
                     ? Color.clear : Chrome.palette.terminal)
+        .anchorPreference(key: MainBackdrop.ContentFrame.self, value: .bounds) { $0 }
         .overlay(alignment: .bottom) {
             // Over the panes' bottom edge, so the title row keeps the top edge.
             if let helper = workspace.helpers.values.first(where: { $0.error != nil }), let error = helper.error {
@@ -676,5 +679,25 @@ private struct WindowTitleSync: View {
 
     var body: some View {
         Color.clear.onChange(of: windowTitle(workspace, settings: settings)) { _, title in controller.window.title = title }
+    }
+}
+
+/// The window color behind everything, with a hole where the terminals are while they are translucent, so the desktop
+/// shows through terminals only and the sidebar's glass still sees the window color.
+private struct MainBackdrop: View {
+    let hole: Anchor<CGRect>?
+
+    struct ContentFrame: PreferenceKey {
+        static let defaultValue: Anchor<CGRect>? = nil
+        static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) { value = nextValue() ?? value }
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            Path { path in
+                path.addRect(CGRect(origin: .zero, size: proxy.size))
+                if let hole { path.addRect(proxy[hole]) }
+            }.fill(Chrome.window, style: FillStyle(eoFill: true))
+        }
     }
 }

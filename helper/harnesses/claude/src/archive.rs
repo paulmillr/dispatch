@@ -216,6 +216,8 @@ impl Claude {
                     }),
                 };
                 if !request.earlier && !request.selected {
+                    let (source, start) = (request.source.clone(), request.reader.start());
+                    let end = request.reader.position - held as u64;
                     self.cache.insert(
                         request.source,
                         Cache {
@@ -242,18 +244,33 @@ impl Claude {
                         if ui.watching(binding) {
                             self.watch(io, binding, &request.path);
                             if request.notify {
-                                if initial {
+                                let shown = self.published.get(&source).copied();
+                                // The same file, grown or not, read again from a page that reaches
+                                // what was shown: its records merge (the chat drops repeats); else
+                                // the history is replaced. A replace page cleared Chat's
+                                // presentation for every reopen and read race.
+                                let continues = shown.is_some_and(|(device, inode, shown)| {
+                                    (device, inode) == (metadata.device, metadata.inode)
+                                        && end >= shown
+                                        && start <= shown
+                                });
+                                if initial && !continues {
                                     ui.update(Update::History {
                                         binding: binding.clone(),
                                         page: page.clone(),
                                     });
-                                } else if !page.records.is_empty() {
+                                } else if !page.records.is_empty()
+                                    && (!initial || shown.is_some_and(|(_, _, shown)| end > shown))
+                                {
                                     ui.update(Update::Records {
                                         binding: binding.clone(),
                                         records: page.records.clone(),
                                     });
                                 }
                             }
+                            // A chat opening read this too: watchers already show it (or get it in
+                            // the refresh its write causes).
+                            self.published.insert(source, (metadata.device, metadata.inode, end));
                         }
                     }
                 }
@@ -318,3 +335,7 @@ impl Cursor {
                 == (self.device, self.inode)
     }
 }
+
+#[cfg(test)]
+#[path = "archive.test.rs"]
+mod tests;

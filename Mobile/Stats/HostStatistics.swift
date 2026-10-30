@@ -50,8 +50,8 @@ enum HostStatsWire {
 /// One host's stats (docs/ios.md, Host stats): CPU, load, memory, the home volume's disk and the top processes from its
 /// helper, and the last 15 minutes of CPU and memory as 60 bars of 15 s. Owned by the `HostSession`, which hands it
 /// each helper connection's client (`attach`); it samples only while `active` (the app in the foreground) and a helper
-/// client is attached: every 2 s while a stats sheet or popover shows it (`beginViewing`), else every 5 s, every 15 s
-/// under Low Power Mode, the disks every 15 s. A plain SSH connection, the background and a dropped link sample
+/// client is attached: every 2 s while a stats sheet or popover shows it (`beginViewing`), else every 15 s, every 30 s
+/// under Low Power Mode, the disks at most every 15 s. A plain SSH connection, the background and a dropped link sample
 /// nothing; the last sample stays (`stale`, with its time) and so does the history, whose missing bars are gaps.
 ///
 /// The API other areas read (the watch's snapshot, the stats views): `sample`, `disk`, `processes`, `bars(_:at:)`,
@@ -105,11 +105,17 @@ final class HostStatistics {
     nonisolated static var barSpan: TimeInterval { window / Double(barCount) }
     nonisolated static let diskInterval: TimeInterval = 15
 
-    /// How often to sample: 2 s while a sheet or popover shows the stats, 5 s otherwise, 15 s under Low Power Mode
-    /// (the Mac's `StatisticsCadence`, which also takes a third under Low Power Mode). Every 15 s bar gets a sample.
+    /// How often to sample: 2 s while a sheet or popover shows the stats, 15 s otherwise, 30 s under Low Power Mode
+    /// (the phone samples only in the foreground; the Mac's `StatisticsCadence` keeps 15 s while shown, 60 s otherwise).
+    /// Each sample is a helper request, a frame that wakes the link and the radio. Every 15 s bar gets a sample, or
+    /// under Low Power Mode every other one and the bar between takes the later sample (`barHold`).
     nonisolated static func cadence(viewing: Bool, lowPower: Bool) -> Duration {
-        lowPower ? .seconds(15) : viewing ? .seconds(2) : .seconds(5)
+        lowPower ? .seconds(30) : viewing ? .seconds(2) : .seconds(15)
     }
+
+    /// The longest gap between two samples whose empty bars take the later one (`bars`): Low Power Mode's 30 s cadence
+    /// leaves every other bar without a sample of its own, plus the requests' own time.
+    nonisolated static let barHold: TimeInterval = 35
 
     private(set) var sample: Sample?
     private(set) var processes: [Process] = []
@@ -293,14 +299,15 @@ final class HostStatistics {
 
     /// The chart's bars, oldest first: one per 15 s on a fixed wall-clock grid, so only the newest bar changes as samples
     /// land and the chart steps one bar left every 15 s (the Mac's `HostStatisticsSnapshot.historyBars`). A bar is the
-    /// peak of its own samples; one without, between two samples at most `hold` apart, takes the later one (Low Power
-    /// Mode's 15 s cadence drifts past a bar now and then). Nil is a gap: no sample (offline, the background).
-    func bars(_ metric: Metric, at now: Date, count: Int = HostStatistics.barCount, hold: TimeInterval = 20) -> [Double?] {
+    /// peak of its own samples; one without, between two samples at most `hold` apart, takes the later one (the 15 s
+    /// cadence drifts past a bar now and then, Low Power Mode's 30 s skips every other one). Nil is a gap: no sample
+    /// (offline, the background).
+    func bars(_ metric: Metric, at now: Date, count: Int = HostStatistics.barCount, hold: TimeInterval = HostStatistics.barHold) -> [Double?] {
         Self.bars(history, metric: metric, at: now, count: count, hold: hold)
     }
 
     nonisolated static func bars(_ history: [Point], metric: Metric, at now: Date, count: Int = barCount,
-                                 hold: TimeInterval = 20) -> [Double?] {
+                                 hold: TimeInterval = barHold) -> [Double?] {
         let span = window / Double(count)
         func slot(_ date: Date) -> Int { Int((date.timeIntervalSinceReferenceDate / span).rounded(.down)) }
         let first = slot(now) - (count - 1)

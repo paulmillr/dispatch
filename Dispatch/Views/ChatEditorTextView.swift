@@ -18,6 +18,25 @@ class ChatEditorTextView: ChatCaretTextView {
     var placeholderColor = NSColor(Chrome.muted)
     var placeholder = "Reply…"
     var placeholderFont: NSFont? { font }
+    /// The placeholder's fade (0 → 1) while it comes back after a sent message leaves the editor.
+    private var placeholderAlpha: CGFloat = 1
+    private var placeholderFade: Task<Void, Never>?
+    /// Fades the placeholder in over a few frames instead of drawing it at once.
+    func fadeInPlaceholder(duration: TimeInterval = 0.2) {
+        placeholderFade?.cancel()
+        placeholderAlpha = 0
+        needsDisplay = true
+        let start = ProcessInfo.processInfo.systemUptime
+        placeholderFade = Task { @MainActor [weak self] in
+            while let self, !Task.isCancelled {
+                let t = min(1, (ProcessInfo.processInfo.systemUptime - start) / duration)
+                self.placeholderAlpha = 1 - pow(1 - t, 3)
+                self.needsDisplay = true
+                if t >= 1 { break }
+                try? await Task.sleep(for: .milliseconds(16))
+            }
+        }
+    }
     var canAcceptFocus: () -> Bool = { true }
     var canFulfillFocus: () -> Bool = { true }
     var didFocus: (() -> Void)?
@@ -49,7 +68,8 @@ class ChatEditorTextView: ChatCaretTextView {
         paragraph.lineBreakMode = .byTruncatingTail
         (prompt as NSString).draw(in: NSRect(origin: textContainerOrigin,
                                             size: NSSize(width: max(0, bounds.width - textContainerOrigin.x * 2), height: font.ascender - font.descender + font.leading + 2)), withAttributes: [
-            .font: font, .foregroundColor: placeholderColor, .paragraphStyle: paragraph
+            .font: font, .foregroundColor: placeholderColor.withAlphaComponent(placeholderColor.alphaComponent * placeholderAlpha),
+            .paragraphStyle: paragraph
         ])
     }
     override func keyDown(with event: NSEvent) {

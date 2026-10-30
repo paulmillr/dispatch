@@ -37,7 +37,8 @@ pub struct Tmux {
     pub(crate) aliases: BTreeMap<Id, (Id, String)>,
     /// Completions of local-only changes: they run once the next topology went to the UI.
     pub(crate) published: Vec<Done<()>>,
-    /// `screen` reads terminals no client renders from tmux (host.rs); off in a client helper.
+    /// `screen` reads every terminal no client publishes for from tmux (host.rs): the queue drainer; off in a client
+    /// helper, whose screens.host clients turn it on per terminal instead.
     pub(crate) host_screens: bool,
     /// Each backend's last published layouts and focus: a backend that cannot read its
     /// server (suspended, opening) republishes them with its current retained views.
@@ -847,7 +848,7 @@ impl Multiplexer for Tmux {
         );
     }
     operations! {
-        attach(terminal: Id, size: Grid, takeover: bool) -> ();
+        attach(terminal: Id, size: Grid, takeover: bool, publishes: bool) -> ();
         input(terminal: Id, bytes: &[u8]) -> ();
         check(terminal: Id, process: &Process) -> ();
         resize(terminal: Id, size: Grid) -> ();
@@ -890,13 +891,28 @@ impl Multiplexer for Tmux {
         }
     }
     fn publish(&mut self, io: &mut dyn Io, terminal: Id, screen: Screen) {
+        // A published screen wins over tmux's own (host.rs).
         if let Some(state) = self.terminals.get_mut(&terminal) {
-            state.client = true;
+            state.published = true;
         }
         self.show(io, terminal, screen);
+        // Reads of the screen now waiting on tmux: the publication is the client's screen now.
+        self.answer_now(io, terminal);
     }
     fn host_screens(&mut self, enabled: bool) {
         self.host_screens = enabled;
+    }
+    fn restores(&self) -> bool {
+        true
+    }
+    fn restore(&mut self, io: &mut dyn Io, terminal: Id, token: u64, done: Done<()>) {
+        self.follow_restore(io, terminal, token, deferred(done));
+    }
+    fn screen_clients(&mut self, io: &mut dyn Io, terminal: Id, hosting: bool, published: bool) {
+        Tmux::screen_clients(self, io, terminal, hosting, published);
+    }
+    fn hosted(&self, terminal: Id) -> bool {
+        Tmux::hosted(self, terminal)
     }
     fn event(&mut self, io: &mut dyn Io, ui: &mut dyn Ui, event: Event) {
         let event = self.endpoints(io, event);

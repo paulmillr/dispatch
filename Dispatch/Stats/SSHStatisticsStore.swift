@@ -87,6 +87,43 @@ final class SSHLatency {
     }
 }
 
+/// How long the app waits on an SSH link, scaled by the round trip its latency probe last measured (`SSHLatency`): a
+/// link with a second's round trip, or one losing packets, answers in seconds, not the milliseconds of a LAN.
+enum SSHLinkTimeout {
+    static let cap = 30.0
+    /// Before a reading, or once the last probe timed out.
+    static let unmeasured = 10.0
+
+    /// One request's reply: `floor` plus ten round trips, at most 30 s; without a current reading at least 10 s.
+    static func reply(milliseconds: Double?, current: Bool, floor: Double = 3) -> Duration {
+        let roundTrip = max(0, milliseconds ?? 0) / 1000
+        var seconds = floor + 10 * roundTrip
+        if milliseconds == nil || !current { seconds = max(seconds, unmeasured) }
+        return duration(min(max(cap, floor), seconds))
+    }
+
+    /// Restoring a reconnected host's retained spaces (a publish and a rebind per space): 30 s plus 30 round trips, at
+    /// most 120 s; 60 s before any reading.
+    static func restore(milliseconds: Double?) -> Duration {
+        guard let milliseconds else { return .seconds(60) }
+        return duration(min(120, 30 + 30 * max(0, milliseconds) / 1000))
+    }
+
+    /// `reply` for a request over `connection`, from its host's latency.
+    @MainActor static func reply(for connection: SSHConnectionID, floor: Double = 3,
+                                 store: SSHStatisticsStore = .shared) -> Duration {
+        let latency = store.key(for: connection).flatMap { store.series[$0]?.latency }
+        return reply(milliseconds: latency?.milliseconds, current: latency?.state == .ready, floor: floor)
+    }
+
+    /// `restore` for `host`, from the last reading of any of its connections (kept across the drop).
+    @MainActor static func restore(for host: HostID, store: SSHStatisticsStore = .shared) -> Duration {
+        restore(milliseconds: store.keys(for: host).compactMap { store.series[$0]?.latency.milliseconds }.max())
+    }
+
+    private static func duration(_ seconds: Double) -> Duration { .milliseconds(Int((seconds * 1000).rounded())) }
+}
+
 /// A provider borrows a terminal-owned connection. The statistics store cannot
 /// create SSH sessions or keep an otherwise unused connection alive.
 @MainActor
@@ -227,20 +264,27 @@ final class SSHStatisticsStore {
         }
     }
     @ObservationIgnored private let interval: Duration
-    /// Nil: StatisticsCadence.background, which follows Low Power Mode.
-    @ObservationIgnored private let backgroundInterval: Duration?
+    /// The wait between background samples, read before each wait: StatisticsCadence.background unless a test fixes it.
+    @ObservationIgnored private let backgroundCadence: @MainActor () -> Duration
     @ObservationIgnored private let diskInterval: Duration
     @ObservationIgnored private let historyRetention: TimeInterval
     @ObservationIgnored private let latencyInterval: Duration
     @ObservationIgnored private let backgroundLatencyInterval: Duration
     @ObservationIgnored private var sleeping = false
 
-    /// Background sampling (no popover open) only pre-fills the chart, at StatisticsCadence.background.
+    /// Background sampling (no popover open) only pre-fills the chart, at StatisticsCadence.background (15 s while
+    /// Dispatch is shown, 60 s otherwise and in Low Power Mode). `backgroundInterval` fixes it; `backgroundCadence`
+    /// (tests) is asked before every wait. Latency is measured every `latencyInterval` while a view showing it
+    /// subscribes (the host popover), every `backgroundLatencyInterval` otherwise.
     init(interval: Duration = .seconds(2), backgroundInterval: Duration? = nil,
+         backgroundCadence: (@MainActor () -> Duration)? = nil,
          diskInterval: Duration = .seconds(15), historyRetention: TimeInterval = 3600,
          latencyInterval: Duration = .seconds(2), backgroundLatencyInterval: Duration = .seconds(60),
          observesSystemSleep: Bool = false) {
-        self.interval = interval; self.backgroundInterval = backgroundInterval
+        self.interval = interval
+        if let backgroundCadence { self.backgroundCadence = backgroundCadence }
+        else if let backgroundInterval { self.backgroundCadence = { backgroundInterval } }
+        else { self.backgroundCadence = { StatisticsCadence.background } }
         self.diskInterval = diskInterval; self.historyRetention = historyRetention
         self.latencyInterval = latencyInterval; self.backgroundLatencyInterval = backgroundLatencyInterval
         // Only the process-lifetime shared store installs workspace observers.
@@ -343,8 +387,9 @@ final class SSHStatisticsStore {
     private func start(_ entry: Series, metricsImmediately: Bool) {
         guard !entry.providers.isEmpty else { return }
         let generation = entry.generation
-        // The background cadence is read per wait, so a Low Power Mode change applies from the next sample.
-        let foreground = !entry.subscriptions.isEmpty, interval = interval, backgroundInterval = backgroundInterval
+        // The background cadence is read per wait, so an activation, occlusion or Low Power Mode change applies from
+        // the next sample. Opening a stats view restarts this loop (subscribe), sampling at once whatever the wait.
+        let foreground = !entry.subscriptions.isEmpty, interval = interval, background = backgroundCadence
         let diskInterval = diskInterval
         if entry.metricsTask == nil {
             let retired = entry.retiredMetrics
@@ -353,7 +398,7 @@ final class SSHStatisticsStore {
                 defer { if entry?.generation == generation { entry?.metricsTask = nil } }
                 await retired?.value
                 if !metricsImmediately {
-                    do { try await System.sleep(for: foreground ? interval : backgroundInterval ?? StatisticsCadence.background, "metrics.first") } catch { return }
+                    do { try await System.sleep(for: foreground ? interval : background(), "metrics.first") } catch { return }
                 }
                 while !Task.isCancelled {
                     guard let entry, entry.generation == generation, let provider = entry.provider() else { return }
@@ -389,7 +434,7 @@ final class SSHStatisticsStore {
                         // may take over. Failed connections are never reopened.
                         if entry.provider() == nil { return }
                     }
-                    do { try await System.sleep(for: foreground ? interval : backgroundInterval ?? StatisticsCadence.background, "metrics") } catch { return }
+                    do { try await System.sleep(for: foreground ? interval : background(), "metrics") } catch { return }
                 }
             }
         }

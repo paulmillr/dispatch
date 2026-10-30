@@ -494,7 +494,12 @@ final class Workspace {
             var presentation = current.presentation ?? TabPresentation(windows: windows, selected: selected, preset: .single)
             let groups = presentation.groups.map { LayoutPreset.TabGroup(id: $0.id, tabs: $0.windows, selected: $0.selected) }
             let arranged = preset.arrange(groups, in: presentation.layout, selected: selected)
-            presentation.groups = arranged.map { .init(id: $0.id, windows: $0.tabs, selected: $0.selected) }
+            // Merged groups append their windows; each strip keeps the server's order, as its ⌘ digits number them.
+            let order = Dictionary(uniqueKeysWithValues: current.containers.enumerated().map { ($1.id, $0) })
+            presentation.groups = arranged.map { group in
+                .init(id: group.id, windows: group.tabs.sorted { order[$0, default: .max] < order[$1, default: .max] },
+                      selected: group.selected)
+            }
             presentation.layout = preset.layout(arranged.map(\.id)); presentation.preset = preset
             updateLayout { next in
                 next.spaces[s].presentation = presentation

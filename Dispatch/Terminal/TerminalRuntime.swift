@@ -98,7 +98,7 @@ final class TerminalRuntime {
         HostColorStore.shared.enabled = preferences.showHostColors
         HostColorStore.shared.vision = preferences.colorVision
         DictationStore.shared.enabled = preferences.dictationEnabled
-        DictationStore.shared.rightCommand = preferences.dictationRightCommand
+        DictationStore.shared.key = preferences.dictationKey
         DictationStore.shared.navigation = preferences.dictationNavigation
         DictationStore.shared.readReplies = preferences.dictationReadReplies
         DictationStore.shared.wakeWords = preferences.dictationWakeWords
@@ -136,11 +136,12 @@ final class TerminalRuntime {
     }
 
     /// Programs set the clipboard (OSC 52, kitty clipboard, tmux buffers) in every tab alike, local or remote, as
-    /// Settings › General › Programs can copy says: a program relaying a remote one (mosh, docker exec, a local tmux)
+    /// Settings › General › Security › Programs can copy says: a program relaying a remote one (mosh, docker exec, a local tmux)
     /// can't be told apart from a local one.
     var allowsClipboardWrites: Bool { preferences.allowClipboardWrites }
+    var autoApprovesUnsafePastes: Bool { preferences.autoApproveUnsafePastes }
 
-    /// Settings › General › Shell for a new local tab: nil for the login shell, or while its program is missing or
+    /// Settings › General › New tabs › Shell for a new local tab: nil for the login shell, or while its program is missing or
     /// can't run, so a moved shell never leaves tabs that close as they open.
     var shellCommand: String? {
         guard let program = preferences.shellProgram, program.hasPrefix("/"),
@@ -170,7 +171,7 @@ final class TerminalRuntime {
         HostColorStore.shared.choices = preferences.hostColors
         HostColorStore.shared.enabled = preferences.showHostColors
         DictationStore.shared.enabled = preferences.dictationEnabled
-        DictationStore.shared.rightCommand = preferences.dictationRightCommand
+        DictationStore.shared.key = preferences.dictationKey
         DictationStore.shared.navigation = preferences.dictationNavigation
         DictationStore.shared.readReplies = preferences.dictationReadReplies
         DictationStore.shared.wakeWords = preferences.dictationWakeWords
@@ -198,14 +199,16 @@ final class TerminalRuntime {
         return """
         term = xterm-256color
         font-family = \(settings.fontFamily)
-        font-size = \(settings.fontSize)
+        font-size = \(TerminalFontScale.size(settings.fontSize, family: settings.fontFamily))
+        \(settings.fontLigatures ? "" : "font-feature = \(ChatTypography.noLigatures)")
         theme = \(theme)
         \(settings.usesDefaultColorScheme(systemIsDark: systemIsDark) || resolution.missing ? settings.resolvedSidebarTheme.defaultColorSchemeOverrides : "")
-        minimum-contrast = \(settings.improveTextContrast ? 4.5 : 1)
+        minimum-contrast = \(settings.textContrast.improves(dark: isDark(settings)) ? 4.5 : 1)
         background-opacity = \(settings.terminalOpacity)
         macos-option-as-alt = \(settings.optionAsAlt.ghostty)
         cursor-style = \(settings.cursor.rawValue)
         \(settings.cursorBlink ? "" : "cursor-style-blink = false")
+        \(settings.lineSpacing.cellHeight.map { "adjust-cell-height = \($0)" } ?? "")
         window-padding-x = 10
         window-padding-y = 8
         scrollback-limit-bytes = \(settings.scrollback.limit(automatic: Self.scrollbackLimit(System.machine.memory)))

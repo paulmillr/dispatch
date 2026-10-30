@@ -56,7 +56,8 @@ struct HostStatsPresentation {
 
     /// W7's banner while Low Power Mode slows sampling.
     var lowPowerBanner: String? {
-        phase == .live && stats.lowPower ? "Low Power Mode · sampling every 15 s" : nil
+        let seconds = HostStatistics.cadence(viewing: true, lowPower: true).components.seconds
+        return phase == .live && stats.lowPower ? "Low Power Mode · sampling every \(seconds) s" : nil
     }
 
     var address: String { "\(session.host.user)@\(session.host.address)" }

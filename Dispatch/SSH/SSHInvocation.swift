@@ -76,15 +76,35 @@ struct SSHInvocation: Equatable, Sendable {
         return true
     }
 
-    func masterArguments(controlPath: String, remoteCommand: String) -> [String] {
+    /// `configuration`: this invocation's `ssh -G`, which decides the keepalive (`SSHKeepalive`).
+    func masterArguments(controlPath: String, remoteCommand: String, configuration: String?) -> [String] {
         // Dispatch closes its private master after checking the shell's exit
         // receipt and releasing native consumers. A one-second idle timeout can
         // race the mailbox poll, especially after the helper has been disabled.
         ["-o", "ControlMaster=yes", "-o", "ControlPersist=yes", "-S", controlPath] + options +
-        ["-tt", "--", destination, remoteCommand]
+        SSHKeepalive.options(configuration: configuration) + ["-tt", "--", destination, remoteCommand]
     }
 }
 #endif
+
+/// What every master the app starts adds after the connection's own options: a keepalive every 15 s, the link given up
+/// after 8 unanswered (about two minutes), so a link that died while idle ends its master instead of waiting for TCP's
+/// two-hour keepalive, while a blip of 40 s or so is survived. A connection with a keepalive of its own keeps it: OpenSSH
+/// uses the first value it is given for an option, so these come after the user's `-o` options, and are left out when
+/// the connection's `ssh -G` (`configuration`, which ssh_config feeds) already sets an interval. Only the master owns the
+/// TCP connection: channels opened over its socket (`SSHMaster.arguments`) inherit it.
+enum SSHKeepalive {
+    static let interval = 15
+    static let count = 8
+
+    static func options(configuration: String?) -> [String] {
+        let own = configuration?.split(separator: "\n").contains { line in
+            let fields = line.split(maxSplits: 1, whereSeparator: \.isWhitespace)
+            return fields.count == 2 && fields[0].lowercased() == "serveraliveinterval" && fields[1] != "0"
+        } ?? false
+        return own ? [] : ["-o", "ServerAliveInterval=\(interval)", "-o", "ServerAliveCountMax=\(count)"]
+    }
+}
 
 struct SSHConnectionID: Hashable, Codable, Sendable {
     let rawValue: UUID
