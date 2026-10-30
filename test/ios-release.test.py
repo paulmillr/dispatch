@@ -3,6 +3,7 @@
 device and simulator discovery of scripts/run.py. No Xcode, network or device; test/ios.py runs them in the iPhone suites
 (test/suites.json: DispatchMobileScripts/<Class>/<test>)."""
 import contextlib
+import gzip
 import hashlib
 import importlib.util
 import io
@@ -305,12 +306,10 @@ class ReleaseBundleTests(unittest.TestCase):
     def bundle(self, directory, protocol=42):
         helper = Path(directory) / 'DispatchMobile.app/helper'
         helper.mkdir(parents=True)
-        (helper / 'darwin-arm64').write_bytes(b'\xca\xfe\xba\xbe mac')
-        (helper / 'linux-aarch64').write_bytes(elf(183))
-        (helper / 'linux-x86_64').write_bytes(elf(62))
-        for name in release.HELPERS:
-            (helper / name).chmod(0o755)
-        digest = b''.join(hashlib.sha256((helper / name).read_bytes()).digest() for name in release.HELPERS)
+        binaries = {'darwin-arm64': b'\xca\xfe\xba\xbe mac', 'linux-aarch64': elf(183), 'linux-x86_64': elf(62)}
+        for name, binary in binaries.items():
+            (helper / (name + '.gz')).write_bytes(gzip.compress(binary))
+        digest = b''.join(hashlib.sha256(binaries[name]).digest() for name in release.HELPERS)
         (helper / 'version').write_text(hashlib.sha256(digest).hexdigest() + '\n')
         (helper / 'protocol-version').write_text(f'{protocol}\n')
         return helper.parent
@@ -324,7 +323,7 @@ class ReleaseBundleTests(unittest.TestCase):
     def test_names_every_helper_fault(self):
         with tempfile.TemporaryDirectory() as directory:
             app = self.bundle(directory)
-            (app / 'helper/linux-x86_64').write_bytes(elf(183))
+            (app / 'helper/linux-x86_64.gz').write_bytes(gzip.compress(elf(183)))
             # A universal Mac helper is a fault now: Apple silicon only.
             problems = release.helper_problems(app, 7, lambda _: ['x86_64', 'arm64'], 'other')
             self.assertTrue(any('darwin-arm64 has' in problem for problem in problems), problems)
@@ -334,8 +333,14 @@ class ReleaseBundleTests(unittest.TestCase):
             self.assertTrue(any('protocol-version' in problem for problem in problems))
         with tempfile.TemporaryDirectory() as directory:
             app = self.bundle(directory)
-            (app / 'helper/linux-aarch64').unlink()
-            self.assertEqual(release.helper_problems(app, 42, lambda _: []), ['missing helper/linux-aarch64'])
+            (app / 'helper/linux-aarch64.gz').unlink()
+            self.assertEqual(release.helper_problems(app, 42, lambda _: []), ['missing helper/linux-aarch64.gz'])
+        # A helper bundled as is: what App Store Connect refused ("Invalid bundle structure").
+        with tempfile.TemporaryDirectory() as directory:
+            app = self.bundle(directory)
+            (app / 'helper/darwin-arm64').write_bytes(b'\xca\xfe\xba\xbe mac')
+            problems = release.helper_problems(app, 42, lambda _: ['arm64'])
+            self.assertEqual(problems, ['helper/darwin-arm64 is bundled as is; App Store Connect refuses it (bundle it gzipped)'])
 
     def test_reads_the_protocol_version_from_the_swift_source(self):
         self.assertEqual(release.protocol_version('    public static let version: UInt64 = 1347\n'), 1347)

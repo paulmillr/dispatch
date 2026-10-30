@@ -395,6 +395,7 @@
 		53B887A2FAC0B4242B928A3F /* SpaceBranchName.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1642A414187A8CCEC7DF6EE /* SpaceBranchName.swift */; };
 		53B95523830EF2D94F5FD82E /* renderer.provenance.json in Resources */ = {isa = PBXBuildFile; fileRef = F27EDAA0207A4F9070BC89C7 /* renderer.provenance.json */; };
 		541F17000AE90BD2BADBB927 /* SSHTestCommand.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A48CD3EA0628F056CC9F485 /* SSHTestCommand.swift */; };
+		5456E5683A2A47665D24262D /* GzipMember.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68041906CC261C3AA18D6F60 /* GzipMember.swift */; };
 		54FB14FCEAD3346ADD86412F /* ChatModelMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50FC55F3DA94D7ABFFF48820 /* ChatModelMemory.swift */; };
 		5510E7CA995286034D19017E /* ToolOrchestration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A7EA1D797F1D7152C898050 /* ToolOrchestration.swift */; };
 		55139A244FDC417C93D3D3EC /* TerminalPresence.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC3CC8AED00F4355B8D1FE2B /* TerminalPresence.swift */; };
@@ -1744,6 +1745,7 @@
 		67890B0C3D8F2531E2074002 /* InterfaceMotionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InterfaceMotionTests.swift; sourceTree = "<group>"; };
 		678D7A79F03B92576AE36EB9 /* libZstd.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libZstd.a; sourceTree = BUILT_PRODUCTS_DIR; };
 		67B5A1394BDCDF17B0DF9407 /* ComposerMarkdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerMarkdown.swift; sourceTree = "<group>"; };
+		68041906CC261C3AA18D6F60 /* GzipMember.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GzipMember.swift; sourceTree = "<group>"; };
 		6896BF27272F8D7D8FE7CE74 /* TerminalFPSBenchmarkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalFPSBenchmarkTests.swift; sourceTree = "<group>"; };
 		68A16B2FFA156A6612061053 /* PadSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PadSidebar.swift; sourceTree = "<group>"; };
 		68A57AD5290DC1B24A4CDC05 /* ChatTranscriptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatTranscriptView.swift; sourceTree = "<group>"; };
@@ -3232,6 +3234,7 @@
 		9B18695063CCC770BE547D28 /* SSH */ = {
 			isa = PBXGroup;
 			children = (
+				68041906CC261C3AA18D6F60 /* GzipMember.swift */,
 				0CCD4FE05F5A44D519CC29B4 /* SSHBootstrap.swift */,
 				49F13449507B1FF238482996 /* SSHBootstrapScript.swift */,
 				923A47A83875CE701AA91103 /* SSHConnectionState.swift */,
@@ -4456,9 +4459,9 @@
 			outputFileListPaths = (
 			);
 			outputPaths = (
-				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/darwin-arm64",
-				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/linux-aarch64",
-				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/linux-x86_64",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/darwin-arm64.gz",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/linux-aarch64.gz",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/linux-x86_64.gz",
 				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/version",
 				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/helper/protocol-version",
 			);
@@ -4743,6 +4746,7 @@
 				6BFE3DC9DE5B59762A17704C /* GitParsers.swift in Sources */,
 				9EB7E7B040EE31DEFCE49DED /* GitQueries.swift in Sources */,
 				A12D697C8E12246372D4D477 /* GitShared.swift in Sources */,
+				5456E5683A2A47665D24262D /* GzipMember.swift in Sources */,
 				1972BC87038C33BAC1349E3B /* HelperBackend.swift in Sources */,
 				496BC4728F9E3E545AC8FEE4 /* HelperBinary.swift in Sources */,
 				08463353969C5E1B2EB6CFDB /* HelperChat.swift in Sources */,

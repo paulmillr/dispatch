@@ -69,7 +69,10 @@ changes every target's build description, so switching between the two rebuilds 
 
 `./run.sh --ios-device --prod` and `test/ios-release.py` build the helpers with Cargo's `release` profile
 (`DISPATCH_HELPER_PROFILE=release`); a plain `xcodebuild -configuration Release` uses the faster `local` one. Release
-strips the executable after making its dSYM; the bundle is about 35 MB, 20 MB of it the three helpers.
+strips the executable after making its dSYM; the bundle is about 36 MB, 8 MB of it the three helpers. They are gzipped
+(`helper/<name>.gz`, scripts/build-ssh-helper.py): App Store Connect refuses a Mach-O file that is not a bundle's
+executable ("Invalid bundle structure"), and `HelperBootstrap.helper` expands the host's one before the upload, whose
+size and SHA-256 are the expanded file's (`GzipMember`, shared with the Mac's `SSHHelperArchive`).
 `test/ios-release.py` (`--simulator`, `--helper-profile local`, `--skip-build`, `--no-launch`, `--with-fast-suite`)
 builds Release for simulator and device, checks the helpers' architectures and versions, Info.plist's device keys, the
 privacy manifest, and that every required-reason API the executable imports is declared in
@@ -77,8 +80,8 @@ privacy manifest, and that every required-reason API the executable imports is d
 (`@testable`, Debug-only demos). TestFlight builds come from `scripts/release-prepare.sh`: `./run.sh --archive` builds
 Release for any iPhone without signing (`CODE_SIGNING_ALLOWED=NO`; Xcode signs iOS code only with a team), the script
 signs it ad hoc with the targets' entitlements, and the signing machine exports and uploads it
-([releasing.md](releasing.md)). Not applied yet: deduplicating licence texts (2.8 MB), shipping helpers compressed,
-`-Osize` for app code.
+([releasing.md](releasing.md)). Not applied yet: deduplicating licence texts (2.8 MB), `-Osize` for app
+code.
 
 ## Architecture and data flow
 

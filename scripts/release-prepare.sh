@@ -149,11 +149,14 @@ EOF
 verify() {
   local dmg="$1" team="$2"
   if [[ -z "$dmg" ]]; then
-    # The newest published build of either variant: build numbers sort as text.
-    local published
-    published="$(cd "$OUTBOX" && ls -d */*/published.json 2>/dev/null | sort -t/ -k2,2 | tail -1 || true)"
-    [[ -n "$published" ]] || fail "nothing published in $OUTBOX yet (git -C $OUTBOX pull)"
-    dmg="$OUTBOX/$(dirname "$published")/$(plutil -extract mac.dmg raw "$OUTBOX/$published")"
+    # The newest published build of either variant with a DMG (an iPhone-only one has none): build numbers sort as text.
+    local published name
+    while IFS= read -r published; do
+      name="$(plutil -extract mac.dmg raw "$OUTBOX/$published" 2> /dev/null)" || continue
+      dmg="$OUTBOX/$(dirname "$published")/$name"
+      break
+    done < <(cd "$OUTBOX" && ls -d */*/published.json 2> /dev/null | sort -t/ -k2,2 -r)
+    [[ -n "$dmg" ]] || fail "no published DMG in $OUTBOX yet (git -C $OUTBOX pull)"
   fi
   [[ -f "$dmg" ]] || fail "no such file: $dmg"
   [[ "$team" =~ ^[A-Z0-9]{10}$ ]] || fail "--team needs the signer's 10-character Team ID"
@@ -191,11 +194,13 @@ verify() {
     case "$line" in
       "Files $reference/"*" and $signed/"*" differ")
         path="${line#Files "$reference"/}"; path="${path%% and *}"
-        [[ "$path" == Contents/_CodeSignature/CodeResources ]] && continue
+        # Signature data, the app's or a nested bundle's (the signer signs each, the build only some).
+        [[ "$path" == */_CodeSignature/CodeResources ]] && continue
         grep -qxF "$path" <<< "$executables" && continue
         # A link to an executable (helper/darwin-arm64) differs with its target; links are checked below.
         [[ -L "$reference/$path" ]] && is_macho "$reference/$path" && continue ;;
       "Only in $signed/Contents: CodeResources") continue ;;
+      "Only in $signed/"*": _CodeSignature") continue ;;
     esac
     echo "unexpected: $line" >&2; unexpected=1
   done < <(/usr/bin/diff -rq "$reference" "$signed" || true)
@@ -209,6 +214,7 @@ verify() {
   while IFS= read -r path; do
     cp "$reference/$path" "$work/a"; cp "$signed/$path" "$work/b"
     codesign --remove-signature "$work/a"; codesign --remove-signature "$work/b"
+    without_linkedit_size "$work/a"; without_linkedit_size "$work/b"
     cmp -s "$work/a" "$work/b" || fail "executable differs beyond its signature: $path"
     echo "identical: $path"
   done <<< "$executables"
@@ -230,11 +236,42 @@ verify() {
 Verified Dispatch $version build $number (Pilot, yachts.dispatch.pilot.app): $dmg
 SHA-256 $digest
 
-Publish the file unchanged (tags are X.Y.Z, no v):
-  gh release create $version '$dmg' -R paulmillr/dispatch --title 'Dispatch $version'
+Publish the file unchanged (tags are X.Y.Z, no v), tagging the commit it was built from:
+  gh release create $version '$dmg' -R paulmillr/dispatch --target $(cat "$(dirname "$reference")/COMMIT") --title 'Dispatch $version'
 In homebrew-tap Casks/dispatch.rb: version "$version", sha256 "$digest", and the url ends in
 Dispatch-#{version}.dmg.
 EOF
+}
+
+# Zeroes the __LINKEDIT segment's vmsize in each 64-bit slice of Mach-O file $1. That segment holds the signature: a
+# Developer ID one (certificates, timestamp) can need another page there, and removing the signature shrinks the file
+# but leaves the vmsize grown, so it is the one field that may differ after --remove-signature.
+without_linkedit_size() {
+  python3 - "$1" <<'PY'
+import struct, sys
+path = sys.argv[1]
+data = bytearray(open(path, 'rb').read())
+def slices():
+    magic = struct.unpack_from('>I', data)[0]
+    if magic in (0xCAFEBABE, 0xCAFEBABF):  # universal: big-endian fat_arch (20 bytes) or fat_arch_64 (32 bytes)
+        wide = magic == 0xCAFEBABF
+        for index in range(struct.unpack_from('>I', data, 4)[0]):
+            entry = 8 + index * (32 if wide else 20)
+            yield struct.unpack_from('>Q', data, entry + 8)[0] if wide else struct.unpack_from('>I', data, entry + 8)[0]
+    else:
+        yield 0
+for start in slices():
+    if struct.unpack_from('<I', data, start)[0] != 0xFEEDFACF:  # only 64-bit little-endian slices
+        continue
+    ncmds = struct.unpack_from('<I', data, start + 16)[0]
+    command = start + 32
+    for _ in range(ncmds):
+        kind, size = struct.unpack_from('<II', data, command)
+        if kind == 0x19 and data[command + 8:command + 24].rstrip(b'\0') == b'__LINKEDIT':  # LC_SEGMENT_64
+            struct.pack_into('<Q', data, command + 32, 0)
+        command += size
+open(path, 'wb').write(data)
+PY
 }
 
 check_authority() {

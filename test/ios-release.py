@@ -5,8 +5,8 @@ usage: python3 test/ios-release.py [--simulator NAME] [--helper-profile release|
                                    [--with-fast-suite]
 
 Builds Release for the simulator and for devices (unsigned, CODE_SIGNING_ALLOWED=NO, with a link map), into
-build/dd, then checks both bundles: the three helper binaries with their architectures, `version` (the hash of the
-three) and `protocol-version` (HelperBinary.version); Info.plist's device keys (the prompts, background refresh, iPhone
+build/dd, then checks both bundles: the three helper binaries, gzipped (none bundled as is: App Store Connect refuses
+that), with their architectures, `version` (the hash of the three) and `protocol-version` (HelperBinary.version); Info.plist's device keys (the prompts, background refresh, iPhone
 and iPad families and orientations); the privacy manifest's form, and that every required-reason API the device
 executable imports is declared there; and the same for the embedded watch app (docs/watch.md) against
 Watch/App/PrivacyInfo.xcprivacy, which it needs only once it uses such an API. It launches the Release simulator build
@@ -18,6 +18,7 @@ use the Debug-only demos (ChatDemo, CodeDemo, TabsSample). --with-fast-suite run
 are local (scripts/setup_mobile.py --offline) and the Swift package has no remote dependency.
 """
 import argparse
+import gzip
 import hashlib
 import os
 from pathlib import Path
@@ -25,6 +26,7 @@ import plistlib
 import re
 import subprocess
 import sys
+import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -70,39 +72,49 @@ CATEGORIES = {
 
 # Checks (pure: test/ios-release.test.py covers them)
 
-def helper_version(directory):
-    """The helper build's `version`: SHA-256 over the three binaries' SHA-256 digests (scripts/build-ssh-helper.py)."""
-    digest = b''.join(hashlib.sha256((directory / name).read_bytes()).digest() for name in HELPERS)
+def helper_version(binaries):
+    """The helper build's `version`: SHA-256 over the three binaries' SHA-256 digests (scripts/build-ssh-helper.py).
+    `binaries`: name to the expanded binary's bytes."""
+    digest = b''.join(hashlib.sha256(binaries[name]).digest() for name in HELPERS)
     return hashlib.sha256(digest).hexdigest()
 
 
-def elf_machine(path):
-    with path.open('rb') as file:
-        header = file.read(20)
+def elf_machine(header):
     if header[:4] != b'\x7fELF' or len(header) < 20:
         return None
     return int.from_bytes(header[18:20], 'little' if header[5] == 1 else 'big')
 
 
 def helper_problems(app, protocol, mac_archs, built_version=None):
-    """What is wrong with the bundled helpers: `mac_archs(path)` gives the Mac helper's slices (lipo)."""
+    """What is wrong with the bundled helpers, `helper/<name>.gz` (App Store Connect refuses a Mach-O file that is not a
+    bundle's executable, so none is bundled as is): `mac_archs(path)` gives the Mac helper's slices (lipo)."""
     directory = app / 'helper'
-    problems = [f'missing helper/{name}' for name in (*HELPERS, 'version', 'protocol-version')
+    problems = [f'missing helper/{name}' for name in (*[name + '.gz' for name in HELPERS], 'version', 'protocol-version')
                 if not (directory / name).is_file()]
+    problems += [f'helper/{name} is bundled as is; App Store Connect refuses it (bundle it gzipped)'
+                 for name in HELPERS if (directory / name).exists()]
     if problems:
         return problems
+    binaries = {}
     for name in HELPERS:
-        if not os.access(directory / name, os.X_OK):
-            problems.append(f'helper/{name} is not executable')
-    archs = set(mac_archs(directory / 'darwin-arm64'))
+        try:
+            binaries[name] = gzip.decompress((directory / (name + '.gz')).read_bytes())
+        except (OSError, EOFError) as error:
+            problems.append(f'helper/{name}.gz does not expand: {error}')
+    if problems:
+        return problems
+    with tempfile.TemporaryDirectory() as scratch:
+        mac = Path(scratch) / 'darwin-arm64'
+        mac.write_bytes(binaries['darwin-arm64'])
+        archs = set(mac_archs(mac))
     if archs != MAC_ARCHS:
         problems.append(f'helper/darwin-arm64 has {sorted(archs)}, not {sorted(MAC_ARCHS)}')
     for name, machine in ELF_MACHINES.items():
-        found = elf_machine(directory / name)
+        found = elf_machine(binaries[name][:20])
         if found != machine:
             problems.append(f'helper/{name} is not an ELF for machine {machine} (found {found})')
     version = (directory / 'version').read_text().strip()
-    if version != helper_version(directory):
+    if version != helper_version(binaries):
         problems.append('helper/version is not the hash of the bundled binaries')
     if built_version is not None and version != built_version:
         problems.append('helper/version differs from build/helper-rust/bin/version')
@@ -245,8 +257,8 @@ def tree_size(path):
 def size_rows(app, link_sizes=None):
     """(label, bytes, indented) rows: the bundle, its parts, and the executable's code by origin."""
     total = tree_size(app)
-    helpers = [(f'helper/{name}', tree_size(app / 'helper' / name), True) for name in HELPERS]
-    parts = [(f'Helpers (three binaries, uploaded to hosts)', tree_size(app / 'helper'), False), *helpers,
+    helpers = [(f'helper/{name}.gz', tree_size(app / 'helper' / (name + '.gz')), True) for name in HELPERS]
+    parts = [(f'Helpers (three gzipped binaries, uploaded to hosts)', tree_size(app / 'helper'), False), *helpers,
              (f'Executable ({EXECUTABLE})', tree_size(app / EXECUTABLE), False)]
     if link_sizes:
         groups = {}

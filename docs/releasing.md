@@ -56,6 +56,7 @@ macOS with Xcode (export needs it, not just the Command Line Tools), and per acc
 | Developer ID Application and Apple Distribution certificates with their private key | Login keychain, from the account's `.p12` |
 | Apple's intermediates (Developer ID G2, WWDR G3) | Login keychain |
 | App Store Connect API key (Users and Access, Integrations, Team Keys; App Manager role) | `~/.config/dispatch-release/AuthKey_<KEY ID>.p8` |
+| App Store profiles of the phone app, the watch app and its widgets | `~/.config/dispatch-release/<variant>-profiles/*.mobileprovision` |
 | notarytool credentials from that key | Keychain, profile `dispatch-<variant>-notary` |
 | Settings | `~/.config/dispatch-release/<variant>.env` |
 
@@ -64,6 +65,26 @@ Once: `git clone git@github.com:paulmillr/dispatch-release.git`, then
 unzipped keys folder, one `.p12` and the intermediates; macOS asks for the `.p12`'s password). In App Store Connect the
 app must exist first (My Apps, +, New App: iOS, bundle id `yachts.dispatch.pilot.mobile`, any SKU); uploads to a
 missing app fail.
+
+The iPhone app is signed manually, because automatic signing from the command line needs an Admin API key (Apple's
+cloud-managed certificates; an App Manager key gets "Cloud signing permission error" and no profiles). In the developer
+portal (Certificates, Identifiers & Profiles), once and again when the certificate expires or a capability changes:
+
+1. Identifiers: the App Group `group.yachts.dispatch.pilot.mobile`, and the App IDs `yachts.dispatch.pilot.mobile` (no
+   capabilities), `….mobile.watchkitapp` and `….mobile.watchkitapp.widgets` (App Groups, with that group).
+2. Profiles, +, Distribution: App Store Connect, one per App ID, certificate Apple Distribution. Download the three
+   into `~/.config/dispatch-release/pilot-profiles/`.
+
+`release-publish.sh` checks them (team, App Store kind, not expired, the App Group on the two watch ones, made for this
+Mac's Apple Distribution certificate; it names what is wrong), installs them where Xcode looks and names them in the
+export options.
+
+Or let Xcode do steps 1 and 2 once: create a Team Key with the Admin role and run
+`bin/release-publish.sh [<variant>/<build>] --ios-only --admin-key AuthKey_<ID>.p8`. It signs automatically with this
+Mac's Apple Distribution certificate (Xcode registers the App IDs and the App Group and makes the profiles), uploads,
+then copies the profiles Xcode made into `<variant>-profiles/`, checked as above; one made for Apple's cloud-managed
+certificate instead is reported, to be edited in the portal. Then revoke the Admin key: later runs sign manually with
+the App Manager key.
 
 Each release: `git pull && bin/release-publish.sh [<variant>/<build>] [--mac-only | --ios-only] [--no-push]`. It takes
 the newest folder without `published.json`, checks both zips against `release.json` and their bundle ids against the
@@ -74,12 +95,47 @@ variant (an account signs only its own apps), then:
   the DMG is copied into the release folder. It also runs on its own, for a zip from elsewhere
   (`bin/release-notarize.sh ZIP --identity '…' [--profile NAME] [--sha256 HASH]`; without `--sha256` it asks for the
   hash).
-- **iPhone.** `xcodebuild -exportArchive` with `method app-store-connect`, `destination upload` and automatic signing
-  through the API key: Xcode registers the bundle ids and the App Group and makes the App Store profiles as needed,
-  signs the phone app, the watch app and its widgets with Apple Distribution and uploads them with their symbols. The
+- **iPhone.** `xcodebuild -exportArchive` with `method app-store-connect`, `destination upload` and manual signing:
+  the phone app, the watch app and its widgets with Apple Distribution and their App Store profiles, then the upload
+  with their symbols through the API key. The
   build appears in TestFlight after Apple's processing, with no export compliance question: `Mobile/App/Info.plist`
   declares `ITSAppUsesNonExemptEncryption` false (its encryption, SSH, is exempt).
 
-It writes `published.json` (team, time, the DMG and its SHA-256, the upload), commits it with the DMG and pushes. After
+- **Ad Hoc** (`--ad-hoc`, on its own; default: the newest release folder, published or not). The same archive signed with
+  Apple Distribution and Ad Hoc profiles, for the devices they list: no Apple review, nothing sent to Apple, no
+  TestFlight. The release folder's `adhoc/` gets `Dispatch.ipa`, `manifest.plist` and `index.html`, an install page
+  whose `itms-services://` link installs it from Safari on a listed iPhone (and the watch app on a listed watch).
+
+It writes `published.json` (team, time, the DMG and its SHA-256, the upload, the Ad Hoc build and its install page),
+merged with what it already records (a part done in another run stays), commits it with the DMG or `adhoc/` and pushes. After
 a failure, run it again: notarization resumes from its saved submission ids, and a finished part is skipped (markers in
 the folder's `export/`, which git ignores with the signed work folders).
+
+## Ad Hoc builds
+
+For people who should not join App Store Connect (internal TestFlight testers accept Apple's developer terms) or wait
+for Beta App Review (external testers). Each iPhone, and each Apple Watch that should get the watch app, is registered
+by UDID (Finder: the phone, click the line under its name; at most 100 iPhones per membership year, a removed one
+frees its slot only at renewal). Ad Hoc profiles last a year or until the certificate expires; an installed build stops
+launching then, and does not update itself.
+
+Once, and again after registering a device: in the developer portal, Devices, + for each UDID, then Profiles, +,
+Distribution: Ad Hoc, one per App ID (`yachts.dispatch.pilot.mobile`, `….watchkitapp`, `….watchkitapp.widgets`),
+certificate Apple Distribution, all the devices; download the three into
+`~/.config/dispatch-release/pilot-adhoc-profiles/` on the signing machine (replacing the old ones). The script checks
+them as it does the App Store ones (Distribution: Ad Hoc, unexpired, the App Group, this Mac's certificate) and prints
+how many devices each lists.
+
+The `.ipa` lists every registered device's UDID: each app in it carries its profile (`embedded.mobileprovision`), which
+anyone holding the file can read. Serve it only from HTTPS that nobody can list or browse (a valid certificate: an
+iPhone installs over nothing else), and share the link only with the testers; `--ad-hoc` refuses to publish into a
+public GitHub repository.
+
+The install page and the manifest name their addresses, `DISPATCH_ADHOC_URL/<variant>/<build>/`, from
+`~/.config/dispatch-release/pilot-adhoc.env` on the signing machine (bin/release-signer-setup.sh leaves it alone).
+With `DISPATCH_ADHOC_SITE` there too, the folder of a git clone that the host serves at `DISPATCH_ADHOC_URL`, each
+`bin/release-publish.sh --ad-hoc` copies the three files to `<variant>/<build>/` in it as the variant's only build,
+makes `<variant>/index.html` the newest build's install page, and rewrites the clone's branch to one commit, pushed
+with `--force-with-lease`, so no older `.ipa` stays in its history. Without it, serve `adhoc/` at that address
+yourself. Each run signs again (offline, quick): the files name their addresses, which may have changed. Testers open
+`DISPATCH_ADHOC_URL/pilot/` in Safari on their iPhone and tap Install.

@@ -81,7 +81,7 @@ public enum HelperBootstrap: Sendable {
     case .unsupported: throw SSHTransportError.bootstrap("SSH integration requires Linux on ARM64 or x86-64, or macOS on Apple silicon.")
     }
     let runtimeDirectory = SSHBootstrapScript.runtimeDirectory(probe.text)
-    let binary = try Data(contentsOf: binaries.appendingPathComponent(platform))
+    let binary = try helper(platform, in: binaries)
     guard !binary.isEmpty, binary.count <= SSHBootstrapScript.maximumSize else {
       throw SSHTransportError.bootstrap("SSH helper is missing or invalid.")
     }
@@ -105,6 +105,21 @@ public enum HelperBootstrap: Sendable {
         throw SSHTransportError.bootstrap(launchFailure(status: 126, stderr: "", installed: blocked))
       }
       root = next
+    }
+  }
+
+  /// The helper for `platform` in `binaries`: `<platform>.gz` expanded (the app bundles all three gzipped: App Store
+  /// Connect refuses a Mach-O file that is not a bundle's executable), else `<platform>` as it is (the tests' folders).
+  /// The upload, its size and its SHA-256 are always the expanded file's.
+  static func helper(_ platform: String, in binaries: URL) throws -> Data {
+    let archive = binaries.appendingPathComponent(platform + ".gz")
+    guard FileManager.default.fileExists(atPath: archive.path) else {
+      return try Data(contentsOf: binaries.appendingPathComponent(platform))
+    }
+    do {
+      return try GzipMember.expand(Data(contentsOf: archive))
+    } catch let invalid as GzipMember.Invalid {
+      throw SSHTransportError.bootstrap("SSH helper is missing or invalid (\(invalid.reason)).")
     }
   }
 

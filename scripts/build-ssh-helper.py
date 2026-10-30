@@ -22,7 +22,8 @@ ROOT = Path(os.environ.get("SRCROOT", Path(__file__).resolve().parent.parent))
 NAMES = ("darwin-arm64", "linux-aarch64", "linux-x86_64")
 ARTIFACTS = (*NAMES, "version", "protocol-version")
 # Bundled gzipped in the Mac app (Dispatch/SSH/SSHHelperArchive.swift): only uploaded, and a host with gzip expands
-# them itself. darwin-arm64 is also the app's own helper, kept as is.
+# them itself. darwin-arm64 is also the app's own helper, kept as is. The iPhone app gzips all three (GzipMember):
+# App Store Connect refuses a Mach-O file that is not a bundle's executable.
 COMPRESSED = ("linux-aarch64", "linux-x86_64")
 # Remote helpers bundled for SSH hosts: protocol marker the app checks (helper: its generated wire schema
 # version).
@@ -260,15 +261,16 @@ def install(target_dir, helper="helper"):
     compatibility = ROOT / "build" / helper
     destination = Path(os.environ.get("TARGET_BUILD_DIR", ROOT / "build")) / os.environ.get(
         "UNLOCALIZED_RESOURCES_FOLDER_PATH", "ssh-helper-resources") / helper
-    # The iPhone app runs no helper itself: all three binaries are plain resources it uploads to hosts.
+    # The iPhone app runs no helper itself: all three are gzipped resources it expands to upload to hosts.
     phone = os.environ.get("PLATFORM_NAME", "").startswith("iphone")
+    compressed = NAMES if phone else COMPRESSED
     for directory in (compatibility, destination):
         directory.mkdir(parents=True, exist_ok=True)
         for name in ARTIFACTS:
             # The Mac app's darwin-arm64 links to the one signed dispatch-helper (scripts/bundle-helper.sh).
             if directory == destination and name == "darwin-arm64" and not phone:
                 continue
-            if directory == destination and name in COMPRESSED and not phone:
+            if directory == destination and name in compressed:
                 replace_if_changed(output / name, directory / (name + ".gz"), compress=True)
                 (directory / name).unlink(missing_ok=True)
                 continue

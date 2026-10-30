@@ -7,6 +7,9 @@
 # Distribution certificates; macOS asks for its password) and Apple's intermediate certificates (*CA*.cer). The .p8 is
 # the account's App Store Connect API key (App Manager role); the issuer id is shown above the keys list.
 #
+# The iPhone app is signed manually, with App Store profiles made in the developer portal and kept in
+# ~/.config/dispatch-release/<variant>-profiles (this creates the folder): the API key needs no Admin role.
+#
 # Imports the identities into the login keychain (codesign, productsign and xcodebuild may use them without asking),
 # copies the API key to ~/.config/dispatch-release (0600), stores notarytool credentials from it under
 # dispatch-<variant>-notary, writes ~/.config/dispatch-release/<variant>.env for bin/release-publish.sh, and checks Xcode.
@@ -88,4 +91,11 @@ DISPATCH_ASC_KEY='$CONFIG/AuthKey_$key_id.p8'
 DISPATCH_ASC_KEY_ID=$key_id
 DISPATCH_ASC_ISSUER=$issuer
 EOF
-echo "Wrote $CONFIG/$variant.env. Publish with: bin/release-publish.sh"
+mkdir -p "$CONFIG/$variant-profiles" "$CONFIG/$variant-adhoc-profiles"
+echo "Wrote $CONFIG/$variant.env."
+case "$variant" in pilot) prefix=yachts.dispatch.pilot ;; *) prefix=yachts.dispatch ;; esac
+echo "For TestFlight, put the App Store profiles of $prefix.mobile, $prefix.mobile.watchkitapp and"
+echo "$prefix.mobile.watchkitapp.widgets in $CONFIG/$variant-profiles (README.md, Signing machine)."
+echo "For Ad Hoc builds (--ad-hoc), put the Ad Hoc profiles of the same three in $CONFIG/$variant-adhoc-profiles and"
+echo "DISPATCH_ADHOC_URL (and DISPATCH_ADHOC_SITE) in $CONFIG/$variant-adhoc.env."
+echo "Publish with: bin/release-publish.sh"
