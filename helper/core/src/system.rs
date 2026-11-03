@@ -1403,7 +1403,7 @@ fn execute(job: Job) -> io::Result<Output> {
             native::remove(&parent, name)?;
             Ok(Output::Written)
         }
-        Job::Pack(job) => archive::pack(&job.base, &job.paths, &job.archive, job.limit, &job.stop).map(Output::Packed),
+        Job::Pack(job) => archive::pack(&job.base, &job.paths, &job.archive, job.limit, job.budget, &job.stop).map(Output::Packed),
         Job::Append(staging, bytes) => archive::append(&staging, &bytes).map(Output::Appended),
         Job::Unpack(job) => {
             archive::unpack(&job).map(Output::Unpacked)

@@ -304,6 +304,7 @@ targets:
       - Dispatch/Chat/ChatSideConversation.swift
       - Dispatch/Chat/ChatSideQuestion.swift
       - Dispatch/Chat/ChatTranscript.swift
+      - Dispatch/Chat/ChatTypingReveal.swift
       - Dispatch/Chat/ClaudeQuestions.swift
       - Dispatch/Chat/HelperChat.swift
       - Dispatch/Chat/ToolCommandPresentation.swift
@@ -412,6 +413,7 @@ targets:
       - DispatchTests/ChatDraftTests.swift
       - DispatchTests/ChatSideQuestionTests.swift
       - DispatchTests/ChatOperationsTests.swift
+      - DispatchTests/ChatTypingRevealTests.swift
       - DispatchTests/GitGraphTests.swift
       - DispatchTests/GitParsersTests.swift
       - DispatchTests/PortableTestSupport.swift

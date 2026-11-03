@@ -12,12 +12,15 @@ use std::{
 pub(crate) type Replies = Rc<RefCell<VecDeque<(RawFd, wire::Kind, u64, Vec<u8>)>>>;
 pub(crate) type Drains = Rc<RefCell<VecDeque<(RawFd, u64, Done<()>)>>>;
 mod client;
+mod limits;
+mod observers;
 pub(crate) mod installation;
 pub(crate) mod candidate;
 pub(crate) mod login;
 mod screens;
 mod transfers;
 use client::Client;
+use observers::{Observer, Observers};
 /// The largest frame: a chunk (21-byte header + CHUNK) or an inline message (<= CHUNK + 13).
 const FRAME: usize = wire::CHUNK + 21;
 /// Per-client admitted output: a few frames keep the pipe busy, while a reply waits behind at
@@ -36,7 +39,7 @@ const LIVENESS: &str = "ui.liveness";
 /// A stdio helper's SIGTERM: the app's close after its grace (HelperSession.close).
 const TERMINATED: &str = "terminated";
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum Scope {
     Backend(usize),
     Terminal(Id),
@@ -48,7 +51,6 @@ enum Scope {
     /// terminals.create with a size, until the created terminal is adopted.
     Created,
 }
-type Observer = (RawFd, u64, Scope);
 
 pub struct DispatchHelper {
     /// Existing SSH feature selections; None is the local helper.
@@ -129,13 +131,15 @@ pub struct DispatchHelper {
     /// This helper serves the drainer: it registers no hook routes, so the agents' hooks keep
     /// going to the helpers of the user's clients.
     pub draining: bool,
+    /// What clients may hold at once (helper/limits.rs).
+    limits: limits::Limits,
 }
 
 struct Updates<'a> {
     pending: Rc<RefCell<VecDeque<Update>>>,
     exits: Vec<(usize, Process, Option<i32>)>,
     replies: Replies,
-    observers: &'a [Observer],
+    observers: &'a Observers,
     module: usize,
     nodes: crate::dispatch::Nodes,
     scopes: Rc<RefCell<BTreeMap<(usize, Id), BTreeSet<Id>>>>,
@@ -262,7 +266,7 @@ impl Ui for Updates<'_> {
         let follows = self.follows.clone();
         let recipients: Vec<_> = self
             .observers
-            .iter()
+            .select(observers::targets(&update, terminal, self.module))
             .filter(|(fd, request, scope)| match (&update, scope) {
                 (Update::Topology { .. } | Update::Agent { .. }, Scope::Backend(index)) => {
                     *index == self.module
@@ -380,7 +384,7 @@ impl Ui for Updates<'_> {
             for terminal in ended {
                 // The conversation ended while its terminal lives: its chat requests end too,
                 // so the app drops their approvals and questions (claude, 77b501a5).
-                for (fd, request, scope) in self.observers {
+                for (fd, request, scope) in self.observers.select([observers::chats(terminal)]) {
                     if matches!(scope, Scope::Chat(id, _) if *id == terminal) {
                         failure(
                             &self.replies,
@@ -618,9 +622,10 @@ impl Ui for Updates<'_> {
     }
     fn watching(&self, binding: &Binding) -> bool {
         self.terminal(binding).is_some_and(|terminal| {
-            self.observers.iter().any(|(_, _, scope)| {
-                matches!(scope, Scope::Chat(id, session) if *id == terminal && *session == binding.session)
-            })
+            self.observers
+                .select([observers::exact(Scope::Chat(terminal, binding.session.clone()))])
+                .next()
+                .is_some()
         })
     }
     fn terminal(&self, binding: &Binding) -> Option<Id> {
@@ -766,6 +771,7 @@ impl DispatchHelper {
             transfers: Default::default(),
             drain: None,
             draining: false,
+            limits: Default::default(),
         }
     }
     fn cancel_creations(&mut self, io: &mut dyn Io, fd: i32, request: Option<u64>) {
@@ -787,7 +793,7 @@ impl DispatchHelper {
             }
         }
     }
-    fn reset(&mut self, io: &mut dyn Io, replies: Replies, observers: &[Observer]) {
+    fn reset(&mut self, io: &mut dyn Io, replies: Replies, observers: &Observers) {
         let resets: Vec<_> = self.resets.borrow_mut().drain(..).collect();
         for (module, enabled, done) in resets {
             if enabled {
@@ -936,19 +942,17 @@ impl DispatchHelper {
 
     /// Tell the multiplexers whose screens their attached terminals have, where that changed since (screens.rs):
     /// an attach that ended, a client that left.
-    fn screen_sources(&mut self, system: &mut System, observers: &[Observer]) {
-        if self.sources.is_empty() && self.publishers.borrow().is_empty()
-            && !observers.iter().any(|(_, _, scope)| matches!(scope, Scope::Terminal(_)))
-        {
-            return;
-        }
-        let attached = observers
-            .iter()
+    fn screen_sources(&mut self, system: &mut System, observers: &Observers) {
+        let attached: BTreeSet<_> = observers
+            .attached()
             .filter_map(|(fd, _, scope)| match scope {
                 Scope::Terminal(terminal) => Some((*fd, *terminal)),
                 _ => None,
             })
             .collect();
+        if self.sources.is_empty() && self.publishers.borrow().is_empty() && attached.is_empty() {
+            return;
+        }
         let features = self.features.clone();
         let hosts = |fd| !crate::dispatch::features::publishes(&features, fd);
         let now = screens::sources(&attached, hosts, &mut self.publishers.borrow_mut());
@@ -1080,7 +1084,7 @@ impl DispatchHelper {
         }));
     }
 
-    fn launch(&self, io: &mut dyn Io, program: &str, peer: u32, reply: u64, replies: Replies, observers: &[Observer]) {
+    fn launch(&self, io: &mut dyn Io, program: &str, peer: u32, reply: u64, replies: Replies, observers: &Observers) {
         let index = self.multiplexers.iter().position(|mux| mux.borrow().program().as_deref() == Some(program));
         let Some(index) = index.filter(|index| !self.unclaimed.contains(index)) else {
             let _ = crate::probe::answer(io, reply, Ok(false));
@@ -1093,7 +1097,7 @@ impl DispatchHelper {
         let receipts = self.receipts.clone();
         receipts.borrow_mut().insert(reply);
         let (nodes, pending, probes, parts) = (self.nodes.clone(), self.launching.clone(), self.probes.clone(), self.multiplexers.clone());
-        let observers = observers.to_vec();
+        let observers: Vec<Observer> = observers.iter().cloned().collect();
         let work = match io.submit(Job::Process { pid: peer }) {
             Ok(work) => work,
             Err(error) => { receipts.borrow_mut().remove(&reply); let _ = crate::probe::answer(io, reply, Err(Error { code: "launch", message: error.to_string() })); return; }
@@ -1326,7 +1330,7 @@ impl DispatchHelper {
             system.interest(signals, true, false)?;
             system.section("startup");
         }
-        let mut observers = Vec::new();
+        let mut observers = Observers::default();
         let replies: Replies = Rc::new(RefCell::new(VecDeque::new()));
         let mut paused = false;
         let mut exited = None;
@@ -1334,6 +1338,8 @@ impl DispatchHelper {
         let mut traffic: Option<Instant> = None;
         // A stdio helper whose client left, until its transfers are removed.
         let mut ending: Option<Instant> = None;
+        // A limits::PARTIAL timer is set.
+        let mut watching = false;
         loop {
             let revoked: Vec<_> = self
                 .admitted
@@ -1349,7 +1355,7 @@ impl DispatchHelper {
                 if let Some((_, active)) = self.admitted.remove(&(fd, id)) {
                     active.set(false);
                 }
-                observers.retain(|(peer, request, _)| *peer != fd || *request != id);
+                observers.remove(fd, id);
                 self.cancel_creations(&mut system, fd, Some(id));
                 replies
                     .borrow_mut()
@@ -1420,29 +1426,14 @@ impl DispatchHelper {
             system.callbacks();
             // Created terminals become observed before the next poll can deliver their IO.
             for (fd, request, terminal) in self.adoptions.borrow_mut().drain(..) {
-                let index = observers.iter().position(|(peer, id, scope)| {
-                    *peer == fd && *id == request && matches!(scope, Scope::Created)
-                });
-                match (index, terminal) {
-                    (Some(index), Some(terminal)) => observers[index].2 = Scope::Terminal(terminal),
-                    (Some(index), None) => {
-                        observers.remove(index);
-                    }
-                    _ => {}
-                }
+                observers.adopt(fd, request, terminal);
             }
             // Prompt watches end with their terminal's last chat observer.
-            self.prompts.borrow_mut().retain(|terminal, _| {
-                observers
-                    .iter()
-                    .any(|(_, _, scope)| matches!(scope, Scope::Chat(id, _) if id == terminal))
-            });
+            self.prompts.borrow_mut().retain(|terminal, _| observers.chats(*terminal));
             self.screen_sources(&mut system, &observers);
             if !self.follows.borrow().is_empty() {
                 self.follows.borrow_mut().retain(|(fd, request)| {
-                    observers.iter().any(|(peer, id, scope)| {
-                        (*peer, *id) == (fd, request) && matches!(scope, Scope::Terminal(_) | Scope::Created)
-                    })
+                    matches!(observers.get(fd, request), Some(Scope::Terminal(_) | Scope::Created))
                 });
             }
             loop {
@@ -1496,7 +1487,7 @@ impl DispatchHelper {
                 .collect();
             for (terminal, process) in pending {
                 let recipients = observers
-                    .iter()
+                    .select(observers::watchers(terminal))
                     .filter(|(_, _, scope)| match scope {
                         Scope::Backend(module) => *module == (terminal >> 48) as usize,
                         Scope::Terminal(id) | Scope::Events(id) => *id == terminal,
@@ -1580,7 +1571,7 @@ impl DispatchHelper {
                 // Replies may pass unrelated bulk bytes, but not semantic notifications: a
                 // mutation's topology/state must reach the UI before its completion.
                 for id in client.admit()? {
-                    observers.retain(|(peer, request, _)| *peer != fd || *request != id);
+                    observers.remove(fd, id);
                 }
                 let mut space = client.output.space();
                 let ready: Vec<_> = client
@@ -1681,6 +1672,9 @@ impl DispatchHelper {
             for &fd in clients.keys() {
                 system.steady(fd, self.backlog(fd))?;
             }
+            if listener.is_some() {
+                self.limits.watch(&mut system, &mut clients, &mut watching);
+            }
             system.pressure(paused)?;
             // Probes and delivery completions above can defer more work. Publish its effects
             // before waiting for unrelated IO to wake the dispatcher.
@@ -1746,6 +1740,19 @@ impl DispatchHelper {
             if section == COALESCE {
                 // Held terminal output is released at the top of the loop.
                 system.section("ui");
+                continue;
+            }
+            if section == limits::PARTIAL {
+                system.section("ui");
+                watching = false;
+                let expired = self.limits.expired(&clients, system.now());
+                for (fd, why) in expired {
+                    eprintln!("dispatch-helper: closing a client that held its place unused ({why:?}) while crowded");
+                    // As at its end of input: nothing it started outlives it.
+                    self.cancel_creations(&mut system, fd, None);
+                    self.windows.borrow_mut().retain(|(peer, _), _| *peer != fd);
+                    self.drop_client(&mut system, &mut clients, &mut observers, fd);
+                }
                 continue;
             }
             if section == DETACHED {
@@ -1904,6 +1911,17 @@ impl DispatchHelper {
             };
             if Some(fd) == listener {
                 match system.accept(fd) {
+                    // Past the connection limit a client is closed before it is read; those already served
+                    // keep being served.
+                    Ok(fd) if clients.len() >= self.limits.connections => {
+                        eprintln!(
+                            "dispatch-helper: refused a connection: {} clients are connected, the limit",
+                            clients.len()
+                        );
+                        // Best effort: the client learns why (helper/PROTOCOL.md, Limits) before it is closed.
+                        let _ = system.write(fd, &self.limits.refusal());
+                        system.close(fd);
+                    }
                     Ok(fd) => {
                         clients.insert(fd, Client::new(fd));
                         system.interest(fd, true, false)?;
@@ -1921,6 +1939,21 @@ impl DispatchHelper {
                     .find_map(|(&key, c)| (c.write == fd).then_some(key))
                     .unwrap_or(fd)
             };
+            // What the other clients hold: their open requests, and their large frames still arriving.
+            let (others, announced, holders) = if read {
+                clients
+                    .iter()
+                    .filter(|(key, _)| **key != fd)
+                    .fold((0, 0, 0), |(open, bytes, holders), (_, client)| {
+                        (
+                            open + client.pending.len(),
+                            bytes + u64::from(client.reserved),
+                            holders + usize::from(client.reserved > 0),
+                        )
+                    })
+            } else {
+                (0, 0, 0)
+            };
             let Some(client) = clients.get_mut(&fd) else {
                 continue;
             };
@@ -1936,7 +1969,7 @@ impl DispatchHelper {
                         if listener.is_none() {
                             self.controls.borrow_mut().leave(fd);
                         }
-                        client.eof = true;
+                        client.ended();
                         let ids: BTreeSet<_> = observers
                             .iter()
                             .filter(|(peer, _, _)| *peer == fd)
@@ -1950,7 +1983,7 @@ impl DispatchHelper {
                             )
                             .collect();
                         self.windows.borrow_mut().retain(|(peer, _), _| *peer != fd);
-                        observers.retain(|(peer, _, _)| *peer != fd);
+                        observers.remove_client(fd);
                         self.questions
                             .borrow_mut()
                             .retain(|(peer, _, _, _), _| *peer != fd);
@@ -1966,7 +1999,9 @@ impl DispatchHelper {
                         if let Some(liveness) = self.liveness.as_mut().filter(|l| l.fd == fd) {
                             liveness.last = system.now();
                         }
-                        let requests = match client.feed(&bytes[..count]) {
+                        // Traffic: under pressure its silence is timed again from the next pass.
+                        client.stamp = None;
+                        let requests = match client.feed(&bytes[..count], &self.limits, announced, holders) {
                             Ok(requests) => requests,
                             Err(_) => {
                                 client.failed = true;
@@ -1985,15 +2020,28 @@ impl DispatchHelper {
                                     .retain(|(peer, _, _, _), question| {
                                         *peer != fd || question.request != header.id
                                     });
-                                observers.retain(|(peer, id, _)| *peer != fd || *id != header.id);
+                                observers.remove(fd, header.id);
                                 continue;
                             }
+                            let open = client.pending.len();
                             if header.kind != wire::Kind::Request
                                 || !client.pending.insert(header.id)
                             {
                                 client.failed = true;
                                 break;
                             }
+                            // Past a limit the request is answered without running (helper/limits.rs).
+                            let admitted = match body {
+                                Some(body) => self.limits.request(open, others).map(|_| body),
+                                None => Err(self.limits.refused()),
+                            };
+                            let body = match admitted {
+                                Ok(body) => body,
+                                Err(error) => {
+                                    failure(&replies, fd, header.id, error);
+                                    continue;
+                                }
+                            };
                             match wire::body::Encoded::wire(body) {
                                 Ok(body) => self.request(
                                     &mut system,
@@ -2030,6 +2078,7 @@ impl DispatchHelper {
                             if traffic.is_some() {
                                 traffic = Some(system.now());
                             }
+                            client.stamp = None;
                             client
                                 .output
                                 .consume(count)
@@ -2063,25 +2112,7 @@ impl DispatchHelper {
                 closed = true;
             }
             if closed {
-                client.abort(&mut system, None);
-                let write = client.write;
-                clients.remove(&fd);
-                self.features.borrow_mut().remove(&fd);
-                self.publishers.borrow_mut().retain(|(peer, _), _| *peer != fd);
-                self.follows.borrow_mut().retain(|(peer, _)| peer != fd);
-                if self.liveness.as_ref().is_some_and(|l| l.fd == fd) {
-                    self.liveness = None;
-                }
-                self.questions
-                    .borrow_mut()
-                    .retain(|(peer, _, _, _), _| *peer != fd);
-                crate::dispatch::queue::left(&mut system, &self.held, fd);
-                observers.retain(|(peer, _, _)| *peer != fd);
-                system.close(fd);
-                if write != fd {
-                    system.close(write);
-                }
-                self.transfers.end(fd, &mut system, &self.plugins);
+                self.drop_client(&mut system, &mut clients, &mut observers, fd);
                 if listener.is_none() {
                     if !self.transfers.running() {
                         self.handoff(&mut system);
@@ -2105,6 +2136,37 @@ impl DispatchHelper {
         }
     }
 
+    /// Client `fd` is gone: everything it held ends.
+    fn drop_client(
+        &mut self,
+        system: &mut System,
+        clients: &mut BTreeMap<RawFd, Client>,
+        observers: &mut Observers,
+        fd: RawFd,
+    ) {
+        let Some(mut client) = clients.remove(&fd) else {
+            return;
+        };
+        client.abort(system, None);
+        let write = client.write;
+        self.features.borrow_mut().remove(&fd);
+        self.publishers.borrow_mut().retain(|(peer, _), _| *peer != fd);
+        self.follows.borrow_mut().retain(|(peer, _)| peer != fd);
+        if self.liveness.as_ref().is_some_and(|l| l.fd == fd) {
+            self.liveness = None;
+        }
+        self.questions
+            .borrow_mut()
+            .retain(|(peer, _, _, _), _| *peer != fd);
+        crate::dispatch::queue::left(system, &self.held, fd);
+        observers.remove_client(fd);
+        system.close(fd);
+        if write != fd {
+            system.close(write);
+        }
+        self.transfers.end(fd, system, &self.plugins);
+    }
+
     /// Whether client `fd` gets requests.backlog: it named it or terminals.window (whose acks must
     /// be read while its exhausted window pauses the multiplexers), or it is the stdio.liveness
     /// client (the iPhone, whose pings must arrive during a flood). None of them is in a recorded
@@ -2123,12 +2185,10 @@ impl DispatchHelper {
         system: &mut System,
         event: &Event,
         replies: &Replies,
-        observers: &[Observer],
+        observers: &Observers,
     ) -> bool {
         self.archives.borrow_mut().retain(|&(fd, id), followed| {
-            let open = observers.iter().any(|(peer, request, scope)| {
-                (*peer, *request) == (fd, id) && matches!(scope, Scope::Archive)
-            });
+            let open = matches!(observers.get(fd, id), Some(Scope::Archive));
             if !open {
                 system.unwatch(followed.watch);
             }
@@ -2165,7 +2225,7 @@ impl DispatchHelper {
         id: u64,
         document: Rc<wire::body::Encoded>,
         replies: &Replies,
-        observers: &mut Vec<Observer>,
+        observers: &mut Observers,
     ) {
         let result = (|| {
             let root = document.root();
@@ -2265,6 +2325,7 @@ impl DispatchHelper {
                         Scope::Chat(terminal, binding.session)
                     }
                 };
+                self.limits.subscribe(observers, fd)?;
                 observers.push((fd, id, scope));
             }
             let mut request = crate::dispatch::Request {
@@ -2283,7 +2344,7 @@ impl DispatchHelper {
             request.dispatch(method, params)
         })();
         if let Err(error) = result {
-            observers.retain(|(peer, request, _)| *peer != fd || *request != id);
+            observers.remove(fd, id);
             failure(replies, fd, id, error);
         }
     }

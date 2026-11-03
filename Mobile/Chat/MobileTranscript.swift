@@ -13,10 +13,12 @@ struct MobileTranscript {
     var isEmpty: Bool { transcript.isEmpty }
 
     /// Applies helper records. `historical`: a page (no live delivery state); `earlier`: an older page, prepended.
-    /// `prepare` sees every item that is not from an earlier page before it is merged. Returns what was applied.
+    /// `prepare` sees every item that is not from an earlier page before it is merged; `streaming` hears the row id of
+    /// each reply a live record started that is still streaming (the typed reveal). Returns what was applied.
     @discardableResult
     mutating func apply(_ records: [HelperChat.Record], historical: Bool, earlier: Bool = false,
-                        now: Date = Date(), prepare: (ChatItem, String) -> ChatItem = { item, _ in item }) -> [Applied] {
+                        now: Date = Date(), prepare: (ChatItem, String) -> ChatItem = { item, _ in item },
+                        streaming: (String) -> Void = { _ in }) -> [Applied] {
         var applied: [Applied] = []
         var batch: [ChatRecord] = []
         func merge(_ item: ChatItem, from record: ChatRecord) {
@@ -24,7 +26,10 @@ struct MobileTranscript {
                 batch.append(ChatRecord(key: record.key, turnID: record.turnID, date: record.date, action: .item(item),
                                         fileOffset: record.fileOffset))
             } else {
-                transcript.insert(item, turnID: record.turnID, at: record.date, fileOffset: record.fileOffset)
+                let insertion = transcript.insert(item, turnID: record.turnID, at: record.date, fileOffset: record.fileOffset)
+                if insertion.added, item.kind == .assistant, !item.completed {
+                    streaming(item.rowID ?? "\(record.turnID.utf8.count):\(record.turnID):\(item.id)")
+                }
             }
         }
         for record in transcript.index.decode(records, historical: historical, earlier: earlier, now: now)

@@ -29,7 +29,9 @@ pub(super) fn read(path: &Path, offset: u64, length: u64) -> io::Result<Output> 
     let mut file = open(path)?;
     let before = file.metadata()?;
     if !before.is_file() {
-        return Err(io::ErrorKind::InvalidInput.into());
+        // A folder says so (files.read answers `is_directory`); anything else that is no regular file is refused.
+        let kind = if before.is_dir() { io::ErrorKind::IsADirectory } else { io::ErrorKind::InvalidInput };
+        return Err(kind.into());
     }
     file.seek(SeekFrom::Start(offset))?;
     let mut bytes = Vec::new();

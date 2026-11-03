@@ -217,8 +217,8 @@ final class FileTransferEngineTests: XCTestCase {
     }
 
     func testConflictsFoldCaseAndAskOnlyAboutListedNames() async throws {
-        // A case variant is a conflict: on this Mac's volumes it is the same name.
-        let (source, target) = hosts()
+        // A case variant is a conflict where the target folds case, as this Mac's volumes do: it is the same name.
+        let (source, target) = hosts(); target.foldsCase = true
         source.file("/src/readme.md", "new readme")
         source.file("/src/new.txt", "new")
         target.file("/dst/README.md", "old readme")
@@ -899,5 +899,38 @@ final class GatedFilesSource: FilesSource, @unchecked Sendable {
     func closeUnpack(transfer: String, commit: Bool) async throws -> UnpackResult {
         await gate("unpack.close")
         return try await inner.closeUnpack(transfer: transfer, commit: commit)
+    }
+}
+
+// MARK: The helper's archive budgets and a commit it could not undo in full
+
+extension FileTransferEngineTests {
+    /// A helper keeps few copy archives per connection: past them a pack is refused as a bound, the row says what the
+    /// helper said, and nothing is opened on the target.
+    func testAPackPastTheHelpersArchiveBudgetFailsWithItsMessage() async throws {
+        let (source, target) = hosts()
+        source.file("/src/tree/a.txt", "a")
+        let message = "this connection already keeps 2 copy archives on the helper; wait for the current copy to finish"
+        source.failures["pack"] = .limit(message)
+        let transfer = engine().copy(items: ["/src/tree"], from: source, to: target, directory: "/dst",
+                                     in: session(target), kind: .copyIn)
+        try await settle(transfer)
+        XCTAssertEqual(transfer.stage, .failed(message: message, retryable: false))
+        XCTAssertFalse(target.calls.contains { $0.hasPrefix("unpack") }, "\(target.calls)")
+    }
+
+    /// A commit whose rollback the target defeated: the helper's message names what stays, and no abort follows.
+    func testACommitThatCouldNotBeUndoneInFullSaysWhatStays() async throws {
+        let (source, target) = hosts()
+        source.file("/src/tree/a.txt", "a")
+        let message = "Stale NFS file handle (os error 70); the copy stopped at \"tree\" and could not be undone in full: "
+            + "the original \"tree\" is now \"tree 2\"; the hidden folder /dst/.dispatch-copy-0f1e stays"
+        target.failures["unpack.close"] = .other(code: "io", message: message)
+        let transfer = engine().copy(items: ["/src/tree"], from: source, to: target, directory: "/dst",
+                                     in: session(target), kind: .copyIn)
+        try await settle(transfer)
+        XCTAssertEqual(transfer.stage, .failed(message: message, retryable: false))
+        XCTAssertEqual(target.calls.filter { $0.hasPrefix("unpack.close") }.count, 1, "\(target.calls)")
+        XCTAssertTrue(source.calls.contains("pack.drop \(transfer.id.uuidString)"))
     }
 }

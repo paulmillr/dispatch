@@ -82,15 +82,13 @@ final class WatchAgentsViewTests: XCTestCase {
         XCTAssertEqual(AgentsDot.working.accessibilityLabel, "Working")
     }
 
-    /// Claude's sparkle, Codex's angle brackets, Pi's π, a terminal otherwise; by key or by the thread's label.
+    /// The phone's one bubble for every agent, by key or by the thread's label; the terminal without one.
     func testAgentMarks() {
-        XCTAssertEqual(AgentsGlyph.agent("claude"), .symbol("sparkle"))
-        XCTAssertEqual(AgentsGlyph.agent("Claude Code"), .symbol("sparkle"))
-        XCTAssertEqual(AgentsGlyph.agent("Codex"), .symbol("chevron.left.forwardslash.chevron.right"))
-        XCTAssertEqual(AgentsGlyph.agent("pi"), .letter("π"))
-        XCTAssertEqual(AgentsGlyph.agent(nil), .symbol("apple.terminal"))
-        XCTAssertEqual(AgentsGlyph.agent("aider"), .symbol("apple.terminal"))
-        XCTAssertEqual(AgentsGlyph.agent("pipeline"), .symbol("apple.terminal"))
+        for agent in ["claude", "Claude Code", "Codex", "pi", "aider", "pipeline"] {
+            XCTAssertEqual(AgentsGlyph.symbol(agent), "text.bubble", agent)
+        }
+        XCTAssertEqual(AgentsGlyph.symbol(nil), "apple.terminal")
+        XCTAssertEqual(AgentsGlyph.symbol(""), "apple.terminal")
         XCTAssertEqual(AgentsGlyph.shortName("Claude Code"), "Claude")
         XCTAssertEqual(AgentsGlyph.shortName("codex"), "Codex")
         XCTAssertEqual(AgentsGlyph.shortName("aider"), "aider")
@@ -109,25 +107,115 @@ final class WatchAgentsViewTests: XCTestCase {
 
     // MARK: Thread items
 
-    func testToolLinesAndTheirSymbols() {
-        var tool = WatchItem(id: "t", kind: .tool, text: "cargo test", tool: "Run", detail: "ok")
-        XCTAssertEqual(ThreadItemRow.toolLine(tool), "Run · cargo test · ok")
-        XCTAssertEqual(ThreadItemRow.symbol(for: tool), "checkmark.circle.fill")
-        XCTAssertEqual(ThreadItemRow.accessibilityLabel(tool, agent: nil), "Run · cargo test · ok, done")
-        tool.failed = true
-        XCTAssertEqual(ThreadItemRow.symbol(for: tool), "xmark.circle.fill")
-        tool.running = true
-        XCTAssertEqual(ThreadItemRow.symbol(for: tool), "ellipsis.circle")
-        XCTAssertEqual(ThreadItemRow.accessibilityLabel(tool, agent: nil), "Run · cargo test · ok, running")
-        XCTAssertEqual(ThreadItemRow.toolLine(WatchItem(id: "u", kind: .tool, text: "lookup")), "Tool · lookup")
-        XCTAssertNil(ThreadItemRow.symbol(for: WatchItem(id: "m", kind: .agent, text: "Hi")))
+    /// Tools are no rows, as on the phone: an older phone's tool lines stay out of the page, its card and its anchor.
+    func testToolsAreNotRows() {
+        var thread = WatchFixtures.threads(now: now)[WatchFixtures.notes]!
+        thread.items.insert(WatchItem(id: "n1t", kind: .tool, text: "CHANGELOG.md", turn: "t1", tool: "Read"), at: 1)
+        thread.items.append(WatchItem(id: "n3", kind: .tool, text: "git log", turn: "t1", tool: "Run", running: true))
+        XCTAssertEqual(ThreadScreen.items(thread).map(\.id), ["n1", "n2"])
+        XCTAssertEqual(ThreadScreen.card(thread), "n2")
+        thread.working = true
+        XCTAssertEqual(ThreadScreen.anchor(thread)?.id, "n2", "the card, not the hidden step after it")
+        XCTAssertEqual(ThreadScreen.anchor(thread)?.top, true)
+    }
+
+    /// A thread opens at its newest turn (the one the user's newest message started, by its turn id); the turns before
+    /// it wait behind "Earlier". A page where the user wrote nothing shows whole.
+    func testTheThreadOpensAtTheNewestTurn() {
+        var thread = WatchThread(key: WatchFixtures.notes, generated: now, title: "t", items: [
+            WatchItem(id: "a1", kind: .user, text: "Draft the notes", turn: "t1"),
+            WatchItem(id: "a2", kind: .agent, text: "Drafted.", turn: "t1"),
+            WatchItem(id: "b1", kind: .user, text: "Shorter, please", turn: "t2"),
+            WatchItem(id: "b2", kind: .thinking, text: "Trimming", turn: "t2"),
+            WatchItem(id: "b3", kind: .tool, text: "notes.md", turn: "t2", tool: "Edit"),
+            WatchItem(id: "b4", kind: .user, text: "Keep the links", turn: "t2"),
+            WatchItem(id: "b5", kind: .agent, text: "Shorter now.", turn: "t2"),
+        ])
+        var turns = ThreadScreen.turns(thread)
+        XCTAssertEqual(turns.earlier.map(\.id), ["a1", "a2"])
+        XCTAssertEqual(turns.newest.map(\.id), ["b1", "b2", "b4", "b5"], "a steer stays in its turn; tools are no rows")
+        XCTAssertEqual(ThreadScreen.card(thread), "b5", "the card is in the newest turn")
+        // Without turn ids: from the user's newest message.
+        thread.items = thread.items.map { WatchItem(id: $0.id, kind: $0.kind, text: $0.text) }
+        turns = ThreadScreen.turns(thread)
+        XCTAssertEqual(turns.newest.map(\.id), ["b4", "b5"])
+        XCTAssertEqual(turns.earlier.count, 4)
+        // The user wrote nothing on this page: all of it.
+        thread.items = [WatchItem(id: "c1", kind: .agent, text: "Hello"), WatchItem(id: "c2", kind: .notice, text: "Compacted")]
+        XCTAssertEqual(ThreadScreen.turns(thread).newest.map(\.id), ["c1", "c2"])
+        XCTAssertTrue(ThreadScreen.turns(thread).earlier.isEmpty)
+        XCTAssertEqual(ThreadScreen.earlierTitle(6), "Earlier · 6")
+        // While the screen is open the split stays where it began: a message sent from here does not hide the answer.
+        thread.items = [WatchItem(id: "a1", kind: .user, text: "Draft", turn: "t1"), WatchItem(id: "a2", kind: .agent, text: "Drafted.", turn: "t1")]
+        let pinned = ThreadScreen.turns(thread).newest.first?.id
+        XCTAssertEqual(pinned, "a1")
+        thread.items.append(WatchItem(id: "b1", kind: .user, text: "Shorter", turn: "t2"))
+        XCTAssertEqual(ThreadScreen.turns(thread).newest.map(\.id), ["b1"], "split afresh")
+        XCTAssertEqual(ThreadScreen.turns(thread, from: pinned).newest.map(\.id), ["a1", "a2", "b1"])
+        XCTAssertEqual(ThreadScreen.turns(thread, from: "gone").newest.map(\.id), ["b1"])
+        // The fixtures' working thread: its one message is the newest turn.
+        XCTAssertTrue(ThreadScreen.turns(WatchFixtures.threads(now: now)[WatchFixtures.working]!).earlier.isEmpty)
+    }
+
+    /// While an approval or a question waits, its chips are the answer: no Reply, Open on iPhone alone.
+    func testReplyWaitsWhileARequestWaits() {
+        let threads = WatchFixtures.threads(now: now)
+        XCTAssertFalse(ThreadScreen.offersReply(threads[WatchFixtures.approval]!))
+        XCTAssertFalse(ThreadScreen.offersReply(threads[WatchFixtures.question]!))
+        XCTAssertTrue(ThreadScreen.offersReply(threads[WatchFixtures.notes]!))
+        XCTAssertTrue(ThreadScreen.offersReply(threads[WatchFixtures.working]!))
+    }
+
+    /// Double tap: Allow on the first approval card, else Answer on the first question (Reply is hidden then), else Reply.
+    func testDoubleTapAllowsTheFirstApprovalElseReplies() {
+        let threads = WatchFixtures.threads(now: now)
+        XCTAssertEqual(ThreadScreen.primaryAction(threads[WatchFixtures.approval]!), .allow("interaction-7"))
+        XCTAssertEqual(ThreadScreen.primaryAction(threads[WatchFixtures.question]!), .answer("interaction-12"))
+        XCTAssertEqual(ThreadScreen.primaryAction(threads[WatchFixtures.notes]!), .reply)
+        XCTAssertEqual(ThreadScreen.primaryAction(threads[WatchFixtures.working]!), .reply)
+        // An approval without Allow (only the phone's own choices): not answered by a double tap.
+        var thread = threads[WatchFixtures.approval]!
+        thread.approvals[0].choices = [WatchChoice(index: 0, label: "Deny", role: .deny)]
+        XCTAssertEqual(ThreadScreen.primaryAction(thread), .none)
+    }
+
+    /// While the agent works the header says the host's CPU after the model: is it the machine or the agent?
+    func testTheHeaderSaysTheHostsCPUWhileTheAgentWorks() {
+        var thread = WatchThread(key: WatchFixtures.working, generated: now, title: "t", agent: "Codex", model: "gpt-5.5", working: true)
+        XCTAssertEqual(ThreadHeader.load(thread, cpu: 33.6), "34%")
+        XCTAssertNil(ThreadHeader.load(thread, cpu: nil))
+        thread.working = false
+        XCTAssertNil(ThreadHeader.load(thread, cpu: 34))
+        var host = WatchHost(id: WatchFixtures.studio, name: "studio", order: 0, state: .connected,
+                             stats: WatchHostStats(cpu: 41, history: [], sampled: now))
+        XCTAssertEqual(ThreadHeader.cpu(host), 41)
+        host.stats?.stale = true
+        XCTAssertNil(ThreadHeader.cpu(host), "not current")
+        host.stats?.stale = false
+        host.state = .offline
+        XCTAssertNil(ThreadHeader.cpu(host))
+        host.state = .connected
+        host.stats = nil
+        XCTAssertNil(ThreadHeader.cpu(host))
+    }
+
+    /// An idle row's preview takes one line; working and needs-you rows keep two.
+    func testAnIdleRowsPreviewTakesOneLine() {
+        var row = WatchConversation(host: studio.id, node: "n1", name: "Fix the build", preview: "Done.")
+        XCTAssertEqual(AgentsRow.lineLimit(row), 1)
+        row.busy = true
+        XCTAssertEqual(AgentsRow.lineLimit(row), 2)
+        row.busy = false
+        row.needsYou = true
+        XCTAssertEqual(AgentsRow.lineLimit(row), 2)
     }
 
     func testItemsSayWhoSpeaks() {
         XCTAssertEqual(ThreadItemRow.accessibilityLabel(WatchItem(id: "1", kind: .user, text: "Go"), agent: "Codex"), "You: Go")
         XCTAssertEqual(ThreadItemRow.accessibilityLabel(WatchItem(id: "2", kind: .agent, text: "Done.", caption: "2 steps · 4s"), agent: "Codex"),
                        "Codex: Done., 2 steps · 4s")
-        XCTAssertEqual(ThreadItemRow.accessibilityLabel(WatchItem(id: "3", kind: .thinking, text: "Hmm"), agent: nil), "Thinking: Hmm")
+        XCTAssertEqual(ThreadItemRow.accessibilityLabel(WatchItem(id: "3", kind: .thinking, text: "Hmm"), agent: "Claude Code"),
+                       "Claude Code: Hmm", "thinking is the agent's message, as the phone shows it")
     }
 
     func testTheWorkingLineReadsAsThePhones() {
@@ -171,8 +259,8 @@ final class WatchAgentsViewTests: XCTestCase {
         XCTAssertEqual(ThreadScreen.anchor(threads[WatchFixtures.question]!)?.id, "interaction-12")
         XCTAssertEqual(ThreadScreen.anchor(threads[WatchFixtures.notes]!)?.id, "n2")
         XCTAssertEqual(ThreadScreen.anchor(threads[WatchFixtures.notes]!)?.top, true)
-        // Working with steps after its last message: the newest step, its bottom.
-        XCTAssertEqual(ThreadScreen.anchor(threads[WatchFixtures.working]!)?.id, "w3")
+        // Working without an answer yet: the newest item, its bottom.
+        XCTAssertEqual(ThreadScreen.anchor(threads[WatchFixtures.working]!)?.id, "w1")
         XCTAssertEqual(ThreadScreen.anchor(threads[WatchFixtures.working]!)?.top, false)
         XCTAssertNil(ThreadScreen.anchor(WatchThread(key: WatchFixtures.notes, generated: now, title: "t")))
     }
@@ -181,7 +269,7 @@ final class WatchAgentsViewTests: XCTestCase {
     func testTheSummaryCardIsTheNewestAnswer() {
         var thread = WatchFixtures.threads(now: now)[WatchFixtures.notes]!
         XCTAssertEqual(ThreadScreen.card(thread), "n2")
-        thread.items.append(WatchItem(id: "n3", kind: .tool, text: "README.md", tool: "Read"))
+        thread.items.append(WatchItem(id: "n3", kind: .notice, text: "Conversation compacted"))
         XCTAssertEqual(ThreadScreen.card(thread), "n2")
         thread.items.append(WatchItem(id: "n4", kind: .user, text: "Shorter, please."))
         XCTAssertNil(ThreadScreen.card(thread))
@@ -204,6 +292,15 @@ final class WatchAgentsViewTests: XCTestCase {
         XCTAssertEqual(approval.choices.map(\.label), ["Deny", "This session", "Allow"])
         XCTAssertEqual(ApprovalCard.titles(approval), ["Allow", "This session", "Deny"])
         XCTAssertEqual(ApprovalCard.ordered(approval.choices).map(ApprovalButtonStyle.of), [.prominent, .secondary, .destructive])
+        // Allow and Deny side by side, This session under them; one the watch does not know goes under them too.
+        let layout = ApprovalCard.layout(approval.choices)
+        XCTAssertEqual(layout.row.map(\.label), ["Allow", "Deny"])
+        XCTAssertEqual(layout.below.map(\.label), ["This session"])
+        let plain = ApprovalCard.layout([WatchChoice(index: 1, label: "Deny", role: .deny), WatchChoice(index: 0, label: "Allow", role: .allow),
+                                         WatchChoice(index: 2, label: "Later", role: .unknown)])
+        XCTAssertEqual(plain.row.map(\.label), ["Allow", "Deny"])
+        XCTAssertEqual(plain.below.map(\.label), ["Later"])
+        XCTAssertTrue(ApprovalCard.layout([WatchChoice(index: 0, label: "Allow", role: .allow)]).below.isEmpty)
         XCTAssertEqual(ApprovalButtonStyle.of(WatchChoice(index: 5, label: "Later", role: .unknown)), .secondary)
         XCTAssertEqual(ApprovalCard.waiting(since: now.addingTimeInterval(-130), now: now), "Waiting · 2m")
         XCTAssertEqual(ApprovalCard.waiting(since: now.addingTimeInterval(-10), now: now), "Waiting")
@@ -317,6 +414,119 @@ final class WatchAgentsViewTests: XCTestCase {
         XCTAssertFalse(ThreadComposer.canSteer(thread))
     }
 
+    /// The route is chosen on the confirm screen, once the words exist: Queue (accent) or Steer now while a live agent
+    /// works, each saying what it does; otherwise Send with where it goes (sent, queued, queued on the phone).
+    func testTheConfirmScreensButtonsFollowTheRoute() {
+        typealias Action = ThreadComposer.ReplyAction
+        var thread = WatchThread(key: WatchFixtures.working, generated: now, title: "t", working: true, canStop: true, route: .queue)
+        let working = ThreadComposer.actions(thread)
+        XCTAssertEqual(working.map(\.title), ["Queue", "Steer now"])
+        XCTAssertEqual(working.map(\.style), [.accent, .glass])
+        XCTAssertEqual(working.map(\.steer), [false, true])
+        XCTAssertEqual(working.map(\.line), ["Queued after this turn", "Goes into the running turn"])
+        thread.queue = [WatchQueued(id: "a", text: "one"), WatchQueued(id: "b", text: "two"),
+                        WatchQueued(id: WatchModel.sendingID + "-1", text: "three", status: "Sending…")]
+        XCTAssertEqual(ThreadComposer.actions(thread).first?.line, "Queued after 2 more", "the watch's own one on its way not counted")
+        thread.queue[1].status = "Not sent: Claude was not ready for input. Send it again or discard it."
+        XCTAssertEqual(ThreadComposer.actions(thread).first?.line, "Queued after 1 more", "a paused one holds nothing back")
+
+        // Idle: sent at once, no line.
+        let idle = ThreadComposer.actions(WatchThread(key: WatchFixtures.notes, generated: now, title: "t", route: .send))
+        XCTAssertEqual(idle, [Action(title: "Send", symbol: "arrow.up", style: .accent, steer: false, line: nil)])
+        // Idle with messages waiting: queued behind them.
+        let behind = WatchThread(key: WatchFixtures.notes, generated: now, title: "t", queue: [WatchQueued(id: "a", text: "one")], route: .queue)
+        XCTAssertEqual(ThreadComposer.actions(behind).map(\.line), ["Queued after 1 more"])
+        // Not live: kept on the phone, even while the agent was working.
+        for phase in [WatchPhase.offline, .opening] {
+            let away = WatchThread(key: WatchFixtures.working, generated: now, title: "t", phase: phase, working: true, route: .outbox)
+            XCTAssertEqual(ThreadComposer.actions(away).map(\.title), ["Send"], "\(phase)")
+            XCTAssertEqual(ThreadComposer.actions(away).map(\.line), ["Queued on your iPhone"], "\(phase)")
+        }
+        // Paused (the agent exited): no steering; the phone's route says where it waits.
+        let paused = WatchThread(key: WatchFixtures.working, generated: now, title: "t", phase: .paused, working: true, route: .outbox)
+        XCTAssertEqual(ThreadComposer.actions(paused).map(\.title), ["Send"])
+        XCTAssertEqual(ThreadComposer.actions(paused).map(\.steer), [false])
+        XCTAssertEqual(ThreadComposer.actions(nil).map(\.title), ["Send"], "no page yet")
+    }
+
+    /// The confirm screen's buttons are those it opened with: a turn starting or ending while it is up changes only what
+    /// their lines say (as the phone will route each), never which button sits where.
+    func testTheConfirmScreensButtonsStayPut() {
+        var thread = WatchThread(key: WatchFixtures.notes, generated: now, title: "t", route: .send)
+        let idle = ThreadComposer.actions(thread)
+        thread.working = true
+        thread.canStop = true
+        thread.route = .queue
+        var shown = ThreadComposer.relabel(idle, thread)
+        XCTAssertEqual(shown.map(\.title), ["Send"], "no Steer now appears under the finger")
+        XCTAssertEqual(shown.map(\.line), ["Queued after this turn"])
+        let working = ThreadComposer.actions(thread)
+        XCTAssertEqual(working.map(\.title), ["Queue", "Steer now"])
+        thread.working = false
+        thread.canStop = false
+        thread.route = .send
+        shown = ThreadComposer.relabel(working, thread)
+        XCTAssertEqual(shown.map(\.title), ["Queue", "Steer now"])
+        XCTAssertEqual(shown.map(\.steer), [false, true])
+        XCTAssertEqual(shown.map(\.line), ["Sent now: the turn ended", "Sent now: the turn ended"])
+        thread.route = .outbox
+        thread.phase = .offline
+        XCTAssertEqual(ThreadComposer.relabel(working, thread).map(\.line), ["Queued on your iPhone", "Queued on your iPhone"])
+    }
+
+    /// Stop's confirmation is for the turn it was asked in: it closes, and stops nothing, once that turn is over or
+    /// another has begun.
+    func testTheStopConfirmationIsForItsTurn() {
+        var thread = WatchThread(key: WatchFixtures.working, generated: now, title: "t", working: true,
+                                 workingSince: now.addingTimeInterval(-30),
+                                 items: [WatchItem(id: "u1", kind: .user, text: "Go")], canStop: true)
+        let asked = ThreadScreen.stopKey(thread)
+        XCTAssertNotNil(asked)
+        XCTAssertTrue(ThreadScreen.stopStillMeant(asked, thread))
+        thread.activity = "editing files"
+        XCTAssertTrue(ThreadScreen.stopStillMeant(asked, thread), "the same turn going on")
+        thread.canStop = false
+        XCTAssertNil(ThreadScreen.stopKey(thread))
+        XCTAssertFalse(ThreadScreen.stopStillMeant(asked, thread), "the turn ended")
+        // The queue started the next turn.
+        thread.canStop = true
+        thread.items.append(WatchItem(id: "u2", kind: .user, text: "Then lint"))
+        thread.workingSince = now
+        XCTAssertFalse(ThreadScreen.stopStillMeant(asked, thread))
+        XCTAssertFalse(ThreadScreen.stopStillMeant(nil, thread))
+    }
+
+    /// Stop is on the working line, only while the phone offers it; it asks first, naming the agent.
+    func testStopOnlyWhileThePhoneOffersItAndItAsksFirst() {
+        var thread = WatchThread(key: WatchFixtures.working, generated: now, title: "t", working: true, canStop: true)
+        XCTAssertNotNil(ThreadScreen.stop(thread) {})
+        thread.canStop = false
+        XCTAssertNil(ThreadScreen.stop(thread) {}, "a stop on its way, or a conversation not live")
+        thread.canStop = true
+        thread.working = false
+        XCTAssertNil(ThreadScreen.stop(thread) {})
+        XCTAssertEqual(ThreadWorkingRow.stopTitle(agent: "Claude Code"), "Stop Claude")
+        XCTAssertEqual(ThreadWorkingRow.stopTitle(agent: "claude"), "Stop Claude")
+        XCTAssertEqual(ThreadWorkingRow.stopTitle(agent: "codex"), "Stop Codex")
+        XCTAssertEqual(ThreadWorkingRow.stopTitle(agent: "pi"), "Stop Pi")
+        XCTAssertEqual(ThreadWorkingRow.stopTitle(agent: "aider"), "Stop aider")
+        XCTAssertEqual(ThreadWorkingRow.stopTitle(agent: nil), "Stop the agent")
+        XCTAssertEqual(ThreadWorkingRow.stopTitle(agent: ""), "Stop the agent")
+        XCTAssertEqual(ThreadWorkingRow.stopMessage, "Queued messages wait until Resume.")
+    }
+
+    /// Reply's first step: "Dictate or type", then the fixed quick replies, each leading to the confirm screen.
+    func testQuickRepliesComeBeforeDictation() throws {
+        XCTAssertEqual(QuickReplies.all, ["Continue", "Yes, do it", "Run the tests", "Commit it"])
+        let shots = ProcessInfo.processInfo.environment["DISPATCH_WATCH_AGENTS_SHOTS"].map { URL(fileURLWithPath: $0) }
+        let picker = VStack(spacing: 6) {
+            CapsuleLabel(title: "Dictate or type", symbol: "mic.fill", style: .accent)
+            ForEach(QuickReplies.all, id: \.self) { CapsuleLabel(title: $0) }
+        }
+        if let shots { try FileManager.default.createDirectory(at: shots, withIntermediateDirectories: true) }
+        try render(picker, name: "quick-replies", to: shots)
+    }
+
     /// The watch's own message on its way is a faded bubble, not a queue row.
     func testTheSendingMessageIsNotAQueueRow() {
         let queue = [WatchQueued(id: "a", text: "one"), WatchQueued(id: WatchModel.sendingID, text: "two", status: "Sending…")]
@@ -347,8 +557,11 @@ final class WatchAgentsViewTests: XCTestCase {
         let model = WatchModel(link: ScriptedWatchLink(scenario: .mockupReview, now: { [now] in now }), now: { [now] in now })
         let review = model.snapshot!.reviews[0]
         XCTAssertNotNil(ImageRenderer(content: ReviewSentContent(model: model, review: review).frame(width: 205, height: 251)).cgImage)
-        let reply = ReplyConfirmContent(draft: ReplyDraft(text: "Use the sidebar header", steer: false), route: "Queued until this turn ends") {}
-        XCTAssertNotNil(ImageRenderer(content: reply.frame(width: 205, height: 251)).cgImage)
+        let working = WatchThread(key: WatchFixtures.working, generated: now, title: "t", working: true, route: .queue)
+        for actions in [ThreadComposer.actions(working), ThreadComposer.actions(nil)] {
+            let reply = ReplyConfirmContent(draft: ReplyDraft(text: "Use the sidebar header", actions: actions), actions: actions) { _ in }
+            XCTAssertNotNil(ImageRenderer(content: reply.frame(width: 205, height: 251)).cgImage)
+        }
     }
 
     // MARK: Rendering
@@ -374,12 +587,18 @@ final class WatchAgentsViewTests: XCTestCase {
             for key in link.threads.keys.sorted(by: { $0.node < $1.node }) {
                 await model.loadThread(key)
                 guard let thread = model.thread(for: key) ?? link.threads[key] else { continue }
-                try render(ThreadDrawing(thread: thread), name: "thread-\(scenario.rawValue)-\(thread.title.prefix(12))", to: shots)
+                try render(ThreadDrawing(thread: thread, cpu: model.host(key.host).flatMap(ThreadHeader.cpu)), name: "thread-\(scenario.rawValue)-\(thread.title.prefix(12))", to: shots)
             }
         }
         if let shots {
             let question = WatchFixtures.threads(now: now)[WatchFixtures.question]!.questions[0]
             try render(QuestionDrawing(question: question), name: "question-form", to: shots)
+            for (name, thread) in [("working", WatchFixtures.threads(now: now)[WatchFixtures.working]!),
+                                   ("idle", WatchFixtures.threads(now: now)[WatchFixtures.notes]!)] {
+                let actions = ThreadComposer.actions(thread)
+                try render(ReplyConfirmStack(draft: ReplyDraft(text: "Use the sidebar header", actions: actions), actions: actions) { _ in },
+                           name: "confirm-\(name)", to: shots)
+            }
         }
     }
 
@@ -400,19 +619,26 @@ final class WatchAgentsViewTests: XCTestCase {
     }
 }
 
-/// A thread page as `ThreadScreen` lists it, in a stack (a `List` does not draw in `ImageRenderer`): header, items,
-/// working line, cards and their chips, queue, composer.
+/// A thread page as `ThreadScreen` lists it, in a stack (a `List` does not draw in `ImageRenderer`): header, the Earlier
+/// row and the newest turn's items, working line with its Stop, cards and their chips, queue, composer (Reply, Open on
+/// iPhone).
 private struct ThreadDrawing: View {
     let thread: WatchThread
+    /// The host's CPU for the header.
+    var cpu: Double?
 
     var body: some View {
         let (queued, sending) = ThreadComposer.split(thread.queue)
         VStack(alignment: .leading, spacing: 6) {
-            ThreadHeader(thread: thread)
-            if thread.earlier {
+            ThreadHeader(thread: thread, cpu: cpu)
+            let turns = ThreadScreen.turns(thread)
+            if !turns.earlier.isEmpty {
+                Label(ThreadScreen.earlierTitle(turns.earlier.count), systemImage: "chevron.up")
+                    .font(.footnote).foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 44)
+            } else if thread.earlier {
                 Text("Earlier messages are on your iPhone").font(.caption2).foregroundStyle(.secondary).frame(maxWidth: .infinity)
             }
-            ForEach(thread.items) { item in
+            ForEach(turns.newest) { item in
                 if item.id == ThreadScreen.card(thread) {
                     ThreadSummaryCard(item: item, agent: thread.agent)
                 } else {
@@ -420,13 +646,14 @@ private struct ThreadDrawing: View {
                 }
             }
             ForEach(sending) { item in ThreadBubble(side: .user, faded: true) { Text(item.text) } }
-            if thread.working { ThreadWorkingRow(activity: thread.activity, since: thread.workingSince) }
+            if thread.working { ThreadWorkingRow(activity: thread.activity, since: thread.workingSince, stop: ThreadScreen.stop(thread) {}) }
             ForEach(thread.approvals) { approval in
+                let layout = ApprovalCard.layout(approval.choices)
                 ApprovalCard(approval: approval, agent: thread.agent)
-                ForEach(ApprovalCard.ordered(approval.choices)) { choice in
-                    let style = ApprovalButtonStyle.of(choice)
-                    CapsuleLabel(title: choice.label, style: style == .prominent ? .accent : style == .destructive ? .destructive : .glass)
+                HStack(spacing: 6) {
+                    ForEach(layout.row) { choice in chip(choice) }
                 }
+                ForEach(layout.below) { choice in chip(choice) }
             }
             ForEach(thread.questions) { question in
                 QuestionCard(question: question)
@@ -439,11 +666,14 @@ private struct ThreadDrawing: View {
                         .background(Color.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 12))
                 }
             }
-            CapsuleLabel(title: "Reply", symbol: "mic.fill", style: .accent)
-            if ThreadComposer.canSteer(thread) { CapsuleLabel(title: "Steer", symbol: "arrow.turn.down.right") }
-            if thread.canStop { CapsuleLabel(title: "Stop", symbol: "stop.fill", style: .destructive) }
+            if ThreadScreen.offersReply(thread) { CapsuleLabel(title: "Reply", symbol: "mic.fill", style: .accent) }
             CapsuleLabel(title: "Open on iPhone", symbol: "iphone")
         }
+    }
+
+    private func chip(_ choice: WatchChoice) -> some View {
+        let style = ApprovalButtonStyle.of(choice)
+        return CapsuleLabel(title: choice.label, style: style == .prominent ? .accent : style == .destructive ? .destructive : .glass)
     }
 }
 

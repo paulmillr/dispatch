@@ -71,6 +71,8 @@ final class MobileChatSession: Identifiable {
         didSet { if transcript.revision != stepRevision { refreshStep() } }
     }
     @ObservationIgnored private var stepRevision = -1
+    /// Live replies typing out as they stream (`ChatTypingReveals`): presentation only, never saved.
+    @ObservationIgnored let typing = ChatTypingReveals()
     /// Where the thread was being read when it was last scrolled or left (`ChatThreadView`); nil while it showed its
     /// end. The next thread view opens there, so leaving the tab and coming back keeps the place. In memory only.
     @ObservationIgnored var readingPosition: ChatReadingPosition?
@@ -387,7 +389,7 @@ final class MobileChatSession: Identifiable {
                 let records = try HelperBinary.decode(Records.self, from: value)
                 guard accepts(records.terminal, records.session) else { return }
                 if records.replace == true {
-                    transcript.clear()
+                    transcript.clear(); typing.reset()
                     transcript.apply(records.records, historical: true)
                     earlier = records.earlier
                 } else { receive(live: records.records) }
@@ -457,7 +459,7 @@ final class MobileChatSession: Identifiable {
         let named = history.session.isEmpty ? nil : history.session
         if let shown = conversation, let named, shown != named {
             // Another conversation in this terminal (/clear, /resume): its own transcript and requests.
-            transcript = MobileTranscript()
+            transcript = MobileTranscript(); typing.reset()
             retireRequests()
             approvals = []
             queue = []
@@ -501,7 +503,10 @@ final class MobileChatSession: Identifiable {
     }
 
     private func receive(live records: [HelperChat.Record]) {
-        let applied = transcript.apply(records, historical: false, prepare: reconcile)
+        let streams = agentKey.map(ChatTypingReveals.streamingAgents.contains) ?? false
+        let applied = transcript.apply(records, historical: false, prepare: reconcile) { [typing] row in
+            if streams { typing.began(row) }
+        }
         for change in applied {
             switch change {
             case .started:
@@ -760,10 +765,12 @@ final class MobileChatSession: Identifiable {
     /// Text from elsewhere (the watch, docs/watch.md), routed exactly as the composer's but without its draft: the
     /// draft is neither read, taken nor restored. Returns where it went, or nil when nothing was sent (empty text, or a
     /// device queue that could not be saved: `failure` says why). A prompt's own delivery failure comes later, in
-    /// `failure`.
+    /// `failure`; having no draft to come back to, the message then stays in the device queue, paused
+    /// (`keepUnsent`), rather than being lost: after Stop, Claude Code puts the interrupted prompt back in its input
+    /// and refuses the next `chat.send` until it is cleared.
     @discardableResult
     func send(text: String, steer: Bool) -> Route? {
-        submit(text, attachments: [], steer: steer, delivery: nil)
+        submit(text, attachments: [], steer: steer, delivery: nil, keepUnsent: true)
     }
 
     /// Why `sendConfirmed` sent nothing, in the words the composer would show.
@@ -794,7 +801,7 @@ final class MobileChatSession: Identifiable {
     /// `delivery` prepares the composer's draft for delivery (nil: not the composer's text); a nil result sends nothing.
     /// With attachments the text may be empty; a command takes none.
     private func submit(_ text: String, attachments: [ChatAttachment], steer: Bool,
-                        delivery prepare: (() -> ChatDraftDelivery?)?,
+                        delivery prepare: (() -> ChatDraftDelivery?)?, keepUnsent: Bool = false,
                         completed: (@MainActor (Route, String?) -> Void)? = nil) -> Route? {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty else { return nil }
         let isCommand = AgentInput.isCommand(text, multiline: text.contains("\n"))
@@ -822,7 +829,8 @@ final class MobileChatSession: Identifiable {
             command(text, delivery: delivery)
             completed?(route, nil)
         case .prompt, .steer:
-            prompt(text, attachments: attachments, steer: route == .steer, delivery: delivery, completed: completed)
+            prompt(text, attachments: attachments, steer: route == .steer, delivery: delivery, keepUnsent: keepUnsent,
+                   completed: completed)
         }
         return route
     }
@@ -833,7 +841,7 @@ final class MobileChatSession: Identifiable {
     }
 
     private func prompt(_ text: String, attachments: [ChatAttachment], steer: Bool, delivery: ChatDraftDelivery?,
-                        completed: (@MainActor (Route, String?) -> Void)? = nil) {
+                        keepUnsent: Bool = false, completed: (@MainActor (Route, String?) -> Void)? = nil) {
         var input = route()
         input.text = text
         input.mode = steer ? "steer" : "prompt"
@@ -861,10 +869,34 @@ final class MobileChatSession: Identifiable {
                 if !steer { self.awaitingAck = false; self.submittedAt = nil }
                 self.updateWorkingSince()
                 self.failure = self.explain(error)
+                if keepUnsent { self.keepUnsent(text, error: error) }
                 completed?(steer ? .steer : .prompt, self.failure)
             }
             if self.generation != generation, self.optimisticPrompt?.id == pending.id { self.optimisticPrompt = nil }
             self.changed?(self)
+        }
+    }
+
+    /// A message without a draft (the watch's) that `chat.send` did not take: kept in the device queue, paused, for the
+    /// user to send again (the queue card's Send, the watch's swipe) or discard; never sent again by itself. A refusal
+    /// typed nothing; a failure that may have delivered it says so instead.
+    private func keepUnsent(_ text: String, error: any Error) {
+        let state: ChatOutboxItem.State = ChatInputNotSent.deliveryUncertain(error, started: true)
+            ? .uncertain("The host may have taken this message. Check the thread, then send or discard it.")
+            : .paused(unsentReason(error))
+        let item = ChatOutboxItem(key: key, conversation: conversation, text: text, state: state,
+                                  process: phase == .verified ? .init(binding) : nil)
+        guard outbox.add(item) else { failure = outbox.error ?? failure; return }
+        // The queue row says why, once (not the composer's "Your draft is preserved": there is no draft).
+        failure = nil
+    }
+
+    /// Why a kept message was not sent, in the queue row's words.
+    private func unsentReason(_ error: any Error) -> String {
+        switch (error as? HelperFailure)?.code {
+        case "input": "Not sent: \(agentName) was not ready for input. Send it again or discard it."
+        case "terminal_unavailable": "Not sent: the terminal was not attached. Send it again or discard it."
+        default: "Not sent: \(error.localizedDescription) Send it again or discard it."
         }
     }
 
@@ -1389,9 +1421,17 @@ final class MobileChatSession: Identifiable {
         })
     }
 
+    /// A message the device itself paused or holds as uncertain (not one the helper's queue holds and paused, whose
+    /// status is the helper's: sending that again would queue it twice, and Resume would send both): the queue card's
+    /// Send (and the watch's) puts it in the queue again.
+    func canResend(_ row: QueueRow) -> Bool {
+        guard case .device(let id) = row.source else { return false }
+        return queueItems.contains { $0.id == id && $0.pauseReason != nil }
+    }
+
     /// A paused or uncertain message: the user's own decision to send it (it goes into the queue again).
     func resendQueued(_ row: QueueRow) {
-        guard case .device(let id) = row.source else { return }
+        guard canResend(row), case .device(let id) = row.source else { return }
         outbox.update(id) { $0.state = .waiting }
         if phase == .verified { Task { await self.drainQueue() } }
     }

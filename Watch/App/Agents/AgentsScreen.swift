@@ -66,10 +66,11 @@ struct AgentsScreen: View {
     }
 }
 
-/// One Agents row, the phone's new row grammar at watch size (mockups K1): the gutter dot, the agent's glyph in its own
-/// column, then the name (two lines), the state line (two lines: the current step and how long it has run while
-/// working, what it asks while it needs you, in primary, else its last message) and a caption with "host · space" in the
-/// host's tint and the time. Dimmed while its data is last-known (`stale`).
+/// One Agents row, the phone's new row grammar at watch size (mockups K1): the gutter dot alone in the leading column
+/// (no agent mark: every row is an agent), then the name (two lines), the state line (two lines while working, the
+/// current step and how long it has run, or needing you, what it asks, in primary; one line for an idle row's last
+/// message) and a caption with "host · space" in the host's tint and the time. Dimmed while its data is last-known
+/// (`stale`).
 struct AgentsRow: View {
     let conversation: WatchConversation
     let host: WatchHost?
@@ -86,8 +87,6 @@ struct AgentsRow: View {
                 .frame(width: Self.dotSize, height: Self.dotSize)
                 .padding(.top, 5)
                 .accessibilityHidden(true)
-            AgentGlyph(agent: conversation.agent, size: 13)
-                .padding(.top, 2)
             VStack(alignment: .leading, spacing: 2) {
                 Text(conversation.displayTitle)
                     .font(.subheadline.weight(.semibold))
@@ -131,8 +130,13 @@ struct AgentsRow: View {
             Text(line)
                 .font(.caption)
                 .foregroundStyle(conversation.needsYou ? Color.primary : Color.secondary)
-                .lineLimit(2)
+                .lineLimit(Self.lineLimit(conversation))
         }
+    }
+
+    /// Two lines for what a working or needs-you row says; one for an idle row's preview.
+    static func lineLimit(_ conversation: WatchConversation) -> Int {
+        conversation.needsYou || conversation.busy ? 2 : 1
     }
 
     /// "studio · dispatch": the host, then the space it runs in; " · muted" as the phone's detail adds it.

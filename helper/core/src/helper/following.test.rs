@@ -95,7 +95,7 @@ struct Bench {
     helper: DispatchHelper,
     io: Queue,
     replies: Replies,
-    observers: Vec<Observer>,
+    observers: Observers,
     asked: Rc<RefCell<Asked>>,
 }
 
@@ -115,7 +115,10 @@ fn bench(restores: bool) -> Bench {
     helper.features.borrow_mut().insert(MAC.0, [features::TERMINALS_FOLLOW].into_iter().collect());
     io.settle();
     replies.borrow_mut().clear();
-    let observers = [MAC, PHONE].map(|(fd, id)| (fd, id, Scope::Terminal(TERMINAL))).to_vec();
+    let mut observers = Observers::default();
+    for (fd, id) in [MAC, PHONE] {
+        observers.push((fd, id, Scope::Terminal(TERMINAL)));
+    }
     Bench { helper, io, replies, observers, asked }
 }
 

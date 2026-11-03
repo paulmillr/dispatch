@@ -68,10 +68,18 @@ final class FilesBrowser {
     @ObservationIgnored private var loads: [String: Task<Void, Never>] = [:]
     /// Listing keys, least recently used first (`listingLimit`).
     @ObservationIgnored private var used: [String] = []
-    /// Item counts: paths waiting, the reads running (by key), and keys whose read failed this session.
+    /// Item counts: the folder rows on screen (oldest first, whether or not a source is there), paths waiting, the reads
+    /// running (by key), and keys whose read failed this session (a lost connection is no failure).
+    @ObservationIgnored private var countRows: [String] = []
     @ObservationIgnored private var countQueue: [String] = []
     @ObservationIgnored private var counting: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var countFailed: Set<String> = []
+    /// Keys whose count was asked on this connection: a row on screen not among them is asked as capacity frees, in
+    /// the rows' order (one that waited past `countQueueLimit`, or every row after a reconnect), never twice.
+    @ObservationIgnored private var countAsked: Set<String> = []
+    /// Bumped by every `reconnected`: a count that lost its connection asks again at once only when one came since it
+    /// started (else the next reconnect asks it).
+    @ObservationIgnored private var connection = 0
     /// git's marks: a read is wanted that could not be asked (no connection then), and the read running.
     @ObservationIgnored private var marksPending = false
     @ObservationIgnored private var marksTask: Task<Void, Never>?
@@ -79,6 +87,8 @@ final class FilesBrowser {
     /// Folders listed at once for their item counts, and at most waiting.
     static let countConcurrency = 4
     static let countQueueLimit = 32
+    /// Folder rows remembered as on screen (their counts asked again after a reconnect); the oldest give way.
+    static let countRowLimit = 256
     /// Listings kept per tab (the least recently used go first; the shown folder's never).
     static let listingLimit = 48
     /// The search's bounds: folders it looks in, hits it keeps, how deep and how long it walks, and its debounce.
@@ -196,10 +206,16 @@ final class FilesBrowser {
         await load(force: true)
     }
 
-    /// The host's connection came back: what was shown, or failed for want of it, is read again.
+    /// The host's connection came back: what was shown, or failed for want of it, is read again, and so are the counts
+    /// of the folder rows on screen that are not known (queued while offline, cut by the drop, or failed).
     func reconnected() async {
+        connection += 1
         if marksPending || marksRoot != nil { refreshMarks(repository: marksRoot) }
         countFailed.removeAll()
+        countAsked.removeAll()
+        // Every row on screen asks again, in the rows' order (the queue's recency is the old connection's).
+        countQueue.removeAll()
+        pumpCounts()
         await load(force: true)
     }
 
@@ -297,18 +313,27 @@ final class FilesBrowser {
         return (listing.entries.count, listing.truncated)
     }
 
-    /// A row showed: its count is read unless known, waiting, running or failed this session. At most
-    /// `countQueueLimit` wait; the oldest give way.
+    /// A row showed: its count is read unless known, waiting, running or failed this session; without a connection it
+    /// waits for one (`reconnected`). At most `countQueueLimit` wait; the oldest give way.
     func needCount(_ path: String) {
+        if !countRows.contains(path) {
+            countRows.append(path)
+            if countRows.count > Self.countRowLimit { countRows.removeFirst(countRows.count - Self.countRowLimit) }
+        }
+        enqueueCount(path)
+        pumpCounts()
+    }
+
+    private func enqueueCount(_ path: String) {
         let key = Self.key(path, hidden: showsHidden)
         guard listings[key]?.listing == nil, counting[key] == nil, !countFailed.contains(key), !countQueue.contains(path) else { return }
         countQueue.append(path)
         if countQueue.count > Self.countQueueLimit { countQueue.removeFirst(countQueue.count - Self.countQueueLimit) }
-        pumpCounts()
     }
 
-    /// A row went off screen: its count is no longer wanted (a running read is cancelled).
+    /// A row went off screen: its count is no longer wanted (a running read is cancelled, a reconnect asks none).
     func dropCount(_ path: String) {
+        countRows.removeAll { $0 == path }
         countQueue.removeAll { $0 == path }
         let key = Self.key(path, hidden: showsHidden)
         counting.removeValue(forKey: key)?.cancel()
@@ -317,30 +342,52 @@ final class FilesBrowser {
 
     /// The listing left the screen, or another folder shows: no count is read for it any more.
     func cancelCounts() {
+        countRows.removeAll()
+        countAsked.removeAll()
         countQueue.removeAll()
         for task in counting.values { task.cancel() }
         counting.removeAll()
     }
 
-    /// Item counts waiting and running (tests).
+    /// Item counts waiting and running (tests); rows on screen past the queue's bound are asked after them (`unasked`).
     var countsPending: Int { countQueue.count + counting.count }
 
+    /// The first row on screen whose count is still to be asked on this connection.
+    private func unasked() -> String? { countRows.first(where: isUnasked) }
+
+    private func isUnasked(_ path: String) -> Bool {
+        let key = Self.key(path, hidden: showsHidden)
+        return listings[key]?.listing == nil && counting[key] == nil && !countFailed.contains(key) && !countAsked.contains(key)
+    }
+
+    /// Starts counts while fewer than `countConcurrency` run: the rows that asked last first (the queue), then the rows
+    /// on screen not asked on this connection, in their order. Without a source they wait for the connection to come
+    /// back (`reconnected`), not dropped.
     private func pumpCounts() {
-        while counting.count < Self.countConcurrency, !countQueue.isEmpty {
-            let path = countQueue.removeFirst()
-            let hidden = showsHidden, key = Self.key(path, hidden: hidden)
-            guard listings[key]?.listing == nil, let source = source() else { continue }
+        while counting.count < Self.countConcurrency {
+            guard let source = source() else { return }
+            guard let path = countQueue.isEmpty ? unasked() : countQueue.removeFirst() else { return }
+            let hidden = showsHidden, key = Self.key(path, hidden: hidden), started = connection
+            guard listings[key]?.listing == nil, counting[key] == nil else { continue }
+            countAsked.insert(key)
             counting[key] = Task { @MainActor [weak self] in
+                var lost = false
                 do {
                     let listing = try await source.list(path, hidden: hidden)
                     guard !Task.isCancelled, let self else { return }
                     self.store(key, listing)
                 } catch {
-                    guard !Task.isCancelled, !(error is CancellationError), (error as? FilesSourceError) != .cancelled else { return }
-                    self?.countFailed.insert(key)
+                    guard !Task.isCancelled, let self else { return }
+                    switch error as? FilesSourceError {
+                    // The connection went (or the read was cancelled on the host): the row asks again when it is back.
+                    case .offline?, .cancelled?: lost = true
+                    default: if !(error is CancellationError) { self.countFailed.insert(key) } else { lost = true }
+                    }
                 }
                 guard let self, !Task.isCancelled else { return }
                 self.counting[key] = nil
+                // A reconnect came while this read was on the old connection: ask again now, on the new one.
+                if lost, started != self.connection, self.countRows.contains(path) { self.enqueueCount(path) }
                 self.pumpCounts()
             }
         }

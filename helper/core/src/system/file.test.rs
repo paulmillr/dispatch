@@ -43,3 +43,24 @@ fn a_collected_run_reads_back_as_recorded() {
         }
     }
 }
+
+#[test]
+fn a_folder_read_says_it_is_one_and_replays_so() {
+    let root = std::env::temp_dir().join(format!("dispatch-file-folder-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let folder = read(&root, 0, 16).unwrap_err();
+    assert_eq!(folder.kind(), io::ErrorKind::IsADirectory);
+    // Recorded and replayed: the same kind, so the files plugin answers `is_directory` either way.
+    let bytes = encode(&Err(folder)).unwrap();
+    let replayed = decode(3, &bytes, std::env::consts::OS).unwrap().result.unwrap_err();
+    assert_eq!(replayed.kind(), io::ErrorKind::IsADirectory);
+    // A file still reads; a path that is neither stays refused as before.
+    std::fs::write(root.join("a.txt"), b"hello").unwrap();
+    match read(&root.join("a.txt"), 0, 16).unwrap() {
+        Output::Read { bytes, .. } => assert_eq!(bytes, b"hello"),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(read(&root.join("missing"), 0, 16).unwrap_err().kind(), io::ErrorKind::NotFound);
+    std::fs::remove_dir_all(&root).unwrap();
+}

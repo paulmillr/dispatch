@@ -7,7 +7,8 @@ import UIKit
 /// What F2 shows for a path, read through `files.read` (docs/ios.md, Files): text with its syntax colours, Markdown
 /// (rendered, or its source), an image, a binary's kind and size, or a folder (which the screen shows as a listing).
 /// Text past `headLimit` shows its first `headLimit` bytes with Load all (up to `wholeLimit`); a file that changes
-/// between two reads is read again from the start once, then says so.
+/// between two reads is read again from the start once, then says so. Share, Save to Photos and Ask take the bytes of
+/// the revision the preview read (`bytes`): only once it has loaded, all of them or nothing.
 @MainActor @Observable
 final class FilePreview {
     enum Content: Equatable {
@@ -31,7 +32,8 @@ final class FilePreview {
 
     let path: String
     private(set) var content: Content = .loading
-    /// The revision the content was read at (its size, its modified time).
+    /// The revision the content was read at (its size, its modified time): the helper's metadata of a regular file,
+    /// nil until a read gives it (and again while a load starts over).
     private(set) var revision: FileRevision?
     /// The whole of a truncated text is being read.
     private(set) var loadingAll = false
@@ -85,6 +87,16 @@ final class FilePreview {
     /// Only a truncated text that fits `wholeLimit` offers Load all.
     var canLoadAll: Bool { truncated && (size ?? .max) <= Self.wholeLimit }
 
+    /// Share (and Save to Photos) may offer the file: it loaded as a file, with the helper's metadata of the revision
+    /// read (`bytes` then reads exactly that revision whole, or fails). Not while loading, failed or a folder.
+    var canShare: Bool {
+        guard let revision, revision.kind == .file else { return false }
+        switch content {
+        case .text, .markdown, .image, .binary: return true
+        case .loading, .folder, .failed: return false
+        }
+    }
+
     static func decide(name: String, size: UInt64, head: Data) -> Kind {
         let ext = (name as NSString).pathExtension.lowercased()
         if imageExtensions.contains(ext) { return size <= imageLimit ? .image : .binary }
@@ -111,6 +123,9 @@ final class FilePreview {
         default: return
         }
         content = .loading
+        // What a failed or offline load left is no revision to share from: the next read gives it.
+        revision = nil
+        downsampled = false
         for attempt in 0..<2 {
             do {
                 try await read()
@@ -129,15 +144,17 @@ final class FilePreview {
         let first: (data: Data, revision: FileRevision)
         do {
             first = try await source.read(path, offset: 0, length: Self.headLimit, revision: nil)
-        } catch FilesSourceError.unsupported(let detail) {
-            // A folder has no bytes to read: it lists.
-            if (try? await source.list(path, hidden: false)) != nil { content = .folder; return }
-            throw FilesSourceError.unsupported(detail)
+        } catch FilesSourceError.isDirectory {
+            // The helper says the path is a folder (`is_directory`): it shows as its listing.
+            content = .folder
+            return
         }
         try Task.checkCancellation()
         if first.revision.kind == .directory { content = .folder; return }
         let size = first.revision.size
-        guard UInt64(first.data.count) == min(Self.headLimit, size) else { throw FilesSourceError.changed(path) }
+        guard first.revision.kind == .file, UInt64(first.data.count) == min(Self.headLimit, size) else {
+            throw FilesSourceError.changed(path)
+        }
         revision = first.revision
         switch Self.decide(name: name, size: size, head: first.data) {
         case .binary:
@@ -197,14 +214,24 @@ final class FilePreview {
         }
     }
 
-    /// The file's bytes for Share and Ask: what is loaded when it is the whole file, else a read of it (up to `limit`).
+    /// The file's bytes for Share and Ask: the whole revision the preview read, never a part of it. What is loaded
+    /// when it is all of that revision, else one read of it (up to `limit`) guarded by it, whose metadata and length
+    /// must be that revision's; a file past `limit`, a short read or a file changed since fail instead (fail closed:
+    /// nothing is shared). Without that revision (loading, failed, offline, a folder) there is nothing to share.
     func bytes(limit: UInt64 = FilePreview.shareLimit) async throws -> Data {
-        if let text, !truncated { return Data(text.utf8) }
-        if case .image(let data) = content, !downsampled { return data }
+        guard canShare, let revision else {
+            throw FilesSourceError.other(code: "not_loaded", message: "\(name) has not loaded: open it again to share it.")
+        }
+        guard revision.size <= limit else { throw FilesSourceError.limit("\(name) is larger than \(FilesFormatting.size(limit))") }
+        if let text, !truncated {
+            let data = Data(text.utf8)
+            if UInt64(data.count) == revision.size { return data }
+        }
+        if case .image(let data) = content, !downsampled, UInt64(data.count) == revision.size { return data }
         guard let source = source() else { throw FilesSourceError.offline(host) }
-        let size = revision?.size ?? limit
-        guard size <= limit else { throw FilesSourceError.limit("\(name) is larger than \(FilesFormatting.size(limit))") }
-        return try await source.read(path, offset: 0, length: size, revision: revision).data
+        let whole = try await source.read(path, offset: 0, length: revision.size, revision: revision)
+        guard whole.revision == revision, UInt64(whole.data.count) == revision.size else { throw FilesSourceError.changed(path) }
+        return whole.data
     }
 
     /// The text's lines are made off the main actor (a Load all of megabytes), then they and the content change in one

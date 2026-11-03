@@ -20,7 +20,7 @@ impl DispatchHelper {
         (node.agent.is_none() && node.tty == Some(candidate.1.process.tty)).then_some(candidate)
     }
 
-    pub(super) fn candidates(&self, io: &mut dyn Io, replies: &Replies, observers: &[Observer]) {
+    pub(super) fn candidates(&self, io: &mut dyn Io, replies: &Replies, observers: &Observers) {
         let mut candidates = self.candidates.borrow_mut();
         candidates
             .observed
@@ -35,7 +35,7 @@ impl DispatchHelper {
                 "agent.changed",
                 &[("terminal", &terminal), ("summary", &Summary::default())],
             );
-            for (fd, id, scope) in observers {
+            for (fd, id, scope) in observers.select(super::observers::watchers(terminal)) {
                 let watching = match scope {
                     Scope::Backend(index) => *index == (terminal >> 48) as usize,
                     Scope::Terminal(id) | Scope::Events(id) => *id == terminal,

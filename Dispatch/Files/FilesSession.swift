@@ -195,10 +195,13 @@ import Foundation
     /// Commits shows (its log and refs are read).
     var showsLog: Bool { tab == .commits }
 
-    /// Whose comments the Review tab shows: the repository's working tree on this tab's host. Nil until both are known.
+    /// Whose comments the Review tab shows: the repository's working tree on this tab's host, a remote host by its
+    /// stable identity (`ReviewScope`). Nil until both are known.
     var reviewScope: String? {
         guard let repository = git.repository, let source else { return nil }
-        return ReviewRepository.scope(local: source.endpoint.isLocal, host: source.hostLabel, root: repository.root)
+        if source.endpoint.isLocal { return ReviewRepository.scope(local: true, host: nil, root: repository.root) }
+        guard let host = source.hostIdentity else { return nil }
+        return ReviewRepository.scope(local: false, host: host, root: repository.root)
     }
 
     /// The header shows the git segments: inside a repository, or while a git tab waits for the repository to resolve

@@ -73,6 +73,10 @@ enum MobileFilesAvailability: Equatable {
     }
 
     var isOffline: Bool { if case .offline = self { true } else { false } }
+
+    /// The host's helper answers Files now: available and connected (not only on its way). Files' listings read again
+    /// when this turns true (`FilesBrowser.reconnected`).
+    static func online(_ host: TabsHost) -> Bool { Self(host) == .available && host.state == .connected }
 }
 
 /// What a Files mode sees of its tab.

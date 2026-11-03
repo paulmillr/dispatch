@@ -517,3 +517,31 @@ final class HelperClientTests: XCTestCase {
         await fulfillment(of: [received, canceled], timeout: 5)
     }
 }
+
+extension HelperClientTests {
+    /// A helper past its connection limit answers request 0 with `busy` and closes (helper/PROTOCOL.md, Limits): the
+    /// waiting request fails with that reason, not as a helper that stopped before it answered.
+    func testConnectionRefusalFailsRequestsWithTheHelpersReason() async throws {
+        struct OK: Decodable { let ok: Bool }
+        let incoming = Pipe(), outgoing = Pipe()
+        let client = HelperConnection(read: incoming.fileHandleForReading, write: outgoing.fileHandleForWriting)
+        let peer = HelperTransport(read: outgoing.fileHandleForReading, write: incoming.fileHandleForWriting)
+        let reason = "The helper already serves 64 connections; try again once one closes"
+        var refused = false
+        peer.start(receive: { _ in
+            guard !refused else { return }
+            refused = true
+            let error = HelperBinary.Value.object(["code": .string("busy"), "message": .string(reason)])
+            let body = try! HelperBinary.encode(.object(["error": error]))
+            // Not closed here: the refusal alone ends the connection, before any close could race it.
+            peer.send(try! HelperWire.encode(.init(kind: .response, id: 0, body: body)))
+        }, closed: { _ in })
+        defer { client.close(); peer.close() }
+        do {
+            let _: OK = try await client.request("echo", params: [String: String]())
+            XCTFail("a refused connection answered")
+        } catch let failure as HelperFailure {
+            XCTAssertEqual(failure, HelperFailure(code: "busy", message: reason))
+        }
+    }
+}

@@ -5,10 +5,15 @@ pub(super) struct State {
     pub limit: u64,
     pub chunk: Rc<RefCell<Chunk>>,
     pub done: Done<Metadata>,
+    /// The packs, when this reads a kept archive: each window counts as its use (pack.rs `touch`).
+    pub archive: Option<pack::Shared>,
 }
 
 impl State {
     pub fn submit(self, io: &mut dyn Io, jobs: &Jobs) {
+        if let Some(packs) = &self.archive {
+            pack::touch(packs, io, &self.read.path);
+        }
         let job = Job::Read {
             path: self.read.path.clone(),
             offset: self.read.offset,
@@ -57,3 +62,7 @@ impl State {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "read.test.rs"]
+mod tests;

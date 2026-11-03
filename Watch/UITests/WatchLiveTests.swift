@@ -111,7 +111,8 @@ final class WatchLiveTests: XCTestCase {
         let open = app.buttons["Open on iPhone"]
         XCTAssertTrue(reveal(open, in: app), app.debugDescription)
         open.tap()
-        XCTAssertTrue(element(app, labelContaining: "on your iPhone").waitForExistence(timeout: 10), app.debugDescription)
+        // Said under the button, which may sit at the screen's bottom edge.
+        XCTAssertTrue(waitForText("on your iPhone", in: app, timeout: 10), app.debugDescription)
         back(app)
 
         // Spaces is the second vertical page: the Digital Crown scrolls Agents to its end, and a swipe there pages on
@@ -204,6 +205,10 @@ final class WatchLiveTests: XCTestCase {
         let composer = app.buttons["Reply"]
         XCTAssertTrue(reveal(composer, in: app, swipes: 10), app.debugDescription)
         composer.tap()
+        // Reply's first step: the quick replies under "Dictate or type".
+        let dictate = app.buttons["Dictate or type"]
+        XCTAssertTrue(dictate.waitForExistence(timeout: 10), app.debugDescription)
+        dictate.tap()
         // The system input opens on its keyboard (a 46 mm watch) with the text view focused; Done submits.
         let field = app.textViews.matching(NSPredicate(format: "placeholderValue != nil")).firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 10), "the text input: \(app.debugDescription)")
@@ -212,12 +217,12 @@ final class WatchLiveTests: XCTestCase {
         let done = app.navigationBars.buttons["Done"]
         XCTAssertTrue(done.waitForExistence(timeout: 3) && done.isEnabled, app.debugDescription)
         done.tap()
-        // The confirm screen: the words in the pink bubble, then Send.
+        // The confirm screen: the words in the pink bubble, then Send (Queue while the agent works).
         XCTAssertTrue(element(app, labelStarting: "Your reply: " + text).waitForExistence(timeout: 10), app.debugDescription)
         shot("confirm")
-        let confirm = app.buttons["Send"]
-        XCTAssertTrue(confirm.waitForExistence(timeout: 5), app.debugDescription)
-        confirm.tap()
+        let send = app.buttons["Send"], queue = app.buttons["Queue"]
+        XCTAssertTrue(send.waitForExistence(timeout: 5) || queue.exists, app.debugDescription)
+        (send.exists ? send : queue).tap()
     }
 
     /// The phone app's own rows over WatchConnectivity: the first conversation opens with the phone's page, Open on
@@ -251,8 +256,10 @@ final class WatchLiveTests: XCTestCase {
         // The first action the page offers, as a user would pick it: an approval, a question, Stop.
         let action = ["Allow", "Answer", "Stop"].first { reveal(app.buttons[$0], in: app, swipes: 2) }
         switch action {
-        case "Allow"?, "Stop"?:
-            app.buttons[action!].tap()
+        case "Allow"?:
+            app.buttons["Allow"].tap()
+        case "Stop"?:
+            stop(app)
         case "Answer"?:
             app.buttons["Answer"].tap()
             let option = app.collectionViews.firstMatch.buttons.element(boundBy: 0)
@@ -328,10 +335,20 @@ final class WatchLiveTests: XCTestCase {
         let stop = app.buttons["Stop"]
         XCTAssertTrue(waitFor(stop, in: app, timeout: 15), "no Stop while the agent works: \(app.debugDescription)")
         shot("working")
-        stop.tap()
+        self.stop(app)
         assertStaysGone(stop, app)
         XCTAssertFalse(failureLine(app).exists, app.debugDescription)
         shot("stopped")
+    }
+
+    /// Stop on the working line, then its confirmation's destructive "Stop <agent>".
+    private func stop(_ app: XCUIApplication) {
+        app.buttons["Stop"].tap()
+        let confirm = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Stop ' AND label != 'Stop'")).firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), "no confirmation after Stop: \(app.debugDescription)")
+        XCTAssertTrue(element(app, labelContaining: "Queued messages wait until Resume").exists, app.debugDescription)
+        shot("stop confirm")
+        confirm.tap()
     }
 
     /// Waits for `element` to come on the page (a reply's or a reload's), scrolling down with the crown.
@@ -391,5 +408,59 @@ final class WatchLiveTests: XCTestCase {
         }
         XCTAssertTrue(waitForText(reply, in: app, timeout: 30), app.debugDescription)
         shot("reply")
+    }
+
+    // MARK: Scripted, a working thread
+
+    /// The working thread on the scripted phone: a quick reply's chip leads to the confirm screen and is queued; typed
+    /// words get Queue and Steer now (no Steer or Stop at the bottom), Steer now sends; Stop on the working line asks first, naming the agent, and goes once confirmed.
+    func testScriptedWorkingThreadSteersAndStops() throws {
+        let app = launch(["-DispatchWatchScripted", "1"])
+        XCTAssertTrue(element(app, labelStarting: "Tune the learning rate").waitForExistence(timeout: 15), app.debugDescription)
+        let row = element(app, labelStarting: "Refactor the queue drainer")
+        XCTAssertTrue(reveal(row, in: app), app.debugDescription)
+        row.tap()
+        XCTAssertTrue(element(app, labelContaining: "Split the drain loop").waitForExistence(timeout: 10), app.debugDescription)
+        let stop = app.buttons["Stop"]
+        XCTAssertTrue(reveal(stop, in: app), app.debugDescription)
+        XCTAssertFalse(app.buttons["Steer"].exists, "no Steer at the bottom")
+        shot("working")
+
+        let composer = app.buttons["Reply"]
+        XCTAssertTrue(reveal(composer, in: app, swipes: 10), app.debugDescription)
+        XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label == 'Stop'")).count, 1, "Stop only on the working line")
+        // A quick reply: its chip, then the confirm screen, queued.
+        composer.tap()
+        let chip = app.buttons["Run the tests"]
+        XCTAssertTrue(chip.waitForExistence(timeout: 10), app.debugDescription)
+        shot("quick replies")
+        chip.tap()
+        let queue = app.buttons["Queue"]
+        XCTAssertTrue(queue.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertTrue(element(app, labelStarting: "Your reply: Run the tests").exists, app.debugDescription)
+        queue.tap()
+        XCTAssertTrue(element(app, labelContaining: "Run the tests").waitForExistence(timeout: 10), app.debugDescription)
+
+        // Typed words, steered.
+        XCTAssertTrue(reveal(composer, in: app, swipes: 10), app.debugDescription)
+        composer.tap()
+        let dictate = app.buttons["Dictate or type"]
+        XCTAssertTrue(dictate.waitForExistence(timeout: 10), app.debugDescription)
+        dictate.tap()
+        let field = app.textViews.matching(NSPredicate(format: "placeholderValue != nil")).firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 10), "the text input: \(app.debugDescription)")
+        field.typeText("Keep the claim step pure")
+        app.navigationBars.buttons["Done"].tap()
+        let steer = app.buttons["Steer now"]
+        XCTAssertTrue(steer.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertTrue(app.buttons["Queue"].exists && app.buttons["Cancel"].exists && !app.buttons["Send"].exists, app.debugDescription)
+        shot("confirm working")
+        steer.tap()
+        XCTAssertTrue(element(app, labelContaining: "Keep the claim step pure").waitForExistence(timeout: 10), app.debugDescription)
+
+        XCTAssertTrue(reveal(app.buttons["Stop"], in: app), app.debugDescription)
+        self.stop(app)
+        XCTAssertTrue(waitForAbsence(app.buttons["Stop"], timeout: 10), "Stop stays after its confirmation")
+        shot("stopped")
     }
 }

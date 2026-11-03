@@ -33,29 +33,42 @@ struct ChatMarkdown: View {
     var fillWidth = true
     /// Default text color; selectable text on macOS 26 ignores foregroundStyle.
     var color: Color?
+    /// A live reply typing out (`ChatTypingReveal`): its safe part shows, cut where the reveal is, with the caret.
+    var typing: ChatTypingReveal?
     @State private var fileLink: ChatFileLink?
     @State private var selection = ChatMessageSelection()
     var body: some View {
-        let rendered = ChatMarkdownCache.document(text)
+        // Typing: the part of the text that can show, parsed as the whole will be, and how far it has typed.
+        let layout = typing?.layout
+        let frame = typing?.current
+        let rendered = ChatMarkdownCache.document(layout?.source ?? text)
+        let count = frame.map { layout?.visibleBlocks($0.shown) ?? 0 } ?? rendered.blocks.count
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(rendered.blocks.enumerated()), id: \.offset) { _, block in
+            if let frame, frame.shown == 0 {
+                ChatTypingCaretLine(caret: frame.caret, color: theme.accent).font(theme.typography.body)
+            }
+            ForEach(Array(rendered.blocks.prefix(count).enumerated()), id: \.offset) { index, block in
+                let cut = layout.flatMap { layout in frame.flatMap { layout.cut(block: index, frame: $0) } }
                 switch block.kind {
-                case .code(let language): ChatCodeBlock(code: block.text, language: language)
+                case .code(let language):
+                    ChatCodeBlock(code: cut.map { ChatTypingLayout.lines(block.text).prefix($0.shown).joined(separator: "\n") } ?? block.text,
+                                  language: language)
                 case .heading(let level):
-                    inline(block.text).font(theme.typography.font(offset: level == 1 ? 7.5 : (level == 2 ? 3.5 : 1), weight: .semibold))
+                    inline(block.text, cut: cut).font(theme.typography.font(offset: level == 1 ? 7.5 : (level == 2 ? 3.5 : 1), weight: .semibold))
                         .padding(.top, 6).accessibilityAddTraits(.isHeader)
                 case .list(let marker, let depth):
                     HStack(alignment: .top, spacing: 8) {
                         Text(marker).foregroundStyle(theme.muted).frame(minWidth: 14, alignment: .trailing)
-                        inline(block.text).frame(maxWidth: .infinity, alignment: .leading)
+                        inline(block.text, cut: cut).frame(maxWidth: .infinity, alignment: .leading)
                     }.padding(.leading, CGFloat(depth) * 14)
                 case .quote:
                     HStack(spacing: 10) {
                         Rectangle().fill(theme.muted.opacity(0.5)).frame(width: 2)
-                        inline(block.text, color: theme.muted)
+                        inline(block.text, color: theme.muted, cut: cut)
                     }.fixedSize(horizontal: false, vertical: true)
                 case .rule: Divider().padding(.vertical, 4)
-                case .table(let rows):
+                case .table(let all):
+                    let rows = cut.map { Array(all.prefix($0.shown)) } ?? all
                     ScrollView(.horizontal) {
                         Grid(alignment: .leading, horizontalSpacing: 20, verticalSpacing: 10) {
                             ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
@@ -68,7 +81,7 @@ struct ChatMarkdown: View {
                             }
                         }.padding(12)
                     }.background(theme.sidebar, in: RoundedRectangle(cornerRadius: 6))
-                case .paragraph: inline(block.text)
+                case .paragraph: inline(block.text, cut: cut)
                 }
             }
             if rendered.truncated {
@@ -82,14 +95,18 @@ struct ChatMarkdown: View {
             })
             .sheet(item: $fileLink) { ChatFileLinkPreview(link: $0) }
     }
-    @ViewBuilder private func inline(_ text: String, color: Color? = nil) -> some View {
+    @ViewBuilder private func inline(_ text: String, color: Color? = nil, cut: ChatTypingCut? = nil) -> some View {
         if #available(macOS 26, *) {
-            ChatSelectableText(value: attributed(text, color: color), selection: selection, source: self.text)
+            let value = attributed(text, color: color)
+            let typed = cut.map { $0.apply(to: value, color: theme.accent) }
+            ChatSelectableText(value: typed?.value ?? value, selection: selection, source: self.text, caret: typed?.caret)
                 .modifier(ChatSelectableBaseline())
         } else {
-            Text(attributed(text, color: color)).textSelection(.enabled).lineSpacing(theme.typography.lineSpacing).tint(theme.blue)
+            Text(cut.map { $0.apply(to: attributed(text, color: color), color: theme.accent).value } ?? attributed(text, color: color))
+                .textSelection(.enabled).lineSpacing(theme.typography.lineSpacing).tint(theme.blue)
         }
     }
+
     private func attributed(_ text: String, color: Color?) -> AttributedString {
         var value = ChatMarkdownCache.inline(text)
         if let color = color ?? self.color { value.foregroundColor = color }
@@ -206,6 +223,8 @@ private struct ChatSelectableText: NSViewRepresentable {
     let selection: ChatMessageSelection
     /// The whole message's markdown, copied after Select All.
     let source: String
+    /// A typing reply's caret, after the text's last character shown (`ChatTypingCut`).
+    var caret: ChatTypingCaret? = nil
     func makeNSView(context: Context) -> NSTextView {
         // TextKit 1: TextKit 2 adds and moves a view per text fragment during layout, and each one
         // asks the hosting views for another constraint pass. In a long transcript inside the
@@ -231,6 +250,7 @@ private struct ChatSelectableText: NSViewRepresentable {
         if let view = view as? SelectableTextView {
             view.source = source
             if view.selection !== selection { view.selection = selection; selection.views.add(view) }
+            view.caret = caret
         }
         let base = font ?? theme.typography.body
         let key = Coordinator.Key(value: value, lineSpacing: theme.typography.lineSpacing, ink: theme.ink, font: base, context: fontContext)
@@ -280,11 +300,56 @@ private struct ChatSelectableText: NSViewRepresentable {
         return fitted
     }
     func makeCoordinator() -> Coordinator { Coordinator(open: openURL) }
-    final class SelectableTextView: NSTextView, ChatTextCounting {
+    final class SelectableTextView: NSTextView, ChatTextCounting, ChatTypingCaretDrawing {
         weak var selection: ChatMessageSelection?
         var source = ""
         var builds = 0, measures = 0
+        var caret: ChatTypingCaret? {
+            didSet { if caret != oldValue { needsDisplay = true } }
+        }
+        var typingCaret: ChatTypingCaret? { caret }
+        /// VoiceOver reads what shows, not the rest of the word laid out after it.
+        override func accessibilityValue() -> String? {
+            guard let caret else { return super.accessibilityValue() }
+            let string = self.string as NSString
+            return string.substring(to: min(caret.offset, string.length))
+        }
+        func typingCaretRect(after offset: Int) -> NSRect? { caretRect(after: offset) }
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+        override func draw(_ dirtyRect: NSRect) {
+            super.draw(dirtyRect)
+            guard let caret, caret.alpha > 0, let rect = caretRect(after: caret.offset) else { return }
+            caret.color.withAlphaComponent(caret.alpha).setFill()
+            rect.fill()
+        }
+        /// The caret's bar: 2 points wide, one cell after the character ending at UTF-16 `offset` (the start of the
+        /// next line after a line break), from that line's ascender to its descender. Its trailing edge in
+        /// left-to-right text: right-to-left text gets it on the same side.
+        func caretRect(after offset: Int) -> NSRect? {
+            guard offset > 0, let layout = layoutManager, let container = textContainer, let storage = textStorage,
+                  offset <= storage.length else { return nil }
+            let string = storage.string as NSString
+            let last = string.rangeOfComposedCharacterSequence(at: offset - 1)
+            let glyphs = layout.glyphRange(forCharacterRange: last, actualCharacterRange: nil)
+            guard glyphs.length > 0 else { return nil }
+            let font = storage.attribute(.font, at: last.location, effectiveRange: nil) as? NSFont ?? .systemFont(ofSize: NSFont.systemFontSize)
+            var line = layout.lineFragmentRect(forGlyphAt: glyphs.location, effectiveRange: nil)
+            var baseline = layout.location(forGlyphAt: glyphs.location).y
+            var x = layout.boundingRect(forGlyphRange: glyphs, in: container).maxX
+            if string.character(at: last.location) == 0x0A {
+                if offset < storage.length {
+                    let next = layout.glyphIndexForCharacter(at: offset)
+                    line = layout.lineFragmentRect(forGlyphAt: next, effectiveRange: nil)
+                    baseline = layout.location(forGlyphAt: next).y
+                } else {
+                    line = layout.extraLineFragmentRect
+                }
+                x = line.minX
+            }
+            let origin = textContainerOrigin
+            return NSRect(x: (origin.x + x).rounded(), y: origin.y + line.minY + baseline - font.ascender,
+                          width: 2, height: font.ascender - font.descender)
+        }
         /// SwiftUI's host view around each block moves with every row above it: nothing observes its frame either.
         override func viewDidMoveToSuperview() {
             super.viewDidMoveToSuperview()
@@ -358,4 +423,30 @@ private struct ChatSelectableText: NSViewRepresentable {
         applying = true; defer { applying = false }
         for view in views.allObjects where view !== kept { view.setSelectedRange(NSRange(location: 0, length: 0)) }
     }
+}
+
+extension ChatTypingCut {
+    /// `value` cut: the shown characters as they are, the hidden ones clear (`ChatTypingLayout.hidden`), and the caret
+    /// (in `color`) at the UTF-16 offset after the shown ones.
+    func apply(to value: AttributedString, color: Color) -> (value: AttributedString, caret: ChatTypingCaret?) {
+        let parts = ChatTypingLayout.split(value, shown: shown, hidden: hidden)
+        var result = parts.shown
+        result.append(ChatTypingLayout.hidden(parts.tail))
+        // Without a caret (another block has it) the view still knows where its shown text ends.
+        return (result, ChatTypingCaret(offset: String(parts.shown.characters).utf16.count, alpha: caret ?? 0, color: NSColor(color)))
+    }
+}
+
+/// The caret a typing reply's text view draws (`ChatSelectableText`): after UTF-16 `offset`, at `alpha` (0: none, the
+/// text after `offset` is still laid out undrawn).
+struct ChatTypingCaret: Equatable {
+    let offset: Int
+    let alpha: Double
+    let color: NSColor
+}
+
+/// A message text view that draws a typing reply's caret, for tests: the caret and where it draws.
+@MainActor protocol ChatTypingCaretDrawing: NSTextView {
+    var typingCaret: ChatTypingCaret? { get }
+    func typingCaretRect(after offset: Int) -> NSRect?
 }

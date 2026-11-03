@@ -21,14 +21,21 @@ import Observation
 /// share this one path. Clean-up after a failure or a cancel (abort the staging, drop the archive) is awaited
 /// before the row settles, so a retry never meets its own leftovers.
 ///
-/// Conflicts. Names are compared case-insensitively whatever the target: a macOS volume usually is, a Linux one
-/// usually is not, and taking a case variant for a conflict only ever asks one question too many. Only names the
-/// prompt listed are ever replaced: the helper applies one policy per archive, so items are grouped by policy as
-/// well as by folder, and only the archive of agreed names goes with `.replace`; the others go with `.keep`
-/// (`.skip` under Skip), which never overwrite whatever appeared since the listing. A target listing cut short by
-/// its bound cannot rule a name out, so a name past it is never replaced either: it is kept beside.
+/// Conflicts. Names are compared as the target compares them (`nameRule`): case and Unicode normalization folded
+/// where the volume folds them (APFS and HFS+ by default), byte for byte on Linux and case-sensitive volumes. Taking a
+/// case variant for a conflict where the target tells them apart is not harmless: Replace would bind one entry's
+/// identity to a write of another name, Keep Both would number a name that was free, and the two paths would settle it
+/// differently. Comparing too strictly is harmless: the helper refuses to write over any name the filesystem takes for
+/// an existing one, so an unasked name is kept beside (skipped under Skip), never replaced. Only names the prompt
+/// listed are ever replaced: the helper applies one policy per archive, so items are grouped by policy as well as by
+/// folder, and only the archive of agreed names goes with `.replace`; the others go with `.keep` (`.skip` under Skip),
+/// which never overwrite whatever appeared since the listing. A target listing cut short by its bound cannot rule a
+/// name out, so a name past it is never replaced either: it is kept beside. Replacing an entry spelled otherwise
+/// (readme.md over README.md on a folding volume) takes the archive path, whose move leaves the dragged item's own
+/// spelling as Finder does; a checked write would swap the new content in under the old spelling.
 /// Two dragged items with one name (from different folders) keep both: the later ones travel in later archives,
-/// after the first has taken the name.
+/// after the first has taken the name. Names alike but for case always travel in separate archives, whatever the
+/// target's rule, so no archive holds two names a folding volume would take for one.
 @MainActor final class FileTransferEngine {
     static let shared = FileTransferEngine()
 
@@ -132,9 +139,44 @@ import Observation
         keptName(name, folder: folder) { taken.contains($0) }
     }
 
-    /// How names are compared for conflicts: case and Unicode normalization folded, as an APFS volume compares them.
+    /// A name with case and Unicode normalization folded, as a default APFS volume compares names.
     nonisolated static func folded(_ name: String) -> String {
         name.precomposedStringWithCanonicalMapping.lowercased()
+    }
+
+    /// How a target compares names, as far as a copy needs to know: whether names that differ only in case are one
+    /// name, and whether names that differ only in Unicode normalization (NFC, NFD) are. The two are independent: a
+    /// default APFS volume folds both, a case-sensitive APFS volume only normalization, SMB, NTFS and exFAT volumes only
+    /// case, Linux neither. What the copy did not learn counts as not folded.
+    struct NameRule: Hashable, Sendable {
+        var foldsCase = false
+        var foldsNormalization = false
+
+        /// Byte for byte: Linux, or a target whose rule nothing in the copy depends on.
+        static let exact = NameRule()
+        /// Both folded, as `folded` compares.
+        static let folded = NameRule(foldsCase: true, foldsNormalization: true)
+    }
+
+    /// A name as `NameRule` compares it. Bytes, since Swift's own `==` already ignores normalization.
+    struct NameKey: Hashable, Sendable {
+        let bytes: [UInt8]
+    }
+
+    nonisolated static func key(_ name: String, _ rule: NameRule) -> NameKey {
+        let normalized = rule.foldsNormalization ? name.precomposedStringWithCanonicalMapping : name
+        return NameKey(bytes: Array((rule.foldsCase ? normalized.lowercased() : normalized).utf8))
+    }
+
+    /// The other normalization of a name (NFD for an NFC name, NFC otherwise), or the name itself when it has none.
+    nonisolated static func renormalized(_ name: String) -> String {
+        let composed = name.precomposedStringWithCanonicalMapping
+        return composed.utf8.elementsEqual(name.utf8) ? name.decomposedStringWithCanonicalMapping : composed
+    }
+
+    /// The name with each letter's case flipped ("README.md" → "readme.MD"): what a probe asks the target for.
+    nonisolated static func flippedCase(_ name: String) -> String {
+        name.map { $0.isUppercase ? $0.lowercased() : $0.uppercased() }.joined()
     }
 
     /// A dragged item's name as it will be written in the target: refused unless it is one plain name. The paths
@@ -196,6 +238,9 @@ import Observation
         var task: Task<Void, Never>?
         var cancelled = false
         var stage: FileTransfer.Stage = .preparing
+        /// Listed and dragged spellings of the respelling replacements the commit running now settles: a failed one
+        /// may leave the original under the dragged spelling (the helper puts it back by the incoming name).
+        var respelling: [(listed: String, dragged: String)] = []
         var conflict: CheckedContinuation<FileTransfer.ConflictResolution, Never>?
         var samples: [(date: Date, bytes: UInt64)] = []
 
@@ -223,6 +268,10 @@ import Observation
         let name: String
         let policy: ConflictPolicy
         let replacement: FileIdentity?
+        /// The listed spelling of the entry it replaces, when the target spells it otherwise (a case variant on a
+        /// folding volume).
+        var respelled: String? = nil
+        var respells: Bool { respelled != nil }
         var base: String { (path as NSString).deletingLastPathComponent }
     }
 
@@ -254,21 +303,24 @@ import Observation
 
     private func perform(_ run: Run) async throws {
         set(run, .preparing)
+        run.respelling = []
         let names = try run.items.map(Self.plainName(of:))
         let listing = try await run.target.list(run.directory, hidden: true)
         try check(run)
         guard let parent = listing.identity else {
             throw FilesSourceError.unsupported("The host helper cannot securely verify this copy destination. Update Dispatch on that host.")
         }
-        let present = Set(listing.entries.map { Self.folded($0.name) })
-        var identities: [String: FileIdentity] = [:]
-        for entry in listing.entries {
-            if let identity = entry.identity { identities[Self.folded(entry.name)] = identities[Self.folded(entry.name)] ?? identity }
-        }
+        let rule = try await nameRule(run, names: names, listing: listing)
+        try check(run)
+        let key = { (name: String) in Self.key(name, rule) }
+        let present = Set(listing.entries.map { key($0.name) })
+        // The entry a name would replace: the listed one the target takes it for, its identity the consent's.
+        var listed: [NameKey: FileEntry] = [:]
+        for entry in listing.entries where entry.identity != nil { listed[key(entry.name)] = listed[key(entry.name)] ?? entry }
         // A name dragged twice: the later items keep both, so only the first is asked about.
-        var seen = Set<String>(), repeated = Set<Int>()
-        for (index, name) in names.enumerated() where !seen.insert(Self.folded(name)).inserted { repeated.insert(index) }
-        let conflicting = names.indices.filter { !repeated.contains($0) && present.contains(Self.folded(names[$0])) }
+        var seen = Set<NameKey>(), repeated = Set<Int>()
+        for (index, name) in names.enumerated() where !seen.insert(key(name)).inserted { repeated.insert(index) }
+        let conflicting = names.indices.filter { !repeated.contains($0) && present.contains(key(names[$0])) }
         var resolution = FileTransfer.ConflictResolution.keepBoth
         if !conflicting.isEmpty, asksBeforeReplacing() {
             resolution = await ask(run, conflicting.map { names[$0] })
@@ -283,7 +335,7 @@ import Observation
         var items: [Item] = []
         var skipped: UInt64 = 0
         for (index, path) in run.items.enumerated() {
-            let taken = present.contains(Self.folded(names[index]))
+            let taken = present.contains(key(names[index]))
             let policy: ConflictPolicy
             switch resolution {
             case .replace: policy = agreed.contains(index) ? .replace : .keep
@@ -296,16 +348,17 @@ import Observation
                 policy = repeated.contains(index) ? .keep : .skip
             case .keepBoth, .cancel: policy = .keep
             }
-            let replacement = policy == .replace ? identities[Self.folded(names[index])] : nil
-            if policy == .replace, replacement == nil {
+            let replaced = policy == .replace ? listed[key(names[index])] : nil
+            guard policy != .replace || replaced != nil else {
                 throw FilesSourceError.changed((run.directory as NSString).appendingPathComponent(names[index]))
             }
-            items.append(Item(path: path, name: names[index], policy: policy, replacement: replacement))
+            items.append(Item(path: path, name: names[index], policy: policy, replacement: replaced?.identity,
+                              respelled: replaced.flatMap { $0.name.utf8.elementsEqual(names[index].utf8) ? nil : $0.name }))
         }
         update(run) { $0.skipped = skipped }
         guard !items.isEmpty else { return }
         if let bytes = try await planned(run, items) {
-            let rest = try await writeFiles(run, items, bytes: bytes, taken: present, parent: parent)
+            let rest = try await writeFiles(run, items, bytes: bytes, taken: present, rule: rule, parent: parent)
             // A file grew past the few-and-small bound since it was listed: what is left travels as archives.
             if !rest.isEmpty { try await sendArchives(run, Self.grouped(rest), done: run.primary.entriesDone, parent: parent) }
         } else {
@@ -313,8 +366,135 @@ import Observation
         }
     }
 
+    /// The ways two names can differ while `folded` takes them for one: in case, in normalization, or both.
+    private struct Difference: OptionSet {
+        let rawValue: Int
+        static let `case` = Difference(rawValue: 1)
+        static let normalization = Difference(rawValue: 2)
+
+        init(rawValue: Int) { self.rawValue = rawValue }
+
+        /// Empty when the names are equal byte for byte or not alike at all.
+        init(_ a: String, _ b: String) {
+            var difference: Difference = []
+            if FileTransferEngine.folded(a) == FileTransferEngine.folded(b), !a.utf8.elementsEqual(b.utf8) {
+                if !a.precomposedStringWithCanonicalMapping.utf8.elementsEqual(b.precomposedStringWithCanonicalMapping.utf8) {
+                    difference.insert(.case)
+                }
+                if !a.lowercased().utf8.elementsEqual(b.lowercased().utf8) { difference.insert(.normalization) }
+            }
+            self = difference
+        }
+    }
+
+    /// The target's rule for names, learned from the target only where it matters: a dimension (case, normalization)
+    /// is looked into only when two names of the copy (dragged against listed, or dragged against dragged) differ in
+    /// it, so a copy without such names asks nothing. Each dimension is settled on its own, only by names that differ
+    /// in that dimension alone: two listed entries differing only there prove the target keeps them apart; otherwise
+    /// read-only probes ask whether another spelling finds a listed entry (the dragged name, else the entry's name
+    /// respelled in that dimension, else the folder's own name), files before folders, until one answers. A probe the
+    /// target cannot answer (no permission) passes to the next. Unanswered, the dimension counts as not folded, which
+    /// can only ask too little: an unasked name is never replaced, the target refuses it and it is kept beside
+    /// (skipped under Skip). Residual: a hard link or bind mount spelled as a variant past a truncated listing.
+    private func nameRule(_ run: Run, names: [String], listing: FileListing) async throws -> NameRule {
+        let exact = Set(listing.entries.map { Self.key($0.name, .exact) })
+        var buckets: [NameKey: [FileEntry]] = [:]
+        for entry in listing.entries { buckets[Self.key(entry.name, .folded), default: []].append(entry) }
+        var needed: Difference = [], kept: Difference = []
+        for bucket in buckets.values where bucket.count > 1 {
+            for (index, a) in bucket.enumerated() {
+                for b in bucket[(index + 1)...] {
+                    let difference = Difference(a.name, b.name)
+                    if difference == .case || difference == .normalization { kept.formUnion(difference) }
+                }
+            }
+        }
+        for (index, name) in names.enumerated() {
+            for entry in buckets[Self.key(name, .folded)] ?? [] { needed.formUnion(Difference(name, entry.name)) }
+            for other in names[(index + 1)...] { needed.formUnion(Difference(name, other)) }
+        }
+        var rule = NameRule.exact
+        for dimension in [Difference.case, .normalization] where needed.contains(dimension) && !kept.contains(dimension) {
+            if try await folds(run, dimension, names: names, listing: listing, buckets: buckets, exact: exact) {
+                if dimension == .case { rule.foldsCase = true } else { rule.foldsNormalization = true }
+            }
+        }
+        return rule
+    }
+
+    /// Whether the target folds names that differ in `dimension` alone; false when no probe could tell.
+    private func folds(_ run: Run, _ dimension: Difference, names: [String], listing: FileListing,
+                       buckets: [NameKey: [FileEntry]], exact: Set<NameKey>) async throws -> Bool {
+        func respelled(_ name: String) -> String {
+            dimension == .case ? Self.flippedCase(name) : Self.renormalized(name)
+        }
+        func path(_ name: String) -> String { (run.directory as NSString).appendingPathComponent(name) }
+        var probes: [(path: String, entry: FileEntry)] = []
+        for name in names where !exact.contains(Self.key(name, .exact)) {
+            for entry in buckets[Self.key(name, .folded)] ?? [] where Difference(name, entry.name) == dimension {
+                probes.append((path(name), entry))
+            }
+        }
+        for entry in listing.entries {
+            let other = respelled(entry.name)
+            if Difference(other, entry.name) == dimension, !exact.contains(Self.key(other, .exact)) {
+                probes.append((path(other), entry))
+            }
+        }
+        // Files first: a file is probed without being opened.
+        let ordered = probes.filter { $0.entry.kind == .file } + probes.filter { $0.entry.kind == .directory }
+        for probe in ordered {
+            if let answer = try await finds(run, probe.path, probe.entry, truncated: listing.truncated) { return answer }
+        }
+        // The folder's own name, respelled, looked up in its parent: not for a symlink or a mount point, whose name
+        // the parent's volume compares.
+        let own = (run.directory as NSString).lastPathComponent, other = respelled(own)
+        let parent = (run.directory as NSString).deletingLastPathComponent
+        guard let identity = listing.identity, Difference(other, own) == dimension, parent != run.directory else { return false }
+        guard let above = try await answer({ try await run.target.list(parent, hidden: true) }), let parentIdentity = above.identity,
+              let entry = above.entries.first(where: { $0.name.utf8.elementsEqual(own.utf8) }), entry.kind == .directory,
+              parentIdentity.device == identity.device,
+              !above.entries.contains(where: { $0.name.utf8.elementsEqual(other.utf8) }) else { return false }
+        let found = try await answer({ try await run.target.list((parent as NSString).appendingPathComponent(other), hidden: false) })
+        return found?.identity == identity
+    }
+
+    /// Whether `path` finds `entry` on the target: true, false (nothing there, or something else), or nil when the
+    /// target could not tell (no permission). A file is looked up as a folder: "not a folder" says something is there,
+    /// which past a complete listing can only be the listed entry; past a cut one its identity is read.
+    private func finds(_ run: Run, _ path: String, _ entry: FileEntry, truncated: Bool) async throws -> Bool? {
+        guard let identity = entry.identity else { return nil }
+        do {
+            let listing = try await run.target.list(path, hidden: false)
+            return entry.kind == .directory ? listing.identity == identity : false
+        } catch let error as FilesSourceError {
+            switch error {
+            case .notFound: return false
+            case .notDirectory where entry.kind == .directory: return false
+            case .notDirectory where !truncated: return true
+            case .notDirectory:
+                guard let revision = try await answer({ try await run.target.read(path, offset: 0, length: 0, revision: nil).revision })
+                else { return nil }
+                return FileIdentity(device: revision.device, inode: revision.inode) == identity
+            case .permissionDenied, .unsupported, .changed: return nil
+            default: throw error
+            }
+        }
+    }
+
+    /// The call's answer, or nil for a refusal that says nothing about names; a missing path is an answer too (nil).
+    private func answer<T>(_ body: () async throws -> T) async throws -> T? {
+        do { return try await body() } catch let error as FilesSourceError {
+            switch error {
+            case .notFound, .notDirectory, .permissionDenied, .unsupported, .changed: return nil
+            default: throw error
+            }
+        }
+    }
+
     /// Items by round, folder and policy, in drag order. A name's first item is in round 0, its second in round 1…:
-    /// a later round's archive unpacks after the earlier one took the name, so keep-both numbers it.
+    /// a later round's archive unpacks after the earlier one took the name, so keep-both numbers it. Rounds fold
+    /// names whatever the target's rule: where it tells case variants apart the later one just takes its own name.
     private static func grouped(_ items: [Item]) -> [Group] {
         var rounds: [[Group]] = []
         var occurrences: [String: Int] = [:]
@@ -335,7 +515,7 @@ import Observation
     /// The few-and-small path's total, or nil for the archive path. Stats the items through their parents'
     /// listings, stopping as soon as the archive path is certain.
     private func planned(_ run: Run, _ items: [Item]) async throws -> UInt64? {
-        guard items.count <= limits.files else { return nil }
+        guard items.count <= limits.files, !items.contains(where: \.respells) else { return nil }
         var bases: [String] = []
         for item in items where !bases.contains(item.base) { bases.append(item.base) }
         var bytes: UInt64 = 0
@@ -360,7 +540,7 @@ import Observation
     }
 
     /// Reads and writes the items one by one; returns those left once a file read longer than the bound allows.
-    private func writeFiles(_ run: Run, _ items: [Item], bytes: UInt64, taken: Set<String>,
+    private func writeFiles(_ run: Run, _ items: [Item], bytes: UInt64, taken: Set<NameKey>, rule: NameRule,
                             parent: FileIdentity) async throws -> [Item] {
         var taken = taken
         update(run) {
@@ -377,8 +557,8 @@ import Observation
             let data = try await run.source.read(item.path, offset: 0, length: budget + 1, revision: nil).data
             try check(run)
             if UInt64(data.count) > budget { return Array(items[index...]) }
-            if let placed = try await place(run, data, item: item, taken: &taken, parent: parent) {
-                taken.insert(Self.folded(placed))
+            if let placed = try await place(run, data, item: item, taken: &taken, rule: rule, parent: parent) {
+                taken.insert(Self.key(placed, rule))
                 written += 1
             } else {
                 skipped += 1
@@ -396,11 +576,13 @@ import Observation
 
     /// Writes one file under its policy and returns the name it took; nil when it was skipped. Only a name the user
     /// agreed to replace is ever replaced: one that appeared since the listing is kept beside it (skipped under Skip).
-    private func place(_ run: Run, _ data: Data, item: Item, taken: inout Set<String>,
+    /// `taken` only saves asking for names known to be taken; the target's refusal decides, as it does for an archive.
+    private func place(_ run: Run, _ data: Data, item: Item, taken: inout Set<NameKey>, rule: NameRule,
                        parent: FileIdentity) async throws -> String? {
         let name = item.name
-        var candidate = item.policy == .keep && taken.contains(Self.folded(name))
-            ? Self.keptName(name) { [taken] in taken.contains(Self.folded($0)) } : name
+        let key = { (name: String) in Self.key(name, rule) }
+        var candidate = item.policy == .keep && taken.contains(key(name))
+            ? Self.keptName(name) { [taken] in taken.contains(key($0)) } : name
         for _ in 0..<16 {
             let path = (run.directory as NSString).appendingPathComponent(candidate)
             update(run) { $0.uncertain = true }
@@ -418,8 +600,8 @@ import Observation
                 guard case .exists = error as? FilesSourceError else { throw error }
                 try check(run)
                 if item.policy == .skip { return nil }
-                taken.insert(Self.folded(candidate))
-                candidate = Self.keptName(name) { [taken] in taken.contains(Self.folded($0)) }
+                taken.insert(key(candidate))
+                candidate = Self.keptName(name) { [taken] in taken.contains(key($0)) }
             }
         }
         throw FilesSourceError.exists((run.directory as NSString).appendingPathComponent(name))
@@ -494,6 +676,7 @@ import Observation
                 // the call runs to its end even if this task is cancelled, since the target must not be left half
                 // moved. Until it answers, what arrived is unknown.
                 set(run, .unpacking)
+                run.respelling = group.policy == .replace ? group.items.compactMap { item in item.respelled.map { ($0, item.name) } } : []
                 update(run) { $0.uncertain = true }
                 let result = try await retryingBusy(run) {
                     committed = true
@@ -506,6 +689,7 @@ import Observation
                         throw error
                     }
                 }
+                run.respelling = []
                 arrived += result.entries
                 skipped += result.skipped
                 update(run) {
@@ -602,6 +786,13 @@ import Observation
     /// The stage a failed or cancelled attempt ends in. Retry starts the copy over, so it is offered only while the
     /// target is known to hold nothing of it: a second attempt after a partial one would copy what arrived twice.
     private func settled(_ run: Run, _ error: any Error) -> FileTransfer.Stage {
+        let stage = outcome(run, error)
+        guard case .failed(let message, let retryable) = stage, !run.respelling.isEmpty else { return stage }
+        let names = run.respelling.map { "\($0.listed) may now be named \($0.dragged)" }.joined(separator: "; ")
+        return .failed(message: message + ". " + names, retryable: retryable)
+    }
+
+    private func outcome(_ run: Run, _ error: any Error) -> FileTransfer.Stage {
         if run.cancelled || error is CancellationError || (error as? FilesSourceError) == .cancelled { return .cancelled }
         let clean = run.primary.entriesDone == 0 && !run.primary.uncertain
         if error is ConnectionChanged { return .failed(message: "The connection changed", retryable: clean) }

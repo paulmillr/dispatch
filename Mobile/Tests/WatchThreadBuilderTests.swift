@@ -25,24 +25,20 @@ final class WatchThreadBuilderTests: XCTestCase {
         return chat
     }
 
-    /// Every user, agent and notice row the phone shows, with the phone's row ids; each tool as one line; the turn's
-    /// caption under its last agent message.
-    func testTheRealTranscriptBecomesRowsToolLinesAndCaptions() async throws {
+    /// Every user, agent and notice row the phone shows, with the phone's row ids, and no tools (the phone's thread has
+    /// none); the turn's caption under its last agent message.
+    func testTheRealTranscriptBecomesRowsAndCaptions() async throws {
         let helper = ScriptedHelper()
         let chat = try await opened(helper, records: ChatFixture.records("claude-thread"))
         let page = WatchThreadBuilder.page(chat, row: nil)
-        XCTAssertEqual(page.items.map(\.kind), [.user, .tool, .tool, .tool, .tool, .tool, .agent,
-                                                .user, .tool, .tool, .tool, .tool, .agent])
-        XCTAssertEqual(page.items.compactMap(\.tool), ["Read", "Search", "Patch", "Run", "Read", "Read", "Read", "Patch", "Patch"])
+        XCTAssertEqual(page.items.map(\.kind), [.user, .agent, .user, .agent])
+        XCTAssertTrue(page.items.allSatisfy { $0.tool == nil && $0.detail == nil }, "no tool lines")
         XCTAssertEqual(page.items.compactMap(\.caption), ["5 steps · 1m 26s", "4 steps · 52s"])
         XCTAssertEqual(page.items.filter { $0.kind == .agent }.map(\.caption), ["5 steps · 1m 26s", "4 steps · 52s"],
                        "on the ended turn's last agent message")
-        let run = try XCTUnwrap(page.items.first { $0.tool == "Run" })
-        XCTAssertEqual(run.text, "pnpm test billing")
-        XCTAssertFalse(run.running)
-        // The phone's row ids, so the watch's cache keys hold across pages.
+        // The phone's rows, ids and all, so the watch's cache keys hold across pages.
         let rows = chat.transcript.rows
-        XCTAssertEqual(page.items.filter { $0.kind != .tool }.map(\.id), rows.map(\.id))
+        XCTAssertEqual(page.items.map(\.id), rows.map(\.id))
         XCTAssertEqual(Set(page.items.map(\.id)).count, page.items.count, "ids are unique")
         XCTAssertEqual(page.items.first?.text, rows.first?.item.text)
         XCTAssertTrue(page.items.allSatisfy { $0.turn != nil })
@@ -56,20 +52,17 @@ final class WatchThreadBuilderTests: XCTestCase {
         XCTAssertEqual(page.lastActivity, chat.transcript.lastActivity)
 
         // The cards' summaries (K2): the caption's steps and time, and the files the turn's patches changed with their
-        // lines, as the Patch lines of the same turn add up.
+        // lines, as the turn's own patch steps add up.
         let agents = page.items.filter { $0.kind == .agent }
         XCTAssertEqual(agents.compactMap(\.summary).map(\.steps), [5, 4])
         XCTAssertEqual(agents.compactMap(\.summary).map { $0.seconds.map { Int($0.rounded()) } }, [86, 52])
-        for agent in agents {
+        XCTAssertTrue(agents.contains { ($0.summary?.files ?? 0) > 0 }, "the transcript's patches count without tool lines")
+        for (agent, turn) in zip(agents, chat.transcript.turns) {
             let summary = try XCTUnwrap(agent.summary)
-            let patches = page.items.filter { $0.turn == agent.turn && $0.tool == "Patch" && !$0.failed }
-            var additions = 0, deletions = 0
-            for detail in patches.compactMap(\.detail) {
-                let counts = detail.split(separator: " ").compactMap { Int($0.dropFirst()) }
-                if counts.count == 2 { additions += counts[0]; deletions += counts[1] }
-            }
-            XCTAssertEqual(summary.additions, additions)
-            XCTAssertEqual(summary.deletions, deletions)
+            XCTAssertEqual(agent.turn, turn.id)
+            let patches = ChatTurnSummary(turn).steps.map { ChatStep($0, directory: nil) }.filter { $0.kind == .patch && !$0.failed }
+            XCTAssertEqual(summary.additions, patches.map(\.additions).reduce(0, +))
+            XCTAssertEqual(summary.deletions, patches.map(\.deletions).reduce(0, +))
             XCTAssertEqual(summary.files > 0, !patches.isEmpty)
             XCTAssertLessThanOrEqual(summary.files, patches.count * 4)
         }
@@ -177,7 +170,8 @@ final class WatchThreadBuilderTests: XCTestCase {
         XCTAssertEqual(back.items.last?.id, full.items.last?.id, "the newest kept")
     }
 
-    /// Claude's thinking is a muted item, other reasoning is left out; the prompt being sent comes last.
+    /// Claude's thinking is an item of its own (an agent bubble on the watch), other reasoning is left out; the prompt
+    /// being sent comes last.
     func testThinkingAndTheSendingPromptAreItems() async throws {
         let helper = ScriptedHelper()
         var thinking = ChatFixture.record("claude-r1", "reasoning", turn: "t1", text: "Checking the **retry** path", time: 946_719_000_100)

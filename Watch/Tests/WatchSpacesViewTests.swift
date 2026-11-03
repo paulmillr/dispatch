@@ -1,4 +1,6 @@
+import ImageIO
 import SwiftUI
+import UniformTypeIdentifiers
 import XCTest
 @testable import DispatchWatch
 
@@ -107,7 +109,7 @@ final class WatchSpacesViewTests: XCTestCase {
         let lab = WatchFixtures.lab
         let agent = WatchTab(host: lab, space: "ws_1", key: "tab_2", name: "Tune", chat: true, conversation: "term_4")
         XCTAssertEqual(SpacesText.destination(agent), .thread(WatchConversationKey(host: lab, node: "term_4")))
-        XCTAssertEqual(SpacesText.symbol(agent), "bubble.left.fill")
+        XCTAssertEqual(SpacesText.symbol(agent), "text.bubble")
         let shell = WatchTab(host: lab, space: "ws_1", key: "tab_5", name: "htop", program: "htop")
         XCTAssertEqual(SpacesText.destination(shell), .tab(WatchTabRoute(host: lab, tab: "tab_5")))
         XCTAssertEqual(SpacesText.symbol(shell), "apple.terminal")
@@ -222,7 +224,50 @@ final class WatchSpacesViewTests: XCTestCase {
         XCTAssertNil(Sparkline.points([5], in: CGSize(width: 100, height: 40), ceiling: 100))
     }
 
+    /// Under a connected host's header: CPU % and memory used of total, red where the phone flags them, dimmed while not
+    /// current; nothing for a host that is not connected or has no reading.
+    func testTheHostsLineUnderItsHeader() throws {
+        let gib: Int64 = 1_073_741_824
+        let demo = WatchFixtures.demo(now: now)
+        let studio = try XCTUnwrap(demo.hosts.first { $0.name == "studio" })
+        let stats = try XCTUnwrap(HostStatsLine.stats(studio))
+        XCTAssertEqual(HostStatsLine.memory(stats), "11/32 GB")
+        XCTAssertEqual(HostStatsLine.accessibilityLabel(stats), "CPU 34 percent, memory 11 GB of 32 GB used")
+        XCTAssertNil(HostStatsLine.stats(try XCTUnwrap(demo.hosts.first { $0.name == "pi" })), "offline: the host screen keeps it")
+        var host = studio
+        host.state = .connecting
+        XCTAssertNil(HostStatsLine.stats(host))
+        host.state = .connected
+        host.stats = WatchHostStats()
+        XCTAssertNil(HostStatsLine.stats(host), "no reading")
+        XCTAssertEqual(HostStatsLine.memory(WatchHostStats(memoryUsed: gib / 2, memoryTotal: 16 * gib)), "512 MB/16 GB")
+        XCTAssertEqual(HostStatsLine.memory(WatchHostStats(memoryUsed: 6 * gib)), "6.0 GB")
+        XCTAssertNil(HostStatsLine.memory(WatchHostStats(cpu: 3)))
+        XCTAssertEqual(HostStatsLine.accessibilityLabel(WatchHostStats(cpu: 91, warnings: [.cpu], stale: true)), "CPU 91 percent, not current")
+    }
+
     // MARK: Rendering
+
+    /// The demo's host headers with their lines. With `DISPATCH_WATCH_AGENTS_SHOTS` set, saved as `spaces-headers.png`.
+    func testTheHostHeadersRender() throws {
+        let model = model(.demo)
+        let headers = VStack(alignment: .leading, spacing: 12) {
+            ForEach(model.hosts) { SpacesHostHeader(host: $0) }
+        }
+        .frame(width: 187)
+        .padding(8)
+        .background(.black)
+        .environment(\.colorScheme, .dark)
+        let renderer = ImageRenderer(content: headers)
+        renderer.scale = 2
+        let image = try XCTUnwrap(renderer.cgImage)
+        guard let shots = ProcessInfo.processInfo.environment["DISPATCH_WATCH_AGENTS_SHOTS"].map({ URL(fileURLWithPath: $0) }) else { return }
+        try FileManager.default.createDirectory(at: shots, withIntermediateDirectories: true)
+        let url = shots.appendingPathComponent("spaces-headers.png")
+        let destination = try XCTUnwrap(CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, image, nil)
+        XCTAssertTrue(CGImageDestinationFinalize(destination))
+    }
 
     /// Every host of the scripted phones draws its screen (connected, offline, blocked, without statistics), and a
     /// route whose host has gone says so.

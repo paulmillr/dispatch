@@ -112,6 +112,13 @@ final class TerminalPresence {
     @ObservationIgnored private var follows: Task<Void, Never>?
     /// The multiplexer answered `unsupported`: this presence keeps following and never asks again.
     @ObservationIgnored private(set) var unfollowable = false
+    /// The attachment whose `.attached` arrived: the screen the server sent for it is in the inbox (`current`).
+    @ObservationIgnored private var completed = 0
+    /// The attachment's last hold (`current`): asked for and not answered yet, or taken by the helper when the feed had
+    /// delivered `at` output bytes (all output sent before the answer: nothing after it but the repaint, which comes
+    /// first once following again). Nil: no hold since the attachment, or one the helper refused.
+    private enum Hold { case asked, held(at: Int) }
+    @ObservationIgnored private var hold: Hold?
     /// How long no view shows an attached presence before its output is held: a glance at Chat and back holds nothing.
     nonisolated static let followGrace = Duration.seconds(2)
     @ObservationIgnored var followGrace = TerminalPresence.followGrace
@@ -291,6 +298,7 @@ final class TerminalPresence {
         attachments += 1
         // A new attachment follows: the helper forgot the last one's hold with it.
         holding = false
+        hold = nil
         publishing.withLock { $0 = !feed.hostsScreens }
         // A later attachment repaints the whole screen; the last one stays shown until its first output arrives, so a
         // terminal shown again (or reattached after a reconnect) never flashes empty.
@@ -309,6 +317,7 @@ final class TerminalPresence {
                     drained.yield()
                     if clear { session.reset(); clear = false }
                     session.feed(batch)
+                    inbox.parsed(batch.count)
                 }
             }
             drained.finish()
@@ -399,6 +408,7 @@ final class TerminalPresence {
             self.grace = nil
             guard self.holds, !self.holding else { return }
             self.holding = true
+            self.hold = .asked
             self.follow(false)
         }
     }
@@ -413,15 +423,38 @@ final class TerminalPresence {
             let result = await feed.follow(following)
             guard let self, self.attached, self.attachments == attachment, self.feed === feed else { return }
             switch result {
+            case .done where !following:
+                // Taken: output the helper sent before this answer is counted now; what it sends later is the repaint.
+                self.hold = .held(at: feed.outputDelivered ?? self.inbox.progress.appended)
             case .done, .stale: break
             case .unsupported:
                 self.unfollowable = true
                 self.holding = false
+                self.hold = nil
             case .failed where following:
                 self.reattach(feed)
             case .failed:
+                // Not held: the output kept coming.
                 self.holding = false
+                self.hold = nil
             }
+        }
+    }
+
+    /// The emulator shows the server's screen as of the last output the feed delivered, so its modes (the alternate
+    /// screen, bracketed paste) can be trusted (Open in Terminal, `FilesTerminalTyping`): attached and following, the
+    /// attachment complete (`.attached`), every byte the feed delivered taken and parsed, and after a hold the helper's
+    /// answer to it in and output since that answer (the repaint) among them. A detached, ended or held presence keeps
+    /// an old screen.
+    var current: Bool {
+        guard attached, ended == nil, !holding, completed == attachments else { return false }
+        let progress = inbox.progress
+        let delivered = feed.outputDelivered ?? progress.appended
+        guard progress.appended == delivered, progress.parsed == progress.appended else { return false }
+        switch hold {
+        case nil: return true
+        case .asked?: return false
+        case .held(let at)?: return delivered > at
         }
     }
 
@@ -493,7 +526,9 @@ final class TerminalPresence {
         guard attached, attachment == attachments else { return }
         switch event {
         case .output: break
-        case .attached: session.refresh()
+        case .attached:
+            completed = attachment
+            session.refresh()
         case .history(let position): scroll.history(position)
         // Remote helper clipboard writes are denied on iPhone; only explicit user copy actions touch the pasteboard.
         case .clipboard: break
@@ -564,6 +599,9 @@ final class TerminalInbox: Sendable {
     private struct Pending {
         var bytes = Data()
         var head = 0
+        /// Bytes appended and bytes the parse task fed to the emulator, since the inbox was made or cleared.
+        var appended = 0
+        var parsed = 0
         var count: Int { bytes.count - head }
     }
 
@@ -578,6 +616,7 @@ final class TerminalInbox: Sendable {
             guard pending.count <= limit, bytes.count <= limit - pending.count else { return .overflow }
             let wasEmpty = pending.count == 0
             pending.bytes.append(bytes)
+            pending.appended += bytes.count
             return wasEmpty ? .signal : .queued
         }
     }
@@ -586,6 +625,12 @@ final class TerminalInbox: Sendable {
     var count: Int { state.withLock { $0.count } }
 
     func clear() { state.withLock { $0 = Pending() } }
+
+    /// The parse task fed `count` bytes of a batch to the emulator.
+    func parsed(_ count: Int) { state.withLock { $0.parsed += count } }
+
+    /// Bytes appended and parsed so far: equal once everything that came is on the emulator's screen.
+    var progress: (appended: Int, parsed: Int) { state.withLock { ($0.appended, $0.parsed) } }
 
     /// Up to `limit` bytes, oldest first; nil: empty.
     func take(limit: Int) -> Data? {
@@ -596,7 +641,8 @@ final class TerminalInbox: Sendable {
             let batch = Data(pending.bytes[start..<end])
             pending.head += end - start
             if pending.count == 0 {
-                pending = Pending()
+                pending.bytes = Data()
+                pending.head = 0
             } else if pending.head >= pending.bytes.count / 2 {
                 // Taken bytes go once they are half the buffer: each byte is moved at most once more, on average.
                 pending.bytes.removeSubrange(pending.bytes.startIndex..<pending.bytes.startIndex + pending.head)

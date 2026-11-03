@@ -107,6 +107,8 @@ enum FilesSourceError: Error, Hashable, Sendable {
     case notFound(String)
     case permissionDenied(String)
     case notDirectory(String)
+    /// The path is a folder where a file was asked for (the helper's `is_directory`): it is listed instead.
+    case isDirectory(String)
     case changed(String)
     case exists(String)
     case limit(String)
@@ -121,6 +123,7 @@ enum FilesSourceError: Error, Hashable, Sendable {
         case .notFound(let path): "\(path) does not exist"
         case .permissionDenied(let path): "No permission to read \(path)"
         case .notDirectory(let path): "\(path) is not a folder"
+        case .isDirectory(let path): "\(path) is a folder"
         case .changed(let path): "\(path) changed while reading"
         case .exists(let path): "\(path) already exists"
         case .limit(let detail): detail
@@ -141,6 +144,9 @@ protocol FilesSource: AnyObject, Sendable {
     var home: String? { get }
     /// The host's short name ("homelab"; the crumbs add the colon); nil on this Mac.
     var hostLabel: String? { get }
+    /// The app's own UUID for the host (`HostRegistry.key(for:)`), which a rename or another host with the same name
+    /// never changes: what keeps its review comments (`ReviewScope`). Nil on this Mac, or without a host record.
+    var hostIdentity: String? { get }
     /// Nothing may be copied in: the host's grant has Files without Copy files in. This Mac's files never are.
     var readOnly: Bool { get }
 
@@ -174,6 +180,7 @@ protocol FilesSource: AnyObject, Sendable {
 
 extension FilesSource {
     var readOnly: Bool { false }
+    var hostIdentity: String? { nil }
 }
 
 #if canImport(AppKit)

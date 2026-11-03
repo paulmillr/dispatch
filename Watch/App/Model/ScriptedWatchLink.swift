@@ -335,8 +335,6 @@ enum WatchFixtures {
             items: [
                 WatchItem(id: "a1", kind: .user, text: "The replay test fails one run in ten. Find out why.", time: ago(9), turn: "t1"),
                 WatchItem(id: "a2", kind: .thinking, text: "The failure looks timing related; checking the burst coalescing.", time: ago(8), turn: "t1"),
-                WatchItem(id: "a3", kind: .tool, text: "Tests/ReplayTests.swift", time: ago(8), turn: "t1", tool: "Read"),
-                WatchItem(id: "a4", kind: .tool, text: "Sources/Replay/Coalescer.swift", time: ago(6), turn: "t1", tool: "Patch", detail: "+4 −1"),
                 WatchItem(id: "a5", kind: .agent, text: "The coalescer dropped a frame when two bursts landed in one tick. I made it keep the newest. I'll run the replay suite to confirm the fix.",
                           time: ago(2), turn: "t1"),
             ],
@@ -350,9 +348,6 @@ enum WatchFixtures {
             activity: "editing files", workingSince: ago(4),
             items: [
                 WatchItem(id: "w1", kind: .user, text: "Split the drain loop so claims and sends are separate steps.", time: ago(6), turn: "t1"),
-                WatchItem(id: "w2", kind: .tool, text: "rg -n \"fn drain\" helper/core", time: ago(5), turn: "t1", tool: "Search"),
-                WatchItem(id: "w3", kind: .tool, text: "cargo test -p dispatch-core drain", time: ago(4), turn: "t1", tool: "Run",
-                          detail: "test result: ok. 12 passed", running: true),
             ],
             queue: [WatchQueued(id: "B2C1D7E0-0000-4000-8000-000000000001", text: "Then update the docs to match.", canSendNow: true)],
             canStop: true, route: .queue)
@@ -367,7 +362,6 @@ enum WatchFixtures {
             key: question, generated: now, title: "Tune the learning rate", agent: "Claude Code", model: "opus-5.5",
             items: [
                 WatchItem(id: "q1", kind: .user, text: "Try a few schedules on the small model.", time: ago(12), turn: "t1"),
-                WatchItem(id: "q2", kind: .tool, text: "python train.py --sweep", time: ago(10), turn: "t1", tool: "Run", detail: "best loss 1.84"),
                 WatchItem(id: "q3", kind: .agent, text: "Cosine decay won on the small model. Which schedule should I use for the next run?", time: ago(1), turn: "t1"),
             ],
             questions: [WatchQuestion(id: "interaction-12", arrived: ago(1), parts: [
@@ -487,9 +481,6 @@ enum WatchFixtures {
             key: sidebar, generated: now, title: "Sidebar theme toggle", agent: "Claude Code", model: "opus-5.5",
             items: [
                 WatchItem(id: "s1", kind: .user, text: "Add a theme toggle to the sidebar.", time: ago(100), turn: "t1"),
-                WatchItem(id: "s2", kind: .tool, text: "src/Sidebar.tsx", time: ago(95), turn: "t1", tool: "Read"),
-                WatchItem(id: "s3", kind: .tool, text: "src/Sidebar.tsx, src/ThemeToggle.tsx", time: ago(60), turn: "t1", tool: "Patch",
-                          detail: "+52 −6"),
                 WatchItem(id: "s4", kind: .agent, text: "Added a ThemeToggle to the sidebar header and wired it to useTheme.",
                           time: ago(14), turn: "t1", caption: "5 steps · 1m 26s",
                           summary: WatchTurnSummary(steps: 5, seconds: 86, files: 4, additions: 61, deletions: 9)),

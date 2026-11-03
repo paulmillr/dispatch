@@ -889,14 +889,25 @@ class ConsentTests(unittest.TestCase):
         mobile = consent.load_script('setup_mobile')
         with tempfile.TemporaryDirectory() as directory, \
                 patch.object(mobile, 'current', return_value=False), \
+                patch.object(mobile, 'russh', return_value=True), \
                 patch.object(mobile, 'CARGO', Path(directory) / 'cargo'):
             self.assertTrue(mobile.downloads())
             (Path(directory) / 'cargo').touch()
             with patch.object(mobile.subprocess, 'run', return_value=Mock(returncode=0)) as run:
                 self.assertFalse(mobile.downloads())
                 self.assertEqual(run.call_args.args[0][1:], ['fetch', '--locked', '--offline'])
-        with patch.object(mobile, 'current', return_value=True):
+        with patch.object(mobile, 'current', return_value=True), patch.object(mobile, 'russh_ready', return_value=True):
             self.assertFalse(mobile.downloads())
+        # A current framework still needs the patched russh staged (Cargo.toml names it by path): its crate is a download.
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(mobile, 'current', return_value=True), \
+                patch.object(mobile, 'russh_ready', return_value=False), \
+                patch.object(mobile, 'CARGO', Path(directory) / 'cargo'):
+            (Path(directory) / 'cargo').touch()
+            with patch.object(mobile, 'russh', return_value=False):
+                self.assertTrue(mobile.downloads())
+            with patch.object(mobile, 'russh', return_value=True):
+                self.assertFalse(mobile.downloads())
 
     def testStandaloneToolDeclinePreventsDownloads(self):
         with tempfile.TemporaryDirectory() as directory, \

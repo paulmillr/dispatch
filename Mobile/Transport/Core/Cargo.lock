@@ -392,6 +392,7 @@ name = "dispatch-mobile-ssh"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "ring",
  "russh",
  "tokio",
  "zeroize",
@@ -1145,9 +1146,7 @@ dependencies = [
 
 [[package]]
 name = "russh"
-version = "0.64.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba61e87b9ec9a39a59a6bbed4c0b8ff7fb07073405b24a767a1f2c8560ac8f58"
+version = "0.65.0"
 dependencies = [
  "aes",
  "bitflags",

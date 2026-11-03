@@ -1,3 +1,4 @@
+import CryptoKit
 import Observation
 import XCTest
 @testable import Dictation
@@ -30,12 +31,12 @@ final class DictationModelStoreTests: XCTestCase {
 
     func testStoreRefusesADownloadThatDoesNotMatch() async throws {
         let directory = try temporaryDirectory()
-        let store = DictationModelStore(whisper: directory, parakeet: parakeet(directory), session: session(serving: StubModelServer.self))
+        let store = DictationModelStore(whisper: directory, parakeet: parakeet(directory), configuration: configuration(serving: StubModelServer.self))
         store.download(.whisper(.small))
         XCTAssertEqual(store.state(.whisper(.small)), .downloading(0))
         let download = try XCTUnwrap(store.downloads[.whisper(.small)]?.task)
         await download.value
-        XCTAssertEqual(store.state(.whisper(.small)), .failed("The download is incomplete."))
+        XCTAssertEqual(store.state(.whisper(.small)), .failed("The server announced another size than the published model’s."))
         XCTAssertNil(store.installed(.whisper(.small)))
         XCTAssertNil(store.downloads[.whisper(.small)])
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path), [])
@@ -44,7 +45,7 @@ final class DictationModelStoreTests: XCTestCase {
     func testStoreCancelsADownloadInFlight() async throws {
         let directory = try temporaryDirectory()
         StalledModelServer.events.reset()
-        let store = DictationModelStore(whisper: directory, parakeet: parakeet(directory), session: session(serving: StalledModelServer.self))
+        let store = DictationModelStore(whisper: directory, parakeet: parakeet(directory), configuration: configuration(serving: StalledModelServer.self))
         for attempt in 1...2 {
             store.download(.whisper(.small))
             XCTAssertEqual(store.state(.whisper(.small)), .downloading(0))
@@ -64,7 +65,11 @@ final class DictationModelStoreTests: XCTestCase {
 
     func testStoreCancelWhileVerifyingRemovesThePartialFile() async throws {
         let directory = try temporaryDirectory()
-        let store = DictationModelStore(whisper: directory, parakeet: parakeet(directory), session: session(serving: StubModelServer.self))
+        // The body has the catalog's size, so the download reaches the checks; its hash is not the catalog's.
+        let store = DictationModelStore(whisper: directory, parakeet: parakeet(directory),
+                                        configuration: configuration(serving: StubModelServer.self)) { model in
+            model.files.map { ModelFile(path: $0.path, bytes: 11, sha256: String(repeating: "0", count: 64), url: $0.url) }
+        }
         let seen = SeenFiles()
         // Cancels on the main actor's next turn after the download turns to verifying: the store's task has then moved
         // the download to its partial file and waits for the (detached) verification.
@@ -111,20 +116,41 @@ final class DictationModelStoreTests: XCTestCase {
     }
 
     /// Parakeet is a folder of files: each is fetched from the pinned revision into the partial folder, and none is
-    /// kept when one doesn't match.
-    func testStoreFetchesEveryParakeetFileAndRefusesAMismatch() async throws {
+    /// kept when one doesn't match: the first whose answer announces another size stops the download.
+    func testStoreFetchesParakeetFilesFromThePinnedRevisionAndStopsAtAMismatch() async throws {
         let directory = try temporaryDirectory()
         RecordingModelServer.requests.reset()
-        let store = DictationModelStore(whisper: directory, parakeet: parakeet(directory), session: session(serving: RecordingModelServer.self))
+        let store = DictationModelStore(whisper: directory, parakeet: parakeet(directory),
+                                        configuration: configuration(serving: RecordingModelServer.self))
         store.download(.parakeet)
         let download = try XCTUnwrap(store.downloads[.parakeet]?.task)
         await download.value
-        XCTAssertEqual(store.state(.parakeet), .failed("The download is incomplete."))
+        XCTAssertEqual(store.state(.parakeet), .failed("The server announced another size than the published model’s."))
         XCTAssertNil(store.installed(.parakeet))
-        XCTAssertEqual(RecordingModelServer.requests.paths, ParakeetModel.files.map {
+        XCTAssertEqual(RecordingModelServer.requests.paths, ParakeetModel.files.prefix(1).map {
             "/FluidInference/parakeet-tdt-0.6b-v3-coreml/resolve/\(ParakeetModel.revision)/\($0.path)"
         })
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: parakeet(directory).path), [])
+
+        // With every file as published (here: the server's body, pinned by size and hash), each is fetched in turn
+        // and the folder becomes the model.
+        RecordingModelServer.requests.reset()
+        let body = Data("not a model".utf8)
+        let digest = SHA256.hash(data: body).map { String(format: "%02x", $0) }.joined()
+        let pinned = DictationModelStore(whisper: directory, parakeet: parakeet(directory),
+                                         configuration: configuration(serving: RecordingModelServer.self)) { model in
+            model.files.map { ModelFile(path: $0.path, bytes: Int64(body.count), sha256: digest, url: $0.url) }
+        }
+        pinned.download(.parakeet)
+        await pinned.downloads[.parakeet]?.task.value
+        XCTAssertEqual(pinned.state(.parakeet), .installed)
+        XCTAssertEqual(RecordingModelServer.requests.paths, ParakeetModel.files.map {
+            "/FluidInference/parakeet-tdt-0.6b-v3-coreml/resolve/\(ParakeetModel.revision)/\($0.path)"
+        })
+        let installed = try XCTUnwrap(pinned.installed(.parakeet))
+        for file in ParakeetModel.files {
+            XCTAssertEqual(try Data(contentsOf: installed.appendingPathComponent(file.path)), body, file.path)
+        }
     }
 
     // MARK: - Helpers
@@ -144,12 +170,10 @@ final class DictationModelStoreTests: XCTestCase {
         return directory
     }
 
-    private func session(serving server: URLProtocol.Type) -> URLSession {
+    private func configuration(serving server: URLProtocol.Type) -> URLSessionConfiguration {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [server]
-        let session = URLSession(configuration: configuration)
-        addTeardownBlock { session.invalidateAndCancel() }
-        return session
+        return configuration
     }
 
     /// Waits (polling) until `condition` holds, failing after `timeout` seconds.

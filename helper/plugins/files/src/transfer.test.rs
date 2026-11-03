@@ -27,6 +27,9 @@ struct Helper {
     files: Files,
 }
 
+/// The connection the tests' packs come from unless they name another.
+const CLIENT: u64 = 7;
+
 impl Helper {
     fn new() -> Self {
         Self {
@@ -64,8 +67,12 @@ impl Helper {
     }
 
     fn start_pack(&mut self, transfer: &str, base: &Path, paths: &[PathBuf], limit: u64) -> Slot<Packed> {
+        self.start_pack_as(CLIENT, transfer, base, paths, limit)
+    }
+
+    fn start_pack_as(&mut self, client: u64, transfer: &str, base: &Path, paths: &[PathBuf], limit: u64) -> Slot<Packed> {
         let (result, done) = slot();
-        self.files.pack(&mut self.io, transfer, base, paths, limit, done);
+        self.files.pack(&mut self.io, client, transfer, base, paths, limit, done);
         result
     }
 
@@ -75,8 +82,12 @@ impl Helper {
     }
 
     fn drop_pack(&mut self, transfer: &str) -> Result<(), Error> {
+        self.drop_pack_as(CLIENT, transfer)
+    }
+
+    fn drop_pack_as(&mut self, client: u64, transfer: &str) -> Result<(), Error> {
         let (result, done) = slot();
-        self.files.pack_drop(&mut self.io, transfer, done);
+        self.files.pack_drop(&mut self.io, client, transfer, done);
         self.wait(&result)
     }
 
@@ -728,4 +739,145 @@ fn a_copy_replays_with_its_random_names_without_its_files() {
     let replayed = run("DISPATCH_REPLAY");
     assert_eq!(replayed, live);
     assert!(!target.exists(), "a replay touches no file");
+}
+
+impl Helper {
+    fn pack_as(&mut self, client: u64, transfer: &str, base: &Path, paths: &[PathBuf]) -> Result<Packed, Error> {
+        let result = self.start_pack_as(client, transfer, base, paths, 0);
+        self.wait(&result)
+    }
+
+    /// Runs the reactor, timers and their callbacks included, until `done` holds; fails after 10 s.
+    fn run_until(&mut self, done: impl Fn() -> bool) {
+        let give_up = self.io.now() + std::time::Duration::from_secs(10);
+        self.io.timer(give_up);
+        loop {
+            self.io.callbacks();
+            if done() {
+                return;
+            }
+            let (section, event) = self.io.next().unwrap();
+            assert!(!matches!(event, Event::Timer { at } if at == give_up), "not done in 10 s");
+            if section != "then" {
+                self.files.event(&mut self.io, &mut Quiet, event);
+            }
+        }
+    }
+
+    /// files.read of all of `path`.
+    fn read(&mut self, path: &Path) -> Result<Vec<u8>, Error> {
+        let bytes: Rc<RefCell<Vec<u8>>> = Rc::default();
+        let into = bytes.clone();
+        let chunk: dispatch_helper_core::api::Chunk = Box::new(move |io, part, done| {
+            into.borrow_mut().extend(part);
+            done(io, Ok(()));
+        });
+        let read = Read { path: path.to_path_buf(), offset: 0, length: None, revision: Default::default() };
+        let (result, done) = slot();
+        self.files.read(&mut self.io, &read, 1 << 20, chunk, done);
+        self.wait(&result)?;
+        Ok(bytes.take())
+    }
+}
+
+#[test]
+fn kept_archives_are_bounded_per_connection_and_per_helper() {
+    let scratch = Scratch::new("pack-budget");
+    let mut helper = Helper::new();
+    let base = tree(&scratch);
+    let notes = [base.join("notes.txt")];
+    // Packs completed and never dropped: the connection's third waits for one of its drops.
+    let one = helper.pack("one", &base, &notes, 0).unwrap();
+    let two = helper.pack("two", &base, &notes, 0).unwrap();
+    let full = helper.pack("three", &base, &notes, 0).unwrap_err();
+    assert_eq!(full.code, "limit", "{full:?}");
+    assert!(full.message.contains("wait for the current copy to finish"), "{full:?}");
+    assert!(Path::new(&one.archive).exists() && Path::new(&two.archive).exists());
+    // Another connection cannot drop them, and counts its own.
+    assert_eq!(code(helper.drop_pack_as(8, "one")), "invalid_request");
+    assert!(Path::new(&one.archive).exists());
+    helper.pack_as(8, "four", &base, &notes).unwrap();
+    helper.drop_pack("one").unwrap();
+    helper.pack("three", &base, &notes, 0).unwrap();
+    // Across connections the helper keeps at most its own count: the next copy waits for one to end.
+    helper.files.packs.borrow_mut().budget.helper = 4;
+    helper.pack_as(9, "five", &base, &notes).unwrap();
+    let crowded = helper.pack_as(10, "six", &base, &notes).unwrap_err();
+    assert_eq!(crowded.code, "busy", "{crowded:?}");
+    for (client, transfer) in [(CLIENT, "two"), (CLIENT, "three"), (8, "four"), (9, "five")] {
+        helper.drop_pack_as(client, transfer).unwrap();
+    }
+    helper.pack_as(10, "six", &base, &notes).unwrap();
+    helper.drop_pack_as(10, "six").unwrap();
+    // Ids are short: the apps send UUIDs.
+    let long = "x".repeat(65);
+    assert_eq!(code(helper.pack(&long, &base, &notes, 0)), "invalid_request");
+    assert_eq!(code(helper.open(&long, &scratch.0, "keep", &["notes.txt"])), "invalid_request");
+    let last = helper.pack(&"x".repeat(64), &base, &notes, 0).unwrap();
+    helper.drop_pack(&"x".repeat(64)).unwrap();
+    assert!(!Path::new(&last.archive).exists() && !Path::new(&two.archive).exists());
+}
+
+#[test]
+fn archive_bytes_are_accounted_per_connection_and_across_them() {
+    let scratch = Scratch::new("pack-bytes");
+    let mut helper = Helper::new();
+    let base = tree(&scratch);
+    let notes = [base.join("notes.txt")];
+    let a = helper.pack("a", &base, &notes, 0).unwrap();
+    let size = a.size;
+    // This connection's bytes are at its budget: nothing more is packed for it.
+    {
+        let mut packs = helper.files.packs.borrow_mut();
+        packs.budget.client_bytes = size;
+        packs.budget.helper_bytes = size + size / 2;
+    }
+    let spent = helper.pack("b", &base, &notes, 0).unwrap_err();
+    assert_eq!((spent.code, spent.message.contains("budget")), ("limit", true), "{spent:?}");
+    // Another connection has its own budget, but only what the helper's has left: half an archive, so the pack
+    // stops at it and its archive goes.
+    let short = helper.pack_as(8, "c", &base, &notes).unwrap_err();
+    assert_eq!((short.code, short.message.contains("budget")), ("limit", true), "{short:?}");
+    helper.drop_pack("a").unwrap();
+    let c = helper.pack_as(8, "c", &base, &notes).unwrap();
+    helper.drop_pack_as(8, "c").unwrap();
+    assert!(!Path::new(&a.archive).exists() && !Path::new(&c.archive).exists());
+}
+
+#[test]
+fn a_kept_archive_goes_when_its_client_leaves_or_nobody_reads_it() {
+    let scratch = Scratch::new("pack-idle");
+    let mut helper = Helper::new();
+    let base = tree(&scratch);
+    let notes = [base.join("notes.txt")];
+    // Its connection ends: the helper's release removes it. Another connection's departure (one that reused its fd,
+    // say, and was handed the same id) leaves it alone.
+    let left = helper.pack("left", &base, &notes, 0).unwrap();
+    let (result, done) = slot();
+    helper.files.release(&mut helper.io, CLIENT + 1, "left", false, done);
+    helper.wait(&result).unwrap();
+    assert!(Path::new(&left.archive).exists(), "another connection's departure ends nothing of this one");
+    let (result, done) = slot();
+    helper.files.release(&mut helper.io, CLIENT, "left", false, done);
+    helper.wait(&result).unwrap();
+    assert!(!Path::new(&left.archive).exists());
+    helper.pack("left", &base, &notes, 0).unwrap();
+    helper.drop_pack("left").unwrap();
+    // Left idle: a read keeps it, then it goes on its own and its id and count are free again.
+    helper.files.packs.borrow_mut().budget.idle = std::time::Duration::from_millis(300);
+    let idle = helper.pack("idle", &base, &notes, 0).unwrap();
+    let packed = helper.files.packs.borrow().used("idle").unwrap();
+    assert_eq!(helper.read(Path::new(&idle.archive)).unwrap(), std::fs::read(&idle.archive).unwrap());
+    assert!(helper.files.packs.borrow().used("idle").unwrap() > packed, "a read counts as use");
+    let archive = PathBuf::from(&idle.archive);
+    helper.run_until(|| !archive.exists());
+    // A read that finds it gone says why.
+    let gone = helper.read(&archive).unwrap_err();
+    assert_eq!(gone.code, "limit", "{gone:?}");
+    assert!(gone.message.contains("without a read"), "{gone:?}");
+    let again = helper.pack("idle", &base, &notes, 0).unwrap();
+    let other = helper.pack("other", &base, &notes, 0).unwrap();
+    helper.drop_pack("idle").unwrap();
+    helper.drop_pack("other").unwrap();
+    assert!(!Path::new(&again.archive).exists() && !Path::new(&other.archive).exists());
 }

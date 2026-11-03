@@ -279,9 +279,9 @@ impl<T: Plugin> Plugin for Registered<T> {
         self.part.name()
     }
     /// Not a client call: the helper ending what a disconnected client left open, whatever its grants now.
-    fn release(&mut self, io: &mut dyn Io, transfer: &str, unpack: bool, done: Done<()>) {
+    fn release(&mut self, io: &mut dyn Io, client: u64, transfer: &str, unpack: bool, done: Done<()>) {
         let caller = io.section(&self.section);
-        self.part.release(io, transfer, unpack, returned(caller.clone(), done));
+        self.part.release(io, client, transfer, unpack, returned(caller.clone(), done));
         io.section(&caller);
     }
     calls! {
@@ -294,8 +294,8 @@ impl<T: Plugin> Plugin for Registered<T> {
         fn list(path: &Path, hidden: bool, limit: u64, git: bool) -> Listing;
         fn summary(path: &Path, limit: u64) -> FolderSummary;
         fn write(path: &Path, bytes: Vec<u8>, mode: Option<u32>, replace: bool, parent: FileIdentity, replaced: Option<FileIdentity>) -> Metadata;
-        fn pack(transfer: &str, base: &Path, paths: &[PathBuf], limit: u64) -> Packed;
-        fn pack_drop(transfer: &str) -> ();
+        fn pack(client: u64, transfer: &str, base: &Path, paths: &[PathBuf], limit: u64) -> Packed;
+        fn pack_drop(client: u64, transfer: &str) -> ();
         fn unpack_open(transfer: &str, target: &Path, policy: &str, names: &[String], parent: FileIdentity, replacements: &[Replacement]) -> Transfer;
         fn unpack_write(transfer: &str, bytes: Vec<u8>) -> Progress;
         fn unpack_close(transfer: &str, commit: bool) -> Unpacked;

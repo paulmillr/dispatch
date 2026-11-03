@@ -172,6 +172,8 @@ final class WatchShellTests: XCTestCase {
         XCTAssertEqual(WatchRouter.Sheet(argument: "question"), .question(choose: nil))
         XCTAssertEqual(WatchRouter.Sheet(argument: "question:0"), .question(choose: 0))
         XCTAssertEqual(WatchRouter.Sheet(argument: "reply:Use the sidebar header"), .reply("Use the sidebar header"))
+        XCTAssertEqual(WatchRouter.Sheet(argument: "stop"), .stop)
+        XCTAssertEqual(WatchRouter.Sheet(argument: "quick"), .quick)
         XCTAssertNil(WatchRouter.Sheet(argument: "review"))
         let router = WatchRouter()
         router.sheet = .question(choose: 1)

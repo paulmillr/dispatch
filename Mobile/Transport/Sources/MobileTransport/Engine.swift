@@ -34,6 +34,7 @@ enum Engine {
     case DMS_CONNECTION_REFUSED: return .connectFailed(.refused, host: "", port: 0)
     case DMS_UNREACHABLE: return .connectFailed(.unreachable, host: "", port: 0)
     case DMS_NO_ANSWER: return .connectFailed(.noAnswer, host: "", port: 0)
+    case DMS_HOST_KEY_CHANGED: return .hostKeyChangedAtRekey(text)
     default: return .protocolError(text)
     }
   }

@@ -12,7 +12,7 @@ import XCTest
 final class WatchComplicationTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_792_000_000)
 
-    private func directory() throws -> URL {
+    func directory() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("complication-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: url) }
@@ -151,6 +151,183 @@ final class WatchComplicationTests: XCTestCase {
         renderer.scale = 2
         let image = try XCTUnwrap(renderer.cgImage)
         let url = shots.appendingPathComponent("complication.png")
+        let destination = try XCTUnwrap(CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, image, nil)
+        XCTAssertTrue(CGImageDestinationFinalize(destination))
+    }
+}
+
+// MARK: Host widget
+
+extension WatchComplicationTests {
+    /// The hosts with a CPU reading, in the phone's order; the chosen one while the entry has it, else the busiest
+    /// current one; the Smart Stack's relevance only while the phone flags a current host's CPU high.
+    func testTheHostEntryChoosesItsHostElseTheBusiest() throws {
+        var snapshot = WatchFixtures.demo(now: now)
+        var entry = HostWidgetEntry(snapshot)
+        XCTAssertEqual(entry.hosts.map(\.name), ["studio", "lab", "pi"])
+        XCTAssertEqual(entry.hosts.map(\.current), [true, true, false])
+        XCTAssertEqual(entry.hosts.first?.cpu, 34)
+        XCTAssertEqual(entry.hosts.first?.history.count, WatchHostStats.historyCount)
+        XCTAssertEqual(entry.host(nil)?.name, "studio", "the busiest connected host")
+        XCTAssertEqual(entry.host(WatchFixtures.lab)?.name, "lab")
+        XCTAssertEqual(entry.host(WatchFixtures.pi)?.name, "pi", "chosen, though offline (shown dimmed)")
+        XCTAssertNil(entry.host("gone"), "a chosen host the entry lacks is unavailable, not another host")
+        XCTAssertEqual(HostWidgetEntry.relevance(entry.host(nil), stale: false).score, 0)
+        snapshot.hosts[1].stats?.cpu = 96
+        snapshot.hosts[1].stats?.warnings = [.cpu]
+        entry = HostWidgetEntry(snapshot)
+        XCTAssertEqual(entry.host(nil)?.name, "lab")
+        XCTAssertEqual(HostWidgetEntry.relevance(entry.host(nil), stale: false).score, 1)
+        XCTAssertEqual(HostWidgetEntry.relevance(entry.host(nil), stale: true).score, 0, "an old reading is not news")
+        XCTAssertEqual(HostWidgetEntry.relevance(entry.host(WatchFixtures.pi), stale: false).score, 0)
+        XCTAssertNil(HostWidgetEntry(WatchSnapshot(generated: now, phone: WatchPhone(), hosts: [])).host(nil))
+        // A tap opens the host's screen.
+        let url = HostWidgetEntry.url(host: WatchFixtures.lab)
+        XCTAssertEqual(HostWidgetEntry.host(url), WatchFixtures.lab)
+        let router = WatchRouter()
+        router.open(url: url)
+        XCTAssertEqual(router.show, .host(WatchHostRoute(host: WatchFixtures.lab)))
+        XCTAssertNil(router.take())
+        XCTAssertNil(HostWidgetEntry.host(try XCTUnwrap(URL(string: "dispatch-watch://host?host=nope"))))
+    }
+
+    /// The timeline reads the file for the chosen host, shows its time once old; the recommendations are Busiest host
+    /// and one per host.
+    func testTheHostTimelineReadsWhatTheAppWrote() throws {
+        let directory = try directory()
+        let now = now
+        let provider = HostWidgetProvider(directory: { directory }, now: { now })
+        XCTAssertNil(provider.current(nil).host)
+        XCTAssertEqual(provider.choices().map(\.?.name), [nil])
+        XCTAssertEqual(provider.recommendations().count, 1)
+        try HostWidgetStore.write(HostWidgetEntry(WatchFixtures.demo(now: now)), to: directory)
+        var timeline = provider.timeline(HostWidgetHost(id: WatchFixtures.lab, name: "lab"))
+        XCTAssertEqual(timeline.entries.first?.host?.name, "lab")
+        XCTAssertEqual(timeline.entries.map(\.stale), [false, true])
+        XCTAssertEqual(timeline.policy, .after(now.addingTimeInterval(HostWidgetProvider.refresh)))
+        timeline = HostWidgetProvider(directory: { directory }, now: { now.addingTimeInterval(600) }).timeline(nil)
+        XCTAssertEqual(timeline.entries.map(\.stale), [true])
+        XCTAssertEqual(timeline.entries.first?.host?.name, "studio")
+        XCTAssertEqual(timeline.entries.first?.dimmed, true, "stale")
+        XCTAssertEqual(timeline.entries.first?.relevance?.score, 0)
+        // A chosen host the entry no longer has: unavailable, by its name.
+        let gone = provider.current(HostWidgetHost(id: "6E1D1A5C-57D1-4C0A-8000-000000000009", name: "old-box"))
+        XCTAssertNil(gone.host)
+        XCTAssertEqual(gone.chosen, "old-box")
+        XCTAssertEqual(HostWidgetView.accessibilityLabel(gone), "old-box, not available")
+        XCTAssertEqual(provider.choices().map(\.?.name), [nil, "studio", "lab", "pi"])
+        XCTAssertEqual(provider.recommendations().count, 4)
+        XCTAssertEqual(HostWidgetHostQuery.hosts(directory: directory).map(\.id), [WatchFixtures.studio, WatchFixtures.lab, WatchFixtures.pi])
+    }
+
+    /// Written only when what a face could show changed; the faces reload at most every `reloadInterval` for numbers,
+    /// every `urgentInterval` when a host is flagged high (or no longer), never more than `dailyCap` a day; the
+    /// recommendations follow the hosts.
+    func testTheHostWriterWritesOnChangeAndReloadsWithinItsBudget() throws {
+        let directory = try directory()
+        var reloads = 0, recommendations = 0
+        var clock = now
+        let writer = HostWidgetWriter(directory: directory, now: { clock }, reload: { reloads += 1 }, recommend: { recommendations += 1 })
+        var snapshot = WatchFixtures.demo(now: now)
+        func write(at offset: TimeInterval, _ change: (inout WatchSnapshot) -> Void) {
+            clock = now.addingTimeInterval(offset)
+            snapshot.generated = clock
+            change(&snapshot)
+            writer.write(snapshot)
+        }
+        writer.write(snapshot)
+        XCTAssertEqual([reloads, recommendations], [1, 1])
+        // Only the time: nothing written.
+        write(at: 15) { _ in }
+        XCTAssertEqual(HostWidgetStore.read(from: directory)?.updated, now, "unchanged faces are not written")
+        // New numbers within the interval: written, not reloaded.
+        write(at: 30) { $0.hosts[0].stats?.cpu = 40 }
+        XCTAssertEqual(HostWidgetStore.read(from: directory)?.hosts.first?.cpu, 40)
+        XCTAssertEqual(reloads, 1)
+        // Flagged high a minute after the last reload: not yet (urgent reloads are paced too); after five minutes, yes.
+        write(at: 60) { $0.hosts[0].stats?.warnings = [.cpu] }
+        XCTAssertEqual(reloads, 1)
+        write(at: 60 + HostWidgetWriter.urgentInterval) { $0.hosts[0].stats?.warnings = [] }
+        XCTAssertEqual(reloads, 2)
+        // New numbers once the interval passed: reloaded.
+        write(at: 120 + HostWidgetWriter.urgentInterval + HostWidgetWriter.reloadInterval) { $0.hosts[0].stats?.cpu = 55 }
+        XCTAssertEqual(reloads, 3)
+        XCTAssertEqual(recommendations, 1)
+        // A host renamed: new recommendations; the faces wait for their interval.
+        write(at: 121 + HostWidgetWriter.urgentInterval + HostWidgetWriter.reloadInterval) { $0.hosts[1].name = "lab2" }
+        XCTAssertEqual([reloads, recommendations], [3, 2])
+        // An older snapshot is ignored; a new writer starts from the file.
+        let latest = writer.written
+        snapshot.generated = now
+        snapshot.hosts[0].stats?.cpu = 1
+        writer.write(snapshot)
+        XCTAssertEqual(HostWidgetStore.read(from: directory)?.hosts.first?.cpu, 55)
+        XCTAssertEqual(HostWidgetWriter(directory: directory, reload: {}, recommend: {}).written, latest)
+        HostWidgetWriter(directory: nil, reload: { reloads += 1 }, recommend: {}).write(WatchFixtures.demo(now: clock))
+        XCTAssertEqual(reloads, 3)
+    }
+
+    /// A host flapping between current and not, or CPU hovering at the threshold, all day long: at most `dailyCap`
+    /// reloads in 24 hours.
+    func testUrgentReloadsAreCappedPerDay() throws {
+        let directory = try directory()
+        var reloads = 0
+        var clock = now
+        let writer = HostWidgetWriter(directory: directory, now: { clock }, reload: { reloads += 1 }, recommend: {})
+        var snapshot = WatchFixtures.demo(now: now)
+        for step in 0..<(24 * 60) {
+            clock = now.addingTimeInterval(Double(step) * 60)
+            snapshot.generated = clock
+            snapshot.hosts[0].stats?.warnings = step.isMultiple(of: 2) ? [.cpu] : []
+            writer.write(snapshot)
+        }
+        XCTAssertLessThanOrEqual(reloads, HostWidgetWriter.dailyCap)
+        XCTAssertGreaterThan(reloads, 0)
+        // A day later there is budget again.
+        clock = now.addingTimeInterval(2 * 86_400)
+        snapshot.generated = clock
+        snapshot.hosts[0].stats?.warnings = [.cpu]
+        let before = reloads
+        writer.write(snapshot)
+        XCTAssertEqual(reloads, before + 1)
+    }
+
+    /// Both families draw with a host, flagged high, stale and without one. With the shots directory set, saved as
+    /// `host-widget.png`.
+    func testTheHostFacesRender() throws {
+        let entry = HostWidgetEntry(WatchFixtures.demo(now: now))
+        var high = try XCTUnwrap(entry.hosts.first)
+        high.cpu = 92
+        high.high = true
+        let entries = [HostTimelineEntry(date: now, host: entry.hosts.first, updated: now),
+                       HostTimelineEntry(date: now, host: high, updated: now),
+                       HostTimelineEntry(date: now, host: entry.hosts.last, updated: now.addingTimeInterval(-900), stale: true),
+                       HostTimelineEntry(date: now, host: nil, updated: now),
+                       HostTimelineEntry(date: now, host: nil, chosen: "old-box", updated: now)]
+        XCTAssertEqual(HostWidgetView.accessibilityLabel(entries[1]), "studio, CPU 92 percent, high")
+        XCTAssertEqual(HostWidgetView.accessibilityLabel(entries[2]), "pi, CPU 3 percent, not current")
+        XCTAssertEqual(HostWidgetView.accessibilityLabel(entries[3]), "No host statistics")
+        let faces = VStack(alignment: .leading, spacing: 10) {
+            ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
+                HStack(spacing: 10) {
+                    HostWidgetView(entry: entry, family: .accessoryRectangular)
+                        .frame(width: 150, height: 56)
+                        .padding(8)
+                        .background(AgentsColor.groupedRow, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    HostWidgetView(entry: entry, family: .accessoryCircular).frame(width: 46, height: 46)
+                }
+            }
+        }
+        .padding(8)
+        .background(.black)
+        .environment(\.colorScheme, .dark)
+        let renderer = ImageRenderer(content: faces)
+        renderer.scale = 2
+        let image = try XCTUnwrap(renderer.cgImage)
+        guard let shots = ProcessInfo.processInfo.environment["DISPATCH_WATCH_AGENTS_SHOTS"].map({ URL(fileURLWithPath: $0) }) else { return }
+        try FileManager.default.createDirectory(at: shots, withIntermediateDirectories: true)
+        let url = shots.appendingPathComponent("host-widget.png")
         let destination = try XCTUnwrap(CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil))
         CGImageDestinationAddImage(destination, image, nil)
         XCTAssertTrue(CGImageDestinationFinalize(destination))

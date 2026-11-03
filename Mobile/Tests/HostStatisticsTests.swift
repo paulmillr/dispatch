@@ -83,8 +83,9 @@ final class HostStatisticsTests: XCTestCase {
         XCTAssertNil(HostStatistics.bars(gapped, metric: .cpu, at: now)[21], "90 s without a sample is a gap")
     }
 
-    /// No sample before anything shows the stats: the first one a cadence after the connection came up; a viewer
-    /// samples now and every 2 s; Low Power Mode every 30 s; the disks at most every 15 s.
+    /// No sample before anything shows the stats: the first on the shared clock's tick at least half a cadence after the
+    /// connection came up (`HostTraffic`), without the process list; a viewer samples now, with it, and every 2 s; Low
+    /// Power Mode every 30 s; the disks at most every 15 s while viewed.
     func testCadenceSwitchesWithViewersAndLowPowerMode() async throws {
         let sleeper = SteppedSleeper()
         let (stats, helper) = store(sleeper)
@@ -92,30 +93,35 @@ final class HostStatisticsTests: XCTestCase {
         stats.attach(helper.client)
         XCTAssertFalse(stats.live, "no sample of this connection yet")
         try await TestSupport.eventually { sleeper.pending == 1 }
-        XCTAssertEqual(sleeper.durations, [.seconds(15)], "nothing shows it yet")
+        // The clock is 5 s past a tick: the first at least 7.5 s away is 10 s on.
+        XCTAssertEqual(sleeper.durations, [.seconds(10)], "nothing shows it yet")
         XCTAssertTrue(helper.requests.isEmpty)
 
-        clock += 15
+        clock += 10
         sleeper.step()
         try await TestSupport.eventually { stats.sample != nil && sleeper.pending == 1 }
-        XCTAssertEqual(helper.methods, ["stats.sample", "stats.processes", "stats.disks"])
+        XCTAssertEqual(Set(helper.methods), ["stats.sample", "stats.disks"], "no process list without a viewer")
+        XCTAssertEqual(helper.requests.count, 2)
         XCTAssertTrue(stats.live)
-        XCTAssertEqual(sleeper.durations.last, .seconds(15))
+        XCTAssertEqual(sleeper.durations.last, .seconds(15), "the next tick")
         XCTAssertEqual(stats.sample?.cpu, 34)
         XCTAssertEqual(stats.sample?.load, 2.71)
         XCTAssertEqual(stats.sample?.memoryTotal, UInt64(32 * HostStatsDemo.gib))
         XCTAssertEqual(stats.disk?.free, UInt64(48 * HostStatsDemo.gib))
-        XCTAssertEqual(stats.top(.cpu).map(\.name), ["node", "cargo", "rust-analyzer"])
-        XCTAssertEqual(stats.top(.memory).map(\.name), ["fixture-helper", "postgres", "rust-analyzer"])
+        XCTAssertEqual(stats.processes, [])
 
-        // A sheet opens a second later: the next sample is due 2 s after the last.
+        // A sheet opens a second later: it samples at once, with the process list, then every 2 s.
         clock += 1
         let token = stats.beginViewing()
-        try await TestSupport.eventually { sleeper.durations.count == 3 && sleeper.pending == 1 }
-        XCTAssertEqual(sleeper.durations.last, .seconds(1))
-        clock += 1
+        try await TestSupport.eventually { helper.requests("stats.processes").count == 1 && sleeper.pending == 1 }
+        XCTAssertEqual(helper.requests("stats.sample").count, 2)
+        XCTAssertEqual(stats.top(.cpu).map(\.name), ["node", "cargo", "rust-analyzer"])
+        XCTAssertEqual(stats.top(.memory).map(\.name), ["fixture-helper", "postgres", "rust-analyzer"])
+        XCTAssertEqual(sleeper.durations.last, .seconds(2))
+        clock += 2
         sleeper.step()
-        try await TestSupport.eventually { helper.requests("stats.sample").count == 2 && sleeper.pending == 1 }
+        try await TestSupport.eventually { helper.requests("stats.sample").count == 3 && sleeper.pending == 1 }
+        XCTAssertEqual(helper.requests("stats.processes").count, 2)
         XCTAssertEqual(helper.requests("stats.disks").count, 1, "the disks every 15 s only")
         XCTAssertEqual(sleeper.durations.last, .seconds(2))
 
@@ -125,14 +131,15 @@ final class HostStatisticsTests: XCTestCase {
         try await TestSupport.eventually { sleeper.durations.last == .seconds(30) && sleeper.pending == 1 }
         clock += 30
         sleeper.step()
-        try await TestSupport.eventually { helper.requests("stats.sample").count == 3 && sleeper.pending == 1 }
+        try await TestSupport.eventually { helper.requests("stats.sample").count == 4 && sleeper.pending == 1 }
         XCTAssertEqual(helper.requests("stats.disks").count, 2, "15 s since the last disks")
 
         lowPower = false
         stats.powerStateChanged()
         stats.endViewing(token)
-        try await TestSupport.eventually { sleeper.durations.last == .seconds(15) && sleeper.pending == 1 }
-        XCTAssertEqual(stats.history.count, 3)
+        // 3 s past a tick: back on the shared clock, at the first tick at least 7.5 s away.
+        try await TestSupport.eventually { sleeper.durations.last == .seconds(12) && sleeper.pending == 1 }
+        XCTAssertEqual(stats.history.count, 4)
     }
 
     /// The background, a dropped link and a plain connection sample nothing; the last sample stays, stale.

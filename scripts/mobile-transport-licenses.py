@@ -32,6 +32,9 @@ def crates():
 
 
 def source(name, version):
+    vendored = ROOT / "build/mobile-ssh" / name
+    if (vendored / ".stamp").is_file() and f'\nversion = "{version}"\n' in (vendored / "Cargo.toml").read_text():
+        return vendored
     for index in sorted((CARGO_HOME / "registry/src").iterdir()):
         directory = index / f"{name}-{version}"
         if directory.is_dir():
@@ -53,6 +56,8 @@ def main():
     for name, version, licence, macro in listed:
         directory = source(name, version)
         out += ["=" * 72, f"{name}-{version}", f"Declared license: {licence}", ""]
+        if directory.parent == ROOT / "build/mobile-ssh":
+            out += [f"Modified by Dispatch: Mobile/Transport/Core/{name}.patch (scripts/vendor-{name}.py).", ""]
         files = sorted(p for p in directory.iterdir() if p.is_file() and NOTICE.match(p.name))
         if not files:
             out += ["(the package ships no license file: used under Apache-2.0, whose text closes this file)", ""]

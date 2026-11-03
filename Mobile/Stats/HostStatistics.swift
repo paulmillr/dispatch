@@ -50,9 +50,13 @@ enum HostStatsWire {
 /// One host's stats (docs/ios.md, Host stats): CPU, load, memory, the home volume's disk and the top processes from its
 /// helper, and the last 15 minutes of CPU and memory as 60 bars of 15 s. Owned by the `HostSession`, which hands it
 /// each helper connection's client (`attach`); it samples only while `active` (the app in the foreground) and a helper
-/// client is attached: every 2 s while a stats sheet or popover shows it (`beginViewing`), else every 15 s, every 30 s
-/// under Low Power Mode, the disks at most every 15 s. A plain SSH connection, the background and a dropped link sample
-/// nothing; the last sample stays (`stale`, with its time) and so does the history, whose missing bars are gaps.
+/// client is attached: every 2 s while a stats sheet or popover shows it (`beginViewing`), else on the shared clock's
+/// 15 s ticks (`HostTraffic`), 30 s under Low Power Mode. Only a viewer's samples ask for the process list (about
+/// 100 KB from a busy Mac, which only the sheet shows); the disks are asked at most every 15 s while viewed, every
+/// minute otherwise; a sample's requests go out together. A sample on a tick stands in for the connection's liveness
+/// ping (`HostPulse`) and its round trip is the host's latency (`roundTrip`). A plain SSH connection, the background
+/// and a dropped link sample nothing; the last sample stays (`stale`, with its time) and so does the history, whose
+/// missing bars are gaps.
 ///
 /// The API other areas read (the watch's snapshot, the stats views): `sample`, `disk`, `processes`, `bars(_:at:)`,
 /// `peak(_:at:)`, `average(_:at:)`, `live`, `stale`, `summary(at:)`.
@@ -103,14 +107,17 @@ final class HostStatistics {
     nonisolated static let window: TimeInterval = 15 * 60
     nonisolated static let barCount = 60
     nonisolated static var barSpan: TimeInterval { window / Double(barCount) }
-    nonisolated static let diskInterval: TimeInterval = 15
+    /// How often the disks are asked: with a sample at most every 15 s while a sheet shows them, every minute otherwise
+    /// (the watch's and the host rows' free space changes slowly).
+    nonisolated static func diskInterval(viewing: Bool) -> TimeInterval { viewing ? 15 : 60 }
 
     /// How often to sample: 2 s while a sheet or popover shows the stats, 15 s otherwise, 30 s under Low Power Mode
     /// (the phone samples only in the foreground; the Mac's `StatisticsCadence` keeps 15 s while shown, 60 s otherwise).
     /// Each sample is a helper request, a frame that wakes the link and the radio. Every 15 s bar gets a sample, or
-    /// under Low Power Mode every other one and the bar between takes the later sample (`barHold`).
+    /// under Low Power Mode every other one and the bar between takes the later sample (`barHold`). Without a viewer the
+    /// samples land on the shared clock's ticks (`HostTraffic`), with the liveness ping's and every other host's.
     nonisolated static func cadence(viewing: Bool, lowPower: Bool) -> Duration {
-        lowPower ? .seconds(30) : viewing ? .seconds(2) : .seconds(15)
+        lowPower ? .seconds(30) : viewing ? .seconds(2) : HostTraffic.interval
     }
 
     /// The longest gap between two samples whose empty bars take the later one (`bars`): Low Power Mode's 30 s cadence
@@ -147,12 +154,17 @@ final class HostStatistics {
     @ObservationIgnored var readLowPower: @MainActor () -> Bool = { System.lowPowerMode }
     /// How long a request may take (the Mac's 3 s); the disks get twice as long.
     @ObservationIgnored var timeout: Duration = .seconds(3)
+    /// The connection's liveness ping, told which ticks a sample covers (`HostSession` shares it with the driver).
+    @ObservationIgnored var pulse: HostPulse?
+    /// A tick's `stats.sample` round trip, the host's latency while the ping skips (`HostSession.latency`).
+    @ObservationIgnored var roundTrip: (@MainActor (Duration) -> Void)?
 
     @ObservationIgnored private var client: HelperClient?
-    @ObservationIgnored private var attached: Date?
-    /// This connection's last sample and disks reading.
-    @ObservationIgnored private var sampled: Date?
+    /// This connection's last process list and disks reading.
+    @ObservationIgnored private var processesRead: Date?
     @ObservationIgnored private var disksRead: Date?
+    /// The shared clock's tick the next sample is for; nil for a viewer's (off the clock).
+    @ObservationIgnored private var dueTick: Date?
     @ObservationIgnored private var samples = 0
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var generation = 0
@@ -163,8 +175,7 @@ final class HostStatistics {
     func attach(_ client: HelperClient?) {
         guard client !== self.client else { return }
         self.client = client
-        attached = client == nil ? nil : now()
-        sampled = nil
+        processesRead = nil
         disksRead = nil
         samples = 0
         // A new connection's numbers are not in yet.
@@ -172,8 +183,8 @@ final class HostStatistics {
         reschedule()
     }
 
-    /// A stats view appeared; end it with `endViewing`. The first viewer samples now (unless a sample is under 2 s old)
-    /// and every 2 s from then.
+    /// A stats view appeared; end it with `endViewing`. The first viewer samples now, with the process list (unless a
+    /// sample with one is under 2 s old), and every 2 s from then.
     func beginViewing() -> UUID {
         let token = System.uuid()
         viewers.insert(token)
@@ -207,6 +218,8 @@ final class HostStatistics {
         task?.cancel()
         task = nil
         generation += 1
+        dueTick = nil
+        pulse?.expect(nil)
         let reading = readLowPower()
         if lowPower != reading { lowPower = reading }
         guard active, let client else {
@@ -227,32 +240,58 @@ final class HostStatistics {
         }
     }
 
-    /// Until the next sample: a cadence after this connection's last one; without one, now for a viewer, else a cadence
-    /// after the connection came up (no sample is needed before anything shows it).
+    /// Until the next sample. A viewer's: a cadence after this connection's last sample with the process list, without
+    /// one now. Otherwise the shared clock's next tick of the cadence at least half of one away (`HostTraffic`; no sample
+    /// is needed before anything shows it), told to the liveness ping, which skips that tick.
     private func delay(_ generation: Int) -> Duration? {
         guard self.generation == generation else { return nil }
-        let start = sampled ?? (viewing ? nil : attached)
-        guard let start else { return .zero }
-        let seconds = Double(cadence.components.seconds) - now().timeIntervalSince(start)
-        return seconds > 0 ? .milliseconds(Int((seconds * 1000).rounded(.up))) : .zero
+        let now = now()
+        guard !viewing else {
+            dueTick = nil
+            pulse?.expect(nil)
+            guard let start = processesRead else { return .zero }
+            let seconds = cadence.seconds - now.timeIntervalSince(start)
+            return seconds > 0 ? .milliseconds(Int((seconds * 1000).rounded(.up))) : .zero
+        }
+        let wait = HostTraffic.wait(every: cadence, from: now)
+        dueTick = wait.tick
+        pulse?.expect(wait.tick)
+        return wait.delay
     }
 
     private func tick(_ client: HelperClient, generation: Int) async {
         let started = now()
-        let readsDisks = disksRead.map { started.timeIntervalSince($0) >= Self.diskInterval - 0.5 } ?? true
-        // Each request is bounded as the Mac's (3 s, the disks 6 s), so a stuck one cannot stall sampling; a cancelled
-        // loop (another connection, the background, a new cadence) sends nothing more.
-        let wire: HostStatsWire.Sample? = await Self.request(client, "stats.sample", timeout: timeout)
-        guard !Task.isCancelled else { return }
-        let rows: HostStatsWire.Processes? = await Self.request(client, "stats.processes", timeout: timeout)
-        guard !Task.isCancelled else { return }
-        let disks: [HostStatsWire.Disk]? = readsDisks ? await Self.request(client, "stats.disks", timeout: timeout * 2) : nil
+        let viewed = viewing
+        let tick = dueTick
+        if let tick { pulse?.sampled(tick) }
+        let readsDisks = disksRead.map { started.timeIntervalSince($0) >= Self.diskInterval(viewing: viewed) - 0.5 } ?? true
+        // The requests go out together, each bounded as the Mac's (3 s, the disks 6 s), so a stuck one cannot stall
+        // sampling (the helper runs each kind in its own slot); a cancelled loop (another connection, the background, a
+        // new cadence) cancels them. The process list only for a viewer.
+        let timeout = timeout
+        async let timed = Self.timedRequest(client, "stats.sample", timeout: timeout) as (HostStatsWire.Sample, Duration)?
+        async let listed: HostStatsWire.Processes? = viewed ? Self.request(client, "stats.processes", timeout: timeout) : nil
+        async let volumes: [HostStatsWire.Disk]? = readsDisks ? Self.request(client, "stats.disks", timeout: timeout * 2) : nil
+        let (sampledWire, rows, disks) = await (timed, listed, volumes)
+        // The ping skipped this tick for the sample: without its answer (refused before it left, as a connection whose
+        // profile lacks `stats.sample` does, or lost) the tick's `echo` goes now, so the helper still hears the phone.
+        var echoed: Duration?
+        if sampledWire == nil, tick != nil, !Task.isCancelled {
+            let reply: ([String: String], Duration)? = await Self.timedRequest(client, "echo", timeout: timeout)
+            echoed = reply?.1
+        }
         // Another connection, a disconnect or the background since: not this connection's any more.
         guard !Task.isCancelled, self.generation == generation, self.client === client else { return }
         let date = now()
-        sampled = date
+        if viewed { processesRead = date }
         if readsDisks { disksRead = date }
-        if let wire { apply(wire, at: date) }
+        if let sampledWire {
+            apply(sampledWire.0, at: date)
+            // On a tick the sample is the ping (which skipped it); a viewer's 2 s samples leave the latency to the ping.
+            if !viewed { roundTrip?(sampledWire.1) }
+        } else if let echoed {
+            roundTrip?(echoed)
+        }
         if let rows {
             let next = rows.rows.map { Process(id: $0.pid, name: $0.name, cpu: $0.cpu, memory: $0.rss ?? 0) }
             if processes != next { processes = next }
@@ -262,6 +301,14 @@ final class HostStatistics {
             let next = Disk(total: home.total, free: home.available)
             if disk != next { disk = next }
         }
+    }
+
+    /// `request`, with its round trip.
+    private static func timedRequest<Value: Decodable & Sendable>(_ client: HelperClient, _ method: String,
+                                                                 timeout: Duration) async -> (Value, Duration)? {
+        let started = ContinuousClock.now
+        let value: Value? = await request(client, method, timeout: timeout)
+        return value.map { ($0, ContinuousClock.now - started) }
     }
 
     /// `method` on `client`, nil after `timeout` (the request is cancelled) or on any failure.

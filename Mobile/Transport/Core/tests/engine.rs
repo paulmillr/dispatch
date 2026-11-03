@@ -70,6 +70,8 @@ struct Server {
     /// "resize <cols>x<rows> <pixels>", "close".
     terminal: Arc<Mutex<Vec<String>>>,
     shells: Arc<Mutex<HashSet<ChannelId>>>,
+    /// The algorithm of every verified public key signature, in order (`rsa-sha2-512`, `ssh-ed25519`, ...).
+    signatures: Arc<Mutex<Vec<String>>>,
 }
 
 impl server::Handler for Server {
@@ -79,8 +81,9 @@ impl server::Handler for Server {
         Ok(if user == "phone" && password == "s3cret" { Auth::Accept } else { reject() })
     }
 
-    async fn auth_publickey(&mut self, _user: &str, key: &PublicKey) -> Result<Auth, Self::Error> {
-        let known = self.authorized.lock().unwrap().iter().any(|k| k.key_data() == key.key_data());
+    async fn auth_publickey(&mut self, _user: &str, key: server::VerifiedPublicKey<'_>) -> Result<Auth, Self::Error> {
+        self.signatures.lock().unwrap().push(key.algorithm.to_string());
+        let known = self.authorized.lock().unwrap().iter().any(|k| k.key_data() == key.public_key.key_data());
         Ok(if known { Auth::Accept } else { reject() })
     }
 
@@ -198,6 +201,11 @@ struct Running {
 }
 
 fn start_server() -> Running {
+    start_server_with(russh::Limits::default())
+}
+
+/// A server that rekeys after `limits` (russh's own rekeys: the same host key every time).
+fn start_server_with(limits: russh::Limits) -> Running {
     let host = LoadedKey::parse(&key_file("host"), None).unwrap();
     let host_key = host.key.public_key().clone();
     let config = Arc::new(server::Config {
@@ -205,9 +213,10 @@ fn start_server() -> Running {
         auth_rejection_time: Duration::from_millis(1),
         auth_rejection_time_initial: Some(Duration::ZERO),
         methods: MethodSet::from(&[MethodKind::Password, MethodKind::PublicKey, MethodKind::KeyboardInteractive][..]),
+        limits,
         ..Default::default()
     });
-    let handler = Server { authorized: Arc::default(), rounds: Arc::default(), terminal: Arc::default(), shells: Arc::default() };
+    let handler = Server { authorized: Arc::default(), rounds: Arc::default(), terminal: Arc::default(), shells: Arc::default(), signatures: Arc::default() };
     let listener = runtime().block_on(tokio::net::TcpListener::bind("127.0.0.1:0")).unwrap();
     let port = listener.local_addr().unwrap().port();
     let accept = handler.clone();
@@ -831,4 +840,48 @@ mod abi {
         assert!(exited_rx.recv_timeout(Duration::from_millis(100)).is_err(), "exited runs once");
         unsafe { dms_session_free(session) };
     }
+}
+
+// MARK: - Rekeys and RSA signatures with russh's server
+
+/// russh's server rekeying after 16 KiB it sends, with the host key it started with: the exchange passes the engine's
+/// check (which compares it with the trusted key), and the stream comes through whole.
+#[test]
+fn many_rekeys_with_the_trusted_key_keep_the_stream_whole() {
+    let server = start_server_with(russh::Limits::new(16 * 1024, 1 << 30, Duration::from_secs(3600)));
+    let (session, events) = connect(&server);
+    assert!(matches!(runtime().block_on(session.auth_password("phone", "s3cret")), AuthOutcome::Success));
+    let log = exec_log();
+    let fd = runtime().block_on(exec(&session, "cat", log.clone())).unwrap();
+    let mut socket = unsafe { std::os::unix::net::UnixStream::from_raw_fd(fd) };
+    let payload: Vec<u8> = (0..512 * 1024u32).map(|i| (i % 251) as u8).collect();
+    let mut writer = socket.try_clone().unwrap();
+    let sent = payload.clone();
+    let feeder = std::thread::spawn(move || {
+        writer.write_all(&sent).unwrap();
+        writer.shutdown(std::net::Shutdown::Write).unwrap();
+    });
+    let mut echoed = Vec::new();
+    socket.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+    socket.read_to_end(&mut echoed).unwrap();
+    feeder.join().unwrap();
+    assert!(echoed == payload, "echoed {} of {} bytes", echoed.len(), payload.len());
+    eventually("the exit", || log.exit.lock().unwrap().is_some());
+    assert_eq!(*log.exit.lock().unwrap(), Some(Exit::Status(0)));
+    assert_eq!(events.seen.lock().unwrap().len(), 1, "a rekey never asks");
+    // russh's server asks for a rekey once it wrote 16 KiB (in practice once over this stream): it was checked.
+    assert!(session.rekeys() >= 1, "{} rekeys", session.rekeys());
+    assert!(events.disconnects.lock().unwrap().is_empty());
+}
+
+/// An RSA key signs rsa-sha2-512 (russh's server lists both SHA-2 algorithms), never ssh-rsa (SHA-1).
+#[test]
+fn rsa_keys_sign_with_sha2_512() {
+    let server = start_server();
+    let key = LoadedKey::parse(&key_file("rsa"), None).unwrap();
+    server.handler.authorized.lock().unwrap().push(key.key.public_key().clone());
+    let (session, _) = connect(&server);
+    let outcome = runtime().block_on(session.auth_key("phone", key.key.clone()));
+    assert!(matches!(outcome, AuthOutcome::Success), "{outcome:?}");
+    assert_eq!(*server.handler.signatures.lock().unwrap(), ["rsa-sha2-512"]);
 }

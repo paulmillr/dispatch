@@ -136,6 +136,11 @@ impl Decoder {
         }
     }
 
+    /// A frame has begun (header bytes or body) and not ended.
+    pub fn partial(&self) -> bool {
+        self.used != 0 || self.remaining != 0
+    }
+
     pub fn feed<'a>(
         &mut self,
         mut bytes: &'a [u8],

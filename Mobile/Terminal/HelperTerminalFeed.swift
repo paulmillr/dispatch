@@ -45,6 +45,8 @@ final class HelperTerminalFeed: TerminalFeed {
         var request: UInt64?
         var events: AsyncStream<TerminalFeedEvent>.Continuation?
         var queue: [(generation: Int, operation: Operation)] = []
+        /// Output bytes the current attachment handed its stream (`outputDelivered`).
+        var delivered = 0
     }
 
     private final class Shared: Sendable {
@@ -88,6 +90,7 @@ final class HelperTerminalFeed: TerminalFeed {
                 state.attached = true
                 state.request = nil
                 state.events = continuation
+                state.delivered = 0
                 state.queue.append((state.generation, .attach(size)))
             }
             return (state.request, state.events, Self.drop(&state.queue))
@@ -98,6 +101,11 @@ final class HelperTerminalFeed: TerminalFeed {
         wake.yield()
         return events
     }
+
+    /// Output bytes the current attachment handed its stream so far. A notification is handed over in the connection's
+    /// receive loop before any later reply resumes its caller, so read after an answer it counts all output sent before
+    /// that answer.
+    var outputDelivered: Int? { shared.state.withLock { $0.delivered } }
 
     func detach() {
         let previous = shared.state.withLock { state -> (UInt64?, AsyncStream<TerminalFeedEvent>.Continuation?, [Abandoned])? in
@@ -242,6 +250,7 @@ final class HelperTerminalFeed: TerminalFeed {
                 let events = shared.state.withLock { state -> AsyncStream<TerminalFeedEvent>.Continuation? in
                     guard state.generation == generation else { return nil }
                     if last { state.attached = false }
+                    if case .output(let bytes) = event { state.delivered += bytes.count }
                     return state.events
                 }
                 guard let events else { return false }

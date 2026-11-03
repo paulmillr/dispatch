@@ -47,3 +47,8 @@ path = "tests/chat_attachments.rs"
 [[test]]
 name = "bound_topology"
 path = "tests/bound_topology.rs"
+
+# files.git verify-commit with a real gpg whose configuration asks for key lookups (skipped without git and gpg).
+[[test]]
+name = "gpg_verify"
+path = "tests/gpg_verify.rs"

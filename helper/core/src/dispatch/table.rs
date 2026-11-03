@@ -437,6 +437,7 @@ operations! {
         ("limit", Unsigned),
     ]),
         plugin pack(
+        self.helper.transfers.client(self.fd),
         text(p, "transfer")?,
         Path::new(text(p, "base")?),
         &paths(p, "paths")?,
@@ -446,7 +447,7 @@ operations! {
         ("plugin", Text),
         ("transfer", Text),
     ]),
-        plugin pack_drop(text(p, "transfer")?) value;
+        plugin pack_drop(self.helper.transfers.client(self.fd), text(p, "transfer")?) value;
     "files.unpack.open" => Object(&[
         ("plugin", Text),
         ("transfer", Text),

@@ -756,6 +756,8 @@ final class ChatSession: Identifiable {
     @ObservationIgnored private var cachedVisibleRows: [ChatTranscriptRow]?
     @ObservationIgnored let toolLayouts = ChatToolLayoutCache()
     @ObservationIgnored let transcriptArrivals = ChatTranscriptArrivals()
+    /// Live replies typing out as they stream (`ChatTypingReveals`): presentation only, never saved.
+    @ObservationIgnored let typingReveals = ChatTypingReveals()
     /// The message flying to its bubble or queue row now, if any.
     var sendFlight: ChatSendFlight?
     @ObservationIgnored let flightFrames = ChatFlightFrames()
@@ -869,7 +871,17 @@ final class ChatSession: Identifiable {
     func holdTranscript() {
         guard !transcriptHeld else { return }
         heldTranscript = (visibleTranscriptRows, revision)
+        heldTyping = typingTurn
         transcriptHeld = true
+    }
+
+    /// The live turn and its newest item (a reply there may still be streaming: the typed reveal,
+    /// `ChatTypingReveals`). While held, the ones of when the window left, so a reply typing then goes on from where
+    /// it showed once the window is back.
+    var presentedTypingTurn: (turn: String, newest: String?)? { transcriptHeld ? heldTyping : typingTurn }
+    @ObservationIgnored private var heldTyping: (turn: String, newest: String?)?
+    private var typingTurn: (turn: String, newest: String?)? {
+        liveTurnID.map { id in (id, turns.last { $0.id == id }?.items.last?.id) }
     }
     /// Shows what arrived while held, in one update. Many rows leaving at once, or a page filling a transcript that
     /// was empty, rebuild the lazy stack in that same pass, as they do when they happen on screen.
@@ -1331,7 +1343,7 @@ final class ChatSession: Identifiable {
     /// reader's place stay, and the new id's records merge into them.
     func resetConversation(keepingConfiguration: Bool = false, keepingTranscript: Bool = false) {
         search.close(); search.query = ""; searchMatches = []; searchIndex = ChatSearch()
-        transcriptArrivals.reset()
+        transcriptArrivals.reset(); typingReveals.reset()
         sideConversation?.close(); sideConversation = nil
         reviewing = false
         draftCollection.persist(flush: true)
@@ -1388,7 +1400,7 @@ final class ChatSession: Identifiable {
     /// created is a replacement, and confirms its bubble in place. A bubble
     /// whose send ended unconfirmed leaves with the replaced history.
     func clearBranchHistory() {
-        transcriptArrivals.reset()
+        transcriptArrivals.reset(); typingReveals.reset()
         if approvals.contains(where: \.pending) {
             print("Chat transcript replacement preserves pending approvals: session=\(sessionID ?? "nil"), pending=\(approvals.filter(\.pending).count)")
         }
@@ -1459,6 +1471,11 @@ final class ChatSession: Identifiable {
             } else {
                 scrollPosition.expectRow()
             }
+        }
+        // A streamed reply that starts while the chat shows types out from its first word.
+        if result.added, !historical, showChat, !loadingHistory, item.kind == .assistant, !item.completed,
+           ChatTypingReveals.streamingAgents.contains(agentID) {
+            typingReveals.began(item.rowID ?? "\(turnID.utf8.count):\(turnID):\(item.id)")
         }
         // A record published again unchanged (the helper repeats a turn's records with its state) moves nothing:
         // no revision, so no transcript pass and no follow scroll for it.

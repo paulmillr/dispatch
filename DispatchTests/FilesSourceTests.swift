@@ -244,3 +244,26 @@ final class FilesSourceTests: XCTestCase {
         XCTAssertTrue(arrived.contains("Photos.app 2"), "A folder's name is numbered whole")
     }
 }
+
+extension FilesSourceTests {
+    /// A folder read through this Mac's helper is its `is_directory` (`FilesSourceError.isDirectory`), not a generic
+    /// refusal, so a preview of an entry not known to be a folder shows the folder's summary; a missing path stays an error.
+    @MainActor func testReadingAFolderSaysItIsOneAndPreviewsAsOne() async throws {
+        let folder = root.appendingPathComponent("src")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        try System.write(Data("hello".utf8), to: folder.appendingPathComponent("a.txt"))
+        do {
+            _ = try await source.read(folder.path, offset: 0, length: 4096, revision: nil)
+            XCTFail("A folder was read")
+        } catch let error as FilesSourceError {
+            XCTAssertEqual(error, .isDirectory(folder.path))
+        }
+        let unknown = FilePreviewState(path: folder.path, entry: nil)
+        await FilePreviewLoader.load(unknown, from: source)
+        guard case .folder(let summary?) = unknown.kind else { return XCTFail("src: \(unknown.kind)") }
+        XCTAssertEqual(summary.files, 1)
+        let gone = FilePreviewState(path: root.appendingPathComponent("gone").path, entry: nil)
+        await FilePreviewLoader.load(gone, from: source)
+        guard case .error = gone.kind else { return XCTFail("gone: \(gone.kind)") }
+    }
+}

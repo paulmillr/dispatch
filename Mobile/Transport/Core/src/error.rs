@@ -27,6 +27,8 @@ pub enum Code {
     Unreachable = -13,
     /// The host did not answer the TCP connection before the deadline.
     NoAnswer = -14,
+    /// A rekey presented another host key or algorithm than the connection's first exchange: the connection ended.
+    HostKeyChanged = -15,
 }
 
 #[derive(Debug)]

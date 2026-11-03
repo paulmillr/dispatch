@@ -121,6 +121,11 @@ final class WatchRequestServer {
                     return WatchFailure(.notSent, "This message is no longer queued.")
                 }
                 if Task.isCancelled { return Self.abandoned }
+                // A paused or uncertain one (a message the agent refused, docs/watch.md): the queue card's Send.
+                if session.canResend(row) {
+                    session.resendQueued(row)
+                    return nil
+                }
                 guard session.canSendNow(row) else {
                     return WatchFailure(.notSent, row.status ?? "Your iPhone can't send this message now.")
                 }

@@ -53,6 +53,13 @@ pub(crate) struct Interactions {
     revoked: bool,
 }
 
+/// One conversation: its session in the exact process (pid and start), as the mux and core match a binding. The
+/// binding's other process facts are a snapshot each identify takes again, so the binding a question opened with and
+/// the one the app answers through can differ there (Claude had its transcript open at one probe and not at the next)
+/// while both name the same conversation.
+fn same(left: &Binding, right: &Binding) -> bool {
+    left.session == right.session && left.process.pid == right.process.pid && left.process.start == right.process.start
+}
 fn fallback(io: &mut dyn Io, reply: u64) {
     let _ = io.reply(reply, b"");
 }
@@ -94,7 +101,7 @@ impl Interactions {
     pub fn cards(&self, binding: &Binding) -> Vec<Interaction> {
         self.pending
             .values()
-            .filter(|p| p.binding == *binding)
+            .filter(|p| same(&p.binding, binding))
             .map(|p| p.request.interaction.clone())
             .collect()
     }
@@ -179,7 +186,7 @@ impl Interactions {
                 .pending
                 .get(id)
                 .ok_or_else(|| error("expired", "Claude approval expired"))?;
-            if pending.binding != *binding || pending.answering || io.now() >= pending.until {
+            if !same(&pending.binding, binding) || pending.answering || io.now() >= pending.until {
                 return Err(error("changed", "Claude approval changed"));
             }
             // Once hooks are disabled, the app's dismiss (Skip for every question) is the old
@@ -454,3 +461,7 @@ impl Interactions {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "interactions.test.rs"]
+mod tests;

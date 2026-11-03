@@ -36,10 +36,14 @@ public protocol HostSession: Sendable {
   func close() async
   /// Why the connection ended, once `closed()` returned; nil when not known.
   var lossReason: String? { get }
+  /// The error the connection ended with, once `closed()` returned: one `refused` classifies as final (a host key
+  /// changed at a rekey) ends the retries as a failed connect would. Nil when not known.
+  var lossError: (any Error)? { get }
 }
 
 extension HostSession {
   public var lossReason: String? { nil }
+  public var lossError: (any Error)? { nil }
 }
 
 public enum HostConnectionPhase: Sendable {
@@ -159,6 +163,11 @@ public actor HostConnection<Session: HostSession> {
         await session.closed()
         guard self.generation == generation, !Task.isCancelled else { return }
         self.session = nil
+        if let error = session.lossError, refused(error) {
+          state = .failed(reason: HostConnectionPolicy.describe(error))
+          self.generation = nil
+          return
+        }
         // A loss: retry soon, unless it follows the previous loss within a minute.
         let now = clock.now
         let recent = lastDrop.map { now.timeIntervalSince($0) < 60 } ?? false
@@ -232,7 +241,7 @@ public enum HostConnectionPolicy: Sendable {
   public static func refused(_ error: any Error) -> Bool {
     guard let error = error as? SSHTransportError else { return false }
     switch error {
-    case .hostKeyRejected, .hostKeyMismatch, .authenticationFailed, .unsupportedAuthentication, .invalidKey,
+    case .hostKeyRejected, .hostKeyMismatch, .hostKeyChangedAtRekey, .authenticationFailed, .unsupportedAuthentication, .invalidKey,
       .wrongPassphrase, .bootstrap, .cancelled:
       return true
     case .timedOut, .channelClosed, .commandFailed, .outputLimit, .network, .connectFailed, .protocolError:

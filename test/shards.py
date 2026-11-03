@@ -14,7 +14,8 @@ TARGET = 'DispatchTests'
 # Classes that read the per-run Linux pairing profile (SSHLinuxTestProfile).
 PRIMARY_ONLY = frozenset(TARGET + '/' + name for name in (
     'SSHLinuxIntegrationTests', 'SSHHostIsolationIntegrationTests', 'HostLinuxIntegrationTests',
-    'SSHLinuxClaudeIntegrationTests', 'SSHLinuxPiIntegrationTests', 'SSHProcessStatisticsIntegrationTests'))
+    'SSHLinuxClaudeIntegrationTests', 'SSHLinuxPiIntegrationTests', 'SSHProcessStatisticsIntegrationTests',
+    'SSHLinuxFileTransferTests'))
 EXCLUDED = 'other VM shard'
 GIB = 1024 ** 3
 # Automatic sharding needs at least this much planned work on the lighter VM;

@@ -25,7 +25,7 @@ final class GitQueriesTests: XCTestCase {
         XCTAssertNil(inside)
 
         // git names the resolved path; the root keeps the spelling of the folder shown.
-        source.gitAnswers["/tmp/x/repo/src rev-parse --show-toplevel"] = ok("/private/tmp/x/repo\n")
+        source.gitAnswers["/tmp/x/repo/src rev-parse --show-toplevel"] = ok("/private/tmp/x/repo\n"); source.gitAnswers["/tmp/x/repo rev-parse --show-toplevel"] = ok("/private/tmp/x/repo\n")
         let linked = try await GitQueries.repository(of: "/tmp/x/repo/src", source: source)
         XCTAssertEqual(linked?.root, "/tmp/x/repo")
 

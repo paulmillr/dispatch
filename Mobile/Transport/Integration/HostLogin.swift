@@ -14,6 +14,8 @@ protocol HostLogin: AnyObject, Sendable {
     var isOpen: Bool { get }
     /// Why the connection ended, once `closed()` returned; nil when not known.
     var lossReason: String? { get }
+    /// The error it ended with (`MobileTransport.HostSession.lossError`); nil when not known.
+    var lossError: (any Error)? { get }
     /// Opens PTY shells on this connection (plain SSH).
     var shells: any ShellOpener { get }
     func closed() async
@@ -24,6 +26,10 @@ protocol HostLogin: AnyObject, Sendable {
     /// leaves the connection open.
     func bootstrapHelper(binaries: URL, capabilities: String, environment: [String: String], root: HelperBootstrap.Root,
                          phase: @escaping @Sendable (HostConnectionPhase) async -> Void) async throws -> any HelperProcess
+}
+
+extension HostLogin {
+    var lossError: (any Error)? { nil }
 }
 
 /// The helper's `--stdio` session on a login.
@@ -62,6 +68,8 @@ final class SSHLogin: HostLogin {
         case let reason?: HostConnectionPolicy.describe(reason)
         }
     }
+
+    var lossError: (any Error)? { connection.endReason }
 
     var shells: any ShellOpener { SSHShellOpener(connection: connection) }
 

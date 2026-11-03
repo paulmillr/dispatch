@@ -99,7 +99,7 @@ Crates (125):
   rfc6979 0.6.0  Apache-2.0 OR MIT
   ring 0.17.14  Apache-2.0 AND ISC
   rsa 0.10.0-rc.18  MIT OR Apache-2.0
-  russh 0.64.1  Apache-2.0
+  russh 0.65.0  Apache-2.0
   russh-cryptovec 0.62.0  Apache-2.0
   russh-util 0.52.0  Apache-2.0
   rustversion 1.0.23  MIT OR Apache-2.0  (build-time macro)
@@ -19242,8 +19242,10 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ========================================================================
-russh-0.64.1
+russh-0.65.0
 Declared license: Apache-2.0
+
+Modified by Dispatch: Mobile/Transport/Core/russh.patch (scripts/vendor-russh.py).
 
 (the package ships no license file: used under Apache-2.0, whose text closes this file)
 

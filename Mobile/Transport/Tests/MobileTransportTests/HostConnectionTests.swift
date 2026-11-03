@@ -375,3 +375,45 @@ private func awaitState<S: HostSession>(_ host: HostConnection<S>, timeout: Dura
                                   _ matches: @escaping @Sendable (HostConnectionState) -> Bool) async throws {
   _ = try await collect(await host.states(), until: matches, timeout: timeout)
 }
+
+/// A session that ended at once with `error` (`HostSession.lossError`).
+private struct EndedSession: HostSession {
+  let error: SSHTransportError
+  func closed() async {}
+  func close() async {}
+  var lossError: (any Error)? { error }
+}
+
+private actor Attempts {
+  private(set) var count = 0
+  func next() -> Int {
+    count += 1
+    return count
+  }
+}
+
+extension HostConnectionTests {
+  /// A host key that changed at a rekey (the engine's `DMS_HOST_KEY_CHANGED`) ends the connection for good: no silent
+  /// reconnect, the host shows why until the user connects again (that connection checks the key against the trusted one).
+  func testHostKeyChangedAtRekeyIsNotRetried() async throws {
+    let error = SSHTransportError.hostKeyChangedAtRekey("the server presented a different host key at a key re-exchange")
+    XCTAssertTrue(HostConnectionPolicy.refused(error))
+    let attempts = Attempts()
+    let clock = TestClock()
+    let host = HostConnection<EndedSession>(clock: clock) { _ in
+      _ = await attempts.next()
+      return EndedSession(error: error)
+    }
+    await host.start()
+    try await awaitState(host) { if case .failed = $0 { true } else { false } }
+    let state = await host.state
+    XCTAssertEqual(state, .failed(reason: HostConnectionPolicy.describe(error)))
+    XCTAssertTrue(HostConnectionPolicy.describe(error).hasPrefix("The host key changed during the connection"))
+    clock.advance(by: 3600)
+    try await Task.sleep(for: .milliseconds(50))
+    let count = await attempts.count
+    XCTAssertEqual(count, 1, "no reconnect")
+    // A plain loss (another error) is still retried.
+    XCTAssertFalse(HostConnectionPolicy.refused(SSHTransportError.protocolError("the host stopped answering")))
+  }
+}

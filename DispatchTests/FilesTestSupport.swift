@@ -9,13 +9,13 @@ final class FakeFilesSource: FilesSource, @unchecked Sendable {
     final class Node {
         var kind: FileEntryKind
         var data: Data
-        var children: [String: Node]
+        var children: [FakeName: Node]
         var modified: Date
         var target: String?
         var mode: UInt32
         let inode: UInt64
 
-        init(kind: FileEntryKind, data: Data = Data(), children: [String: Node] = [:], modified: Date,
+        init(kind: FileEntryKind, data: Data = Data(), children: [FakeName: Node] = [:], modified: Date,
              target: String? = nil, mode: UInt32 = 0o644, inode: UInt64) {
             self.kind = kind
             self.data = data
@@ -30,6 +30,8 @@ final class FakeFilesSource: FilesSource, @unchecked Sendable {
     let endpoint: FilesEndpoint
     var home: String?
     var hostLabel: String?
+    /// The host's stable identity (`FilesSource.hostIdentity`); a remote source without one keeps no review.
+    var hostIdentity: String?
     /// A host whose grant has Files without Copy files in.
     var readOnly = false
     /// Waited before every call through `System.sleep`, so tests that replay stay deterministic.
@@ -42,6 +44,12 @@ final class FakeFilesSource: FilesSource, @unchecked Sendable {
     var hangs: Set<String> = []
     /// Entries past this count are reported as truncated.
     var listLimit = 10_000
+    /// Names that differ only in case are one name, each entry keeping its spelling (a default APFS volume, SMB). A
+    /// checked write over a variant keeps the old spelling (the helper swaps the content in), an archive's replacing
+    /// move leaves the new one. With both this and `foldsNormalization` off names compare byte for byte, as on Linux.
+    var foldsCase = false
+    /// Names that differ only in Unicode normalization (NFC and NFD) are one name: any APFS volume, case-sensitive ones too.
+    var foldsNormalization = false
     /// Scripted `git` answers by the arguments joined with spaces (e.g. "status --porcelain=v2 -z"), tried with the
     /// path prefixed ("/Users/ivan/src/api status …") first. Unscripted commands answer like a folder outside any
     /// repository: status 128 and git's own words.
@@ -123,7 +131,8 @@ final class FakeFilesSource: FilesSource, @unchecked Sendable {
     func remove(_ path: String) {
         lock.withLock {
             let (parent, name) = split(path)
-            node(at: parent)?.children[name] = nil
+            guard let directory = node(at: parent), let key = key(in: directory, name) else { return }
+            directory.children[key] = nil
         }
     }
 
@@ -139,7 +148,7 @@ final class FakeFilesSource: FilesSource, @unchecked Sendable {
             guard let start = node(at: path) else { return [] }
             var out: [String] = []
             func walk(_ node: Node, _ prefix: String) {
-                for name in node.children.keys.sorted() {
+                for name in node.children.keys.map(\.text).sorted() {
                     let child = node.children[name]!
                     let relative = prefix.isEmpty ? name : prefix + "/" + name
                     out.append(relative)
@@ -184,7 +193,7 @@ final class FakeFilesSource: FilesSource, @unchecked Sendable {
         return try lock.withLock {
             guard let node = node(at: path) else { throw FilesSourceError.notFound(path) }
             guard node.kind == .directory else { throw FilesSourceError.notDirectory(path) }
-            var names = node.children.keys.sorted { Array($0.utf8).lexicographicallyPrecedes(Array($1.utf8)) }
+            var names = node.children.keys.map(\.text).sorted { Array($0.utf8).lexicographicallyPrecedes(Array($1.utf8)) }
             if !hidden { names.removeAll { $0.hasPrefix(".") } }
             let truncated = names.count > listLimit
             if truncated { names = Array(names.prefix(listLimit)) }
@@ -228,7 +237,9 @@ final class FakeFilesSource: FilesSource, @unchecked Sendable {
         try await enter("read", path)
         return try lock.withLock {
             guard let node = resolved(at: path) else { throw FilesSourceError.notFound(path) }
-            guard node.kind == .file else { throw FilesSourceError.unsupported("\(path) is not a regular file") }
+            // As the helper answers: a folder is `is_directory`, anything else not a file `invalid_request`.
+            if node.kind == .directory { throw FilesSourceError.isDirectory(path) }
+            guard node.kind == .file else { throw FilesSourceError.other(code: "invalid_request", message: "invalid input parameter") }
             let current = self.revision(of: node)
             if let revision, revision != current { throw FilesSourceError.changed(path) }
             let start = min(Int(offset), node.data.count)
@@ -248,15 +259,16 @@ final class FakeFilesSource: FilesSource, @unchecked Sendable {
             guard expectedParent == FileIdentity(device: 1, inode: directory.inode) else {
                 throw FilesSourceError.changed(parent)
             }
+            let existing = key(in: directory, name)
             if replace {
-                guard let current = directory.children[name],
+                guard let existing, let current = directory.children[existing],
                       replaced == FileIdentity(device: 1, inode: current.inode) else { throw FilesSourceError.changed(path) }
             } else if replaced != nil {
                 throw FilesSourceError.changed(path)
             }
-            if directory.children[name] != nil, !replace { throw FilesSourceError.exists(path) }
+            if existing != nil, !replace { throw FilesSourceError.exists(path) }
             let node = Node(kind: .file, data: data, modified: System.date(), mode: mode ?? 0o644, inode: allocate())
-            directory.children[name] = node
+            directory.children[existing ?? name] = node
             return revision(of: node)
         }
     }
@@ -280,7 +292,7 @@ final class FakeFilesSource: FilesSource, @unchecked Sendable {
                     case .directory:
                         folders += 1
                         payload.append(entry)
-                        for name in node.children.keys.sorted() { add(node.children[name]!, relative + "/" + name) }
+                        for name in node.children.keys.map(\.text).sorted() { add(node.children[name]!, relative + "/" + name) }
                         return
                     case .file:
                         files += 1
@@ -331,7 +343,7 @@ final class FakeFilesSource: FilesSource, @unchecked Sendable {
             guard parent == FileIdentity(device: 1, inode: node.inode) else { throw FilesSourceError.changed(target) }
             if policy == .replace {
                 guard Set(replacements.keys) == Set(names), replacements.allSatisfy({ name, identity in
-                    node.children[name].map { identity == FileIdentity(device: 1, inode: $0.inode) } ?? false
+                    key(in: node, name).flatMap { node.children[$0] }.map { identity == FileIdentity(device: 1, inode: $0.inode) } ?? false
                 }) else { throw FilesSourceError.changed(target) }
             } else if !replacements.isEmpty {
                 throw FilesSourceError.changed(target)
@@ -404,22 +416,23 @@ final class FakeFilesSource: FilesSource, @unchecked Sendable {
                 result.entries += 1
             }
             // As the helper does: an archive naming anything at its top but what was dragged is refused whole.
-            if !open.names.isEmpty, let stray = tree.children.keys.sorted().first(where: { !open.names.contains($0) }) {
+            if !open.names.isEmpty, let stray = tree.children.keys.map(\.text).sorted().first(where: { name in
+                !open.names.contains { $0.utf8.elementsEqual(name.utf8) } }) {
                 throw FilesSourceError.other(code: "invalid_request", message: "The archive holds \(stray), which was not sent")
             }
-            for name in tree.children.keys.sorted() {
+            for name in tree.children.keys.map(\.text).sorted() {
                 let incoming = tree.children[name]!
-                if target.children[name] == nil {
+                guard let existing = key(in: target, name) else {
                     target.children[name] = incoming
                     continue
                 }
                 switch open.policy {
                 case .replace:
+                    target.children[existing] = nil
                     target.children[name] = incoming
                     result.replaced += 1
                 case .keep:
-                    let kept = FileTransferEngine.keptName(name, folder: incoming.kind == .directory,
-                                                           taken: Set(target.children.keys))
+                    let kept = FileTransferEngine.keptName(name, folder: incoming.kind == .directory) { key(in: target, $0) != nil }
                     target.children[kept] = incoming
                     result.kept += 1
                 case .skip:
@@ -488,17 +501,29 @@ final class FakeFilesSource: FilesSource, @unchecked Sendable {
     private func node(at path: String) -> Node? {
         var node = root
         for part in components(path) {
-            guard let child = node.children[part] else { return nil }
+            guard let key = key(in: node, part), let child = node.children[key] else { return nil }
             node = child
         }
         return node
+    }
+
+    /// The child key a name finds in a folder: the name itself, or the spelling of the entry it folds to.
+    private func key(in node: Node, _ name: String) -> String? {
+        if node.children[name] != nil { return name }
+        guard foldsCase || foldsNormalization else { return nil }
+        func form(_ name: String) -> [UInt8] {
+            let normalized = foldsNormalization ? name.precomposedStringWithCanonicalMapping : name
+            return Array((foldsCase ? normalized.lowercased() : normalized).utf8)
+        }
+        let wanted = form(name)
+        return node.children.keys.first { form($0.text) == wanted }?.text
     }
 
     @discardableResult
     private func makeDirectory(_ path: String, modified: Date) -> Node {
         var node = root
         for part in components(path) {
-            if let child = node.children[part] {
+            if let child = key(in: node, part).flatMap({ node.children[$0] }) {
                 node = child
             } else {
                 let child = Node(kind: .directory, modified: modified, inode: allocate())
@@ -527,6 +552,21 @@ final class FakeFilesSource: FilesSource, @unchecked Sendable {
         var parts = components(path)
         let name = parts.popLast() ?? ""
         return ("/" + parts.joined(separator: "/"), name)
+    }
+}
+
+/// A fake folder entry's name, compared byte for byte (Swift's `==` on strings ignores normalization).
+struct FakeName: Hashable {
+    let text: String
+
+    static func == (a: Self, b: Self) -> Bool { a.text.utf8.elementsEqual(b.text.utf8) }
+    func hash(into hasher: inout Hasher) { hasher.combine(Array(text.utf8)) }
+}
+
+extension Dictionary where Key == FakeName {
+    subscript(name: String) -> Value? {
+        get { self[FakeName(text: name)] }
+        set { self[FakeName(text: name)] = newValue }
     }
 }
 

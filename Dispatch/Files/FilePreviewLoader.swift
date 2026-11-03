@@ -127,8 +127,8 @@ import ImageIO
         do {
             first = try await source.read(preview.path, offset: 0, length: sniffLength, revision: nil)
         } catch let error as FilesSourceError {
-            // Without an entry the row may be a folder: a folder's summary works where its read does not.
-            guard preview.entry == nil, case .unsupported = error, let summary = try? await source.summary(preview.path) else {
+            // Without an entry the row may be a folder: the helper says so (`is_directory`), and its summary shows.
+            guard preview.entry == nil, case .isDirectory = error, let summary = try? await source.summary(preview.path) else {
                 throw error
             }
             try Task.checkCancellation()

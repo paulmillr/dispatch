@@ -104,8 +104,8 @@ request and hold is logged under subsystem `yachts.dispatch.mobile`, category `W
 | `refresh` | holds (background) or `retryNow()`s (foreground) the hosts with Chat on, never a plain SSH host; with a host it is the user's Connect and lifts the phone's Disconnect | `snapshot` |
 | `thread` | holds the host; `ChatConversations.session(for:)`; waits for a verified, loaded session, else answers with what the phone holds | `thread` |
 | `answer` | the pending approval, question form or side question by interaction id (waited for up to 2 s after a reopen), answered through `MobileChatSession` | `thread` |
-| `send` | `MobileChatSession.send(text:steer:)`, the composer's routing without touching the phone's drafts; a host that is down queues on the phone | `thread` |
-| `stop`, `resume`, `queue.remove`, `queue.sendNow` | the session's own actions, with the phone's own permission checks | `thread` |
+| `send` | `MobileChatSession.send(text:steer:)`, the composer's routing without touching the phone's drafts; a host that is down queues on the phone; a prompt the agent refuses stays in the phone's queue, paused (Limits, Refused after Stop) | `thread` |
+| `stop`, `resume`, `queue.remove`, `queue.sendNow` | the session's own actions, with the phone's own permission checks; `queue.sendNow` on a paused or uncertain device row is the queue card's Send (`resendQueued`) | `thread` |
 | `seen` | `ChatConversations.markSeen` through the item's time; no host needed | `done` |
 | `open` | foreground: the thread opens at once; background: a local notification when allowed, else `unavailable` | `opened` |
 | `review.undo` | `WatchReviewEvents.undo` while the review's window is open | `done` |
@@ -167,20 +167,56 @@ naming its mockup) follow it.
   older than 10 min while reachable. A locked phone alone shows nothing (its password hosts still connect). Per host,
   `blocked` says what only the phone can do; rows of a host not live dim as on the phone.
 - **Agents and Spaces** are the phone's lists in the phone's order with the phone's dots and badge; previews are one
-  flattened line. Two pushes (hosts and spaces, then a space's tabs, then a tab) rather than one indented list. An
-  agent's tab opens its thread; any other tab shows its facts and "Terminal on your iPhone". A host screen shows the
-  phone's stats strip and 15-minute CPU sparkline, dimmed when the phone marks them stale or the host offline, with
-  Connect (`refresh` with that host) when offline.
-- **Thread.** Opening fetches a page (40 items) and caches it; the cached page shows while a newer one loads, and a
-  page goes when the snapshot no longer lists its conversation. A page on screen reloads when its row moves past it;
+  flattened line. An Agents row's leading column is its dot alone; its name takes up to two lines, its state line two
+  while it works or needs you and one for an idle row's preview. Where an agent's mark shows (a tab row, the thread's
+  header, an approval) it is the phone's one monochrome bubble for every agent. Two pushes (hosts and spaces, then a
+  space's tabs, then a tab) rather than one indented list. An agent's tab opens its thread; any other tab shows its
+  facts and "Terminal on your iPhone". Under a connected host's Spaces header with a reading, one line: CPU % with a
+  small 15-minute sparkline and memory used of total, red where the phone flags them high, dimmed while the phone's
+  numbers are not current (`HostStatsLine`). A host screen shows the phone's stats strip and 15-minute CPU sparkline,
+  dimmed when the phone marks them stale or the host offline, with Connect (`refresh` with that host) when offline.
+- **Thread.** A page holds the phone's thread rows: the messages, Claude's thinking as an agent bubble of its own,
+  notices; no tools (an ended turn's caption counts its steps), and the watch hides those an older phone still sends.
+  It opens at the newest turn (the one the user's newest message started, by its turn id: the summary card and what
+  waits); the page's earlier turns wait behind an "Earlier · N" row that expands in place, and "Earlier messages are
+  on your iPhone" shows once they do. The split stays where it was when the screen opened, so a message sent from it
+  does not put the answer just read behind "Earlier". While the agent works the header says the host's CPU after the
+  model ("Claude Code · opus-5.5", a chip symbol, "34%"): the machine or the agent. Opening fetches a page (40 items)
+  and caches it; the cached page shows while a newer one loads, and a page goes when the snapshot no longer lists its
+  conversation. A page on screen reloads when its row moves past it;
   one off screen reloads on its next open. A thread opened before the phone was reachable loads once it is; launch
   greets the phone with one `hello`. Older history stays on the phone.
-- **Approvals and questions.** Only pending ones, with the phone's chips, affirmative first. Nothing is sent until
-  every part of a question is answered; a secret question says "Answer on your iPhone".
-- **Composer and queue.** Reply opens the system's text input, then a confirm screen saying where the words go
-  (sent at once, queued, or queued on the phone): nothing leaves the watch before Send. Steer is the phone's long-press
-  send as a second input. Queue rows swipe for Remove and Send now where the phone allows it; no editing of queued
-  text.
+- **Approvals and questions.** Only pending ones, with the phone's chips: Allow (accent) and Deny (red words) side by
+  side in one row, This session under them as a glass capsule where offered (`ApprovalCard.layout`). While one waits
+  the composer is Open on iPhone alone (no Reply). Nothing is sent until every part of a question is answered; a
+  secret question says "Answer on your iPhone".
+- **Composer and queue.** The bottom of a thread is two buttons, Reply (accent) and Open on iPhone (kept there rather
+  than in the toolbar: it is the composer's only button while a request waits, and the toolbar's trailing place holds
+  the loading spinner). Reply opens its first step (`QuickReplySheet`): "Dictate or type" (the system's text input;
+  watchOS offers no suggestions on `TextFieldLink`) and the quick replies "Continue", "Yes, do it", "Run the tests",
+  "Commit it" (a fixed list for now); either leads to a confirm screen that carries the route, chosen once the words
+  exist (the phone's tap queues, its hold offers Steer): while a live agent works, Queue (accent, "Queued after this
+  turn", or after the messages waiting that send by themselves; a paused one holds nothing back) and Steer now ("Goes
+  into the running turn"); otherwise Send with where the words go (sent at once, queued, or queued on the phone);
+  Cancel under either. The buttons are those the screen opened with, so none moves under a finger; a turn that starts
+  or ends meanwhile changes only their lines, which say what the phone will do with each (Steer now after the turn
+  ended: "Sent now: the turn ended"). Nothing leaves the watch before one is tapped. Queue rows swipe for Remove and
+  Send now where the phone allows it, or Send for one the phone itself paused or holds as uncertain (the queue card's
+  Send: into the queue again; `queue.sendNow` on such a row; `MobileChatSession.canResend`). A row the host's queue
+  holds and paused after Stop has neither: Resume is its way back, as sending it again would queue it twice.
+- **Stop.** A small stop disc at the trailing end of the working line (the phone's), only while the phone offers Stop
+  (`canStop`), with a 44 pt target and its own VoiceOver element ("Stop"); not among the bottom buttons, where a crown
+  scroll or a flick ends. It asks first: "Queued messages wait until Resume." with a destructive "Stop Claude" (Codex,
+  Pi; the agent's own label otherwise). The confirmation is for the turn it was asked in (`ThreadScreen.stopKey`):
+  it closes, and stops nothing, once that turn ended or another began. Resume stays under the queue.
+- **Double tap** (`handGestureShortcut(.primaryAction)`, `ThreadScreen.primaryAction`): Allow on the thread's first
+  approval card (one that offers Allow), else Answer on its first question (Reply is hidden while one waits), else
+  Reply. One control holds it at a time.
+- **Haptics** (`WatchHaptic`), only while the app is frontmost: `.notification` when a conversation the last snapshot
+  listed starts needing you, else `.success` when one's turn finished (working, now not, without needing you); one
+  per snapshot, none for working updates or a muted row. None either until the phone answered the launch's or a
+  reconnection's `hello` (what changed while the watch was away is not news), nor for a turn the user stopped from the
+  watch. In the background the phone's notifications speak.
 - **Optimistic, then the phone's page.** An answer removes its card, a message shows as "Sending…", a removed row
   goes, at once; the reply's page replaces the guess. On a failure the page as it was comes back with the reason,
   unless another action's page replaced the guess meanwhile.
@@ -191,7 +227,7 @@ naming its mockup) follow it.
   whatever shows, with Undo until the deadline; one that arrives after its window never shows; one the phone's own
   Undo took back says so and closes. It waits while a thread's own sheet is up (one sheet cannot present over
   another).
-- **Complications.** One widget, "Needs you" (`NeedsYouWidget`), in the rectangular, corner, circular and inline
+- **Complications.** Two widgets. "Needs you" (`NeedsYouWidget`), in the rectangular, corner, circular and inline
   families; pink only while something needs you. The entry (`WatchComplicationEntry`: the count, the newest needs-you
   row, the snapshot's time) is a JSON file in the App Group container (`WatchComplicationStore`, data protection class
   C, a plain file so no required-reason API), written newest-wins from every snapshot the watch app takes and from the
@@ -199,8 +235,21 @@ naming its mockup) follow it.
   or first line changed, within the day's budget of 50), which wakes the watch app in the background
   (`.backgroundTask(.watchConnectivity)`). The timeline is the entry, then from five minutes past its time the same
   with "As of …"; a tap opens `dispatch-watch://open?host=…&node=…`. Once the budget is spent, or with the
-  complication only in the Smart Stack, a face can show an old count; its "As of" time says so. Untested: a face
-  carrying it and a real background wake (simctl can configure neither).
+  complication only in the Smart Stack, a face can show an old count; its "As of" time says so. "Host" (`HostWidget`),
+  rectangular and circular: one host's CPU % and sparkline (a circular gauge), red when the phone flags it high,
+  dimmed when not current or stale; the host chosen for it (shown by name as "Not available" while the entry lacks
+  it, never another host's numbers in its place), else, for Busiest host, the busiest connected one. watchOS has no
+  configuration
+  screen, so a face offers the recommendations: Busiest host and one per host (`HostWidgetIntent`, an App Intent whose
+  hosts come from the entry). Its entry (`HostWidgetEntry`: every host with a CPU reading, its 60 buckets, the high
+  and current flags) is `hosts.json` beside the other, written by `HostWidgetWriter` from the watch app's snapshots
+  only when what a face could show changed; its timelines reload at most every 15 minutes for numbers, every 5 when a
+  host is flagged high (or no longer) or goes stale, never more than 40 times in 24 hours (what a skipped reload would
+  show is in the file for the next one or the widget's own 15-minute refresh), and the recommendations are
+  invalidated when the hosts change. Its entry's relevance is high while a current, fresh reading is flagged, so the
+  Smart Stack can bring it forward; a tap
+  opens the host's screen (`dispatch-watch://host?host=…`). The phone transfers no Host entry: it follows what the
+  watch app receives. Untested: a face carrying either and a real background wake (simctl can configure neither).
 - **Notifications.** Background refresh's notifications reach the watch as iOS forwards any iPhone notification;
   `WatchAppDelegate` registers category `agent` (no actions: a refresh holds no interaction, and an approval belongs
   to a live subscription), and a tap routes through `WatchRouter` to the thread, on a cold launch too. Untested: a
@@ -213,7 +262,8 @@ naming its mockup) follow it.
 mockup-offline|mockup-review` (via `SIMCTL_CHILD_`), or the launch argument `-DispatchWatchScripted <value>` (so
 `xcrun simctl launch <udid> <bundle id> -DispatchWatchScripted locked` works without a paired phone): `ScriptedWatchLink`'s
 phone, defined in `WatchModel` and `WatchFixtures`. `-DispatchWatchShow spaces|spaces:<host>|space:<host>/<key>|
-tab:<host>/<key>|host:<host>` opens a screen, `-DispatchWatchSheet question[:<option>]|reply:<text>` a thread's sheet,
+tab:<host>/<key>|host:<host>` opens a screen, `-DispatchWatchSheet question[:<option>]|reply:<text>|stop|quick` a thread's sheet (`quick`: Reply's quick replies) (the reply confirm screen shows
+the thread's route: Queue and Steer now on a working one; `stop` is Stop's confirmation where Stop is offered),
 `-DispatchWatchOpen <host>/<node>` takes a notification tap's route, `-DispatchWatchNotify <host>/<node>` posts a local
 `agent` notification 3 s after launch (provisional authorization, so no prompt).
 
@@ -232,9 +282,13 @@ tab:<host>/<key>|host:<host>` opens a screen, `-DispatchWatchSheet question[:<op
 - **Simulator.** A message takes 1 to 3.5 s each way. Not shown by simulators: a locked phone, forwarded
   notifications and their tap, Face ID keys, real SSH hosts, a face with the complication, a device. The watch cannot
   be tapped from `simctl`; the debug hooks and the UI tests stand in.
-- **Open, outside the watch.** Stop (`chat.stop`) leaves the interrupted prompt in Claude Code's input, and the next
-  `chat.send` is refused as "not ready for input" until it is cleared; a message sent from the watch then is lost (the
-  phone keeps no draft for it) and the watch learns of the failure only from its next page.
+- **Refused after Stop.** Stop (`chat.stop`) leaves the interrupted prompt in Claude Code's input, and the next
+  `chat.send` is refused as "not ready for input" until it is cleared (in Terminal; the helper does not clear it). A
+  message from the watch has no draft on the phone to come back to, so `MobileChatSession.send(text:steer:)` keeps a
+  refused one in the phone's queue, paused ("Not sent: Claude was not ready for input. Send it again or discard it.";
+  one whose connection ended after the request may have been delivered and is kept as uncertain instead). It is never
+  sent again by itself: the queue card's Send or the watch's swipe puts it back in the queue. The watch learns of the
+  failure from its next page, where the row shows with its reason.
 
 ## Testing
 
@@ -254,7 +308,8 @@ tab:<host>/<key>|host:<host>` opens a screen, `-DispatchWatchSheet question[:<op
     -derivedDataPath build/ios test [-only-testing:DispatchWatchUITests/WatchLiveTests/<test>]
   ```
 
-  `WatchLiveTests.testScriptedTapsThroughAgentsAndSpaces` needs no phone. `testLiveRoundTripWithThePairedPhone` and
+  `WatchLiveTests.testScriptedTapsThroughAgentsAndSpaces` and `testScriptedWorkingThreadSteersAndStops` (a quick
+  reply queued, typed words steered, Stop confirmed) need no phone. `testLiveRoundTripWithThePairedPhone` and
   `testLiveSendWithThePairedPhone` run against Dispatch on the paired phone (`XCTSkip` without one); with
   `TEST_RUNNER_DISPATCH_LIVE_FIXTURE` the phone is on the live fixture (`scripts/mobile-live-fixture.py`,
   [ios](ios.md#testing)) and the tests answer, approve, send and stop a real Claude Code turn. Run the send test with

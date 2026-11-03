@@ -229,6 +229,14 @@ final class HelperConnection: @unchecked Sendable {
       var frames: [HelperWire.Message] = []
       try decoder.feed(bytes) { frames.append($0) }
       for frame in frames {
+        // A response to request 0, which is never sent: the helper refused this connection (its connection limit,
+        // helper/PROTOCOL.md Limits) and closes it; every request fails with its reason.
+        if frame.id == 0, frame.kind == .response, let reply = try? HelperBinary.decode(frame.body),
+          case .object(let object) = reply, let error = object["error"],
+          let refusal = try? HelperBinary.decode(HelperFailure.self, from: error)
+        {
+          throw refusal
+        }
         guard let item = pending[frame.id] else { continue }
         guard let reply = try collector.push(kind: frame.kind.rawValue, id: frame.id, body: frame.body)
         else { continue }

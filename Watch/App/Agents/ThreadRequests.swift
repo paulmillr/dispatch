@@ -16,7 +16,7 @@ enum ApprovalButtonStyle: Equatable {
 
 /// K3: the agent's request in its bubble, its glyph and "Codex wants to run" (or the request's own words), the command
 /// on one monospaced line (scaled down rather than wrapped), "Waiting · 2m" under it. The chips follow as capsules
-/// (`ApprovalChoiceButton`): Allow first, This session where offered, Deny last.
+/// (`ApprovalChoiceButton`, `layout`): Allow and Deny side by side, This session under them where offered.
 struct ApprovalCard: View {
     let approval: WatchApproval
     /// The agent's key or label ("codex", "Claude Code").
@@ -89,9 +89,17 @@ struct ApprovalCard: View {
 
     /// The chips' titles in the order they show.
     static func titles(_ approval: WatchApproval) -> [String] { ordered(approval.choices).map(\.label) }
+
+    /// Where the chips go: Allow and Deny side by side in one row (Allow first), the rest (This session, where offered,
+    /// and any the watch does not know) under it, full width.
+    static func layout(_ choices: [WatchChoice]) -> (row: [WatchChoice], below: [WatchChoice]) {
+        let ordered = ordered(choices)
+        let row = ordered.filter { $0.role == .allow || $0.role == .deny }
+        return (row, ordered.filter { $0.role != .allow && $0.role != .deny })
+    }
 }
 
-/// One approval chip as a full-width capsule: Allow in the accent, This session glass, Deny glass with red words.
+/// One approval chip as a capsule: Allow in the accent, This session glass, Deny glass with red words.
 struct ApprovalChoiceButton: View {
     let choice: WatchChoice
     let busy: Bool

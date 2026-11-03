@@ -11,6 +11,10 @@ mod uninstall;
 const TYPED: [(&str, &str); 4] = [("claude", "claude"), ("codex", "codex"), ("pi", "pi"), ("herdr", "herdr")];
 
 fn main() -> std::io::Result<()> {
+    // git running this helper as gpg for a signature check (files plugin, gpg.rs): it starts gpg and never returns.
+    if let Some(code) = dispatch_helper_files::gpg::wrapper() {
+        std::process::exit(code);
+    }
     // Replay is a test instrument (the `capture` feature). Without it DISPATCH_REPLAY is ignored
     // (system/capture.rs): the helper would run live, on this machine's files and processes.
     if !cfg!(feature = "capture") && std::env::var_os("DISPATCH_REPLAY").is_some() {

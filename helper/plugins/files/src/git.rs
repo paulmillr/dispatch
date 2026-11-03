@@ -9,7 +9,10 @@
 //! changing the repository's own config file. User and system configuration are ignored entirely.
 
 use super::*;
-use dispatch_helper_core::api::{CollectJob, Collected, Git};
+use dispatch_helper_core::{
+    api::{CollectJob, Collected, Git},
+    system::System,
+};
 use std::{ffi::OsString, os::unix::fs::MetadataExt, process::Command, time::Duration};
 
 /// Long enough for `status` on a large tree on a slow disk; the process group is killed after it.
@@ -93,6 +96,9 @@ pub(super) struct Settings {
     /// None: the helper's own (a replay restores the recorded one before anything runs).
     pub environment: Option<Vec<(OsString, OsString)>>,
     pub deadline: Duration,
+    /// What git runs as gpg for a signature check (gpg.rs). None: this helper's own executable, as recorded when
+    /// replaying.
+    pub gpg: Option<PathBuf>,
 }
 
 impl Default for Settings {
@@ -100,6 +106,7 @@ impl Default for Settings {
         Self {
             environment: None,
             deadline: DEADLINE,
+            gpg: None,
         }
     }
 }
@@ -210,17 +217,21 @@ const SIGNING: [&str; 5] = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/local/M
 /// What `verify-commit` runs, set after GLOBAL (which points every signing program nowhere), so the repository's own
 /// configuration names none of it: gpg and ssh-keygen as `trusted` finds them, never X.509's gpgsm, and the SSH
 /// signers the user allows (their own configuration's `gpg.ssh.allowedSignersFile`, else none): a repository naming
-/// its own file would vouch for its own key.
-fn signing(path: &OsString, signers: Option<&str>) -> Vec<String> {
+/// its own file would vouch for its own key. gpg runs through `wrapper` (the helper itself, gpg.rs), which keeps it
+/// off the network; the second value is the gpg it runs (its environment's gpg::PROGRAM), None when there is none.
+fn signing(path: &OsString, signers: Option<&str>, wrapper: Option<&Path>) -> (Vec<String>, Option<PathBuf>) {
     let mut directories: Vec<PathBuf> = std::env::split_paths(path).collect();
     directories.extend(SIGNING.iter().map(PathBuf::from));
     let found = |name: &str| {
         trusted(name, &directories, true).map_or_else(|| "/nonexistent".to_owned(), |path| path.display().to_string())
     };
-    let gpg = found("gpg");
-    [
-        format!("gpg.program={gpg}"),
-        format!("gpg.openpgp.program={gpg}"),
+    // A Linux helper whose executable was replaced or deleted while it runs has an image path ending " (deleted)",
+    // which is no file: its checks find no gpg until it restarts.
+    let gpg = trusted("gpg", &directories, true).zip(wrapper.filter(|wrapper| wrapper.is_absolute() && wrapper.is_file()));
+    let program = gpg.as_ref().map_or_else(|| "/nonexistent".to_owned(), |(_, wrapper)| wrapper.display().to_string());
+    let arguments = [
+        format!("gpg.program={program}"),
+        format!("gpg.openpgp.program={program}"),
         format!("gpg.ssh.program={}", found("ssh-keygen")),
         "gpg.x509.program=/nonexistent".to_owned(),
         format!("gpg.ssh.allowedSignersFile={}", signers.unwrap_or("/dev/null")),
@@ -229,7 +240,8 @@ fn signing(path: &OsString, signers: Option<&str>) -> Vec<String> {
     ]
     .into_iter()
     .flat_map(|value| ["-c".to_owned(), value])
-    .collect()
+    .collect();
+    (arguments, gpg.map(|(gpg, _)| gpg))
 }
 
 /// `git -C <path>`, its environment and GLOBAL, then each filter of the repository turned off, then `args`.
@@ -445,18 +457,23 @@ fn list(io: &mut dyn Io, request: Request) {
 fn run(io: &mut dyn Io, request: Request, filters: Vec<String>) {
     let args: Vec<&str> = request.args.iter().map(String::as_str).collect();
     let verify = args[0] == "verify-commit";
-    let extra = if verify {
+    let (extra, gpg) = if verify {
         let environment = match &request.settings.environment {
             Some(environment) => environment.clone(),
             None => std::env::vars_os().collect(),
         };
         let path = environment.into_iter().find(|(name, _)| name.as_encoded_bytes() == b"PATH").map(|(_, value)| value);
-        signing(&path.unwrap_or_else(|| OsString::from("/usr/bin:/bin")), request.signers.as_deref())
+        let wrapper = request.settings.gpg.clone().or_else(|| System::image().ok());
+        signing(&path.unwrap_or_else(|| OsString::from("/usr/bin:/bin")), request.signers.as_deref(), wrapper.as_deref())
     } else {
-        Vec::new()
+        (Vec::new(), None)
     };
+    let mut command = command(&request.settings, &request.path, &filters, &extra, &args);
+    if let Some(gpg) = gpg {
+        command.env(gpg::PROGRAM, gpg);
+    }
     let job = Job::Collect(CollectJob {
-        command: command(&request.settings, &request.path, &filters, &extra, &args),
+        command,
         timeout: request.settings.deadline,
         stdout: request.limit,
         stderr: ERRORS,

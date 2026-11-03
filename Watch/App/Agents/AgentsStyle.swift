@@ -21,10 +21,6 @@ enum AgentsColor {
     static let added = WatchDots.connected
     /// `GroupedRow` in dark: the host card, the review card.
     static let groupedRow = Color(red: 0x1C / 255, green: 0x1C / 255, blue: 0x1E / 255)
-    /// `CodeType` in dark: Pi's π.
-    static let codeType = Color(red: 0xA9 / 255, green: 0x8A / 255, blue: 0xE0 / 255)
-    /// Claude's orange, as the phone's tab rows draw its sparkle.
-    static let claude = Color(red: 0.85, green: 0.47, blue: 0.34)
 }
 
 /// The gutter dot of an Agents row (`MobileRowDot`): blue unread, amber working.
@@ -48,15 +44,10 @@ enum AgentsDot: Equatable {
     }
 }
 
-/// The agent's mark (`AgentGlyph`), as the phone's tab rows draw it: the agent tells rows apart better than the host's
-/// disc, which a watch row has no room for (the host's tint goes to the row's "host · space" caption instead).
+/// The agent's mark (`AgentGlyph`), as the phone's tab rows draw it: the Chat segment's bubble for every agent, the
+/// terminal without one. The agent is not told apart by its mark; its name says it where it matters ("Claude Code ·
+/// opus-5.5", "Codex wants to run").
 enum AgentsGlyph {
-    /// Claude's sparkle, Codex's angle brackets, Pi's π, a terminal otherwise.
-    enum Mark: Equatable {
-        case symbol(String)
-        case letter(String)
-    }
-
     /// The agent's key ("claude"), or a label naming one ("Claude Code", "Codex"): the thread page names its agent by
     /// label.
     static func key(_ agent: String?) -> String? {
@@ -65,22 +56,9 @@ enum AgentsGlyph {
         return agent
     }
 
-    static func agent(_ agent: String?) -> Mark {
-        switch key(agent) {
-        case "claude"?: .symbol("sparkle")
-        case "codex"?: .symbol("chevron.left.forwardslash.chevron.right")
-        case "pi"?: .letter("π")
-        default: .symbol("apple.terminal")
-        }
-    }
-
-    static func color(_ agent: String?) -> Color {
-        switch key(agent) {
-        case "claude"?: AgentsColor.claude
-        case "codex"?: .primary
-        case "pi"?: AgentsColor.codeType
-        default: .secondary
-        }
+    /// `text.bubble` for any agent, `apple.terminal` for none (the phone's `TabSegment` symbols).
+    static func symbol(_ agent: String?) -> String {
+        key(agent) == nil ? "apple.terminal" : "text.bubble"
     }
 
     /// The agent's short name for "Codex wants to run": "Claude", "Codex", "Pi", else the label as it is.

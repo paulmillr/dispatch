@@ -79,13 +79,24 @@ final class WatchModel {
     @ObservationIgnored private(set) var seenReviews: Set<String> = []
     /// Reviews this watch is undoing: their leaving the snapshot is this watch's doing, not the phone's.
     @ObservationIgnored private var undoing: Set<String> = []
-    /// Called with every snapshot the model takes (the complications' writer, `WatchComplicationWriter`).
+    /// Called with every snapshot the model takes (the complications' writers, `WatchComplicationWriter` and
+    /// `HostWidgetWriter`).
     @ObservationIgnored let snapshotChanged: ((WatchSnapshot) -> Void)?
+    /// Called with what a new snapshot brings for the wrist (`WatchHaptic`: needs you, finished); the app's plays it
+    /// while frontmost.
+    @ObservationIgnored let haptic: ((WatchHaptic) -> Void)?
+    /// No haptics until the phone answered this launch's or this reconnection's `hello`: what changed while the watch was
+    /// away (the stored context, then the fresh lists) is not news on the wrist.
+    @ObservationIgnored private var hapticsQuiet = true
+    /// Conversations this watch stopped: their turn ending is the user's doing, not news.
+    @ObservationIgnored private var stoppedHere: Set<WatchConversationKey> = []
 
-    init(link: any WatchLink, now: @escaping () -> Date = Date.init, snapshotChanged: ((WatchSnapshot) -> Void)? = nil) {
+    init(link: any WatchLink, now: @escaping () -> Date = Date.init, snapshotChanged: ((WatchSnapshot) -> Void)? = nil,
+         haptic: ((WatchHaptic) -> Void)? = nil) {
         self.link = link
         self.now = now
         self.snapshotChanged = snapshotChanged
+        self.haptic = haptic
         snapshot = link.snapshot
         reachable = link.reachable
         link.changed = { [weak self] in self?.linkChanged() }
@@ -207,6 +218,7 @@ final class WatchModel {
         greeting = true
         defer { greeting = false }
         await ask(.hello)
+        hapticsQuiet = false
     }
 
     /// Pull to refresh: the phone retries its hosts and answers with the lists.
@@ -229,6 +241,7 @@ final class WatchModel {
     private func linkChanged() {
         let back = link.reachable && !reachable
         reachable = link.reachable
+        if back { hapticsQuiet = true }
         if let next = link.snapshot { accept(next) }
         // The context may be minutes old: the phone that just came back answers with its lists now.
         if back, started { Task { await self.greet() } }
@@ -248,6 +261,9 @@ final class WatchModel {
         guard next != previous else { return }
         snapshot = next
         snapshotChanged?(next)
+        if !hapticsQuiet, let event = WatchHaptic.event(from: previous, to: next, ignoring: stoppedHere) { haptic?(event) }
+        // A stopped turn that ended (or a row that went) is no longer the user's to ignore.
+        stoppedHere = stoppedHere.filter { key in next.conversations.contains { $0.key == key && $0.busy } }
         noteReviews(next)
         // Pages of conversations the phone no longer lists (as a row or a tab's agent) go, unless on screen.
         let listed = Set(next.conversations.map(\.key) + next.tabs.compactMap(\.conversationKey))
@@ -408,7 +424,10 @@ final class WatchModel {
     @discardableResult
     func stop(_ key: WatchConversationKey) async -> Bool {
         let guess = update(key) { $0.canStop = false }
-        return await act(.stop(key), on: key, guess: guess)
+        stoppedHere.insert(key)
+        let stopped = await act(.stop(key), on: key, guess: guess)
+        if !stopped { stoppedHere.remove(key) }
+        return stopped
     }
 
     @discardableResult
@@ -509,16 +528,22 @@ final class WatchModel {
     /// (or `empty`, `unreachable`, `locked`, `waiting`; also the launch argument `-DispatchWatchScripted <value>`).
     static func app(environment: [String: String] = ProcessInfo.processInfo.environment,
                     arguments: [String] = ProcessInfo.processInfo.arguments) -> WatchModel {
-        let writer: (WatchSnapshot) -> Void = { snapshot in MainActor.assumeIsolated { WatchComplicationWriter.shared.write(snapshot) } }
+        let writer: (WatchSnapshot) -> Void = { snapshot in
+            MainActor.assumeIsolated {
+                WatchComplicationWriter.shared.write(snapshot)
+                HostWidgetWriter.shared.write(snapshot)
+            }
+        }
+        let haptic: (WatchHaptic) -> Void = { event in MainActor.assumeIsolated { WatchHaptic.play(event) } }
         #if DEBUG
         if let scenario = scripted(environment: environment, arguments: arguments) {
-            return WatchModel(link: ScriptedWatchLink(scenario: scenario), snapshotChanged: writer)
+            return WatchModel(link: ScriptedWatchLink(scenario: scenario), snapshotChanged: writer, haptic: haptic)
         }
         #endif
         #if canImport(WatchConnectivity)
         let link = SessionWatchLink()
         link.complication = { WatchComplicationWriter.shared.write(entry: $0) }
-        return WatchModel(link: link, snapshotChanged: writer)
+        return WatchModel(link: link, snapshotChanged: writer, haptic: haptic)
         #else
         return WatchModel(link: ScriptedWatchLink(scenario: .waiting), snapshotChanged: writer)
         #endif

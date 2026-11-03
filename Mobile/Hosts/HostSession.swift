@@ -114,6 +114,8 @@ final class HostSession: Identifiable {
     @ObservationIgnored private let hostID: UUID
     @ObservationIgnored private let driver: any HostSessionDriver
     @ObservationIgnored private let context: (HostSession) -> HostSessionContext
+    /// The stats' ticks, which the driver's liveness ping skips (`HostTraffic`).
+    @ObservationIgnored private let pulse = HostPulse()
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var retry: AsyncStream<Void>.Continuation?
     /// The running driver's multiplexer preference (`HostSessionContext.preferences`).
@@ -151,6 +153,9 @@ final class HostSession: Identifiable {
             guard let self else { return }
             self.changed?(self)
         }
+        stats.pulse = pulse
+        // A sample on a tick stands in for the ping: its round trip is the latency.
+        stats.roundTrip = { [weak self] in self?.apply(.latency($0)) }
     }
 
     func connect() {
@@ -171,7 +176,7 @@ final class HostSession: Identifiable {
         let base = context(self)
         let context = HostSessionContext(launch: base.launch, verifyHostKey: base.verifyHostKey, key: base.key,
                                          password: base.password, retries: retries, keyboardInteractive: base.keyboardInteractive,
-                                         keyAvailable: base.keyAvailable, preferences: preferences)
+                                         keyAvailable: base.keyAvailable, preferences: preferences, pulse: pulse)
         let events = driver.run(host, context: context)
         task = Task { [weak self] in
             for await event in events {

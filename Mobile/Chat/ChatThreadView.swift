@@ -273,6 +273,10 @@ struct ChatThreadView: View {
                                      >= geometry.contentSize.height - 40,
                                  insets: geometry.contentInsets, height: geometry.containerSize.height)
             }) { old, sample in
+                // A layout before the scroll view is in its window (a pushed thread's first passes, more of them on a
+                // busy phone) reports the content at its top: no scroll of anyone's, so it neither ends the follow nor
+                // counts as the top coming near (`ChatFollower.attached`).
+                guard follower.attached else { return }
                 follower.atEnd = sample.atEnd
                 // Putting the place back holds through the first layouts (the navigation bar's inset arrives late).
                 if follower.restoring != nil { applyReading() }
@@ -287,7 +291,7 @@ struct ChatThreadView: View {
             .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentSize.height }) { old, new in grew(by: new - old) }
             // Within half a screen of the top: older rows draw before the top is reached.
             .onScrollGeometryChange(for: Bool.self, of: { geometry in
-                geometry.contentOffset.y + geometry.contentInsets.top < geometry.containerSize.height / 2
+                follower.attached && geometry.contentOffset.y + geometry.contentInsets.top < geometry.containerSize.height / 2
             }) { _, near in
                 follower.nearTop = near
                 if near { reachedTop() }
@@ -331,6 +335,8 @@ struct ChatThreadView: View {
     /// The thread's pushes (a message's details, the side conversation), its sheets and the attachment preview.
     private func presenting(_ thread: some View) -> some View {
         thread
+        // A sheet or the preview over the thread: its working row and banner stand still meanwhile.
+        .coversLoops(step != nil || settings || session.managingGoal || session.showingShells || previewing != nil)
         .navigationDestination(item: $details) { row in
             messageDetails(row)
         }
@@ -668,8 +674,12 @@ struct ChatThreadView: View {
     /// the message's details (M5b), and the long press's Copy, Reply and Info.
     private func agentBubble(_ row: ChatThreadRow, summary: ChatTurnSummary?) -> some View {
         let (corner, time) = swiped(row, summary: summary)
+        let stream = streaming(row)
         return ChatRevealReceived(reveal: reveal, time: time) {
-            ChatBubble(side: .agent) { MobileChatMarkdownView(text: row.item.text, corner: corner) }
+            ChatBubble(side: .agent) {
+                MobileTypedMarkdown(text: row.item.text, corner: corner, rowID: row.id, reveals: session.typing,
+                                    live: stream.live, ended: stream.ended)
+            }
                 .environment(\.openURL, MobileChatMarkdown.openURL)
                 .onTapGesture { details = row }
                 .contextMenu {
@@ -678,6 +688,13 @@ struct ChatThreadView: View {
                     Button("Info", systemImage: "info.circle") { details = row }
                 }
         }
+    }
+
+    /// Whether a reply is in the live turn, and whether it may still stream there (its turn's newest item, not
+    /// complete): such a reply types out (`ChatTypingReveals`). Thinking never does.
+    private func streaming(_ row: ChatThreadRow) -> (live: Bool, ended: Bool) {
+        guard case .agent = row.kind, let open = session.transcript.openTurn, open.id == row.turnID else { return (false, true) }
+        return (true, row.item.completed || open.items.last?.id != row.item.id)
     }
 
     /// A reply's corner and its time on the swipe (`ChatCorner.swiped`); a thinking bubble has neither.
@@ -889,7 +906,9 @@ struct ChatThreadView: View {
         guard follower.growing else { return }
         follower.growing = false
         if !shownFollow.following, delta > 0, let scroll = follower.scrollView { scroll.contentOffset.y += delta }
-        Task { if follower.nearTop { reachedTop() } }
+        // The scroll view's own offset, not only the last near-top change told: SwiftUI drops geometry changes that
+        // come several to a frame, and a top no longer near drew on to the transcript's start and asked for its page.
+        Task { if follower.nearTop, follower.nearTopNow { reachedTop() } }
     }
 
     private enum Entry: Identifiable {
@@ -989,6 +1008,14 @@ extension EnvironmentValues {
     var growing = false
     /// The thread's scroll view (`ChatScrollViewProbe`), whose offset follows rows drawn above.
     weak var scrollView: UIScrollView?
+    /// The scroll view is in a window: the thread's scroll geometry is the one shown.
+    var attached: Bool { scrollView?.window != nil }
+    /// Within half a screen of the top as the scroll view lies now (`nearTop`'s measure, the insets left out).
+    var nearTopNow: Bool {
+        guard let scroll = scrollView, scroll.window != nil, scroll.contentSize.height > 0 else { return false }
+        let insets = scroll.adjustedContentInset
+        return scroll.contentOffset.y + insets.top < (scroll.bounds.height - insets.top - insets.bottom) / 2
+    }
     /// The rows' frames in the content (`ChatThreadView.contentSpace`), as last laid out.
     var rowFrames: [String: CGRect] = [:]
     /// The place being put back as the thread opens (`ChatThreadView.restoreReading`), until the user scrolls or a

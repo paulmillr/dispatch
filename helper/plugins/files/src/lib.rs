@@ -2,8 +2,8 @@
 //!
 //! One module per operation family: `read.rs` (files.read), `branch.rs` (files.branch), `list.rs`
 //! (files.list), `summary.rs` (files.summary), `write.rs` (files.write), `pack.rs` (files.pack,
-//! files.pack.drop), `unpack.rs` (files.unpack.*) and `git.rs` (files.git); `transfer.rs` tracks the packs
-//! and unpacks a client has open.
+//! files.pack.drop), `unpack.rs` (files.unpack.*) and `git.rs` (files.git, with `gpg.rs`, the helper run as gpg for
+//! a signature check); `transfer.rs` tracks the packs and unpacks a client has open.
 
 use dispatch_helper_core::api::{
     Chunk, Done, Error, Event, FileIdentity, FileKind, Io, Job, Metadata, Output, Plugin, Read, Replacement, Ui, Work,
@@ -20,6 +20,7 @@ use std::{
 
 mod branch;
 mod git;
+pub mod gpg;
 mod list;
 mod read;
 mod summary;
@@ -98,6 +99,17 @@ fn native(value: io::Error) -> Error {
     }
 }
 
+/// A read job's failure: a folder is `is_directory` (clients show it as one), the rest as `native`.
+fn read_failure(value: io::Error) -> Error {
+    if value.kind() != io::ErrorKind::IsADirectory {
+        return native(value);
+    }
+    Error {
+        code: "is_directory",
+        message: value.to_string(),
+    }
+}
+
 impl Files {
     /// `checked` keeps the existing SSH policy; false keeps the local initial preview.
     pub fn new(checked: bool) -> Self {
@@ -139,11 +151,18 @@ impl Plugin for Files {
             done(io, Err(error("invalid_request")));
             return;
         }
+        let archive = pack::kept(&self.packs, &read.path).then(|| self.packs.clone());
+        let done = if archive.is_some() || pack::expired(&self.packs, &read.path) {
+            pack::reading(&self.packs, &read.path, done)
+        } else {
+            done
+        };
         read::State {
             read: read.clone(),
             limit: limit as u64,
             chunk: Rc::new(RefCell::new(chunk)),
             done,
+            archive,
         }
         .submit(io, &self.jobs);
     }
@@ -229,17 +248,18 @@ impl Plugin for Files {
     fn pack(
         &mut self,
         io: &mut dyn Io,
+        client: u64,
         transfer: &str,
         base: &Path,
         paths: &[PathBuf],
         limit: u64,
         done: Done<Packed>,
     ) {
-        pack::pack(&self.packs, io, transfer, base, paths, limit, deferred(done));
+        pack::pack(&self.packs, io, client, transfer, base, paths, limit, deferred(done));
     }
 
-    fn pack_drop(&mut self, io: &mut dyn Io, transfer: &str, done: Done<()>) {
-        pack::discard(&self.packs, io, transfer, deferred(done));
+    fn pack_drop(&mut self, io: &mut dyn Io, client: u64, transfer: &str, done: Done<()>) {
+        pack::discard(&self.packs, io, pack::By::Drop(client), transfer, deferred(done));
     }
 
     fn unpack_open(
@@ -282,12 +302,13 @@ impl Plugin for Files {
 
     /// The client that opened `transfer` left: its archive or staging folder goes, by the same paths as its own
     /// drop or uncommitted close would take.
-    fn release(&mut self, io: &mut dyn Io, transfer: &str, unpack: bool, done: Done<()>) {
+    fn release(&mut self, io: &mut dyn Io, client: u64, transfer: &str, unpack: bool, done: Done<()>) {
         let done = deferred(done);
         if unpack {
             unpack::close(&self.unpack, io, transfer, false, Box::new(move |io, _| done(io, Ok(()))));
         } else {
-            pack::discard(&self.packs, io, transfer, Box::new(move |io, _| done(io, Ok(()))));
+            let by = pack::By::Departure(client);
+            pack::discard(&self.packs, io, by, transfer, Box::new(move |io, _| done(io, Ok(()))));
         }
     }
 
@@ -320,7 +341,7 @@ impl Plugin for Files {
         let output = match result {
             Ok(output) => output,
             Err(value) => {
-                pending.fail(io, native(value));
+                pending.fail(io, read_failure(value));
                 return;
             }
         };

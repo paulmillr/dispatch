@@ -135,7 +135,9 @@ final class ReviewDiffTests: XCTestCase {
         let draft = try XCTUnwrap(selection?.draft(in: rows))
         XCTAssertEqual(draft.start, ReviewLine(side: .new, number: 45))
         XCTAssertEqual(draft.end, ReviewLine(side: .new, number: 48))
-        XCTAssertEqual(draft.quote, ReviewSample.sidebar[44...47].map { ReviewQuote(kind: .added, text: $0) })
+        XCTAssertEqual(draft.quote, ReviewSample.sidebar[44...47].enumerated().map {
+            ReviewQuote(kind: .added, text: $0.element, line: ReviewLine(side: .new, number: 45 + $0.offset))
+        })
         XCTAssertEqual(ReviewDiffText.pill(start: draft.start, end: draft.end), "Comment on 45–48")
         XCTAssertEqual(ReviewText.location(start: draft.start, end: draft.end), "Lines 45–48")
         XCTAssertEqual(ReviewDiffSelection.tap(selection, row: 0, in: rows), selection, "a hunk header does nothing")
@@ -186,7 +188,7 @@ final class ReviewDiffTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(saved.created, before.addingTimeInterval(-1))
         // The Mac's Create review renders it as its own.
         let text = ReviewText.render(repository.review(scope), context: .init(root: place.root, host: "mba2", branch: "dark-mode"))
-        XCTAssertTrue(text.contains("## \(path)\n\nLines 45–48:\n```diff\n+" + ReviewSample.sidebar[44] + "\n"), text)
+        XCTAssertTrue(text.contains("## File 1: \"\(path)\"\n\nLines 45–48:\n```diff\n+" + ReviewSample.sidebar[44] + "\n"), text)
         XCTAssertTrue(text.contains("\nKeep the old markup.\n"), text)
 
         XCTAssertEqual(comments.save(ReviewDiffDraft(start: saved.start, end: saved.end, quote: quote, editing: id,

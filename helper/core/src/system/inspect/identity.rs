@@ -29,10 +29,7 @@ pub(super) fn collect() -> io::Result<Vec<u8>> {
                 .trim_end_matches('\0')
                 .into())
         };
-        (
-            read(c"kern.uuid")?.to_ascii_lowercase(),
-            read(c"kern.bootsessionuuid")?,
-        )
+        (platform_uuid()?, read(c"kern.bootsessionuuid")?)
     };
     unsafe extern "C" {
         fn gethostname(bytes: *mut u8, length: usize) -> i32;
@@ -74,6 +71,38 @@ pub(super) fn collect() -> io::Result<Vec<u8>> {
         ("os_label", text(&release.label)),
     ]))
     .map_err(|_| super::invalid())
+}
+
+/// The Mac's hardware platform UUID (IOPlatformUUID) through `gethostuuid(2)`, lowercase. It names the machine, where
+/// `kern.uuid` named the running kernel build: that changed with every macOS update and was shared by every Mac on
+/// the same build.
+#[cfg(target_os = "macos")]
+fn platform_uuid() -> io::Result<String> {
+    unsafe extern "C" {
+        fn gethostuuid(uuid: *mut u8, timeout: *const [i64; 2]) -> i32;
+    }
+    let mut bytes = [0u8; 16];
+    let timeout = [0i64, 0];
+    // SAFETY: the kernel writes exactly 16 bytes into the buffer; a zero timeout returns at once.
+    if unsafe { gethostuuid(bytes.as_mut_ptr(), &timeout) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(format_uuid(&bytes))
+}
+
+/// `8-4-4-4-12` lowercase hex of 16 bytes.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn format_uuid(bytes: &[u8; 16]) -> String {
+    let hex: Vec<String> = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    let hex = hex.concat();
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32]
+    )
 }
 
 /// Optional presentation facts of the operating system; never an identity.

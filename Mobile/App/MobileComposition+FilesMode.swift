@@ -50,10 +50,12 @@ extension MobileComposition {
         let back = filesBackTitle(ref, route)
         let pop = { if !navigator.path.isEmpty { navigator.path.removeLast() } }
         let push = { (path: String, directory: Bool) in navigator.path.append(.files(ref, .preview(path, directory: directory))) }
+        // As the tab's own Files mode decides it (`FilesModeBody.online`), from the workspace's live host.
+        let online = { [weak tabs] in tabs?.workspace(ref.host).map { MobileFilesAvailability.online($0.host) } ?? false }
         let folder = {
             AnyView(FilesFolderScreen(browser: FilesBrowser(tab: ref, host: host.name, preferences: browsers.preferences) {
                 browsers.source(ref.host)
-            }, path: path, repository: root, host: host, back: back, pop: pop, preview: push))
+            }, path: path, repository: root, host: host, back: back, pop: pop, preview: push, online: online))
         }
         if route.detail == FilesRoute.directory { return folder() }
         let tab = tabs.tab(ref)
@@ -99,28 +101,57 @@ extension MobileComposition {
     }
 
     /// Open in Terminal: the tab's shell changes to the file's folder and the tab shows Terminal. Offered only for a
-    /// folder whose name has no control characters, while the tab's program is a shell and the host is connected; checked
-    /// again when tapped (the pane's program by its window, a full-screen program on the emulator's screen), else "The
-    /// terminal is busy". The line is cleared (^U) and the `cd` sent as a bracketed paste when the shell asked for it,
-    /// then Return (`FilesAsk.typing`). Returns why it did nothing, nil when it typed.
-    private func filesOpenInTerminal(_ tab: MobileTab, folder: String) -> (() -> String?)? {
-        guard FilesAsk.typable(folder), tab.atShell, hosts.session(tab.ref.host)?.client != nil else { return nil }
+    /// folder whose name has no control characters, while the tab's program is a shell, the host is connected and its
+    /// panes are tmux's (herdr's rendering never says what holds a pane: `FilesTerminalTyping.unknownModes`); checked
+    /// again when tapped (the pane's program by its window), then on the terminal's screen as it is now: the pane's
+    /// presence is attached through the current connection and shown (held output follows again), and nothing is typed
+    /// before its screen is the server's (`FilesTerminalTyping`), else "The terminal is busy" (a full-screen program) or
+    /// that the screen did not come. The line is cleared (^U) and the `cd` sent as a bracketed paste when the shell asked
+    /// for it, then Return (`FilesAsk.typing`); the tab shows Terminal only once the helper took it, and only while this
+    /// tab's Files screen is still the one shown and the caller was not cancelled (the screen left: nothing more is typed
+    /// or shown). Returns why it did nothing (or how the send went, never retried), nil when it typed.
+    func filesOpenInTerminal(_ tab: MobileTab, folder: String) -> (() async -> String?)? {
+        guard FilesAsk.typable(folder), tab.atShell, let session = hosts.session(tab.ref.host), session.client != nil,
+              TerminalScrollback(multiplexer: session.following) != .server else { return nil }
         let ref = tab.ref, navigator = navigator, tabs = tabs, hosts = hosts, presences = presences
         return {
-            guard let tab = tabs.tab(ref), let pane = tab.activePane, let client = hosts.session(ref.host)?.client else {
+            guard let tab = tabs.tab(ref), let pane = tab.activePane, let session = hosts.session(ref.host),
+                  let client = session.client, session.topologyIsLive else {
                 return "The tab is not connected."
             }
-            let state = presences.presence(.init(host: ref.host, node: pane.key))?.filesTypingState
-            guard FilesAsk.ready(program: tab.program, agent: pane.agent != nil, alternate: state?.alternate ?? false),
-                  let bytes = FilesAsk.typing(folder, bracketed: state?.bracketed ?? false) else {
-                return "The terminal is busy."
+            // This tab's Files screen still shown, the same pane, still a shell without an agent, on the same
+            // connection: checked now and again right before typing.
+            let shown = { if case .files(let shown, _)? = navigator.path.last { shown == ref } else { false } }
+            let ready = {
+                guard shown(), let tab = tabs.tab(ref), let now = tab.activePane, now.key == pane.key, now.id == pane.id,
+                      hosts.session(ref.host)?.client === client else { return false }
+                return FilesAsk.ready(program: tab.program, agent: now.agent != nil, alternate: false)
             }
-            Task { try? await client.input(HelperClient.Output(terminal: pane.id, bytes: bytes)) }
+            guard ready() else { return FilesTerminalTyping.busy }
+            let key = TerminalPresences.Key(host: ref.host, node: pane.key)
+            let presence = presences.current(key, pane: pane, session: session, client: client)
+            presences.retain(key, showing: true)
+            let terminal = pane.id
+            let failure = await FilesTerminalTyping.type(folder, into: presence, ready: ready, send: { bytes in
+                try await client.input(HelperClient.Output(terminal: terminal, bytes: bytes))
+            })
+            guard failure == nil, !Task.isCancelled, shown() else {
+                presences.release(key, showing: true)
+                return failure
+            }
             TabSegment.requestSwitch(ref, to: .terminal)
             FilesAsk.popToTab(ref, navigator: navigator)
+            // The Terminal segment about to show takes the attachment over; this use lets go once it has.
+            Task {
+                try? await Task.sleep(for: Self.openInTerminalHandover)
+                presences.release(key, showing: true)
+            }
             return nil
         }
     }
+
+    /// How long Open in Terminal keeps its use of the presence after showing Terminal (the segment's own use comes first).
+    static let openInTerminalHandover: Duration = .seconds(1)
 }
 
 extension FilesRoute {
@@ -267,11 +298,15 @@ private struct FilesModeBody: View {
         .onChange(of: working) { old, new in
             if old, !new { Task { await browser.refresh() } }
         }
-        // The connection back: a listing first asked offline, and git's letters, are read now.
-        .onChange(of: context.availability) { old, new in
-            if old != .available, new == .available { Task { await browser.reconnected() } }
+        // The connection back (connected, not only on its way): a listing first asked offline, git's letters and the
+        // counts of the folder rows on screen are read now.
+        .onChange(of: online) { old, new in
+            if !old, new { Task { await browser.reconnected() } }
         }
     }
+
+    /// The host's helper answers Files now: connected, with the grant.
+    private var online: Bool { MobileFilesAvailability.online(context.host) }
 
     private func follow() {
         browser.follow(directory: context.directory, repository: context.git?.root, home: context.host.home)
@@ -305,10 +340,12 @@ struct FilesFolderScreen: View {
     let back: String
     let pop: () -> Void
     let preview: (String, Bool) -> Void
+    /// The host's link is up (read in `body`, so a reconnect redraws the screen).
+    let online: @MainActor () -> Bool
     @Environment(\.tabsColumnWidth) private var column
 
     init(browser: FilesBrowser, path: String, repository: String?, host: TabsHost, back: String, pop: @escaping () -> Void,
-         preview: @escaping (String, Bool) -> Void) {
+         preview: @escaping (String, Bool) -> Void, online: @escaping @MainActor () -> Bool = { true }) {
         _browser = State(initialValue: browser)
         self.path = path
         self.repository = repository
@@ -316,12 +353,17 @@ struct FilesFolderScreen: View {
         self.back = back
         self.pop = pop
         self.preview = preview
+        self.online = online
     }
 
     var body: some View {
-        FilesListingView(browser: browser, tint: host.tint) { path, _ in preview(path, false) }
+        FilesListingView(browser: browser, tint: host.tint, offline: !online()) { path, _ in preview(path, false) }
             // Once: the browser keeps its folder (follow does nothing for the same one).
             .onAppear { browser.follow(directory: path, repository: repository, home: host.home) }
+            // The connection back: the folder, git's letters and the rows' counts are read again, without navigating.
+            .onChange(of: online()) { old, new in
+                if !old, new { Task { await browser.reconnected() } }
+            }
             .safeAreaBar(edge: .top, spacing: 0) {
                 FilesListingBar(browser: browser)
                     .padding(.horizontal, 16)

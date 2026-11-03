@@ -43,6 +43,7 @@ package. Crates are pinned in `Core/Cargo.lock`; licences: `THIRD_PARTY_NOTICES.
 ## Tests
 
 ```sh
+python3 scripts/vendor-russh.py --offline   # from the repository root: the patched russh in build/mobile-ssh/russh
 cd Mobile/Transport/Core
 PATH=$PWD/../../../build/rust/bin:$PATH CARGO_HOME=$PWD/../../../build/cargo cargo test --offline --frozen
 cd .. && swift test --scratch-path ../../build/spm
@@ -50,7 +51,10 @@ cd .. && swift test --scratch-path ../../build/spm
 
 The engine tests run an in-process russh server (keyboard-interactive, password, external signer, exec, and a PTY
 shell that records its `pty-req`, `shell` and `window-change` requests and echoes input; a terminal named
-`refused` is refused), rapid resizes arriving in order with the last winning, and the C ABI's shell calls.
+`refused` is refused), rapid resizes arriving in order with the last winning, the C ABI's shell calls, and russh's
+rekeys with the trusted key. `tests/hostile.rs` runs a scripted server (X25519, AES-256-GCM) that sends what russh's
+server cannot: a nested certificate as the host key, `EXT_INFO` floods, an oversized packet, a zero maximum packet
+size, and rekeys with the same key, another key, another algorithm, repeated and while input streams.
 `ShellTests` drive the account's login shell under the fixture sshd: the prompt and TERM, `stty size` before and
 after a resize, `exit 3`, the loss when the connection closes, `close()`, a closed shell never touching a socket
 that reused its number, and `PermitTTY no` as a refusal; `DescriptorTests` hold an operation in flight across

@@ -8,6 +8,8 @@ public struct SSHHostSession: HostSession {
 
   public func closed() async { await connection.closed() }
 
+  public var lossError: (any Error)? { connection.endReason }
+
   public var lossReason: String? {
     switch connection.endReason {
     case nil: nil

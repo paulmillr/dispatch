@@ -4,9 +4,11 @@ build/mobile-ssh/DispatchMobileSSHCore.xcframework: static libraries for iOS dev
 simulator and macOS (the package's `swift test`), with the checked-in C header and module map. Xcode's pre-build
 script passes --platform: only the destination's slice is rebuilt, the others stay as last built.
 
-Crates come from Mobile/Transport/Core/Cargo.lock, fetched once into build/cargo with --fetch (network);
-every build is --offline --frozen, as the helper's is."""
+Crates come from Mobile/Transport/Core/Cargo.lock, fetched once into build/cargo with --fetch (network); russh is
+the published crate with Dispatch's patch, staged into build/mobile-ssh/russh by scripts/vendor-russh.py (downloaded with
+--fetch, staged offline before every build). Every build is --offline --frozen, as the helper's is."""
 import argparse
+import importlib.util
 import os
 from pathlib import Path
 import shutil
@@ -48,13 +50,23 @@ def run(arguments, env=None):
     subprocess.run([str(a) for a in arguments], check=True, env=env, cwd=CRATE)
 
 
+def vendored():
+    """scripts/vendor-russh.py, which stages the patched russh that Cargo.toml names by path."""
+    spec = importlib.util.spec_from_file_location("vendor_russh", ROOT / "scripts/vendor-russh.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def fetch():
-    """The one networked step: download the locked crates into build/cargo."""
+    """The one networked step: download russh's crate and stage it, then the locked crates into build/cargo."""
+    vendored().ensure(offline=False)
     run(["cargo", "fetch", "--locked"], environment())
 
 
 def build(profile, platform=None):
     subprocess.run(["python3", str(ROOT / "scripts/setup-ssh-rust.py"), "--offline"], check=True)
+    vendored().ensure(offline=True)
     env = environment()
     for target, name, variable, minimum in TARGETS:
         if platform in (None, name):

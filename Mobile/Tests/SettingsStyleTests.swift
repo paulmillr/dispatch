@@ -367,7 +367,7 @@ final class SettingsStyleTests: XCTestCase {
         composition.settings.terminalFont = "Fira Code"
         composition.settings.chatFont = .comicSans
         let expected = ["Theme, Automatic", "Line spacing, Normal", "Font, Fira Code", "Color scheme, Dispatch", "Improve text contrast, Light themes",
-                        "Font, Comic Sans", "Dictation, Apple", "Notifications, Sound, text", "Background refresh", "studio, Chat on",
+                        "Font, Comic Sans", "Dictation, Apple", "Notifications, Sound, text", "Background refresh", "Show offline hosts", "Color-code hosts",
                         "Remove all data"]
         _ = try await labels(SettingsView(composition: composition).environment(composition.hosts), height: 2400, expected: expected)
     }

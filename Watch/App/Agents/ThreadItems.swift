@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// One item of a thread page as the phone's thread draws it, at watch size: the user's message right-aligned in the
-/// pink bubble, the agent's in the grey one (its turn caption under it), Claude's thinking muted and italic, a tool as
-/// one line with its state, a notice small and centred.
+/// pink bubble, the agent's in the grey one (its turn caption under it), Claude's thinking in an agent bubble of its
+/// own, a notice small and centred. Tools are not rows (`ThreadScreen.items` leaves them out).
 struct ThreadItemRow: View {
     let item: WatchItem
     /// "Claude Code", for VoiceOver.
@@ -21,14 +21,9 @@ struct ThreadItemRow: View {
                     }
                 }
             case .thinking:
-                Text(item.text)
-                    .font(.footnote.italic())
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 4)
-            case .tool:
-                ThreadToolLine(item: item)
-            case .notice, .unknown:
+                // In the same colours and font as its messages, as the phone's thread shows it.
+                ThreadBubble(side: .agent) { Text(item.text) }
+            case .tool, .notice, .unknown:
                 Text(item.text)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
@@ -40,52 +35,13 @@ struct ThreadItemRow: View {
         .accessibilityLabel(Self.accessibilityLabel(item, agent: agent))
     }
 
-    /// The tool's state as a symbol: running, failed, done. Nil for anything but a tool.
-    static func symbol(for item: WatchItem) -> String? {
-        guard item.kind == .tool else { return nil }
-        if item.running { return "ellipsis.circle" }
-        return item.failed ? "xmark.circle.fill" : "checkmark.circle.fill"
-    }
-
-    /// "Run · cargo test · ok": the step's kind, what it acted on, its short result (docs/watch.md, Thread).
-    static func toolLine(_ item: WatchItem) -> String {
-        [item.tool ?? "Tool", item.text, item.detail].compactMap { $0?.isEmpty == false ? $0 : nil }.joined(separator: " · ")
-    }
-
     static func accessibilityLabel(_ item: WatchItem, agent: String?) -> String {
         switch item.kind {
         case .user: return "You: " + item.text
         case .agent: return [(agent ?? "Agent") + ": " + item.text, item.caption].compactMap { $0 }.joined(separator: ", ")
-        case .thinking: return "Thinking: " + item.text
-        case .tool:
-            let state = item.running ? "running" : item.failed ? "failed" : "done"
-            return toolLine(item) + ", " + state
-        case .notice, .unknown: return item.text
+        case .thinking: return (agent ?? "Agent") + ": " + item.text
+        case .tool, .notice, .unknown: return item.text
         }
-    }
-}
-
-/// A tool step on one line: its state symbol, the kind in bold, then what it acted on in mono.
-struct ThreadToolLine: View {
-    let item: WatchItem
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 4) {
-            if let symbol = ThreadItemRow.symbol(for: item) {
-                Image(systemName: symbol)
-                    .font(.caption2)
-                    .foregroundStyle(item.running ? AgentsColor.working : item.failed ? AgentsColor.destructive : AgentsColor.added)
-                    .symbolEffect(.pulse, isActive: item.running)
-            }
-            let rest = [item.text, item.detail].compactMap { $0?.isEmpty == false ? $0 : nil }.joined(separator: " · ")
-            Text("\(Text(item.tool ?? "Tool").bold()) \(Text(rest).monospaced())")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 4)
     }
 }
 
@@ -116,25 +72,42 @@ struct ThreadBubble<Content: View>: View {
     }
 }
 
-/// The phone's working row (ChatWorkingRow), reduced: what the agent does and for how long, in amber.
+/// The phone's working row (ChatWorkingRow), reduced: what the agent does and for how long, in amber; Stop at its
+/// trailing end while the conversation can take it (the phone's quiet disc with its square, a 44 pt target), away from
+/// where a crown scroll or a flick ends at the composer.
 struct ThreadWorkingRow: View {
     let activity: String?
     let since: Date?
+    /// Stop's tap (the thread asks first); nil while Stop is not offered.
+    var stop: (() -> Void)? = nil
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { context in
-            HStack(spacing: 6) {
-                Image(systemName: "circle.fill")
-                    .font(.system(size: 7))
-                    .symbolEffect(.pulse)
-                    .accessibilityHidden(true)
-                Text(Self.text(activity: activity, since: since, now: context.date))
-                    .font(.footnote)
-                    .lineLimit(1)
+        HStack(spacing: 0) {
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                HStack(spacing: 6) {
+                    Image(systemName: "circle.fill")
+                        .font(.system(size: 7))
+                        .symbolEffect(.pulse)
+                        .accessibilityHidden(true)
+                    Text(Self.text(activity: activity, since: since, now: context.date))
+                        .font(.footnote)
+                        .lineLimit(1)
+                }
+                .foregroundStyle(AgentsColor.working)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 4)
             }
-            .foregroundStyle(AgentsColor.working)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 4)
+            if let stop {
+                Button(action: stop) {
+                    StopDisc()
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Stop")
+                .accessibilityHint(Self.stopHint)
+                .accessibilityIdentifier("thread.stop")
+            }
         }
     }
 
@@ -143,5 +116,27 @@ struct ThreadWorkingRow: View {
         let word = activity?.isEmpty == false ? activity! : "Working"
         guard let since else { return word }
         return word + " " + WatchTime.elapsed(now.timeIntervalSince(since))
+    }
+
+    static let stopHint = "Stops the agent; queued messages wait until Resume"
+
+    /// The confirmation's destructive button: "Stop Claude", "Stop Codex", "Stop Pi", else the agent's own label, else
+    /// "Stop the agent".
+    static func stopTitle(agent: String?) -> String {
+        "Stop " + (AgentsGlyph.shortName(agent).flatMap { $0.isEmpty ? nil : $0 } ?? "the agent")
+    }
+
+    /// The confirmation's line.
+    static let stopMessage = "Queued messages wait until Resume."
+}
+
+/// The phone's working-row Stop (`ChatWorkingDisc`): a quiet disc with the primary square on it.
+struct StopDisc: View {
+    var body: some View {
+        RoundedRectangle(cornerRadius: 2)
+            .fill(Color.primary.opacity(0.85))
+            .frame(width: 9, height: 9)
+            .frame(width: 26, height: 26)
+            .background(Color.white.opacity(0.16), in: Circle())
     }
 }

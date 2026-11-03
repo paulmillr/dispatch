@@ -18,7 +18,7 @@ final class WatchRouter {
         return pending
     }
 
-    /// Debug only (`-DispatchWatchShow`): a screen to open at launch, for screenshots without touches.
+    /// A screen to open: `-DispatchWatchShow` (Debug) at launch, for screenshots without touches; the Host widget's tap.
     enum Show: Equatable {
         /// Spaces, scrolled to a host's section when one is named.
         case spaces(host: String?)
@@ -48,15 +48,21 @@ final class WatchRouter {
     var scrollTarget: String?
 
     /// Debug only (`-DispatchWatchSheet`): a thread's sheet to open once the thread shows, for screenshots: its first
-    /// question's form (K4), or the reply confirm screen with a text (K5).
+    /// question's form (K4), the reply confirm screen with a text (K5), or Stop's confirmation.
     enum Sheet: Equatable {
         /// The first question's form, with its first part's option at this index chosen.
         case question(choose: Int?)
         case reply(String)
+        /// Stop's confirmation, when the thread offers Stop.
+        case stop
+        /// Reply's first step: the quick replies.
+        case quick
 
-        /// "question", "question:<option index>", "reply:<text>".
+        /// "question", "question:<option index>", "reply:<text>", "stop", "quick".
         init?(argument: String) {
             if argument == "question" { self = .question(choose: nil); return }
+            if argument == "stop" { self = .stop; return }
+            if argument == "quick" { self = .quick; return }
             if argument.hasPrefix("question:") { self = .question(choose: Int(argument.dropFirst(9))); return }
             guard argument.hasPrefix("reply:") else { return nil }
             self = .reply(String(argument.dropFirst(6)))
@@ -72,9 +78,11 @@ final class WatchRouter {
     }
 
     /// A complication's tap (`dispatch-watch://open?host=…&node=…`, `WatchComplicationEntry.url`): that thread, or
-    /// Agents when the URL names none.
+    /// Agents when the URL names none; the Host widget's (`dispatch-watch://host?host=…`): the host's screen.
     func open(url: URL) {
         guard url.scheme == WatchComplicationEntry.scheme else { return }
+        // The Host widget's: the host's screen.
+        if let host = HostWidgetEntry.host(url) { show = .host(WatchHostRoute(host: host)); return }
         if let key = WatchComplicationEntry.key(url) { open(key) } else { showAgents = true }
     }
 

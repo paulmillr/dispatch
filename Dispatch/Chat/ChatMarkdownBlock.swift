@@ -115,7 +115,7 @@ struct ChatMarkdownBlock: Equatable {
         return blocks.compactMap { if case .code = $0.kind { $0.text } else { nil } }.joined(separator: "\n")
     }
 
-    private static func isTableDivider(_ line: String) -> Bool {
+    static func isTableDivider(_ line: String) -> Bool {
         let row = cells(line, markTruncated: false)
         return !row.isEmpty && row.allSatisfy { $0.range(of: #"^:?-{3,}:?$"#, options: .regularExpression) != nil }
     }

@@ -9,14 +9,15 @@ import Synchronization
 /// (and keyboard-interactive through the Hosts sheet), installs the bundled helper for the host's platform under its
 /// hash-named path, starts it on a plain exec channel and greets it with the iPhone's features. While connected it
 /// follows the topology of the host's multiplexer (`backends.open` of the chosen backend) and measures latency with
-/// `echo`. A host with its Helper switch off stops after the login: the connection is plain SSH (`.plain(nil)`, shells
-/// only). So does a connection whose helper cannot start while the SSH connection stays up (`fallback`:
+/// `echo`, on the shared clock's ticks the stats' samples leave free (`HostTraffic`). A host with its Helper switch
+/// off stops after the login: the connection is plain SSH (`.plain(nil)`, shells only). So does a connection whose helper cannot start while the SSH connection stays up (`fallback`:
 /// `.plain(reason)`); login, host key and network failures stay refusals and reconnects. Each connection decides again.
 /// Cancelling the run (`HostSession.disconnect()`) closes the connection; nothing on the host stops.
 struct SSHHostSessionDriver: HostSessionDriver {
     /// The hello features the phone asks for (docs/ios.md, Helper contract); what the reply accepted is
     /// `HostSession.features`. With `stdio.liveness` the helper ends after 45 s without a frame from the phone: the
-    /// latency ping (`pingInterval`) keeps it alive while connected, so it must stay at most `livenessPing`. With
+    /// latency ping (`pingInterval`, or the stats' sample on the ticks it covers) keeps it alive while connected, so it
+    /// must stay at most `livenessPing`. With
     /// `screens.host` the helper reads the screens of the terminals the phone attaches from tmux or herdr itself, so the
     /// phone publishes none (`TerminalFeed.hostsScreens`); with `terminals.follow` too a terminal only a conversation
     /// uses holds its output (`TerminalPresence`). With `sizes.steady` opening a tab resizes its tmux window alone, not
@@ -33,8 +34,9 @@ struct SSHHostSessionDriver: HostSessionDriver {
 
     /// The bundled helpers (`darwin-arm64`, `linux-aarch64`, `linux-x86_64`), the app's `helper` folder.
     var binaries = Bundle.main.bundleURL.appendingPathComponent("helper", isDirectory: true)
-    /// The latency ping, which is also the liveness traffic `stdio.liveness` needs (at most `livenessPing`).
-    var pingInterval: Duration = .seconds(10)
+    /// The latency ping, which is also the liveness traffic `stdio.liveness` needs (at most `livenessPing`): on each tick
+    /// of the shared clock (`HostTraffic.interval`) that no stats sample covers (`HostPulse`).
+    var pingInterval: Duration = HostTraffic.interval
     /// How long `.ready` waits for the first topology, so no row shows a connected host without its spaces.
     var firstTopology: Duration = .seconds(2)
     /// Between `backends.open` attempts while no multiplexer server runs (New space starts one).
@@ -113,7 +115,7 @@ struct SSHHostSessionDriver: HostSessionDriver {
                     break
                 }
                 let gate = ReadyGate()
-                live = Task { await driver.serve(link, preference: preference, gate: gate, events: events) }
+                live = Task { await driver.serve(link, preference: preference, gate: gate, pulse: context.pulse, events: events) }
                 let first = await gate.first(timeout: firstTopology)
                 guard !Task.isCancelled else { break }
                 events.yield(.ready(client: link.client, hello: link.hello, multiplexers: link.multiplexers,
@@ -296,15 +298,11 @@ struct SSHHostSessionDriver: HostSessionDriver {
 
     /// While connected: the chosen multiplexer's topology (following the host's preference live) and the latency.
     /// Ends when cancelled (the link was lost).
-    private func serve(_ link: HelperLink, preference: FollowPreference, gate: ReadyGate,
+    private func serve(_ link: HelperLink, preference: FollowPreference, gate: ReadyGate, pulse: HostPulse,
                        events: AsyncStream<HostSessionEvent>.Continuation) async {
+        let interval = pingInterval
         let pinging = Task {
-            while !Task.isCancelled {
-                let started = ContinuousClock.now
-                let echoed: [String: String]? = try? await link.client.connection.request("echo", params: [String: String]())
-                if echoed != nil { events.yield(.latency(ContinuousClock.now - started)) }
-                try? await Task.sleep(for: pingInterval)
-            }
+            await Self.ping(link.client, every: interval, pulse: pulse) { events.yield(.latency($0)) }
         }
         defer { pinging.cancel() }
         let follower = MultiplexerFollower(client: link.client, rows: link.rows, backends: link.backends,
@@ -314,6 +312,37 @@ struct SSHHostSessionDriver: HostSessionDriver {
         }, none: {
             if gate.none() { events.yield(.noBackend) }
         })
+    }
+
+    /// The liveness ping and the latency while connected, until cancelled: `echo` at once (the latency on connecting),
+    /// then on each tick of `interval` on the shared clock (`HostTraffic`; the first at most a second late) that the
+    /// stats' sample does not cover (`HostPulse`): the helper hears a frame every tick, and a tick's frames leave together.
+    /// A ping does not wait for the last one's answer, which can sit behind a flood of output for a minute (the helper
+    /// reads the request at once, `requests.backlog`): the next tick sends its own.
+    static func ping(_ client: HelperClient, every interval: Duration, pulse: HostPulse,
+                     now: @escaping @Sendable () -> Date = { System.date() },
+                     sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
+                     latency: @escaping @Sendable (Duration) -> Void) async {
+        await withDiscardingTaskGroup { group in
+            var tick: Date?
+            while !Task.isCancelled {
+                if tick.map({ !pulse.covers($0) }) ?? true {
+                    group.addTask {
+                        let started = ContinuousClock.now
+                        let echoed: [String: String]? = try? await client.connection.request("echo", params: [String: String]())
+                        if echoed != nil { latency(ContinuousClock.now - started) }
+                    }
+                }
+                let date = now()
+                let next = HostTraffic.tick(after: date, minimum: min(.seconds(1), interval / 2), grid: interval)
+                do { try await sleep(.milliseconds(Int((next.timeIntervalSince(date) * 1000).rounded(.up)))) } catch {
+                    group.cancelAll()
+                    return
+                }
+                tick = next
+            }
+            group.cancelAll()
+        }
     }
 
     /// Whether the helper answers `echo` within `timeout` (after a network change: a dead link is closed and reconnects).
@@ -398,6 +427,7 @@ enum DriverLink: MobileTransport.HostSession {
     func closed() async { await session.closed() }
     func close() async { await session.close() }
     var lossReason: String? { session.lossReason }
+    var lossError: (any Error)? { session.lossError }
 }
 
 /// A connection without a helper (plain SSH): the login, and why there is no helper (nil: the host's switch is off).
@@ -413,6 +443,7 @@ final class PlainLink: MobileTransport.HostSession {
     func closed() async { await login.closed() }
     func close() async { await login.close() }
     var lossReason: String? { login.lossReason }
+    var lossError: (any Error)? { login.lossError }
 }
 
 /// The live connection the reconnect policy watches: SSH, the helper's stdio channel and the greeted client.
@@ -460,11 +491,15 @@ final class HelperLink: MobileTransport.HostSession {
         }
         // Before closing: afterwards the SSH connection's end is this close.
         ended.withLock { $0 = login.lossReason ?? "The helper on the host stopped." }
+        let error = login.lossError as? SSHTransportError
+        endError.withLock { $0 = error }
         await close()
     }
 
     private let ended = Mutex<String?>(nil)
+    private let endError = Mutex<SSHTransportError?>(nil)
     var lossReason: String? { ended.withLock { $0 } }
+    var lossError: (any Error)? { endError.withLock { $0 } }
 
     func close() async {
         client.connection.close()

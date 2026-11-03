@@ -108,6 +108,9 @@ protocol TerminalFeed: AnyObject, Sendable {
     var clipboardWrite: Bool { get }
     /// Detaching ends the program (a plain shell): nothing reattaches to repaint its screen.
     var endsOnDetach: Bool { get }
+    /// Output bytes the current attachment's stream was handed so far, counted where the transport delivers them (nil:
+    /// the feed does not count). `TerminalPresence.current` compares it with what it parsed.
+    var outputDelivered: Int? { get }
 }
 
 extension TerminalFeed {
@@ -117,4 +120,5 @@ extension TerminalFeed {
     var scrollback: TerminalScrollback { .unknown }
     var clipboardWrite: Bool { false }
     var endsOnDetach: Bool { false }
+    var outputDelivered: Int? { nil }
 }

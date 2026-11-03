@@ -212,7 +212,7 @@ fn a_packed_tree_unpacks_as_it_was() {
     let source = scratch.0.join("source");
     let a = sample(&source);
     let archive = scratch.0.join("dispatch-pack-test.tar.zst");
-    let packed = pack(&source, &[a.clone(), a.join("b")], &archive, 250_000, &Stop::default()).unwrap();
+    let packed = pack(&source, &[a.clone(), a.join("b")], &archive, 250_000, u64::MAX, &Stop::default()).unwrap();
     let before = facts(&a);
     let regular: Vec<_> = before.values().filter(|f| matches!(f, Fact::File { .. })).collect();
     assert_eq!(packed.files, regular.len() as u64);
@@ -237,7 +237,7 @@ fn the_system_tar_and_zstd_read_the_archive() {
     let scratch = Scratch::new("external");
     let a = sample(&scratch.0);
     let archive = scratch.0.join("dispatch-pack-external.tar.zst");
-    pack(&scratch.0, &[a.clone()], &archive, 250_000, &Stop::default()).unwrap();
+    pack(&scratch.0, &[a.clone()], &archive, 250_000, u64::MAX, &Stop::default()).unwrap();
     let tar = Path::new("/usr/bin/tar");
     if tar.exists() {
         let plain = scratch.0.join("plain.tar");
@@ -267,16 +267,16 @@ fn a_pack_over_its_limit_fails_and_leaves_no_archive() {
     let scratch = Scratch::new("limit");
     let a = sample(&scratch.0);
     let archive = scratch.0.join("dispatch-pack-limit.tar.zst");
-    let error = pack(&scratch.0, &[a], &archive, 3, &Stop::default()).unwrap_err();
+    let error = pack(&scratch.0, &[a], &archive, 3, u64::MAX, &Stop::default()).unwrap_err();
     assert_eq!((error.kind(), error.raw_os_error()), (io::ErrorKind::QuotaExceeded, None));
     assert!(!archive.exists());
     // Never a path outside the base, nor the base itself.
     for path in [scratch.0.join("../elsewhere"), scratch.0.clone(), PathBuf::from("relative")] {
-        assert_eq!(pack(&scratch.0, &[path], &archive, 10, &Stop::default()).unwrap_err().kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(pack(&scratch.0, &[path], &archive, 10, u64::MAX, &Stop::default()).unwrap_err().kind(), io::ErrorKind::InvalidInput);
     }
     // An existing archive name is never reused.
     fs::write(&archive, b"").unwrap();
-    assert_eq!(pack(&scratch.0, &[scratch.0.join("a")], &archive, 0, &Stop::default()).unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+    assert_eq!(pack(&scratch.0, &[scratch.0.join("a")], &archive, 0, u64::MAX, &Stop::default()).unwrap_err().kind(), io::ErrorKind::AlreadyExists);
 }
 
 #[test]
@@ -316,7 +316,7 @@ fn a_cut_or_damaged_archive_moves_nothing() {
     let scratch = Scratch::new("damaged");
     let a = sample(&scratch.0.join("source"));
     let archive = scratch.0.join("dispatch-pack-damaged.tar.zst");
-    pack(&scratch.0.join("source"), &[a], &archive, 250_000, &Stop::default()).unwrap();
+    pack(&scratch.0.join("source"), &[a], &archive, 250_000, u64::MAX, &Stop::default()).unwrap();
     let bytes = fs::read(&archive).unwrap();
     let target = scratch.0.join("target");
     fs::create_dir(&target).unwrap();
@@ -346,7 +346,7 @@ fn packed(root: &Path, entries: &[(&str, &[u8])]) -> Vec<u8> {
         }
     }
     let archive = root.join("dispatch-pack-incoming.tar.zst");
-    pack(&source, &paths, &archive, 250_000, &Stop::default()).unwrap();
+    pack(&source, &paths, &archive, 250_000, u64::MAX, &Stop::default()).unwrap();
     let bytes = fs::read(&archive).unwrap();
     fs::remove_file(&archive).unwrap();
     remove_tree(&source).unwrap();
@@ -449,7 +449,7 @@ fn modes_are_restored_under_the_umask_and_read_only_folders_still_move() {
     mode(&source.join("locked/inner"), 0o555);
     mode(&source.join("locked"), 0o555);
     let archive = scratch.0.join("dispatch-pack-modes.tar.zst");
-    pack(&source, &[source.join("locked"), source.join("setuid")], &archive, 250_000, &Stop::default()).unwrap();
+    pack(&source, &[source.join("locked"), source.join("setuid")], &archive, 250_000, u64::MAX, &Stop::default()).unwrap();
     mode(&source.join("locked/inner"), 0o755);
     mode(&source.join("locked"), 0o755);
     let target = scratch.0.join("target");
@@ -666,10 +666,10 @@ fn a_stopped_pack_or_unpack_ends_before_its_next_entry_and_leaves_nothing() {
     let archive = scratch.0.join("dispatch-pack-stop.tar.zst");
     let stop = Stop::default();
     stop.set();
-    let error = pack(&scratch.0.join("source"), &[a.clone()], &archive, 250_000, &stop).unwrap_err();
+    let error = pack(&scratch.0.join("source"), &[a.clone()], &archive, 250_000, u64::MAX, &stop).unwrap_err();
     assert_eq!((error.kind(), error.raw_os_error()), (io::ErrorKind::Interrupted, None));
     assert!(!archive.exists());
-    pack(&scratch.0.join("source"), &[a], &archive, 250_000, &Stop::default()).unwrap();
+    pack(&scratch.0.join("source"), &[a], &archive, 250_000, u64::MAX, &Stop::default()).unwrap();
     let bytes = fs::read(&archive).unwrap();
     let target = scratch.0.join("target");
     fs::create_dir(&target).unwrap();
@@ -820,7 +820,7 @@ fn a_pack_skips_and_counts_what_this_account_cannot_read() {
     mode(&source.join("a/closed"), 0);
     mode(&source.join("a/locked.txt"), 0);
     let archive = scratch.0.join("dispatch-pack-unreadable.tar.zst");
-    let packed = pack(&source, &[source.join("a")], &archive, 250_000, &Stop::default());
+    let packed = pack(&source, &[source.join("a")], &archive, 250_000, u64::MAX, &Stop::default());
     mode(&source.join("a/closed"), 0o700);
     mode(&source.join("a/locked.txt"), 0o600);
     // SAFETY: getuid only reads this process's account. Root reads them anyway.
@@ -921,7 +921,7 @@ fn transfer_job_outputs_replay_as_recorded() {
     let source = scratch.0.join("source");
     let a = sample(&source);
     let archive = scratch.0.join("dispatch-pack-replay.tar.zst");
-    let packed = pack(&source, &[a], &archive, 250_000, &Stop::default()).unwrap();
+    let packed = pack(&source, &[a], &archive, 250_000, u64::MAX, &Stop::default()).unwrap();
     let (result, recorded, again) = replayed(Ok(Output::Packed(packed.clone())));
     assert_eq!(again, recorded);
     assert!(matches!(result, Ok(Output::Packed(back)) if back == packed));
@@ -959,4 +959,221 @@ fn transfer_job_outputs_replay_as_recorded() {
         let back = result.unwrap_err();
         assert_eq!((back.kind(), back.raw_os_error(), back.to_string()), (kind, None, message));
     }
+}
+
+/// A target holding the originals `a` and `b`.
+fn originals(target: &Path) {
+    fs::create_dir_all(target).unwrap();
+    fs::write(target.join("a"), b"original a").unwrap();
+    fs::write(target.join("b"), b"original b").unwrap();
+}
+
+/// `bytes` unpacked into `target` under `policy` with MOVE set to `hook`; the staging folder's path too.
+fn moved_with(
+    target: &Path,
+    bytes: &[u8],
+    policy: Policy,
+    hook: impl FnMut(&std::ffi::OsStr) -> io::Result<()> + 'static,
+) -> (io::Result<Unpacked>, PathBuf) {
+    MOVE.with_borrow_mut(|slot| *slot = Some(Box::new(hook)));
+    let (archive, staging) = staged(target, bytes);
+    let result = unpack(&job(&archive, &staging, target, policy, &tops(bytes)));
+    MOVE.with_borrow_mut(|slot| *slot = None);
+    (result, staging)
+}
+
+/// `b` fails with ESTALE as it is about to move: `b` only.
+fn stale_b(name: &std::ffi::OsStr) -> io::Result<()> {
+    if name == "b" { Err(io::Error::from_raw_os_error(native::ESTALE)) } else { Ok(()) }
+}
+
+#[test]
+fn a_failed_entry_takes_back_every_entry_moved_before_it() {
+    let scratch = Scratch::new("rollback");
+    let bytes = packed(&scratch.0, &[("a", b"incoming a"), ("b", b"incoming b")]);
+    // Replace: `a` moves in over its original, then `b` fails; `a`'s original comes back and the copy goes.
+    for (policy, existing) in [(Policy::Replace, true), (Policy::Replace, false), (Policy::Keep, true), (Policy::Skip, false)] {
+        let target = scratch.0.join(format!("target-{}-{existing}", super::super::capture::policy(policy)));
+        if existing {
+            originals(&target);
+        } else {
+            fs::create_dir_all(&target).unwrap();
+        }
+        let (result, staging) = moved_with(&target, &bytes, policy, stale_b);
+        let error = result.unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(native::ESTALE), "{error}");
+        if existing {
+            assert_eq!(names(&target), ["a", "b"], "{policy:?}: no copy of `a` stays");
+            assert_eq!(fs::read(target.join("a")).unwrap(), b"original a", "{policy:?}");
+            assert_eq!(fs::read(target.join("b")).unwrap(), b"original b", "{policy:?}");
+        } else {
+            assert!(names(&target).is_empty(), "{policy:?}: {:?}", names(&target));
+        }
+        assert!(!staging.exists(), "{policy:?}: the staging folder is removed");
+    }
+    // The replaced original's own failure (the listed `b` changed): `b` restored as well as `a`.
+    let target = scratch.0.join("target-changed");
+    originals(&target);
+    let (archive, staging) = staged(&target, &bytes);
+    let mut changed = job(&archive, &staging, &target, Policy::Replace, &tops(&bytes));
+    changed.replacements.get_mut(b"b".as_slice()).unwrap().inode ^= 1;
+    let error = unpack(&changed).unwrap_err();
+    assert_eq!(error.raw_os_error(), Some(native::ESTALE), "{error}");
+    assert_eq!(names(&target), ["a", "b"]);
+    assert_eq!(fs::read(target.join("a")).unwrap(), b"original a");
+    assert_eq!(fs::read(target.join("b")).unwrap(), b"original b");
+    assert!(!staging.exists());
+}
+
+#[test]
+fn a_rollback_the_target_defeats_names_what_stays_and_keeps_the_hidden_folder() {
+    let scratch = Scratch::new("rollback-partial");
+    let bytes = packed(&scratch.0, &[("a", b"incoming a"), ("b", b"incoming b")]);
+    // Someone renames the copy of `a` before `b` fails: it cannot be taken back, while `a`'s original can.
+    let target = scratch.0.join("renamed");
+    originals(&target);
+    let into = target.clone();
+    let (result, staging) = moved_with(&target, &bytes, Policy::Replace, move |name| {
+        if name == "b" {
+            fs::rename(into.join("a"), into.join("a elsewhere")).unwrap();
+        }
+        stale_b(name)
+    });
+    let error = result.unwrap_err();
+    assert_eq!((error.kind(), error.raw_os_error()), (io::ErrorKind::Other, None), "{error}");
+    let message = error.to_string();
+    assert!(message.contains("could not be undone in full") && message.contains("the copy of \"a\""), "{message}");
+    assert!(message.contains(&staging.display().to_string()), "{message}");
+    let visible: Vec<_> = names(&target).into_iter().filter(|name| !name.starts_with(STAGING)).collect();
+    assert_eq!(visible, ["a", "a elsewhere", "b"]);
+    assert_eq!(fs::read(target.join("a")).unwrap(), b"original a");
+    assert_eq!(fs::read(target.join("a elsewhere")).unwrap(), b"incoming a");
+    assert_eq!(fs::read(target.join("b")).unwrap(), b"original b");
+    assert!(staging.exists(), "the hidden folder stays");
+    // Someone puts another file where the copy of `a` was: it stays, and the original goes beside it.
+    let target = scratch.0.join("swapped");
+    originals(&target);
+    let into = target.clone();
+    let (result, staging) = moved_with(&target, &bytes, Policy::Replace, move |name| {
+        if name == "b" {
+            fs::rename(into.join("a"), into.join("a elsewhere")).unwrap();
+            fs::write(into.join("a"), b"theirs").unwrap();
+        }
+        stale_b(name)
+    });
+    let message = result.unwrap_err().to_string();
+    assert!(message.contains("the original \"a\" is now \"a 2\""), "{message}");
+    assert_eq!(fs::read(target.join("a")).unwrap(), b"theirs", "an entry the copy did not move in is never taken");
+    assert_eq!(fs::read(target.join("a 2")).unwrap(), b"original a");
+    assert_eq!(fs::read(target.join("b")).unwrap(), b"original b");
+    assert!(staging.exists());
+}
+
+#[test]
+fn a_pack_keeps_the_volumes_reserve_and_stays_within_its_budget() {
+    // The reserve is never handed out, whatever the budget.
+    assert_eq!(room(RESERVE - 1, u64::MAX).0, 0);
+    assert_eq!(room(RESERVE, u64::MAX).0, 0);
+    assert_eq!(room(RESERVE + 10, u64::MAX), (10, "not enough free space for the archive"));
+    assert_eq!(room(RESERVE + 10, 4).0, 4);
+    assert!(room(RESERVE + 10, 4).1.contains("budget"));
+    // A pack past its budget fails as a bound and leaves no archive.
+    let scratch = Scratch::new("pack-budget");
+    let source = scratch.0.join("source");
+    fs::create_dir_all(&source).unwrap();
+    fs::write(source.join("noise"), noise(256 << 10)).unwrap();
+    let archive = scratch.0.join("dispatch-pack-budget.tar.zst");
+    let error = pack(&source, &[source.join("noise")], &archive, 250_000, 64 << 10, &Stop::default()).unwrap_err();
+    assert_eq!((error.kind(), error.raw_os_error()), (io::ErrorKind::QuotaExceeded, None), "{error}");
+    assert!(error.to_string().contains("budget"), "{error}");
+    assert!(!archive.exists());
+    let packed = pack(&source, &[source.join("noise")], &archive, 250_000, 1 << 20, &Stop::default()).unwrap();
+    assert!(packed.size > 64 << 10 && packed.size <= 1 << 20, "{packed:?}");
+}
+
+/// Whether `directory`'s file system finds a name under another case (APFS and HFS+ by default).
+fn case_insensitive(directory: &Path) -> bool {
+    let probe = directory.join("Case-Probe");
+    fs::write(&probe, b"").unwrap();
+    let insensitive = directory.join("case-probe").exists();
+    fs::remove_file(&probe).unwrap();
+    insensitive
+}
+
+#[test]
+fn a_replaced_original_comes_back_under_its_own_spelling() {
+    let scratch = Scratch::new("rollback-spelling");
+    if !case_insensitive(&scratch.0) {
+        eprintln!("skipped: a case-sensitive file system never matches another spelling");
+        return;
+    }
+    let bytes = packed(&scratch.0, &[("readme.md", b"incoming readme"), ("z", b"incoming z")]);
+    // `readme.md` replaces `README.md`, then `z` fails: the original returns as `README.md`, not as `readme.md`.
+    let target = scratch.0.join("later");
+    fs::create_dir_all(&target).unwrap();
+    fs::write(target.join("README.md"), b"original readme").unwrap();
+    fs::write(target.join("z"), b"original z").unwrap();
+    let (result, staging) = moved_with(&target, &bytes, Policy::Replace, |name| {
+        if name == "z" { Err(io::Error::from_raw_os_error(native::ESTALE)) } else { Ok(()) }
+    });
+    assert_eq!(result.unwrap_err().raw_os_error(), Some(native::ESTALE));
+    assert_eq!(names(&target), ["README.md", "z"]);
+    assert_eq!(fs::read(target.join("README.md")).unwrap(), b"original readme");
+    assert!(!staging.exists());
+    // Its own failure (the listed identity changed): it stays `README.md` as well.
+    let target = scratch.0.join("own");
+    fs::create_dir_all(&target).unwrap();
+    fs::write(target.join("README.md"), b"original readme").unwrap();
+    let one = packed(&scratch.0, &[("readme.md", b"incoming readme")]);
+    let (archive, staging) = staged(&target, &one);
+    let mut changed = job(&archive, &staging, &target, Policy::Replace, &tops(&one));
+    changed.replacements.get_mut(b"readme.md".as_slice()).unwrap().inode ^= 1;
+    assert_eq!(unpack(&changed).unwrap_err().raw_os_error(), Some(native::ESTALE));
+    assert_eq!(names(&target), ["README.md"]);
+    // And a replace that succeeds leaves the copy under the name it was sent with.
+    let target = scratch.0.join("done");
+    fs::create_dir_all(&target).unwrap();
+    fs::write(target.join("README.md"), b"original readme").unwrap();
+    unpacked(&target, &one, Policy::Replace).unwrap();
+    assert_eq!(names(&target), ["readme.md"]);
+    assert_eq!(fs::read(target.join("readme.md")).unwrap(), b"incoming readme");
+}
+
+#[test]
+fn a_rollback_never_moves_or_restamps_an_entry_the_user_put_in_place_of_the_copy() {
+    let scratch = Scratch::new("rollback-foreign");
+    // The archive's folder `d`, 0750 and dated 2001, then `e`.
+    let source = scratch.0.join("incoming");
+    fs::create_dir_all(source.join("d")).unwrap();
+    fs::write(source.join("d/inside.txt"), b"copied").unwrap();
+    fs::write(source.join("e"), b"incoming e").unwrap();
+    mode(&source.join("d"), 0o750);
+    stamp(&source.join("d"), 1_000_000_000, 0);
+    let archive = scratch.0.join("dispatch-pack-foreign.tar.zst");
+    pack(&source, &[source.join("d"), source.join("e")], &archive, 250_000, u64::MAX, &Stop::default()).unwrap();
+    let bytes = fs::read(&archive).unwrap();
+    // Before `e` fails, the user moves the copy of `d` away and makes a folder `d` of their own.
+    let target = scratch.0.join("target");
+    fs::create_dir_all(&target).unwrap();
+    let into = target.clone();
+    let (result, staging) = moved_with(&target, &bytes, Policy::Keep, move |name| {
+        if name == "e" {
+            fs::rename(into.join("d"), into.join("d moved")).unwrap();
+            fs::create_dir(into.join("d")).unwrap();
+            mode(&into.join("d"), 0o755);
+            return Err(io::Error::from_raw_os_error(native::ESTALE));
+        }
+        Ok(())
+    });
+    let theirs = target.join("d");
+    let before = identity(&theirs);
+    let message = result.unwrap_err().to_string();
+    assert!(message.contains("\"d\" was replaced after the copy moved in and is left as it is"), "{message}");
+    assert_eq!(identity(&theirs), before, "the user's folder stays where it is");
+    let metadata = fs::metadata(&theirs).unwrap();
+    assert_eq!(metadata.mode() & 0o777, 0o755, "the archive's mode is not applied to it");
+    assert_ne!(metadata.mtime(), 1_000_000_000, "nor its time");
+    assert!(names(&theirs).is_empty());
+    assert_eq!(fs::read(target.join("d moved/inside.txt")).unwrap(), b"copied");
+    assert!(staging.exists());
 }

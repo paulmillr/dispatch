@@ -66,29 +66,46 @@ struct ChatLinkBanner: View {
     }
 }
 
-/// Three dots rising in turn (hx-dot, 1.3 s); still with Reduce Motion.
+/// Three dots rising in turn (hx-dot, 1.3 s), in the compositor (`ChatDotsLoop`) and stopped while scrolled away; still
+/// with Reduce Motion. An `animationDateOverride` (tests) draws that instant in SwiftUI.
 struct ChatWaitingDots: View {
     @Environment(\.animationDateOverride) private var fixedDate
     var color: Color
     var size: CGFloat = 5
     @ReduceMotion private var reduceMotion
+    @State private var onScreen = true
+    static let period = 1.3
+    /// Each dot's delay after the one before it.
+    static let lag = 0.18
+    static let spacing: CGFloat = 3
+
     var body: some View {
         if reduceMotion {
-            HStack(spacing: 3) { ForEach(0..<3, id: \.self) { _ in Circle().fill(color).frame(width: size, height: size) } }
-        } else {
-            TimelineView(.animation) { context in
-                let time = (fixedDate ?? context.date).timeIntervalSinceReferenceDate
-                HStack(spacing: 3) {
-                    ForEach(0..<3, id: \.self) { index in
-                        let phase = (time - Double(index) * 0.18).truncatingRemainder(dividingBy: 1.3) / 1.3
-                        let lift = phase < 0 ? 0 : phase < 0.3 ? phase / 0.3 : phase < 0.6 ? (0.6 - phase) / 0.3 : 0
-                        Circle().fill(color).frame(width: size, height: size)
-                            .opacity(0.35 + 0.65 * lift)
-                            .offset(y: -2 * lift)
-                    }
+            HStack(spacing: Self.spacing) { ForEach(0..<3, id: \.self) { _ in Self.dot(color: color, size: size) } }
+        } else if let fixedDate {
+            let time = fixedDate.timeIntervalSinceReferenceDate
+            HStack(spacing: Self.spacing) {
+                ForEach(0..<3, id: \.self) { index in
+                    let lift = Self.lift(phase: (time - Double(index) * Self.lag).truncatingRemainder(dividingBy: Self.period) / Self.period)
+                    Self.dot(color: color, size: size)
+                        .opacity(0.35 + 0.65 * lift)
+                        .offset(y: -2 * lift)
                 }
             }
+        } else {
+            ChatDotsLoop(color: color, size: size, moving: onScreen)
+                .onScreen($onScreen)
+                .accessibilityHidden(true)
         }
+    }
+
+    static func dot(color: Color, size: CGFloat) -> some View {
+        Circle().fill(color).frame(width: size, height: size)
+    }
+
+    /// How far a dot has risen (0 to 1) at `phase` of its period: up over the first 0.3, down over the next, then still.
+    static func lift(phase: Double) -> Double {
+        phase < 0 ? 0 : phase < 0.3 ? phase / 0.3 : phase < 0.6 ? (0.6 - phase) / 0.3 : 0
     }
 }
 

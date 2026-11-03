@@ -180,10 +180,11 @@ pub trait Plugin {
         )
     }
     /// `paths` (inside `base`) packed into a temporary archive named relative to `base`;
-    /// `transfer` is the client's id for it.
+    /// `transfer` is the client's id for it, and `client` (its connection's serial) owns it.
     fn pack(
         &mut self,
         io: &mut dyn Io,
+        _client: u64,
         _transfer: &str,
         _base: &Path,
         _paths: &[PathBuf],
@@ -196,8 +197,8 @@ pub trait Plugin {
             }),
         )
     }
-    /// Removes a packed archive, or the one a running pack is still writing when it ends.
-    fn pack_drop(&mut self, io: &mut dyn Io, _transfer: &str, done: Done<()>) {
+    /// Removes a packed archive `client` owns, or the one a running pack is still writing when it ends.
+    fn pack_drop(&mut self, io: &mut dyn Io, _client: u64, _transfer: &str, done: Done<()>) {
         done(
             io,
             Err(Error {
@@ -236,9 +237,9 @@ pub trait Plugin {
         )
     }
     /// Ends a transfer whose client disconnected: drops a pack's archive (`unpack` false) or closes an unpack
-    /// without commit, removing only what the helper made. The helper calls it with no capability check, so a
-    /// client whose grants were reduced still leaves nothing behind.
-    fn release(&mut self, io: &mut dyn Io, _transfer: &str, _unpack: bool, done: Done<()>) {
+    /// without commit, removing only what the helper made, and only what `client` (the connection's serial) owns.
+    /// The helper calls it with no capability check, so a client whose grants were reduced still leaves nothing behind.
+    fn release(&mut self, io: &mut dyn Io, _client: u64, _transfer: &str, _unpack: bool, done: Done<()>) {
         deferred(done)(io, Ok(()))
     }
     /// Extracts and moves in (`commit`), or discards the staging directory.

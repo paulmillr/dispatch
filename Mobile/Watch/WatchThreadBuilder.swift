@@ -2,7 +2,7 @@ import Foundation
 
 /// A conversation as a watch thread page (docs/watch.md, "The page"): what `ChatThreadView` shows, flattened for a small
 /// screen. Rows keep the phone's ids (`ChatThreadRow.id`'s form), so the watch's cache keys stay the same across pages;
-/// tools, which the phone folds into captions and steps, are one line each.
+/// tools stay out, as the phone's thread leaves them to the turn's caption.
 @MainActor
 enum WatchThreadBuilder {
     /// The most items one page holds, whatever the watch asks.
@@ -33,13 +33,14 @@ enum WatchThreadBuilder {
         }
         thread.questions += session.questions.filter { !$0.submitted }.map(question)
         thread.queue = session.queueRows.map {
-            WatchQueued(id: $0.id, text: $0.text, status: $0.status, canSendNow: session.canSendNow($0))
+            WatchQueued(id: $0.id, text: $0.text, status: $0.status, canSendNow: session.canSendNow($0) || session.canResend($0))
         }
         return WatchCodec.fit(thread)
     }
 
-    /// Per turn, its displayed items (`ChatTurnSummary.displayed`) as the thread shows them, plus each tool as a line;
-    /// the turn's caption under its last agent message once it ended; the prompt being sent last.
+    /// Per turn, its displayed items (`ChatTurnSummary.displayed`) as the thread's rows (`MobileTranscript.rows`): the
+    /// user's and the agent's messages, Claude's thinking, notices; no tools. The turn's caption under its last agent
+    /// message once it ended; the prompt being sent last.
     static func items(_ session: MobileChatSession, directory: String?) -> [WatchItem] {
         var result: [WatchItem] = []
         for turn in session.transcript.turns {
@@ -66,12 +67,7 @@ enum WatchThreadBuilder {
                     }
                 case .notice: result.append(text(.notice))
                 case .reasoning where item.isNarration && !item.text.isEmpty: result.append(text(.thinking))
-                case .tool:
-                    let step = ChatStep(item, directory: directory)
-                    result.append(WatchItem(id: id, kind: .tool, text: step.title, time: time, turn: turn.id,
-                                            tool: step.kind.label, detail: step.detail, failed: step.failed,
-                                            running: step.running))
-                case .reasoning: break
+                case .tool, .reasoning: break
                 }
             }
         }

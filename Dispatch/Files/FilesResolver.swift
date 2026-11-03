@@ -35,12 +35,14 @@ import Foundation
         /// The reconnect controller keeps the tab's connection: it dropped, or is being made again.
         var reconnecting = false
         var disconnectedAt: Date?
+        /// The app's own UUID for the tab's identified host (`HostRegistry.key(for:)`); nil without a host record.
+        var hostIdentity: String?
     }
 
     enum Decision: Equatable {
         case local
         /// `readOnly`: the grant lists, reads and copies out, but Copy files in is off.
-        case remote(SSHConnectionID, home: String?, host: String, readOnly: Bool = false)
+        case remote(SSHConnectionID, home: String?, host: String, readOnly: Bool = false, identity: String? = nil)
         case plainSSH(host: String)
         case notGranted(host: String, scope: SSHIntegrationScope?)
         case offline(host: String, since: Date?)
@@ -65,7 +67,8 @@ import Foundation
             guard let connection = facts.connection else { return .plainSSH(host: host) }
             if let link = facts.link {
                 guard link.grantsFiles else { return .notGranted(host: host, scope: link.scope) }
-                return .remote(connection, home: link.home, host: host, readOnly: !link.grantsWrite)
+                return .remote(connection, home: link.home, host: host, readOnly: !link.grantsWrite,
+                               identity: facts.hostIdentity)
             }
             guard facts.live else { return .offline(host: host, since: lastRefresh ?? facts.disconnectedAt) }
             if facts.helperGone { return .unavailable("The helper on \(host) stopped. Files return with its next connection.") }
@@ -81,8 +84,8 @@ import Foundation
     func availability(_ decision: Decision) -> FilesAvailability {
         switch decision {
         case .local: return .available(FilesSources.localSource())
-        case .remote(let id, let home, let host, let readOnly):
-            return .available(source(for: id, home: home, host: host, readOnly: readOnly))
+        case .remote(let id, let home, let host, let readOnly, let identity):
+            return .available(source(for: id, home: home, host: host, readOnly: readOnly, identity: identity))
         case .plainSSH(let host): return .plainSSH(host: host)
         case .notGranted(let host, let scope): return .notGranted(host: host, scope: scope)
         case .offline(let host, let since): return .offline(host: host, since: since)
@@ -92,9 +95,12 @@ import Foundation
     }
 
     /// One source per connection for as long as that connection is live (a grant reduced while it lives makes a new one).
-    func source(for id: SSHConnectionID, home: String?, host: String, readOnly: Bool = false) -> HelperFilesSource {
-        if let source = remote[id], source.home == home, source.hostLabel == host, source.readOnly == readOnly { return source }
-        let source = HelperFilesSource(endpoint: .remote(id), home: home, hostLabel: host, readOnly: readOnly)
+    func source(for id: SSHConnectionID, home: String?, host: String, readOnly: Bool = false,
+                identity: String? = nil) -> HelperFilesSource {
+        if let source = remote[id], source.home == home, source.hostLabel == host, source.readOnly == readOnly,
+           source.hostIdentity == identity { return source }
+        let source = HelperFilesSource(endpoint: .remote(id), home: home, hostLabel: host, readOnly: readOnly,
+                                       hostIdentity: identity)
         remote[id] = source
         return source
     }
@@ -131,7 +137,15 @@ import Foundation
             live: connection.map { runtime.ssh.hasConnections(in: [$0.rawValue]) } ?? false,
             helperGone: link == nil && connection.map { runtime.ssh.helperInstalled($0) } == true,
             host: host ?? "The host", state: context?.state,
-            reconnecting: reconnect != nil, disconnectedAt: reconnect?.disconnectedAt)
+            reconnecting: reconnect != nil, disconnectedAt: reconnect?.disconnectedAt,
+            hostIdentity: Self.identified(context: context, link: link).flatMap { workspace.hosts.key(for: $0)?.uuidString })
+    }
+
+    /// The tab's identified host: its terminal's, else the one HostRegistry names for its helper's greeting.
+    private static func identified(context: TerminalHostContext?, link: SSHCoordinator.Link?) -> HostID? {
+        if let host = context?.host, host != .local, !host.isProvisional { return host }
+        guard let host = link?.greeting.host, !host.isEmpty, host.utf8.count <= 256 else { return nil }
+        return .authenticated(host)
     }
 
     /// Reads, inside an observation, the resolver's inputs that are observable: the tab's host state and its

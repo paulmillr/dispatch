@@ -339,13 +339,14 @@ impl Io for System {
                 Job::Remove { path: at, expected } => {
                     object("remove", vec![("path", Data::from(at.as_path())), ("expected", capture::expected(expected)?)])
                 }
-                Job::Pack(crate::api::PackJob { base, paths, archive, limit, stop: _ }) => object(
+                Job::Pack(crate::api::PackJob { base, paths, archive, limit, budget, stop: _ }) => object(
                     "pack",
                     vec![
                         ("base", Data::from(base.as_path())),
                         ("paths", Data::Array(paths.iter().map(|p| Data::from(p.as_path())).collect())),
                         ("archive", Data::from(archive.as_path())),
                         ("limit", Data::Unsigned(*limit)),
+                        ("budget", Data::Unsigned(*budget)),
                     ],
                 ),
                 Job::Append(staging, bytes) => {

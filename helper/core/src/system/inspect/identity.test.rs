@@ -33,3 +33,21 @@ fn macos_reports_its_product_version() {
     assert_eq!(release.label, Some(format!("macOS {version}")));
     assert_eq!(release.name, None);
 }
+
+#[test]
+fn a_uuid_is_written_as_lowercase_hex_groups() {
+    let bytes = [
+        0xd9, 0x64, 0xe8, 0x27, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0xfe, 0xdc, 0xba, 0x98,
+    ];
+    assert_eq!(format_uuid(&bytes), "d964e827-0123-4567-89ab-cdeffedcba98");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn the_mac_identity_is_the_platform_uuid_not_the_kernels() {
+    let host = platform_uuid().unwrap();
+    assert_eq!(host.len(), 36);
+    assert!(host.chars().all(|c| c == '-' || c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+    let kernel = crate::system::stats::macos::sysctl(c"kern.uuid", 256).unwrap();
+    assert_ne!(host, String::from_utf8_lossy(&kernel).trim_end_matches('\0').to_ascii_lowercase());
+}

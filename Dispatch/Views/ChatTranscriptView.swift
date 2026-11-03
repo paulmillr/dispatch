@@ -53,6 +53,8 @@ struct ChatTranscriptView: View {
                 // While its window is off screen, the rows it showed then (`presentedTranscriptRows`).
                 let rows = session.presentedTranscriptRows
                 let watches = theme.radioLog ? ChatRadioLog.watches(rows) : [:]
+                // The live turn and its newest item: a reply there may still be streaming (typed reveal).
+                let typingTurn = session.presentedTypingTurn
                 LazyVStack(alignment: .leading, spacing: 0) {
                     if session.hasEarlier || session.loadingEarlier {
                         earlierMessages
@@ -75,7 +77,8 @@ struct ChatTranscriptView: View {
                             // A step taking over its group's shown step hands off in place instead of entering.
                             let handoff = row.timeline?.replaced == nil ? nil : session.transcriptArrivals.handoff(for: row.id)
                             ChatTranscriptRowView(row: row, session: session, coordinator: coordinator, directory: directory,
-                                contentWidth: max(0, geometry.size.width - 44), handoff: handoff, openedAt: openedAt)
+                                contentWidth: max(0, geometry.size.width - 44), handoff: handoff, openedAt: openedAt,
+                                streaming: ChatTypedMarkdown.streaming(row, in: typingTurn))
                                 .modifier(ChatArrivalMotion(receipt: handoff == nil ? session.transcriptArrivals.receipt(for: row.id) : nil,
                                                             since: openedAt, reduceMotion: reduceMotion, grouped: true))
                         }.background(ChatScrollMarker(id: row.id, position: session.scrollPosition)).id(row.id)
@@ -569,6 +572,8 @@ private struct ChatTranscriptRowView: View {
     let contentWidth: CGFloat
     var handoff: ChatTranscriptArrivals.Receipt? = nil
     var openedAt: TimeInterval = .infinity
+    /// The row is in the live turn (`newest`: its newest item, still streaming unless complete); nil otherwise.
+    var streaming: ChatTypedMarkdown.Streaming? = nil
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var bubbleWidth: CGFloat {
         theme.radioLog ? ChatRadioLog.messageWidth(contentWidth, theme: theme) + 32 - (row.item?.kind == .tool ? 10 : 0)
@@ -722,7 +727,9 @@ private struct ChatTranscriptRowView: View {
                             flight: row.id == session.optimisticPrompt?.id ? (session.flightFrames, .prompt(row.id)) : nil,
                             hidden: session.sendFlight?.to == .prompt(row.id))
         case .assistant:
-            ChatMarkdown(text: item.text).foregroundStyle(theme.ink)
+            ChatTypedMarkdown(text: item.text, rowID: row.id, reveals: session.typingReveals, live: streaming != nil,
+                              ended: item.completed || streaming != .newest)
+                .foregroundStyle(theme.ink)
         case .notice:
             Text(ChatSearchHighlight.text(AttributedString(item.text), query: query, theme: theme)).font(theme.typography.detail).foregroundStyle(theme.muted)
         case .reasoning where item.isNarration:
@@ -984,5 +991,38 @@ struct ChatRadioLogHeader: View {
         .overlay(alignment: .bottom) { Rectangle().fill(theme.border).frame(height: 1) }
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("chat-radio-log-header")
+    }
+}
+
+/// An agent's reply, typing out while it streams in the live turn (`ChatTypingReveals`); otherwise, and with Reduce
+/// Motion, as `ChatMarkdown` draws it at once. Only this view asks for the reveal, and only `ChatMarkdown` reads its
+/// frames: a step draws the message's text again, nothing around it.
+struct ChatTypedMarkdown: View {
+    enum Streaming: Equatable { case live, newest }
+    /// A row's place in the live turn (`ChatSession.presentedTypingTurn`): nil outside it, `newest` for its newest item.
+    static func streaming(_ row: ChatTranscriptRow, in live: (turn: String, newest: String?)?) -> Streaming? {
+        guard let live, let turn = row.turnID, turn == live.turn else { return nil }
+        return row.item?.id == live.newest ? .newest : .live
+    }
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let text: String
+    let rowID: String
+    let reveals: ChatTypingReveals
+    let live: Bool
+    let ended: Bool
+    /// The reveal this view counts as shown (its clock runs only while one does).
+    @State private var shown: ChatTypingReveal?
+    var body: some View {
+        let typing = reveals.reveal(rowID, text: text, live: live, ended: ended, reduceMotion: reduceMotion)
+        ChatMarkdown(text: text, typing: typing)
+            .onAppear { show(typing) }
+            .onDisappear { show(nil) }
+            .onChange(of: typing.map(ObjectIdentifier.init)) { _, _ in show(typing) }
+    }
+    private func show(_ reveal: ChatTypingReveal?) {
+        guard shown !== reveal else { return }
+        if let shown { reveals.disappeared(shown) }
+        if let reveal { reveals.appeared(reveal) }
+        shown = reveal
     }
 }

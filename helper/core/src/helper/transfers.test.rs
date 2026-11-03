@@ -6,13 +6,16 @@ use crate::system::System;
 struct Fake {
     released: Rc<RefCell<Vec<(String, bool)>>>,
     held: Rc<RefCell<Vec<Done<()>>>>,
+    /// The client serial each release named.
+    owners: Rc<RefCell<Vec<u64>>>,
 }
 impl Plugin for Fake {
     fn name(&self) -> &str {
         "files"
     }
     fn event(&mut self, _: &mut dyn Io, _: &mut dyn Ui, _: Event) {}
-    fn release(&mut self, _: &mut dyn Io, transfer: &str, unpack: bool, done: Done<()>) {
+    fn release(&mut self, _: &mut dyn Io, client: u64, transfer: &str, unpack: bool, done: Done<()>) {
+        self.owners.borrow_mut().push(client);
         self.released.borrow_mut().push((transfer.to_owned(), unpack));
         self.held.borrow_mut().push(done);
     }
@@ -24,14 +27,16 @@ struct Run {
     plugins: Vec<Shared<dyn Plugin>>,
     released: Rc<RefCell<Vec<(String, bool)>>>,
     held: Rc<RefCell<Vec<Done<()>>>>,
+    owners: Rc<RefCell<Vec<u64>>>,
 }
 
 impl Run {
     fn new() -> Self {
         let fake = Fake::default();
-        let (released, held) = (fake.released.clone(), fake.held.clone());
+        let (released, held, owners) = (fake.released.clone(), fake.held.clone(), fake.owners.clone());
         let plugin: Shared<dyn Plugin> = Rc::new(RefCell::new(fake));
-        Self { system: System::new(2, 64).unwrap(), transfers: Transfers::default(), plugins: vec![plugin], released, held }
+        let transfers = Transfers::default();
+        Self { system: System::new(2, 64).unwrap(), transfers, plugins: vec![plugin], released, held, owners }
     }
 
     /// Request `method` for `transfer` from `fd`: its observed completion.
@@ -164,8 +169,48 @@ fn a_release_needs_no_capability_the_client_lost() {
     let denied = Rc::new(Cell::new(None));
     let code = denied.clone();
     registered.unpack_close(&mut system, "a", false, Box::new(move |_, result| code.set(result.err().map(|e| e.code))));
-    registered.release(&mut system, "a", true, Box::new(|_, _| {}));
+    registered.release(&mut system, 1, "a", true, Box::new(|_, _| {}));
     system.callbacks();
     assert_eq!(denied.get(), Some("permission_denied"));
     assert_eq!(released.borrow().as_slice(), [("a".to_owned(), true)]);
+}
+
+#[test]
+fn a_client_never_dropping_its_packs_is_remembered_for_its_newest_only() {
+    let mut run = Run::new();
+    for index in 0..40 {
+        let pack = run.request::<Packed>(3, "pack", &format!("p{index}"), false);
+        run.complete(pack, Ok(Packed::default()));
+    }
+    let open = run.request::<Transfer>(3, "unpack_open", "u", false);
+    run.complete(open, Ok(Transfer::default()));
+    run.end(3);
+    run.finish();
+    let released = run.released();
+    assert_eq!(released.len(), PACKS + 1, "{released:?}");
+    assert!(released.contains(&("u".to_owned(), true)), "an open unpack is never forgotten");
+    assert!(released.contains(&("p39".to_owned(), false)) && !released.contains(&("p0".to_owned(), false)), "{released:?}");
+}
+
+#[test]
+fn a_refused_repeat_of_an_open_id_keeps_it_and_a_reused_fd_is_another_client() {
+    let mut run = Run::new();
+    let first = run.transfers.client(3);
+    let pack = run.request::<Packed>(3, "pack", "x", false);
+    run.complete(pack, Ok(Packed::default()));
+    // The same id again, refused because it is held: still released when the client leaves.
+    let again = run.request::<Packed>(3, "pack", "x", false);
+    run.complete(again, Err(refused("invalid_request")));
+    run.end(3);
+    run.finish();
+    assert_eq!(run.released(), [("x".to_owned(), false)]);
+    assert_eq!(*run.owners.borrow(), [first], "released as the client that packed it");
+    // The next connection on fd 3 is a client of its own.
+    let second = run.transfers.client(3);
+    assert_ne!(second, first);
+    let pack = run.request::<Packed>(3, "pack", "y", false);
+    run.complete(pack, Ok(Packed::default()));
+    run.end(3);
+    run.finish();
+    assert_eq!(*run.owners.borrow(), [first, second]);
 }

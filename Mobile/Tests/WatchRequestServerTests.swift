@@ -47,6 +47,8 @@ final class WatchRequestServerTests: XCTestCase {
     private var blocked: WatchHostBlock?
     private var locked = false
     private let suite = "watch-server-\(UUID().uuidString)"
+    /// `chat.send` fails with this code while set (Claude Code refusing input after Stop: "input").
+    private var sendRefusal: String?
 
     private var key: WatchConversationKey { WatchConversationKey(host: record.id.uuidString, node: node) }
     private var chatKey: ChatConversationKey { ChatConversationKey(host: record.id, node: node) }
@@ -58,8 +60,9 @@ final class WatchRequestServerTests: XCTestCase {
     }
 
     private func start(active: Bool = true, refusal: String? = nil) {
-        helper.script { request in
+        helper.script { [unowned self] request in
             switch request.method {
+            case "chat.send" where sendRefusal != nil: .error(code: sendRefusal!, message: "Claude's current prompt or session does not allow input")
             case "chat.open": .open
             case "terminals.attach": .attachedNow
             case "queue.list", "chat.list": .result([Any]())
@@ -145,7 +148,7 @@ final class WatchRequestServerTests: XCTestCase {
         XCTAssertEqual(page.phase, .live)
         XCTAssertEqual(page.title, "zsh", "the Agents row's name")
         XCTAssertEqual(page.items.filter { $0.kind == .agent }.compactMap(\.caption), ["5 steps · 1m 26s", "4 steps · 52s"])
-        XCTAssertEqual(page.items.count, 13)
+        XCTAssertEqual(page.items.map(\.kind), [.user, .agent, .user, .agent], "the messages, no tool lines")
 
         let reply = WatchReply(id: "r1", .thread(page))
         XCTAssertLessThanOrEqual(WatchCodec.size(reply), WatchLimits.replyBytes)
@@ -549,5 +552,83 @@ final class WatchRequestServerTests: XCTestCase {
         XCTAssertEqual(failure(stop), WatchFailure(.hostOffline, said))
         let thread = try page(await serve(.thread(key, limit: 40)))
         XCTAssertEqual(thread.reason, said)
+    }
+}
+
+extension WatchRequestServerTests {
+    /// After Stop, Claude Code puts the interrupted prompt back in its input and refuses the next `chat.send`. A message
+    /// from the watch has no draft to come back to: it stays in the phone's queue, paused with why, never sent again by
+    /// itself; the watch's swipe sends it again as the queue card's Send does.
+    func testAMessageTheAgentRefusedStaysQueuedOnThePhone() async throws {
+        start()
+        _ = try await openThread()
+        let chat = try XCTUnwrap(session)
+        sendRefusal = "input"
+        _ = try page(await serve(.send(key, text: "Then run the tests", steer: false)))
+        try await TestSupport.eventually { helper.requests("chat.send").count == 2 && !chat.sending }
+        try await TestSupport.eventually { chat.queueRows.count == 1 }
+        let row = try XCTUnwrap(chat.queueRows.first)
+        XCTAssertEqual(row.text, "Then run the tests")
+        XCTAssertEqual(row.status, "Not sent: \(chat.agentName) was not ready for input. Send it again or discard it.")
+        XCTAssertTrue(helper.requests("queue.add").isEmpty, "nothing sent again by itself")
+        XCTAssertNil(chat.failure, "the row says why, once; no composer's \"draft is preserved\"")
+        let listed = try page(await serve(.thread(key, limit: WatchLimits.threadItems)))
+        XCTAssertEqual(listed.queue.map(\.text), ["Then run the tests"])
+        XCTAssertEqual(listed.queue.first?.status, row.status)
+        XCTAssertEqual(listed.queue.first?.canSendNow, true, "the watch offers Send")
+        XCTAssertEqual(listed.route, .queue, "what follows waits behind it")
+
+        // The user sends it again from the watch: into the queue, as the queue card's Send.
+        sendRefusal = nil
+        _ = try page(await serve(.sendQueuedNow(key, item: row.id)))
+        try await TestSupport.eventually { helper.requests("queue.add").count == 1 }
+        XCTAssertEqual(helper.requests("queue.add").last?.params["text"] as? String, "Then run the tests")
+        XCTAssertEqual(helper.requests("chat.send").count, 2)
+    }
+
+    /// A message the helper's queue holds and paused after Stop is not sent again (watch swipe or the queue card's
+    /// Send): queueing it anew would leave the paused original, and Resume would send both. Resume is its way back.
+    func testAMirroredRowPausedAfterStopIsNotQueuedTwice() async throws {
+        start()
+        _ = try await openThread(state: ChatFixture.state(busy: true))
+        let chat = try XCTUnwrap(session)
+        _ = try page(await serve(.send(key, text: "Then lint", steer: false)))
+        try await TestSupport.eventually { helper.requests("queue.add").count == 1 && chat.queueItems.first?.helperID != nil }
+        let held = try XCTUnwrap(chat.queueItems.first?.helperID)
+        _ = try page(await serve(.stop(key)))
+        try await TestSupport.eventually { helper.requests("chat.stop").count == 1 && !chat.stopping }
+        try notify("chat.queue", ["error": NSNull(), "items": [ChatFixture.queued(held, "Then lint", paused: "stopped")]])
+        try await TestSupport.eventually { chat.queueRows.first?.status == "Paused after Stop." }
+        let row = try XCTUnwrap(chat.queueRows.first)
+        XCTAssertFalse(chat.canResend(row), "the helper's pause, not the device's")
+        let listed = try page(await serve(.thread(key, limit: WatchLimits.threadItems)))
+        XCTAssertEqual(listed.queue.first?.canSendNow, false, "no swipe Send on the watch")
+        let refused = await serve(.sendQueuedNow(key, item: row.id))
+        XCTAssertEqual(failure(refused)?.code, .notSent)
+        chat.resendQueued(row)
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(helper.requests("queue.add").count, 1, "queued once")
+        XCTAssertEqual(chat.queueItems.first?.helperID, held)
+    }
+
+    /// The composer's refused text goes back to its draft, as before, not to the queue; a watch message whose
+    /// connection ended after the request may have been delivered: kept, but as uncertain.
+    func testTheComposersTextKeepsItsDraftAndAMaybeSentMessageIsUncertain() async throws {
+        start()
+        _ = try await openThread()
+        let chat = try XCTUnwrap(session)
+        sendRefusal = "input"
+        chat.drafts.edit(text: "typed on the phone")
+        chat.send()
+        try await TestSupport.eventually { helper.requests("chat.send").count == 2 && !chat.sending && chat.failure != nil }
+        XCTAssertEqual(chat.drafts.current.text, "typed on the phone")
+        XCTAssertTrue(chat.queueItems.isEmpty)
+
+        sendRefusal = "connection_closed"
+        _ = try page(await serve(.send(key, text: "Maybe sent", steer: false)))
+        try await TestSupport.eventually { !chat.queueItems.isEmpty }
+        XCTAssertEqual(chat.queueItems.map(\.text), ["Maybe sent"])
+        XCTAssertEqual(chat.queueItems.first?.state,
+                       .uncertain("The host may have taken this message. Check the thread, then send or discard it."))
     }
 }

@@ -51,12 +51,12 @@ extension MobileReview {
         var status = changes.status
         if status == nil { status = try? await reader.status(place.root) }
         guard !review.comments.isEmpty else { return (review, status) }
-        let refreshed = await Self.refresh(review, status: status ?? GitStatus(changes: [], loadedAt: clock()),
-                                           root: place.root, reader: reader)
+        // Without a status the areas are unknown: removed lines keep their numbers.
+        let refreshed = await Self.refresh(review, status: status, root: place.root, reader: reader)
         return (refreshed, status)
     }
 
-    nonisolated private static func refresh(_ review: Review, status: GitStatus, root: String,
+    nonisolated private static func refresh(_ review: Review, status: GitStatus?, root: String,
                                             reader: ReviewGitReader) async -> Review {
         await ReviewRefresh.refresh(review, status: status, read: { await read($0, root: root, reader: reader) },
                                     diff: { try? await reader.diff(root, $0) })

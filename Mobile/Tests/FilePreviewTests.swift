@@ -27,7 +27,7 @@ final class FilePreviewTests: XCTestCase {
 
         func read(_ path: String, offset: UInt64, length: UInt64, revision: FileRevision?) async throws -> (data: Data, revision: FileRevision) {
             reads.append((path, offset, length))
-            if folders.contains(path) { throw FilesSourceError.unsupported("Is a folder") }
+            if folders.contains(path) { throw FilesSourceError.isDirectory(path) }
             guard let data = files[path] else { throw FilesSourceError.notFound(path) }
             let generation = changeAfter[path].map { reads.filter { $0.path == path }.count > $0 ? 2 : 1 } ?? 1
             let current = FileRevision(kind: .file, size: UInt64(data.count), device: 1, inode: 7,

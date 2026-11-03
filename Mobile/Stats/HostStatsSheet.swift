@@ -469,7 +469,8 @@ extension View {
     /// What other areas call from a host's glyph or row (Spaces' host glyph, the space switcher's host row, host
     /// detail, Settings). The host's `HostSessions` must be in the environment.
     func hostStatsSheet(host: Binding<UUID?>) -> some View {
-        sheet(item: Binding(get: { host.wrappedValue.map(HostStatsItem.init) }, set: { host.wrappedValue = $0?.id })) { item in
+        // The sheet covers what is under it: its looping motion stands still meanwhile.
+        coversLoops(host.wrappedValue != nil).sheet(item: Binding(get: { host.wrappedValue.map(HostStatsItem.init) }, set: { host.wrappedValue = $0?.id })) { item in
             HostStatsSheet(hostID: item.id)
         }
     }

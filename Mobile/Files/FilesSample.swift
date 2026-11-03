@@ -36,7 +36,7 @@ final class FilesSample: MobileFilesSource, @unchecked Sendable {
 
     func read(_ path: String, offset: UInt64, length: UInt64, revision: FileRevision?) async throws -> (data: Data, revision: FileRevision) {
         guard let node = node(path) else { throw FilesSourceError.notFound(path) }
-        guard node.children == nil else { throw FilesSourceError.unsupported("A folder has no bytes to read") }
+        guard node.children == nil else { throw FilesSourceError.isDirectory(path) }
         let data = bytes(node)
         let stamp = String(Int64(now.addingTimeInterval(-node.age * 60).timeIntervalSince1970) * 1_000_000_000)
         let current = FileRevision(kind: .file, size: UInt64(data.count), device: 1, inode: UInt64(abs(path.hashValue) % 100_000),

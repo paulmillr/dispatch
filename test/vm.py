@@ -42,6 +42,7 @@ SOURCES = ["Dispatch", "DispatchTests", "Mobile", "Watch", "Packages", "helper",
 # The iPhone app's prebuilt SSH engine (scripts/setup_mobile.py): Xcode resolves its package for every scheme of the
 # project, the Mac's included, so the guest needs the binary target even though it never builds the iPhone app.
 MOBILE_ENGINE = "build/mobile-ssh/DispatchMobileSSHCore.xcframework"
+MOBILE_RUSSH = "build/mobile-ssh/russh"
 # The replay corpus (its own repository at replays/, docs/replay.md): the guest's tests replay from it, and its Debug build
 # replays the helper captures. Synchronized whenever the host has it.
 CORPUS = "replays"
@@ -405,7 +406,7 @@ def test(vm, tests, recheck=False, benchmarks=False, selection=None, **shard):
     selected = selection['selected'] if selection else tests
     extra = {'selection': selection, **shard} if selection else shard
     configuration = ROOT / "build" / "vm-tests" / (vm + "-linux.json")
-    linux_suites = {"SSHLinuxIntegrationTests", "SSHHostIsolationIntegrationTests", "HostLinuxIntegrationTests", "SSHLinuxClaudeIntegrationTests", "SSHLinuxPiIntegrationTests"}
+    linux_suites = {"SSHLinuxIntegrationTests", "SSHHostIsolationIntegrationTests", "HostLinuxIntegrationTests", "SSHLinuxClaudeIntegrationTests", "SSHLinuxPiIntegrationTests", "SSHLinuxFileTransferTests"}
     explicit_linux = any(set(test.split("/")) & linux_suites for test in selected)
     explicit_linux |= any(test.endswith("SSHProcessStatisticsIntegrationTests")
                           or test.endswith("SSHProcessStatisticsIntegrationTests/testLinuxProcessRowsAndTerminalTraffic")
@@ -483,10 +484,13 @@ def prepare_test_inputs(vm, profile, needs_codex=True, prebuilt=True):
         with profile.stage("source_sync") as stage:
             corpus = (ROOT / CORPUS).is_dir()
             stage["statistics"] = synchronize(vm, SOURCES + [CORPUS] * corpus, GUEST + "/workspace/", relative=True)
-            if (ROOT / MOBILE_ENGINE).is_dir():
+            engine = [path for path in (MOBILE_ENGINE, MOBILE_RUSSH) if (ROOT / path).is_dir()]
+            if engine:
                 # On its own: inside the relative sync above, --delete would empty the guest's build/ (Rust, XcodeGen).
-                # Named without a trailing slash, rsync makes the folder in build/mobile-ssh/ (which it creates too).
-                synchronize(vm, [str(ROOT / MOBILE_ENGINE)], GUEST + "/workspace/" + str(Path(MOBILE_ENGINE).parent) + "/")
+                # Named without a trailing slash, rsync makes the folders in build/mobile-ssh/ (which it creates too).
+                # The staged russh goes with the framework: the guest's offline setup checks for both.
+                synchronize(vm, [str(ROOT / path) for path in engine],
+                            GUEST + "/workspace/" + str(Path(MOBILE_ENGINE).parent) + "/")
             if not corpus:
                 # A corpus left from an earlier run would replay recordings this checkout does not have.
                 shell(vm, 'rm -rf "$1/workspace/' + CORPUS + '"', GUEST)

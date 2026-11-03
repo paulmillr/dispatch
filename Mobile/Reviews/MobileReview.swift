@@ -2,8 +2,8 @@ import Foundation
 import Observation
 
 /// A tab's repository on a host: where its review comments live and whose changes Review lists. Its
-/// `ReviewRepository` scope is `remote:<host UUID>|<root>` (the Mac's format for a remote working tree, with the phone's
-/// host id where the Mac puts the host's name). Every tab in the same repository on the same host shares one review.
+/// `ReviewRepository` scope is the Mac's versioned key for a remote working tree (`ReviewScope`) with the phone's host
+/// UUID as the host's identity. Every tab in the same repository on the same host shares one review.
 struct ReviewPlace: Hashable, Sendable {
     let host: UUID
     /// The repository's root on the host (`SpaceGitFacts`).

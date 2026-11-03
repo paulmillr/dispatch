@@ -22,6 +22,17 @@ pub(super) struct Client {
     credits: BTreeMap<u64, u64>,
     /// The read interest this loop last set on the client's read side.
     pub listening: bool,
+    /// The announced length of the large frame arriving now, counted against Limits::input; 0 for none or a small one.
+    pub reserved: u32,
+    /// The frame arriving now did not fit Limits::input: its body is read and dropped.
+    refused: bool,
+    /// Frames it completed.
+    pub frames: u64,
+    /// Under pressure (Limits::track): its last traffic either way, since when it has been unsettled (with
+    /// `frames` then), and when it is due to be closed.
+    pub stamp: Option<Instant>,
+    pub began: Option<(Instant, u64)>,
+    pub due: Option<Instant>,
 }
 
 /// Feature requests.backlog: the helper keeps reading a client's requests while its output is
@@ -100,7 +111,29 @@ impl Client {
             unacked: 0,
             credits: BTreeMap::new(),
             listening: true,
+            reserved: 0,
+            refused: false,
+            frames: 0,
+            stamp: None,
+            began: None,
+            due: None,
         }
+    }
+
+    /// Its read side ended: a frame it left partial will never complete, so its reservation goes.
+    pub fn ended(&mut self) {
+        self.eof = true;
+        self.reserved = 0;
+    }
+
+    /// The announced length of the frame arriving now (0 before its header is whole).
+    pub fn announced(&self) -> u32 {
+        self.header.map_or(0, |header| header.len)
+    }
+
+    /// A frame has begun arriving and not ended.
+    pub fn partial(&self) -> bool {
+        self.decoder.partial()
     }
 
     /// Whether the helper reads this client's requests now. Without requests.backlog (`backlog`
@@ -232,16 +265,33 @@ impl Client {
         }
     }
 
-    pub fn feed(&mut self, bytes: &[u8]) -> Result<Vec<(wire::Header, Vec<u8>)>, wire::Error> {
+    /// The frames `bytes` complete; a frame `limits` refused (other connections' large frames
+    /// still arriving announce `others` bytes, `holders` of them hold one) comes without its body.
+    pub fn feed(
+        &mut self,
+        bytes: &[u8],
+        limits: &super::limits::Limits,
+        others: u64,
+        holders: usize,
+    ) -> Result<Vec<(wire::Header, Option<Vec<u8>>)>, wire::Error> {
         let mut messages = Vec::new();
-        let (header, body) = (&mut self.header, &mut self.body);
+        let (header, body, reserved, refused, frames) =
+            (&mut self.header, &mut self.body, &mut self.reserved, &mut self.refused, &mut self.frames);
         self.decoder.feed(bytes, |event| match event {
             wire::Event::Begin(value) => {
+                *refused = !limits.admits(value.len, others, holders);
+                *reserved = if value.len > limits.small && !*refused { value.len } else { 0 };
                 *header = Some(value);
                 body.clear();
             }
-            wire::Event::Data(bytes) => body.extend_from_slice(bytes),
-            wire::Event::End => messages.push((header.take().unwrap(), std::mem::take(body))),
+            wire::Event::Data(bytes) if !*refused => body.extend_from_slice(bytes),
+            wire::Event::Data(_) => {}
+            wire::Event::End => {
+                *reserved = 0;
+                *frames += 1;
+                let body = (!std::mem::take(refused)).then(|| std::mem::take(body));
+                messages.push((header.take().unwrap(), body));
+            }
         })?;
         Ok(messages)
     }

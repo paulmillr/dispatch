@@ -363,6 +363,7 @@ fn a_git_that_runs_past_the_deadline_is_stopped() {
         files.git = Settings {
             environment: Some(vec![("PATH".into(), path.clone())]),
             deadline: Duration::from_secs(1),
+            gpg: None,
         };
         let started = std::time::Instant::now();
         let git = run(&mut files, &repo.root, &["status", "--porcelain=v2", "-z"], 0).unwrap();
@@ -916,26 +917,53 @@ fn a_signature_check_runs_only_the_programs_the_helper_trusts() {
     let mut path_value = OsString::from(&bin);
     path_value.push(":");
     path_value.push(std::env::var_os("PATH").unwrap_or_default());
+    // The helper stands in for gpg (gpg.rs, tested in the dispatch-helper crate's gpg_verify): here a script that
+    // runs what it is handed, recording that it was the program git ran.
+    let handed = repo.tree.root.join("wrapper-ran");
+    let wrapper = script(&repo, "wrapper.sh", &format!("echo \"$DISPATCH_HELPER_GPG\" > '{}'\nexec \"$DISPATCH_HELPER_GPG\" \"$@\"\n", handed.display()));
     for mut files in repo.plugins() {
         let mut environment = repo.environment();
         environment.retain(|(name, _)| name != "PATH");
         environment.push(("PATH".into(), path_value.clone()));
         files.git.environment = Some(environment);
+        files.git.gpg = Some(PathBuf::from(&wrapper));
         let files = &mut files;
         let git = run(files, root, &["verify-commit", "--raw", &hash], 0).unwrap();
         assert_eq!(git.status, 0, "{}", git.output);
         assert!(git.output.contains("GOODSIG 0123456789ABCDEF Test <test@example.com>"), "{}", git.output);
         assert!(!marker.exists(), "the repository's gpg ran");
+        let handed = std::fs::read_to_string(&handed).unwrap();
+        assert_eq!(Path::new(handed.trim()), std::fs::canonicalize(&gpg).unwrap(), "the wrapper runs the trusted gpg");
         for args in [&["verify-commit", "--verbose", &hash][..], &["verify-commit", "--raw", "HEAD"]] {
             assert_eq!(run(files, root, args, 0).unwrap_err().code, "invalid_request", "{args:?}");
         }
     }
     // A repository's signers file would vouch for its own key: only the user's, else none.
-    let config = signing(&OsString::from("/nonexistent-path"), None).join(" ");
+    // Any existing file stands in for the helper's executable here.
+    let program = wrapper.clone();
+    let wrapper = Path::new(&program);
+    let (config, _) = signing(&OsString::from("/nonexistent-path"), None, Some(wrapper));
+    let config = config.join(" ");
     assert!(config.contains("gpg.ssh.allowedSignersFile=/dev/null"), "{config}");
     assert!(config.contains("gpg.x509.program=/nonexistent"), "{config}");
-    let config = signing(&OsString::from("/nonexistent-path"), Some("/Users/me/.ssh/allowed_signers")).join(" ");
-    assert!(config.contains("gpg.ssh.allowedSignersFile=/Users/me/.ssh/allowed_signers"), "{config}");
+    let (config, _) = signing(&OsString::from("/nonexistent-path"), Some("/Users/me/.ssh/allowed_signers"), Some(wrapper));
+    assert!(config.join(" ").contains("gpg.ssh.allowedSignersFile=/Users/me/.ssh/allowed_signers"), "{config:?}");
+    // gpg runs only through the wrapper: with no trusted gpg, or no wrapper, there is no gpg at all.
+    let (config, found) = signing(&path_value, None, Some(wrapper));
+    assert_eq!(found.as_deref(), Some(std::fs::canonicalize(bin.join("gpg")).unwrap().as_path()));
+    assert!(config.contains(&format!("gpg.program={program}")), "{config:?}");
+    assert!(config.contains(&format!("gpg.openpgp.program={program}")), "{config:?}");
+    let deleted = format!("{program} (deleted)");
+    for wrapper in [None, Some(Path::new("relative/dispatch-helper")), Some(Path::new(&deleted))] {
+        let (config, gpg) = signing(&path_value, None, wrapper);
+        assert_eq!(gpg, None);
+        assert!(config.contains(&"gpg.program=/nonexistent".to_owned()), "{config:?}");
+    }
+    let (config, gpg) = signing(&OsString::from("/nonexistent-path"), None, Some(wrapper));
+    if !SIGNING.iter().any(|directory| Path::new(directory).join("gpg").exists()) {
+        assert_eq!(gpg, None);
+        assert!(config.contains(&"gpg.program=/nonexistent".to_owned()), "{config:?}");
+    }
 }
 
 #[cfg(target_os = "macos")]

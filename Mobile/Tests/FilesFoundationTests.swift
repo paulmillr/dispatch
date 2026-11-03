@@ -321,11 +321,11 @@ final class FilesFoundationTests: XCTestCase {
         XCTAssertEqual(helper.requests("files.git").count, 2, "a failed read is asked again")
     }
 
-    /// A watch reads the root once, then only the branch every interval (10 s, the Mac's for a shown branch) until its
-    /// task ends; a new connection reads the root again at the next tick.
+    /// A watch reads the root once, then only the branch every interval (15 s on the shared clock, `HostTraffic`) until
+    /// its task ends; a new connection reads the root again at the next tick.
     func testGitFactsWatchPollsTheBranchOnly() async throws {
-        XCTAssertEqual(SpaceGitFacts().interval, .seconds(10))
-        XCTAssertEqual(SpaceGitFacts.branchInterval, .seconds(10))
+        XCTAssertEqual(SpaceGitFacts().interval, .seconds(15))
+        XCTAssertEqual(SpaceGitFacts.branchInterval, HostTraffic.interval)
         let helper = Self.gitHelper()
         let ticks = Ticks()
         let facts = SpaceGitFacts(interval: .seconds(2), sleep: { _ in try await ticks.next() })

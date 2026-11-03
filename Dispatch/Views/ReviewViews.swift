@@ -26,13 +26,14 @@ import SwiftUI
 
     /// A new comment on `start`…`end` (nil: the file). A new comment not yet saved moves there with its text; an edit
     /// is left unsaved.
-    func begin(start: ReviewLine?, end: ReviewLine?, quote: [ReviewQuote]) {
+    func begin(start: ReviewLine?, end: ReviewLine?, quote: [ReviewQuote], before: [ReviewQuote]? = nil,
+               after: [ReviewQuote]? = nil) {
         let current = session.reviewDraft
         let moving = current?.editing == nil && current != nil
         if !moving { session.reviewDraftText = "" }
         session.reviewDraft = ReviewDraft(id: moving ? current?.id ?? System.uuid() : System.uuid(), focus: System.uuid(),
                                           scope: scope, path: path, start: start, end: end, quote: quote, editing: nil,
-                                          area: area)
+                                          area: area, before: before, after: after)
     }
 
     func beginOnFile() { begin(start: nil, end: nil, quote: []) }
@@ -67,7 +68,8 @@ import SwiftUI
             repository.update(id, text: text, in: draft.scope)
         } else {
             repository.add(ReviewComment(id: System.uuid(), path: draft.path, start: draft.start, end: draft.end,
-                                         quote: draft.quote, text: text, created: System.date(), area: draft.area),
+                                         quote: draft.quote, text: text, created: System.date(), area: draft.area,
+                                         before: draft.before, after: draft.after),
                            to: draft.scope)
         }
         session.reviewDraft = nil
@@ -290,6 +292,15 @@ struct ReviewHeaderButton: View {
             // The button and the note crossfade: copying, Undo and the note's timeout change the repository outside
             // any animation.
             .animation(InterfaceMotion.animation(reduce: reduceMotion), value: reviews.copied[scope] != nil)
+        } else if session.git.repository != nil, let source = session.source, !source.endpoint.isLocal {
+            // A remote host's comments are kept by the host's own id (`ReviewScope`): without one, none are taken.
+            Label("No comments", systemImage: "text.bubble")
+                .labelStyle(.titleAndIcon)
+                .font(AppFont.ui(size: typography.size(offset: -1)))
+                .foregroundStyle(.secondary)
+                .help("Comments are kept per host, and \(source.hostLabel ?? "this host") isn’t identified yet. "
+                      + "They can be written once its connection is.")
+                .accessibilityIdentifier("review-unidentified")
         }
     }
 

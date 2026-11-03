@@ -128,24 +128,50 @@ struct Client {
     link: Arc<Link>,
     gate: Arc<Mutex<Gate>>,
     reason: Option<(Code, String)>,
+    /// The host key algorithm the current key exchange negotiated (`kex_done` runs before `check_server_key`).
+    negotiated: Option<Algorithm>,
+    /// What the owner trusted at the first exchange: the negotiated host key algorithm (stricter than OpenSSH, which
+    /// accepts another signature algorithm for the same key: rsa-sha2-256 after rsa-sha2-512 is a change here) and the
+    /// key's blob (as ssh-key encodes the parsed key, which is the wire form for the key types the engine negotiates).
+    /// Every rekey must present both again.
+    accepted: Option<(Algorithm, Vec<u8>)>,
+    /// Rekeys that passed the check (`Session::rekeys`).
+    rekeys: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl client::Handler for Client {
     type Error = russh::Error;
 
-    /// The initial key exchange only: russh 0.64.1 does not call this on a rekey, and its `kex_done`
-    /// sees only the negotiated algorithm names, so a later exchange's host key is never compared with
-    /// the trusted one (docs/security.md, Dispatch for iPhone, host keys). A patch would go in
-    /// `russh/src/client/mod.rs`, `KexProgress::Done` in the client's read loop: the rekey branch
-    /// (`if session.common.encrypted.is_some()`) drops `server_host_key` and `server_host_certificate`;
-    /// it should compare them with the key accepted at the first exchange (or call `check_server_key`
-    /// again and fail with `Error::UnknownKey` on false) before `common.newkeys(newkeys)`. This handler
-    /// would then answer a rekey by comparing with the key it trusted, without asking the user.
+    async fn kex_done(&mut self, _secret: Option<&[u8]>, names: &russh::Names, _session: &mut client::Session) -> Result<(), Self::Error> {
+        self.negotiated = Some(names.key.clone());
+        Ok(())
+    }
+
+    /// Every key exchange: the first asks the owner; each rekey (the vendored russh's patch, vendor/russh.patch, makes
+    /// it call this) must present the key and algorithm trusted then, without asking, or the connection ends before the
+    /// exchange's keys are used (docs/security.md, Dispatch for iPhone, host keys).
     async fn check_server_key(&mut self, key: &PublicKeyOrCertificate) -> Result<bool, Self::Error> {
-        let PublicKeyOrCertificate::PublicKey { key, .. } = key else {
+        let algorithm = self.negotiated.clone();
+        let presented = match key {
+            PublicKeyOrCertificate::PublicKey { key, .. } => key.to_bytes().ok().map(|blob| (key, blob)),
             // Host certificates are not part of v1: refuse rather than trust an unchecked CA.
-            return Ok(false);
+            PublicKeyOrCertificate::Certificate(_) => None,
         };
+        if let Some((trusted_algorithm, trusted_blob)) = &self.accepted {
+            let problem = match (&presented, &algorithm) {
+                (Some((_, blob)), Some(algorithm)) if algorithm == trusted_algorithm && blob == trusted_blob => {
+                    self.rekeys.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    return Ok(true);
+                }
+                (Some(_), Some(algorithm)) if algorithm != trusted_algorithm => {
+                    format!("the host key algorithm changed at a key re-exchange ({trusted_algorithm}, now {algorithm})")
+                }
+                _ => "the server presented a different host key at a key re-exchange".to_owned(),
+            };
+            self.reason.get_or_insert((Code::HostKeyChanged, problem));
+            return Ok(false);
+        }
+        let (Some((key, blob)), Some(algorithm)) = (presented, algorithm) else { return Ok(false) };
         // Asked under the lock: `connect` cannot give up between this check and the question.
         let decision = {
             let mut gate = self.gate.lock().unwrap();
@@ -159,11 +185,15 @@ impl client::Handler for Client {
         let Some(decision) = decision else { return Ok(false) };
         let trusted = decision.await;
         self.gate.lock().unwrap().deciding = false;
+        if trusted {
+            self.accepted = Some((algorithm, blob));
+        }
         Ok(trusted)
     }
 
+    /// The first reason stands: a refused rekey says why before russh reports its `UnknownKey`.
     async fn disconnected(&mut self, reason: DisconnectReason<Self::Error>) -> Result<(), Self::Error> {
-        self.reason = Some(match reason {
+        self.reason.get_or_insert(match reason {
             DisconnectReason::ReceivedDisconnect(info) => (Code::Closed, format!("disconnected by the server: {}", info.message)),
             DisconnectReason::Error(error) => {
                 let failure = Failure::from(error);
@@ -185,6 +215,7 @@ impl Drop for Client {
 pub struct Session {
     handle: tokio::sync::Mutex<Handle<Client>>,
     link: Arc<Link>,
+    rekeys: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl Session {
@@ -198,7 +229,8 @@ impl Session {
             preferred: preferred_algorithms(),
             ..Default::default()
         });
-        let client = Client { link: link.clone(), gate: gate.clone(), reason: None };
+        let rekeys = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let client = Client { link: link.clone(), gate: gate.clone(), reason: None, negotiated: None, accepted: None, rekeys: rekeys.clone() };
         let address = (options.host.clone(), options.port);
         // How far the connect got, for what a deadline reports: 0 looking up, 1 connecting, 2 the SSH handshake.
         let stage = Arc::new(std::sync::atomic::AtomicU8::new(0));
@@ -256,9 +288,14 @@ impl Session {
                 });
             }
         };
-        let session = Arc::new(Session { handle: tokio::sync::Mutex::new(handle), link });
+        let session = Arc::new(Session { handle: tokio::sync::Mutex::new(handle), link, rekeys });
         session.link.arm();
         Ok(session)
+    }
+
+    /// How many key exchanges after the first this connection has accepted (each presented the trusted key).
+    pub fn rekeys(&self) -> usize {
+        self.rekeys.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub async fn auth_password(&self, user: &str, password: &str) -> AuthOutcome {

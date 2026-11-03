@@ -717,11 +717,7 @@ private struct TerminalSegment: View {
         guard let session = hosts.session(tab.ref.host), let client = session.client, session.topologyIsLive else {
             return presences.presence(key)
         }
-        let node = session.topology?.nodes.first { $0.key == pane.key }
-        return presences.open(key, feed: HelperTerminalFeed(client: client, terminal: pane.id, features: session.features),
-                              terminal: pane.id, client: client,
-                              scrollback: TerminalScrollback(multiplexer: session.following),
-                              grid: node?.size.map { (Int($0.columns), Int($0.rows)) })
+        return presences.current(key, pane: pane, session: session, client: client)
     }
 }
 

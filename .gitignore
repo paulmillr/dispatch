@@ -25,3 +25,6 @@ review/
 /CLAUDE.md
 /AGENTS.md
 /.claude/
+
+# Dispatch's patch to russh (scripts/vendor-russh.py), despite a global *.patch ignore.
+!/Mobile/Transport/Core/russh.patch

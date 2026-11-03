@@ -226,7 +226,7 @@ struct ChatQueueCard: View {
                 else if value.translation.width > 20 { withAnimation(motion) { swiped = nil } }
             })
             .contextMenu {
-                if row.status != nil, case .device = row.source {
+                if session.canResend(row) {
                     Button("Send", systemImage: "paperplane") { session.resendQueued(row) }
                 }
                 if !held, session.canSendNow(row) {
@@ -331,7 +331,7 @@ struct ChatQueuedBubbles: View {
                 ChatUserMessage(text: row.text, attachments: row.attachments, host: session.key.host,
                                 read: { [session] in try await session.attachmentBytes($0) }, faded: true)
                     .contextMenu {
-                        if row.status != nil { Button("Send", systemImage: "paperplane") { session.resendQueued(row) } }
+                        if session.canResend(row) { Button("Send", systemImage: "paperplane") { session.resendQueued(row) } }
                         if case .device = row.source { Button("Edit", systemImage: "pencil") { session.editInComposer(row) } }
                         Button("Discard", systemImage: "trash", role: .destructive) { session.removeQueued(row) }
                     }

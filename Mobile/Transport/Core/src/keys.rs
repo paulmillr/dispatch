@@ -28,9 +28,13 @@ pub struct LoadedKey {
 
 impl LoadedKey {
     /// An OpenSSH private key file (`openssh-key-v1`: ED25519, ECDSA P-256/384/521, RSA; plain or with a
-    /// passphrase), or a PEM/PKCS#8 file. DSA and other types are refused.
+    /// passphrase), a PuTTY (PPK) file, or a PEM/PKCS#8 file. DSA and other types are refused.
     pub fn parse(data: &[u8], passphrase: Option<&str>) -> Result<LoadedKey, Failure> {
         let text = std::str::from_utf8(data).map_err(|_| Failure::new(Code::InvalidKey, "not a text key file"))?;
+        // Before any decoder, whatever the format (OpenSSH, PPK's Public-Lines, PEM).
+        if certificate_markers(text) > MAX_CERTIFICATE_MARKERS {
+            return Err(Failure::new(Code::InvalidKey, "the key file holds nested certificates"));
+        }
         let key = if text.contains("-----BEGIN OPENSSH PRIVATE KEY-----") {
             let key = PrivateKey::from_openssh(text).map_err(|e| Failure::new(Code::InvalidKey, e.to_string()))?;
             if key.is_encrypted() {
@@ -53,6 +57,47 @@ impl LoadedKey {
         let info = KeyInfo::of(key.public_key());
         Ok(LoadedKey { key: Arc::new(key), info })
     }
+}
+
+/// ssh-key (0.7.0-rc.11) decodes a certificate's signing key, which may be another certificate, recursively and
+/// without a limit, and both an OpenSSH key file's and a PPK file's public half go through that decoder (PPK's after a
+/// MAC anyone can compute for an unencrypted file): a crafted file would exhaust the stack (an abort, not an error). A
+/// key file holds no certificate; the bound is russh's own for host keys (`check_cert_nesting`), which counts the same
+/// marker.
+const MAX_CERTIFICATE_MARKERS: usize = 8;
+
+/// How often a certificate algorithm's marker occurs in what a key file encodes: each run of lines made only of base64
+/// (an armored body, PPK's Public-Lines and Private-Lines) decoded as one, so a blob split across lines still counts.
+fn certificate_markers(text: &str) -> usize {
+    const MARKER: &[u8] = b"-cert-v01@";
+    let base64 = |line: &str| !line.is_empty() && line.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'+' | b'/' | b'='));
+    let mut markers = 0;
+    let mut lines = text.lines().map(str::trim_end).peekable();
+    while lines.peek().is_some() {
+        let mut bytes = Vec::new();
+        let (mut bits, mut count) = (0u32, 0u32);
+        for line in lines.by_ref().skip_while(|line| !base64(line)).take_while(|line| base64(line)) {
+            for c in line.bytes() {
+                let value = match c {
+                    b'A'..=b'Z' => c - b'A',
+                    b'a'..=b'z' => c - b'a' + 26,
+                    b'0'..=b'9' => c - b'0' + 52,
+                    b'+' => 62,
+                    b'/' => 63,
+                    _ => continue,
+                };
+                bits = bits << 6 | u32::from(value);
+                count += 6;
+                if count >= 8 {
+                    count -= 8;
+                    bytes.push((bits >> count) as u8);
+                    bits &= (1 << count) - 1;
+                }
+            }
+        }
+        markers += bytes.windows(MARKER.len()).filter(|window| *window == MARKER).count();
+    }
+    markers
 }
 
 /// Encodes an external signer's raw signature as the SSH signature blob for `algorithm`:

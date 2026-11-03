@@ -83,6 +83,8 @@ struct HostSessionContext: Sendable {
     /// The host's multiplexer preference each time it changes while the run lasts (Edit host, Settings): the driver
     /// follows the new choice on the live connection, without reconnecting.
     var preferences: AsyncStream<HostRecord.MultiplexerPreference> = AsyncStream { $0.finish() }
+    /// The ticks of the shared clock the session's stats sample on: the driver's liveness ping skips them (`HostTraffic`).
+    var pulse = HostPulse()
 }
 
 /// Connects one host and keeps it connected (`SSHHostSessionDriver` in Mobile/Transport/Integration implements it over SSH; tests and previews use

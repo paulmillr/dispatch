@@ -134,15 +134,15 @@ enum WatchRoute: String, WatchTolerantValue {
     case unknown
 }
 
-/// What a thread row is (`ChatThreadRow.Kind`, plus the tool steps the phone folds into captions).
+/// What a thread row is (`ChatThreadRow.Kind`).
 enum WatchItemKind: String, WatchTolerantValue {
     /// The user's message.
     case user
     /// The agent's message, Markdown flattened to text (`WatchText.plain`).
     case agent
-    /// Claude's inline thinking (`ChatItem.isNarration`): drawn muted.
+    /// Claude's inline thinking (`ChatItem.isNarration`): an agent bubble of its own, as the phone draws it.
     case thinking
-    /// One tool call as one line (`ChatStep`: the kind, what it acted on, a short result).
+    /// One tool call (`ChatStep`). Only an older phone sends these; the watch leaves them out, as the phone's thread does.
     case tool
     /// "Conversation compacted" and other notices.
     case notice
@@ -341,7 +341,8 @@ struct WatchQueued: Codable, Equatable, Sendable, Identifiable {
     var text: String
     /// Why it does not send by itself (paused, uncertain, stopped; `QueueRow.status`).
     var status: String?
-    /// "Send now" is offered (`MobileChatSession.canSendNow`).
+    /// "Send now" is offered (`MobileChatSession.canSendNow`), or, for a row with a `status` (paused, not sent), the
+    /// phone's Send, which puts it in the queue again (`canResend`).
     var canSendNow: Bool
 
     init(id: String, text: String, status: String? = nil, canSendNow: Bool = false) {

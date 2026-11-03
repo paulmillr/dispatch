@@ -61,7 +61,13 @@ struct GitQueries: Sendable {
     static func repository(of folder: String, source: any FilesSource) async throws(GitError) -> GitRepository? {
         do throws(GitError) {
             let top = try await toplevel(of: folder, source: source)
-            if let shown = shownRoot(top, for: folder) { return GitRepository(root: shown) }
+            if FilesLoader.path(folder, isInside: top) { return GitRepository(root: top) }
+            for candidate in shownCandidates(top, for: folder).prefix(linkDepth) {
+                // `folder` itself was just asked.
+                if try await isRoot(candidate, of: top, placed: candidate == folder, source: source) {
+                    return GitRepository(root: candidate)
+                }
+            }
             return GitRepository(root: try await linkedRoot(top, for: folder, source: source))
         } catch .notRepository {
             return nil
@@ -75,17 +81,48 @@ struct GitQueries: Sendable {
         return top
     }
 
-    /// `top` as `folder` names it: itself when `folder` is inside it, else the ancestor of `folder` with the same last
-    /// component (the symlinked spelling of the same folder); nil when no name matches (a link with a name of its own).
+    /// `top` as `folder` might name it: itself when `folder` is inside it, else the first ancestor of `folder` with the
+    /// same last component (the symlinked spelling of the same folder, if git agrees: `shownCandidates`, `isRoot`);
+    /// nil when no name matches (a link with a name of its own).
     static func shownRoot(_ top: String, for folder: String) -> String? {
         if FilesLoader.path(folder, isInside: top) { return top }
+        return shownCandidates(top, for: folder).first
+    }
+
+    /// The ancestors of `folder` (itself first, then up) with `top`'s last component: the spellings of `top` through
+    /// links that `folder` could be using. A name proves nothing (an unrelated folder of the same name, a folder of the
+    /// repository named like it), so each is asked of git before it is taken (`isRoot`).
+    static func shownCandidates(_ top: String, for folder: String) -> [String] {
         let name = (top as NSString).lastPathComponent
+        var result: [String] = []
         var candidate = folder
         while candidate.count > 1 {
-            if (candidate as NSString).lastPathComponent == name { return candidate }
+            if (candidate as NSString).lastPathComponent == name { result.append(candidate) }
             candidate = (candidate as NSString).deletingLastPathComponent
         }
-        return nil
+        return result
+    }
+
+    /// Whether `candidate` is `top` spelled otherwise: git places it in `top` (not in another repository, a nested
+    /// one or a worktree, nor outside any), and its parent is not in `top` too (which a folder inside the repository
+    /// with the same name would be). A host that cannot answer fails the whole question.
+    private static func isRoot(_ candidate: String, of top: String, placed known: Bool,
+                               source: any FilesSource) async throws(GitError) -> Bool {
+        if !known { guard try await placed(candidate, in: top, source: source) else { return false } }
+        let parent = (candidate as NSString).deletingLastPathComponent
+        guard !parent.isEmpty, parent != candidate else { return true }
+        return !(try await placed(parent, in: top, source: source))
+    }
+
+    /// git names `top` as `folder`'s repository; false outside any repository, in another one, or where git refuses.
+    private static func placed(_ folder: String, in top: String, source: any FilesSource) async throws(GitError) -> Bool {
+        do throws(GitError) {
+            return try await toplevel(of: folder, source: source) == top
+        } catch .notRepository {
+            return false
+        } catch .failed {
+            return false
+        }
     }
 
     /// The root of a repository reached through a link named otherwise (`~/proj` → `/Volumes/data/api`): the highest

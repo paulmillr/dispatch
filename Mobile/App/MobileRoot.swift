@@ -392,6 +392,7 @@ private struct ShellSheets: ViewModifier {
     func body(content: Content) -> some View {
         if apply {
             content
+                .coversLoops(sheet != nil)
                 .sheet(item: $sheet, onDismiss: {
                     let action = afterSheet
                     afterSheet = nil

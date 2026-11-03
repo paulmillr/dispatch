@@ -218,10 +218,11 @@ struct ReviewDiffDocument: Equatable {
     // MARK: Comments
 
     /// The comments whose quoted lines are no longer in the file (S5), once the file is read: found again neither in
-    /// the file (the new side) nor among the diff's removed lines (the old side). Unknown when the file is.
-    func outdated(_ comments: [ReviewComment]) -> Set<UUID> {
+    /// the file (the new side) nor among the diff's removed lines (the old side), or found in more than one place
+    /// (`ReviewRefresh.relocate`, this being `area`'s diff of a file changed in `areas`). Unknown when the file is.
+    func outdated(_ comments: [ReviewComment], area: GitChangeArea = .unstaged, areas: Set<GitChangeArea> = []) -> Set<UUID> {
         if case .unknown = file { return [] }
-        let relocated = ReviewRefresh.relocate(comments, file: file, diffs: [presentation])
+        let relocated = ReviewRefresh.relocate(comments, file: file, diffs: [area: presentation], areas: areas.union([area]))
         return Set(relocated.filter { $0.outdated == true }.map(\.id))
     }
 
@@ -274,15 +275,15 @@ struct ReviewDiffLayout: Equatable {
             candidates.append(.init(line: line, text: quote.text))
             candidateRows.append(index)
         }
-        let placed = ReviewPlacement.place(comments, among: candidates)
+        let placed = ReviewPlacement.locate(comments, among: candidates)
         var unplaced: [ReviewComment] = []
         for comment in comments {
-            guard let found = placed[comment.id] else {
+            guard let placement = placed[comment.id] else {
                 self.comments[comment.id] = comment
                 unplaced.append(comment)
                 continue
             }
-            let moved = comment.moved(to: candidates[found].line)
+            let moved = placement.comment, found = placement.index
             self.comments[comment.id] = moved
             let last = candidateRows[found]
             // From its first line (the nearest row above the last with that line) to where it lands.
@@ -337,12 +338,20 @@ struct ReviewDiffSelection: Equatable, Sendable {
         return row
     }
 
-    /// The comment's first and last lines and its quote: the commentable rows in the range.
-    func draft(in rows: [ReviewDiffRow]) -> (start: ReviewLine, end: ReviewLine, quote: [ReviewQuote])? {
+    /// The comment's first and last lines and its quote: the commentable rows in the range, each line with its number,
+    /// and the lines just around it (`ReviewQuote.surroundings`), which find it again once the file changes.
+    func draft(in rows: [ReviewDiffRow])
+        -> (start: ReviewLine, end: ReviewLine, quote: [ReviewQuote], before: [ReviewQuote], after: [ReviewQuote])? {
         let picked = self.rows.clamped(to: 0...max(0, rows.count - 1)).filter { rows.indices.contains($0) && rows[$0].commentable }
         guard let first = picked.first, let last = picked.last, let start = rows[first].line, let end = rows[last].line
         else { return nil }
-        return (start, end, picked.compactMap { rows[$0].quote })
+        let quote = picked.compactMap { index in
+            rows[index].quote.map { ReviewQuote(kind: $0.kind, text: $0.text, line: rows[index].line) }
+        }
+        var shown: [ReviewLine: ReviewQuote] = [:]
+        for row in rows { if let line = row.line, let quote = row.quote, shown[line] == nil { shown[line] = quote } }
+        let around = ReviewQuote.surroundings(of: quote, in: shown)
+        return (start, end, quote, around.before, around.after)
     }
 }
 
@@ -395,6 +404,9 @@ struct ReviewDiffDraft: Equatable, Sendable {
     /// The saved comment it edits; nil for a new one.
     var editing: UUID?
     var text = ""
+    /// The lines around the quote (`ReviewComment.before`, `after`).
+    var before: [ReviewQuote]? = nil
+    var after: [ReviewQuote]? = nil
 
     var location: String { ReviewText.location(start: start, end: end) }
 }
@@ -420,7 +432,8 @@ struct ReviewDiffComments {
             return id
         }
         let comment = ReviewComment(id: System.uuid(), path: path, start: draft.start, end: draft.end, quote: draft.quote,
-                                    text: text, created: System.date(), area: area)
+                                    text: text, created: System.date(), area: area, before: draft.before,
+                                    after: draft.after)
         repository.add(comment, to: scope)
         return comment.id
     }
@@ -458,6 +471,8 @@ final class ReviewDiffModel {
     private(set) var load: Load = .loading
     /// The change as the status lists it (counts, kind); a stand-in until the status is read.
     private(set) var change: GitChange
+    /// Every area the file is changed in, as the status last said (`outdated` looks in the right one).
+    private(set) var areas: Set<GitChangeArea> = []
     var mode: ReviewDiffMode = .diff
     var openedFolds: Set<Int> = []
     var openedGaps: Set<Int> = []
@@ -493,6 +508,8 @@ final class ReviewDiffModel {
         let changes = context.review.changes(context.place)
         if changes.status == nil || refresh { await changes.refresh() }
         if let found = Self.change(path: path, area: area, in: changes.status) { change = found }
+        let areas = Set(changes.status?.changes.filter { $0.path == path && $0.kind != .ignored }.map(\.area) ?? [])
+        if areas != self.areas { self.areas = areas }
         guard let reader = changes.reader else {
             load = .unavailable("\(context.host.isEmpty ? "The host" : context.host) can’t be read now.")
             return
@@ -533,6 +550,8 @@ final class ReviewDiffModel {
         var gaps: Set<Int>
         var comments: [ReviewComment]
         var document: ReviewDiffDocument
+        var area: GitChangeArea
+        var areas: Set<GitChangeArea>
     }
 
     @ObservationIgnored private var layoutKey: LayoutKey?
@@ -541,11 +560,13 @@ final class ReviewDiffModel {
     /// The rows with the comments placed, and the outdated comments (S5's cards).
     func layout(_ comments: [ReviewComment]) -> (layout: ReviewDiffLayout, outdated: Set<UUID>)? {
         guard let document else { return nil }
-        let key = LayoutKey(mode: mode, folds: openedFolds, gaps: openedGaps, comments: comments, document: document)
+        let key = LayoutKey(mode: mode, folds: openedFolds, gaps: openedGaps, comments: comments, document: document,
+                            area: change.area, areas: areas)
         if key == layoutKey, let cached { return cached }
         let held = mode == .diff ? document.holding(comments) : (folds: [], gaps: [])
         let rows = document.rows(mode, opened: openedFolds.union(held.folds), openedGaps: openedGaps.union(held.gaps))
-        let result = (ReviewDiffLayout(rows: rows, comments: comments), document.outdated(comments))
+        let result = (ReviewDiffLayout(rows: rows, comments: comments),
+                      document.outdated(comments, area: change.area, areas: areas))
         layoutKey = key
         cached = result
         return result
@@ -569,7 +590,8 @@ final class ReviewDiffModel {
     /// The selection pill's tap: the composer on the selected lines.
     func compose(rows: [ReviewDiffRow]) {
         guard let picked = selection?.draft(in: rows) else { return }
-        draft = ReviewDiffDraft(start: picked.start, end: picked.end, quote: picked.quote)
+        draft = ReviewDiffDraft(start: picked.start, end: picked.end, quote: picked.quote, before: picked.before,
+                                after: picked.after)
     }
 
     func composeOnFile() {

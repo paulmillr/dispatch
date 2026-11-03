@@ -83,9 +83,14 @@ final class HostRegistry {
     @ObservationIgnored private var nextOrder = 0
     // Presentation grouping only: never a source of integration permissions.
     @ObservationIgnored private var loginScopes: [UUID: String] = [:]
+    /// Each identified host's own UUID (`key(for:)`), saved as `HostRegistry.keys.v1`.
+    @ObservationIgnored private var keys: [HostID: UUID] = [:]
 
     init(defaults: UserDefaults? = .app) {
         self.defaults = defaults
+        if let saved = defaults?.dictionary(forKey: Self.keysKey) as? [String: String] {
+            for (host, key) in saved { if let key = UUID(uuidString: key) { keys[HostID(rawValue: host)] = key } }
+        }
         if let data = defaults?.data(forKey: "HostRegistry.v1"),
            let saved = try? JSONDecoder().decode([HostRecord].self, from: data) {
             // Local is saved only once the user reorders hosts; until then it stays first.
@@ -264,7 +269,9 @@ final class HostRegistry {
         clear()
         records = [.local: .local]
         nextOrder = 0
+        keys = [:]
         defaults?.removeObject(forKey: "HostRegistry.v1")
+        defaults?.removeObject(forKey: Self.keysKey)
         assignColors()
     }
 
@@ -326,6 +333,21 @@ final class HostRegistry {
         guard host.isProvisional, let tint = records[host]?.tint else { return nil }
         return HostColorStore.shared.automatic[tint.machine]
     }
+
+    /// The app's own UUID for an identified host, which what it keeps per host is keyed by (Review's comments,
+    /// `ReviewScope`), never the host's name nor what its helper reports. Made the first time it is asked for, kept
+    /// across launches and when the host is forgotten (its reviews come back with it); nil for this Mac, a connection
+    /// not yet identified, or a host with no record.
+    func key(for host: HostID) -> UUID? {
+        guard host != .local, !host.isProvisional, records[host] != nil else { return nil }
+        if let key = keys[host] { return key }
+        let key = System.uuid(for: "host-key")
+        keys[host] = key
+        defaults?.set(Dictionary(uniqueKeysWithValues: keys.map { ($0.key.rawValue, $0.value.uuidString) }), forKey: Self.keysKey)
+        return key
+    }
+
+    private static let keysKey = "HostRegistry.keys.v1"
 
     private func persist() {
         guard let defaults, let data = try? JSONEncoder().encode(Array(records.values)) else { return }

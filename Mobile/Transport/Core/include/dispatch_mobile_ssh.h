@@ -39,6 +39,7 @@ extern "C" {
 #define DMS_CONNECTION_REFUSED (-12) /* nothing accepted the TCP connection on the port */
 #define DMS_UNREACHABLE (-13)       /* no route to the host (or Local Network access denied) */
 #define DMS_NO_ANSWER (-14)         /* the host did not answer the TCP connection in time */
+#define DMS_HOST_KEY_CHANGED (-15)  /* disconnected: a rekey presented another host key or algorithm */
 
 /* Authentication methods (remaining_methods bits). */
 #define DMS_METHOD_PASSWORD 1u

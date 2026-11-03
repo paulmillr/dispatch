@@ -16,12 +16,18 @@ name = "dispatch_mobile_ssh"
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]
-# ring rather than aws-lc-rs: no cmake, and cc cross-compiles it for iOS with Xcode's clang.
-russh = { version = "=0.64.1", default-features = false, features = ["ring", "rsa"] }
+# ring rather than aws-lc-rs: no cmake, and cc cross-compiles it for iOS with Xcode's clang. The published 0.65.0 with
+# one patch (russh.patch: every rekey's host key goes through `check_server_key`), staged into build/mobile-ssh/russh by
+# scripts/vendor-russh.py (scripts/build-mobile-ssh.py runs it; run it once by hand before a bare `cargo test`).
+russh = { path = "../../../build/mobile-ssh/russh", version = "=0.65.0", default-features = false, features = ["ring", "rsa"] }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync", "time", "macros"] }
 libc = "0.2"
 # Wipes the copies of passphrases and passwords the C ABI makes (russh's key types wipe themselves).
 zeroize = "1"
+
+[dev-dependencies]
+# The scripted SSH server of tests/hostile.rs (X25519, SHA-256, AES-256-GCM): already in the graph through russh.
+ring = "0.17"
 
 [profile.release]
 opt-level = 3

@@ -7,25 +7,29 @@ final class HelperFilesSource: FilesSource, Sendable {
     let endpoint: FilesEndpoint
     let home: String?
     let hostLabel: String?
+    let hostIdentity: String?
     /// The connection's grant has Files without Copy files in: copies into this host are refused before they start.
     let readOnly: Bool
     /// A fixed connection (a test's own helper), or nil to borrow the endpoint's from `HelperApp` per call:
     /// the shared local helper may be restarted, and a remote connection's helper is lent only while it lives.
     private let connection: HelperConnection?
 
-    init(endpoint: FilesEndpoint, connection: HelperConnection, home: String?, hostLabel: String?, readOnly: Bool = false) {
+    init(endpoint: FilesEndpoint, connection: HelperConnection, home: String?, hostLabel: String?, readOnly: Bool = false,
+         hostIdentity: String? = nil) {
         self.endpoint = endpoint
         self.connection = connection
         self.home = home
         self.hostLabel = hostLabel
+        self.hostIdentity = hostIdentity
         self.readOnly = readOnly
     }
 
-    init(endpoint: FilesEndpoint, home: String?, hostLabel: String?, readOnly: Bool = false) {
+    init(endpoint: FilesEndpoint, home: String?, hostLabel: String?, readOnly: Bool = false, hostIdentity: String? = nil) {
         self.endpoint = endpoint
         connection = nil
         self.home = home
         self.hostLabel = hostLabel
+        self.hostIdentity = hostIdentity
         self.readOnly = readOnly
     }
 
@@ -184,6 +188,7 @@ final class HelperFilesSource: FilesSource, Sendable {
         case "not_found": return .notFound(path)
         case "permission_denied": return .permissionDenied(path)
         case "not_directory": return .notDirectory(path)
+        case "is_directory": return .isDirectory(path)
         case "changed": return .changed(path)
         case "exists": return .exists(path)
         case "limit": return .limit(detail("\(path) is larger than the helper copies at once"))

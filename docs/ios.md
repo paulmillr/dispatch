@@ -34,9 +34,11 @@ python3 test/ios-release.py [--simulator NAME]              # Release check, bel
 - **Fresh checkout.** SwiftPM resolves `MobileTransport`'s binary target before any build script runs, for every
   scheme (the Mac app's too), so the pinned Rust with its iOS targets and
   `build/mobile-ssh/DispatchMobileSSHCore.xcframework` must exist first. `scripts/setup.sh` does it through
-  `scripts/setup_mobile.py` (`setup-ssh-rust.py`, then `build-mobile-ssh.py --fetch`, the only network step);
+  `scripts/setup_mobile.py` (`setup-ssh-rust.py`, then `build-mobile-ssh.py --fetch`, the only network step: the
+  locked crates and russh's crate, which it stages patched into `build/mobile-ssh/russh`);
   `DISPATCH_SETUP_OFFLINE=1` fails with the command instead. Setup rebuilds the XCFramework whenever its headers
-  differ from `Mobile/Transport/Core/include`. Existing checkouts run `python3 scripts/setup-ssh-rust.py` once.
+  differ from `Mobile/Transport/Core/include`, and stages russh whenever `build/mobile-ssh/russh` is missing or stale
+  (offline from the cached crate). Existing checkouts run `python3 scripts/setup-ssh-rust.py` once.
 
 ### Signing and a device
 
@@ -135,16 +137,22 @@ Mac views built on the Mac chat stack are ported, not shared.
 
 ### Transport
 
-The engine is Rust `russh` (`ring`, `rsa`) behind a hand-written C ABI (`Mobile/Transport/Core`, crate
+The engine is Rust `russh` 0.65.0 (`ring`, `rsa`) with one patch (`Mobile/Transport/Core/russh.patch`: every rekey's
+host key goes through `check_server_key`, [security](security.md#dispatch-for-iphone)), behind a hand-written C ABI (`Mobile/Transport/Core`, crate
 `dispatch-mobile-ssh`), built into an XCFramework by `scripts/build-mobile-ssh.py` in a minimal environment so Xcode's
-settings cannot leak into ring's C build. swift-nio-ssh was rejected (Apple's has no RSA user keys or
+settings cannot leak into ring's C build. The engine's `Cargo.toml` names russh by path, `build/mobile-ssh/russh`:
+`scripts/vendor-russh.py` stages the published crate there (SHA-256 checked, kept in `build/downloads`) with the patch
+applied, online from `build-mobile-ssh.py --fetch` and offline before every build (again when the patch or the script
+changes; `--check` compares). swift-nio-ssh was rejected (Apple's has no RSA user keys or
 keyboard-interactive; Citadel's fork signs RSA with SHA-1 only, refused by OpenSSH 8.8+), and ring over aws-lc-rs needs
 no cmake. Third-party Rust enters only here; `helper/` stays dependency-free.
 
 - Private keys sign in Swift (CryptoKit, Secure Enclave) through the external-signer callback and never cross the
   FFI. File keys are parsed in Rust. RSA signs `rsa-sha2-512/256`, never `ssh-rsa`.
 - The host-key callback is answered later (`dms_reply_bool`), so the trust sheet can wait; the handshake deadline
-  pauses meanwhile. `disconnected` fires exactly once.
+  pauses meanwhile. Rekeys never ask: each must present the first exchange's key and algorithm, or the connection
+  ends (`disconnected` with `DMS_HOST_KEY_CHANGED`, `SSHTransportError.hostKeyChangedAtRekey`: final, like a
+  mismatch, so the host waits for Connect, whose connection checks the key as usual). `disconnected` fires exactly once.
 - An exec channel is a socketpair fd pumped by Rust with backpressure both ways; `HelperTransport` reads it unchanged.
   A shell channel (plain SSH) is a session channel with a PTY; the package README specifies it.
 - Limits: host certificates refused, user certificates not wired; no x86_64 simulator or Intel Mac slice;
@@ -155,8 +163,22 @@ no cmake. Third-party Rust enters only here; `helper/` stays dependency-free.
 `SSHHostSessionDriver` connects (host key through `KnownHostStore`), logs in, uploads the helper for the host's `uname`
 to `~/.dispatch/bin/versions/<sha256>/` (or the runtime folder, [Helper contract](#helper-contract)), starts it, greets
 it, reads `multiplexers.list` and `backends.list`, waits up to 2 s for the first topology, then is ready. It pings
-with `echo` every 10 s. A host with its Helper switch off stops after the login, and a helper that cannot be
-installed, started or used leaves the connection up without it: both are [plain SSH](#plain-ssh).
+with `echo` at once, then on the ticks of the shared 15 s clock that no stats sample covers (Traffic, below). A host
+with its Helper switch off stops after the login, and a helper that cannot be installed, started or used leaves the
+connection up without it: both are [plain SSH](#plain-ssh).
+
+- **Traffic.** Everything the phone sends a host on a timer waits for the same clock (`HostTraffic`): 15 s ticks of
+  the wall clock, the stats chart's bars. The stats' samples (`HostStatistics`, 30 s ticks under Low Power Mode), the
+  liveness ping and the branch poll (`SpaceGitFacts`) end their waits on them, so every host's periodic frames leave
+  together: while nothing else flows a cellular radio, which stays up about 10 s after a burst, can idle between ticks in
+  the foreground (with the old 10 s ping beside 15 s stats it never did). A tick the stats sample on sends no `echo`
+  (`HostPulse`): the sample's requests are the helper's frame for that tick and `stats.sample`'s round trip is the
+  latency; a sample that gets no answer (refused before it left, or lost) sends the tick's `echo` itself. Without a
+  sample on a tick (the background's linger, Low Power Mode's other ticks, a stats sheet's 2 s samples, which are off
+  the clock) the ping goes, without waiting for the last ping's answer (it can sit behind a flood of output; the
+  helper reads the request at once). So the helper hears a frame every 15 s (`stdio.liveness`); around a change (a
+  sample cancelled just after the ping skipped its tick, the background, a connection's first tick, up to a second
+  late) a gap can reach about 30 s, under the helper's 45 s. The SSH keepalive (15 s × 3) is the transport's own.
 
 - Lost link or helper: `reconnecting` at once (keepalive 15 s × 3), backoff 1 s up to 60 s, raced by `retryNow()`
   (network change, foregrounding, pull to refresh; on a connected link it probes `echo` within 3 s, `:` on a plain
@@ -201,7 +223,8 @@ off sends `permissions.reduce` to the running helper (a reconnect when that fail
 grant only shrinks. The phone's hello features (`SSHHostSessionDriver`) are specified in `helper/PROTOCOL.md`; what
 they let the helper do on the host is in [security](security.md#dispatch-for-iphone). The client must:
 
-- **Ping.** With `stdio.liveness` the helper exits after 45 s without a frame; send `echo` at least every 15 s. A drop
+- **Ping.** With `stdio.liveness` the helper exits after 45 s without a frame; send one at least every 15 s (`echo`,
+  or a tick's stats sample in its place, Traffic above). A drop
   can reach the host late, so a reconnect may briefly meet the old helper. Only time the helper reads the phone
   counts, and `stdio.liveness` implies `requests.backlog`: during a flood of terminal output the helper still reads
   the pings (and keystrokes, cancels) even though their replies wait behind the output.
@@ -346,12 +369,25 @@ The policies below are the ones a change must keep; the screens themselves are d
 - **Files, Review and Commits** read only, through `MobileFilesSource` and `ReviewGitReader` (never `file.write`),
   only with a connected helper and the Files & git grant; their exact commands, bounds and cadences are the ones
   [security](security.md#dispatch-for-iphone) lists, and the Mac's shared parsers and placement rules apply. The
-  repository and branch of a folder are `SpaceGitFacts`, once per folder and connection, the branch every 10 s (the
-  Mac's for a shown branch) only while something shows it. A review is one per host and repository root
+  repository and branch of a folder are `SpaceGitFacts`, once per folder and connection, the branch on the shared 15 s
+  ticks (Traffic) only while something shows it. A review is one per host and repository root
   (`ReviewPlace`, `reviews.json`, the Mac's format); Send finds every comment's lines again first, goes through the composer's routing, and leaves the comments
   in place until confirmed; Undo (60 s) withdraws a queued review and the watch mirrors only that Undo. Open in
   Terminal types into the shell only while its program is a shell with no full-screen program up, never for a folder
-  name with control characters.
+  name with control characters, and only on tmux (herdr sends its own rendering of a pane, so the program's modes never
+  reach the phone): it attaches the pane's terminal through the current connection (held output follows again), waits
+  up to 5 s for the server's screen of now (the attachment complete, or after a hold the helper's answer to it and the
+  repaint since, all parsed) and reads the alternate screen and bracketed paste from that, awaits the helper's answer
+  to the input (10 s for all of it), and shows Terminal only once it was taken and while the preview is still shown;
+  leaving the preview stops it before anything is typed. A refused send says it did not reach the terminal, one with
+  no answer or an uncertain one that it may have; neither is retried. The phone checks the screen the helper had sent
+  when it answered: a program that takes the pane after that (a command typed just before) still gets the `cd`, a
+  window only the helper could close. Share, Save to Photos and Ask take
+  only the whole revision the preview read, with the helper's metadata (off while loading, failed, offline or a
+  folder): a file past the limit, a short read or a file changed since fail instead of sharing part of it. A path that
+  turns out to be a folder (the helper's `is_directory`) shows its listing. A folder row's item count waits while the
+  host is offline and is asked again when it reconnects, for every row still on screen in their order (four at a
+  time, none dropped).
 - **Chat.** `chat.open` only for a bound terminal; the conversation is accepted once `chat.history` names the same
   process. Losing link or binding pauses input and keeps transcript and drafts. Dots follow Mail: blue for needs you
   or unseen, amber for working; a conversation's first sight is its baseline; seen markers stay per device. Needs you
@@ -408,11 +444,22 @@ The policies below are the ones a change must keep; the screens themselves are d
   offered with a hardware keyboard). Dragging the thread down onto the composer, or on into the keyboard, takes a
   software keyboard down (`ChatKeyboardDragDismissal`; a hardware keyboard's focus stays). The hairline's glint is the
   light on "thinking": one 2.2 s ease-in-out sweep, leading to trailing, the label lit where and while the glint passes
-  over it (`ChatThinkingSweep`, `ChatSweepTrack`).
+  over it (`ChatThinkingSweep`, `ChatSweepTrack`). The thread's loops (the ◆'s breathing and satellite, the glint and
+  the light, the reconnect banner's dots) run in Core Animation (`CompositorView`, Mobile/Chat/ChatMotion.swift): SwiftUI
+  draws their still artwork once, the compositor moves it at the phone's `MotionRate` (the ◆'s breathing and the dots
+  30 fps, the satellite and the sweep 60, everything 30 in Low Power Mode), and nothing runs in the background, while
+  the row is scrolled out of sight or while a sheet covers it (`coversLoops`: the thread's own sheets and preview, the
+  shell's sheets, a host's stats sheet). The background is followed from its notifications (`applicationState` still
+  reads background when `willEnterForeground` arrives). A row scrolled under the translucent composer counts as shown. As `TimelineView(.animation)` loops they cost about 12% of a core in the app and as
+  much in the render server at 60 Hz. With Reduce Motion they stand still; tests draw a chosen instant
+  (`animationDateOverride`) in SwiftUI, the frame the loops show then.
   The thread runs on under the composer (a bottom `safeAreaBar` with the soft scroll edge, as the side conversation's).
   Conversation mode starts from "+" (Conversation Mode) or a long press on the mic
   (`MobileVoiceConversation`); it is half-duplex as the Mac's and never grants permission by voice. Composers are
   `ChatEditorTextView`-based, as on the Mac.
+  A reply streaming into the live turn types out as on the Mac (docs/architecture.md, Typed reveal;
+  `MobileTypedMarkdown`): a text renderer draws its caret, and a bubble that hugs its text is as wide as what has
+  arrived from the first frame.
 - **Terminal.** Output is coalesced (up to 256 KiB per parse) because tmux sends one notification per line; the
   presence holds a whole helper reply (64 MiB) unparsed, since overflow ends the attachment. Only a lost stream of the
   current attachment detaches the feed. A run of size changes reaches the server once, 100 ms after the last
@@ -431,10 +478,12 @@ The policies below are the ones a change must keep; the screens themselves are d
   switcher's host row open it; an iPad's host glyph opens the same content as a popover (I5). Everything the user sets
   is Edit host's (New host's form with the host's Color and, last, Remove host), saved with Save; Files' Change
   integration… opens Edit host directly.
-- **Host stats.** `HostStatistics`, one per `HostSession`: `stats.sample` and `stats.processes` every 15 s in the
-  foreground (one per chart bar), 2 s while a sheet shows the host, 30 s under Low Power Mode (a bar without its own
-  sample takes the next one, `barHold` 35 s), `stats.disks` with a sample at most every 15 s; nothing in the
-  background, on plain SSH or before something shows the stats. Numbers are `live` only after the connection's own
+- **Host stats.** `HostStatistics`, one per `HostSession`: `stats.sample` on every 15 s tick of the shared clock in the
+  foreground (one per chart bar, Traffic), every 2 s while a sheet or popover shows the host, 30 s under Low Power Mode
+  (a bar without its own sample takes the next one, `barHold` 35 s). `stats.processes` (some 100 KB from a busy Mac)
+  only with a viewer's samples, the first at once when the sheet opens; `stats.disks` with a sample at most every 15 s
+  while viewed, every minute otherwise; a sample's requests go out together. Nothing in the background, on plain SSH
+  or before something shows the stats. Numbers are `live` only after the connection's own
   first sample; the last sample and 15 minutes of history stay through a drop, stale. Red thresholds are the Mac's
   (CPU 90 %, memory 90 %, disk 80 %). The watch reads `summary(at:)` through `WatchHostStatsFeed`, at most one change
   per 15 s ([watch](watch.md#seams)).
@@ -603,7 +652,8 @@ SwiftUI `.commands`; one table (`MobileCommand`) feeds the menu bar, the ⌘-hol
   The Linux entry is the Lima VM (`build/host-linux-ssh.json`, [vm_testing](vm_testing.md)).
 - **Helper over stdio.** `python3 test/helper-stdio.py --live [--lima NAME | --remote user@host:port --identity KEY]
   [-k case] [--keep]` runs the helper exactly as the phone does, in a private root. Not in `test/suites.json`.
-- **Transport.** `cargo test` in `Mobile/Transport/Core` (an in-process russh server) and `swift test` in
+- **Transport.** `cargo test` in `Mobile/Transport/Core` (an in-process russh server, and a scripted hostile server
+  for the pre-authentication flaws and rekeys, `tests/hostile.rs`) and `swift test` in
   `Mobile/Transport` (the login shell under the fixture sshd; `HelperRootTests` pin the bootstrap scripts).
 - **Dictation.** `swift test` in `Packages/Dictation`, on the Mac; engine cases skip without their models.
 - **Frame checks.** No transient wrong state, frame by frame: `TransitionUITests` and `-DispatchTabsScript` drive
@@ -639,7 +689,6 @@ Release build on a real iPhone, by hand. Nothing below has been run on a device 
 - iPad: one window only (multi-window needs per-scene compositions and host sessions); no Mac Catalyst and no
   "Designed for iPad" on the Mac. Esc does not go back.
 - The iOS 26 New-button fallback (`.search` tab role) is untested: only the iOS 27 runtime has been used.
-- Rekeys are not re-checked against the trusted host key (russh has no hook; [security](security.md#dispatch-for-iphone)).
 - Keyboard-interactive is untested against a real multi-round server (OTP, PAM).
 - Live runs cover tmux; herdr only through the helper harness and scripted tests. Linux is covered on one arm64
   Ubuntu VM; x86-64, other distributions and a real remote Mac with Homebrew tmux are untested.

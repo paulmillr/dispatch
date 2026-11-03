@@ -1,46 +1,76 @@
 import SwiftUI
 
 /// The thinking line (the Mac's working indicator, ported for the phone): a pulsing ◆ with an orbiting satellite and a
-/// shimmering "thinking", driven by one timeline so only this small view redraws. With Reduce Motion the diamond
-/// stands still, the satellite and shimmer go.
+/// shimmering "thinking", in the compositor (`ChatOrbitLoop`), so nothing redraws while it moves; it stops while scrolled
+/// away. With Reduce Motion the diamond stands still, the satellite and shimmer go. An `animationDateOverride` (tests)
+/// draws that instant's frame in SwiftUI, the frame the loops show then.
 struct ChatThinkingGlyph: View {
     var size: CGFloat = 16
     @ReduceMotion private var reduceMotion
     @Environment(\.animationDateOverride) private var fixedDate
+    @State private var onScreen = true
 
     var body: some View {
         if reduceMotion {
             diamond(scale: 1, opacity: 1)
                 .frame(width: size, height: size)
-        } else {
-            TimelineView(.animation) { context in
-                let time = (fixedDate ?? context.date).timeIntervalSinceReferenceDate
-                // hx-pulse: 1.6 s ease-in-out, scale .92 to 1.08, opacity .55 to 1.
-                let pulse = (1 - cos(time / 1.6 * 2 * .pi)) / 2
-                // hx-orbit: one turn every 1.4 s.
-                let angle = Angle.degrees(time.truncatingRemainder(dividingBy: 1.4) / 1.4 * 360)
-                ZStack {
-                    diamond(scale: 0.92 + 0.16 * pulse, opacity: 0.55 + 0.45 * pulse)
-                    Circle()
-                        .fill(Color.dispatchPink)
-                        .frame(width: 4, height: 4)
-                        .shadow(color: .dispatchPink, radius: 3)
-                        .offset(y: -size / 2)
-                        .rotationEffect(angle)
-                }
-                .frame(width: size, height: size)
+        } else if let fixedDate {
+            let time = fixedDate.timeIntervalSinceReferenceDate
+            let pulse = ChatThinkingMotion.pulse(time)
+            ZStack {
+                diamond(scale: 0.92 + 0.16 * pulse, opacity: 0.55 + 0.45 * pulse)
+                Self.dotShape(color: .dispatchPink)
+                    .offset(y: -size / 2)
+                    .rotationEffect(.radians(ChatThinkingMotion.orbit(time)))
             }
+            .frame(width: size, height: size)
+        } else {
+            ChatOrbitLoop(size: size, moving: onScreen)
+                .frame(width: size, height: size)
+                .onScreen($onScreen)
+                .accessibilityHidden(true)
         }
     }
 
     private func diamond(scale: Double, opacity: Double) -> some View {
-        Text("◆")
-            .font(.system(size: size * 0.72))
-            .foregroundStyle(Color.dispatchPink)
+        Self.diamondText(size: size, color: .dispatchPink)
             .scaleEffect(scale)
             .opacity(opacity)
             .accessibilityHidden(true)
     }
+
+    /// The ◆, as SwiftUI and the compositor's still artwork draw it.
+    static func diamondText(size: CGFloat, color: Color) -> some View {
+        Text("◆")
+            .font(.system(size: size * 0.72))
+            .foregroundStyle(color)
+    }
+
+    /// The satellite: a 4 pt dot glowing 3 pt around (the compositor draws the same with its own layer and shadow).
+    static let dotSize: CGFloat = 4
+    static let dotGlow: CGFloat = 3
+
+    static func dotShape(color: Color) -> some View {
+        Circle()
+            .fill(color)
+            .frame(width: dotSize, height: dotSize)
+            .shadow(color: color, radius: dotGlow)
+    }
+}
+
+/// The thinking glyph's two loops as functions of the instant (in seconds): what SwiftUI draws for a given instant and
+/// what the compositor's keyframes sample.
+enum ChatThinkingMotion {
+    /// hx-pulse: 1.6 s ease-in-out, scale .92 to 1.08, opacity .55 to 1.
+    static let pulsePeriod = 1.6
+    /// hx-orbit: one turn every 1.4 s.
+    static let orbitPeriod = 1.4
+
+    /// 0 at rest, 1 at the breath's peak.
+    static func pulse(_ time: Double) -> Double { (1 - cos(time / pulsePeriod * 2 * .pi)) / 2 }
+
+    /// The satellite's angle, clockwise from the top, in radians.
+    static func orbit(_ time: Double) -> Double { time.truncatingRemainder(dividingBy: orbitPeriod) / orbitPeriod * 2 * .pi }
 }
 
 /// The working row's one sweep: the glint crossing the row's hairline (`ChatAccentScan`) is the light on "thinking"
@@ -53,7 +83,11 @@ enum ChatThinkingSweep {
 
     /// 0 with the glint just off the line's leading end, 1 just off its trailing end; eased in and out.
     static func progress(at date: Date) -> Double {
-        let time = date.timeIntervalSinceReferenceDate
+        progress(phase: date.timeIntervalSinceReferenceDate)
+    }
+
+    /// The same for `time` seconds (a phase within the period, or any instant's time).
+    static func progress(phase time: Double) -> Double {
         let t = (time - (time / period).rounded(.down) * period) / period
         return t < 0.5 ? 2 * t * t : 1 - pow(-2 * t + 2, 2) / 2
     }
@@ -72,35 +106,42 @@ struct ChatSweepTrack: Equatable {
 }
 
 /// "thinking" with the light sweeping across it (`ChatThinkingSweep`); plain with Reduce Motion. On a `track` the light
-/// is the hairline's glint itself, as wide and where it is; without one it crosses the label in the same period.
+/// is the hairline's glint itself, as wide and where it is; without one it crosses the label in the same period. The
+/// light moves in the compositor (`ChatShimmerLoop`) and stops while scrolled away; an `animationDateOverride` (tests)
+/// draws that instant in SwiftUI.
 struct ChatShimmerText: View {
     let text: String
     var track: ChatSweepTrack? = nil
     @ReduceMotion private var reduceMotion
     @Environment(\.animationDateOverride) private var fixedDate
+    @State private var onScreen = true
     private static let base = Color.shimmerBase
     /// Half the light's width without a track, as a share of the label's.
-    private static let half = 0.25
+    static let half = 0.25
+
+    /// The label, as SwiftUI and the compositor's still artwork draw it.
+    static func label(_ text: String) -> Text { Text(text).font(.subheadline.weight(.semibold)) }
 
     var body: some View {
-        let label = Text(text).font(.subheadline.weight(.semibold))
+        let label = Self.label(text)
         if reduceMotion {
             label.foregroundStyle(Self.base)
-        } else {
+        } else if let fixedDate {
             // The label keeps its place; the copy over it reads the label's width in the same pass.
             label.hidden().overlay {
                 GeometryReader { proxy in
-                    TimelineView(.animation) { context in
-                        let (start, end) = span(progress: ChatThinkingSweep.progress(at: fixedDate ?? context.date),
-                                                width: proxy.size.width)
-                        // The gradient's ends pad with the base colour beyond its points: off the label nothing is
-                        // lit, and the light leaves and comes back with nothing drawn between (no jump at the wrap).
-                        label.foregroundStyle(LinearGradient(colors: [Self.base, .shimmerHighlight, Self.base],
-                                                             startPoint: UnitPoint(x: start, y: 0.5),
-                                                             endPoint: UnitPoint(x: end, y: 0.5)))
-                    }
+                    let (start, end) = span(progress: ChatThinkingSweep.progress(at: fixedDate), width: proxy.size.width)
+                    // The gradient's ends pad with the base colour beyond its points: off the label nothing is lit, and
+                    // the light leaves and comes back with nothing drawn between (no jump at the wrap).
+                    label.foregroundStyle(LinearGradient(colors: [Self.base, .shimmerHighlight, Self.base],
+                                                         startPoint: UnitPoint(x: start, y: 0.5),
+                                                         endPoint: UnitPoint(x: end, y: 0.5)))
                 }
             }
+        } else {
+            label.foregroundStyle(Self.base)
+                .overlay { ChatShimmerLoop(text: text, track: track, moving: onScreen).accessibilityHidden(true) }
+                .onScreen($onScreen)
         }
     }
 
@@ -119,27 +160,31 @@ struct ChatShimmerText: View {
     }
 }
 
-/// The accent scan along a hairline (hx-scan, `ChatThinkingSweep`): a 30% wide pink glint crossing it.
+/// The accent scan along a hairline (hx-scan, `ChatThinkingSweep`): a 30% wide pink glint crossing it, in the compositor
+/// (`ChatScanLoop`) and stopped while scrolled away; an `animationDateOverride` (tests) draws that instant in SwiftUI.
 struct ChatAccentScan: View {
     /// The glint's width, as a share of the line's.
     static let share: CGFloat = 0.3
+    static let opacity = 0.7
     @ReduceMotion private var reduceMotion
     @Environment(\.animationDateOverride) private var fixedDate
+    @State private var onScreen = true
     var body: some View {
         if reduceMotion {
             Rectangle().fill(Color.dispatchPink.opacity(0.35))
-        } else {
+        } else if let fixedDate {
             GeometryReader { geometry in
-                TimelineView(.animation) { context in
-                    let glint = ChatSweepTrack.glint(lineWidth: geometry.size.width,
-                                                     progress: ChatThinkingSweep.progress(at: fixedDate ?? context.date))
-                    LinearGradient(colors: [.clear, .dispatchPink, .clear], startPoint: .leading, endPoint: .trailing)
-                        .frame(width: glint.half * 2)
-                        .opacity(0.7)
-                        .offset(x: glint.center - glint.half)
-                }
+                let glint = ChatSweepTrack.glint(lineWidth: geometry.size.width, progress: ChatThinkingSweep.progress(at: fixedDate))
+                LinearGradient(colors: [.clear, .dispatchPink, .clear], startPoint: .leading, endPoint: .trailing)
+                    .frame(width: glint.half * 2)
+                    .opacity(Self.opacity)
+                    .offset(x: glint.center - glint.half)
             }
             .clipped()
+        } else {
+            ChatScanLoop(moving: onScreen)
+                .onScreen($onScreen)
+                .accessibilityHidden(true)
         }
     }
 }

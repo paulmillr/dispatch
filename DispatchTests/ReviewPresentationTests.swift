@@ -105,7 +105,7 @@ final class ReviewPresentationTests: XCTestCase {
                 .map { NSPoint(x: $0.minX + 11, y: $0.midY) }
         }, in: window, until: { session.reviewDraft != nil }, diagnostic: "no composer after the line's +")
         XCTAssertEqual(session.reviewDraft?.end, ReviewLine(side: .new, number: number))
-        XCTAssertEqual(session.reviewDraft?.quote, [ReviewQuote(kind: .added, text: presentation.lines[index].text)])
+        XCTAssertEqual(session.reviewDraft?.quote, [ReviewQuote(kind: .added, text: presentation.lines[index].text, line: ReviewLine(side: .new, number: number))])
         let composer = try await frame("review-composer", in: window)
         let line = try await frame("git-diff-line-\(index)", in: window)
         XCTAssertLessThan(composer.maxY, line.minY + 1, "the composer sits under its line")
@@ -141,11 +141,11 @@ final class ReviewPresentationTests: XCTestCase {
         try type("Looks close; run the tests after.", in: try XCTUnwrap(popover))
         try await TestSupport.eventually { self.repository.review(scope).isEmpty }
         let copied = try XCTUnwrap(NSPasteboard.general.string(forType: .string))
-        XCTAssertTrue(copied.hasPrefix("Code review of the uncommitted changes in \(root) (main at 3f2c1a0): 1 comment on 1 file."),
+        XCTAssertTrue(copied.hasPrefix("Code review of the uncommitted changes in the repository below: 1 comment on 1 file.") && copied.contains("\"repository\": \"\(root)\",\n  \"branch\": \"main\",\n  \"head\": \"3f2c1a0\""),
                       copied)
         XCTAssertTrue(copied.contains("Looks close; run the tests after."), copied)
         // Create review read the file again: the fake tree's billing.ts is one export repeated, so the line is gone.
-        XCTAssertTrue(copied.contains("## src/routes/billing.ts\n\nLine \(number) (the line has changed since; the quote is what it "
+        XCTAssertTrue(copied.contains("## File 1: \"src/routes/billing.ts\"\n\nLine \(number) (the line has changed since; the quote is what it "
                                       + "said):\n```diff\n+\(presentation.lines[index].text)\n```\n"
                                       + "Wrap the find and the put in one transaction."), copied)
         _ = try await frame("review-copied", in: window)

@@ -295,7 +295,8 @@ struct FilesListingView: View {
         .buttonStyle(.plain)
         .modifier(FilesZoomSource(path: path))
         .tabsRowHover()
-        .task(id: path) { if entry.isDirectory && !offline { browser.needCount(path) } }
+        // On screen, offline too: the browser asks once there is a connection (and again after a reconnect).
+        .task(id: path) { if entry.isDirectory { browser.needCount(path) } }
         .onDisappear { if entry.isDirectory { browser.dropCount(path) } }
         .contextMenu {
             Button("Copy path", systemImage: "doc.on.doc") { UIPasteboard.general.string = path }

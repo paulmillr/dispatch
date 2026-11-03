@@ -78,8 +78,9 @@ enum SpacesText {
         return nil
     }
 
-    /// The row's glyph: a speech bubble for a chat tab, the terminal for any other (`TabsKindGlyph`).
-    static func symbol(_ tab: WatchTab) -> String { tab.chat ? "bubble.left.fill" : "apple.terminal" }
+    /// The row's glyph, as the phone's tab rows draw it (`AgentGlyph`): the Chat segment's bubble for a chat tab, the
+    /// terminal for any other.
+    static func symbol(_ tab: WatchTab) -> String { tab.chat ? "text.bubble" : "apple.terminal" }
 
     /// Where a tab row leads: an agent's thread when it is bound to one, else the tab's screen.
     enum Destination: Equatable {

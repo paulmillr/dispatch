@@ -9,8 +9,9 @@ import Observation
 ///
 /// The root is read once per key, folder and connection (`resolve`): again when the folder changes, when the host's
 /// connection or grant changes (`invalidate`, a new `generation`), or when the last read failed. The branch is polled
-/// every `interval` (10 s, the Mac's cadence for the branch names it shows) only while something shows it (`watch`: the
-/// Files segment, a visible space's branch chip); nothing polls otherwise. One read per key at a time; a read asked meanwhile
+/// every `interval` (15 s, on the shared clock's ticks with the stats' samples and the liveness ping, `HostTraffic`; the
+/// Mac's cadence for the branch names it shows is 10 s) only while something shows it (`watch`: the Files segment, a
+/// visible space's branch chip); nothing polls otherwise. One read per key at a time; a read asked meanwhile
 /// runs after it with the latest folder, and the previous facts stay until it answers.
 @MainActor @Observable
 final class SpaceGitFacts {
@@ -51,8 +52,8 @@ final class SpaceGitFacts {
     /// A root read asked while another read of the key ran: the latest folder asked.
     @ObservationIgnored private var again: [Key: String] = [:]
 
-    /// The branch poll while something shows it (`watch`).
-    nonisolated static let branchInterval = Duration.seconds(10)
+    /// The branch poll while something shows it (`watch`), on the shared clock.
+    nonisolated static let branchInterval = HostTraffic.interval
 
     init(interval: Duration = SpaceGitFacts.branchInterval, reader: Reader = SpaceGitFacts.helper,
          sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) {
@@ -85,11 +86,12 @@ final class SpaceGitFacts {
         await readRoot(key, directory)
     }
 
-    /// `resolve`, then the branch every `interval` (the root again if its read failed) until the task is cancelled.
+    /// `resolve`, then the branch on each `interval` tick of the shared clock (`HostTraffic`; the root again if its read
+    /// failed) until the task is cancelled.
     func watch(_ key: Key, directory: String) async {
         await resolve(key, directory: directory)
         while !Task.isCancelled {
-            do { try await sleep(interval) } catch { return }
+            do { try await sleep(HostTraffic.wait(every: interval, from: System.date()).delay) } catch { return }
             guard !Task.isCancelled else { return }
             if needsRoot(key, directory) {
                 await readRoot(key, directory)

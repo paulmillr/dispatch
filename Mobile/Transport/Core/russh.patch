@@ -1,0 +1,44 @@
+diff --git a/src/client/mod.rs b/src/client/mod.rs
+index 59989448..50b7ef77 100644
+--- a/src/client/mod.rs
++++ b/src/client/mod.rs
+@@ -12,6 +12,8 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ //
++// Modified for Dispatch (Mobile/Transport/Core/russh.patch): `check_server_key` at every rekey.
++//
+ 
+ //! # Implementing clients
+ //!
+@@ -2041,6 +2043,19 @@ async fn reply<H: Handler>(
+ 
+                     if session.common.encrypted.is_some() {
+                         // This is a rekey
++                        // Dispatch: the server proves its host key again at every exchange, and the
++                        // handler decides about it as at the first, before these keys are used.
++                        let trusted = if let Some(certificate) = server_host_certificate {
++                            handler.check_server_key(&certificate.into()).await?
++                        } else if let Some(server_host_key) = server_host_key {
++                            handler.check_server_key(&server_host_key.into()).await?
++                        } else {
++                            // An exchange without a host key (`none`) proves nothing.
++                            false
++                        };
++                        if !trusted {
++                            return Err(crate::Error::UnknownKey.into());
++                        }
+                         {
+                             let common = &mut session.common;
+                             common.newkeys(newkeys);
+@@ -2802,6 +2817,10 @@ pub trait Handler: Sized + Send {
+     /// The library verifies the key exchange signature before this call,
+     /// but it's up to the implementation to decide whether the key or certificate
+     /// is trusted.
++    ///
++    /// Dispatch: called at every key exchange, the first and each rekey, before
++    /// the exchange's keys are used; false at a rekey ends the connection with
++    /// [`crate::Error::UnknownKey`].
+     #[allow(unused_variables)]
+     fn check_server_key(
+         &mut self,

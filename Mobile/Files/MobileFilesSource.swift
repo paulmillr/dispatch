@@ -67,6 +67,7 @@ final class HelperMobileFilesSource: MobileFilesSource {
         case "not_found": return .notFound(path)
         case "permission_denied": return .permissionDenied(path)
         case "not_directory": return .notDirectory(path)
+        case "is_directory": return .isDirectory(path)
         case "changed": return .changed(path)
         case "limit": return .limit(detail)
         case "busy": return .busy(detail)

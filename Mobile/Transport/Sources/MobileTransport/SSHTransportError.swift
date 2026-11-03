@@ -15,6 +15,9 @@ public enum SSHConnectFailure: Sendable, Equatable {
 public enum SSHTransportError: Error, Sendable, Equatable, LocalizedError {
   case hostKeyRejected(HostKeyInfo)
   case hostKeyMismatch(HostKeyInfo, expected: String)
+  /// A rekey presented another host key or algorithm than the connection's first exchange: the connection ended. Like a
+  /// mismatch, final until the user connects again (that connection checks the key against the trusted one).
+  case hostKeyChangedAtRekey(String)
   /// The server refused every offered credential. `methods` are the ones it still allows.
   case authenticationFailed(methods: [String])
   /// A key type or method the engine does not support.
@@ -38,6 +41,8 @@ public enum SSHTransportError: Error, Sendable, Equatable, LocalizedError {
     switch self {
     case .hostKeyRejected(let key): "The host key \(key.fingerprint) was not trusted."
     case .hostKeyMismatch(let key, _): "The host key of \(key.hostPattern) changed (now \(key.fingerprint))."
+    case .hostKeyChangedAtRekey(let reason):
+      "The host key changed during the connection (\(reason)). Connect again to check it against the trusted key."
     case .authenticationFailed(let methods): "Authentication failed (server allows: \(methods.joined(separator: ", ")))."
     case .unsupportedAuthentication(let method): "The \(method) authentication method is not supported."
     case .invalidKey(let reason): "Invalid private key: \(reason)."

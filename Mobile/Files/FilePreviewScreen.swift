@@ -9,8 +9,9 @@ struct FilesPreviewActions {
     /// The tab's agent ("claude"), for "Ask claude".
     var agent: String?
     var ask: ((FilePreview) -> Void)?
-    /// Types the `cd`; returns why it did not ("The terminal is busy."), nil when it did.
-    var openInTerminal: (() -> String?)?
+    /// Types the `cd` and, once the helper took it, shows the tab's terminal; returns why it did not ("The terminal is
+    /// busy."), nil when it did.
+    var openInTerminal: (() async -> String?)?
     /// The screen Back returns to ("Files", "Review").
     var back = "Files"
     var pop: () -> Void = {}
@@ -40,6 +41,9 @@ struct FilePreviewScreen: View {
     @State private var find = FileFind()
     @State private var sharing: FilesShareItem?
     @State private var problem: String?
+    /// Open in Terminal waiting for the terminal's screen or the helper's answer: cancelled when the screen goes, so
+    /// nothing is typed or shown for a screen no longer there.
+    @State private var opening: Task<Void, Never>?
     @FocusState private var findFocused: Bool
     @Environment(\.tabsColumnWidth) private var column
 
@@ -78,6 +82,10 @@ struct FilePreviewScreen: View {
             }
         }
         .task { await preview.load() }
+        .onDisappear {
+            opening?.cancel()
+            opening = nil
+        }
         .sheet(item: $sharing) { item in
             FilesActivityView(items: [item.url]).ignoresSafeArea()
                 // The sheet closed: the copy goes.
@@ -204,6 +212,7 @@ struct FilePreviewScreen: View {
             }
             .buttonStyle(.plain)
             .glassEffect(.regular.interactive(), in: Capsule())
+            .disabled(!preview.canShare)
             .padding(.top, 6)
         }
         .padding(24)
@@ -348,10 +357,12 @@ struct FilePreviewScreen: View {
                 Button("Copy path", systemImage: "doc.on.doc") { UIPasteboard.general.string = preview.path }
                 Button("Copy contents", systemImage: "doc.on.clipboard") { UIPasteboard.general.string = preview.text }
                     .disabled(preview.text == nil || preview.truncated)
+                // Only with the helper's metadata of what loaded: never a failed, offline or partial read's bytes.
                 Button("Share", systemImage: "square.and.arrow.up", action: share)
-                    .disabled(preview.content == .loading)
+                    .disabled(!preview.canShare)
                 if isImage {
                     Button("Save to Photos", systemImage: "square.and.arrow.down", action: saveToPhotos)
+                        .disabled(!preview.canShare)
                 }
             }
             Section {
@@ -359,7 +370,14 @@ struct FilePreviewScreen: View {
                     Button("Attach to chat", systemImage: "paperclip") { ask(preview) }
                 }
                 if let open = actions.openInTerminal {
-                    Button("Open in Terminal", systemImage: "apple.terminal") { problem = open() }
+                    Button("Open in Terminal", systemImage: "apple.terminal") {
+                        opening = Task {
+                            let failure = await open()
+                            opening = nil
+                            if !Task.isCancelled { problem = failure }
+                        }
+                    }
+                    .disabled(opening != nil)
                 }
             }
         } label: {

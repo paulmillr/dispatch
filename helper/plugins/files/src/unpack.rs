@@ -79,7 +79,7 @@ pub(super) fn open(
     {
         return done(io, Err(error("invalid_request")));
     }
-    if transfer.is_empty() || !plain(target) {
+    if transfer.is_empty() || transfer.len() > pack::TRANSFER || !plain(target) {
         return done(io, Err(error("invalid_request")));
     }
     if shared.borrow().is_some() {

@@ -328,16 +328,20 @@ struct GitDiffView: View {
     /// The + of a line, or ⏎ on it: a new comment there, or with ⇧ the one being written stretched to it.
     private func comment(on row: GitDiffDisplayRow, layout: GitDiffReviewLayout, extend: Bool) {
         guard let review, let target = layout.lines[row] else { return }
+        var lines = [target]
         if extend, let draft = review.draft, draft.editing == nil, let start = draft.start,
            let anchor = layout.lines.values.filter({ $0.line == start }).min(by: { abs($0.index - target.index) < abs($1.index - target.index) }) {
             let range = min(anchor.index, target.index)...max(anchor.index, target.index)
-            let lines = layout.lines.values.filter { range.contains($0.index) }.sorted { $0.index < $1.index }
-            if let first = lines.first, let last = lines.last {
-                review.begin(start: first.line, end: last.line, quote: lines.map(\.quote))
-                return
-            }
+            let spanned = layout.lines.values.filter { range.contains($0.index) }.sorted { $0.index < $1.index }
+            if !spanned.isEmpty { lines = spanned }
         }
-        review.begin(start: target.line, end: target.line, quote: [target.quote])
+        guard let first = lines.first, let last = lines.last else { return }
+        // Each quoted line keeps its number, and the lines around them are kept too: what finds the comment again.
+        let quote = lines.map { ReviewQuote(kind: $0.quote.kind, text: $0.quote.text, line: $0.line) }
+        var shown: [ReviewLine: ReviewQuote] = [:]
+        for line in layout.lines.values where shown[line.line] == nil { shown[line.line] = line.quote }
+        let around = ReviewQuote.surroundings(of: quote, in: shown)
+        review.begin(start: first.line, end: last.line, quote: quote, before: around.before, after: around.after)
     }
 
     /// The review's rows among a diff's, in order: what the rows' motion follows.
@@ -784,7 +788,7 @@ struct GitSourceText: Equatable {
     private static func pending(_ draft: ReviewDraft?) -> ReviewComment? {
         guard let draft, draft.editing == nil, draft.end != nil else { return nil }
         return ReviewComment(id: draft.id, path: draft.path, start: draft.start, end: draft.end, quote: draft.quote,
-                             text: "", created: .distantFuture)
+                             text: "", created: .distantFuture, before: draft.before, after: draft.after)
     }
 
     /// The `Fold.start` of every fold holding a line a comment (or the draft) lands on, so it shows open.
@@ -800,7 +804,12 @@ struct GitSourceText: Equatable {
             indices.append(index)
             candidates.append(.init(line: line.line, text: line.quote.text))
         }
-        let placed = Set(ReviewPlacement.place(all, among: candidates).values.map { indices[$0] })
+        // Every line a comment spans opens its fold, from its first line (the nearest above its last) to its last.
+        var placed: Set<Int> = []
+        for found in ReviewPlacement.locate(all, among: candidates).values {
+            let start = found.comment.start.flatMap { start in candidates.prefix(found.index + 1).lastIndex { $0.line == start } }
+            for index in (start ?? found.index)...found.index { placed.insert(indices[index]) }
+        }
         folds = Set(presentation.folds.filter { fold in placed.contains { fold.range.contains($0) } }.map(\.start))
         foldsKey = all
         return folds
@@ -831,15 +840,21 @@ struct GitSourceText: Equatable {
             candidateRows.append(index)
         }
         let pending = Self.pending(draft)
-        let placed = ReviewPlacement.place(comments + [pending].compactMap { $0 }, among: candidates)
+        let found = ReviewPlacement.locate(comments + [pending].compactMap { $0 }, among: candidates)
+        var placed = found.mapValues(\.index)
+        // A comment being written that is not found again (its line repeats) stays under the line it was begun on.
+        if let pending, placed[pending.id] == nil, let end = pending.end,
+           let at = candidates.firstIndex(where: { $0.line == end }) {
+            placed[pending.id] = at
+        }
         var under: [Int: [GitDiffDisplayRow]] = [:]
         var top: [ReviewComment] = []
         for comment in comments.sorted(by: { $0.created < $1.created }) {
             layout.comments[comment.id] = comment
-            if let placed = placed[comment.id] {
+            if let found = found[comment.id] {
                 // Found again on another line (lines added or removed above it): its card names the line it is on now.
-                layout.comments[comment.id] = comment.moved(to: candidates[placed].line)
-                under[candidateRows[placed], default: []].append(.comment(comment.id))
+                layout.comments[comment.id] = found.comment
+                under[candidateRows[found.index], default: []].append(.comment(comment.id))
             } else {
                 top.append(comment)
                 if !comment.onFile { layout.detached.insert(comment.id) }

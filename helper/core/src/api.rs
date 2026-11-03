@@ -1957,13 +1957,16 @@ pub enum Policy {
 /// Job::Pack: `paths` (absolute, lexically inside `base`, named relative to it) walked without
 /// following a symlink into a ustar/pax tar through zstd level 1, written to the new file
 /// `archive` (O_EXCL, 0600). Sockets, fifos and devices are left out and counted. More than
-/// `limit` entries fails with QuotaExceeded; any failure removes the archive.
+/// `limit` entries fails with QuotaExceeded, and so does an archive past `budget` bytes or the
+/// volume's free space less its reserve; any failure removes the archive.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PackJob {
     pub base: PathBuf,
     pub paths: Vec<PathBuf>,
     pub archive: PathBuf,
     pub limit: u64,
+    /// Archive bytes the pack may write: what the retained archives leave of the plugin's budgets.
+    pub budget: u64,
     /// Set by files.pack.drop: the walk stops before its next entry (Interrupted).
     pub stop: Stop,
 }

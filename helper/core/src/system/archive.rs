@@ -37,16 +37,29 @@ const ARCHIVE_LIMIT: u64 = 128 << 30;
 /// Free space an extraction leaves on the target's file system.
 const RESERVE: u64 = 64 << 20;
 
-/// Refuses before a packed archive consumes the free-space reserve measured when the pack began.
+/// Refuses before a packed archive consumes the free-space reserve measured when the pack began, or passes its
+/// budget.
 struct Reserved<'a> {
     file: &'a File,
     left: u64,
+    /// Why `left` ends there.
+    full: &'static str,
+}
+
+/// The bytes a pack may write: the volume's free space less RESERVE, and at most `budget`; why it ends there.
+fn room(available: u64, budget: u64) -> (u64, &'static str) {
+    let free = available.saturating_sub(RESERVE);
+    if budget < free {
+        (budget, "the copy archives this helper keeps would pass their budget")
+    } else {
+        (free, "not enough free space for the archive")
+    }
 }
 
 impl Write for Reserved<'_> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         if bytes.len() as u64 > self.left {
-            return Err(limited("not enough free space for the archive"));
+            return Err(limited(self.full));
         }
         let mut file = self.file;
         let written = file.write(bytes)?;
@@ -121,7 +134,7 @@ fn time(seconds: i64, nanos: u32) -> Option<SystemTime> {
 }
 
 /// Job::Pack.
-pub(super) fn pack(base: &Path, paths: &[PathBuf], archive: &Path, limit: u64, stop: &Stop) -> io::Result<Packed> {
+pub(super) fn pack(base: &Path, paths: &[PathBuf], archive: &Path, limit: u64, budget: u64, stop: &Stop) -> io::Result<Packed> {
     let base = normal(base).ok_or(io::ErrorKind::InvalidInput)?;
     let mut selected = Vec::new();
     for path in paths {
@@ -154,8 +167,8 @@ pub(super) fn pack(base: &Path, paths: &[PathBuf], archive: &Path, limit: u64, s
             archive: archive.to_string_lossy().into_owned(),
             ..Packed::default()
         };
-        let room = stats::available(directory)?.saturating_sub(RESERVE);
-        let output = Reserved { file: &file, left: room };
+        let (left, full) = room(stats::available(directory)?, budget);
+        let output = Reserved { file: &file, left, full };
         let mut writer = tar::Writer::new(zstd::Encoder::live(output)?);
         let mut stack: Vec<Walked> = kept.into_iter().rev().map(|(path, name)| Walked { holder: None, path, name, kind: UNKNOWN }).collect();
         while let Some(walked) = stack.pop() {
@@ -695,7 +708,7 @@ pub(super) fn unpack(job: &UnpackJob) -> io::Result<Unpacked> {
     // Nothing is touched, not even removed, unless the target and its staging folder are still the ones opened.
     let (target_dir, staging_dir, staged) = pinned(&job.staging)?;
     let staging_dir = staging_dir.ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "the staging folder is gone"))?;
-    let mut stranded = false;
+    let (mut stranded, mut kept) = (false, false);
     let result = (|| {
         let root = staging.join("tree");
         fs::DirBuilder::new().mode(0o777).create(&root)?;
@@ -758,6 +771,8 @@ pub(super) fn unpack(job: &UnpackJob) -> io::Result<Unpacked> {
             &mut moved,
             &mut settled,
             &mut stranded,
+            &mut kept,
+            staging,
         );
         // Folder modes and times last, deepest first: a read-only folder could not have been filled or moved.
         let mut folders: Vec<_> = tree.directories.iter().collect();
@@ -786,9 +801,9 @@ pub(super) fn unpack(job: &UnpackJob) -> io::Result<Unpacked> {
         })
     })();
     // Whatever was skipped, set aside by a replace, or left by a failure goes with the staging directory, unless
-    // it holds an original a failed replace could not put back.
-    if stranded {
-        return result.map_err(|e| io::Error::other(format!("{e} {}", staging.join("old").display())));
+    // it holds an original a failed replace could not put back, or what a rollback could not undo.
+    if stranded || kept {
+        return result;
     }
     drop(staging_dir);
     let _ = remove_at(&target_dir, staged);
@@ -806,36 +821,77 @@ fn folder_of(tree: &Tree, top: &[u8]) -> bool {
     tree.directories.contains_key(top)
 }
 
-/// A replace whose new entry could not take `top`'s name: the original, set aside in `old`, goes back, or when
-/// its name is taken meanwhile to "name 2", "name 3"… beside it. Some(error) says where it is when not back;
-/// None when it is back. Left in `old` (`stranded`), the staging folder must stay.
-fn restore(old: &File, target: &File, top: &[u8], folder: bool, stranded: &mut bool) -> Option<io::Error> {
+/// Where an original set aside in `old` went when it was moved back: its own name (None), "name 2", "name 3"… beside
+/// it when that was taken meanwhile (Some), or nowhere (Err: it is still in `old`).
+fn back(old: &File, target: &File, top: &[u8], folder: bool) -> Result<Option<Vec<u8>>, ()> {
     let name = OsStr::from_bytes(top);
     if native::rename(old, name, target, name).is_ok() {
-        return None;
+        return Ok(None);
     }
-    let shown = String::from_utf8_lossy(top);
     for number in 2..=NUMBERS {
         let candidate = numbered(top, number, folder);
         match native::rename(old, name, target, OsStr::from_bytes(&candidate)) {
-            Ok(()) => {
-                let placed = String::from_utf8_lossy(&candidate);
-                return Some(io::Error::other(format!(
-                    "the copy could not take the place of {shown:?}, whose name was taken meanwhile; the original is now {placed:?}"
-                )));
-            }
+            Ok(()) => return Ok(Some(candidate)),
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
             Err(_) => break,
         }
     }
-    *stranded = true;
-    Some(io::Error::other(format!(
-        "the copy could not take the place of {shown:?}, and the original could not go back; it stays in"
-    )))
+    Err(())
+}
+
+/// A replace whose new entry could not take `top`'s name: the original, set aside in `old` (inside the staging folder
+/// `hidden`), goes back (`back`). Some(error) says where it is when not back; None when it is back. Left in `old`
+/// (`stranded`), the staging folder must stay.
+fn restore(old: &File, target: &File, top: &[u8], folder: bool, stranded: &mut bool, hidden: &Path) -> Option<io::Error> {
+    let shown = String::from_utf8_lossy(top);
+    match back(old, target, top, folder) {
+        Ok(None) => None,
+        Ok(Some(placed)) => {
+            let placed = String::from_utf8_lossy(&placed);
+            Some(io::Error::other(format!(
+                "the copy could not take the place of {shown:?}, whose name was taken meanwhile; the original is now {placed:?}"
+            )))
+        }
+        Err(()) => {
+            *stranded = true;
+            Some(io::Error::other(format!(
+                "the copy could not take the place of {shown:?}, and the original could not go back; it stays in {}",
+                hidden.join("old").display()
+            )))
+        }
+    }
+}
+
+/// One entry the move phase put in the target, kept to take it back: its name in the tree (and the archive) and in
+/// the target, the incoming entry's identity, and the name of the original it replaced, which waits in `old` under
+/// that name (its spelling on disk, which a case-insensitive file system may have matched to `top`).
+struct Placed {
+    top: Vec<u8>,
+    placed: Vec<u8>,
+    incoming: FileIdentity,
+    original: Option<Vec<u8>>,
+}
+
+/// The name the entry at `top` has in `target` on disk: `top` when the folder holds that very name, else the entry
+/// with the identity `top` finds, which a case-insensitive or normalizing file system matched under another spelling
+/// (`README.md` for an incoming `readme.md`); `top` when none is. `names` is the folder's listing, read once per
+/// commit and only when a replaced name is not in it as sent.
+fn spelled(target: &File, top: &[u8], names: &mut Option<Vec<std::ffi::OsString>>) -> Vec<u8> {
+    let names = names.get_or_insert_with(|| {
+        native::entries(target).map(|entries| entries.into_iter().map(|(name, _)| name).collect()).unwrap_or_default()
+    });
+    if names.iter().any(|name| name.as_bytes() == top) {
+        return top.to_vec();
+    }
+    let Ok(current) = native::identity(target, OsStr::from_bytes(top)) else { return top.to_vec() };
+    let found = names.iter().find(|name| native::identity(target, name).is_ok_and(|identity| identity == current));
+    found.map_or_else(|| top.to_vec(), |name| name.as_bytes().to_vec())
 }
 
 /// The move phase: each top-level entry into `target`, conflicts settled by `policy` and counted in `counts`.
-/// `moved` maps each original name to its name in target.
+/// `moved` maps each original name to its name in target. All or nothing: when an entry fails, every entry moved
+/// before it is taken back and every original it replaced restored (`rollback`), then the failure is returned. What
+/// could not be undone (a target changed meanwhile) is named in the error, and `kept` keeps the staging folder.
 #[allow(clippy::too_many_arguments)]
 fn place(
     tree: &Tree,
@@ -847,75 +903,178 @@ fn place(
     moved: &mut BTreeMap<Vec<u8>, Vec<u8>>,
     counts: &mut Unpacked,
     stranded: &mut bool,
+    kept: &mut bool,
+    folder: &Path,
 ) -> io::Result<()> {
-    let mut aside: Option<File> = None;
+    let (mut aside, mut names): (Option<File>, _) = (None, None);
+    let mut journal = Vec::new();
     for top in &tree.tops {
-        let name = OsStr::from_bytes(top);
-        match native::rename(from, name, target, name) {
-            Ok(()) => {
-                moved.insert(top.clone(), top.clone());
-                continue;
-            }
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
-            Err(e) => return Err(e),
-        }
-        match policy {
-            Policy::Skip => counts.skipped += 1,
-            Policy::Keep => {
-                let folder = tree.directories.contains_key(top);
-                let mut placed = None;
-                for number in 2..=NUMBERS {
-                    let candidate = numbered(top, number, folder);
-                    match native::rename(from, name, target, OsStr::from_bytes(&candidate)) {
-                        Ok(()) => {
-                            placed = Some(candidate);
-                            break;
-                        }
-                        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
-                        Err(e) => return Err(e),
-                    }
+        let step = settle(tree, from, staging, target, policy, replacements, counts, stranded, (&mut aside, &mut names), top, folder);
+        match step {
+            Ok(Some(placed)) => journal.push(placed),
+            Ok(None) => {}
+            Err(error) => {
+                let left = rollback(tree, from, target, aside.as_ref(), &journal, kept);
+                for placed in left.settled.iter().map(|&index| &journal[index]) {
+                    moved.insert(placed.top.clone(), placed.placed.clone());
                 }
-                let placed = placed.ok_or_else(|| {
-                    limited(&format!("no free name for {:?} up to number {NUMBERS}", String::from_utf8_lossy(top)))
-                })?;
-                counts.kept += 1;
-                moved.insert(top.clone(), placed);
-            }
-            Policy::Replace => {
-                // A conflict may have existed when the client listed the directory or appeared later. Only the
-                // former carries consent to replace, bound to that exact directory entry. Moving it aside before
-                // checking closes the check/rename race; a mismatch is restored without exposing the incoming item.
-                let expected = replacements
-                    .get(top)
-                    .copied()
-                    .ok_or_else(|| io::Error::from_raw_os_error(native::ESTALE))?;
-                if aside.is_none() {
-                    native::mkdir(staging, OsStr::new("old"), 0o700)?;
-                    aside = Some(directory(staging, OsStr::new("old"))?);
+                if left.notes.is_empty() {
+                    return Err(error);
                 }
-                let Some(old) = &aside else { continue };
-                // The existing entry steps aside first and comes back if the new one cannot take its name, so a
-                // failure never loses both; once replaced it is removed with the staging directory.
-                native::rename(target, name, old, name)?;
-                let mismatch = match native::identity(old, name) {
-                    Ok(current) if current == expected => None,
-                    Ok(_) => Some(io::Error::from_raw_os_error(native::ESTALE)),
-                    Err(error) => Some(error),
-                };
-                if let Some(error) = mismatch {
-                    return Err(restore(old, target, top, folder_of(tree, top), stranded).unwrap_or(error));
-                }
-                #[cfg(test)]
-                ASIDE.with_borrow_mut(|hook| hook.as_mut().map(|hook| hook(name)));
-                if let Err(e) = native::rename(from, name, target, name) {
-                    return Err(restore(old, target, top, folder_of(tree, top), stranded).unwrap_or(e));
-                }
-                counts.replaced += 1;
-                moved.insert(top.clone(), top.clone());
+                let shown = String::from_utf8_lossy(top);
+                return Err(io::Error::other(format!(
+                    "{error}; the copy stopped at {shown:?} and could not be undone in full: {}; the hidden folder {} stays",
+                    left.notes.join("; "),
+                    folder.display()
+                )));
             }
         }
     }
+    for placed in journal {
+        moved.insert(placed.top, placed.placed);
+    }
     Ok(())
+}
+
+/// One top-level entry into `target`: Some with what moved, None when it was skipped.
+#[allow(clippy::too_many_arguments)]
+fn settle(
+    tree: &Tree,
+    from: &File,
+    staging: &File,
+    target: &File,
+    policy: Policy,
+    replacements: &BTreeMap<Vec<u8>, FileIdentity>,
+    counts: &mut Unpacked,
+    stranded: &mut bool,
+    (aside, names): (&mut Option<File>, &mut Option<Vec<std::ffi::OsString>>),
+    top: &[u8],
+    hidden: &Path,
+) -> io::Result<Option<Placed>> {
+    let name = OsStr::from_bytes(top);
+    let incoming = native::identity(from, name)?;
+    let placed = |placed: Vec<u8>, original| Some(Placed { top: top.to_vec(), placed, incoming, original });
+    #[cfg(test)]
+    MOVE.with_borrow_mut(|hook| hook.as_mut().map(|hook| hook(name))).transpose()?;
+    match native::rename(from, name, target, name) {
+        Ok(()) => return Ok(placed(top.to_vec(), None)),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(e),
+    }
+    match policy {
+        Policy::Skip => {
+            counts.skipped += 1;
+            Ok(None)
+        }
+        Policy::Keep => {
+            let folder = tree.directories.contains_key(top);
+            for number in 2..=NUMBERS {
+                let candidate = numbered(top, number, folder);
+                match native::rename(from, name, target, OsStr::from_bytes(&candidate)) {
+                    Ok(()) => {
+                        counts.kept += 1;
+                        return Ok(placed(candidate, None));
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+                    Err(e) => return Err(e),
+                }
+            }
+            Err(limited(&format!("no free name for {:?} up to number {NUMBERS}", String::from_utf8_lossy(top))))
+        }
+        Policy::Replace => {
+            // A conflict may have existed when the client listed the directory or appeared later. Only the
+            // former carries consent to replace, bound to that exact directory entry. Moving it aside before
+            // checking closes the check/rename race; a mismatch is restored without exposing the incoming item.
+            let expected = replacements
+                .get(top)
+                .copied()
+                .ok_or_else(|| io::Error::from_raw_os_error(native::ESTALE))?;
+            if aside.is_none() {
+                native::mkdir(staging, OsStr::new("old"), 0o700)?;
+                *aside = Some(directory(staging, OsStr::new("old"))?);
+            }
+            let Some(old) = aside.as_ref() else { return Ok(None) };
+            // The existing entry steps aside first, under its own spelling, and comes back if the new one cannot
+            // take its name, so a failure never loses both; once replaced it is removed with the staging directory.
+            let original = spelled(target, top, names);
+            let spelling = OsStr::from_bytes(&original);
+            native::rename(target, spelling, old, spelling)?;
+            let mismatch = match native::identity(old, spelling) {
+                Ok(current) if current == expected => None,
+                Ok(_) => Some(io::Error::from_raw_os_error(native::ESTALE)),
+                Err(error) => Some(error),
+            };
+            if let Some(error) = mismatch {
+                return Err(restore(old, target, &original, folder_of(tree, top), stranded, hidden).unwrap_or(error));
+            }
+            #[cfg(test)]
+            ASIDE.with_borrow_mut(|hook| hook.as_mut().map(|hook| hook(name)));
+            if let Err(e) = native::rename(from, name, target, name) {
+                return Err(restore(old, target, &original, folder_of(tree, top), stranded, hidden).unwrap_or(e));
+            }
+            counts.replaced += 1;
+            Ok(placed(top.to_vec(), Some(original)))
+        }
+    }
+}
+
+/// What a rollback could not undo: the journal's entries left in the target, and a message for each thing not where
+/// it was before the copy.
+#[derive(Default)]
+struct Left {
+    settled: Vec<usize>,
+    notes: Vec<String>,
+}
+
+/// The entries `journal` put in `target`, taken back in reverse: each incoming entry back into the tree, only when
+/// the name holds the entry the commit moved in (one the user moved away or put there meanwhile is never touched),
+/// and each original it replaced back from `old` under its own name (`back`). What cannot be undone sets `kept`: the
+/// staging folder, which may hold an original, stays. `settled` lists only copies still in the target.
+fn rollback(tree: &Tree, from: &File, target: &File, old: Option<&File>, journal: &[Placed], kept: &mut bool) -> Left {
+    let mut left = Left::default();
+    for (index, step) in journal.iter().enumerate().rev() {
+        let (name, placed) = (OsStr::from_bytes(&step.top), OsStr::from_bytes(&step.placed));
+        let (top, shown) = (String::from_utf8_lossy(&step.top), String::from_utf8_lossy(&step.placed));
+        match native::identity(target, placed) {
+            Ok(current) if current == step.incoming => match native::rename(target, placed, from, name) {
+                Ok(()) if native::identity(from, name).is_ok_and(|current| current == step.incoming) => {}
+                // Swapped between the check and the move: it goes back where it was.
+                Ok(()) => {
+                    if native::rename(from, name, target, placed).is_err() {
+                        left.notes.push(format!("{shown:?}, put in the folder after the copy moved in, is in the hidden folder's tree"));
+                    } else {
+                        left.notes.push(format!("{shown:?} was replaced after the copy moved in and is left as it is"));
+                    }
+                }
+                Err(_) => {
+                    left.settled.push(index);
+                    left.notes.push(format!("the copy of {top:?} stays in the folder as {shown:?}"));
+                }
+            },
+            Ok(_) => left.notes.push(format!("{shown:?} was replaced after the copy moved in and is left as it is")),
+            Err(_) => left.notes.push(format!("the copy of {top:?} was moved away from {shown:?} and is left where it is")),
+        }
+        let (Some(old), Some(original)) = (old, step.original.as_deref()) else { continue };
+        let original_shown = String::from_utf8_lossy(original);
+        match back(old, target, original, folder_of(tree, &step.top)) {
+            Ok(None) => {}
+            Ok(Some(numbered)) => {
+                let numbered = String::from_utf8_lossy(&numbered);
+                left.notes.push(format!("the original {original_shown:?} is now {numbered:?}"));
+            }
+            Err(()) => left.notes.push(format!("the original {original_shown:?} is in old/ inside the hidden folder")),
+        }
+    }
+    if !left.notes.is_empty() {
+        *kept = true;
+    }
+    left
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Runs before each top-level entry moves into the target, in the job's thread: a test fails an entry with it.
+    pub(super) static MOVE: std::cell::RefCell<Option<Box<dyn FnMut(&OsStr) -> io::Result<()>>>> = const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(test)]
