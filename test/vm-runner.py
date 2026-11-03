@@ -397,7 +397,7 @@ extension RealTests {
         self.assertTrue(any(matches(case, BENCHMARKS) for case in with_benchmarks))
         explicit = resolve(['DispatchTests'])['selected']
         self.assertEqual(explicit, inventory())
-        for name in ['UIBenchmarkTests', 'TerminalFPSBenchmarkTests']:
+        for name in ['UIBenchmarkTests', 'TerminalFPSBenchmarkTests', 'ChatScrollingFrameBenchmarkTests']:
             with self.subTest(benchmark=name):
                 selected_benchmark = resolve([name])['selected']
                 self.assertTrue(selected_benchmark)
@@ -533,10 +533,12 @@ final class UIBenchmarkTests: XCTestCase {
                 patch.object(vm, 'sync_helper'), patch.object(vm, 'sync_products', return_value='') as products:
             vm.prepare_test_inputs('desktop', profile, needs_codex=False)
             products.assert_called_once_with('desktop')
-            # The sources, then the iPhone engine when the checkout has it: nothing else.
+            # The sources, then the iPhone engine and its staged Rust source: no agent tools.
             self.assertIn('Dispatch', source.call_args_list[0].args[1])
+            engine = [str(vm.ROOT / path) for path in (vm.MOBILE_ENGINE, vm.MOBILE_RUSSH)
+                      if (vm.ROOT / path).is_dir()]
             self.assertEqual([call.args[1] for call in source.call_args_list[1:]],
-                             [[str(vm.ROOT / vm.MOBILE_ENGINE)]] if (vm.ROOT / vm.MOBILE_ENGINE).is_dir() else [])
+                             [engine] if engine else [])
             cli.assert_not_called()
 
     def testFailedAndIncompleteResultsStillExportTimingsAndNeverPass(self):

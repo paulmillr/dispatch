@@ -265,20 +265,18 @@ final class AttentionTests: XCTestCase {
         let request = try XCTUnwrap(attention.notificationRequest(for: XCTUnwrap(attention.entries.first)))
         let rowID = try XCTUnwrap(request.content.userInfo["row"] as? String)
         session.scrollAnchor = "older-row"; session.followRevision = session.revision
-        var revealed: String?
-        session.scrollPosition.realizeAnchor = { revealed = $0 }
         attention.openNotification(request.content.userInfo)
         XCTAssertTrue(session.showChat)
         XCTAssertEqual(session.scrollAnchor, rowID)
         XCTAssertEqual(session.scrollPosition.saved?.id, rowID)
-        XCTAssertEqual(revealed, rowID)
+        XCTAssertEqual(session.scrollPosition.restorationAnchor?.id, rowID, "The transcript realizes the response by identity")
         XCTAssertNil(session.followRevision)
         XCTAssertFalse(session.hasNewMessages)
         session.sessionID = "replacement"
-        session.scrollAnchor = "new-conversation-row"; revealed = nil
+        session.scrollAnchor = "new-conversation-row"; session.scrollPosition.clear()
         attention.openNotification(request.content.userInfo)
         XCTAssertEqual(session.scrollAnchor, "new-conversation-row")
-        XCTAssertNil(revealed, "Old notifications must not scroll a replacement conversation")
+        XCTAssertNil(session.scrollPosition.restorationAnchor, "Old notifications must not scroll a replacement conversation")
     }
 
     func testAttentionAndSettingsPresentation() async throws {

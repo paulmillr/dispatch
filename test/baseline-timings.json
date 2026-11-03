@@ -941,11 +941,6 @@
       "outcome": "Passed"
     },
     {
-      "identifier": "DispatchTests/ChatScrollStabilityTests/testBlankViewportRecoversDespiteContinuousLayoutUpdates",
-      "seconds": 0.08535504341125488,
-      "outcome": "Passed"
-    },
-    {
       "identifier": "DispatchTests/ChatScrollStabilityTests/testBottomFollowingSurvivesLargeRepliesAndStopsWhenReadingHistory",
       "seconds": 6.148732900619507,
       "outcome": "Passed"
@@ -973,11 +968,6 @@
     {
       "identifier": "DispatchTests/ChatScrollStabilityTests/testHistoryPrefetchAnticipatesFastScrollingButStaysBounded",
       "seconds": 0.3705589771270752,
-      "outcome": "Passed"
-    },
-    {
-      "identifier": "DispatchTests/ChatScrollStabilityTests/testIdleViewportDetectsMissingRowsAndEscalatesRecoveryWithoutWheelInput",
-      "seconds": 8.110448002815247,
       "outcome": "Passed"
     },
     {
@@ -1048,16 +1038,6 @@
     {
       "identifier": "DispatchTests/ChatScrollStabilityTests/testScrollbarVisibilityFollowsInteractionNotDocumentUpdates",
       "seconds": 6.4671419858932495,
-      "outcome": "Passed"
-    },
-    {
-      "identifier": "DispatchTests/ChatScrollStabilityTests/testTranscriptRebuildAndWakePreserveReadingPositionDraftAndIdleThinking",
-      "seconds": 2.5375880002975464,
-      "outcome": "Passed"
-    },
-    {
-      "identifier": "DispatchTests/ChatScrollStabilityTests/testViewportRecoveryIgnoresEmptyHiddenAndActivelyScrolledContentAndDisconnects",
-      "seconds": 0.952678918838501,
       "outcome": "Passed"
     },
     {
@@ -1321,11 +1301,6 @@
       "outcome": "Passed"
     },
     {
-      "identifier": "DispatchTests/ChatToolGroupingTests/testMockupGroupSummaryCountsOperationsWithoutDecodingOutput",
-      "seconds": 0.002823948860168457,
-      "outcome": "Passed"
-    },
-    {
       "identifier": "DispatchTests/ChatToolGroupingTests/testNativeGroupAndChildUnwrapIndependentlyAndRetainState",
       "seconds": 6.647372007369995,
       "outcome": "Passed"
@@ -1373,11 +1348,6 @@
     {
       "identifier": "DispatchTests/ClaudeHistoryTests/testWrongSessionPageIsRejectedAndEmptyFileCanStartLater",
       "seconds": 0.0046770572662353516,
-      "outcome": "Passed"
-    },
-    {
-      "identifier": "DispatchTests/ClaudeHookTests/testPreviousApprovalOptInSurvivesQuestionHookUpgrade",
-      "seconds": 0.0035599470138549805,
       "outcome": "Passed"
     },
     {
@@ -3771,16 +3741,6 @@
       "outcome": "Passed"
     },
     {
-      "identifier": "DispatchTests/TerminalMachineTests/testIndependentAutoClosePreferencesMigrateAndReachWorkspace",
-      "seconds": 0.2585010528564453,
-      "outcome": "Passed"
-    },
-    {
-      "identifier": "DispatchTests/TerminalMachineTests/testIntegrationPreferencesMigrateAndRoundTrip",
-      "seconds": 0.0009520053863525391,
-      "outcome": "Passed"
-    },
-    {
       "identifier": "DispatchTests/TerminalMachineTests/testNonInteractiveAndInvalidSSHProcessesAreNotCloned",
       "seconds": 0.0008549690246582031,
       "outcome": "Passed"
@@ -4403,6 +4363,48 @@
     {
       "identifier": "DispatchTests/WorkspaceTransactionTests/testThrowingMutationLeavesLayoutAndSelectionUntouched",
       "seconds": 0.001071929931640625,
+      "outcome": "Passed"
+    }
+  ],
+  "retired_cases": [
+    {
+      "identifier": "DispatchTests/ChatScrollStabilityTests/testBlankViewportRecoversDespiteContinuousLayoutUpdates",
+      "seconds": 0.08535504341125488,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatScrollStabilityTests/testIdleViewportDetectsMissingRowsAndEscalatesRecoveryWithoutWheelInput",
+      "seconds": 8.110448002815247,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatScrollStabilityTests/testTranscriptRebuildAndWakePreserveReadingPositionDraftAndIdleThinking",
+      "seconds": 2.5375880002975464,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatScrollStabilityTests/testViewportRecoveryIgnoresEmptyHiddenAndActivelyScrolledContentAndDisconnects",
+      "seconds": 0.952678918838501,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ChatToolGroupingTests/testMockupGroupSummaryCountsOperationsWithoutDecodingOutput",
+      "seconds": 0.002823948860168457,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/ClaudeHookTests/testPreviousApprovalOptInSurvivesQuestionHookUpgrade",
+      "seconds": 0.0035599470138549805,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TerminalMachineTests/testIndependentAutoClosePreferencesMigrateAndReachWorkspace",
+      "seconds": 0.2585010528564453,
+      "outcome": "Passed"
+    },
+    {
+      "identifier": "DispatchTests/TerminalMachineTests/testIntegrationPreferencesMigrateAndRoundTrip",
+      "seconds": 0.0009520053863525391,
       "outcome": "Passed"
     }
   ]

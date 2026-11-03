@@ -63,6 +63,69 @@ final class UIBenchmarkTests: XCTestCase {
         min(3600, max(5, Double(System.environment("DISPATCH_BENCHMARK_SECONDS") ?? "5") ?? 5))
     }
 
+    /// Shared before/after workload for the transcript container: cold mount, tab changes, streaming, scrolling
+    /// and idle cost. Reports layout/display submission latency, CPU and resident memory, not physical scanout.
+    func testChatTranscriptContainerWorkloads() async throws {
+        try DesktopTestSupport.requireUnlocked(); AppFont.register()
+        let coordinator = ChatCoordinator(enabled: false)
+        defer { coordinator.stop() }
+        let sessions = (0..<2).map { tab in
+            let session = coordinator.session(for: System.uuid())
+            session.sessionID = "container-benchmark-\(tab)"; session.showChat = true
+            session.turns = (0..<300).map { index in
+                ChatTurn(id: "turn-\(index)", items: [
+                    .init(id: "question-\(index)", kind: .user, text: "Inspect result \(index)."),
+                    .init(id: "answer-\(index)", kind: .assistant,
+                          text: "Result \(index)\n\n" + String(repeating: "A paragraph with **formatted text** and `code`.\n\n", count: index % 5 + 1)),
+                    .init(id: "tool-\(index)", kind: .tool, text: #"{"cmd":"rg result Sources"}"#, title: "exec_command",
+                          output: "Sources/Queue.swift: flushPending", completed: true, exitCode: 0)])
+            }
+            return session
+        }
+        let window = try await mount(Color.clear.frame(width: 1000, height: 700))
+        defer { sessions.forEach { $0.scrollPosition.disconnect() }; close(window) }
+        let host = NSHostingView(rootView: AnyView(Color.clear))
+        window.contentView = host
+        func show(_ session: ChatSession) {
+            host.rootView = AnyView(ChatView(session: session, coordinator: coordinator, focused: false,
+                                            floatingSwitch: false).id(session.id))
+        }
+        func ready(_ session: ChatSession) async throws {
+            try await TestSupport.eventually(timeout: .seconds(3)) {
+                session.scrollPosition.showsRows() && session.scrollPosition.isAtBottom(tolerance: 40) == true
+            }
+        }
+        try await measure("chat-transcript-cold-mount", count: 1, window: window) { _ in
+            show(sessions[0]); try await ready(sessions[0])
+        }
+        try await measure("chat-transcript-tab-switch", count: 24, window: window) { index in
+            let session = sessions[(index + 1) % 2]
+            show(session); try await ready(session)
+        }
+        let session = sessions[0]
+        show(session); try await ready(session)
+        session.active = true; session.busy = true; session.activeTurnID = "live"
+        var text = ""
+        try await measure("chat-transcript-stream", count: 100, window: window) { _ in
+            text += "Streamed **reply** text with `code`. "
+            session.insert(.init(id: "stream", kind: .assistant, text: text), turnID: "live")
+            try await ready(session)
+        }
+        session.busy = false
+        let scroll = try XCTUnwrap(PresentationTestSupport.views(of: NSScrollView.self, in: host)
+            .max { ($0.documentView?.bounds.height ?? 0) < ($1.documentView?.bounds.height ?? 0) })
+        try await measure("chat-transcript-scroll", count: 100, window: window) { _ in
+            session.scrollPosition.userWillScroll(deltaY: 32)
+            let event = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1,
+                                             wheel1: 32, wheel2: 0, wheel3: 0))
+            scroll.scrollWheel(with: try XCTUnwrap(NSEvent(cgEvent: event)))
+        }
+        try await Task.sleep(for: .seconds(1))
+        try await measure("chat-transcript-idle", count: 1, window: window) { _ in
+            try await Task.sleep(for: .seconds(3))
+        }
+    }
+
     /// Fixture/window readiness, not full application process launch or workspace restoration.
     func testTerminalLifecycle() async throws {
         let observer = try await mount(Text("Terminal lifecycle"))

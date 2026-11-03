@@ -176,6 +176,9 @@ final class ClaudeTransportTests: XCTestCase {
         try await TestSupport.eventually { app.window.firstResponder is ChatComposer.ComposerTextView }
         let editor = try XCTUnwrap(app.window.firstResponder as? ChatComposer.ComposerTextView)
         editor.keyDown(with: TerminalTestSupport.keyEvent(53, "\u{1b}", in: app.window))
+        XCTAssertNotNil(session.stopArmedAt)
+        XCTAssertNil(session.interruptionID, "The first Escape arms Stop")
+        editor.keyDown(with: TerminalTestSupport.keyEvent(53, "\u{1b}", in: app.window))
         XCTAssertNotNil(session.interruptionID)
         XCTAssertFalse(runtime.chat.interrupt(session), "Repeated Escape must not enqueue a second interrupt")
         try await TestSupport.eventually(timeout: .seconds(10)) {

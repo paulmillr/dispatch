@@ -1,0 +1,7 @@
+{
+  "kind": "rerecord",
+  "why": "The AppKit transcript requests its bounded opening-history reserve before the old SwiftUI container did. On the guest-built macOS 26 test, this search journal stalls at its initial settled-history wait (record 9): a prefetch request has already been sent (record 11), but its response (record 12) is gated behind that wait. The same case passes live, including loading all earlier history, selecting the search match, presented-text verification and search teardown. Re-record only this affected search case; retain the reading-position search journal, which still replays.",
+  "tests": [
+    "ChatHistoryTests/testFindSearchesEarlierHistoryAndRevealsItsMatch"
+  ]
+}

@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(AppKit)
+import AppKit
+#endif
 import Observation
 import CryptoKit
 import OSLog
@@ -369,13 +372,38 @@ struct ChatSendFlight: Equatable {
 @MainActor final class ChatFlightFrames {
     static let space = "chat-send-flight"
     private var frames: [ChatSendFlight.Place: CGRect] = [:]
+    #if canImport(AppKit)
+    weak var coordinateView: NSView?
+    private final class NativeAnchor {
+        weak var view: NSView?
+        init(_ view: NSView) { self.view = view }
+    }
+    private var nativeAnchors: [ChatSendFlight.Place: NativeAnchor] = [:]
+    func register(_ place: ChatSendFlight.Place, view: NSView, absorbing: Bool) {
+        nativeAnchors[place] = NativeAnchor(view)
+        if absorbing { self.absorbing.insert(place) } else { self.absorbing.remove(place) }
+    }
+    func unregister(_ place: ChatSendFlight.Place, view: NSView) {
+        guard nativeAnchors[place]?.view === view else { return }
+        nativeAnchors.removeValue(forKey: place)
+        absorbing.remove(place)
+    }
+    #endif
     /// Places laid out only as the folded queue's count, not as the message's own row: a flight there sinks into the
     /// count and fades instead of landing as text.
     private var absorbing: Set<ChatSendFlight.Place> = []
     /// When each flight set off: the first frame its destination was laid out.
     var departures: [UUID: TimeInterval] = [:]
     subscript(place: ChatSendFlight.Place) -> CGRect? {
-        get { frames[place] }
+        get {
+            #if canImport(AppKit)
+            if let view = nativeAnchors[place]?.view {
+                guard let coordinateView, view.window != nil, view.window === coordinateView.window else { return nil }
+                return view.convert(view.bounds, to: coordinateView)
+            }
+            #endif
+            return frames[place]
+        }
         set { frames[place] = newValue; if newValue == nil { absorbing.remove(place) } }
     }
     func absorbs(_ place: ChatSendFlight.Place) -> Bool { absorbing.contains(place) }
@@ -733,12 +761,8 @@ final class ChatSession: Identifiable {
     var turns: [ChatTurn] = [] {
         didSet {
             cachedRows = nil; cachedVisibleRows = nil
-            // A page filling an emptied transcript (a new conversation, a reset) arrives in a fresh lazy stack.
-            if turnsWereEmpty, turns.count > 1 { scrollPosition.rebuildForMassChange() }
-            turnsWereEmpty = turns.isEmpty
         }
     }
-    @ObservationIgnored private var turnsWereEmpty = true
     var approvals: [PendingApproval] = [] { didSet { cachedRows = nil; cachedVisibleRows = nil } }
     private struct PatchPair: Hashable { let wrapper: UUID; let patch: UUID }
     @ObservationIgnored private var patchPairs: [PatchPair: (collapse: Bool, hidden: Set<String>)] = [:]
@@ -813,20 +837,8 @@ final class ChatSession: Identifiable {
     var expandedToolGroups: Set<String> = [] {
         didSet {
             cachedVisibleRows = nil
-            closed(oldValue.subtracting(expandedToolGroups))
         }
     }
-    /// Closing a long group at the bottom took its steps out of the lazy stack in the pass that shrank the
-    /// document, and with AppKit's offset clamped the stack kept only hidden rows: a blank transcript until the
-    /// reader scrolled (macOS 27). Rebuilding the stack in that same pass lays the rows out afresh.
-    private func closed(_ groups: Set<String>) {
-        guard !groups.isEmpty, !turns.isEmpty else { return }
-        let leaving = transcriptRows.reduce(0) { $0 + ($1.group.map { groups.contains($0.id) ? $0.children.count : 0 } ?? 0) }
-        if leaving >= Self.massChange { scrollPosition.rebuildForMassChange() }
-    }
-    /// How many rows leaving at once rebuild the transcript's lazy stack.
-    static let massChange = 10
-
     var collapsedToolGroups: Set<String> = [] { didSet { cachedVisibleRows = nil } }
     /// Settings › Chat mode's Tool steps (`ChatCoordinator.toolSteps`): how groups show until opened or closed.
     var toolSteps = ChatToolGroupDisclosure.current { didSet { if toolSteps != oldValue { cachedVisibleRows = nil } } }
@@ -876,7 +888,7 @@ final class ChatSession: Identifiable {
         else { expandedToolGroups.remove(group.id); collapsedToolGroups.insert(group.id) }
     }
 
-    /// Expanded children remain peers in the outer lazy stack, so even one huge
+    /// Expanded children remain peers in the native document, so even one huge
     /// group never mounts thousands of tool cards inside an eager container.
     var visibleTranscriptRows: [ChatTranscriptRow] {
         let rows = transcriptRows
@@ -937,18 +949,11 @@ final class ChatSession: Identifiable {
     private var typingTurn: (turn: String, newest: String?)? {
         liveTurnID.map { id in (id, turns.last { $0.id == id }?.items.last?.id) }
     }
-    /// Shows what arrived while held, in one update. Many rows leaving at once, or a page filling a transcript that
-    /// was empty, rebuild the lazy stack in that same pass, as they do when they happen on screen.
+    /// Shows what arrived while held in one native layout transaction before the window becomes visible.
     func releaseTranscript() {
         guard transcriptHeld else { return }
-        let held = heldTranscript.rows
         heldTranscript = ([], 0)
         transcriptHeld = false
-        let live = visibleTranscriptRows
-        let remaining = Set(live.map(\.id))
-        if held.lazy.filter({ !remaining.contains($0.id) }).count >= Self.massChange || (held.isEmpty && live.count > 1) {
-            scrollPosition.rebuildForMassChange(offScreen: true)
-        }
     }
     /// The shown row nearest one that may have left the visible rows: itself, or for a step of a group that no
     /// longer shows it, the group's header; nil when the transcript no longer has it.
@@ -1020,7 +1025,10 @@ final class ChatSession: Identifiable {
         for approval in grouped[nil] ?? [] {
             rows.append(ChatTranscriptRow(id: "approval-\(approval.id)", item: nil, approval: approval))
         }
-        if toolLayouts.count > 0 { toolLayouts.retain(displayedTurns.toolRevisions) }
+        if toolLayouts.count > 0 {
+            let retained = Set(rows.flatMap { [$0.id] + ($0.group?.children.map(\.id) ?? []) })
+            toolLayouts.retain(displayedTurns.toolRevisions, rows: retained)
+        }
         cachedRows = rows
         return rows
     }
@@ -1498,8 +1506,6 @@ final class ChatSession: Identifiable {
             if leaving.count == turn.items.count { emptied.insert(turn.id) }
         }
         guard !records.isEmpty || !emptied.isEmpty else { return }
-        // As for a closing group: many rows leaving at once rebuild the lazy stack in the same pass.
-        if records.count >= Self.massChange { scrollPosition.rebuildForMassChange() }
         for index in turns.indices where !emptied.contains(turns[index].id) && items.contains(where: { $0.turn == turns[index].id }) {
             let turn = turns[index]
             turns[index].items.removeAll { gone(turn, $0) }
@@ -1522,11 +1528,10 @@ final class ChatSession: Identifiable {
         // An acknowledged optimistic prompt already animated under its rowID.
         if result.added, !historical, showChat, atBottom, !loadingHistory, item.rowID == nil {
             if item.kind == .tool { transcriptArrivals.recordHandoff("\(turnID.utf8.count):\(turnID):\(item.id)") }
+            // A burst's later rows enter without motion; the document pins them to the bottom directly.
             if transcriptArrivals.admitsMotion() {
                 transcriptArrivals.record("\(turnID.utf8.count):\(turnID):\(item.id)")
                 scrollPosition.expectArrival()
-            } else {
-                scrollPosition.expectRow()
             }
         }
         // A streamed reply that starts while the chat shows types out from its first word.

@@ -12,7 +12,6 @@ struct ChatTranscriptView: View {
     /// stays faint behind the glass but never shows through the strip's bare controls.
     var fadeTopInset: CGFloat = 0
     @State private var openedAt = ProcessInfo.processInfo.systemUptime
-    @State private var viewportGeneration = System.uuid()
     @State private var scrollConnection: UUID?
     private struct SearchRequest: Equatable {
         let query: String
@@ -36,66 +35,67 @@ struct ChatTranscriptView: View {
                                     history: searching ? session.historyRevision : 0,
                                     approvals: searching ? session.approvals.count : 0, generation: session.historyGeneration)
         return GeometryReader { geometry in
-            ScrollViewReader { scroll in
-                // Helpers split this chain: as one expression it took seconds to type-check.
-                followingLatest(searchAndLifecycle(transcript(geometry, directory: directory), query: query,
-                                                   request: request, scroll: scroll))
-            }
+            followingLatest(searchAndLifecycle(transcript(geometry, directory: directory), query: query,
+                                               request: request))
         }.environment(\.chatSearchQuery, query)
     }
 
     private func transcript(_ geometry: GeometryProxy, directory: String) -> some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            // Keep the floating input's space outside the lazy rows.
-            VStack(alignment: .leading, spacing: 0) {
-                if theme.radioLog { ChatRadioLogHeader(surface: session.id) }
-                // While its window is off screen, the rows it showed then (`presentedTranscriptRows`).
-                let rows = session.presentedTranscriptRows
-                let watches = theme.radioLog ? ChatRadioLog.watches(rows) : [:]
-                // The live turn and its newest item: a reply there may still be streaming (typed reveal).
-                let typingTurn = session.presentedTypingTurn
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    if session.hasEarlier || session.loadingEarlier {
-                        earlierMessages
-                    }
-                    ForEach(rows) { row in
-                        // One layout child per ID, regardless of row kind or
-                        // disclosure state, keeps the outer stack lazy.
-                        VStack(alignment: .leading, spacing: 0) {
-                            if let watch = watches[row.id] { ChatRadioWatchDivider(day: watch.day, watch: watch.watch) }
-                            if let match = session.searchMatch, match.document.row == row.id {
-                                let excerpt = match.excerpt
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(match.document.label).font(theme.typography.detail).foregroundStyle(theme.muted)
-                                    Text(searchExcerpt(excerpt)).textSelection(.enabled).font(theme.typography.body)
-                                }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
-                                    .background(theme.yellow.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
-                                    .overlay { RoundedRectangle(cornerRadius: 6).stroke(theme.yellow, lineWidth: 1) }
-                                    .padding(.bottom, 8).accessibilityIdentifier("chat-find-match")
-                            }
-                            // A step taking over its group's shown step hands off in place instead of entering.
-                            let handoff = row.timeline?.replaced == nil ? nil : session.transcriptArrivals.handoff(for: row.id)
-                            ChatTranscriptRowView(row: row, session: session, coordinator: coordinator, directory: directory,
-                                contentWidth: max(0, geometry.size.width - 44), handoff: handoff, openedAt: openedAt,
-                                streaming: ChatTypedMarkdown.streaming(row, in: typingTurn))
-                                .modifier(ChatArrivalMotion(receipt: handoff == nil ? session.transcriptArrivals.receipt(for: row.id) : nil,
-                                                            since: openedAt, reduceMotion: reduceMotion, grouped: true))
-                        }.background(ChatScrollMarker(id: row.id, position: session.scrollPosition)).id(row.id)
-                    }
+        let rows = session.presentedTranscriptRows
+        let rowsByID = Dictionary(uniqueKeysWithValues: rows.map { ($0.id, $0) })
+        let watches = theme.radioLog ? ChatRadioLog.watches(rows) : [:]
+        let typingTurn = session.presentedTypingTurn
+        var ids = rows.map(\.id)
+        if session.hasEarlier || session.loadingEarlier { ids.insert("earlier", at: 0) }
+        if theme.radioLog { ids.insert("radio-header", at: 0) }
+        return ChatTranscriptScrollView(ids: ids, position: session.scrollPosition,
+            initiallyAtBottom: session.atBottom, topInset: Self.padding + topContentInset,
+            bottomInset: Self.padding + 1 + bottomContentInset,
+            context: .init(theme: theme, query: session.search.visible ? session.search.query : "", directory: directory,
+                           openedAt: openedAt, reduceMotion: reduceMotion, source: session.helper?.endpoint.connection),
+            revision: { id in
+                // What the row closure below captures by value; a row keeps its root while this is unchanged.
+                rowsByID[id].map { row in
+                    let handoff = row.timeline?.replaced == nil ? nil : session.transcriptArrivals.handoff(for: row.id)
+                    return ChatTranscriptRowRevision(row, watch: watches[row.id], match: session.searchMatch, handoff: handoff,
+                        receipt: handoff == nil ? session.transcriptArrivals.receipt(for: row.id) : nil,
+                        streaming: ChatTypedMarkdown.streaming(row, in: typingTurn))
                 }
-                Color.clear.frame(height: 1 + bottomContentInset).id("bottom")
-            }
-            .padding(Self.padding).frame(maxWidth: .infinity)
-            .padding(.top, topContentInset)
-            .id(viewportGeneration)
-            .background(ChatScrollViewport(position: session.scrollPosition))
+            }) { id, width in
+            let content: AnyView
+            if id == "earlier" { content = AnyView(earlierMessages) }
+            else if id == "radio-header" { content = AnyView(ChatRadioLogHeader(surface: session.id)) }
+            else if let row = rowsByID[id] {
+                content = AnyView(
+                    VStack(alignment: .leading, spacing: 0) {
+                        if let watch = watches[row.id] { ChatRadioWatchDivider(day: watch.day, watch: watch.watch) }
+                        if let match = session.searchMatch, match.document.row == row.id {
+                            let excerpt = match.excerpt
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(match.document.label).font(theme.typography.detail).foregroundStyle(theme.muted)
+                                Text(searchExcerpt(excerpt)).textSelection(.enabled).font(theme.typography.body)
+                            }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                                .background(theme.yellow.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+                                .overlay { RoundedRectangle(cornerRadius: 6).stroke(theme.yellow, lineWidth: 1) }
+                                .padding(.bottom, 8).accessibilityIdentifier("chat-find-match")
+                        }
+                        // A step taking over its group's shown step hands off in place instead of entering.
+                        let handoff = row.timeline?.replaced == nil ? nil : session.transcriptArrivals.handoff(for: row.id)
+                        ChatTranscriptRowView(row: row, session: session, coordinator: coordinator, directory: directory,
+                            contentWidth: width, handoff: handoff, openedAt: openedAt,
+                            streaming: ChatTypedMarkdown.streaming(row, in: typingTurn))
+                            .modifier(ChatArrivalMotion(receipt: handoff == nil ? session.transcriptArrivals.receipt(for: row.id) : nil,
+                                                        since: openedAt, reduceMotion: reduceMotion, grouped: true))
+                    })
+            } else { content = AnyView(EmptyView()) }
+            return AnyView(content.environment(\.chatTheme, theme)
+                .environment(\.chatSearchQuery, session.search.visible ? session.search.query : "")
+                .environment(\.colorScheme, theme.isDark ? .dark : .light)
+                .environment(\.sshSource, session.helper?.endpoint.connection.map { id in
+                    SSHSourceContext(id: id) { try await $0.source(in: $1, endpoint: .remote(id)) }
+                })
+                .font(theme.typography.body).foregroundStyle(theme.ink).tint(theme.blue))
         }
-        // The initial anchor and eager target position the first frame. Measured following takes over afterward;
-        // waiting for a lazy row's item scroll here can first paint the beginning of the conversation.
-        .modifier(ChatInitialScrollAnchor(atBottom: session.atBottom))
-        .modifier(ChatScrollGeometryTrace(position: session.scrollPosition,
-            enabled: ChatViewportTrace.enabled || session.scrollPosition.diagnosticSink != nil))
-        .coordinateSpace(name: "chatScroll")
         .mask {
             VStack(spacing: 0) {
                 if fadeTopInset > 0 {
@@ -104,11 +104,6 @@ struct ChatTranscriptView: View {
                         .frame(height: fadeTopInset + 8)
                 }
                 Color.black
-            }
-        }
-        .onPreferenceChange(ChatTopPreference.self) { top in
-            if top > -session.scrollPosition.earlierPrefetchDistance && top < geometry.size.height {
-                session.scrollPosition.prefetchEarlier()
             }
         }
         .overlay(alignment: .bottomTrailing) {
@@ -137,12 +132,11 @@ struct ChatTranscriptView: View {
         }
     }
 
-    private func searchAndLifecycle(_ content: some View, query: String, request: SearchRequest,
-                                    scroll: ScrollViewProxy) -> some View {
+    private func searchAndLifecycle(_ content: some View, query: String, request: SearchRequest) -> some View {
         content
             .onAppear {
                 openedAt = ProcessInfo.processInfo.systemUptime
-                scrollConnection = connectScrollPosition(scroll)
+                scrollConnection = connectScrollPosition()
                 updateScrollbarTheme()
             }
             .task(id: request) {
@@ -180,7 +174,7 @@ struct ChatTranscriptView: View {
                 session.search.selected = (selected + session.search.direction + count) % count
             }
             .onChange(of: session.searchMatch?.id) { _, id in
-                guard let id, let match = session.searchMatch else { return }
+                guard id != nil, let match = session.searchMatch else { return }
                 for row in session.transcriptRows {
                     if let group = row.group, group.children.contains(where: { $0.id == match.document.row }) {
                         session.setGroupExpanded(group, true)
@@ -188,10 +182,6 @@ struct ChatTranscriptView: View {
                 }
                 session.atBottom = false; session.followRevision = nil
                 session.scrollPosition.restore(.init(id: match.document.row, offset: 0))
-                DispatchQueue.main.async {
-                    guard session.searchMatch?.id == id else { return }
-                    scroll.scrollTo(match.document.row, anchor: .top)
-                }
             }
             .onChange(of: theme) { _, _ in updateScrollbarTheme() }
             .onChange(of: session.scrollToLatestRequest) { _, _ in
@@ -221,24 +211,11 @@ struct ChatTranscriptView: View {
                 if session.atBottom { session.scrollPosition.followLatest() }
             }
             .onChange(of: bottomContentInset) { _, _ in
-                session.scrollPosition.bottomContentInset = 1 + bottomContentInset
                 // A floating input that grows on focus would otherwise cover the latest message.
                 if session.atBottom { session.scrollPosition.followLatest() }
             }
-            .onChange(of: session.presentedRevision) { _, revision in
+            .onChange(of: session.presentedRevision) { _, _ in
                 session.scrollPosition.recordDiagnostic(.transcript)
-                // Capture intent when the item arrives. New row geometry can
-                // move the bottom outside the viewport before this callback.
-                if session.atBottom || session.followRevision == revision {
-                    let interaction = session.scrollPosition.interactionRevision
-                    DispatchQueue.main.async {
-                        guard session.scrollPosition.interactionRevision == interaction,
-                              session.atBottom || session.followRevision == revision,
-                              !session.scrollPosition.glidesToBottom else { return }
-                        session.scrollPosition.recordDiagnostic(.followRequested)
-                        session.scrollPosition.followLatest()
-                    }
-                }
             }
     }
     private func updateScrollbarTheme() { session.scrollPosition.scrollbarColor = NSColor(theme.muted) }
@@ -263,22 +240,16 @@ struct ChatTranscriptView: View {
             }.font(theme.typography.detail).foregroundStyle(theme.muted)
                 .frame(minHeight: 28).frame(maxWidth: .infinity).contentShape(Rectangle())
         }.buttonStyle(.plain).disabled(session.loadingEarlier).id("earlier")
-            .background(GeometryReader { proxy in
-                Color.clear.preference(key: ChatTopPreference.self, value: proxy.frame(in: .named("chatScroll")).maxY)
-            })
     }
 
     /// The transcript's padding, around its rows and below the floating input's spacer.
     static let padding: CGFloat = 22
 
-    private func connectScrollPosition(_ scroll: ScrollViewProxy, reusing token: UUID? = nil) -> UUID {
+    private func connectScrollPosition(reusing token: UUID? = nil) -> UUID {
         let connection = session.scrollPosition.connect(reusing: token) { token in
-            _ = connectScrollPosition(scroll, reusing: token)
+            _ = connectScrollPosition(reusing: token)
         }
         session.scrollPosition.bottomPadding = Self.padding
-        session.scrollPosition.bottomContentInset = 1 + bottomContentInset
-        session.scrollPosition.bottomRowID = { [weak session] in session?.presentedTranscriptRows.last?.id }
-        session.scrollPosition.realizeBottom = { id in scroll.scrollTo(id, anchor: .bottom) }
         session.scrollPosition.diagnosticState = { [weak session] in
             guard let session else { return nil }
             return .init(revision: session.revision, historyRevision: session.historyRevision,
@@ -295,10 +266,9 @@ struct ChatTranscriptView: View {
             return rows
         }
         session.scrollPosition.recordDiagnostic(.connected, force: true)
-        // Keep initial follow intent while lazy rows replace estimated heights.
+        // Keep initial follow intent as native layout measures the visible rows.
         // Actual user scrolling clears this through userScrolled below.
         if session.atBottom { session.followRevision = session.revision }
-        session.scrollPosition.realizeAnchor = { id in scroll.scrollTo(id, anchor: .top) }
         session.scrollPosition.hasContent = { [weak session] in session?.presentedTranscriptRows.isEmpty == false }
         session.scrollPosition.holdChanged = { [weak session] hold in
             if hold { session?.holdTranscript() } else { session?.releaseTranscript() }
@@ -307,28 +277,6 @@ struct ChatTranscriptView: View {
         session.scrollPosition.rowExists = { [weak session] id in
             guard let session, !session.loadingHistory, !session.presentedTranscriptRows.isEmpty else { return true }
             return session.presentedTranscriptRows.contains { $0.id == id }
-        }
-        session.scrollPosition.recoverViewport = { [weak session] anchor, rebuild in
-            guard let session, session.showChat, !session.visibleTranscriptRows.isEmpty else { return }
-            let interaction = session.scrollPosition.interactionRevision
-            let following = session.atBottom
-            // A row that left (a collapsed group's step) gives way to the nearest one shown; with none, the latest
-            // messages, never the first loaded row.
-            let target = anchor.flatMap { saved in
-                session.nearestVisibleRow(to: saved.id).map { $0 == saved.id ? saved : .init(id: $0, offset: 0) }
-            }
-            if rebuild { openedAt = ProcessInfo.processInfo.systemUptime; viewportGeneration = System.uuid() }
-            let generation = viewportGeneration
-            DispatchQueue.main.async {
-                guard viewportGeneration == generation, session.showChat,
-                      session.scrollPosition.interactionRevision == interaction else { return }
-                if let target, !following {
-                    scroll.scrollTo(target.id, anchor: .top)
-                    session.scrollPosition.restore(target)
-                } else {
-                    session.scrollPosition.jumpToLatest()
-                }
-            }
         }
         session.scrollPosition.followsBottom = { [weak session] in
             session?.atBottom == true && session?.followRevision != nil
@@ -348,7 +296,7 @@ struct ChatTranscriptView: View {
             // Include the 40-point follow margin.
             if let atBottom = session.scrollPosition.isAtBottom(tolerance: 40), session.atBottom != atBottom {
                 // A growing reply briefly puts the bottom outside the viewport
-                // before SwiftUI applies its scroll. Preserve the captured
+                // before native layout applies its scroll. Preserve the captured
                 // follow intent through that layout; userScrolled cancels it
                 // when the reader actually moves away.
                 if !atBottom && session.followRevision != nil { return }
@@ -363,10 +311,8 @@ struct ChatTranscriptView: View {
         if session.atBottom {
             // A previous view may still be restoring an earlier row. Explicit latest-output intent wins;
             // otherwise that pending restoration can undo this jump and keep native bottom pinning paused.
-            scroll.scrollTo("bottom", anchor: .bottom)
             session.scrollPosition.jumpToLatest()
-        } else if let anchor = session.scrollPosition.saved?.id ?? session.scrollAnchor {
-            scroll.scrollTo(anchor, anchor: .top)
+        } else if session.scrollPosition.saved != nil || session.scrollAnchor != nil {
             session.scrollPosition.restoreOnAppearance()
         }
         session.scrollPosition.beginOpeningHistoryPreload()
@@ -564,11 +510,6 @@ private struct ChatArrivalEffect: AnimatableModifier {
     }
 }
 
-private struct ChatTopPreference: PreferenceKey {
-    static let defaultValue: CGFloat = -.greatestFiniteMagnitude
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
-}
-
 private struct ChatTranscriptRowView: View {
     @Environment(\.chatTheme) private var theme
     @Environment(\.chatSearchQuery) private var query
@@ -760,7 +701,8 @@ private struct ChatTranscriptRowView: View {
                          layouts: session.toolLayouts, layoutWidth: max(0, bubbleWidth - 32 - railWidth),
                          live: row.turnID != nil && row.turnID == session.liveTurnID,
                          elapsed: theme.radioLog || row.timeline?.running == true ? nil : row.timeline?.step.seconds,
-                         titleColumn: row.timeline == nil || theme.radioLog ? nil : theme.typography.stepTitleWidth)
+                         titleColumn: row.timeline == nil || theme.radioLog ? nil : theme.typography.stepTitleWidth,
+                         presentation: session.toolIsExpanded(row) ? session.toolLayouts.viewState(for: row.id) : nil)
         }
     }
     /// The log's own transmission: its attachments, then what was typed.
@@ -828,40 +770,6 @@ struct ChatUserMessage: View {
         ChatUserBubble(text: text)
             .background { if let flight { ChatFlightAnchor(place: flight.place, frames: flight.frames) } }
             .opacity(hidden ? 0 : 1)
-    }
-}
-
-/// Diagnostics only: SwiftUI's own scroll geometry beside the native clip. While
-/// disabled the transform returns nil, so no action runs as the reader scrolls.
-private struct ChatScrollGeometryTrace: ViewModifier {
-    let position: ChatScrollPosition
-    let enabled: Bool
-    func body(content: Content) -> some View {
-        if #available(macOS 15, *) {
-            content.onScrollGeometryChange(for: ChatViewportTrace.SwiftUIScroll?.self) { [enabled] geometry in
-                guard enabled else { return nil }
-                return .init(offsetY: geometry.contentOffset.y.rounded(), contentHeight: geometry.contentSize.height.rounded(),
-                             containerHeight: geometry.containerSize.height.rounded(),
-                             visibleY: geometry.visibleRect.minY.rounded(), visibleHeight: geometry.visibleRect.height.rounded())
-            } action: { _, value in
-                position.swiftUIScroll = value
-            }
-        } else {
-            content
-        }
-    }
-}
-
-/// Position the first layout before native measured following takes over.
-private struct ChatInitialScrollAnchor: ViewModifier {
-    let atBottom: Bool
-    func body(content: Content) -> some View {
-        if #available(macOS 15, *) {
-            content.defaultScrollAnchor(atBottom ? .bottom : nil, for: .initialOffset)
-                .defaultScrollAnchor(nil, for: .sizeChanges)
-        } else {
-            content.defaultScrollAnchor(atBottom ? .bottom : nil)
-        }
     }
 }
 

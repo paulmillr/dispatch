@@ -1,0 +1,7 @@
+{
+  "kind": "rerecord",
+  "why": "The native paging fixture now disables viewport prefetch while checking explicit prepends, deferred publication during thumb tracking, unread state and remount restoration. It re-enables prefetch for the final automatic boundary-load assertion. This removes a timing-dependent replay cycle: a viewport request could start just before the recorded settled-paging wait (record 14), with its response gated behind that same wait (record 17). The revised case passes live. Both search cases still replay with their controlled paging policy, so retain those journals. Replace only this paging journal.",
+  "tests": [
+    "ChatHistoryTests/testNativePagingPreservesPixelOffsetAndSeparatesNewMessages"
+  ]
+}

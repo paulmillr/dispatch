@@ -4,11 +4,17 @@ import importlib.util
 import json
 from pathlib import Path
 import tempfile
+import sys
 import unittest
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('benchmark', Path(__file__).resolve().parent.parent / 'scripts/benchmark.py')
 bench = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bench)
+with patch.dict(sys.modules, benchmark=bench):
+    frame_spec = importlib.util.spec_from_file_location('chat_frames', Path(__file__).resolve().parent.parent / 'scripts/benchmark-chat-frames.py')
+    frames = importlib.util.module_from_spec(frame_spec)
+    frame_spec.loader.exec_module(frames)
 
 
 def report(samples=None):
@@ -93,6 +99,26 @@ class BenchmarkTests(unittest.TestCase):
             self.assertEqual(values['action/latency']['samples'], [10, 20])
             self.assertEqual(values['action/rss-growth']['samples'], [1])
             self.assertEqual(values['action/peak-rss']['samples'], [3])
+
+    def test_scrolling_frames_keep_presentation_separate_from_input(self):
+        row = dict(uniqueFrames=11, captureSamples=20, presentationIntervals=[1 / 60] * 10,
+                   compositedFPS=60, callbackHz=120, work=[.002, .009], workOver120Budget=1,
+                   cpuSeconds=1, mainCPUSeconds=.8, rssPeak=3 * 2**20)
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            for name in frames.PHASES:
+                (folder / (name + '.json')).write_text(json.dumps(row))
+            values = {v['name']: v for v in frames.metrics(folder)}
+            self.assertEqual(values['mixed-2400/composited-fps']['samples'], [60])
+            self.assertEqual(values['mixed-2400/input-rate']['samples'], [120])
+            self.assertEqual(values['mixed-2400/main-loop-work']['samples'], [2, 9])
+            self.assertEqual(values['mixed-2400/main-loop-work']['sampling'], 'observed')
+            self.assertEqual(values['mixed-2400/work-over-120Hz-budget']['samples'], [50])
+            for change in (dict(uniqueFrames=9), dict(captureSamples=5), dict(work=[]), dict(presentationIntervals=[])):
+                with self.subTest(change=change):
+                    (folder / (frames.PHASES[0] + '.json')).write_text(json.dumps(row | change))
+                    with self.assertRaises(ValueError):
+                        frames.metrics(folder)
 
 
 if __name__ == '__main__':

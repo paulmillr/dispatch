@@ -25,20 +25,41 @@ extension ChatCoordinator {
 }
 
 /// Reports where a place a message flies between is laid out.
-struct ChatFlightAnchor: View {
+struct ChatFlightAnchor: NSViewRepresentable {
     let place: ChatSendFlight.Place
     let frames: ChatFlightFrames
     /// Stands in for a place not laid out itself (ChatFlightFrames.absorbs).
     var absorbing = false
 
-    var body: some View {
-        GeometryReader { proxy in
-            let frame = proxy.frame(in: .named(ChatFlightFrames.space))
-            Color.clear
-                .onAppear { frames.report(place, at: frame, absorbing: absorbing) }
-                .onChange(of: frame) { _, frame in frames.report(place, at: frame, absorbing: absorbing) }
-                .onDisappear { frames.withdraw(place, at: frame) }
+    func makeNSView(context: Context) -> Probe { Probe(place: place, frames: frames) }
+    func updateNSView(_ view: Probe, context: Context) {
+        if view.place != place || view.frames !== frames {
+            view.frames.unregister(view.place, view: view)
+            view.place = place; view.frames = frames
         }
+        view.frames.register(place, view: view, absorbing: absorbing)
+    }
+    static func dismantleNSView(_ view: Probe, coordinator: ()) { view.frames.unregister(view.place, view: view) }
+    final class Probe: NSView {
+        var place: ChatSendFlight.Place
+        var frames: ChatFlightFrames
+        override var isFlipped: Bool { true }
+        init(place: ChatSendFlight.Place, frames: ChatFlightFrames) {
+            self.place = place; self.frames = frames; super.init(frame: .zero)
+        }
+        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+}
+
+/// A native coordinate root works across the transcript's independent row hosting views.
+struct ChatFlightCoordinateRoot: NSViewRepresentable {
+    let frames: ChatFlightFrames
+    func makeNSView(context: Context) -> Probe { Probe() }
+    func updateNSView(_ view: Probe, context: Context) { frames.coordinateView = view }
+    final class Probe: NSView {
+        override var isFlipped: Bool { true }
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
     }
 }
 

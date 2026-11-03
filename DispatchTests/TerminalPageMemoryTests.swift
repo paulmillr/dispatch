@@ -1,6 +1,10 @@
 import Darwin
 import XCTest
 @_spi(Test) import Term
+#if os(macOS)
+import Foundation
+@testable import DispatchApp
+#endif
 
 /// History a terminal no longer holds stops counting in the process's footprint: page blocks waiting in a list's pool
 /// (cleared scrollback, reflowed pages) are given back to the system until reused, and reused blocks show only what
@@ -25,14 +29,49 @@ final class TerminalPageMemoryTests: XCTestCase {
     private func feed(_ s: Surface, _ text: String) { Array(text.utf8).withUnsafeBufferPointer { s.feed($0) } }
     private func lines(_ prefix: String, _ count: Int) -> String { (1...count).map { "\(prefix) \($0)\r\n" }.joined() }
 
-    func testClearedScrollbackLeavesTheFootprint() {
+    func testClearedScrollbackLeavesTheFootprint() throws {
+        #if os(macOS)
+        // The suite's UI, renderer and helper callbacks allocate independently. Measure the same surface in a
+        // fresh process so those allocations cannot offset its released pages in TASK_VM_INFO.
+        let directory = System.temporary.appendingPathComponent("terminal-page-memory-" + System.uuid().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let products = System.bundle.deletingLastPathComponent()
+        let binary = directory.appendingPathComponent("probe")
+        var environment = System.inherited
+        for name in environment.keys where name.hasPrefix("DYLD_") || name.hasPrefix("TEST_RUNNER_") || name.hasPrefix("XCTest") {
+            environment.removeValue(forKey: name)
+        }
+        func run(_ executable: String, _ arguments: [String]) throws -> (Int32, Data) {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: executable)
+            process.arguments = arguments; process.environment = environment
+            let result = try TestSupport.live(process, input: Data(), timeout: 60)
+            XCTAssertFalse(result.timedOut)
+            XCTAssertEqual(result.status, 0, String(decoding: result.errors, as: UTF8.self))
+            return (result.status, result.output)
+        }
+        let source = System.checkout.appendingPathComponent("test/fixtures/terminal-page-memory.swift")
+        let compiled = try run("/usr/bin/xcrun", ["swiftc", "-O", "-module-cache-path", directory.appendingPathComponent("modules").path,
+            "-F", products.path, "-framework", "Term", "-Xlinker", "-rpath", "-Xlinker", products.path,
+            source.path, "-o", binary.path])
+        guard compiled.0 == 0 else { return }
+        let measured = try run(binary.path, [])
+        let line = try XCTUnwrap(String(decoding: measured.1, as: UTF8.self).split(separator: "\n").last { $0.hasPrefix("PAGE_MEMORY ") })
+        let values = line.split(separator: " ").dropFirst().compactMap { Int($0) }
+        XCTAssertEqual(values.count, 3)
+        guard values.count == 3 else { return }
+        let (pages, full, cleared) = (values[0], values[1], values[2])
+        #else
         let s = surface()
         feed(s, lines("Sam Example line", 60_000))
         let pages = s.terminal.view.primary.pageChain.count
-        XCTAssertGreaterThan(pages, 50)
         let full = footprint()
         feed(s, "\u{1B}[H\u{1B}[2J\u{1B}[3J")
         let cleared = footprint()
+        #endif
+        XCTAssertGreaterThan(pages, 50)
         // Each page block is about 400 KB; nearly all of them now wait in the list's pool.
         XCTAssertGreaterThan(full - cleared, (pages - 4) * 300_000, "\(pages) pages: \(full) -> \(cleared) bytes")
     }

@@ -490,7 +490,7 @@ import XCTest
         let prose = try XCTUnwrap(storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
         let code = try XCTUnwrap(storage.attribute(.font, at: 16, effectiveRange: nil) as? NSFont)
         XCTAssertEqual(prose.fontName, "ComicSansMS")
-        XCTAssertEqual(prose.pointSize, 13.605, accuracy: 0.001)
+        XCTAssertEqual(prose.pointSize, 15 * preferences.chatFont.sizeScale, accuracy: 0.001)
         XCTAssertEqual(code.fontName, "SourceCodePro-Regular")
         XCTAssertEqual(code.pointSize, 15, accuracy: 0.001)
         preferences.chatFont = .sameAsCode

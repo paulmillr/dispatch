@@ -44,7 +44,8 @@ def failed_tests(path):
 SUITES = ('fast', 'full', 'exhaustive')
 # A disabled case runs in no suite, only when selected explicitly.
 TIERS = SUITES + ('disabled',)
-BENCHMARKS = ('DispatchTests/ChatScrollBenchmarkTests', 'DispatchTests/HostScalingBenchmarkTests', 'DispatchTests/UIBenchmarkTests',
+BENCHMARKS = ('DispatchTests/ChatScrollBenchmarkTests', 'DispatchTests/ChatScrollingFrameBenchmarkTests',
+              'DispatchTests/HostScalingBenchmarkTests', 'DispatchTests/UIBenchmarkTests',
               'DispatchTests/UISettingsBenchmarkTests', 'DispatchTests/TerminalFPSBenchmarkTests')
 ROOT = Path(__file__).resolve().parent.parent
 

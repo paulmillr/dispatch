@@ -1,0 +1,21 @@
+{
+  "kind": "rerecord",
+  "why": "The Mac transcript now uses an AppKit-owned virtualized document instead of a SwiftUI lazy stack with a polling recovery bridge. The watchdog/rebuild-specific tests are removed, and the retained diagnostic and wake/relayout cases now assert native layout without periodic recovery or SwiftUI scroll geometry. Their recorded waits and view lifetimes describe the retired implementation; retire only these affected test journals. Replacement native layout and presented-pixel cases are recorded under their current names.",
+  "tests": [
+    "ChatScrollStabilityTests/testFollowingUsesTheMeasuredLastRowInsteadOfAnInflatedDocumentEstimate",
+    "ChatScrollStabilityTests/testPendingBottomRealizationYieldsToUserScrolling",
+    "ChatScrollStabilityTests/testExplicitJumpAfterCancellingAQueuedJumpStillRealizesTheLastRow",
+    "ChatScrollStabilityTests/testViewportTraceRecordsPostMountHiddenRowsAndTheScrollThatRevealsThem",
+    "ChatScrollStabilityTests/testPostMountHiddenRowsRebuildOnceWithoutWaitingForWheelOrWatchdog",
+    "ChatScrollStabilityTests/testBlankViewportRecoversDespiteContinuousLayoutUpdates",
+    "ChatScrollStabilityTests/testIdleViewportDetectsMissingRowsAndEscalatesRecoveryWithoutWheelInput",
+    "ChatScrollStabilityTests/testViewportRecoveryIgnoresEmptyHiddenAndActivelyScrolledContentAndDisconnects",
+    "ChatScrollStabilityTests/testBlankAfterAMountRebuildIsRebuiltAgainWithinSecondsUntilRowsShow",
+    "ChatScrollStabilityTests/testAQuietBlankMountRebuildsAtTheFirstCheck",
+    "ChatScrollStabilityTests/testABlankMountStillLayingOutWaitsForTheLateCheck",
+    "ChatScrollStabilityTests/testViewportTraceDistinguishesMissingRowsAndRecordsRecoveryWithoutText",
+    "ChatScrollStabilityTests/testViewportTraceReportsSwiftUIScrollGeometryAndRowCategoriesWithoutText",
+    "ChatScrollStabilityTests/testTranscriptRebuildAndWakePreserveReadingPositionDraftAndIdleThinking",
+    "ChatScrollStabilityTests/testAVisibleSliverOfOneRowStillCountsAsBlank"
+  ]
+}

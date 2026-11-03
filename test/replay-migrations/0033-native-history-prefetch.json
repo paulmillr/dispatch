@@ -1,0 +1,7 @@
+{
+  "kind": "rerecord",
+  "why": "The native transcript measures and mounts the viewport synchronously, so opening and approaching earlier history produce a different bounded prefetch sequence from the SwiftUI lazy stack. The old paging journal stalls at its next history request (record 14), before the explicit prepend assertions. The live test passes with the native container, including pixel-offset retention, deferred publication during scrollbar tracking, new-message separation and remount restoration. Its scroll simulation now cancels following through userWillScroll before changing the native offset. Re-record this affected case; no helper wire schema or unrelated journal changes are required.",
+  "tests": [
+    "ChatHistoryTests/testNativePagingPreservesPixelOffsetAndSeparatesNewMessages"
+  ]
+}

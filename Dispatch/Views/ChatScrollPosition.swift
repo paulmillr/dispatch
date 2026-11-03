@@ -1,158 +1,262 @@
 import AppKit
-import SwiftUI
 import CryptoKit
+import SwiftUI
 
-/// SwiftUI's item ID gets us to a row; this bridge retains the position *within*
-/// that row when earlier history is inserted or a chat view is recreated.
+/// One chat's scroll controller. It attaches to the transcript's `NSScrollView` and keeps a single positioning
+/// intent that the native document (`ChatTranscriptDocument`) realizes on every layout. It never computes row
+/// geometry, and it moves the clip itself only for the arrival glide's frames.
 @MainActor
 final class ChatScrollPosition {
     struct Anchor: Equatable { let id: String; let offset: CGFloat }
-    private final class WeakMarker {
-        weak var view: NSView?
-        init(_ view: NSView) { self.view = view }
+    /// What the next layout does with the clip beyond keeping the reader's message where it is.
+    enum Intent: Equatable {
+        /// Nothing requested: the document keeps the visible message, or the bottom while the view follows it.
+        case free
+        /// The latest output, until a layout lands there (a jump the reader asked for, or opening at the bottom).
+        case bottom
+        /// A message at a pixel offset (a reopened view, a find, a prepend), until a layout has it mounted.
+        case hold(Anchor)
     }
-    private var markers: [String: WeakMarker] = [:]
-    private let diagnosticID = System.uuid()
-    private let diagnosticStarted = ProcessInfo.processInfo.systemUptime
-    private lazy var diagnosticKey = SymmetricKey(size: .bits256)
-    private var diagnosticEvents: [String: Int] = [:]
-    private var lastDiagnostic = -Double.infinity
-    private var diagnosticWasVisible: Bool?
-    private var diagnosticCorrection: ChatViewportTrace.Correction?
-    var diagnosticState: (() -> ChatViewportTrace.Transcript?)?
-    /// Tests can inject a private sink; production checks the setting at each
-    /// sample so already-mounted conversations respond to the checkbox live.
-    var diagnosticSink: ((ChatViewportTrace.Sample) -> Void)?
-    /// Row positions and categories for sampled marker IDs; set by the view.
-    var diagnosticRows: ((Set<String>) -> [String: ChatViewportTrace.RowInfo])?
-    /// Latest SwiftUI scroll geometry, reported only while diagnostics record.
-    var swiftUIScroll: ChatViewportTrace.SwiftUIScroll?
-    private var attachedAt: TimeInterval?
-    private var mountCheckGeneration = System.uuid()
-    private var mountBlank = false
-    private var firstScrollPending = false
-    private weak var scroll: NSScrollView?
-    private(set) var scrollbar: ChatScrollbar?
-    var scrollbarColor = NSColor(Chrome.muted) { didSet { scrollbar?.thumb.color = scrollbarColor } }
-    private var observation: NSObjectProtocol?
-    private var documentObservation: NSObjectProtocol?
-    private var frameObservation: NSObjectProtocol?
-    private var liveScrollObservations: [NSObjectProtocol] = []
-    private var wheelMonitor: Any?
-    private var viewportTimer: Timer?
-    private var visibilityObservations: [NSObjectProtocol] = []
-    /// Whether the transcript holds what it shows: its window is off screen (`MainWindow.isOffScreen`). Set by the
-    /// view (`ChatSession.holdTranscript` and `releaseTranscript`); released before the window is back on screen.
-    var holdChanged: ((Bool) -> Void)?
-    private(set) var holding = false
-    private var screenObservations: [NSObjectProtocol] = []
-    private var wakeObservation: NSObjectProtocol?
-    private var emptyViewportChecks = 0
-    private var emptyViewportSince: TimeInterval?
-    private var lastEmptyViewportCheck = -Double.infinity
-    private var lastViewportRebuild = -Double.infinity
-    /// How long after the last rebuild another may run. A rebuild that left the viewport blank doubles it (2 s up to
-    /// 30 s), so a blank that survives a rebuild is retried soon without rebuilding forever; visible rows reset it.
-    private var rebuildBackoff: TimeInterval = 0
-    /// Follow-up checks while the viewport is blank: the 2 s watchdog alone took three intervals to escalate.
-    private var blankFollowUp = false
-    /// A check shortly after layout changes (`settledCheck`), and whether the previous one found a blank.
-    private var settledCheckScheduled = false
-    private var settledBlank = false
-    private var lastGeometryChange = ProcessInfo.processInfo.systemUptime
-    /// A live row arriving at the followed bottom glides there with its fade instead of jumping.
-    static let arrivalGlide: TimeInterval = 0.22
-    private var arrivalExpectedAt = -Double.infinity
-    private var glide: (from: CGFloat, start: TimeInterval, link: CADisplayLink)?
-    /// SwiftUI's item scroll would land before the glide starts; hold it while one is pending or running.
-    var glidesToBottom: Bool {
-        let now = ProcessInfo.processInfo.systemUptime
-        return glide != nil || now - arrivalExpectedAt < 0.3 || now - rowExpectedAt < 0.3
+    private(set) var intent = Intent.free
+    /// The last position a layout reported; a view that mounts again restores it.
+    private(set) var saved: Anchor?
+    var restorationAnchor: Anchor? {
+        guard case .hold(let anchor) = intent else { return nil }
+        return anchor
     }
-    private var rowExpectedAt = -Double.infinity
+    var isRestoring: Bool { intent != .free }
+
+    // The view's side: set by `ChatTranscriptView` when it connects, cleared when the last view leaves.
+    /// Whether the reader follows the latest output (the session's `atBottom` and follow revision).
+    var followsBottom: (() -> Bool)?
+    var userScrolled: (() -> Void)?
+    var positionChanged: ((Anchor) -> Void)?
+    /// Whether the transcript has rows: an empty page has no latest row for a jump to wait for.
     var hasContent: (() -> Bool)?
-    /// Whether a row still exists in the transcript: a restoration whose row is gone has nothing to realize.
+    /// Whether a row still exists: a restoration whose row is gone for good has nothing to wait for.
     var rowExists: ((String) -> Bool)?
+    /// Called with true while the window is off screen (`ChatSession.holdTranscript`), false before it shows again.
+    var holdChanged: ((Bool) -> Void)?
+    /// Starts an earlier-history read (true when the reader asked for it); returns whether one started.
+    var loadEarlier: ((Bool) -> Bool)?
+    /// Room the followed bottom leaves below the last row, outside the floating composer's inset.
+    var bottomPadding: CGFloat = 0
+    var scrollbarColor = NSColor(Chrome.muted) { didSet { scrollbar?.thumb.color = scrollbarColor } }
+
+    private weak var scroll: NSScrollView?
+    /// Scroll views documents registered, newest last: when the newest view leaves, the one still showing takes over.
+    private var viewports: [WeakScroll] = []
+    private var document: ChatTranscriptDocument? { scroll?.documentView as? ChatTranscriptDocument }
+    private(set) var scrollbar: ChatScrollbar?
+    private var observations: [(center: NotificationCenter, token: NSObjectProtocol)] = []
+    private var eventMonitor: Any?
     /// The views showing this chat, oldest first, each with how it connects again. The last one owns the
     /// callbacks: an earlier view's disconnect leaves them (a moved tab mounts its new view before the old one
     /// disappears), and the last one's hands them back to the view still showing.
     private var connections: [(token: UUID, reconnect: (UUID) -> Void)] = []
-    var recoverViewport: ((Anchor?, Bool) -> Void)?
-    private var pending: Anchor?
-    private var previousDocumentY: CGFloat?
-    private var prependGeometry: (height: CGFloat, y: CGFloat)?
-    private var prependFallbacks: [(anchor: Anchor, documentY: CGFloat)] = []
-    private var restoredPending = false
-    private var realizationAttempts = 0
-    private(set) var adjustmentScheduled = false
-    private var settlingRevision = 0
-    private var adjusting = false
-    private var layingOutPrepend = false
-    private(set) var interactionRevision = 0
-    private(set) var isTrackingScroller = false
-    private var isLiveScrolling = false
-    private var lastWheelTime = -Double.infinity
-    private var afterTracking: [() -> Void] = []
-    var userScrolled: (() -> Void)?
-    var realizeAnchor: ((String) -> Void)?
-    /// The last real message, not an eager spacer after the lazy stack. Its frame is the measured bottom;
-    /// the document's estimated height can extend far beyond every realized row while a chat opens.
-    var bottomRowID: (() -> String?)?
-    var realizeBottom: ((String) -> Void)?
-    var bottomContentInset: CGFloat = 0
-    private var bottomRealizationID: String?
-    private var bottomRealizationAttempts = 0
-    private var bottomRealizationScheduled = false
-    private var bottomRealizationGeneration = 0
-    private var bottomJumpPending = false
-    private var hasFollowedMeasuredBottom = false
-    var followsBottom: (() -> Bool)?
-    private(set) var saved: Anchor?
-    /// Returns true only when the coordinator actually starts a request.
-    var loadEarlier: ((Bool) -> Bool)?
-    private var automaticHistoryLoadsRemaining = 0
-    var positionChanged: ((Anchor) -> Void)?
-    var isRestoring: Bool { pending != nil || bottomJumpPending }
-    private var earlierVelocity: CGFloat = 0
-    private var earlierReadLatency: TimeInterval = 0.1
-    private var velocityTime: TimeInterval?
-    var earlierPrefetchDistance: CGFloat {
-        let height = max(400, scroll?.contentView.bounds.height ?? 0)
-        let recent = velocityTime.map { ProcessInfo.processInfo.systemUptime - $0 < 0.3 } ?? false
-        let lead = recent ? earlierVelocity * max(0.35, earlierReadLatency * 3) : 0
-        // Start loading six screens ahead without increasing insertion size.
-        return max(height * 6, min(height * 12, lead))
-    }
-    func observedHistoryRead(seconds: TimeInterval) {
-        guard seconds.isFinite, seconds >= 0 else { return }
-        earlierReadLatency = earlierReadLatency * 0.7 + min(seconds, 2) * 0.3
-    }
-    func beginOpeningHistoryPreload() {
-        // Build a scroll reserve after the latest messages are displayed. Even
-        // tool-only history must not turn opening a view into an unlimited read.
-        automaticHistoryLoadsRemaining = 4
-        geometryChanged()
-    }
-    func historyLoadFinished(madeProgress: Bool) {
-        if !madeProgress { automaticHistoryLoadsRemaining = 0 }
-        geometryChanged()
-    }
-    func prefetchEarlier() {
-        guard automaticHistoryLoadsRemaining > 0, !isRestoring, !adjusting,
-              let scroll, scroll.window?.isVisible == true,
-              scroll.contentView.bounds.minY < earlierPrefetchDistance,
-              let loadEarlier else { return }
-        // Reserve before calling out: publishing loading state can cause layout
-        // callbacks. Readiness/restoration guards do not spend the allowance.
-        automaticHistoryLoadsRemaining -= 1
-        if !loadEarlier(false) { automaticHistoryLoadsRemaining += 1 }
-    }
-    private var needsAnchorRealized: Bool {
-        guard let pending else { return false }
-        return markers[pending.id]?.view?.window == nil
+
+    // MARK: Attaching
+
+    /// The document calls this when it enters a window; a new scroll view replaces every observation.
+    func registerViewport(_ view: NSView) {
+        guard let value = view.enclosingScrollView, value !== scroll else { return }
+        viewports.removeAll { $0.value == nil || $0.value === value }
+        viewports.append(WeakScroll(value))
+        attach(value)
     }
 
-    func forwardWheel(_ event: NSEvent) { scroll?.scrollWheel(with: event) }
+    private func attach(_ value: NSScrollView) {
+        stopObserving()
+        scroll = value
+        attachedAt = ProcessInfo.processInfo.systemUptime
+        firstScrollPending = true
+        recordDiagnostic(.attached, force: true)
+        installScrollbar(in: value)
+        value.contentView.postsBoundsChangedNotifications = true
+        value.postsFrameChangedNotifications = true
+        observe(NSView.boundsDidChangeNotification, value.contentView) { position, _ in position.clipMoved() }
+        observe(NSView.frameDidChangeNotification, value) { position, _ in position.updateScrollbar() }
+        observe(NSScrollView.willStartLiveScrollNotification, value) { position, _ in
+            position.isLiveScrolling = true
+            position.liveScrollMoved = ProcessInfo.processInfo.systemUptime
+            position.beginUserScroll()
+        }
+        observe(NSScrollView.didEndLiveScrollNotification, value) { position, _ in
+            position.isLiveScrolling = false
+            position.finishScrollerTracking()
+            // Following waited for AppKit's live scroll to end (`ownsClip`): settle now.
+            position.document?.layoutTranscript()
+        }
+        // Visibility can change during AppKit layout: check on the next turn, for this window only.
+        for name in [NSWindow.didChangeOcclusionStateNotification, NSWindow.didBecomeKeyNotification] {
+            observe(name) { position, sender in
+                guard position.isOwnWindow(sender) else { return }
+                DispatchQueue.main.async { [weak position] in position?.checkViewport(redraw: true) }
+            }
+        }
+        observe(NSApplication.didBecomeActiveNotification) { position, _ in
+            DispatchQueue.main.async { [weak position] in position?.checkViewport(redraw: true) }
+        }
+        observe(NSWorkspace.didWakeNotification, center: NSWorkspace.shared.notificationCenter) { position, _ in
+            DispatchQueue.main.async { [weak position] in position?.checkViewport(redraw: true) }
+        }
+        observeScreen()
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .leftMouseDown, .leftMouseUp, .keyDown]) { [weak self] event in
+            self?.handleScrollEvent(event)
+            return event
+        }
+    }
+
+    /// `queue` nil delivers synchronously, for the window's own show and hide notifications.
+    private func observe(_ name: Notification.Name, _ object: AnyObject? = nil, center: NotificationCenter = .default,
+                         queue: OperationQueue? = .main,
+                         _ handler: @escaping @Sendable @MainActor (ChatScrollPosition, ObjectIdentifier?) -> Void) {
+        let token = center.addObserver(forName: name, object: object, queue: queue) { [weak self] note in
+            let sender = note.object.map { ObjectIdentifier($0 as AnyObject) }
+            MainActor.assumeIsolated { if let self { handler(self, sender) } }
+        }
+        observations.append((center, token))
+    }
+
+    private func isOwnWindow(_ sender: ObjectIdentifier?) -> Bool {
+        guard let window = scroll?.window else { return false }
+        return sender == ObjectIdentifier(window)
+    }
+
+    private func stopObserving() {
+        observations.forEach { $0.center.removeObserver($0.token) }
+        observations = []
+        if let eventMonitor { NSEvent.removeMonitor(eventMonitor) }
+        eventMonitor = nil
+    }
+
+    /// A view connecting takes over the session's callbacks; the token is what it disconnects with, and
+    /// `reconnect` wires that view again (with its token) if it outlasts a later one.
+    func connect(reusing token: UUID? = nil, reconnect: @escaping (UUID) -> Void = { _ in }) -> UUID {
+        let token = token ?? System.uuid()
+        connections.removeAll { $0.token == token }
+        connections.append((token, reconnect))
+        return token
+    }
+
+    /// An earlier view's token only forgets that view; the last view's disconnect detaches the session, then
+    /// connects the view still showing, if any.
+    func disconnect(_ token: UUID? = nil) {
+        if let token {
+            guard connections.last?.token == token else {
+                connections.removeAll { $0.token == token }
+                return
+            }
+            connections.removeLast()
+        } else {
+            connections = []
+        }
+        let leaving = scroll
+        detach()
+        guard let previous = connections.last else { return }
+        if let showing = viewports.last(where: { $0.value !== leaving && $0.value?.window != nil })?.value { attach(showing) }
+        previous.reconnect(previous.token)
+    }
+
+    private func detach() {
+        recordDiagnostic(.disconnected, force: true)
+        cancelGlide(); arrivalExpectedAt = -.infinity
+        saved = visibleAnchor() ?? saved
+        if intent == .bottom { intent = .free }
+        diagnosticState = nil; diagnosticRows = nil
+        firstScrollPending = false; attachedAt = nil
+        hasContent = nil; rowExists = nil; followsBottom = nil
+        automaticHistoryLoadsRemaining = 0; loadEarlier = nil
+        stopObserving()
+        scrollbar?.removeFromSuperview(); scrollbar = nil
+        scroll = nil
+        isLiveScrolling = false; lastWheelTime = -.infinity
+        finishScrollerTracking()
+        // The next view of this chat shows its current rows (callbacks are gone: no rebuild from here).
+        setHolding(false)
+    }
+
+    // MARK: Intent
+
+    func restore(_ anchor: Anchor?) { saved = anchor; restoreOnAppearance() }
+
+    /// A view mounting again shows what the last one reported (or what `restore` set).
+    func restoreOnAppearance() { setIntent(saved.map(Intent.hold) ?? .free) }
+
+    /// Before rows are inserted above the reader: hold the first visible row that survives the change.
+    func preserveForPrepend(retaining ids: Set<String>? = nil) {
+        guard let anchor = visibleAnchor(retaining: ids) else { return }
+        saved = anchor
+        setIntent(.hold(anchor))
+    }
+
+    /// After the model published the prepend: the document's next layout realizes the held row.
+    func restoreAfterPrepend() { setIntent(intent) }
+
+    func cancelPreservation() {
+        if case .hold = intent { intent = .free }
+    }
+
+    func jumpToLatest() {
+        cancelGlide(); arrivalExpectedAt = -.infinity
+        saved = nil
+        setIntent(hasContent?() == false ? .free : .bottom)
+        if intent == .free { document?.scrollToBottom() }
+    }
+
+    /// Keeps the latest output in view after a change outside the rows (an approval, a taller composer).
+    func followLatest() {
+        // During AppKit's live scroll its end lays out and settles a followed bottom instead.
+        guard restorationAnchor == nil, followsBottom?() == true, !ownsClip, document?.layingOut == false else { return }
+        document?.scrollToBottom()
+    }
+
+    func clear() {
+        saved = nil; intent = .free
+        automaticHistoryLoadsRemaining = 0
+    }
+
+    /// Records the intent and asks the document for a layout that realizes it.
+    private func setIntent(_ value: Intent) {
+        intent = value
+        guard let document, !document.layingOut else { return }
+        switch value {
+        case .hold(let anchor): recordDiagnostic(.restoreRequested); document.scroll(to: anchor)
+        case .bottom: recordDiagnostic(.followRequested); document.scrollToBottom()
+        case .free: break
+        }
+    }
+
+    /// The document calls this after it has set every visible frame and the final clip offset.
+    func nativeLayoutCompleted(animateArrival: Bool = false) {
+        if let anchor = restorationAnchor, document?.hasMounted(anchor.id) != true {
+            // A row the model no longer has can never be realized; anything else waits for the update that adds it,
+            // reporting nothing meanwhile: the viewport is not yet where the restoration is going.
+            guard rowExists?(anchor.id) == false else { updateScrollbar(); return }
+            intent = .free
+            if saved?.id == anchor.id { saved = nil }
+        }
+        if animateArrival { startGlide() }
+        if let actual = visibleAnchor() {
+            saved = actual
+            intent = .free
+            positionChanged?(actual)
+        } else if intent == .bottom {
+            intent = .free
+        }
+        updateScrollbar()
+        prefetchEarlier()
+    }
+
+    /// Something outside the rows changed (history state, a cancelled page): measure the rows again and lay out.
+    func geometryChanged() {
+        guard let document, !document.layingOut else { return }
+        document.invalidateMeasurements()
+        updateScrollbar()
+        recordDiagnostic(.geometry)
+    }
+
+    func visibleAnchor(retaining ids: Set<String>? = nil) -> Anchor? { document?.visibleAnchor(retaining: ids) }
 
     /// Measured from the offset following settles at, which leaves `bottomPadding` below the viewport.
     func isAtBottom(tolerance: CGFloat) -> Bool? {
@@ -160,379 +264,82 @@ final class ChatScrollPosition {
         return bottomOffset(scroll, document) - scroll.contentView.bounds.minY <= tolerance
     }
 
-    func register(_ view: NSView, id: String) {
-        if markers[id]?.view !== view { markers[id] = WeakMarker(view) }
-        if let scroll = view.enclosingScrollView { attach(scroll); scroll.contentView.postsBoundsChangedNotifications = true }
-        geometryChanged()
-    }
-    func registerViewport(_ view: NSView) {
-        if let scroll = view.enclosingScrollView { attach(scroll) }
-    }
-    func unregister(_ view: NSView, id: String) {
-        if markers[id]?.view === view { markers.removeValue(forKey: id) }
-        if pending?.id == id { geometryChanged() }
-    }
-    private func attach(_ value: NSScrollView) {
-        guard scroll !== value else { return }
-        if let observation { NotificationCenter.default.removeObserver(observation) }
-        if let documentObservation { NotificationCenter.default.removeObserver(documentObservation) }
-        if let frameObservation { NotificationCenter.default.removeObserver(frameObservation) }
-        liveScrollObservations.forEach { NotificationCenter.default.removeObserver($0) }
-        if let wheelMonitor { NSEvent.removeMonitor(wheelMonitor) }
-        stopViewportChecks()
-        scroll = value
-        hasFollowedMeasuredBottom = false
-        resetBottomRealization()
-        recordDiagnostic(.attached, force: true)
-        scrollbar?.removeFromSuperview()
-        // A separate overlay owns visibility. AppKit's automatic overlay would
-        // reveal itself on programmatic scrolling as well as user input.
-        value.hasVerticalScroller = false
-        let bar = ChatScrollbar()
-        scrollbar = bar
-        bar.thumb.color = scrollbarColor
-        // SwiftUI manages the scroll view's subview layout, so neither springs
-        // nor constraints reliably place an added overlay. Track its actual
-        // viewport explicitly, including resize events without new messages.
-        value.addSubview(bar)
-        value.postsFrameChangedNotifications = true
-        frameObservation = NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification, object: value, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.updateScrollbar() }
-        }
-        bar.beganDragging = { [weak self] in
-            self?.isTrackingScroller = true
-            self?.beginUserScroll()
-        }
-        bar.endedDragging = { [weak self] in self?.finishScrollerTracking() }
-        bar.moved = { [weak self] fraction in
-            guard let self, let scroll = self.scroll, let document = scroll.documentView else { return }
-            let maximum = max(0, document.bounds.height - scroll.contentView.bounds.height)
-            scroll.contentView.scroll(to: NSPoint(x: scroll.contentView.bounds.minX, y: fraction * maximum))
-            scroll.reflectScrolledClipView(scroll.contentView)
-        }
-        bar.wheel = { [weak value] event in value?.scrollWheel(with: event) }
-        updateScrollbar()
-        value.contentView.postsBoundsChangedNotifications = true
-        observation = NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: value.contentView, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.scrolled() }
-        }
-        if let document = value.documentView {
-            document.postsFrameChangedNotifications = true
-            documentObservation = NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification, object: document, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.geometryChanged() }
-            }
-        }
-        liveScrollObservations = [
-            NotificationCenter.default.addObserver(forName: NSScrollView.willStartLiveScrollNotification, object: value, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    self?.isLiveScrolling = true
-                    self?.beginUserScroll()
-                }
-            },
-            NotificationCenter.default.addObserver(forName: NSScrollView.didEndLiveScrollNotification, object: value, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    self?.isLiveScrolling = false
-                    self?.finishScrollerTracking()
-                }
-            }
-        ]
-        wheelMonitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .leftMouseDown, .leftMouseUp, .keyDown]) { [weak self] event in
-            self?.handleScrollEvent(event)
-            return event
-        }
-        viewportTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] timer in
-            guard let self else { timer.invalidate(); return }
-            MainActor.assumeIsolated { self.checkViewport() }
-        }
-        // A watchdog, not a clock: let the system fire it with other timers.
-        viewportTimer?.tolerance = 1
-        for name in [NSWindow.didChangeOcclusionStateNotification, NSWindow.didBecomeKeyNotification,
-                     NSApplication.didBecomeActiveNotification] {
-            visibilityObservations.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                // Visibility notifications can arrive during AppKit layout.
-                DispatchQueue.main.async { self?.checkViewport(redraw: true) }
-            })
-        }
-        wakeObservation = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
-            DispatchQueue.main.async { self?.checkViewport(redraw: true) }
-        }
-        observeScreen()
-        scheduleMountChecks()
+    private func bottomOffset(_ scroll: NSScrollView, _ document: NSView) -> CGFloat {
+        max(0, document.bounds.maxY - bottomPadding - scroll.contentView.bounds.height)
     }
 
-    /// Hold while the transcript's main window is off screen, and release synchronously when it is about to show
-    /// (`MainWindow.willShow`), so it lays out and draws what arrived before its first frame. Only a `MainWindow` says
-    /// when it is about to show; elsewhere the transcript never holds.
-    private func observeScreen() {
-        screenObservations.forEach(NotificationCenter.default.removeObserver)
-        screenObservations = []
-        setHolding(false)
-        let center = NotificationCenter.default
-        screenObservations = [
-            center.addObserver(forName: MainWindow.willShow, object: nil, queue: nil) { [weak self] note in
-                let sender = note.object.map { ObjectIdentifier($0 as AnyObject) }
-                MainActor.assumeIsolated {
-                    guard let self, let window = self.scroll?.window, sender == ObjectIdentifier(window) else { return }
-                    self.setHolding(false)
-                }
-            },
-            center.addObserver(forName: MainWindow.didLeaveScreen, object: nil, queue: nil) { [weak self] note in
-                let sender = note.object.map { ObjectIdentifier($0 as AnyObject) }
-                MainActor.assumeIsolated {
-                    guard let self, let window = self.scroll?.window as? MainWindow, sender == ObjectIdentifier(window) else { return }
-                    self.setHolding(window.isOffScreen)
-                }
-            },
-            // Back on screen some other way (it should not happen): show what arrived at once.
-            center.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: nil, queue: nil) { [weak self] note in
-                let sender = note.object.map { ObjectIdentifier($0 as AnyObject) }
-                MainActor.assumeIsolated {
-                    guard let self, self.holding, let window = self.scroll?.window, sender == ObjectIdentifier(window),
-                          window.isVisible, !NSApp.isHidden else { return }
-                    self.setHolding(false)
-                }
-            }
-        ]
-    }
-
-    private func setHolding(_ value: Bool) {
-        guard holding != value else { return }
-        holding = value
-        holdChanged?(value)
-        // SwiftUI applies the released rows when its hosting views lay out: have the window's layout before it shows
-        // reach them (MainWindow.prepareToShow).
-        if !value {
-            var view: NSView? = scroll
-            while let current = view { current.needsLayout = true; view = current.superview }
-            (scroll?.window as? MainWindow)?.releasedHeldContent = true
+    /// Whether the viewport shows rows, not a sliver of one: visible rows cover a tenth of the clip, or one row lies
+    /// wholly inside it (a short transcript).
+    func showsRows() -> Bool {
+        guard let scroll, let document else { return false }
+        let viewport = scroll.contentView.bounds
+        var covered: CGFloat = 0
+        for view in document.mountedRows.values where view.window != nil && !view.isHiddenOrHasHiddenAncestor {
+            let frame = view.convert(view.bounds, to: document)
+            guard frame.width > 1, frame.height > 1 else { continue }
+            let overlap = min(frame.maxY, viewport.maxY) - max(frame.minY, viewport.minY)
+            guard overlap > 1 else { continue }
+            if frame.minY >= viewport.minY - 0.5 && frame.maxY <= viewport.maxY + 0.5 { return true }
+            covered += overlap
+            if covered >= viewport.height * 0.1 { return true }
         }
+        return false
     }
 
-    /// Check whether rows are visible soon after mounting. The watchdog needs
-    /// two intervals before it reports a blank; a reader often scrolls sooner.
-    /// After a rebuild (`afterRebuild`) the same checks verify it: a rebuilt stack can come up blank again, and
-    /// nothing else looks until the watchdog's next interval.
-    private func scheduleMountChecks(afterRebuild: Bool = false) {
-        if !afterRebuild {
-            attachedAt = ProcessInfo.processInfo.systemUptime
-            mountBlank = false; firstScrollPending = true
-        }
-        let generation = System.uuid()
-        mountCheckGeneration = generation
-        let interaction = interactionRevision
-        let start = ProcessInfo.processInfo.systemUptime
-        for delay in [0.1, 0.15, 0.4, 0.8] {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                guard let self, self.mountCheckGeneration == generation else { return }
-                // A blank whose layout has gone quiet stays blank (a chat of tall rows, whose estimated document
-                // was half its height, kept only hidden rows until the rebuild): rebuild it at once, not at 0.4 s.
-                // A rebuild verifies itself with new checks, which end these: one rebuild per mount.
-                let quiet = ProcessInfo.processInfo.systemUptime - max(start, self.lastGeometryChange) >= Self.mountQuiet
-                self.mountCheck(rebuild: !afterRebuild && (delay == 0.4 || delay < 0.4 && quiet)
-                                && self.interactionRevision == interaction)
-            }
-        }
-    }
-    /// How long a fresh mount's layout must have been still before a blank viewport counts as stuck.
-    static let mountQuiet: TimeInterval = 0.06
-    private func mountCheck(rebuild: Bool) {
-        guard let scroll, scroll.window?.isVisible == true, !scroll.isHiddenOrHasHiddenAncestor,
-              hasContent?() == true else { return }
-        if !showsRows() {
-            mountBlank = true
-            recordDiagnostic(.mountBlank, force: true)
-            // A remounted lazy stack can scroll to its destination yet keep only
-            // hidden rows from its first layout until the next wheel event. An
-            // item scroll to where it already is changes nothing; rebuilding
-            // the stack does. Don't leave the reader on a blank tab meanwhile.
-            // A pending restoration first realizes its row through the watchdog.
-            dropVanishedPending()
-            guard rebuild, pending == nil, !isLiveScrolling, !isTrackingScroller, !adjusting,
-                  ProcessInfo.processInfo.systemUptime - lastViewportRebuild >= rebuildBackoff else {
-                followUpBlank()
-                return
-            }
-            rebuildViewport(saved)
-        } else {
-            noteMountRecovery()
-            rebuildBackoff = 0
-            recordDiagnostic(.mountCheck, force: true)
-        }
-    }
-    /// The first visible row after a post-mount blank, whatever restored it;
-    /// the sample's wheel age and interaction tell whether it was the reader.
-    private func noteMountRecovery() {
-        guard mountBlank, showsRows() else { return }
-        mountBlank = false
-        recordDiagnostic(.mountRecovered, force: true)
+    /// The clip moved (input, a glide frame, the document's own correction): mount what came into view.
+    private func clipMoved() {
+        if isLiveScrolling { liveScrollMoved = ProcessInfo.processInfo.systemUptime }
+        guard let document, !document.layingOut else { return }
+        document.layoutTranscript()
+        recordDiagnostic(.scrolled)
     }
 
-    /// Rebuild the lazy stack, then verify it as a mount: a rebuild is the only cure for a stack with no realized
-    /// rows, and it can need a second one.
-    private func rebuildViewport(_ anchor: Anchor?, now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
-        lastViewportRebuild = now
-        rebuildBackoff = min(30, max(2, rebuildBackoff * 2))
-        emptyViewportChecks = 0
-        recordDiagnostic(.rebuildRequested, force: true, now: now)
-        recoverViewport?(anchor, true)
-        scheduleMountChecks(afterRebuild: true)
-    }
-
-    /// Many rows are about to leave or arrive at once: rebuild in the same pass instead of letting the lazy stack
-    /// lose them. Not under the reader's scrolling; the settled check looks once it stops.
-    /// `offScreen`: a held transcript applying what arrived while its window was off screen, just before it shows.
-    func rebuildForMassChange(offScreen: Bool = false) {
-        guard let scroll, offScreen || scroll.window?.isVisible == true, hasContent?() == true,
-              !isLiveScrolling, !isTrackingScroller,
-              ProcessInfo.processInfo.systemUptime - lastWheelTime > 0.3 else { return }
-        recordDiagnostic(.rebuildRequested, force: true)
-        recoverViewport?(saved, true)
-        scheduleMountChecks(afterRebuild: true)
-    }
-
-    /// While the viewport stays blank, check again in less than a second instead of the watchdog's 2 s, so the
-    /// escalation (redraw, realize, rebuild) ends a blank in about two.
-    private func followUpBlank() {
-        guard !blankFollowUp, scroll != nil else { return }
-        blankFollowUp = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
-            guard let self else { return }
-            self.blankFollowUp = false
-            guard self.scroll != nil, self.emptyViewportSince != nil || self.mountBlank else { return }
-            self.checkViewport()
-        }
-    }
-
-    /// A restoration whose row left the transcript (a collapsed group's step, a replaced page) can never realize;
-    /// keeping it pending blocked rebuilds and earlier pages.
-    private func dropVanishedPending() {
-        guard let id = pending?.id, let rowExists, !rowExists(id) else { return }
-        cancelPreservation()
-        if saved?.id == id { saved = nil }
-    }
-
-    /// Validate the mounted viewport independently of new messages. A lazy
-    /// stack can retain its document height after discarding every visible row.
-    /// First ask it to realize the saved row; rebuild only if that stays empty.
+    /// Visibility changed or the Mac woke: lay out, and repaint text views that keep their own layers.
     func checkViewport(redraw: Bool = false, now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
-        recordDiagnostic(.watchdog, force: true, now: now)
-        // A covered window (occluded, another space) gets no redraws: its layers refresh when it shows again
-        // (didChangeOcclusionStateNotification above calls this).
-        guard let scroll, let document = scroll.documentView,
-              scroll.window?.isVisible == true, scroll.window?.isMiniaturized == false,
-              scroll.window?.occlusionState.contains(.visible) == true,
-              !scroll.isHiddenOrHasHiddenAncestor, scroll.contentView.bounds.width > 1,
-              scroll.contentView.bounds.height > 1, hasContent?() == true,
-              !isLiveScrolling, !isTrackingScroller, now - lastWheelTime > 0.3,
-              !adjusting else {
-            emptyViewportSince = nil; emptyViewportChecks = 0
-            return
-        }
-        if showsRows(), let anchor = visibleAnchor() {
-            if emptyViewportSince != nil { recordDiagnostic(.recovered, force: true, now: now) }
-            noteMountRecovery()
-            emptyViewportSince = nil; emptyViewportChecks = 0; lastEmptyViewportCheck = -Double.infinity
-            rebuildBackoff = 0
-            saved = anchor
-            // Invalidate only the visible pixels, not the full history. This
-            // also refreshes stale backing layers after an idle or occluded gap.
-            if redraw || now - lastGeometryChange > 1 { redrawViewport(scroll, document: document) }
-            return
-        }
-        if emptyViewportSince == nil {
-            emptyViewportSince = now
-            recordDiagnostic(.blank, force: true, now: now)
-        }
-        dropVanishedPending()
-        followUpBlank()
-        // Streaming and marker updates can keep layout busy indefinitely even
-        // when no rows are realized. Bound the grace period by blank duration,
-        // rather than restarting it on every geometry notification.
-        let stalled = now - (emptyViewportSince ?? now) >= 2
-        guard stalled || (!adjustmentScheduled && now - lastGeometryChange > 0.75
-                          && (pending == nil || realizationAttempts >= 3 || now - lastGeometryChange > 2)),
-              now - lastEmptyViewportCheck > 0.75 else { return }
-        lastEmptyViewportCheck = now
-        emptyViewportChecks += 1
-        redrawViewport(scroll, document: document)
-        guard emptyViewportChecks >= 2 else { return }
-        // Realizing the saved row first keeps row state; when that changed nothing, the next check rebuilds.
-        if emptyViewportChecks >= 3, now - lastViewportRebuild >= rebuildBackoff {
-            rebuildViewport(pending ?? saved, now: now)
-            return
-        }
-        recordDiagnostic(.recoveryRequested, force: true, now: now)
-        recoverViewport?(pending ?? saved, false)
-    }
-
-    /// Many rows leaving or arriving at once under a clamped offset (a group closing at the bottom, a dropped turn,
-    /// a transcript refilled) can leave the lazy stack with only hidden rows, and nothing short of a rebuild brings
-    /// them back. Look again a moment after layout changes instead of waiting for the watchdog: a viewport still
-    /// blank on two looks 0.1 s apart, with the reader not scrolling, is rebuilt at once.
-    private func scheduleSettledCheck() {
-        guard !settledCheckScheduled, scroll != nil else { return }
-        settledCheckScheduled = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-            guard let self else { return }
-            self.settledCheckScheduled = false
-            self.settledCheck()
-        }
-    }
-    private func settledCheck(now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
-        guard let scroll, scroll.window?.isVisible == true, scroll.window?.isMiniaturized == false,
-              scroll.window?.occlusionState.contains(.visible) == true,
-              !scroll.isHiddenOrHasHiddenAncestor, scroll.contentView.bounds.height > 1, hasContent?() == true,
-              // Mount checks own a fresh mount; a restoration realizes its row first.
-              attachedAt.map({ now - $0 > 0.5 }) ?? false, pending == nil,
-              !isLiveScrolling, !isTrackingScroller, now - lastWheelTime > 0.3, !adjusting, glide == nil,
-              !showsRows() else {
-            settledBlank = false
-            return
-        }
-        guard settledBlank else {
-            settledBlank = true
-            scheduleSettledCheck()
-            return
-        }
-        settledBlank = false
-        if emptyViewportSince == nil {
-            emptyViewportSince = now
-            recordDiagnostic(.blank, force: true, now: now)
-        }
-        guard now - lastViewportRebuild >= rebuildBackoff else { followUpBlank(); return }
-        rebuildViewport(saved, now: now)
-    }
-
-    private func redrawViewport(_ scroll: NSScrollView, document: NSView) {
-        recordDiagnostic(.redraw)
-        scroll.contentView.needsDisplay = true
-        let clip = document.convert(scroll.contentView.bounds, from: scroll.contentView)
-        document.setNeedsDisplay(clip)
-        // Text views keep their own layers: invalidating the document does not repaint them.
-        func invalidate(_ view: NSView, _ rect: NSRect) {
-            for child in view.subviews where !child.isHidden {
-                let frame = child.convert(child.bounds, to: document)
-                guard frame.intersects(rect) else { continue }
-                if child is NSTextView { child.needsDisplay = true } else { invalidate(child, rect) }
+        guard let scroll, let document else { return }
+        document.layoutTranscript()
+        if redraw {
+            recordDiagnostic(.redraw)
+            let clip = document.convert(scroll.contentView.bounds, from: scroll.contentView)
+            scroll.contentView.needsDisplay = true
+            document.setNeedsDisplay(clip)
+            func invalidate(_ view: NSView) {
+                for child in view.subviews where !child.isHidden && child.convert(child.bounds, to: document).intersects(clip) {
+                    if child is NSTextView { child.needsDisplay = true } else { invalidate(child) }
+                }
             }
+            invalidate(document)
         }
-        invalidate(document, clip)
+        recordDiagnostic(.mountCheck, force: true, now: now)
     }
 
-    private func stopViewportChecks() {
-        viewportTimer?.invalidate(); viewportTimer = nil
-        visibilityObservations.forEach { NotificationCenter.default.removeObserver($0) }
-        visibilityObservations = []
-        if let wakeObservation { NSWorkspace.shared.notificationCenter.removeObserver(wakeObservation) }
-        wakeObservation = nil; emptyViewportSince = nil; emptyViewportChecks = 0; lastEmptyViewportCheck = -Double.infinity
+    // MARK: User input
+
+    private(set) var interactionRevision = 0
+    private(set) var isTrackingScroller = false
+    private var isLiveScrolling = false
+    private var liveScrollMoved = -Double.infinity
+    private var lastWheelTime = -Double.infinity
+
+    /// AppKit is moving the clip itself, between its live-scroll notifications: a gesture, its momentum or an elastic
+    /// bounce. Following leaves the clip to it until the live scroll ends. AppKit's concurrent scrolling applies its
+    /// own origin again on every frame, so a pass that moved the clip during one (momentum re-arms following as it
+    /// nears the bottom) started a fight: the live scroll never ended and the clip was flung thousands of points past
+    /// the document. A live scroll whose clip has not moved for a second no longer counts, in case AppKit never
+    /// reports its end.
+    var ownsClip: Bool {
+        isLiveScrolling && ProcessInfo.processInfo.systemUptime - liveScrollMoved < 1
     }
+    /// History waiting for a scrollbar drag to end: the thumb maps a fraction of the height it would change.
+    private var afterTracking: [() -> Void] = []
+
+    func forwardWheel(_ event: NSEvent) { scroll?.scrollWheel(with: event) }
+
     func handleScrollEvent(_ event: NSEvent) {
         if event.type == .leftMouseUp { finishScrollerTracking(); return }
         guard let scroll, event.window === scroll.window else { return }
         if event.type == .keyDown {
-            // Keyboard navigation needs the same fresh reserve as wheel/drag
-            // input. Editing the composer or a nested output must not preload
-            // or cancel transcript following.
+            // Only navigation inside the transcript: editing the composer or a nested output keeps following.
             guard let responder = scroll.window?.firstResponder as? NSView,
                   responder === scroll || responder.enclosingScrollView === scroll else { return }
             switch event.specialKey {
@@ -548,15 +355,15 @@ final class ChatScrollPosition {
         let point = scroll.convert(event.locationInWindow, from: nil)
         guard scroll.bounds.contains(point) else { return }
         if event.type == .leftMouseDown {
-            if let bar = scrollbar, bar.canScroll, bar.frame.contains(point) {
-                isTrackingScroller = true; beginUserScroll()
-            }
+            if let bar = scrollbar, bar.canScroll, bar.frame.contains(point) { isTrackingScroller = true; beginUserScroll() }
         } else if event.type == .scrollWheel && event.scrollingDeltaY != 0 {
-            // A tool's nested code/output scroller does not move the transcript.
+            // A tool's nested code or output scroller does not move the transcript.
             if let hit = scroll.contentView.hitTest(point), hit.enclosingScrollView !== scroll { return }
             userWillScroll(deltaY: event.scrollingDeltaY)
         }
     }
+
+    /// Wheel input about to move the transcript (positive is towards earlier history).
     func userWillScroll(deltaY: CGFloat) {
         guard deltaY != 0 else { return }
         let now = ProcessInfo.processInfo.systemUptime
@@ -566,451 +373,208 @@ final class ChatScrollPosition {
         velocityTime = now
         lastWheelTime = now
         beginUserScroll()
-        if deltaY > 0 {
-            if let scroll, scroll.contentView.bounds.minY < earlierPrefetchDistance { _ = loadEarlier?(true) }
-        }
+        if deltaY > 0, let scroll, scroll.contentView.bounds.minY < earlierPrefetchDistance { _ = loadEarlier?(true) }
     }
+
+    /// The reader takes over: every programmatic position and the follow intent give way.
     private func beginUserScroll() {
         // The first scroll after mounting shows what the reader was looking at.
-        recordDiagnostic(.userScroll, force: firstScrollPending || mountBlank)
+        recordDiagnostic(.userScroll, force: firstScrollPending)
         firstScrollPending = false
-        bottomJumpPending = false
-        resetBottomRealization()
-        emptyViewportChecks = 0; lastEmptyViewportCheck = -Double.infinity
         scrollbar?.reveal()
         interactionRevision &+= 1
         automaticHistoryLoadsRemaining = 4
-        // Finish any correction that layout already made possible, then give
-        // subsequent movement to the reader. No queued item scroll may undo it.
-        restorePending()
-        cancelPreservation()
-        cancelGlide()
+        intent = .free
+        document?.cancelPositioning()
+        cancelGlide(); arrivalExpectedAt = -.infinity
         userScrolled?()
     }
+
+    /// Runs history changes after a scrollbar drag; wheel scrolling keeps its pixel anchor, so it never waits.
     func performAfterScrolling(_ action: @escaping () -> Void) {
-        // Thumb dragging uses a fraction of document height, so changing that
-        // height changes its destination. Wheel scrolling can keep its visible
-        // pixel anchor while history is prepended, without waiting for release.
-        if isTrackingScroller { afterTracking.append(action) }
-        else { action() }
+        if isTrackingScroller { afterTracking.append(action) } else { action() }
     }
+
     private func finishScrollerTracking() {
         isTrackingScroller = false
-        applyDeferredHistory()
-    }
-    private func applyDeferredHistory() {
-        guard !isTrackingScroller else { return }
-        let actions = afterTracking; afterTracking = []
+        let actions = afterTracking
+        afterTracking = []
         actions.forEach { $0() }
     }
-    func visibleAnchor(retaining ids: Set<String>? = nil) -> Anchor? {
-        guard let scroll, let document = scroll.documentView else { return nil }
-        let viewport = scroll.contentView.bounds
-        var first: Anchor?
-        for (id, marker) in markers {
-            if let ids, !ids.contains(id) { continue }
-            guard let view = marker.view, view.window != nil, view.enclosingScrollView === scroll else { continue }
-            let frame = view.convert(view.bounds, to: document)
-            guard frame.width > 1, frame.height > 1, !view.isHiddenOrHasHiddenAncestor else { continue }
-            guard frame.maxY > viewport.minY + 1, frame.minY < viewport.maxY else { continue }
-            let offset = frame.minY - viewport.minY
-            if first == nil || offset < first!.offset { first = Anchor(id: id, offset: offset) }
-        }
-        return first
-    }
-    /// Whether the viewport shows rows, not a sliver of one: visible markers cover a tenth of the clip, or one
-    /// row lies wholly inside it (a short transcript). Any 1 pt overlap counted as healthy before.
-    func showsRows() -> Bool {
-        guard let scroll, let document = scroll.documentView else { return false }
-        let viewport = scroll.contentView.bounds
-        var covered: CGFloat = 0
-        for marker in markers.values {
-            guard let view = marker.view, view.window != nil, view.enclosingScrollView === scroll,
-                  !view.isHiddenOrHasHiddenAncestor else { continue }
-            let frame = view.convert(view.bounds, to: document)
-            guard frame.width > 1, frame.height > 1 else { continue }
-            let overlap = min(frame.maxY, viewport.maxY) - max(frame.minY, viewport.minY)
-            guard overlap > 1 else { continue }
-            if frame.minY >= viewport.minY - 0.5 && frame.maxY <= viewport.maxY + 0.5 { return true }
-            covered += overlap
-            if covered >= viewport.height * 0.1 { return true }
-        }
-        return false
-    }
-    func preserveForPrepend(retaining ids: Set<String>? = nil) {
-        pending = visibleAnchor(retaining: ids)
-        prependFallbacks = []
-        realizationAttempts = 0
-        restoredPending = false
-        if let pending, let scroll, let document = scroll.documentView, let marker = markers[pending.id]?.view {
-            saved = pending; previousDocumentY = marker.convert(marker.bounds, to: document).minY
-            prependGeometry = isLiveScrolling || ProcessInfo.processInfo.systemUptime - lastWheelTime < 0.2
-                ? (document.bounds.height, scroll.contentView.bounds.minY) : nil
-            if prependGeometry != nil {
-                let viewport = scroll.contentView.bounds
-                prependFallbacks = markers.compactMap { id, marker -> (anchor: Anchor, documentY: CGFloat)? in
-                    guard id != pending.id, ids?.contains(id) != false,
-                          let view = marker.view, view.window != nil, view.enclosingScrollView === scroll,
-                          !view.isHiddenOrHasHiddenAncestor else { return nil }
-                    let frame = view.convert(view.bounds, to: document)
-                    guard frame.width > 1, frame.height > 1, frame.maxY > viewport.minY + 1,
-                          frame.minY < viewport.maxY else { return nil }
-                    return (Anchor(id: id, offset: frame.minY - viewport.minY), frame.minY)
-                }.sorted { $0.anchor.offset < $1.anchor.offset }
-            }
-        }
-    }
-    func restoreOnAppearance() {
-        bottomJumpPending = false
-        resetBottomRealization()
-        pending = saved; realizationAttempts = 0; previousDocumentY = nil; prependGeometry = nil; prependFallbacks = []; restoredPending = false
-        geometryChanged()
-    }
-    func restoreAfterPrepend() {
-        if #available(macOS 15, *), prependGeometry == nil {
-            // The transcript disables SwiftUI's automatic offset adjustment.
-            // Restore from marker geometry as lazy layout settles; forcing the
-            // window to lay out here blocks scrolling during history insertion.
-            requestRealization()
-            geometryChanged()
-            return
-        }
-        // During a gesture, realize and correct native geometry in this layout
-        // pass. A deferred SwiftUI item scroll can otherwise land after the next
-        // wheel step and erase it. Older systems also require this path because
-        // automatic offset adjustment cannot be disabled there.
-        guard !layingOutPrepend else { return }
-        layingOutPrepend = true
-        defer { layingOutPrepend = false }
-        if prependGeometry == nil {
-            requestRealization()
-            geometryChanged()
-            return
-        }
-        scroll?.window?.contentView?.layoutSubtreeIfNeeded()
-        // Decide after layout: a marker may be mounted before the prepend but
-        // discarded when the lazy stack replaces its indices. Avoid queuing an
-        // item scroll when the pixel anchor can already be restored directly.
-        for _ in 0..<3 where needsAnchorRealized {
-            requestRealization()
-            scroll?.window?.contentView?.layoutSubtreeIfNeeded()
-        }
-        geometryChanged()
-    }
-    private func requestRealization() {
-        // Lazy layout can discard the first item lookup while replacing its
-        // indices. Retry only while the retained row is absent, with a fixed
-        // limit so a removed row cannot cause an endless layout cycle.
-        dropVanishedPending()
-        guard let id = pending?.id, realizationAttempts < 3 else { return }
-        realizationAttempts += 1
-        recordDiagnostic(.restoreRequested)
-        // The native estimate treats the whole height change as prepended rows,
-        // but lazy layout also re-estimates unrealized rows, so the document can
-        // even shrink. If two estimates leave the retained row unrealized, the
-        // final attempt realizes it by identity instead of leaving the clamped
-        // estimate (often the bottom) in place; restorePending then refines it.
-        if let prependGeometry, realizationAttempts < 3, let scroll, let document = scroll.documentView {
-            // Realize the retained area with a native offset, then let its
-            // marker refine the estimate. Queuing a SwiftUI item scroll here
-            // can snap to the row's top after the next wheel event has arrived.
-            let y = prependGeometry.y + document.bounds.height - prependGeometry.height
-            let maximum = max(0, document.bounds.height - scroll.contentView.bounds.height)
-            let destination = min(max(0, y), maximum)
-            recordCorrection(from: scroll.contentView.bounds.minY, to: destination)
-            scroll.contentView.scroll(to: NSPoint(x: scroll.contentView.bounds.minX, y: destination))
-            scroll.reflectScrolledClipView(scroll.contentView)
-            return
-        }
-        realizeAnchor?(id)
-    }
-    func restore(_ anchor: Anchor?) { saved = anchor; restoreOnAppearance() }
-    func clear() {
-        saved = nil; bottomJumpPending = false; hasFollowedMeasuredBottom = false; automaticHistoryLoadsRemaining = 0
-        resetBottomRealization(); cancelPreservation()
-    }
-    func cancelPreservation() { pending = nil; realizationAttempts = 0; previousDocumentY = nil; prependGeometry = nil; prependFallbacks = []; restoredPending = false }
-    /// A view connecting takes over the session's callbacks; the token is what it disconnects with, and
-    /// `reconnect` wires that view again (with its token) if it outlasts a later one.
-    func connect(reusing token: UUID? = nil, reconnect: @escaping (UUID) -> Void = { _ in }) -> UUID {
-        let token = token ?? System.uuid()
-        connections.removeAll { $0.token == token }
-        connections.append((token, reconnect))
-        return token
-    }
-    /// An earlier view's token only forgets that view; the last view's disconnect detaches the session, then
-    /// connects the view still showing, if any.
-    func disconnect(_ token: UUID? = nil) {
-        if let token {
-            guard connections.last?.token == token else {
-                connections.removeAll { $0.token == token }
-                return
-            }
-            connections.removeLast()
-        } else {
-            connections = []
-        }
-        detach()
-        if let previous = connections.last { previous.reconnect(previous.token) }
-    }
-    private func detach() {
-        recordDiagnostic(.disconnected, force: true)
-        cancelGlide(); arrivalExpectedAt = -Double.infinity; rowExpectedAt = -Double.infinity
-        diagnosticState = nil; diagnosticRows = nil; swiftUIScroll = nil
-        mountCheckGeneration = System.uuid(); mountBlank = false; firstScrollPending = false; attachedAt = nil
-        stopViewportChecks(); hasContent = nil; rowExists = nil; recoverViewport = nil
-        automaticHistoryLoadsRemaining = 0; loadEarlier = nil
-        saved = visibleAnchor() ?? saved
-        if let observation { NotificationCenter.default.removeObserver(observation) }
-        if let documentObservation { NotificationCenter.default.removeObserver(documentObservation) }
-        if let frameObservation { NotificationCenter.default.removeObserver(frameObservation) }
-        liveScrollObservations.forEach { NotificationCenter.default.removeObserver($0) }
-        liveScrollObservations = []
-        if let wheelMonitor { NSEvent.removeMonitor(wheelMonitor) }
-        scrollbar?.removeFromSuperview(); scrollbar = nil
-        observation = nil; wheelMonitor = nil; scroll = nil; markers.removeAll()
-        documentObservation = nil; frameObservation = nil; realizeAnchor = nil; followsBottom = nil
-        bottomRowID = nil; realizeBottom = nil; bottomJumpPending = false
-        resetBottomRealization()
-        isLiveScrolling = false; lastWheelTime = -Double.infinity
-        finishScrollerTracking()
-        // The next view of this chat shows its current rows (callbacks are gone: no rebuild from here).
-        screenObservations.forEach(NotificationCenter.default.removeObserver)
-        screenObservations = []
-        setHolding(false)
-    }
-    func jumpToLatest() {
-        cancelPreservation(); cancelGlide(); saved = nil
-        bottomJumpPending = true
-        hasFollowedMeasuredBottom = false
-        resetBottomRealization()
-        pinToBottom()
-    }
-    func followLatest() {
-        guard pending == nil, followsBottom?() == true else { return }
-        pinToBottom()
-    }
-    /// A live row without an entrance (in a burst): layout pins it at once, as a glide would, so no later item
-    /// scroll adds another pass. Reduce Motion keeps the item scroll, as for any arrival.
-    func expectRow() {
-        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
-        rowExpectedAt = ProcessInfo.processInfo.systemUptime
-    }
+
+    // MARK: Arrival glide
+
+    /// A live row arriving at the followed bottom glides there with its fade instead of jumping.
+    static let arrivalGlide: TimeInterval = 0.22
+    private var arrivalExpectedAt = -Double.infinity
+    private var glide: (from: CGFloat, start: TimeInterval, link: CADisplayLink)?
+    var wantsArrivalGlide: Bool { glide != nil || ProcessInfo.processInfo.systemUptime - arrivalExpectedAt < 0.3 }
+
     /// The session is inserting a live row while the reader follows the bottom.
     func expectArrival() {
         guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
         arrivalExpectedAt = ProcessInfo.processInfo.systemUptime
     }
-    /// The document's trailing padding stays below the followed viewport. It is excluded from the estimate used
-    /// while history's last row is not realized; a measured row uses `bottomContentInset` instead.
-    var bottomPadding: CGFloat = 0
-    /// Follow the last row's measured edge, including the floating input. A native-only viewport (and history
-    /// whose last row is not realized) can still estimate proximity from the document height.
-    private func bottomOffset(_ scroll: NSScrollView, _ document: NSView) -> CGFloat {
-        if let frame = bottomRowFrame(document) {
-            return max(0, frame.maxY + bottomContentInset - scroll.contentView.bounds.height)
-        }
-        return max(0, document.bounds.maxY - bottomPadding - scroll.contentView.bounds.height)
+
+    private func startGlide() {
+        guard glide == nil, let scroll else { return }
+        arrivalExpectedAt = -.infinity
+        // One step per displayed frame, in the display cycle the arrival fade updates in: a timer out of phase with
+        // it, or faster than the display, scrolls and lays out the transcript again.
+        let link = scroll.displayLink(target: GlideStep { [weak self] in self?.glideFrame() }, selector: #selector(GlideStep.step))
+        link.add(to: .main, forMode: .common)
+        glide = (scroll.contentView.bounds.minY, ProcessInfo.processInfo.systemUptime, link)
     }
-    private func bottomRowFrame(_ document: NSView) -> NSRect? {
-        guard let id = bottomRowID?(), let view = markers[id]?.view,
-              view.window != nil, view.enclosingScrollView === scroll,
-              !view.isHiddenOrHasHiddenAncestor, view.bounds.height > 1 else { return nil }
-        return view.convert(view.bounds, to: document)
-    }
-    private func requestBottomRealization() {
-        guard let id = bottomRowID?(), realizeBottom != nil, let scroll else { return }
-        if bottomRealizationID != id { bottomRealizationID = id; bottomRealizationAttempts = 0 }
-        guard bottomRealizationAttempts < Self.bottomRealizationLimit, !bottomRealizationScheduled else { return }
-        bottomRealizationScheduled = true
-        let interaction = interactionRevision
-        let generation = bottomRealizationGeneration
-        // Ask SwiftUI after the current layout returns. Keep this queued work cancellable when the reader
-        // scrolls or another view takes over the connection.
-        DispatchQueue.main.async { [weak self, weak scroll] in
-            guard let self, let scroll, self.scroll === scroll, self.bottomRealizationGeneration == generation else { return }
-            guard self.pending == nil, self.interactionRevision == interaction,
-                  self.bottomJumpPending || self.followsBottom?() == true else {
-                self.bottomRealizationScheduled = false
-                return
-            }
-            // Layout may have supplied the row while this was queued, or a newer message may now be last.
-            // Do not send an obsolete item scroll after the native correction has already placed the viewport.
-            if self.bottomRowID?() != id || scroll.documentView.flatMap(self.bottomRowFrame) != nil {
-                self.bottomRealizationScheduled = false
-                self.pinToBottom()
-                return
-            }
-            self.bottomRealizationAttempts += 1
-            self.recordDiagnostic(.followRequested)
-            self.realizeBottom?(id)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { [weak self, weak scroll] in
-                guard let self, let scroll, self.scroll === scroll, self.bottomRealizationGeneration == generation else { return }
-                self.bottomRealizationScheduled = false
-                guard self.pending == nil, self.interactionRevision == interaction,
-                      self.bottomJumpPending || self.followsBottom?() == true else { return }
-                self.pinToBottom()
-            }
-        }
-    }
-    /// Item scrolls to the last row before following stops asking: each lands on SwiftUI's estimate for the rows not yet
-    /// measured, and replacing a tall reply's estimate can take several (a 3,400-point reply among short rows needed more
-    /// than 4 once chat text was 14.2 points).
-    static let bottomRealizationLimit = 12
-    private func resetBottomRealization() {
-        bottomRealizationGeneration &+= 1
-        bottomRealizationScheduled = false; bottomRealizationID = nil; bottomRealizationAttempts = 0
-    }
-    private func pinToBottom() {
-        guard !adjusting else { return }
-        guard let scroll, let document = scroll.documentView else { return }
-        // Moving to an estimated document end can leave SwiftUI's lazy rows hidden at their earlier positions.
-        // Realize the actual destination first; retries allow its item lookup and layout to settle separately.
-        // Once following is established, a resize or live insertion can recycle the final row while other rows
-        // still show. Follow that layout's extent as before; a fresh or wholly blank viewport must realize first.
-        let measuredBottom = bottomRowFrame(document)
-        if bottomRowID?() != nil, measuredBottom == nil, !(hasFollowedMeasuredBottom && showsRows()) {
-            requestBottomRealization()
-            return
-        }
-        if measuredBottom != nil { hasFollowedMeasuredBottom = true; bottomRealizationAttempts = 0 }
-        let destination = bottomOffset(scroll, document)
-        let jumping = bottomJumpPending
-        bottomJumpPending = false
-        guard abs(destination - scroll.contentView.bounds.minY) > 0.25 else {
-            if jumping { scrolled() }
-            return
-        }
-        // Each glide frame re-reads the bottom, so later growth joins the running glide.
-        if glide != nil { return }
-        let now = ProcessInfo.processInfo.systemUptime
-        if now - arrivalExpectedAt < 0.3, destination > scroll.contentView.bounds.minY, scroll.window?.isVisible == true {
-            arrivalExpectedAt = -Double.infinity
-            // One step per displayed frame, in the display cycle that SwiftUI's arrival fade updates in. A timer
-            // out of phase with it, or faster than the display, scrolls and lays out the transcript again.
-            let link = scroll.displayLink(target: GlideStep { [weak self] in self?.glideFrame() }, selector: #selector(GlideStep.step))
-            link.add(to: .main, forMode: .common)
-            glide = (scroll.contentView.bounds.minY, now, link)
-            return
-        }
-        adjusting = true
-        defer { adjusting = false }
-        recordCorrection(from: scroll.contentView.bounds.minY, to: destination)
-        scroll.contentView.scroll(to: NSPoint(x: scroll.contentView.bounds.minX, y: destination))
-        scroll.reflectScrolledClipView(scroll.contentView)
-    }
+
+    /// Each frame re-reads the bottom, so growth during the glide joins it.
     private func glideFrame() {
-        guard let glide, let scroll, let document = scroll.documentView, pending == nil, followsBottom?() == true else {
-            cancelGlide(); return
-        }
+        guard let glide, let scroll, let document = scroll.documentView, restorationAnchor == nil,
+              followsBottom?() == true else { cancelGlide(); return }
         let progress = min(1, (ProcessInfo.processInfo.systemUptime - glide.start) / Self.arrivalGlide)
-        let eased = 1 - pow(1 - progress, 3)
-        let destination = bottomOffset(scroll, document)
-        let y = glide.from + (destination - glide.from) * eased
+        let y = glide.from + (bottomOffset(scroll, document) - glide.from) * (1 - pow(1 - progress, 3))
         if abs(y - scroll.contentView.bounds.minY) > 0.25 {
-            adjusting = true
             recordCorrection(from: scroll.contentView.bounds.minY, to: y)
             scroll.contentView.scroll(to: NSPoint(x: scroll.contentView.bounds.minX, y: y))
             scroll.reflectScrolledClipView(scroll.contentView)
-            adjusting = false
         }
         if progress >= 1 { cancelGlide() }
     }
-    private func cancelGlide() {
-        glide?.link.invalidate(); glide = nil
+
+    func cancelGlide() { glide?.link.invalidate(); glide = nil }
+
+    // MARK: Off screen
+
+    /// Whether the transcript holds what it shows: its window is off screen (`MainWindow.isOffScreen`).
+    private var holding = false
+
+    /// Hold while the transcript's main window is off screen, and release synchronously when it is about to show
+    /// (`MainWindow.willShow`), so it lays out and draws what arrived before its first frame. Only a `MainWindow` says
+    /// when it is about to show; elsewhere the transcript never holds.
+    private func observeScreen() {
+        setHolding(false)
+        observe(MainWindow.willShow, queue: nil) { position, sender in
+            if position.isOwnWindow(sender) { position.setHolding(false) }
+        }
+        observe(MainWindow.didLeaveScreen, queue: nil) { position, sender in
+            guard position.isOwnWindow(sender), let window = position.scroll?.window as? MainWindow else { return }
+            position.setHolding(window.isOffScreen)
+        }
+        // Back on screen some other way (it should not happen): show what arrived at once.
+        observe(NSWindow.didChangeOcclusionStateNotification, queue: nil) { position, sender in
+            guard position.holding, position.isOwnWindow(sender), let window = position.scroll?.window,
+                  window.isVisible, !NSApp.isHidden else { return }
+            position.setHolding(false)
+        }
     }
+
+    private func setHolding(_ value: Bool) {
+        guard holding != value else { return }
+        holding = value
+        if value { cancelGlide(); arrivalExpectedAt = -.infinity }
+        holdChanged?(value)
+        // SwiftUI applies the released rows when its hosting views lay out: have the window's layout before it shows
+        // reach them (MainWindow.prepareToShow).
+        if !value {
+            var view: NSView? = scroll
+            while let current = view { current.needsLayout = true; view = current.superview }
+            (scroll?.window as? MainWindow)?.releasedHeldContent = true
+        }
+    }
+
+    // MARK: Earlier history
+
+    /// Explicit paging and search hosts own their requests; viewport-triggered loads would race them.
+    var automaticHistoryPrefetch = true
+    private var automaticHistoryLoadsRemaining = 0
+    private var earlierVelocity: CGFloat = 0
+    private var earlierReadLatency: TimeInterval = 0.1
+    private var velocityTime: TimeInterval?
+
+    /// How close to the top a load starts: six screens, more while scrolling up fast against a slow read.
+    var earlierPrefetchDistance: CGFloat {
+        let height = max(400, scroll?.contentView.bounds.height ?? 0)
+        let recent = velocityTime.map { ProcessInfo.processInfo.systemUptime - $0 < 0.3 } ?? false
+        let lead = recent ? earlierVelocity * max(0.35, earlierReadLatency * 3) : 0
+        return max(height * 6, min(height * 12, lead))
+    }
+
+    func observedHistoryRead(seconds: TimeInterval) {
+        guard seconds.isFinite, seconds >= 0 else { return }
+        earlierReadLatency = earlierReadLatency * 0.7 + min(seconds, 2) * 0.3
+    }
+
+    /// Build a scroll reserve once the latest messages show; even tool-only history must not make opening a view an
+    /// unlimited read.
+    func beginOpeningHistoryPreload() {
+        automaticHistoryLoadsRemaining = 4
+        geometryChanged()
+    }
+
+    func historyLoadFinished(madeProgress: Bool) {
+        if !madeProgress { automaticHistoryLoadsRemaining = 0 }
+        geometryChanged()
+    }
+
+    private func prefetchEarlier() {
+        guard automaticHistoryPrefetch, automaticHistoryLoadsRemaining > 0, !isRestoring,
+              let scroll, scroll.window?.isVisible == true,
+              scroll.contentView.bounds.minY < earlierPrefetchDistance, let loadEarlier else { return }
+        // Spend before calling out: publishing the loading state can lay out (and prefetch) again. A request that
+        // does not start gives it back.
+        automaticHistoryLoadsRemaining -= 1
+        if !loadEarlier(false) { automaticHistoryLoadsRemaining += 1 }
+    }
+
+    // MARK: Scrollbar
+
+    private func installScrollbar(in scroll: NSScrollView) {
+        scrollbar?.removeFromSuperview()
+        // A separate overlay owns visibility: AppKit's overlay scroller would show for programmatic scrolling too.
+        scroll.hasVerticalScroller = false
+        let bar = ChatScrollbar()
+        bar.thumb.color = scrollbarColor
+        bar.beganDragging = { [weak self] in self?.isTrackingScroller = true; self?.beginUserScroll() }
+        bar.endedDragging = { [weak self] in self?.finishScrollerTracking() }
+        bar.moved = { [weak self] fraction in
+            guard let scroll = self?.scroll, let document = scroll.documentView else { return }
+            let maximum = max(0, document.bounds.height - scroll.contentView.bounds.height)
+            scroll.contentView.scroll(to: NSPoint(x: scroll.contentView.bounds.minX, y: fraction * maximum))
+            scroll.reflectScrolledClipView(scroll.contentView)
+        }
+        bar.wheel = { [weak scroll] event in scroll?.scrollWheel(with: event) }
+        // SwiftUI lays out the scroll view's subviews, so the overlay is placed by hand on every resize.
+        scroll.addSubview(bar)
+        scrollbar = bar
+        updateScrollbar()
+    }
+
     private func updateScrollbar() {
-        guard let scroll, let document = scroll.documentView else { return }
-        if let bar = scrollbar {
-            let frame = NSRect(x: scroll.bounds.maxX - 14, y: scroll.bounds.minY, width: 14, height: scroll.bounds.height)
-            if bar.frame != frame { bar.frame = frame }
-            if bar.thumb.frame != bar.bounds { bar.thumb.frame = bar.bounds }
-            bar.update(total: document.bounds.height, visible: scroll.contentView.bounds.height,
-                       offset: scroll.contentView.bounds.minY)
-        }
+        guard let scroll, let document = scroll.documentView, let bar = scrollbar else { return }
+        let frame = NSRect(x: scroll.bounds.maxX - 14, y: scroll.bounds.minY, width: 14, height: scroll.bounds.height)
+        if bar.frame != frame { bar.frame = frame }
+        if bar.thumb.frame != bar.bounds { bar.thumb.frame = bar.bounds }
+        bar.update(total: document.bounds.height, visible: scroll.contentView.bounds.height,
+                   offset: scroll.contentView.bounds.minY)
     }
-    private func scrolled() {
-        recordDiagnostic(.scrolled)
-        updateScrollbar()
-        guard scroll != nil else { return }
-        noteMountRecovery()
-        if pending != nil {
-            if !adjusting { geometryChanged() }
-            return
-        }
-        saved = visibleAnchor() ?? saved
-        if let saved { positionChanged?(saved) }
-        prefetchEarlier()
-    }
-    func geometryChanged() {
-        recordDiagnostic(.geometry)
-        lastGeometryChange = ProcessInfo.processInfo.systemUptime
-        updateScrollbar()
-        scheduleSettledCheck()
-        // Item scrolling can precede a streamed row's final measured height.
-        // Follow the document's actual bottom through subsequent layout passes.
-        if pending == nil && (bottomJumpPending || followsBottom?() == true) { pinToBottom() }
-        // Correct during layout/bounds notifications, before painting. SwiftUI
-        // may subsequently finish its item scroll; retain the anchor through a
-        // quiet layout cycle so that final adjustment cannot erase the offset.
-        settlingRevision += 1
-        restorePending()
-        guard !adjustmentScheduled else { return }
-        adjustmentScheduled = true
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.restorePending()
-            if self.needsAnchorRealized { self.requestRealization() }
-            let revision = self.settlingRevision
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                self.adjustmentScheduled = false
-                if self.settlingRevision != revision { self.geometryChanged(); return }
-                self.dropVanishedPending()
-                if self.pending != nil && self.restoredPending {
-                    self.saved = self.visibleAnchor() ?? self.saved
-                    self.pending = nil
-                } else if self.pending == nil { self.saved = self.visibleAnchor() ?? self.saved }
-                // An unresolved restoration measures where the viewport was, not where it is going: reporting
-                // that re-armed following before a find's match was revealed.
-                if self.pending == nil, let saved = self.saved { self.positionChanged?(saved) }
-                // Requests suppressed during restoration need a fresh check,
-                // including when no new wheel event follows the insertion.
-                self.prefetchEarlier()
-            }
-        }
-    }
-    private func restorePending() {
-        // Estimated lazy-stack heights can temporarily put the first retained
-        // row just outside the realized range. Another row from that same
-        // viewport provides an equally exact pixel anchor without an item jump.
-        if let pending, markers[pending.id]?.view?.window == nil,
-           let fallback = prependFallbacks.first(where: { markers[$0.anchor.id]?.view?.window != nil }) {
-            self.pending = fallback.anchor
-            previousDocumentY = fallback.documentY
-            restoredPending = false
-        }
-        guard let pending, let scroll, let document = scroll.documentView,
-              let marker = markers[pending.id]?.view, marker.window != nil, marker.bounds.height > 1 else { return }
-        let documentY = marker.convert(marker.bounds, to: document).minY
-        // Once the prepend has been restored, a late SwiftUI item scroll can
-        // still change the clip offset without changing this marker's position.
-        // Correct that too, until the next user input cancels preservation.
-        if let previousDocumentY, abs(documentY - previousDocumentY) < 1, !restoredPending { return }
-        // Keep a remounted expanded row visible until its loading placeholder
-        // has grown enough to contain the saved position inside the row.
-        guard marker.bounds.height > max(1, -pending.offset) else { return }
-        let y = documentY - pending.offset
-        let maximum = max(0, document.bounds.height - scroll.contentView.bounds.height)
-        let destination = min(max(0, y), maximum)
-        restoredPending = abs(y - destination) <= 0.25
-        guard abs(destination - scroll.contentView.bounds.minY) > 0.25 else { return }
-        adjusting = true
-        defer { adjusting = false }
-        recordCorrection(from: scroll.contentView.bounds.minY, to: destination)
-        scroll.contentView.scroll(to: NSPoint(x: scroll.contentView.bounds.minX, y: destination))
-        scroll.reflectScrolledClipView(scroll.contentView)
-    }
+
+    // MARK: Diagnostics
+
+    var diagnosticState: (() -> ChatViewportTrace.Transcript?)?
+    /// Tests can inject a private sink; production checks the setting at each sample, so mounted conversations
+    /// follow the checkbox live.
+    var diagnosticSink: ((ChatViewportTrace.Sample) -> Void)?
+    /// Transcript positions and categories for sampled row IDs; set by the view.
+    var diagnosticRows: ((Set<String>) -> [String: ChatViewportTrace.RowInfo])?
+    private let diagnosticID = System.uuid()
+    private let diagnosticStarted = ProcessInfo.processInfo.systemUptime
+    private lazy var diagnosticKey = SymmetricKey(size: .bits256)
+    private var diagnosticEvents: [String: Int] = [:]
+    private var lastDiagnostic = -Double.infinity
+    private var lastGeometryChange = ProcessInfo.processInfo.systemUptime
+    private var diagnosticWasVisible: Bool?
+    private var diagnosticCorrection: ChatViewportTrace.Correction?
+    private var attachedAt: TimeInterval?
+    private var firstScrollPending = false
 
     private func recordCorrection(from: CGFloat, to: CGFloat) {
         guard diagnosticSink != nil || ChatViewportTrace.enabled else { return }
@@ -1018,262 +582,57 @@ final class ChatScrollPosition {
         recordDiagnostic(.correction)
     }
 
-    /// Coalesce high-frequency layout notifications before inspecting markers.
-    /// Milestones bypass the throttle so recovery decisions remain ordered.
+    /// Coalesces layout events to four samples a second; milestones (`force`) bypass that, so their order survives.
     func recordDiagnostic(_ event: ChatViewportTrace.Event, force: Bool = false,
                           now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
-        guard let diagnosticSink = diagnosticSink ?? (ChatViewportTrace.enabled
-            ? { ChatViewportTrace.shared.record($0) } : nil) else {
+        guard let sink = diagnosticSink ?? (ChatViewportTrace.enabled ? { ChatViewportTrace.shared.record($0) } : nil) else {
             diagnosticEvents.removeAll(keepingCapacity: true)
             diagnosticCorrection = nil
             return
         }
-        let isVisible = scroll?.window?.isVisible == true && scroll?.window?.isMiniaturized == false
-            && scroll?.isHiddenOrHasHiddenAncestor == false
-        // Keep one transition sample for hidden chats, not a periodic scan of
-        // every retained conversation in a large workspace.
-        if !isVisible, diagnosticWasVisible == false,
-           event != .attached && event != .connected && event != .disconnected { return }
+        if event == .geometry { lastGeometryChange = now }
+        let window = scroll?.window
+        let isVisible = window?.isVisible == true && window?.isMiniaturized == false && scroll?.isHiddenOrHasHiddenAncestor == false
+        // One transition sample for a hidden chat, not a scan of every retained conversation in a large workspace.
+        if !isVisible, diagnosticWasVisible == false, ![.attached, .connected, .disconnected].contains(event) { return }
         diagnosticEvents[event.rawValue, default: 0] += 1
         guard force || now - lastDiagnostic >= 0.25 else { return }
         lastDiagnostic = now
         diagnosticWasVisible = isVisible
-        let clip = scroll?.contentView.bounds, document = scroll?.documentView
-        var summary = ChatViewportTrace.Markers()
-        summary.registered = markers.count
-        // Every mounted row, hidden ones included: where the lazy stack placed
-        // rows relative to the clip explains an empty viewport.
-        var mounted: [(id: String, frame: NSRect, alpha: Double, hidden: Bool, visible: Bool)] = []
-        for (id, marker) in markers {
-            guard let view = marker.view, view.window != nil,
-                  view.enclosingScrollView === scroll, let document, let clip else { continue }
-            summary.mounted += 1
-            let frame = view.convert(view.bounds, to: document)
-            var alpha = 1.0, ancestor: NSView? = view
-            while let node = ancestor { alpha *= node.alphaValue; ancestor = node.superview }
-            let hidden = view.isHiddenOrHasHiddenAncestor
-            var visible = false
-            if hidden { summary.hidden += 1 }
-            else if frame.width <= 1 || frame.height <= 1 { summary.empty += 1 }
-            else if frame.intersects(clip) {
-                if alpha <= 0.01 { summary.transparent += 1 }
-                summary.visible += 1; visible = true
-            }
-            mounted.append((id, frame, alpha, hidden, visible))
-        }
-        // The random key never leaves memory. Unlike a public salt, it cannot
-        // be used to guess a path or identifier from a shared trace.
+        let clip = scroll?.contentView.bounds, documentView = scroll?.documentView
+        // The random key never leaves memory: unlike a public salt, it cannot confirm a guessed path or ID.
         func token(_ id: String) -> String {
             HMAC<SHA256>.authenticationCode(for: Data(id.utf8), using: diagnosticKey).prefix(8)
                 .map { String(format: "%02x", $0) }.joined()
         }
-        func anchor(_ value: Anchor?) -> ChatViewportTrace.Anchor? {
-            value.map { .init(token: token($0.id), offset: $0.offset) }
+        func anchor(_ value: Anchor?) -> ChatViewportTrace.Anchor? { value.map { .init(token: token($0.id), offset: $0.offset) } }
+        var summary = ChatViewportTrace.Markers()
+        if let documentView, let clip {
+            summary = .init(rows: document?.mountedRows ?? [:], in: documentView, clip: clip, token: token) {
+                self.diagnosticRows?($0) ?? [:]
+            }
         }
-        // Visible rows first, then the nearest others, in a bounded record.
-        let center = clip.map { $0.midY } ?? 0
-        let sampled = mounted.sorted { lhs, rhs in
-            lhs.visible != rhs.visible ? lhs.visible : abs(lhs.frame.midY - center) < abs(rhs.frame.midY - center)
-        }.prefix(16).sorted { $0.frame.minY < $1.frame.minY }
-        let info = diagnosticRows?(Set(sampled.map(\.id))) ?? [:]
-        summary.rows = sampled.map {
-            .init(token: token($0.id), frame: .init($0.frame), alpha: $0.alpha, hidden: $0.hidden,
-                  index: info[$0.id]?.index, kind: info[$0.id]?.kind)
-        }
-        let window = scroll?.window
-        diagnosticSink(.init(date: Date(), elapsed: max(0, now - diagnosticStarted), viewport: diagnosticID, event: event,
+        sink(.init(date: Date(), elapsed: max(0, now - diagnosticStarted), viewport: diagnosticID, event: event,
             events: diagnosticEvents, transcript: diagnosticState?(), clip: clip.map(ChatViewportTrace.Rect.init),
-            document: document.map { .init($0.bounds) }, documentNeedsLayout: document?.needsLayout ?? false,
-            documentNeedsDisplay: document?.needsDisplay ?? false, clipNeedsDisplay: scroll?.contentView.needsDisplay ?? false,
+            document: documentView.map { .init($0.bounds) }, documentNeedsLayout: documentView?.needsLayout ?? false,
+            documentNeedsDisplay: documentView?.needsDisplay ?? false, clipNeedsDisplay: scroll?.contentView.needsDisplay ?? false,
             windowVisible: window?.isVisible == true,
             windowOccluded: window.map { !$0.occlusionState.contains(.visible) } ?? false,
             scrollHidden: scroll?.isHiddenOrHasHiddenAncestor ?? true, markers: summary,
-            saved: anchor(saved), pending: anchor(pending), correction: diagnosticCorrection,
-            interaction: interactionRevision, adjusting: adjusting, adjustmentScheduled: adjustmentScheduled,
-            tracking: isTrackingScroller, liveScrolling: isLiveScrolling, realizationAttempts: realizationAttempts,
-            emptyChecks: emptyViewportChecks, blankDuration: emptyViewportSince.map { max(0, now - $0) },
+            saved: anchor(saved), pending: anchor(restorationAnchor), correction: diagnosticCorrection,
+            interaction: interactionRevision, adjusting: glide != nil, adjustmentScheduled: false,
+            tracking: isTrackingScroller, liveScrolling: isLiveScrolling, realizationAttempts: 0,
+            emptyChecks: 0, blankDuration: nil,
             geometryAge: max(0, now - lastGeometryChange), wheelAge: lastWheelTime.isFinite ? max(0, now - lastWheelTime) : nil,
-            sinceAttach: attachedAt.map { max(0, now - $0) }, swiftUI: swiftUIScroll))
+            sinceAttach: attachedAt.map { max(0, now - $0) }, swiftUI: nil))
         diagnosticEvents.removeAll(keepingCapacity: true)
         diagnosticCorrection = nil
     }
 }
 
-/// The scroll bridge must outlive lazy rows, including an empty realized range.
-struct ChatScrollViewport: NSViewRepresentable {
-    let position: ChatScrollPosition
-    func makeNSView(context: Context) -> Probe { Probe(position: position) }
-    func updateNSView(_ view: Probe, context: Context) { view.position = position; position.registerViewport(view) }
-    final class Probe: NSView {
-        var position: ChatScrollPosition
-        init(position: ChatScrollPosition) { self.position = position; super.init(frame: .zero) }
-        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-        override func hitTest(_ point: NSPoint) -> NSView? { nil }
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            if window != nil { position.registerViewport(self) }
-        }
-        override func layout() { super.layout(); position.registerViewport(self) }
-    }
-}
-
-/// An always-mounted hit region with a fading native thumb. Keeping the region
-/// transparent (rather than hiding it) lets pointer entry reveal the thumb.
-@MainActor
-final class ChatScrollbar: NSView {
-    final class Thumb: NSScroller {
-        var color = NSColor(Chrome.muted) { didSet { needsDisplay = true } }
-        var began: (() -> Void)?
-        var ended: (() -> Void)?
-        override var isOpaque: Bool { false }
-        override var acceptsFirstResponder: Bool { false }
-        override func draw(_ dirtyRect: NSRect) {
-            guard isEnabled else { return }
-            color.withAlphaComponent(0.65).setFill()
-            let knob = rect(for: .knob).insetBy(dx: 4, dy: 1)
-            NSBezierPath(roundedRect: knob, xRadius: 3, yRadius: 3).fill()
-        }
-        override func mouseDown(with event: NSEvent) {
-            began?()
-            defer { ended?() }
-            super.mouseDown(with: event)
-        }
-        override func scrollWheel(with event: NSEvent) { superview?.scrollWheel(with: event) }
-    }
-    let thumb = Thumb(frame: NSRect(x: 0, y: 0, width: 14, height: 100))
-    var beganDragging: (() -> Void)?
-    var endedDragging: (() -> Void)?
-    var moved: ((CGFloat) -> Void)?
-    var wheel: ((NSEvent) -> Void)?
-    private var hideTask: DispatchWorkItem?
-    private var pointerInside = false
-    private var dragging = false
-    private var hoverArea: NSTrackingArea?
-    private(set) var canScroll = false
-    private(set) var revealed = false
-
-    init() {
-        super.init(frame: thumb.frame)
-        thumb.scrollerStyle = .legacy
-        thumb.autoresizingMask = [.width, .height]
-        thumb.target = self; thumb.action = #selector(scrolled)
-        thumb.isContinuous = true; thumb.alphaValue = 0
-        thumb.setAccessibilityLabel("Chat history")
-        thumb.setAccessibilityIdentifier("chat-scrollbar")
-        addSubview(thumb)
-        thumb.began = { [weak self] in
-            guard let self else { return }
-            dragging = true; reveal(); beganDragging?()
-        }
-        thumb.ended = { [weak self] in
-            guard let self else { return }
-            dragging = false; endedDragging?(); scheduleHide()
-        }
-    }
-    required init?(coder: NSCoder) { fatalError("init(coder:) is unsupported") }
-    override var isOpaque: Bool { false }
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let hoverArea { removeTrackingArea(hoverArea) }
-        let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp,
-            .inVisibleRect, .enabledDuringMouseDrag], owner: self)
-        hoverArea = area; addTrackingArea(area)
-    }
-    override func mouseEntered(with event: NSEvent) { pointerInside = true; reveal() }
-    override func mouseExited(with event: NSEvent) { pointerInside = false; scheduleHide() }
-    override func mouseDown(with event: NSEvent) {
-        guard canScroll else { return }
-        reveal(); thumb.mouseDown(with: event)
-    }
-    override func scrollWheel(with event: NSEvent) { reveal(); wheel?(event) }
-    override func viewWillMove(toSuperview newSuperview: NSView?) {
-        if newSuperview == nil { hideTask?.cancel(); hideTask = nil }
-        super.viewWillMove(toSuperview: newSuperview)
-    }
-    func update(total: CGFloat, visible: CGFloat, offset: CGFloat) {
-        canScroll = total > visible + 1
-        if thumb.isEnabled != canScroll { thumb.isEnabled = canScroll }
-        let proportion = total > 0 ? min(1, visible / total) : 1
-        if thumb.knobProportion != proportion { thumb.knobProportion = proportion }
-        let fraction = Double(max(0, min(1, offset / max(1, total - visible))))
-        if !dragging && thumb.doubleValue != fraction { thumb.doubleValue = fraction }
-        if !canScroll {
-            hideTask?.cancel(); hideTask = nil
-            revealed = false; thumb.alphaValue = 0
-        }
-        thumb.needsDisplay = true
-    }
-    func reveal() {
-        guard canScroll else { return }
-        hideTask?.cancel(); hideTask = nil
-        revealed = true
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0
-            thumb.animator().alphaValue = 1
-        }
-        scheduleHide()
-    }
-    private func scheduleHide() {
-        hideTask?.cancel(); hideTask = nil
-        guard !pointerInside && !dragging else { return }
-        let task = DispatchWorkItem { [weak self] in
-            guard let self, !pointerInside, !dragging else { return }
-            revealed = false
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.2
-                thumb.animator().alphaValue = 0
-            }
-            hideTask = nil
-        }
-        hideTask = task
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: task)
-    }
-    @objc private func scrolled() {
-        guard canScroll else { return }
-        reveal()
-        var fraction = CGFloat(thumb.doubleValue)
-        let page = thumb.knobProportion / max(0.001, 1 - thumb.knobProportion)
-        switch thumb.hitPart {
-        case .decrementPage: fraction -= page
-        case .incrementPage: fraction += page
-        case .decrementLine: fraction -= page / 10
-        case .incrementLine: fraction += page / 10
-        default: break
-        }
-        moved?(min(1, max(0, fraction)))
-    }
-}
-
-struct ChatScrollMarker: NSViewRepresentable {
-    let id: String
-    let position: ChatScrollPosition
-    func makeNSView(context: Context) -> Marker { Marker(id: id, position: position) }
-    func updateNSView(_ view: Marker, context: Context) { view.update(id: id, position: position) }
-    static func dismantleNSView(_ view: Marker, coordinator: ()) { view.position.unregister(view, id: view.id) }
-    final class Marker: NSView {
-        private(set) var id: String
-        private(set) var position: ChatScrollPosition
-        init(id: String, position: ChatScrollPosition) { self.id = id; self.position = position; super.init(frame: .zero) }
-        func update(id: String, position: ChatScrollPosition) {
-            if self.id != id || self.position !== position {
-                self.position.unregister(self, id: self.id)
-                self.id = id; self.position = position
-            }
-            position.register(self, id: id)
-        }
-        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-        override func hitTest(_ point: NSPoint) -> NSView? { nil }
-        override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); if window != nil { position.register(self, id: id) } }
-        override func setFrameOrigin(_ origin: NSPoint) {
-            guard origin != frame.origin else { return }
-            super.setFrameOrigin(origin); position.geometryChanged()
-        }
-        override func setFrameSize(_ size: NSSize) {
-            guard size != frame.size else { return }
-            super.setFrameSize(size); position.geometryChanged()
-        }
-        override func layout() { super.layout(); position.geometryChanged() }
-    }
+private struct WeakScroll {
+    weak var value: NSScrollView?
+    init(_ value: NSScrollView) { self.value = value }
 }
 
 /// A display link's target; the link retains it, and it holds its owner weakly.

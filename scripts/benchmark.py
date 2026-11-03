@@ -26,6 +26,8 @@ FULL = QUICK + ['testDesktopNavigationAndResize', 'testLiveTerminalInputAndScrol
                 'testSidebarScrollingAndFiltering', 'testSettings',
                 'testTerminalLifecycle', 'testIdleTerminals', 'testMixedOutputAndNavigation']
 EXPECTED = {
+    'testChatTranscriptContainerWorkloads': ['chat-transcript-cold-mount', 'chat-transcript-tab-switch',
+                                           'chat-transcript-stream', 'chat-transcript-scroll', 'chat-transcript-idle'],
     'testChatHistoryAndCodePreviews': ['chat-mixed-history-scroll-450', 'code-block-resize-350-lines', 'code-document-resize-350-lines'],
     'testDesktopNavigationAndResize': ['desktop-space-switch-6', 'desktop-tab-switch-12', 'desktop-sidebar-toggle', 'desktop-split-window-resize'],
     'testLiveTerminalInputAndScroll': [backend + '-' + action for backend in ('local', 'ssh', 'tmux', 'herdr')
@@ -262,10 +264,11 @@ def run(args):
                                           'skipped': 'skipped (' + ssh.get('reason', '') + ')'}[ssh['mode']], flush=True)
             write_json(folder / 'report.json', report)
             binary = folder / 'core-benchmark'
-            command(['xcrun', 'swiftc', '-O', '-swift-version', '6', '-module-cache-path', str(folder / 'modules'),
-                     'Dispatch/Herdr/HerdrLineBuffer.swift', 'Dispatch/Tmux/TmuxProtocol.swift',
-                     'Dispatch/Tmux/TmuxOutputFilter.swift', 'scripts/benchmarks/CoreBenchmark.swift',
-                     '-o', str(binary)], folder / 'core-build.log')
+            if args.suite != 'transcript':
+                command(['xcrun', 'swiftc', '-O', '-swift-version', '6', '-module-cache-path', str(folder / 'modules'),
+                         'Dispatch/Herdr/HerdrLineBuffer.swift', 'Dispatch/Tmux/TmuxProtocol.swift',
+                         'Dispatch/Tmux/TmuxOutputFilter.swift', 'scripts/benchmarks/CoreBenchmark.swift',
+                         '-o', str(binary)], folder / 'core-build.log')
             plan = None
             if args.suite != 'core':
                 products = OUTPUT / 'products'
@@ -283,8 +286,7 @@ def run(args):
             for index in range(args.runs):
                 repetition = folder / f'run-{index + 1}'
                 repetition.mkdir()
-                raw = subprocess.check_output([str(binary)], cwd=ROOT, text=True)
-                values = json.loads(raw)
+                values = [] if args.suite == 'transcript' else json.loads(subprocess.check_output([str(binary)], cwd=ROOT, text=True))
                 write_json(repetition / 'core.json', values)
                 metrics = []
                 for value in values:
@@ -292,7 +294,8 @@ def run(args):
                     metrics.append(metric(value['name'] + '/throughput', 'MiB/s',
                                           [value['bytesPerSample'] / 2**20 / x for x in value['seconds']], 'higher'))
                 if plan:
-                    selections = [UI + name for name in (QUICK if args.suite == 'quick' else FULL)]
+                    workloads = ['testChatTranscriptContainerWorkloads'] if args.suite == 'transcript' else (QUICK if args.suite == 'quick' else FULL)
+                    selections = [UI + name for name in workloads]
                     if args.suite in ('full', 'soak'):
                         selections += ['DispatchTests/UISettingsBenchmarkTests/testRepeatedSettingsLifecycle',
                                        'DispatchTests/ChatScrollBenchmarkTests/testDenseAgenticHistoryPaging']
@@ -383,7 +386,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='command', required=True)
     execute = sub.add_parser('run', help='Run serially; requires prepared offline build dependencies')
-    execute.add_argument('--suite', choices=['core', 'quick', 'full', 'soak'], default='core')
+    execute.add_argument('--suite', choices=['core', 'quick', 'full', 'soak', 'transcript'], default='core')
     execute.add_argument('--label', required=True)
     execute.add_argument('--runs', type=int, default=3)
     execute.add_argument('--desktop', action='store_true', help='Use the current unlocked desktop for UI suites')

@@ -658,10 +658,12 @@ final class SSHCoordinator {
             let deadline = ContinuousClock.now.advanced(by: SSHLinkTimeout.restore(for: recipe.host))
             for _ in 0... {
                 let consumers = runtime.hosts.reconnect.recipes[recipe.connection]?.surfaces ?? []
-                let retained = Set(recipe.backends.flatMap(\.presentation).filter { space in
+                let saved = Set(recipe.backends.flatMap(\.presentation).filter { space in
                     recipe.surfaces.contains(recipe.origin) || space.tabs.flatMap(\.surfaceIDs).contains(where: consumers.contains)
                 }.map(\.id))
-                if !recipe.surfaces.contains(recipe.origin), retained.isEmpty { throw CancellationError() }
+                if !recipe.surfaces.contains(recipe.origin), saved.isEmpty { throw CancellationError() }
+                // Spaces a Reconnect anyway found gone on the server are not waited for.
+                let retained = saved.subtracting(runtime.hosts.reconnect.droppedSpaces)
                 if retained.isEmpty { break }
                 try Task.checkCancellation()
                 if let state = connections.values.first(where: { $0.request.tabID == recipe.origin }) {
@@ -784,7 +786,7 @@ final class SSHCoordinator {
                     space.remote == id && space.backend.flatMap { helper?.multiplexer(of: $0) } != nil
                         && helper?.isRestoring(space.id) == false
                 }.map(\.id) ?? [])
-                if spaces.isSubset(of: restored) { break }
+                if spaces.subtracting(runtime.hosts.reconnect.droppedSpaces).isSubset(of: restored) { break }
                 if let error = helper?.error { throw HerdrFailure(error) }
                 guard ContinuousClock.now < deadline else {
                     throw SSHRecoveryIncomplete("The SSH shell reconnected, but its retained terminal spaces did not restore.")

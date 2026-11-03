@@ -508,8 +508,7 @@ final class ChatHistoryTests: XCTestCase {
         XCTAssertEqual(session.scrollPosition.isAtBottom(tolerance: 2), true)
         XCTAssertFalse(session.hasNewMessages)
         let document = try XCTUnwrap(scroll.documentView)
-        let latestMarker = try XCTUnwrap(PresentationTestSupport.views(of: ChatScrollMarker.Marker.self, in: document)
-            .first { $0.id == latestRowID })
+        let latestMarker = try XCTUnwrap(PresentationTestSupport.transcriptRows(in: document)[latestRowID])
         XCTAssertTrue(latestMarker.convert(latestMarker.bounds, to: document).intersects(scroll.contentView.bounds),
             "Opening history must leave the latest reply in the native viewport")
     }
@@ -529,6 +528,7 @@ final class ChatHistoryTests: XCTestCase {
         let coordinator = ChatCoordinator(enabled: false)
         let session = coordinator.session(for: System.uuid())
         session.sessionID = sessionID; session.transcriptPath = path.path; session.showChat = true
+        session.scrollPosition.automaticHistoryPrefetch = false // Search owns the page requests in this case.
         coordinator.start(); defer { coordinator.stop() }
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 700),
             styleMask: [.titled, .resizable], backing: .buffered, defer: false)
@@ -574,6 +574,8 @@ final class ChatHistoryTests: XCTestCase {
         let coordinator = ChatCoordinator(enabled: false)
         let session = coordinator.session(for: System.uuid())
         session.sessionID = sessionID; session.transcriptPath = path.path; session.showChat = true
+        // Control the explicit prepends independently of viewport prefetch; exercise prefetch at the end.
+        session.scrollPosition.automaticHistoryPrefetch = false
         coordinator.start(); defer { coordinator.stop() }
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 700), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -604,10 +606,10 @@ final class ChatHistoryTests: XCTestCase {
         XCTAssertLessThan(session.turns.count, 1_000, "Opening should leave history for the explicit prepend checks")
         let scroll = try XCTUnwrap(PresentationTestSupport.views(of: NSScrollView.self, in: try XCTUnwrap(window.contentView)).max { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) })
         XCTAssertTrue(session.atBottom)
-        // Use a position within a row, away from the automatic prefetch threshold.
+        // Move as a reader would: user input cancels following before changing the native offset.
+        session.scrollPosition.userWillScroll(deltaY: 32)
         scroll.contentView.scroll(to: NSPoint(x: 0, y: 700)); scroll.reflectScrolledClipView(scroll.contentView)
-        try await Task.sleep(for: .milliseconds(250))
-        session.atBottom = false
+        try await eventually { !session.loadingEarlier && !session.scrollPosition.isRestoring && !session.atBottom }
         let anchor = try XCTUnwrap(session.scrollPosition.visibleAnchor())
         session.scrollPosition.recordDiagnostic(.transcript, force: true)
         print("Paging before: \(anchor); geometry=\(String(decoding: try JSONEncoder().encode(geometry.last), as: UTF8.self))")
@@ -635,7 +637,7 @@ final class ChatHistoryTests: XCTestCase {
         XCTAssertTrue(session.loadingEarlier)
         XCTAssertEqual(session.turns.count, beforeDrag)
         scroll.contentView.scroll(to: NSPoint(x: 0, y: 1150)); scroll.reflectScrolledClipView(scroll.contentView)
-        // Lazy rows at the new position are registered on the next layout pass.
+        // The native document measures rows at the new position during layout.
         try await eventually { session.scrollPosition.visibleAnchor() != nil }
         let dragAnchor = try XCTUnwrap(session.scrollPosition.visibleAnchor())
         session.scrollPosition.handleScrollEvent(try PresentationTestSupport.mouseEvent(.leftMouseUp, in: window, at: point))
@@ -663,6 +665,8 @@ final class ChatHistoryTests: XCTestCase {
         // Scrolling into the top boundary fetches the next page automatically.
         let countBeforeScroll = session.turns.count
         let restoredScroll = try XCTUnwrap(PresentationTestSupport.views(of: NSScrollView.self, in: try XCTUnwrap(window.contentView)).max { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) })
+        session.scrollPosition.automaticHistoryPrefetch = true
+        session.scrollPosition.userWillScroll(deltaY: 32)
         restoredScroll.contentView.scroll(to: NSPoint(x: 0, y: 100)); restoredScroll.reflectScrolledClipView(restoredScroll.contentView)
         try await Task.sleep(for: .milliseconds(200))
         try await eventually { session.turns.count > countBeforeScroll }

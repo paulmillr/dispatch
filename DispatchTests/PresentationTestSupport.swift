@@ -241,6 +241,16 @@ enum PresentationTestSupport {
         accessibilityFrames(matching: { $0 == identifier }, label: label, in: window)
     }
 
+    static func accessibilityFrames(label: String, in window: NSWindow) -> [NSRect] {
+        var frames: [NSRect] = []
+        eachAccessibilityElement(in: window) { element in
+            if element.accessibilityLabel?() == label, let frame = element.accessibilityFrame?() {
+                frames.append(window.convertFromScreen(frame))
+            }
+        }
+        return frames
+    }
+
     /// Frames of the accessibility elements whose identifier satisfies `matches`, e.g. a per-row identifier's prefix.
     static func accessibilityFrames(matching matches: (String) -> Bool, label: String? = nil, in window: NSWindow) -> [NSRect] {
         var frames: [NSRect] = []
@@ -265,6 +275,17 @@ enum PresentationTestSupport {
             labels += [label, value].compactMap { $0 }.filter { !$0.isEmpty }
         }
         return labels
+    }
+
+    /// SwiftUI can inherit a containing row's identifier; a uniquely labelled control still exposes its own value.
+    static func accessibilityValues(label: String, in window: NSWindow) -> [String] {
+        var values: [String] = []
+        eachAccessibilityElement(in: window) { element in
+            guard element.accessibilityLabel?() == label else { return }
+            let readValue: (() -> Any?)? = element.accessibilityValue
+            if let value = readValue?() as? String { values.append(value) }
+        }
+        return values
     }
 
     private static func eachAccessibilityElement(in window: NSWindow, _ body: (AnyObject) -> Void) {
@@ -511,5 +532,15 @@ extension PresentationTestSupport {
             throw OCRTimeout()
         }
         if let error = outcome.error { throw error }
+    }
+}
+
+extension PresentationTestSupport {
+    /// The chat transcript rows under `root` that the native document shows (`ChatTranscriptDocument.mountedRows`),
+    /// by row ID: each value is the row's hosting view, whose frame is the row's frame in the document.
+    static func transcriptRows(in root: NSView) -> [String: NSView] {
+        views(of: ChatTranscriptDocument.self, in: root).reduce(into: [:]) { rows, document in
+            rows.merge(document.mountedRows) { first, _ in first }
+        }
     }
 }

@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import OSLog
 import Observation
@@ -268,6 +269,40 @@ actor ChatViewportTraceWriter {
                 try handle.write(contentsOf: data)
             }
             size += data.count
+        }
+    }
+}
+
+extension ChatViewportTrace.Markers {
+    /// Every row the transcript holds, hidden ones included: where they lie relative to the clip explains a blank.
+    /// The record keeps the visible rows first, then the nearest others, at most 16, without their IDs.
+    @MainActor init(rows: [String: NSView], in document: NSView, clip: NSRect, token: (String) -> String,
+                    info: (Set<String>) -> [String: ChatViewportTrace.RowInfo]) {
+        self.init()
+        registered = rows.count
+        var found: [(id: String, frame: NSRect, alpha: Double, hidden: Bool, visible: Bool)] = []
+        for (id, view) in rows where view.window != nil {
+            mounted += 1
+            let frame = view.convert(view.bounds, to: document)
+            var alpha = 1.0, ancestor: NSView? = view
+            while let node = ancestor { alpha *= node.alphaValue; ancestor = node.superview }
+            let isHidden = view.isHiddenOrHasHiddenAncestor
+            var isVisible = false
+            if isHidden { hidden += 1 }
+            else if frame.width <= 1 || frame.height <= 1 { empty += 1 }
+            else if frame.intersects(clip) {
+                if alpha <= 0.01 { transparent += 1 }
+                visible += 1; isVisible = true
+            }
+            found.append((id, frame, alpha, isHidden, isVisible))
+        }
+        let sampled = found.sorted { lhs, rhs in
+            lhs.visible != rhs.visible ? lhs.visible : abs(lhs.frame.midY - clip.midY) < abs(rhs.frame.midY - clip.midY)
+        }.prefix(16).sorted { $0.frame.minY < $1.frame.minY }
+        let categories = info(Set(sampled.map(\.id)))
+        self.rows = sampled.map {
+            .init(token: token($0.id), frame: .init($0.frame), alpha: $0.alpha, hidden: $0.hidden,
+                  index: categories[$0.id]?.index, kind: categories[$0.id]?.kind)
         }
     }
 }

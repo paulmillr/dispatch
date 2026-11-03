@@ -43,7 +43,9 @@ final class HostPerformanceTests: XCTestCase {
             for candidate in NSApp.windows where candidate !== window && candidate.isVisible {
                 let text = try await PresentationTestSupport.capture(candidate).text()
                 popoverText = text
-                if text.localizedCaseInsensitiveContains("ssh") && text.contains("admin@homelab") { return true }
+                // Vision can insert whitespace around @. Still require the complete account and host.
+                let compact = text.filter { !$0.isWhitespace }
+                if text.localizedCaseInsensitiveContains("ssh") && compact.contains("admin@homelab") { return true }
             }
             return false
         }

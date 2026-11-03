@@ -692,20 +692,8 @@ extension ChatCoordinator {
                 }
             } catch {
                 guard session.helper === helper, session.submissionID == id else { return }
-                // The agent exited before the command's reply: the exit was delivered.
-                if exits, !session.active {
-                    if let delivery { session.drafts.finish(delivery, success: true) }
-                    if let queued { session.queuedMessages.removeAll { $0.id == queued.id } }
-                    session.command = nil
-                    session.observedCommand = nil
-                    session.awaitingPromptAck = false
-                    session.promptBoundary = nil
-                    session.submissionID = nil
-                    session.queuedSubmissionID = nil
-                    session.helperTask = nil
-                    if !self.filesShowing(session) { self.setChatVisible(false, session: session, reason: "exit") }
-                    return
-                }
+                // An exit notification can overtake a refused Return. It changes presentation, but only the
+                // checked delivery result above can acknowledge the command and consume its draft.
                 if exits { session.exitRequested = false }
                 let attention = command && (error as? HelperFailure)?.code == "attention"
                 if let delivery { session.drafts.finish(delivery, success: attention) }

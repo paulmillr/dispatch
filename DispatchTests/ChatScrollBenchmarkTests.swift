@@ -90,10 +90,10 @@ final class ChatScrollBenchmarkTests: XCTestCase {
                     let oldHeight = document.bounds.height
                     let oldRevision = session.historyRevision
                     let oldAnchor = session.scrollPosition.visibleAnchor()
-                    let before = Dictionary(PresentationTestSupport.views(of: ChatScrollMarker.Marker.self, in: document).compactMap { marker -> (String, CGFloat)? in
+                    let before = PresentationTestSupport.transcriptRows(in: document).compactMapValues { marker -> CGFloat? in
                         let frame = marker.convert(marker.bounds, to: document).offsetBy(dx: 0, dy: -scroll.contentView.bounds.minY)
-                        return frame.maxY > 1 && frame.minY < scroll.contentView.bounds.height ? (marker.id, frame.minY) : nil
-                    }, uniquingKeysWith: { first, _ in first })
+                        return frame.maxY > 1 && frame.minY < scroll.contentView.bounds.height ? frame.minY : nil
+                    }
                     session.scrollPosition.userWillScroll(deltaY: 40)
                     scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, scroll.contentView.bounds.minY - 40)))
                     scroll.reflectScrolledClipView(scroll.contentView)
@@ -101,8 +101,8 @@ final class ChatScrollBenchmarkTests: XCTestCase {
                     if session.loadingEarlier { loadingFrames += 1 }
                     try await Task.sleep(for: .milliseconds(16))
                     if !before.isEmpty {
-                        let movements = PresentationTestSupport.views(of: ChatScrollMarker.Marker.self, in: document).compactMap { marker -> Double? in
-                            guard let offset = before[marker.id] else { return nil }
+                        let movements = PresentationTestSupport.transcriptRows(in: document).compactMap { id, marker -> Double? in
+                            guard let offset = before[id] else { return nil }
                             return Double(marker.convert(marker.bounds, to: document).minY - scroll.contentView.bounds.minY - offset)
                         }.sorted()
                         if movements.isEmpty {
@@ -112,7 +112,7 @@ final class ChatScrollBenchmarkTests: XCTestCase {
                                 "oldRevision": oldRevision, "revision": session.historyRevision,
                                 "before": before, "restoring": session.scrollPosition.isRestoring,
                                 "rows": session.visibleTranscriptRows.map(\.id),
-                                "mounted": PresentationTestSupport.views(of: ChatScrollMarker.Marker.self, in: document).map(\.id)])
+                                "mounted": Array(PresentationTestSupport.transcriptRows(in: document).keys)])
                         }
                         else {
                             let movement = abs(movements[movements.count / 2])
@@ -438,8 +438,11 @@ final class ScrollFrames: NSObject {
     var distance = 0.0
     private var gaps: [Double] = [], work: [Double] = [], positions: [Double] = []
     private var previous = 0.0, pending = 0.0, start = 0.0
+    private var cycleStarted = 0.0
     private var direction: Int32 = 1
     private var link: CADisplayLink?
+    private var inputTimer: Timer?
+    private let inputHz: Double?
     private var observer: CFRunLoopObserver?
     private var peak: UInt64 = 0
     private let measureContinuity: Bool
@@ -459,31 +462,53 @@ final class ScrollFrames: NSObject {
     private(set) var lostVisibleAnchors = 0
     private var discontinuities: [[String: Any]] = []
 
-    init(scroll: NSScrollView, window: NSWindow, position: ChatScrollPosition, measureContinuity: Bool, pauseBetweenGestures: Bool, liveSession: ChatSession? = nil, speed: Double = 2400) {
+    init(scroll: NSScrollView, window: NSWindow, position: ChatScrollPosition, measureContinuity: Bool, pauseBetweenGestures: Bool, liveSession: ChatSession? = nil, speed: Double = 2400, inputHz: Double? = nil) {
         self.scroll = scroll; self.window = window; self.position = position; self.measureContinuity = measureContinuity
         self.pauseBetweenGestures = pauseBetweenGestures
         self.liveSession = liveSession; self.speed = speed
+        self.inputHz = inputHz
     }
 
     func run(seconds: Double) async -> [String: Any] {
-        let before = resident(), cpu = cpuTime()
+        let before = resident(), cpu = cpuTime(), mainCPU = mainCPUTime()
         peak = before; start = CACurrentMediaTime()
         initialHistoryRevision = liveSession?.historyRevision ?? 0
         initialTurnCount = liveSession?.turns.count ?? 0
-        let link = window.displayLink(target: self, selector: #selector(tick))
-        self.link = link
         let fps = Float(window.screen?.maximumFramesPerSecond ?? 60)
-        link.preferredFrameRateRange = CAFrameRateRange(minimum: fps, maximum: fps, preferred: fps)
-        observer = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.beforeWaiting.rawValue, true, CFIndex.max) { [weak self] _, _ in
+        if let inputHz {
+            let timer = Timer(timeInterval: 1 / inputHz, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.advance(duration: 1 / inputHz) }
+            }
+            inputTimer = timer
+            RunLoop.main.add(timer, forMode: .common)
+        } else {
+            let link = window.displayLink(target: self, selector: #selector(tick))
+            self.link = link
+            link.preferredFrameRateRange = CAFrameRateRange(minimum: fps, maximum: fps, preferred: fps)
+            link.add(to: .main, forMode: .common)
+        }
+        let activities = inputHz == nil ? CFRunLoopActivity.beforeWaiting.rawValue
+            : CFRunLoopActivity.beforeWaiting.rawValue | CFRunLoopActivity.afterWaiting.rawValue | CFRunLoopActivity.beforeTimers.rawValue
+        observer = CFRunLoopObserverCreateWithHandler(nil, activities, true, CFIndex.max) { [weak self] _, activity in
             MainActor.assumeIsolated {
-                guard let self, self.pending > 0 else { return }
-                self.work.append(CACurrentMediaTime() - self.pending); self.pending = 0
+                guard let self else { return }
+                let now = CACurrentMediaTime()
+                if self.inputHz != nil {
+                    // Timer input and SwiftUI drawing can occupy different run-loop turns. Include every busy
+                    // turn from wake/source processing through the last before-waiting observer, not just input.
+                    if activity == .beforeWaiting {
+                        if self.cycleStarted > 0 { self.work.append(now - self.cycleStarted) }
+                        self.cycleStarted = 0; self.pending = 0
+                    } else if self.cycleStarted == 0 { self.cycleStarted = now }
+                } else if self.pending > 0 {
+                    self.work.append(now - self.pending); self.pending = 0
+                }
             }
         }
         CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
-        link.add(to: .main, forMode: .common)
         try? await Task.sleep(for: .seconds(seconds))
-        link.invalidate(); self.link = nil
+        link?.invalidate(); self.link = nil
+        inputTimer?.invalidate(); inputTimer = nil
         CFRunLoopRemoveObserver(CFRunLoopGetMain(), observer, .commonModes); observer = nil
         let elapsed = CACurrentMediaTime() - start
         if let waitStart { waits.append(CACurrentMediaTime() - waitStart) }
@@ -494,12 +519,14 @@ final class ScrollFrames: NSObject {
             "displayName": window.screen?.localizedName ?? "Unknown",
             "windowWidth": window.frame.width, "windowHeight": window.frame.height,
             "callbacks": positions.count, "callbackHz": Double(positions.count) / elapsed,
+            "requestedInputHz": inputHz ?? Double(fps),
             "gapP50Ms": percentile(gaps, 0.5), "gapP95Ms": percentile(gaps, 0.95), "gapMaxMs": percentile(gaps, 1),
             "workP50Ms": percentile(work, 0.5), "workP95Ms": percentile(work, 0.95), "workMaxMs": percentile(work, 1),
             "workP99Ms": percentile(work, 0.99),
             "workOver120Budget": work.filter { $0 > 1.0 / 120 }.count,
             "lateDisplayIntervals": gaps.filter { $0 > 1.5 / Double(fps) }.count,
             "rssBefore": before, "rssAfter": resident(), "rssPeak": peak, "cpuSeconds": cpuTime() - cpu,
+            "mainCPUSeconds": mainCPUTime() - mainCPU,
             "livePages": liveSession != nil, "speed": speed,
             "boundaryWaitSeconds": boundarySeconds, "boundaryWaitEpisodes": waits.count,
             "boundaryWaitMaxMs": (waits.max() ?? 0) * 1000,
@@ -516,14 +543,18 @@ final class ScrollFrames: NSObject {
             "maxMessageMovement": messageMovements.map { abs($0) }.max() ?? 0]
     }
     @objc private func tick(_ sender: CADisplayLink) {
+        advance(duration: sender.duration)
+    }
+    private func advance(duration: Double) {
         let now = CACurrentMediaTime()
+        let elapsed = previous > 0 ? min(0.1, now - previous) : duration
         if previous > 0 {
             gaps.append(now - previous)
             if wasBlocked { boundarySeconds += now - previous }
             if wasLoadingNearEdge { loadingNearEdgeSeconds += now - previous }
             if wasLoading { loadingSeconds += now - previous }
         }
-        if pending > 0 { work.append(now - pending) }
+        if inputHz == nil, pending > 0 { work.append(now - pending) }
         pending = now; previous = now
         let old = scroll.contentView.bounds.minY
         if let session = liveSession {
@@ -556,9 +587,9 @@ final class ScrollFrames: NSObject {
         if measureContinuity, let document = scroll.documentView {
             // Optional diagnostic work: leave it off for comparable frame-time
             // benchmarks, and retain viewport-relative movement for jump tests.
-            let current = Dictionary(PresentationTestSupport.views(of: ChatScrollMarker.Marker.self, in: document).map {
-                ($0.id, $0.convert($0.bounds, to: document).offsetBy(dx: 0, dy: -old))
-            }, uniquingKeysWith: { first, _ in first })
+            let current = PresentationTestSupport.transcriptRows(in: document).mapValues {
+                $0.convert($0.bounds, to: document).offsetBy(dx: 0, dy: -old)
+            }
             if !visibleFrames.isEmpty {
                 let movement = visibleFrames.compactMap { id, frame in current[id].map { Double($0.minY - frame.minY) } }.sorted()
                 if movement.isEmpty { lostVisibleAnchors += 1 }
@@ -578,14 +609,19 @@ final class ScrollFrames: NSObject {
         else if old < 50 { direction = -1 }
         else if old > maximum - 50 { direction = 1 }
         // Requested speed is independent of the display's refresh rate.
-        let pixels = direction * Int32(max(1, speed * sender.duration))
+        let pixels = direction * Int32(max(1, speed * elapsed))
         // Real readers pause between gestures. Continue measuring every display
         // frame during the pause, including the deferred history publication.
         previousPixels = 0
         if pauseBetweenGestures && (now - start).truncatingRemainder(dividingBy: 2) >= 1.4 { return }
         previousPixels = Double(abs(pixels))
         if let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: pixels, wheel2: 0, wheel3: 0),
-           let event = NSEvent(cgEvent: cg) {
+           let screen = NSScreen.screens.first {
+            // A CGEvent has no window: choose coordinates that NSEvent reads back as the scroll view's
+            // gutter in window coordinates, independently of where the physical pointer happens to be.
+            let point = scroll.convert(NSPoint(x: scroll.bounds.minX + 8, y: scroll.bounds.midY), to: nil)
+            cg.location = CGPoint(x: point.x, y: screen.frame.height - point.y)
+            guard let event = NSEvent(cgEvent: cg) else { return }
             // Directly delivered synthetic wheel events bypass AppKit's local
             // event monitor. Exercise the same transcript coordination callback
             // before every delivery, including fixed-history scrolling.
@@ -607,5 +643,18 @@ final class ScrollFrames: NSObject {
     private func cpuTime() -> Double {
         var usage = rusage(); getrusage(RUSAGE_SELF, &usage)
         return Double(usage.ru_utime.tv_sec + usage.ru_stime.tv_sec) + Double(usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) / 1e6
+    }
+    private func mainCPUTime() -> Double {
+        var info = thread_basic_info()
+        var count = mach_msg_type_number_t(MemoryLayout<thread_basic_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let thread = mach_thread_self(); defer { mach_port_deallocate(mach_task_self_, thread) }
+        let result = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                thread_info(thread, thread_flavor_t(THREAD_BASIC_INFO), $0, &count)
+            }
+        }
+        guard result == KERN_SUCCESS else { return 0 }
+        return Double(info.user_time.seconds + info.system_time.seconds)
+            + Double(info.user_time.microseconds + info.system_time.microseconds) / 1_000_000
     }
 }

@@ -11,7 +11,6 @@ final class ChatScrollStabilityTests: XCTestCase {
         let fixture = try NativeScrollFixture(rows: 0)
         defer { fixture.close() }
         fixture.position.registerViewport(fixture.document)
-        fixture.position.bottomRowID = { nil }
         fixture.position.hasContent = { false }
         fixture.position.jumpToLatest()
         XCTAssertFalse(fixture.position.isRestoring, "An empty page has no last row to realize")
@@ -21,71 +20,11 @@ final class ChatScrollStabilityTests: XCTestCase {
         try await TestSupport.eventually(timeout: .seconds(1)) { requests > 0 }
     }
 
-    func testFollowingUsesTheMeasuredLastRowInsteadOfAnInflatedDocumentEstimate() throws {
-        let fixture = try NativeScrollFixture(rows: 8)
-        defer { fixture.close() }
-        fixture.position.bottomRowID = { "row-7" }
-        fixture.position.bottomContentInset = 97
-        fixture.position.followsBottom = { true }
-        // The lazy stack's estimate grows before its final row moves. Following that estimate would leave
-        // every message above the viewport, even though the last row already supplies an exact destination.
-        fixture.document.frame.size.height = 12_000
-        fixture.position.jumpToLatest()
-        let measuredBottom = fixture.markers[7].frame.maxY + 97
-        XCTAssertEqual(fixture.scroll.contentView.bounds.maxY, measuredBottom, accuracy: 0.5)
-        XCTAssertTrue(fixture.position.showsRows())
-        XCTAssertEqual(fixture.position.isAtBottom(tolerance: 1), true)
-    }
-
-    func testPendingBottomRealizationYieldsToUserScrolling() async throws {
-        let fixture = try NativeScrollFixture(rows: 8)
-        defer { fixture.close() }
-        fixture.position.bottomRowID = { "row-7" }
-        var following = true
-        fixture.position.followsBottom = { following }
-        fixture.position.userScrolled = { following = false }
-        fixture.markers[7].removeFromSuperview()
-        var requests = 0
-        fixture.position.realizeBottom = { _ in requests += 1 }
-        fixture.position.jumpToLatest()
-        fixture.position.userWillScroll(deltaY: 20)
-        fixture.move(to: 450)
-        let start = ProcessInfo.processInfo.systemUptime
-        try await TestSupport.eventually { ProcessInfo.processInfo.systemUptime - start > 0.1 }
-        XCTAssertEqual(requests, 0, "The queued item scroll must not override the reader")
-        XCTAssertEqual(fixture.scroll.contentView.bounds.minY, 450, accuracy: 0.5)
-    }
-
-    func testExplicitJumpAfterCancellingAQueuedJumpStillRealizesTheLastRow() async throws {
-        let fixture = try NativeScrollFixture(rows: 8)
-        defer { fixture.close() }
-        fixture.position.bottomRowID = { "row-7" }
-        fixture.position.followsBottom = { false }
-        let last = fixture.markers[7]
-        last.removeFromSuperview()
-        var requests = 0
-        fixture.position.realizeBottom = { id in
-            XCTAssertEqual(id, last.id)
-            requests += 1
-            fixture.document.addSubview(last)
-        }
-        fixture.position.jumpToLatest()
-        fixture.position.userWillScroll(deltaY: 20)
-        fixture.move(to: 450)
-        // This new explicit intent must survive the cancelled request's queued callback, even though normal
-        // following is still off. No wheel or watchdog tick should be needed to finish it.
-        fixture.position.jumpToLatest()
-        try await TestSupport.eventually(timeout: .seconds(1)) {
-            !fixture.position.isRestoring && fixture.position.isAtBottom(tolerance: 1) == true
-        }
-        XCTAssertEqual(requests, 1)
-        XCTAssertTrue(fixture.position.showsRows())
-    }
-
     func testDiagnosticsOptInDiscardsQueuedSamplesOnDisableAndCanReenable() async throws {
         let fixture = try NativeScrollFixture(rows: 8)
         defer { fixture.close() }
-        fixture.markers[0].update(id: "private-user@private-host:/Users/private-user/private-transcript", position: fixture.position)
+        fixture.ids[0] = "private-user@private-host:/Users/private-user/private-transcript"
+        fixture.update()
         var sample: ChatViewportTrace.Sample?
         fixture.position.diagnosticSink = { sample = $0 }
         fixture.position.recordDiagnostic(.watchdog, force: true)
@@ -139,7 +78,7 @@ final class ChatScrollStabilityTests: XCTestCase {
         XCTAssertEqual(recorder.error, "Could not write diagnostics. Check access to the log folder.")
     }
 
-    func testViewportTraceDistinguishesMissingRowsAndRecordsRecoveryWithoutText() async throws {
+    func testViewportTraceReportsVisibleAndMissingRowsWithoutText() async throws {
         let fixture = try NativeScrollFixture(rows: 8)
         defer { fixture.close() }
         fixture.move(to: 750)
@@ -154,26 +93,27 @@ final class ChatScrollStabilityTests: XCTestCase {
         fixture.position.recordDiagnostic(.transcript, force: true)
         let healthy = try XCTUnwrap(samples.last)
         XCTAssertEqual(healthy.transcript?.rows, 8)
-        XCTAssertEqual(healthy.markers.mounted, 8)
+        XCTAssertGreaterThan(healthy.markers.mounted, 0)
+        XCTAssertEqual(healthy.markers.mounted, fixture.rows.count)
         XCTAssertGreaterThan(healthy.markers.visible, 0)
         XCTAssertEqual(healthy.clip?.y, fixture.scroll.contentView.bounds.minY)
         XCTAssertEqual(healthy.document?.height, 2400)
         XCTAssertFalse(String(decoding: try JSONEncoder().encode(healthy), as: UTF8.self).contains("row-"))
-        fixture.markers.forEach { $0.removeFromSuperview() }
+        let rows = Array(fixture.rows.values)
+        rows.forEach { $0.removeFromSuperview() }
         let start = ProcessInfo.processInfo.systemUptime
         for second in 0...4 {
             fixture.position.geometryChanged()
             fixture.position.checkViewport(now: start + Double(second))
         }
-        let blank = try XCTUnwrap(samples.first { $0.event == .blank })
+        let blank = try XCTUnwrap(samples.last { $0.event == .mountCheck })
         XCTAssertEqual(blank.transcript?.rows, 8)
         XCTAssertEqual(blank.markers.mounted, 0)
         XCTAssertEqual(blank.markers.visible, 0)
-        XCTAssertTrue(samples.contains { $0.event == .recoveryRequested })
-        XCTAssertTrue(samples.contains { $0.event == .rebuildRequested })
-        fixture.markers.forEach { fixture.document.addSubview($0) }
+        XCTAssertFalse(samples.contains { $0.event == .recoveryRequested || $0.event == .rebuildRequested })
+        rows.forEach { fixture.document.addSubview($0) }
         fixture.position.checkViewport(now: start + 5)
-        XCTAssertGreaterThan(try XCTUnwrap(samples.last { $0.event == .recovered }).markers.visible, 0)
+        XCTAssertGreaterThan(try XCTUnwrap(samples.last { $0.event == .mountCheck }).markers.visible, 0)
         fixture.position.disconnect()
         XCTAssertEqual(samples.last?.event, .disconnected)
         XCTAssertNil(fixture.position.diagnosticState)
@@ -239,57 +179,7 @@ final class ChatScrollStabilityTests: XCTestCase {
         XCTAssertTrue(text.contains("\"count\":8"))
     }
 
-    func testViewportTraceRecordsPostMountHiddenRowsAndTheScrollThatRevealsThem() async throws {
-        // The observed failure: right after remounting, the lazy stack keeps
-        // its realized rows mounted but hidden, until the reader scrolls.
-        let position = ChatScrollPosition()
-        var samples: [ChatViewportTrace.Sample] = []
-        position.diagnosticSink = { samples.append($0) }
-        let fixture = try NativeScrollFixture(rows: 8, position: position)
-        defer { fixture.close() }
-        position.hasContent = { true }
-        fixture.markers.forEach { $0.isHidden = true }
-        try await TestSupport.eventually(timeout: .seconds(2)) { samples.contains { $0.event == .mountBlank } }
-        let blank = try XCTUnwrap(samples.first { $0.event == .mountBlank })
-        XCTAssertLessThan(try XCTUnwrap(blank.sinceAttach), 1, "Recorded before the watchdog's two-interval escalation")
-        XCTAssertEqual(blank.markers.mounted, 8)
-        XCTAssertEqual(blank.markers.hidden, 8)
-        XCTAssertEqual(blank.markers.visible, 0)
-        XCTAssertEqual(blank.markers.rows.count, 8, "Hidden rows keep their frames in the record")
-        XCTAssertTrue(blank.markers.rows.allSatisfy(\.hidden))
-        XCTAssertEqual(blank.markers.rows.map(\.frame.y), (0..<8).map { Double($0) * 300 })
-        fixture.position.userWillScroll(deltaY: -20)
-        let firstScroll = try XCTUnwrap(samples.last { $0.event == .userScroll }, "The scroll that ends a blank is sampled despite throttling")
-        XCTAssertEqual(firstScroll.markers.visible, 0)
-        XCTAssertFalse(samples.contains { $0.event == .mountRecovered })
-        // As SwiftUI does once it observes the reader's scroll.
-        fixture.markers.forEach { $0.isHidden = false }
-        fixture.move(to: 40)
-        let recovered = try XCTUnwrap(samples.last { $0.event == .mountRecovered })
-        XCTAssertGreaterThan(recovered.markers.visible, 0)
-        XCTAssertLessThan(try XCTUnwrap(recovered.wheelAge), 1, "The record attributes recovery to the reader")
-        XCTAssertEqual(samples.filter { $0.event == .mountRecovered }.count, 1)
-    }
-
-    func testPostMountHiddenRowsRebuildOnceWithoutWaitingForWheelOrWatchdog() async throws {
-        // Switching to a busy chat tab: the remounted lazy stack is already at
-        // its destination but keeps only hidden rows, so an item scroll is a
-        // no-op. The reader must not have to scroll to see the transcript.
-        let position = ChatScrollPosition()
-        var attempts: [(ChatScrollPosition.Anchor?, Bool)] = []
-        position.hasContent = { true }
-        position.recoverViewport = { attempts.append(($0, $1)) }
-        let fixture = try NativeScrollFixture(rows: 8, position: position)
-        defer { fixture.close() }
-        fixture.markers.forEach { $0.isHidden = true }
-        try await TestSupport.eventually(timeout: .milliseconds(1000)) { !attempts.isEmpty }
-        XCTAssertEqual(attempts.map(\.1), [true])
-        XCTAssertEqual(position.interactionRevision, 0, "Recovery is not user scrolling")
-        try await Task.sleep(for: .milliseconds(600))
-        XCTAssertEqual(attempts.count, 1, "One rebuild per mount")
-    }
-
-    func testViewportTraceReportsSwiftUIScrollGeometryAndRowCategoriesWithoutText() async throws {
+    func testViewportTraceReportsNativeGeometryAndRowCategoriesWithoutText() async throws {
         try DesktopTestSupport.requireUnlocked(); AppFont.register()
         let coordinator = ChatCoordinator(enabled: false)
         defer { coordinator.stop() }
@@ -308,20 +198,11 @@ final class ChatScrollStabilityTests: XCTestCase {
         defer { session.scrollPosition.disconnect(); window.orderOut(nil); window.contentView = nil; window.close() }
         window.contentView = NSHostingView(rootView: ChatView(session: session, coordinator: coordinator, focused: false, floatingSwitch: false))
         window.makeKeyAndOrderFront(nil)
-        // A settled mount check (0.8 s): the first ones can precede SwiftUI's next geometry report while rows replace
-        // their estimated heights.
-        try await TestSupport.eventually(timeout: .seconds(3)) {
-            samples.contains { $0.event == .mountCheck && ($0.sinceAttach ?? 0) >= 0.7 }
-        }
+        try await TestSupport.eventually(timeout: .seconds(3)) { session.scrollPosition.showsRows() }
+        session.scrollPosition.checkViewport()
         let sample = try XCTUnwrap(samples.last { $0.event == .mountCheck })
-        let clip = try XCTUnwrap(sample.clip)
-        if #available(macOS 15, *) {
-            // SwiftUI's view of the same viewport; a disagreement is the signal.
-            let swiftUI = try XCTUnwrap(sample.swiftUI)
-            XCTAssertEqual(swiftUI.containerHeight, clip.height, accuracy: 1)
-            XCTAssertEqual(swiftUI.visibleY, clip.y, accuracy: 1)
-            XCTAssertEqual(swiftUI.contentHeight, try XCTUnwrap(sample.document).height, accuracy: 48)
-        }
+        XCTAssertNotNil(sample.clip)
+        XCTAssertNil(sample.swiftUI, "The transcript has one native layout authority")
         let rows = sample.markers.rows
         XCTAssertFalse(rows.isEmpty)
         let count = session.visibleTranscriptRows.count
@@ -332,87 +213,7 @@ final class ChatScrollStabilityTests: XCTestCase {
         XCTAssertFalse(String(decoding: try JSONEncoder().encode(samples), as: UTF8.self).contains("Private"))
     }
 
-    func testBlankViewportRecoversDespiteContinuousLayoutUpdates() async throws {
-        let fixture = try NativeScrollFixture(rows: 8)
-        defer { fixture.close() }
-        fixture.move(to: 750)
-        try await Task.sleep(for: .milliseconds(60))
-        let anchor = try XCTUnwrap(fixture.position.visibleAnchor())
-        fixture.position.hasContent = { true }
-        var attempts: [(ChatScrollPosition.Anchor?, Bool)] = []
-        fixture.position.recoverViewport = { attempts.append(($0, $1)) }
-        fixture.markers.forEach { $0.removeFromSuperview() }
-        fixture.position.restore(anchor)
-        let start = ProcessInfo.processInfo.systemUptime
-        for second in 0...4 {
-            // Keep a layout adjustment queued at every watchdog check, as can
-            // happen while new messages stream into an empty lazy viewport.
-            fixture.position.geometryChanged()
-            fixture.position.checkViewport(now: start + Double(second))
-        }
-        XCTAssertEqual(attempts.first?.0, anchor)
-        XCTAssertEqual(attempts.first?.1, false)
-        XCTAssertEqual(attempts.last?.1, true, "Layout churn must not starve viewport recovery")
-        XCTAssertEqual(fixture.position.interactionRevision, 0)
-    }
-
-    func testIdleViewportDetectsMissingRowsAndEscalatesRecoveryWithoutWheelInput() async throws {
-        let fixture = try NativeScrollFixture(rows: 8)
-        defer { fixture.close() }
-        fixture.move(to: 750)
-        try await Task.sleep(for: .milliseconds(60))
-        let anchor = try XCTUnwrap(fixture.position.visibleAnchor())
-        var attempts: [(ChatScrollPosition.Anchor?, Bool)] = []
-        fixture.position.hasContent = { true }
-        fixture.position.recoverViewport = { attempts.append(($0, $1)) }
-        // Preserve the document extent but remove the mounted row range, as can
-        // happen when a lazy transcript invalidates its realized content.
-        fixture.markers.forEach { $0.removeFromSuperview() }
-        // A restoration can also stall after its first realization request if
-        // the lazy stack produces no subsequent geometry notification.
-        fixture.position.restore(anchor)
-        try await TestSupport.eventually(timeout: .seconds(9)) { attempts.contains { $0.1 } }
-        XCTAssertEqual(attempts.first?.0, anchor)
-        XCTAssertEqual(attempts.first?.1, false, "Realize the retained row before rebuilding")
-        XCTAssertEqual(attempts.last?.0, anchor)
-        XCTAssertEqual(fixture.position.interactionRevision, 0, "Recovery is not user scrolling")
-        let count = attempts.count
-        fixture.markers.forEach { fixture.document.addSubview($0) }
-        try await Task.sleep(for: .milliseconds(60))
-        fixture.position.checkViewport(redraw: true)
-        XCTAssertEqual(attempts.count, count, "Healthy content must not be rebuilt")
-        XCTAssertEqual(fixture.position.visibleAnchor(), anchor)
-    }
-
-    func testViewportRecoveryIgnoresEmptyHiddenAndActivelyScrolledContentAndDisconnects() async throws {
-        let fixture = try NativeScrollFixture(rows: 8)
-        defer { fixture.close() }
-        try await Task.sleep(for: .milliseconds(60))
-        fixture.markers.forEach { $0.removeFromSuperview() }
-        var attempts = 0
-        fixture.position.recoverViewport = { _, _ in attempts += 1 }
-        try await Task.sleep(for: .milliseconds(850))
-        let now = ProcessInfo.processInfo.systemUptime
-        fixture.position.hasContent = { false }
-        for index in 0..<4 { fixture.position.checkViewport(now: now + Double(index)) }
-        fixture.position.hasContent = { true }
-        fixture.scroll.isHidden = true
-        for index in 0..<4 { fixture.position.checkViewport(now: now + Double(index)) }
-        fixture.scroll.isHidden = false
-        fixture.position.scrollbar?.beganDragging?()
-        for index in 0..<4 { fixture.position.checkViewport(now: now + Double(index)) }
-        fixture.position.scrollbar?.endedDragging?()
-        fixture.position.userWillScroll(deltaY: 10)
-        for _ in 0..<4 { fixture.position.checkViewport() }
-        XCTAssertEqual(attempts, 0)
-        fixture.position.disconnect()
-        fixture.position.checkViewport(redraw: true)
-        XCTAssertNil(fixture.position.hasContent)
-        XCTAssertNil(fixture.position.recoverViewport)
-        XCTAssertEqual(attempts, 0)
-    }
-
-    func testTranscriptRebuildAndWakePreserveReadingPositionDraftAndIdleThinking() async throws {
+    func testNativeRelayoutAndWakePreserveReadingPositionDraftAndIdleThinking() async throws {
         try DesktopTestSupport.requireUnlocked(); AppFont.register()
         let coordinator = ChatCoordinator(enabled: false)
         defer { coordinator.stop() }
@@ -438,12 +239,11 @@ final class ChatScrollStabilityTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(400))
         let anchor = try XCTUnwrap(session.scrollPosition.visibleAnchor())
         XCTAssertFalse(session.atBottom)
-        let originalMarker = try XCTUnwrap(PresentationTestSupport.views(of: ChatScrollMarker.Marker.self, in: document)
-            .first { $0.id == anchor.id })
-        session.scrollPosition.recoverViewport?(anchor, true)
+        let originalMarker = try XCTUnwrap(PresentationTestSupport.transcriptRows(in: document)[anchor.id])
+        session.scrollPosition.restore(anchor)
         try await TestSupport.eventually(timeout: .seconds(5)) {
             guard let restored = session.scrollPosition.visibleAnchor() else { return false }
-            return originalMarker.window == nil && restored.id == anchor.id && abs(restored.offset - anchor.offset) < 2
+            return originalMarker.window === window && restored.id == anchor.id && abs(restored.offset - anchor.offset) < 2
         }
         window.orderOut(nil)
         try await Task.sleep(for: .milliseconds(100))
@@ -457,7 +257,7 @@ final class ChatScrollStabilityTests: XCTestCase {
         let snapshot = try await PresentationTestSupport.capture(window, named: "idle-viewport-recovered", in: "chat-scroll-stability-validation")
         XCTAssertTrue(try snapshot.text().contains("Visible transcript content"))
         session.atBottom = true
-        session.scrollPosition.recoverViewport?(nil, true)
+        session.scrollPosition.jumpToLatest()
         try await TestSupport.eventually(timeout: .seconds(5)) {
             session.scrollPosition.visibleAnchor() != nil && session.scrollPosition.isAtBottom(tolerance: 24) == true
         }
@@ -497,20 +297,19 @@ final class ChatScrollStabilityTests: XCTestCase {
         let fixture = try NativeScrollFixture(rows: 2, rowHeight: 150)
         defer { fixture.close() }
         fixture.position.followsBottom = { true }
-        var requests = 0
+        let reads = HistoryReads()
         fixture.position.loadEarlier = { userInitiated in
             XCTAssertFalse(userInitiated, "Opening must build a reserve without wheel input")
-            requests += 1
-            fixture.document.frame.size.height += 1400
-            for marker in fixture.markers { marker.frame.origin.y += 1400 }
-            fixture.position.historyLoadFinished(madeProgress: true)
-            return true
+            return reads.start {
+                fixture.prepend(1400)
+                fixture.position.historyLoadFinished(madeProgress: true)
+            }
         }
         fixture.position.beginOpeningHistoryPreload()
-        XCTAssertEqual(requests, 0, "Initial content must get a layout before loading more")
-        try await waitForHistoryCondition { requests >= 2 }
+        XCTAssertEqual(reads.count, 0, "Initial content must get a layout before loading more")
+        try await waitForHistoryCondition { reads.count >= 2 }
         try await Task.sleep(for: .milliseconds(60))
-        XCTAssertEqual(requests, 2, "Enough scroll reserve must stop loading before the four-batch cap")
+        XCTAssertEqual(reads.count, 2, "Enough scroll reserve must stop loading before the four-batch cap")
         XCTAssertGreaterThanOrEqual(fixture.scroll.contentView.bounds.minY, fixture.position.earlierPrefetchDistance)
         XCTAssertEqual(fixture.position.isAtBottom(tolerance: 1), true)
     }
@@ -553,27 +352,26 @@ final class ChatScrollStabilityTests: XCTestCase {
         fixture.move(to: 750)
         let anchor = try XCTUnwrap(fixture.position.visibleAnchor())
         fixture.position.preserveForPrepend()
-        fixture.document.frame.size.height += 300
-        for marker in fixture.markers { marker.frame.origin.y += 300 }
-        var requests = 0
+        fixture.prepend(300)
+        let reads = HistoryReads()
         fixture.position.loadEarlier = { _ in
             XCTAssertFalse(fixture.position.isRestoring)
-            requests += 1
-            if requests == 1 {
-                fixture.position.preserveForPrepend()
-                fixture.document.frame.size.height += 300
-                for marker in fixture.markers { marker.frame.origin.y += 300 }
+            let first = reads.count == 0
+            return reads.start {
+                if first {
+                    fixture.position.preserveForPrepend()
+                    fixture.prepend(300)
+                }
+                fixture.position.historyLoadFinished(madeProgress: first)
             }
-            fixture.position.historyLoadFinished(madeProgress: requests == 1)
-            return true
         }
         fixture.position.beginOpeningHistoryPreload()
-        XCTAssertEqual(requests, 0)
-        try await waitForHistoryCondition { requests == 2 && !fixture.position.isRestoring }
+        XCTAssertEqual(reads.count, 0)
+        try await waitForHistoryCondition { reads.count == 2 && !reads.loading && !fixture.position.isRestoring }
         XCTAssertEqual(fixture.position.visibleAnchor(), anchor)
         fixture.position.geometryChanged()
         try await Task.sleep(for: .milliseconds(60))
-        XCTAssertEqual(requests, 2, "A completed read without progress must not loop")
+        XCTAssertEqual(reads.count, 2, "A completed read without progress must not loop")
     }
 
     func testKeyboardNavigationRearmsExhaustedHistoryPreloadAndIgnoresComposer() async throws {
@@ -655,9 +453,10 @@ final class ChatScrollStabilityTests: XCTestCase {
             fixture.position.historyLoadFinished(madeProgress: false)
             return true
         }
-        for marker in fixture.markers { fixture.position.register(marker, id: marker.id) }
+        fixture.position.registerViewport(fixture.document)
+        fixture.update()
         try await Task.sleep(for: .milliseconds(60))
-        XCTAssertEqual(requests, 0, "Reattaching native markers must not restart an old view's budget")
+        XCTAssertEqual(requests, 0, "Reattaching the document must not restart an old view's budget")
         fixture.position.beginOpeningHistoryPreload()
         try await waitForHistoryCondition { requests == 1 }
     }
@@ -685,8 +484,9 @@ final class ChatScrollStabilityTests: XCTestCase {
             let fixture = try NativeScrollFixture(rows: 6, position: session.scrollPosition)
             defer { fixture.close() }
             let rows = session.visibleTranscriptRows
-            XCTAssertGreaterThanOrEqual(rows.count, fixture.markers.count)
-            for (marker, row) in zip(fixture.markers, rows) { marker.update(id: row.id, position: fixture.position) }
+            XCTAssertGreaterThanOrEqual(rows.count, fixture.ids.count)
+            fixture.ids = Array(rows.prefix(fixture.ids.count).map(\.id))
+            fixture.update()
             session.followRevision = session.revision
             fixture.position.followsBottom = { session.atBottom && session.followRevision != nil }
             fixture.position.userScrolled = { session.followRevision = nil }
@@ -703,9 +503,7 @@ final class ChatScrollStabilityTests: XCTestCase {
             XCTAssertNil(session.earlierError)
             // Model publication precedes native layout. Apply that later height
             // change only after the real coordinator has chosen how to retain it.
-            fixture.document.frame.size.height += 600
-            for marker in fixture.markers { marker.frame.origin.y += 600 }
-            fixture.position.geometryChanged()
+            fixture.prepend(600)
             try await waitForHistoryCondition { !fixture.position.isRestoring }
             if userMoves {
                 XCTAssertEqual(fixture.position.visibleAnchor(), anchor, "An earlier follow decision must not undo intervening user movement")
@@ -755,7 +553,7 @@ final class ChatScrollStabilityTests: XCTestCase {
         }
         coordinator.receiveHelper(.records([record("turn_started", "start"),
                                             record("user", "prompt", text: "Why does the reply move?", completed: true)]), session: session)
-        try await TestSupport.eventually(timeout: .seconds(1)) { !session.scrollPosition.glidesToBottom }
+        try await TestSupport.eventually(timeout: .seconds(1)) { !session.scrollPosition.wantsArrivalGlide }
         try await Task.sleep(for: .milliseconds(200))
         let reply = """
             Each delta changes the row's **height**, and the transcript follows the bottom.
@@ -839,7 +637,7 @@ final class ChatScrollStabilityTests: XCTestCase {
                 XCTAssertLessThanOrEqual(gap(), 24, "Newest row must be visible; row \(index), gap=\(gap())")
             }
         }
-        try await TestSupport.eventually(timeout: .seconds(1)) { !session.scrollPosition.glidesToBottom }
+        try await TestSupport.eventually(timeout: .seconds(1)) { !session.scrollPosition.wantsArrivalGlide }
         XCTAssertTrue(session.atBottom)
         XCTAssertLessThanOrEqual(gap(), 24, "The burst ends at the bottom; gap=\(gap())")
     }
@@ -883,7 +681,7 @@ final class ChatScrollStabilityTests: XCTestCase {
         }
         /// A new row reaches the bottom by gliding with its fade, not in the frame it arrives.
         func assertBottomAfterGlide(file: StaticString = #filePath, line: UInt = #line) async throws {
-            try await TestSupport.eventually(timeout: .seconds(1)) { !session.scrollPosition.glidesToBottom }
+            try await TestSupport.eventually(timeout: .seconds(1)) { !session.scrollPosition.wantsArrivalGlide }
             assertBottom(file: file, line: line)
         }
         assertBottom()
@@ -967,8 +765,8 @@ final class ChatScrollStabilityTests: XCTestCase {
         fixture.position.userWillScroll(deltaY: -10)
         XCTAssertTrue(bar.revealed)
         for _ in 0..<8 {
-            fixture.document.frame.size.height += 10
-            fixture.position.geometryChanged()
+            fixture.heights["row-9", default: 300] += 10
+            fixture.update()
             try await Task.sleep(for: .milliseconds(200))
         }
         XCTAssertFalse(bar.revealed, "Streaming must not extend the user's visibility timer")
@@ -1023,9 +821,9 @@ final class ChatScrollStabilityTests: XCTestCase {
             .max { ($0.documentView?.bounds.height ?? 0) < ($1.documentView?.bounds.height ?? 0) })
         let document = try XCTUnwrap(scroll.documentView)
         func frames() -> [String: CGRect] {
-            Dictionary(PresentationTestSupport.views(of: ChatScrollMarker.Marker.self, in: document).map {
-                ($0.id, $0.convert($0.bounds, to: document).offsetBy(dx: 0, dy: -scroll.contentView.bounds.minY))
-            }, uniquingKeysWith: { first, _ in first })
+            PresentationTestSupport.transcriptRows(in: document).mapValues {
+                $0.convert($0.bounds, to: document).offsetBy(dx: 0, dy: -scroll.contentView.bounds.minY)
+            }
         }
         var samples: [[String: Any]] = [], jumps = 0, worst = 0.0, comparisons = 0
         for step in 0..<240 {
@@ -1060,14 +858,14 @@ final class ChatScrollStabilityTests: XCTestCase {
 
         // Recreating Chat should also preserve an offset inside expanded output,
         // rather than scrolling past its temporary header while formatting loads.
-        let tool = try XCTUnwrap(PresentationTestSupport.views(of: ChatScrollMarker.Marker.self, in: document)
-            .first { $0.id.hasSuffix(":tool-0") && $0.bounds.height > 120 })
+        let (toolID, tool) = try XCTUnwrap(PresentationTestSupport.transcriptRows(in: document)
+            .first { $0.key.hasSuffix(":tool-0") && $0.value.bounds.height > 120 })
         let toolY = tool.convert(tool.bounds, to: document).minY
         scroll.contentView.scroll(to: NSPoint(x: 0, y: toolY + 100))
         scroll.reflectScrolledClipView(scroll.contentView)
         try await Task.sleep(for: .milliseconds(150))
         let anchor = try XCTUnwrap(session.scrollPosition.visibleAnchor())
-        XCTAssertEqual(anchor.id, tool.id)
+        XCTAssertEqual(anchor.id, toolID)
         window.contentView = nil
         ToolPresentationCache.shared.removeAll()
         session.atBottom = false
@@ -1106,9 +904,9 @@ final class ChatScrollStabilityTests: XCTestCase {
             .max { ($0.documentView?.bounds.height ?? 0) < ($1.documentView?.bounds.height ?? 0) })
         let document = try XCTUnwrap(scroll.documentView)
         func frames() -> [String: CGRect] {
-            Dictionary(PresentationTestSupport.views(of: ChatScrollMarker.Marker.self, in: document).map {
-                ($0.id, $0.convert($0.bounds, to: document).offsetBy(dx: 0, dy: -scroll.contentView.bounds.minY))
-            }, uniquingKeysWith: { first, _ in first })
+            PresentationTestSupport.transcriptRows(in: document).mapValues {
+                $0.convert($0.bounds, to: document).offsetBy(dx: 0, dy: -scroll.contentView.bounds.minY)
+            }
         }
         for step in 0..<120 {
             let before = frames().filter { $0.value.maxY > 1 && $0.value.minY < scroll.contentView.bounds.height }
@@ -1153,9 +951,7 @@ final class ChatScrollStabilityTests: XCTestCase {
         fixture.position.performAfterScrolling {
             applied += 1
             fixture.position.preserveForPrepend()
-            fixture.document.frame.size.height += 600
-            for marker in fixture.markers { marker.frame.origin.y += 600 }
-            fixture.position.geometryChanged()
+            fixture.prepend(600)
         }
         XCTAssertEqual(applied, 0); XCTAssertEqual(fixture.document.frame.height, height)
         fixture.move(to: 1150)
@@ -1167,40 +963,6 @@ final class ChatScrollStabilityTests: XCTestCase {
         let restored = try XCTUnwrap(fixture.position.visibleAnchor())
         XCTAssertEqual(restored, dragged, "Prepend preserves where the reader finished dragging, not where the fetch began")
         XCTAssertFalse(fixture.position.isRestoring)
-    }
-
-    func testLivePrependRetainsPixelsWhenFirstVisibleMarkerIsRecycled() throws {
-        let fixture = try NativeScrollFixture()
-        defer { fixture.close() }
-        fixture.move(to: 750)
-        fixture.position.userWillScroll(deltaY: 40)
-        let first = try XCTUnwrap(fixture.position.visibleAnchor())
-        fixture.position.preserveForPrepend()
-        try XCTUnwrap(fixture.markers.first { $0.id == first.id }).removeFromSuperview()
-        fixture.document.frame.size.height += 600
-        for marker in fixture.markers { marker.frame.origin.y += 600 }
-        fixture.position.geometryChanged()
-        XCTAssertEqual(fixture.scroll.contentView.bounds.minY, 1350, accuracy: 0.25)
-        XCTAssertNotNil(fixture.position.visibleAnchor())
-    }
-
-    func testLateItemScrollCannotUndoAPrependedPixelAnchor() throws {
-        let fixture = try NativeScrollFixture()
-        defer { fixture.close() }
-        fixture.move(to: 750)
-        let anchor = try XCTUnwrap(fixture.position.visibleAnchor())
-        fixture.position.preserveForPrepend()
-        fixture.document.frame.size.height += 600
-        for marker in fixture.markers { marker.frame.origin.y += 600 }
-        fixture.position.geometryChanged()
-        XCTAssertEqual(fixture.position.visibleAnchor(), anchor)
-        // Item-ID scrolling can arrive after layout has already restored the
-        // prepend. Its clip-only change must not discard the within-row offset.
-        fixture.move(to: 1300)
-        XCTAssertEqual(fixture.position.visibleAnchor(), anchor)
-        fixture.position.userWillScroll(deltaY: 40)
-        fixture.move(to: 1310)
-        XCTAssertEqual(fixture.scroll.contentView.bounds.minY, 1310, accuracy: 0.25)
     }
 
     func testLiveScrollingCancelsStalePreservationAndFollowIntent() async throws {
@@ -1241,91 +1003,86 @@ final class ChatScrollStabilityTests: XCTestCase {
         XCTAssertFalse(fixture.position.isTrackingScroller)
     }
 
-    func testReusedMarkerTracksItsCurrentMessageAndChat() throws {
-        let fixture = try NativeScrollFixture()
-        defer { fixture.close() }
-        fixture.move(to: 750)
-        let marker = fixture.markers[2]
-        marker.update(id: "replacement-message", position: fixture.position)
-        XCTAssertEqual(fixture.position.visibleAnchor(), .init(id: "replacement-message", offset: -150))
-
-        let replacement = ChatScrollPosition()
-        defer { replacement.disconnect() }
-        marker.update(id: "other-chat-message", position: replacement)
-        XCTAssertEqual(replacement.visibleAnchor(), .init(id: "other-chat-message", offset: -150))
-        XCTAssertEqual(fixture.position.visibleAnchor()?.id, "row-3", "The previous chat must not retain a reused row")
-    }
-
     func testPrependRetainsTheNextVisibleMessageWhenTheFirstRowBecomesAGroup() async throws {
         let fixture = try NativeScrollFixture()
         defer { fixture.close() }
         fixture.move(to: 750)
-        // Pagination can replace a single tool row with a collapsed tool group.
-        let removed = fixture.markers[2]
-        fixture.position.preserveForPrepend(retaining: Set(fixture.markers.map(\.id)).subtracting([removed.id]))
-        fixture.position.unregister(removed, id: removed.id)
-        removed.removeFromSuperview()
-        fixture.document.frame.size.height += 600
-        for marker in fixture.markers { marker.frame.origin.y += 600 }
-        fixture.position.geometryChanged()
-        try await TestSupport.poll { !fixture.position.isRestoring && !fixture.position.adjustmentScheduled }
-        XCTAssertEqual(fixture.position.visibleAnchor(), .init(id: "row-3", offset: 150))
+        // Pagination can replace a single tool row (row-2, the first visible) with a collapsed tool group.
+        fixture.position.preserveForPrepend(retaining: Set(fixture.ids).subtracting(["row-2"]))
+        fixture.ids.removeAll { $0 == "row-2" }
+        fixture.prepend(600)
+        try await TestSupport.poll { !fixture.position.isRestoring }
+        XCTAssertEqual(fixture.position.visibleAnchor(retaining: ["row-3"]), .init(id: "row-3", offset: 150))
         XCTAssertFalse(fixture.position.isRestoring)
     }
 
+    /// Fixed-height rows in a real native document, scrolled by hand.
     @MainActor private final class NativeScrollFixture {
         let position: ChatScrollPosition
-        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
-        let document = FlippedView(frame: NSRect(x: 0, y: 0, width: 380, height: 3000))
+        let scroll = ChatTranscriptScrollView.TranscriptScrollView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        let document: ChatTranscriptDocument
         let window: NSWindow
-        var markers: [ChatScrollMarker.Marker] = []
+        var ids: [String]
+        var heights: [String: CGFloat] = [:]
+        private let rowHeight: CGFloat
+        private var prepended = 0
         init(rows: Int = 10, rowHeight: CGFloat = 300, position: ChatScrollPosition? = nil) throws {
             try DesktopTestSupport.requireUnlocked()
             self.position = position ?? ChatScrollPosition()
+            self.rowHeight = rowHeight
+            ids = (0..<rows).map { "row-\($0)" }
+            document = ChatTranscriptDocument(position: self.position, initiallyAtBottom: false)
             window = NSWindow(contentRect: scroll.frame, styleMask: [.titled], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
-            scroll.hasVerticalScroller = true; scroll.scrollerStyle = .legacy
-            document.frame.size.height = CGFloat(rows) * rowHeight
             scroll.documentView = document; window.contentView = scroll
             window.makeKeyAndOrderFront(nil)
-            for index in 0..<rows {
-                let marker = ChatScrollMarker.Marker(id: "row-\(index)", position: self.position)
-                marker.frame = NSRect(x: 0, y: CGFloat(index) * rowHeight, width: 380, height: rowHeight)
-                document.addSubview(marker); markers.append(marker)
-                self.position.register(marker, id: marker.id)
+            update()
+            // Offscreen rows keep the document's estimate until measured: visit each, so positions are exact.
+            for id in ids { self.position.restore(.init(id: id, offset: 0)); update() }
+            self.position.clear()
+            move(to: 0)
+        }
+        /// The rows the document has mounted, by ID.
+        var rows: [String: NSView] { document.mountedRows.filter { $0.value.window != nil } }
+        func update() {
+            document.update(ids: ids, topInset: 0, bottomInset: 0) { [weak self] id, width in
+                AnyView(Color.clear.frame(width: width, height: self.map { $0.heights[id] ?? $0.rowHeight } ?? 1))
             }
+            scroll.layoutSubtreeIfNeeded()
+            document.layoutTranscript()
+        }
+        /// Earlier history arriving above the first row, `height` points of it in rows as tall as the document's
+        /// estimate, so offscreen geometry is exact without measuring them.
+        func prepend(_ height: CGFloat) {
+            let rows = (0..<Int(height / 100)).map { "earlier-\(prepended + $0)" }
+            prepended += rows.count
+            rows.forEach { heights[$0] = 100 }
+            ids.insert(contentsOf: rows, at: 0)
+            update()
         }
         func move(to y: CGFloat) {
             scroll.contentView.scroll(to: NSPoint(x: 0, y: y)); scroll.reflectScrolledClipView(scroll.contentView)
         }
         func close() { position.disconnect(); window.orderOut(nil); window.contentView = nil; window.close() }
     }
+    /// History reads that complete on a later turn, as the coordinator's do, one at a time.
+    @MainActor private final class HistoryReads {
+        private(set) var count = 0
+        private(set) var loading = false
+        func start(_ complete: @escaping @MainActor () -> Void) -> Bool {
+            guard !loading else { return false }
+            loading = true; count += 1
+            Task { @MainActor in
+                complete()
+                self.loading = false
+            }
+            return true
+        }
+    }
     private final class NavigationResponderView: NSView { override var acceptsFirstResponder: Bool { true } }
-    private final class FlippedView: NSView { override var isFlipped: Bool { true } }
 }
 
-/// Recovery ends any blank in about two seconds: a rebuild is verified like a mount, the next one waits seconds
-/// (not 30), and stale callbacks or restorations cannot keep a viewport blank.
 extension ChatScrollStabilityTests {
-    func testBlankAfterAMountRebuildIsRebuiltAgainWithinSecondsUntilRowsShow() async throws {
-        let position = ChatScrollPosition()
-        var attempts: [(rebuild: Bool, at: TimeInterval)] = []
-        position.hasContent = { true }
-        let fixture = try NativeScrollFixture(rows: 8, position: position)
-        defer { fixture.close() }
-        // The second rebuild realizes rows, as a fresh lazy stack does.
-        position.recoverViewport = { _, rebuild in
-            attempts.append((rebuild, ProcessInfo.processInfo.systemUptime))
-            if rebuild, attempts.filter(\.rebuild).count == 2 { fixture.markers.forEach { $0.isHidden = false } }
-        }
-        fixture.markers.forEach { $0.isHidden = true }
-        try await TestSupport.eventually(timeout: .seconds(6)) { attempts.filter(\.rebuild).count == 2 }
-        let rebuilds = attempts.filter(\.rebuild)
-        XCTAssertLessThan(rebuilds[1].at - rebuilds[0].at, 4, "A failed rebuild is retried in seconds, not after 30")
-        XCTAssertGreaterThanOrEqual(rebuilds[1].at - rebuilds[0].at, 1.9, "but not at once")
-        try await TestSupport.eventually { position.showsRows() }
-        XCTAssertEqual(position.interactionRevision, 0, "Recovery is not user scrolling")
-    }
 
     func testOutgoingViewsDisconnectKeepsTheIncomingViewsCallbacks() async throws {
         let fixture = try NativeScrollFixture(rows: 8)
@@ -1335,15 +1092,15 @@ extension ChatScrollStabilityTests {
         position.hasContent = { false }
         let incoming = position.connect()
         position.hasContent = { true }
-        position.recoverViewport = { _, _ in }
+        position.rowExists = { _ in true }
         // A moved tab's new view connects first; the old one's onDisappear comes last.
         position.disconnect(outgoing)
         XCTAssertNotNil(position.hasContent)
-        XCTAssertNotNil(position.recoverViewport)
-        XCTAssertNotNil(position.visibleAnchor(), "The marker registry stays")
+        XCTAssertNotNil(position.rowExists)
+        XCTAssertNotNil(position.visibleAnchor(), "The viewport stays attached")
         position.disconnect(incoming)
         XCTAssertNil(position.hasContent)
-        XCTAssertNil(position.recoverViewport)
+        XCTAssertNil(position.rowExists)
     }
 
     func testTheViewStillShowingGetsTheCallbacksBackWhenTheLaterOneLeaves() async throws {
@@ -1389,84 +1146,38 @@ extension ChatScrollStabilityTests {
         defer { fixture.close() }
         let position = fixture.position
         position.hasContent = { true }
-        var realized: [String] = []
-        position.realizeAnchor = { realized.append($0) }
+        position.rowExists = { _ in true }
         var reported: [ChatScrollPosition.Anchor] = []
         position.positionChanged = { reported.append($0) }
-        // A find's match: its row exists but is not realized yet.
-        fixture.markers[6].removeFromSuperview()
-        position.restore(.init(id: "row-6", offset: 0))
-        try await TestSupport.eventually { realized.contains("row-6") }
+        // A find's match: its row exists, but the transcript has not published it yet.
+        position.restore(.init(id: "row-8", offset: 0))
         try await Task.sleep(for: .milliseconds(100))
         XCTAssertTrue(position.isRestoring)
         XCTAssertTrue(reported.isEmpty, "A measurement before the match is revealed re-armed following")
-        fixture.document.addSubview(fixture.markers[6])
-        position.geometryChanged()
+        fixture.ids.append("row-8")
+        fixture.update()
         try await TestSupport.eventually { !position.isRestoring }
-        XCTAssertEqual(reported.last?.id, "row-6")
+        XCTAssertEqual(reported.last?.id, "row-8")
     }
 
-    func testAVisibleSliverOfOneRowStillCountsAsBlank() async throws {
+    func testViewportHealthRequiresVisibleContent() async throws {
         let fixture = try NativeScrollFixture(rows: 8)
         defer { fixture.close() }
         let position = fixture.position
-        var attempts: [Bool] = []
         position.hasContent = { true }
-        position.recoverViewport = { _, rebuild in attempts.append(rebuild) }
         fixture.move(to: 597)
         // The checks below skip an occluded window and a pending scroll adjustment: wait for both, not a fixed time.
-        try await TestSupport.poll { fixture.window.occlusionState.contains(.visible) && !position.adjustmentScheduled }
+        try await TestSupport.poll { fixture.window.occlusionState.contains(.visible) }
         // row-1 shows 3 points; every other row is hidden.
-        fixture.markers.forEach { $0.isHidden = $0.id != "row-1" }
+        let rows = fixture.rows
+        rows.forEach { $0.value.isHidden = $0.key != "row-1" }
         XCTAssertEqual(position.visibleAnchor()?.id, "row-1")
         XCTAssertFalse(position.showsRows())
-        let start = ProcessInfo.processInfo.systemUptime + 1
-        for tick in 0..<4 { position.checkViewport(now: start + Double(tick)) }
-        XCTAssertEqual(attempts.first, false)
-        XCTAssertEqual(attempts.last, true)
-        fixture.markers.forEach { $0.isHidden = false }
+        rows.values.forEach { $0.isHidden = false }
         XCTAssertTrue(position.showsRows())
     }
 }
 
-/// A blank mount whose layout has gone quiet is rebuilt at the first check, not at 0.4 s: switching to a chat of tall
-/// rows showed nothing for half a second, every time.
 extension ChatScrollStabilityTests {
-    func testAQuietBlankMountRebuildsAtTheFirstCheck() async throws {
-        let position = ChatScrollPosition()
-        var rebuilds: [TimeInterval] = []
-        position.hasContent = { true }
-        let start = ProcessInfo.processInfo.systemUptime
-        position.recoverViewport = { _, rebuild in if rebuild { rebuilds.append(ProcessInfo.processInfo.systemUptime - start) } }
-        let fixture = try NativeScrollFixture(rows: 8, position: position)
-        defer { fixture.close() }
-        fixture.markers.forEach { $0.isHidden = true }
-        try await TestSupport.eventually(timeout: .seconds(1)) { !rebuilds.isEmpty }
-        XCTAssertLessThan(rebuilds[0], 0.35, "Rebuilt before the 0.4 s check")
-        try await Task.sleep(for: .milliseconds(600))
-        XCTAssertEqual(rebuilds.count, 1, "One rebuild per mount")
-        XCTAssertEqual(position.interactionRevision, 0, "Recovery is not user scrolling")
-    }
 
-    func testABlankMountStillLayingOutWaitsForTheLateCheck() async throws {
-        let position = ChatScrollPosition()
-        var rebuilds: [TimeInterval] = []
-        position.hasContent = { true }
-        let start = ProcessInfo.processInfo.systemUptime
-        position.recoverViewport = { _, rebuild in if rebuild { rebuilds.append(ProcessInfo.processInfo.systemUptime - start) } }
-        let fixture = try NativeScrollFixture(rows: 8, position: position)
-        defer { fixture.close() }
-        fixture.markers.forEach { $0.isHidden = true }
-        // Lazy layout still placing rows may show them on its own: the early checks leave it alone.
-        let layout = Task { @MainActor in
-            while !Task.isCancelled, rebuilds.isEmpty {
-                position.geometryChanged()
-                try? await Task.sleep(for: .milliseconds(20))
-            }
-        }
-        defer { layout.cancel() }
-        try await TestSupport.eventually(timeout: .seconds(1)) { !rebuilds.isEmpty }
-        XCTAssertGreaterThanOrEqual(rebuilds[0], 0.38, "Not rebuilt while layout keeps changing")
-        XCTAssertEqual(position.interactionRevision, 0, "Recovery is not user scrolling")
-    }
 }

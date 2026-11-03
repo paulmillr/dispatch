@@ -309,7 +309,6 @@ final class AttentionCoordinator: NSObject, UNUserNotificationCenterDelegate {
         session.scrollAnchor = rowID
         TerminalRuntime.shared.chat.showChat(session)
         session.scrollPosition.restore(.init(id: rowID, offset: 0))
-        session.scrollPosition.realizeAnchor?(rowID)
         if current { session.hasNewMessages = false }
     }
 

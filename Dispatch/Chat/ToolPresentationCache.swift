@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 /// Bounded, memory-only formatting cache. Large payloads are parsed away from
 /// AppKit; scrolling revisits already formatted rows without parsing them again.
@@ -35,29 +36,50 @@ actor ToolPresentationCache {
 }
 
 #if canImport(AppKit)
-/// Small geometry records belong to the retained transcript, independently of
-/// the evictable payload cache. One measurement per tool revision is sufficient
-/// to avoid collapsing a previously expanded row while cold formatting loads.
+/// User choices outlive a virtualized row host. Payloads remain in the bounded formatting cache.
+@MainActor @Observable
+final class ChatToolViewState {
+    var rawExpanded = false
+    @ObservationIgnored private var documents: [String: CodeDocumentState] = [:]
+    func document(_ path: String) -> CodeDocumentState {
+        if let state = documents[path] { return state }
+        let state = CodeDocumentState()
+        documents[path] = state
+        return state
+    }
+}
+
+/// Geometry and user choices belong to the retained transcript, independently of its evictable row hosts
+/// and payload cache. Preserve both disclosure heights so cold formatting cannot collapse a revisited row.
 @MainActor
 final class ChatToolLayoutCache {
+    private struct Key: Hashable { let revision: UUID; let raw: Bool }
     private struct Measurement {
         let size: CGSize
         let typography: ChatTypography
     }
-    private var measurements: [UUID: Measurement] = [:]
-    var count: Int { measurements.count }
-    func height(for revision: UUID, width: CGFloat, typography: ChatTypography) -> CGFloat? {
-        guard let value = measurements[revision], value.typography == typography,
+    private var measurements: [Key: Measurement] = [:]
+    private var states: [String: ChatToolViewState] = [:]
+    var count: Int { measurements.count + states.count }
+    func viewState(for row: String) -> ChatToolViewState {
+        if let state = states[row] { return state }
+        let state = ChatToolViewState()
+        states[row] = state
+        return state
+    }
+    func height(for revision: UUID, width: CGFloat, typography: ChatTypography, raw: Bool = false) -> CGFloat? {
+        guard let value = measurements[Key(revision: revision, raw: raw)], value.typography == typography,
               abs(value.size.width - width) < 0.5 else { return nil }
         return value.size.height
     }
-    func remember(_ size: CGSize, for revision: UUID, typography: ChatTypography) {
+    func remember(_ size: CGSize, for revision: UUID, typography: ChatTypography, raw: Bool = false) {
         guard size.width.isFinite, size.height.isFinite, size.width > 0, size.height > 0 else { return }
-        measurements[revision] = Measurement(size: size, typography: typography)
+        measurements[Key(revision: revision, raw: raw)] = Measurement(size: size, typography: typography)
     }
-    func retain(_ revisions: Set<UUID>) {
-        measurements = measurements.filter { revisions.contains($0.key) }
+    func retain(_ revisions: Set<UUID>, rows: Set<String> = []) {
+        measurements = measurements.filter { revisions.contains($0.key.revision) }
+        states = states.filter { rows.contains($0.key) }
     }
-    func removeAll() { measurements.removeAll() }
+    func removeAll() { measurements.removeAll(); states.removeAll() }
 }
 #endif

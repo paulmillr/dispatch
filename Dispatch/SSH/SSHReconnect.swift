@@ -69,6 +69,9 @@ final class SSHReconnectController {
         var attempts = 0
         /// When automatic reconnect tries this connection again.
         var retryAt: Date?
+        /// The last attempt stopped because the server no longer has some of the saved tabs (panes, windows or
+        /// sessions closed meanwhile): the bar offers Reconnect anyway, and your next reconnect accepts the change.
+        var changed = false
     }
     private(set) var states: [SSHConnectionID: State] = [:]
     private(set) var completed: [UUID: UUID] = [:]
@@ -77,6 +80,11 @@ final class SSHReconnectController {
     @ObservationIgnored private weak var runtime: TerminalRuntime?
     @ObservationIgnored private var operations: [HostID: Task<Void, Never>] = [:]
     @ObservationIgnored private var epochs: [HostID: UUID] = [:]
+    /// Hosts whose current attempt (its epoch) is a Reconnect anyway: their helpers show the server's spaces as they
+    /// are now, dropping saved tabs it no longer has (`HelperWorkspace.dropSaved`).
+    @ObservationIgnored private var accepting: [HostID: UUID] = [:]
+    /// Saved spaces such an attempt dropped whole: recovery no longer waits for them to restore.
+    @ObservationIgnored private(set) var droppedSpaces: Set<UUID> = []
     @ObservationIgnored private var loginBusy = false
     @ObservationIgnored private var launchingShells: [UUID: Recipe] = [:]
     /// Restored output a launching shell replays, kept until it logs in so a retry shows it again.
@@ -162,7 +170,17 @@ final class SSHReconnectController {
         guard states[id] != nil else { return }
         states[id]?.reconnecting = false
         states[id]?.error = error is CancellationError ? nil : error.localizedDescription
+        states[id]?.changed = Self.serverChanged(error)
     }
+    /// Whether a recovery failed only because the server no longer has some saved tabs (`HelperWorkspace.missingRetained`).
+    static func serverChanged(_ error: Error) -> Bool {
+        !(error is CancellationError) && error.localizedDescription.contains(HelperWorkspace.missingRetained)
+    }
+    /// Whether `host`'s current attempt accepts the server's changed spaces (Reconnect anyway).
+    func acceptsChanges(on host: HostID) -> Bool {
+        accepting[host].map { $0 == epochs[host] } == true
+    }
+    func dropped(_ spaces: Set<UUID>) { droppedSpaces.formUnion(spaces) }
     /// An automatic attempt never prompts and covers only lost connections; your own takes over from it.
     func reconnect(hostID: HostID, sourceSurfaceID: UUID, scope: SSHIntegrationScope? = nil, automatic: Bool = false) {
         guard operations[hostID] == nil,
@@ -171,9 +189,12 @@ final class SSHReconnectController {
         if automatic { ids = ids.filter(losses.contains) } else { stopRetrying(hostID) }
         guard !ids.isEmpty else { return }
         let epoch = System.uuid(); epochs[hostID] = epoch
+        // Your reconnect after one stopped on a changed server is Reconnect anyway; an automatic one never accepts.
+        let accepts = !automatic && ids.contains { states[$0]?.changed == true }
+        if accepts { accepting[hostID] = epoch }
         for id in ids {
             var state = states[id] ?? State(disconnectedAt: Date())
-            state.reconnecting = true; state.attempted = true; state.attempts += 1; state.retryAt = nil
+            state.reconnecting = true; state.attempted = true; state.attempts += 1; state.retryAt = nil; state.changed = false
             states[id] = state
         }
         operations[hostID] = Task { [weak self] in
@@ -181,6 +202,7 @@ final class SSHReconnectController {
             var unreachable = false
             defer {
                 if epochs[hostID] == epoch { operations[hostID] = nil; epochs[hostID] = nil }
+                if accepting[hostID] == epoch { accepting[hostID] = nil; droppedSpaces = [] }
             }
             // Serialize login sheets across hosts, as well as within one host.
             while loginBusy {
@@ -189,6 +211,11 @@ final class SSHReconnectController {
             guard !Task.isCancelled else { return }
             loginBusy = true
             defer { loginBusy = false }
+            // A helper still attached whose restore stopped on the change takes it now; a new one when its topology arrives.
+            if accepts {
+                droppedSpaces = []
+                for helper in runtime?.helpers.values.filter({ $0.host == hostID && !$0.stopped }) ?? [] { helper.acceptServerChanges() }
+            }
             for id in ids {
                 guard !Task.isCancelled, epochs[hostID] == epoch, let recipe = recipes[id],
                       !recipe.surfaces.isDisjoint(with: runtime?.workspace?.allSurfaceIDs ?? []) else { continue }
@@ -227,6 +254,7 @@ final class SSHReconnectController {
                     var state = states[id] ?? State()
                     state.reconnecting = false
                     state.error = error is CancellationError ? nil : error.localizedDescription
+                    state.changed = Self.serverChanged(error)
                     states[id] = state
                     if retry { unreachable = true } else { losses.remove(id) }
                 }
@@ -357,6 +385,7 @@ final class SSHReconnectController {
         for host in Array(operations.keys) { cancel(hostID: host) }
         automatic = false
         losses.removeAll(); failures.removeAll(); dropped.removeAll()
+        accepting.removeAll(); droppedSpaces.removeAll()
         recipes.removeAll(); replacements.removeAll(); states.removeAll(); completed.removeAll(); launchingShells.removeAll(); launchingHistory.removeAll()
     }
 }

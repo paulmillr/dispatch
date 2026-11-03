@@ -783,7 +783,7 @@ final class SettingsStatsPresentationTests: XCTestCase {
         let root = try XCTUnwrap(window.contentView)
         for (tab, labels) in [
             ("General", ["Text", "Font", "Size", "line spacing", "Cursor", "Terminal", "Window", "tab names, git branches, host colors, glass and contrast",
-                         "On launch", "Reopen spaces", "Scrollback", "New tabs", "login shell",
+                         "On launch", "Reopen spaces", "Scrollback", "New tabs", "login shell", "Startup command",
                          "Security", "programs can copy"]),
             ("Theme", ["Colors", "App theme", "app, terminal and chat", "Terminal opacity", "Colorblind-friendly",
                        "Dark color scheme", "Dispatch", "Light color scheme", "Your color schemes"]),
@@ -792,6 +792,17 @@ final class SettingsStatsPresentationTests: XCTestCase {
             ("Hosts", ["Hosts", "This Mac"])
         ] {
             if tab != "General" { try await PresentationTestSupport.selectSettingsTab(tab, in: window) }
+            else {
+                try await TestSupport.eventually {
+                    !PresentationTestSupport.accessibilityFrames(label: "New tabs", in: window).isEmpty
+                }
+                let options = try XCTUnwrap(PresentationTestSupport.accessibilityFrames(label: "New tabs", in: window).first)
+                try PresentationTestSupport.click(window, at: NSPoint(x: options.midX, y: options.midY))
+                try await TestSupport.eventually {
+                    PresentationTestSupport.views(of: NSPopUpButton.self, in: root)
+                        .contains { $0.accessibilityIdentifier() == "settings-dropdown-Scrollback" }
+                }
+            }
             var snapshots = [try await capture(window, "settings-\(tab)")]
             var text = try snapshots[0].text()
             let scroll = try XCTUnwrap(PresentationTestSupport.views(of: NSScrollView.self, in: root).first { !$0.isHiddenOrHasHiddenAncestor })
@@ -821,7 +832,6 @@ final class SettingsStatsPresentationTests: XCTestCase {
                 XCTAssertFalse(text.contains("Space size"), "Window starts collapsed")
                 XCTAssertFalse(text.contains("Open tmux sessions"), "Whole features live under Features")
                 XCTAssertFalse(text.contains("Drag and drop"), "Files settings live under Features")
-                XCTAssertFalse(text.contains("Startup"), "Startup rows are in Terminal and New spaces")
                 XCTAssertFalse(text.contains("dock badge and banner"), "Notifications live under Features")
                 XCTAssertFalse(text.contains("via OSC 52"), "Security starts collapsed")
                 XCTAssertFalse(text.contains("Kitty graphics"), "Security starts collapsed")

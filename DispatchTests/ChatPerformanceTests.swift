@@ -48,16 +48,42 @@ final class ChatPerformanceTests: XCTestCase {
         _ = session.transcriptRows
         let typography = ChatTypography()
         session.toolLayouts.remember(CGSize(width: 568, height: 340), for: item.presentationID, typography: typography)
+        session.toolLayouts.remember(CGSize(width: 568, height: 700), for: item.presentationID, typography: typography, raw: true)
         _ = await cache.presentation(for: item)
         cache.removeAll()
         XCTAssertNil(cache.cached(for: item))
         XCTAssertEqual(session.toolLayouts.height(for: item.presentationID, width: 568, typography: typography), 340)
+        XCTAssertEqual(session.toolLayouts.height(for: item.presentationID, width: 568, typography: typography, raw: true), 700)
         XCTAssertNil(session.toolLayouts.height(for: item.presentationID, width: 500, typography: typography))
         var larger = typography; larger.size += 1
         XCTAssertNil(session.toolLayouts.height(for: item.presentationID, width: 568, typography: larger))
         session.turns = []
         _ = session.transcriptRows
         XCTAssertEqual(session.toolLayouts.count, 0, "Discarded transcript rows cannot retain geometry")
+    }
+
+    func testToolViewChoicesSurviveRevisionsAndExpireWithTheTranscript() throws {
+        let session = ChatSession(id: System.uuid())
+        session.turns = [ChatTurn(id: "one", items: [ChatItem(id: "same", kind: .tool, text: "a")]),
+                         ChatTurn(id: "two", items: [ChatItem(id: "same", kind: .tool, text: "b")])]
+        let rows = session.transcriptRows
+        let first = session.toolLayouts.viewState(for: rows[0].id)
+        let second = session.toolLayouts.viewState(for: rows[1].id)
+        first.rawExpanded = true
+        first.document("Queue.swift").sourceMode = true
+        XCTAssertFalse(second.rawExpanded, "Equal item IDs in different turns have independent choices")
+        session.turns[0].items[0].output = "updated"
+        _ = session.transcriptRows
+        XCTAssertTrue(session.toolLayouts.viewState(for: rows[0].id) === first)
+        XCTAssertTrue(first.rawExpanded)
+        XCTAssertTrue(first.document("Queue.swift").sourceMode)
+        session.turns.removeFirst()
+        _ = session.transcriptRows
+        XCTAssertEqual(session.toolLayouts.count, 1)
+        XCTAssertTrue(session.toolLayouts.viewState(for: rows[1].id) === second)
+        session.turns = []
+        _ = session.transcriptRows
+        XCTAssertEqual(session.toolLayouts.count, 0)
     }
 
     func testTenThousandToolRowsOnlyFormatVisibleRowsWhileScrolling() async throws {
@@ -244,7 +270,7 @@ extension ChatPerformanceTests {
         window.makeKeyAndOrderFront(nil)
         let root = try XCTUnwrap(window.contentView)
         try await TestSupport.eventually { messageTextViews(root).contains { $0.string == "Done " + marker } }
-        XCTAssertEqual(ChatMarkdownCache.documentParses - parses, 2, "Each message's markdown is parsed once (the prompt and the plan)")
+        XCTAssertEqual(ChatMarkdownCache.documentParses - parses, 1, "Only the visible plan is parsed; the prompt above the tall reply stays lazy")
         XCTAssertLessThanOrEqual(ChatMarkdownCache.inlineParses - inlineParses, 44, "Each block's inline markdown is parsed once")
         for _ in 0..<3 { window.contentView?.layoutSubtreeIfNeeded(); try await Task.sleep(for: .milliseconds(40)) }
         /// Text views mounted since `before`: only those may build their text.

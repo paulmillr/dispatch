@@ -80,6 +80,29 @@ final class NativeTabCloseTests: XCTestCase {
         XCTAssertNil(helper.error)
     }
 
+    func testPreparedCloseReleasesAnExitedTerminalWhenItsDeliveryReplyFails() async throws {
+        let app = try TmuxWalkthrough(); defer { app.close() }
+        _ = try app.server(["new-window", "-d", "-n", "keeper", "/bin/sh"])
+        try await app.attach(); try await app.ready()
+        let tab = try XCTUnwrap(app.workspace.activeTab)
+        let pane = try XCTUnwrap(app.target(tab))
+        let helper = try XCTUnwrap(app.workspace.helper(containing: tab.id))
+        var finish: CheckedContinuation<Void, any Error>?
+        let task = helper.close(try XCTUnwrap(tab.terminal), policy: .prompt) {
+            try await withCheckedThrowingContinuation { finish = $0 }
+        }
+        try await TestSupport.eventually { finish != nil }
+        _ = try app.server(["kill-pane", "-t", pane])
+        _ = try app.server(["rename-window", "-t", "edge:keeper", "after-exit"])
+        try await app.wait { app.workspace.current?.windows.contains { $0.name == "after-exit" } == true }
+        finish?.resume(throwing: HerdrFailure("The quit reply arrived after the terminal exited"))
+        await task.value
+        XCTAssertFalse(app.workspace.allTabIDs.contains(tab.id))
+        XCTAssertNil(app.runtime.views[tab.id], "An exited terminal must not retain a view waiting for another topology")
+        XCTAssertNil(helper.closingSpace(containing: tab.id))
+        XCTAssertNil(helper.error, "A terminal already confirmed absent needs no failed-close recovery")
+    }
+
     func testCommandWTerminatesIdleTmuxWindowAndAllItsPanes() async throws {
         let app = try TmuxWalkthrough(); defer { app.close() }
         _ = try app.server(["new-window", "-d", "-n", "keeper", "/bin/sh"])

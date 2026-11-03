@@ -76,7 +76,7 @@ struct SSHReconnectGlassRow: View {
                 Button(action: reconnect) {
                     HStack(spacing: 6) {
                         Image(systemName: "arrow.clockwise").font(icon)
-                        Text("Reconnect")
+                        Text(presentation.actionTitle)
                         Text("⏎").opacity(0.6)
                     }
                     .foregroundStyle(Color(nsColor: SSHReconnectControl.actionInk))
@@ -85,8 +85,8 @@ struct SSHReconnectGlassRow: View {
                     .contentShape(Capsule())
                 }
                 .fixedSize(horizontal: true, vertical: false)
-                .accessibilityLabel("Reconnect to \(hostName)")
-                .help("Reconnect to \(hostName) · ⏎")
+                .accessibilityLabel(presentation.actionHelp)
+                .help(presentation.actionHelp + " · ⏎")
                 .transition(.opacity)
             }
             ReconnectIndicator(color: color, reconnecting: state.reconnecting)
@@ -172,6 +172,10 @@ struct SSHReconnectControl: NSViewRepresentable {
         let info: [String]
         /// Reconnect is offered until an attempt starts or the session resumes.
         let offersReconnect: Bool
+        /// "Reconnect anyway" after an attempt stopped on a changed server (`State.changed`): it shows the host's spaces
+        /// as they are now.
+        let actionTitle: String
+        let actionHelp: String
         /// Cancel while reconnecting, Close tab while offline, nothing once connected.
         let detailTitle: String?
         let detailHelp: String
@@ -191,10 +195,15 @@ struct SSHReconnectControl: NSViewRepresentable {
                 if let date = state.disconnectedAt { info.append(date.formatted(date: .omitted, time: .shortened)) }
                 if state.attempts > 0 { info.append("\(state.attempts) \(state.attempts == 1 ? "attempt" : "attempts")") }
                 if state.retryAt != nil { info.append("retrying automatically") }
-                if let error = state.error { info.append(error) }
+                if state.changed { info.append("some saved tabs no longer exist on \(hostName)") }
+                else if let error = state.error { info.append(error) }
             }
             self.info = info
             offersReconnect = !state.reconnecting && !state.connected
+            actionTitle = state.changed ? "Reconnect anyway" : "Reconnect"
+            actionHelp = state.changed
+                ? "Reconnect to \(hostName) and show its spaces as they are now; tabs whose terminals are gone close"
+                : "Reconnect to \(hostName)"
             detailTitle = state.connected ? nil : state.reconnecting ? "Cancel" : "Close tab"
             detailHelp = state.reconnecting ? "Cancel reconnect" : "Close tab; keep remote jobs running"
         }
@@ -257,8 +266,9 @@ struct SSHReconnectControl: NSViewRepresentable {
             label.textColor = color
             metadata.stringValue = presentation.info.joined(separator: " · ")
             toolTip = presentation.help
-            button.title = "Reconnect  ⏎"
-            button.setAccessibilityLabel("Reconnect to " + hostName)
+            button.title = presentation.actionTitle + "  ⏎"
+            button.setAccessibilityLabel(presentation.actionHelp)
+            button.toolTip = presentation.actionHelp
             button.isHidden = !presentation.offersReconnect
             if starting && !reduceMotion {
                 button.isHidden = false
@@ -310,7 +320,8 @@ struct SSHReconnectControl: NSViewRepresentable {
             super.layout()
             let scale = max(1, (label.font?.pointSize ?? 11.5) / 11.5)
             let height = min(bounds.height - 8, 22 * scale)
-            let closeWidth: CGFloat = 84 * scale, buttonWidth: CGFloat = 118 * scale
+            let closeWidth: CGFloat = 84 * scale
+            let buttonWidth = max(118 * scale, ceil(button.intrinsicContentSize.width) + 20 * scale)
             details.isHidden = state.connected || (!state.reconnecting && bounds.width < 280 * scale)
             details.frame = NSRect(x: bounds.width - closeWidth - 14, y: bounds.midY - height / 2, width: closeWidth, height: height)
             let trailing = details.isHidden ? bounds.width - 14 : details.frame.minX - 8

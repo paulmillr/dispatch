@@ -23,9 +23,10 @@ final class SplitSizingTests: XCTestCase {
         defer { window.close(); window.contentView = nil }
         for size: CGFloat in [12.5, 22, 8] {
             host.rootView = tree(size: size)
+            let expected = AppFont.native(size: size)
             try await TestSupport.eventually {
                 let labels = PresentationTestSupport.views(of: NSTextField.self, in: host)
-                return labels.count == 3 && labels.allSatisfy { $0.font?.pointSize == size }
+                return labels.count == 3 && labels.allSatisfy { $0.font == expected }
             }
         }
     }

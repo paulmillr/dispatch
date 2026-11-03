@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 import XCTest
-import ScreenCaptureKit
+@preconcurrency import ScreenCaptureKit
 @testable import DispatchApp
 
 /// The transcript never goes blank: mass row changes at the followed bottom (a collapsed group, a helper
@@ -324,8 +324,7 @@ final class ChatBlankTranscriptTests: XCTestCase {
             mount.stop()
             assertNoBlank(mount, "tall reply on mount \(round)")
             let lastID = try XCTUnwrap(mount.session.presentedTranscriptRows.last?.id)
-            let marker = try XCTUnwrap(PresentationTestSupport.views(of: ChatScrollMarker.Marker.self,
-                in: XCTUnwrap(mount.window.contentView)).first { $0.id == lastID })
+            let marker = try XCTUnwrap(PresentationTestSupport.transcriptRows(in: XCTUnwrap(mount.window.contentView))[lastID])
             let scroll = try XCTUnwrap(marker.enclosingScrollView)
             XCTAssertFalse(marker.isHiddenOrHasHiddenAncestor)
             XCTAssertTrue(marker.convert(marker.bounds, to: scroll.documentView).intersects(scroll.contentView.bounds),

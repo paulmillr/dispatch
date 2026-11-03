@@ -64,6 +64,7 @@ struct ChatView: View {
                                 bubbleWidth: ChatUserMessage.maxWidth(max(0, chatWidth - 44), characterWidth: theme.typography.characterWidth))
         }
         .coordinateSpace(.named(ChatFlightFrames.space))
+        .background(ChatFlightCoordinateRoot(frames: session.flightFrames))
         .background(theme.terminal)
         .foregroundStyle(theme.ink).tint(theme.blue)
         .environment(\.chatTheme, theme)

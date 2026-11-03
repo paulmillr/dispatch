@@ -188,15 +188,24 @@ final class CodexQueueTests: XCTestCase {
         XCTAssertTrue(runtime.chat.interrupt(session))
         try await TestSupport.eventually(timeout: .seconds(10)) { !session.busy && session.interruptionID == nil }
         XCTAssertEqual(session.queuedMessages.count, 2)
-        runtime.chat.resumeQueue(session)
-        try await TestSupport.eventually(timeout: .seconds(20)) { session.queuedMessages.isEmpty && !session.busy && !session.queueBusy }
-        let requests = try CodexTestSupport.conversationRequests(in: fixture.state)
         func prompt(_ request: [String: Any]) -> String? {
             let body = request["body"] as? [String: Any]
             let input = body?["input"] as? [[String: Any]]
             let user = input?.last { $0["role"] as? String == "user" }
             let content = user?["content"] as? [[String: Any]]
             return content?.compactMap { $0["text"] as? String }.joined(separator: "\n")
+        }
+        runtime.chat.resumeQueue(session)
+        var requests: [[String: Any]] = []
+        try await TestSupport.eventually(timeout: .seconds(20)) {
+            // The last row leaves the queue before its prompt is acknowledged. Wait for both model requests
+            // and settled delivery before checking order or submitting the next barrier prompt.
+            guard session.queuedMessages.isEmpty, !session.busy, !session.queueBusy,
+                  !session.awaitingPromptAck, session.submissionID == nil else { return false }
+            requests = try CodexTestSupport.conversationRequests(in: fixture.state)
+            return ["external queued message", "edited second"].allSatisfy { expected in
+                requests.contains { prompt($0) == expected }
+            }
         }
         XCTAssertEqual(requests.filter { prompt($0) == "edited second" }.count, 1)
         XCTAssertEqual(requests.filter { prompt($0) == "external queued message" }.count, 1)

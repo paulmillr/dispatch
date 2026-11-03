@@ -74,6 +74,7 @@ final class SSHSubmissionIntegrationTests: XCTestCase {
         XCTAssertEqual(try System.read(state.appendingPathComponent("shell.bin")), Data(),
                        "Neither Return nor a retried paste may reach the resumed shell")
         XCTAssertEqual(session.draft, draft, "An incomplete checked submission must retain the draft")
+        XCTAssertNotNil(session.submissionFailure, "An exit event cannot turn refused delivery into success")
         XCTAssertFalse(session.active)
         if remote { XCTAssertEqual(session.remoteAgent?.key, try XCTUnwrap(identity).key) }
     }

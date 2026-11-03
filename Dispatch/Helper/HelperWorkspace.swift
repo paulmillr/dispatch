@@ -1857,6 +1857,48 @@
 
     static let missingRetained = "A retained terminal no longer exists on the server. Its saved view remains offline."
 
+    /// Reconnect anyway (`SSHReconnectController.acceptsChanges`): the saved view's tabs whose terminals the server no
+    /// longer has leave it as if closed offline (the server is never asked: their old ids could name other nodes now),
+    /// and a space left without tabs leaves too, not listed as detached: nothing of it is left to restore. A route left
+    /// with nothing releases its server view, as `closeSaved` does.
+    private func dropSaved(_ missing: Set<UUID>, route: HelperBackend.Route) {
+      guard var entry = restoring[route], let workspace else { return }
+      let shown = Set(workspace.spaces.map(\.id))
+      let released = workspace.spaces.flatMap(\.tabs).filter { missing.contains($0.id) }.flatMap(\.surfaceIDs)
+      workspace.updateLayout { next in
+        for id in missing { _ = next.detachTab(id) }
+      }
+      var saved = WorkspaceLayout(spaces: entry.presentation, selectedSpace: nil)
+      for id in missing { _ = saved.detachTab(id) }
+      let before = Set(entry.presentation.map(\.id))
+      entry.presentation = saved.spaces.compactMap { space in
+        shown.contains(space.id) ? workspace.spaces.first { $0.id == space.id } : space
+      }
+      let gone = before.subtracting(entry.presentation.map(\.id))
+      print("Helper saved view accepts server: route=\(route), missing=\(missing.count), spaces gone=\(gone)")
+      TerminalRuntime.shared.hosts.reconnect.dropped(gone)
+      if entry.presentation.isEmpty {
+        restoring.removeValue(forKey: route)
+        subscribing.removeValue(forKey: route)?.task.cancel()
+        if let request = observations.removeValue(forKey: route) { connection?.cancel(request) }
+        restored(route)
+      } else {
+        restoring[route] = entry
+      }
+      workspace.onCloseTabs(released)
+    }
+
+    /// Reconnect anyway on a helper whose restore already stopped on a changed server (its error is `missingRetained`):
+    /// the saved views still restoring are matched to the server's latest topologies again, accepting what is gone.
+    func acceptServerChanges() {
+      guard error == Self.missingRetained else { return }
+      error = nil
+      for route in Array(restoring.keys) {
+        guard let topology = snapshots[route] else { continue }
+        do { try apply(topology, route: route) } catch { fail(error); return }
+      }
+    }
+
     /// `close` for a node of a space still restoring (`route`'s saved view): the server is never asked. The whole space
     /// leaves for the detached list unless terminated (its work keeps running either way, as offline); a window or tab
     /// leaves the saved view, which is then matched to the server's topology again: without a pane that is gone, the
@@ -2039,6 +2081,15 @@
           result = try await client.close(.init(node: node, policy: policy))
         } catch {
           self.preparingCloses.removeValue(forKey: node)
+          // Exit can remove the terminal before a checked quit reply settles. There is no tab to restore;
+          // release the view held for preparation without treating the failed command as delivered.
+          if preparing != nil, policy != .detach, !self.stopped, !Task.isCancelled,
+             let route, let topology = self.snapshots[route], !topology.nodes.contains(where: { $0.id == node }) {
+            self.closing.remove(node)
+            stopOutput()
+            self.workspace?.onCloseTabs(released)
+            return
+          }
           if !self.stopped, !Task.isCancelled, policy != .detach { self.reveal(node) }
           throw error
         }
@@ -2827,7 +2878,15 @@
         let requested = Set(restored.presentation.flatMap(\.tabs).filter { $0.terminal != nil }.map(\.id))
         let terminals = topology.nodes.filter { $0.kind == .terminal }
         let available = Set(terminals.compactMap { restored.nodes[$0.key] })
-        guard requested.isSubset(of: available) else { throw HerdrFailure(Self.missingRetained) }
+        if !requested.isSubset(of: available) {
+          guard TerminalRuntime.shared.hosts.reconnect.acceptsChanges(on: hosts[route] ?? host) else {
+            throw HerdrFailure(Self.missingRetained)
+          }
+          dropSaved(requested.subtracting(available), route: route)
+          // Matched again without what is gone; a route left with nothing to restore has released its view.
+          if restoring[route] != nil { try apply(topology, route: route) }
+          return
+        }
         let roots = Set(restored.presentation.map(\.id))
         // Closing a retained pane while offline changes only its presentation, never the server.
         for terminal in terminals {

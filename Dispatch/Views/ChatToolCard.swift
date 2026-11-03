@@ -16,14 +16,16 @@ struct ChatToolCard: View {
     var elapsed: TimeInterval? = nil
     /// An opened group's steps share one title width, so what follows each title starts at the same place.
     var titleColumn: CGFloat? = nil
+    var presentation: ChatToolViewState?
     @State private var formatted: (id: UUID, value: ToolPresentation)?
-    @State private var rawExpanded = false
-    @State private var singleFileState = CodeDocumentState()
+    @State private var localState = ChatToolViewState()
+    private var state: ChatToolViewState { presentation ?? localState }
     var body: some View {
         let cached = formatted == nil ? ToolPresentationCache.shared.cached(for: item) : nil
         let tool = formatted?.value ?? cached
         let reserved = expanded && tool == nil
-            ? layouts?.height(for: item.presentationID, width: layoutWidth, typography: theme.typography) : nil
+            ? layouts?.height(for: item.presentationID, width: layoutWidth, typography: theme.typography,
+                               raw: state.rawExpanded) : nil
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
             Button { expanded.toggle() } label: {
@@ -35,7 +37,7 @@ struct ChatToolCard: View {
                 .accessibilityIdentifier("tool-header-\(item.id)")
                 .accessibilityValue(expanded ? "Expanded" : "Collapsed")
             if expanded, let tool, tool.isPatch, tool.documents.count == 1, let document = tool.documents.first {
-                CodeDocumentControls(document: document, state: singleFileState)
+                CodeDocumentControls(document: document, state: state.document(document.path))
                     .padding(.trailing, embedded ? 0 : 12)
             }
             }
@@ -68,7 +70,8 @@ struct ChatToolCard: View {
                         ChatCodeBlock(code: operation.input, language: operation.language, title: "Requested command")
                     }
                     ForEach(operation.documents) { document in
-                        CodeDocumentView(document: document, directory: directory, animatesChanges: live)
+                        CodeDocumentView(document: document, directory: directory,
+                                         presentation: state.document("request:\(request.id):\(document.path)"), animatesChanges: live)
                     }
                 }
                 if tool.isOrchestration && tool.requests.isEmpty && tool.output.isEmpty {
@@ -77,7 +80,7 @@ struct ChatToolCard: View {
                 ForEach(tool.documents) { document in
                     let singleFile = tool.isPatch && tool.documents.count == 1
                     CodeDocumentView(document: document, directory: directory, showHeader: !singleFile,
-                                     presentation: singleFile ? singleFileState : nil, animatesChanges: live)
+                                     presentation: state.document(document.path), animatesChanges: live)
                 }
                 if !tool.output.isEmpty && !(tool.documents.contains { !$0.diff.isEmpty } && (tool.output.contains("+++ ") || tool.output.contains("*** Update File:"))) {
                     if let read = tool.sourceReadPreview {
@@ -89,15 +92,16 @@ struct ChatToolCard: View {
                 } else if !tool.isPatch && tool.completed && tool.output.isEmpty && item.patch == nil {
                     Text(tool.failed ? "Failed with no output" : "Done").font(theme.typography.detail).foregroundStyle(theme.muted)
                 }
-                Button { rawExpanded.toggle() } label: {
+                Button { state.rawExpanded.toggle() } label: {
                     HStack {
-                        Image(systemName: rawExpanded ? "chevron.down" : "chevron.right")
+                        Image(systemName: state.rawExpanded ? "chevron.down" : "chevron.right")
                         Text(tool.usesRawDetails ? "Raw details" : "Tool details")
                         Spacer(minLength: 0)
                     }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 6).contentShape(Rectangle())
                 }.buttonStyle(.plain).font(theme.typography.detail).foregroundStyle(theme.muted)
-                    .accessibilityValue(rawExpanded ? "Expanded" : "Collapsed")
-                if rawExpanded {
+                    .accessibilityLabel(tool.usesRawDetails ? "Raw details" : "Tool details")
+                    .accessibilityValue(state.rawExpanded ? "Expanded" : "Collapsed")
+                if state.rawExpanded {
                     VStack(spacing: 8) {
                         Text(ChatSearchHighlight.text(AttributedString(item.title), query: query, theme: theme))
                             .frame(maxWidth: .infinity, alignment: .leading).foregroundStyle(theme.muted)
@@ -133,13 +137,9 @@ struct ChatToolCard: View {
         .onDisappear { if !expanded { formatted = nil } }
     }
     private func rememberHeight(_ size: CGSize, cached: ToolPresentation?) {
-        guard expanded, !rawExpanded,
-              formatted?.id == item.presentationID || (formatted == nil && cached != nil),
-              let tool = formatted?.value ?? cached,
-              tool.documents.isEmpty, tool.requests.isEmpty else { return }
-        // Source/diff panels own a separate asynchronous presentation state;
-        // their measured source height must not be reused for a default diff.
-        layouts?.remember(size, for: item.presentationID, typography: theme.typography)
+        guard expanded,
+              formatted?.id == item.presentationID || (formatted == nil && cached != nil) else { return }
+        layouts?.remember(size, for: item.presentationID, typography: theme.typography, raw: state.rawExpanded)
     }
     private func header(_ tool: ToolPresentation?) -> some View {
             HStack(spacing: 9) {
